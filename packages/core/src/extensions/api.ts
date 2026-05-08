@@ -247,8 +247,21 @@ export { type ExtensionSetupContext } from "../domain/extension.js"
 export type FieldSpec<A, R = never> =
   | ReadonlyArray<A>
   | ((args: {
-      readonly ctx: ExtensionSetupContext
+      readonly ctx: PublicExtensionSetupContext
     }) => ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R>)
+
+export type PublicExtensionSetupContext = Omit<ExtensionSetupContext, "host"> & {
+  readonly host: Pick<
+    ExtensionSetupContext["host"],
+    | "osInfo"
+    | "execPath"
+    | "homeDirectory"
+    | "pathListSeparator"
+    | "commandCandidates"
+    | "isPortFree"
+    | "isPidAlive"
+  >
+}
 
 export interface DefineExtensionInput<R = never> {
   readonly id: string

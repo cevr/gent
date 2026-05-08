@@ -29,6 +29,7 @@ import {
 import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-cache.js"
 import { buildKeychainTransformClient } from "./keychain-transform.js"
 import { AnthropicPlatform, type AnthropicPlatformShape } from "./platform-adapter.js"
+import type { ExtensionHostPlatform } from "@gent/core-internal/domain/extension"
 
 const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
   Effect.gen(function* () {
@@ -262,7 +263,9 @@ export const AnthropicExtension = defineExtension({
       initAnthropicKeychainEnv(env)
 
       const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
-      const platform = AnthropicPlatform.fromHost(ctx.host)
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- provider setup is a bundled host-owned extension boundary
+      const host = ctx.host as ExtensionHostPlatform
+      const platform = AnthropicPlatform.fromHost(host)
 
       // Cache cells are hoisted to extension-closure scope so they
       // survive across `resolveModel` calls. Lifetime: one extension

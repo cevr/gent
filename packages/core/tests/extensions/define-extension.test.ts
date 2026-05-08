@@ -15,15 +15,15 @@ import {
   defineExtension,
   defineResource,
   getToolId,
+  type PublicExtensionSetupContext,
   request,
   tool,
+  type GentExtension,
 } from "@gent/core/extensions/api"
 import { validateExtensionPackageShape } from "../../src/domain/extension-package-shape"
 import { GentToolMetadataTag, getToolMetadata } from "@gent/core-internal/domain/capability/tool"
-import type { GentExtension } from "@gent/core/extensions/api"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
 import { PermissionRule } from "@gent/core-internal/domain/permission"
-import type { ExtensionSetupContext } from "../../src/domain/extension.js"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
@@ -183,7 +183,7 @@ describe("defineExtension", () => {
 
   it.live("setup context is forwarded to per-bucket factory", () =>
     Effect.gen(function* () {
-      let captured: ExtensionSetupContext | undefined
+      let captured: PublicExtensionSetupContext | undefined
       const ext = defineExtension({
         id: "captures-ctx",
         tools: ({ ctx }) => {

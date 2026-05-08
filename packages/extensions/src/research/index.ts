@@ -4,9 +4,11 @@ import {
   CapabilityError,
   ExtensionId,
   ModelId,
+  ToolNeeds,
   action,
   defineAgent,
   defineExtension,
+  type ModelCapabilityContext,
 } from "@gent/core/extensions/api"
 import { ResearchTool } from "./research-tool.js"
 
@@ -42,9 +44,10 @@ export const ResearchExtension = defineExtension({
       surface: "slash",
       slash: { trigger: "research" },
       category: "Tools",
+      needs: [ToolNeeds.write("session")],
       input: Schema.String,
       output: Schema.Void,
-      execute: (input, ctx) =>
+      execute: (input: string, ctx: ModelCapabilityContext) =>
         ctx.session
           .queueFollowUp({
             sourceId: "research-command",

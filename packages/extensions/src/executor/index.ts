@@ -4,6 +4,7 @@
 
 import { Effect, Layer } from "effect"
 import { defineExtension, defineResource } from "@gent/core/extensions/api"
+import type { ExtensionHostPlatform } from "@gent/core-internal/domain/extension"
 import { EXECUTOR_EXTENSION_ID } from "./domain.js"
 import { ExecutorSidecar } from "./sidecar.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
@@ -19,8 +20,10 @@ export const ExecutorExtension = defineExtension({
   tools: [ExecuteTool, ResumeTool],
   requests: [ExecutorRpc.Start, ExecutorRpc.Stop, ExecutorRpc.GetSnapshot],
   resources: ({ ctx }) => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- executor sidecar is a bundled host-owned extension boundary
+    const host = ctx.host as ExtensionHostPlatform
     const executorDependencies = Layer.merge(
-      ExecutorSidecar.Live(ctx.home, ctx.host),
+      ExecutorSidecar.Live(ctx.home, host),
       ExecutorMcpBridge.Live,
     )
     const executorLayer = Layer.provideMerge(ExecutorControllerLive(ctx.cwd), executorDependencies)

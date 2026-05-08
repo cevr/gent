@@ -6,6 +6,7 @@ import type {
   LoadedExtension,
   TurnAfterInput,
 } from "../../src/domain/extension.js"
+import type { ReadOnlyExtensionHostContext } from "../../src/domain/extension-host-context"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import {
@@ -45,7 +46,10 @@ const turnAfterReactions = (
   failureMode: "continue" | "isolate" | "halt",
   handler: () => Effect.Effect<void, BoomError>,
 ): ExtensionReactions<BoomError> => ({
-  turnAfter: { failureMode, handler: (_input: TurnAfterInput, _ctx) => handler() },
+  turnAfter: {
+    failureMode,
+    handler: (_input: TurnAfterInput, _ctx: ReadOnlyExtensionHostContext) => handler(),
+  },
 })
 
 describe("runtime reactions", () => {

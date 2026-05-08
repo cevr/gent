@@ -46,15 +46,14 @@ export class CapabilityNotFoundError extends Schema.TaggedErrorClass<CapabilityN
  * stops write-shaped service calls.
  *
  * Split: `CapabilityCoreContext` (the always-on minimum) plus the wider
- * `ModelCapabilityContext` for the model audience whose handlers historically
- * have full host access through `ToolCapabilityContext` (and frequently rely on it —
- * spawning subagents, asking for approval, queuing follow-ups).
+ * `ModelCapabilityContext` for handlers that explicitly declare authority
+ * needs before reaching host/session/agent mutation surfaces.
  *
  * Capability authors pick the surface they need by typing their `effect`'s
  * second parameter:
  *   - `(input, ctx: CapabilityCoreContext) => …` — the default, audience-neutral
- *   - `(input, ctx: ModelCapabilityContext) => …` — model tools that need
- *     subagent / interaction / follow-up surfaces
+ *   - `(input, ctx: ModelCapabilityContext) => …` — tools/actions that declare
+ *     explicit needs and need subagent / interaction / follow-up surfaces
  *
  * Request/action hosts pass the context required by the leaf type. Tool
  * execution derives host facets from declared `ToolNeeds`, so handlers asking
@@ -77,12 +76,8 @@ export interface ModelCapabilityContext extends ExtensionHostContext {}
 
 /**
  * Default ctx parameter type for request/action host signatures.
- *
- * Kept as an alias for the wide context so callers writing
- * `(input, ctx: CapabilityContext) => …` continue to compile, but new code
- * should choose `CapabilityCoreContext` or `ModelCapabilityContext` explicitly.
  */
-export type CapabilityContext = ModelCapabilityContext
+export type CapabilityContext = CapabilityCoreContext
 
 export type CapabilityEffect<Input = unknown, Output = unknown, R = never, E = CapabilityError> = {
   bivarianceHack(input: Input, ctx: CapabilityContext): Effect.Effect<Output, E, R>

@@ -2,13 +2,16 @@ import type { Context, Duration, Effect } from "effect"
 import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { AgentDefinition, AgentName, DriverSource } from "./agent"
-import type { ToolCapability } from "./capability/tool.js"
+import type { ToolCapability, ToolNeed } from "./capability/tool.js"
 import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids"
 import type { Message, MessagePart } from "./message"
 import type { ExtensionContributions } from "./contribution.js"
 export type { ExtensionContributions } from "./contribution.js"
 import type { PromptSection } from "./prompt.js"
-import type { ExtensionHostContext } from "./extension-host-context.js"
+import type {
+  ExtensionHostContext,
+  ReadOnlyExtensionHostContext,
+} from "./extension-host-context.js"
 import type { PermissionResult } from "./permission.js"
 
 // Extension Manifest — authored by extension author
@@ -209,10 +212,19 @@ export interface MessageInputInput {
 export type ExtensionReactionFailureMode = "continue" | "isolate" | "halt"
 
 /** Single reaction handler with explicit failure policy. */
-export interface ExtensionReaction<Input, E = never, R = never> {
-  readonly failureMode: ExtensionReactionFailureMode
-  readonly handler: (input: Input, ctx: ExtensionHostContext) => Effect.Effect<void, E, R>
-}
+export type ExtensionReaction<Input, E = never, R = never> =
+  | {
+      readonly failureMode: ExtensionReactionFailureMode
+      readonly handler: (
+        input: Input,
+        ctx: ReadOnlyExtensionHostContext,
+      ) => Effect.Effect<void, E, R>
+    }
+  | {
+      readonly failureMode: ExtensionReactionFailureMode
+      readonly needs: readonly [ToolNeed, ...ReadonlyArray<ToolNeed>]
+      readonly handler: (input: Input, ctx: ExtensionHostContext) => Effect.Effect<void, E, R>
+    }
 
 /**
  * The full reactions bag accepted by `defineExtension({ reactions })`. Every
@@ -231,7 +243,7 @@ export interface ExtensionReactions<E = never, R = never> {
    */
   readonly systemPrompt?: (
     input: SystemPromptInput,
-    ctx: ExtensionHostContext,
+    ctx: ReadOnlyExtensionHostContext,
   ) => Effect.Effect<string, E, R>
   /**
    * User-message rewrite before the message is committed. Runs in scope order;
@@ -239,7 +251,7 @@ export interface ExtensionReactions<E = never, R = never> {
    */
   readonly messageInput?: (
     input: MessageInputInput,
-    ctx: ExtensionHostContext,
+    ctx: ReadOnlyExtensionHostContext,
   ) => Effect.Effect<string, E, R>
   /**
    * Context-message rewrite before prompt assembly. Runs in scope order;
@@ -247,7 +259,7 @@ export interface ExtensionReactions<E = never, R = never> {
    */
   readonly contextMessages?: (
     input: ContextMessagesInput,
-    ctx: ExtensionHostContext,
+    ctx: ReadOnlyExtensionHostContext,
   ) => Effect.Effect<ReadonlyArray<Message>, E, R>
   /**
    * Permission decision interceptor. Receives the current decision and may
@@ -255,7 +267,7 @@ export interface ExtensionReactions<E = never, R = never> {
    */
   readonly permissionCheck?: (
     input: PermissionCheckInput & { readonly current: PermissionResult },
-    ctx: ExtensionHostContext,
+    ctx: ReadOnlyExtensionHostContext,
   ) => Effect.Effect<PermissionResult, E, R>
   /**
    * Turn-scoped prompt/tool-policy contribution. Use for read-only runtime
@@ -273,7 +285,7 @@ export interface ExtensionReactions<E = never, R = never> {
    */
   readonly toolResult?: (
     input: ToolResultInput,
-    ctx: ExtensionHostContext,
+    ctx: ReadOnlyExtensionHostContext,
   ) => Effect.Effect<unknown, E, R>
   /**
    * Tool execution wrapper. Receives the current result produced by the base

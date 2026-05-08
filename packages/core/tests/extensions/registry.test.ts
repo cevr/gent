@@ -12,6 +12,7 @@ import {
   tool,
   ToolNeeds,
   type ActionCapability,
+  type ActionInput,
   type RequestCapability,
   type ToolCapability,
 } from "@gent/core/extensions/api"
@@ -91,10 +92,7 @@ const makeExt = (
     },
   }
 }
-const makeCommand = (
-  id: string,
-  options?: Partial<Parameters<typeof action>[0]>,
-): ActionCapability =>
+const makeCommand = (id: string, options?: Partial<ActionInput>): ActionCapability =>
   action({
     id,
     name: id,

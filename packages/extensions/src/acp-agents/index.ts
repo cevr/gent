@@ -31,6 +31,7 @@ import {
   type GentExtension,
   type ToolCapability,
 } from "@gent/core/extensions/api"
+import type { ExtensionHostPlatform } from "@gent/core-internal/domain/extension"
 import { ACP_PROTOCOL_AGENTS, CLAUDE_CODE_AGENT_NAME } from "./config.js"
 import { makeAcpTurnExecutor } from "./executor.js"
 import { createAcpSessionManager } from "./session-manager.js"
@@ -226,8 +227,10 @@ export const makeAcpAgentsExtension = (
   setup: (ctx) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner
-      const acpPlatform = { parentEnv: ctx.host.parentEnv } satisfies AcpAgentsPlatformShape
-      const anthropicPlatform = AnthropicPlatform.fromHost(ctx.host)
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ACP agents are bundled host-owned drivers
+      const host = ctx.host as ExtensionHostPlatform
+      const acpPlatform = { parentEnv: host.parentEnv } satisfies AcpAgentsPlatformShape
+      const anthropicPlatform = AnthropicPlatform.fromHost(host)
       return buildAcpContributions(spawner, deps, {
         acp: acpPlatform,
         anthropic: anthropicPlatform,

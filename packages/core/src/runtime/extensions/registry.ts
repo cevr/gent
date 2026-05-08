@@ -310,9 +310,10 @@ const compileRpcRegistry = (
         })
       }
       const needs =
-        entry.capability.intent === "write"
+        entry.capability.needs ??
+        (entry.capability.intent === "write"
           ? [{ tag: "*", access: "write" } as const]
-          : [{ tag: "*", access: "read" } as const]
+          : [{ tag: "*", access: "read" } as const])
       return yield* provideCapabilityAccessNeeds(needs)(
         runExtensionCapability(extensionId, capabilityId, entry.capability, input, ctx),
       )

@@ -31,6 +31,7 @@ import {
   ToolNeeds,
   request,
   tool,
+  type ModelCapabilityContext,
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 import * as ExtensionApi from "@gent/core/extensions/api"
@@ -268,9 +269,10 @@ describe("extension command RPCs", () => {
               description: "Queue follow-up action",
               surface: "slash",
               slash: { trigger: "queue-follow-up" },
+              needs: [ToolNeeds.write("session")],
               input: Schema.String,
               output: Schema.Void,
-              execute: (input, ctx) =>
+              execute: (input: string, ctx: ModelCapabilityContext) =>
                 ctx.session.queueFollowUp({ sourceId: "test-action", content: input }).pipe(
                   Effect.mapError(
                     (cause) =>

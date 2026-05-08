@@ -12,6 +12,7 @@ import {
   tool,
   ToolNeeds,
   type AgentDefinition,
+  type ModelCapabilityContext,
   type ToolCapabilityContext,
   type ToolCallId,
 } from "@gent/core/extensions/api"
@@ -393,9 +394,10 @@ export const ReviewExtension = defineExtension({
       surface: "slash",
       slash: { trigger: "review" },
       category: "Tools",
+      needs: [ToolNeeds.write("session")],
       input: Schema.String,
       output: Schema.Void,
-      execute: (input, ctx) =>
+      execute: (input: string, ctx: ModelCapabilityContext) =>
         ctx.session
           .queueFollowUp({
             sourceId: "review-command",

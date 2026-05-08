@@ -9,6 +9,7 @@ import {
   defineExtension,
   makeRunSpec,
   tool,
+  type ModelCapabilityContext,
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 
@@ -125,9 +126,10 @@ export const CounselExtension = defineExtension({
       surface: "slash",
       slash: { trigger: "counsel" },
       category: "Tools",
+      needs: [ToolNeeds.write("session")],
       input: Schema.String,
       output: Schema.Void,
-      execute: (input, ctx) =>
+      execute: (input: string, ctx: ModelCapabilityContext) =>
         ctx.session
           .queueFollowUp({
             sourceId: "counsel-command",

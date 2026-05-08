@@ -21,7 +21,6 @@
 import { type Effect, type Schema } from "effect"
 import { RpcId, type ExtensionId } from "../ids.js"
 import {
-  type CapabilityContext,
   type RequestCapability as RequestCapabilityVariant,
   type ErasedCapabilityEffect,
   type CapabilityRef,
@@ -148,7 +147,7 @@ export function request(input: {
   readonly slash?: RequestInputBase<unknown, unknown>["slash"]
   readonly execute: (
     input: unknown,
-    ctx: CapabilityContext,
+    ctx: ModelCapabilityContext,
   ) => Effect.Effect<unknown, CapabilityError, unknown>
 }): RequestCapability {
   const rpcId = RpcId.make(input.id)

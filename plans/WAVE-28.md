@@ -615,6 +615,46 @@ collapse any remaining tiny one-importer files whose split is only aesthetic.
 - `bun run typecheck`
 - `bun run gate`
 
+## Commit 15: refactor(extensions): require explicit authority for public callbacks
+
+**Status**: Completed in this wave.
+
+**Justification**: The final independent audit found one remaining P1 in lane
+4: `action()` callbacks and extension setup/reaction callbacks still received
+privileged host/session authority by default. Builtins are only the starting
+extension set, so normal public extension authoring must not inherit process,
+agent, interaction, or session mutation authority accidentally.
+
+**Principles**
+
+- `boundary-discipline`: public authoring callbacks expose only the authority
+  their contract declares.
+- `small-interface-deep-implementation`: the common extension path is narrow;
+  write/session/process authority is explicit.
+- `use-the-platform`: host process authority stays at host-owned edges, not in
+  ordinary setup callbacks.
+
+**Changes**
+
+| File                                                                                                 | Change                                                                                       |
+| ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability.ts`                          | Made `CapabilityContext` the narrow core context; wide context is explicit.                  |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/action.ts`                   | `action()` defaults to core context; wide action context now requires non-empty `needs`.     |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts`                           | Reactions default to read-only host context; wide reaction context now requires `needs`.     |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`                             | Public `defineExtension` bucket factories receive host facts, not process authority.         |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts`                | RPC command dispatch honors explicit action/request needs before falling back to intent.     |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/{plan,handoff,research,counsel,review}*` | Slash actions that queue follow-ups now declare session write authority.                     |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/{anthropic,executor,acp-agents}*`        | Bundled host-owned driver setup marks the internal host-authority boundary explicitly.       |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-cache.ts`                                 | Deleted dead stateful cache hook found by the file-existence audit.                          |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts`  | Added compile locks for default action context and explicit action/reaction authority needs. |
+
+**Verification**
+
+- `bun run typecheck`
+- Focused extension surface and command tests.
+- `bun run lint`
+- `bun run gate`
+
 ## Final Batch: audit: independent simplicity audit
 
 Run the same final audit lanes from Wave 27, including file-merit and split
@@ -649,7 +689,7 @@ Close only if no P0/P1 remains. If P0/P1 remains, synthesize the next wave.
 
 **Verification**
 
-- Five independent audit lanes.
+- Six independent audit lanes.
 - `bun run gate`
 - `bun run smoke`
 - `bun run test:e2e`

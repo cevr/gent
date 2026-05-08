@@ -19,7 +19,8 @@ const getSystemPrompt = Effect.gen(function* () {
   const contributions = yield* SessionToolsExtension.setup(testSetupCtx())
   const systemPrompt = contributions.reactions?.systemPrompt
   if (systemPrompt === undefined) throw new Error("expected session tools systemPrompt reaction")
-  return systemPrompt as (
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test owns this concrete extension handler
+  return systemPrompt as unknown as (
     input: SystemPromptInput,
     ctx: typeof stubHostCtx,
   ) => Effect.Effect<string>

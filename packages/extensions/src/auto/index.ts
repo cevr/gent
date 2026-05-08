@@ -10,7 +10,8 @@ import { Effect, Schema } from "effect"
 import {
   defineExtension,
   defineResource,
-  type ExtensionReactions,
+  ToolNeeds,
+  type ModelCapabilityContext,
   type ToolResultInput,
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
@@ -43,8 +44,8 @@ const CheckpointOutput = Schema.Struct({
   nextIdea: Schema.optional(Schema.String),
 })
 const decodeCheckpointOutput = Schema.decodeUnknownSync(CheckpointOutput)
-type ToolResultContext = Parameters<NonNullable<ExtensionReactions["toolResult"]>>[1]
-type TurnAfterContext = Parameters<NonNullable<ExtensionReactions["turnAfter"]>["handler"]>[1]
+type ToolResultContext = ModelCapabilityContext
+type TurnAfterContext = ModelCapabilityContext
 
 const parseCheckpointParams = (
   input: Record<string, unknown>,
@@ -262,6 +263,7 @@ export const AutoExtension = defineExtension({
       journalInterceptorImpl(input, (next) => Effect.succeed(next.result)),
     turnAfter: {
       failureMode: "isolate",
+      needs: [ToolNeeds.read("session"), ToolNeeds.write("session")],
       handler: autoHandoffImpl,
     },
   },

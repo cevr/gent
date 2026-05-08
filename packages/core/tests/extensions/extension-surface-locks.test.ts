@@ -23,6 +23,7 @@ import {
   type ReadOnlyTag,
   type ReadRequestInput,
   makeRunSpec,
+  type ModelCapabilityContext,
   request,
   resource,
   tool,
@@ -297,13 +298,50 @@ describe("Effect-purity locks (compile-time)", () => {
     ).toThrow("Read-only tool")
   })
 
-  test("session.queueFollowUp is exposed for slot handlers and extension authors", () => {
+  test("default action context is not privileged", () => {
+    action({
+      id: "default-action-context",
+      name: "Default Action Context",
+      description: "ok",
+      surface: "slash",
+      input: Schema.Struct({}),
+      output: Schema.Void,
+      execute: (_input, ctx) => {
+        void ctx.sessionId
+        // @ts-expect-error — public actions do not get session mutation authority by default
+        ctx.session.queueFollowUp({ sourceId: "lock", content: "x" })
+        // @ts-expect-error — public actions do not get agent spawning authority by default
+        void ctx.agent.run
+        return Effect.void
+      },
+    })
+    expect(true).toBe(true)
+  })
+
+  test("session.queueFollowUp requires explicit action needs", () => {
     defineExtension({
       id: "queue-follow-up-compile-lock",
+      actions: [
+        action({
+          id: "queue-follow-up",
+          name: "Queue Follow Up",
+          description: "ok",
+          surface: "slash",
+          needs: [ToolNeeds.write("session")],
+          input: Schema.Struct({}),
+          output: Schema.Void,
+          execute: (_input, ctx: ModelCapabilityContext) => {
+            void ctx.session.queueFollowUp({ sourceId: "lock", content: "x" })
+            return Effect.void
+          },
+        }),
+      ],
       reactions: {
         turnAfter: {
           failureMode: "continue",
-          handler: (_input, ctx) => ctx.session.queueFollowUp({ sourceId: "lock", content: "x" }),
+          needs: [ToolNeeds.write("session")],
+          handler: (_input: PublicExtensionApi.TurnAfterInput, ctx: ModelCapabilityContext) =>
+            ctx.session.queueFollowUp({ sourceId: "lock", content: "x" }),
         },
       },
     })

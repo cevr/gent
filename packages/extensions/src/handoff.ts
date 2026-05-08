@@ -4,7 +4,8 @@ import {
   defineExtension,
   defineResource,
   action,
-  type ExtensionReactions,
+  ToolNeeds,
+  type ModelCapabilityContext,
   type Message,
   type TurnAfterInput,
   messagePartsTextLines,
@@ -14,7 +15,7 @@ import { HandoffTool } from "./handoff-tool.js"
 import { AutoRead } from "./auto/controller.js"
 
 const EXTENSION_ID = ExtensionId.make("@gent/handoff")
-type TurnAfterContext = Parameters<NonNullable<ExtensionReactions["turnAfter"]>["handler"]>[1]
+type TurnAfterContext = ModelCapabilityContext
 
 const HandoffAction = action({
   id: "handoff-command",
@@ -22,9 +23,10 @@ const HandoffAction = action({
   description: "Distill context into new session",
   surface: "slash",
   slash: { trigger: "handoff" },
+  needs: [ToolNeeds.write("session")],
   input: Schema.String,
   output: Schema.Void,
-  execute: (_input, ctx) =>
+  execute: (_input: string, ctx: ModelCapabilityContext) =>
     ctx.session
       .queueFollowUp({
         sourceId: "handoff-command",
@@ -145,6 +147,7 @@ export const HandoffExtension = defineExtension({
   reactions: {
     turnAfter: {
       failureMode: "isolate",
+      needs: [ToolNeeds.read("session"), ToolNeeds.write("interaction")],
       handler: autoHandoffImpl,
     },
   },

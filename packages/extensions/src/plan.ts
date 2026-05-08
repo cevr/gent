@@ -6,7 +6,14 @@
  */
 
 import { Effect, Schema } from "effect"
-import { action, CapabilityError, defineExtension, ExtensionId } from "@gent/core/extensions/api"
+import {
+  action,
+  CapabilityError,
+  defineExtension,
+  ExtensionId,
+  ToolNeeds,
+  type ModelCapabilityContext,
+} from "@gent/core/extensions/api"
 import { PlanTool } from "./plan-tool.js"
 
 export { PlanTool, PlanParams } from "./plan-tool.js"
@@ -31,9 +38,10 @@ const PlanAction = action({
   slash: { trigger: "plan" },
   category: "Workflow",
   keybind: "ctrl+shift+p",
+  needs: [ToolNeeds.write("session")],
   input: Schema.String,
   output: Schema.Void,
-  execute: (input, ctx) =>
+  execute: (input: string, ctx: ModelCapabilityContext) =>
     ctx.session.queueFollowUp({ sourceId: "plan-command", content: planPrompt(input) }).pipe(
       Effect.mapError(
         (cause) =>
@@ -53,9 +61,10 @@ const AuditAction = action({
   surface: "slash",
   slash: { trigger: "audit" },
   category: "Workflow",
+  needs: [ToolNeeds.write("session")],
   input: Schema.String,
   output: Schema.Void,
-  execute: (input, ctx) =>
+  execute: (input: string, ctx: ModelCapabilityContext) =>
     ctx.session.queueFollowUp({ sourceId: "audit-command", content: auditPrompt(input) }).pipe(
       Effect.mapError(
         (cause) =>
