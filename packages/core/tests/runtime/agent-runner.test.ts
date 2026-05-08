@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Context, Effect, Layer, Schema, Stream, SubscriptionRef } from "effect"
+import { Context, Effect, Fiber, Layer, Schema, Stream, SubscriptionRef } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import {
   finishPart,
@@ -16,6 +16,7 @@ import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-runner"
+import { makeEphemeralAgentRootLayer } from "../../src/runtime/agent/ephemeral-root"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
@@ -63,7 +64,7 @@ import {
   type SessionRuntimeService,
   type SessionRuntimeState,
 } from "../../src/runtime/session-runtime"
-import { BunFileSystem } from "@effect/platform-bun"
+import { BunFileSystem, BunPath } from "@effect/platform-bun"
 /** Scripted provider: returns stream parts from an array, one response per model stream call. */
 const scriptedProvider = (
   responses: ReadonlyArray<ReadonlyArray<LanguageModelStreamPart>>,
@@ -1128,6 +1129,60 @@ describe("ephemeral service propagation", () => {
         new Branch({ id: BranchId.make(`${id}-branch`), sessionId: id, createdAt: now }),
       )
     })
+  it.live("ephemeral publisher suppresses duplicate committed delivery", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("unused")])
+      const parentDeps = Layer.mergeAll(
+        providerLayer,
+        ModelResolver.fromLanguageModel(providerLayer),
+        testRegistryLayer,
+        ephemeralParentDeps,
+        BunFileSystem.layer,
+        BunPath.layer,
+      )
+      const layer = Layer.unwrap(
+        Effect.gen(function* () {
+          const parentServices = yield* Effect.context()
+          const extensionRegistry = yield* ExtensionRegistry
+          return makeEphemeralAgentRootLayer({
+            config: { baseSections: [] },
+            parentServices,
+            extensionRegistry,
+          })
+        }).pipe(Effect.provide(parentDeps)),
+      )
+      yield* Effect.gen(function* () {
+        const publisher = yield* EventPublisher
+        const events = yield* EventStore
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const sessionId = SessionId.make("ephemeral-duplicate-delivery")
+        const branchId = BranchId.make("ephemeral-duplicate-delivery-branch")
+        const now = dateFromMillis(1_767_225_600_000)
+        yield* sessions.createSession(
+          new Session({ id: sessionId, name: "Child", createdAt: now, updatedAt: now }),
+        )
+        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+        const envelope = yield* publisher.append(
+          AgentEvent.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make("ephemeral-duplicate-tool-call"),
+            toolName: "bash",
+          }),
+        )
+        yield* publisher.deliver(envelope)
+        const duplicate = yield* Effect.forkScoped(
+          events
+            .subscribe({ sessionId, branchId, after: envelope.id })
+            .pipe(Stream.take(1), Stream.runCollect),
+        )
+        yield* publisher.deliver(envelope)
+        const deliveredAgain = yield* Fiber.join(duplicate).pipe(Effect.timeoutOption("25 millis"))
+        expect(deliveredAgain._tag).toBe("None")
+      }).pipe(Effect.scoped, Effect.provide(layer))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
   it.live("ephemeral agent writes to ephemeral storage, not parent", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([

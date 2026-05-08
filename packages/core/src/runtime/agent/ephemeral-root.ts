@@ -182,7 +182,7 @@ export const makeEphemeralAgentRootLayer = (params: {
       const baseEventStore = yield* EventStore
       const publisher = EventPublisher.of({
         append: (event) => baseEventStore.append(event),
-        deliver: (envelope) => baseEventStore.broadcast(envelope),
+        deliver: (envelope) => baseEventStore.deliver(envelope),
         publish: (event) => baseEventStore.publish(event),
       })
       return Context.empty().pipe(
