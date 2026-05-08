@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Deferred, Effect, Exit, Fiber, Layer, Ref, Scope, Semaphore, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   finishPart,
@@ -96,7 +96,6 @@ describe("queue drain regression", () => {
         yield* Effect.gen(function* () {
           yield* ensureStorageParents({ sessionId, branchId })
           const behaviorDeps = yield* AgentLoopBehaviorDeps
-          const sideMutationSemaphore = yield* Semaphore.make(1)
           const behavior = yield* makeAgentLoopBehavior(
             {
               ...behaviorDeps,
@@ -104,9 +103,8 @@ describe("queue drain regression", () => {
             },
             sessionId,
             branchId,
-            sideMutationSemaphore,
           )
-          yield* Effect.addFinalizer(() => Scope.close(behavior.scope, Exit.void))
+          yield* Effect.addFinalizer(() => behavior.close)
           yield* behavior.start
 
           const first = { message: makeMessage("msg-start-window-1", "first") }
@@ -182,7 +180,6 @@ describe("queue drain regression", () => {
         yield* Effect.gen(function* () {
           yield* ensureStorageParents({ sessionId, branchId })
           const behaviorDeps = yield* AgentLoopBehaviorDeps
-          const sideMutationSemaphore = yield* Semaphore.make(1)
           const inFlight = { message: makeMessage("msg-drain-inflight", "in flight") }
           const behavior = yield* makeAgentLoopBehavior(
             {
@@ -191,14 +188,13 @@ describe("queue drain regression", () => {
             },
             sessionId,
             branchId,
-            sideMutationSemaphore,
             LoopQueueState.make({
               steering: [{ message: makeMessage("msg-drain-steering", "steer") }],
               followUp: [{ message: makeMessage("msg-drain-follow-up", "follow") }],
               inFlight,
             }),
           )
-          yield* Effect.addFinalizer(() => Scope.close(behavior.scope, Exit.void))
+          yield* Effect.addFinalizer(() => behavior.close)
           yield* behavior.start
 
           const drained = yield* behavior.drainQueue

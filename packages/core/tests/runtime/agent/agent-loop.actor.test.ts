@@ -68,7 +68,23 @@ const interruptPayload = (params: {
 }) => ({ ...params, workspaceId: DefaultWorkspaceId })
 
 describe("AgentLoop actor identity", () => {
-  it.effect("Submit dedup keys by message id, mailboxes by message (sessionId, branchId)", () =>
+  it.effect(
+    "public submission and steering ops are live-only while reply commands remain persisted",
+    () =>
+      Effect.sync(() => {
+        const hasPersistedFlag = (definition: object) => Object.hasOwn(definition, "persisted")
+        const hasPersistedTrueFlag = (definition: object) =>
+          Object.entries(definition).some(([key, value]) => key === "persisted" && value === true)
+
+        expect(hasPersistedFlag(AgentLoop._meta.definitions.Submit)).toBe(false)
+        expect(hasPersistedFlag(AgentLoop._meta.definitions.QueueFollowUp)).toBe(false)
+        expect(hasPersistedFlag(AgentLoop._meta.definitions.Steer)).toBe(false)
+        expect(hasPersistedTrueFlag(AgentLoop._meta.definitions.Interrupt)).toBe(true)
+        expect(hasPersistedTrueFlag(AgentLoop._meta.definitions.RespondInteraction)).toBe(true)
+      }),
+  )
+
+  it.effect("Submit execution id keys by message id and routes by message target", () =>
     Effect.gen(function* () {
       const exec1 = yield* AgentLoop.Submit.executionId(
         submitPayload({ id: messageOne, sessionId: sessionA, branchId: branchMain }),
@@ -86,7 +102,7 @@ describe("AgentLoop actor identity", () => {
         submitPayload({ id: messageOne, sessionId: sessionB, branchId: branchMain }),
       )
 
-      // Same payload → same ExecId (dedup).
+      // Same payload → same ExecId.
       expect(exec1).toBe(exec1Again)
 
       // Different message → different ExecId.
@@ -155,7 +171,7 @@ describe("AgentLoop actor identity", () => {
     }),
   )
 
-  it.effect("Steer routes via command target, dedups by commandId", () =>
+  it.effect("Steer routes via command target and keys by commandId", () =>
     Effect.gen(function* () {
       const execAlpha = yield* AgentLoop.Steer.executionId(
         steerPayload({ sessionId: sessionA, branchId: branchMain, commandId: cmdAlpha }),
@@ -177,7 +193,7 @@ describe("AgentLoop actor identity", () => {
     }),
   )
 
-  it.effect("Interrupt dedup keys by commandId", () =>
+  it.effect("Interrupt execution id keys by commandId", () =>
     Effect.gen(function* () {
       const execAlpha = yield* AgentLoop.Interrupt.executionId(
         interruptPayload({ sessionId: sessionA, branchId: branchMain, commandId: cmdAlpha }),
@@ -205,7 +221,7 @@ describe("AgentLoop actor identity", () => {
     }),
   )
 
-  it.effect("RespondInteraction dedup keys by requestId", () =>
+  it.effect("RespondInteraction execution id keys by requestId", () =>
     Effect.gen(function* () {
       const reqOne = InteractionRequestId.make("req-one")
       const reqTwo = InteractionRequestId.make("req-two")
@@ -236,7 +252,7 @@ describe("AgentLoop actor identity", () => {
     }),
   )
 
-  it.effect("DrainQueue dedup keys by commandId", () =>
+  it.effect("DrainQueue execution id keys by commandId", () =>
     Effect.gen(function* () {
       const execAlpha = yield* AgentLoop.DrainQueue.executionId({
         workspaceId: DefaultWorkspaceId,
@@ -317,7 +333,7 @@ describe("AgentLoop actor identity", () => {
     }),
   )
 
-  it.effect("RecordToolResult dedup keys by toolCallId", () =>
+  it.effect("RecordToolResult execution id keys by toolCallId", () =>
     Effect.gen(function* () {
       const callA = ToolCallId.make("tool-call-a")
       const callB = ToolCallId.make("tool-call-b")
@@ -342,7 +358,7 @@ describe("AgentLoop actor identity", () => {
     }),
   )
 
-  it.effect("InvokeTool dedup keys by commandId", () =>
+  it.effect("InvokeTool execution id keys by commandId", () =>
     Effect.gen(function* () {
       const execAlpha = yield* AgentLoop.InvokeTool.executionId({
         workspaceId: DefaultWorkspaceId,
@@ -358,7 +374,7 @@ describe("AgentLoop actor identity", () => {
         branchId: branchMain,
         commandId: cmdAlpha,
         toolName: "echo",
-        input: { text: "different input still dedups by cmd" },
+        input: { text: "different input still keys by cmd" },
       })
       const execBeta = yield* AgentLoop.InvokeTool.executionId({
         workspaceId: DefaultWorkspaceId,

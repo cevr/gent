@@ -23,10 +23,12 @@
  * authority. Only `Interrupt` (no embedded payload) carries explicit
  * target fields.
  *
- * **Primary key (dedup)** per op:
- * - `Submit` / `QueueFollowUp` — `message.id`
- * - `Steer` — `commandId`
- * - `Interrupt` — `commandId`
+ * **Execution id key** per op:
+ * - `Submit` / `QueueFollowUp` — `message.id` (live-only; SessionRuntime owns
+ *   durable request idempotency for this path)
+ * - `Steer` — `commandId` (live-only; SessionRuntime owns durable request
+ *   idempotency for this path)
+ * - `Interrupt` / `RespondInteraction` — durable persisted command key
  *
  * Schemas reuse gent's existing domain (`Message`, `RunSpec`,
  * `SteerCommand`) rather than introducing a parallel envelope shape.
@@ -34,19 +36,7 @@
  * @module
  */
 
-import {
-  DateTime,
-  Deferred,
-  Effect,
-  Exit,
-  Ref,
-  Schema,
-  Scope,
-  Semaphore,
-  Stream,
-  Layer,
-  Option,
-} from "effect"
+import { DateTime, Effect, Exit, Ref, Schema, Stream, Layer, Option } from "effect"
 import { ShardingConfig } from "effect/unstable/cluster"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Actor } from "effect-encore"
@@ -82,7 +72,6 @@ import {
 import {
   type AgentLoopBehavior,
   causeToAgentLoopError,
-  interruptActiveStream,
   makeAgentLoopBehavior,
 } from "./agent-loop.behavior.js"
 import { AgentLoopBehaviorDeps } from "./agent-loop.behavior-deps.js"
@@ -355,9 +344,9 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     }),
   },
   // Programmatic tool invocation (server-driven). commandId is required
-  // here (vs optional in the legacy command schema) because actor dedup
-  // needs a deterministic primary key — callers that previously elided
-  // commandId now generate one before sending.
+  // here (vs optional in the legacy command schema) because the actor
+  // execution id needs a deterministic primary key — callers that previously
+  // elided commandId now generate one before sending.
   InvokeTool: {
     payload: InvokeToolFields,
     success: Schema.Void,
@@ -532,7 +521,6 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     queueStorage: workspaceQueueStorage,
     sessionStorage: workspaceSessionStorage,
   } satisfies typeof rawDeps
-  const sideMutationSemaphore = yield* Semaphore.make(1)
   const closed = yield* Ref.make(false)
   const operationSeen = yield* Ref.make(false)
 
@@ -543,9 +531,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
     Effect.gen(function* () {
       if (yield* Ref.get(closed)) return
       yield* Ref.set(closed, true)
-      yield* interruptActiveStream(loop.activeStreamRef)
-      yield* Deferred.succeed(loop.closed, undefined).pipe(Effect.ignore)
-      yield* Scope.close(loop.scope, Exit.void)
+      yield* loop.close
     }).pipe(Effect.ignore)
 
   const cleanupLoop = (loop: AgentLoopBehavior) => closeBehavior(loop)
@@ -701,7 +687,6 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
       },
       sessionId,
       branchId,
-      sideMutationSemaphore,
       initialQueue,
     )
     if (initialQueueFailure !== undefined) {
@@ -762,7 +747,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
       yield* ensureStarted
       return handle.stateChanges.pipe(
         Stream.map(projectRuntimeState),
-        Stream.interruptWhen(Deferred.await(handle.closed)),
+        Stream.interruptWhen(handle.awaitExit),
       )
     }),
   )
@@ -877,7 +862,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
         const loopState = yield* handle.appendSteering(item)
         const shouldInterrupt = projectedState._tag === "Running" || loopState._tag === "Running"
         if (shouldInterrupt) {
-          yield* interruptActiveStream(handle.activeStreamRef)
+          yield* handle.interruptActiveStream
         }
         return
       }
@@ -974,7 +959,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
         ensureTarget(operation).pipe(
           Effect.andThen(markWrite),
           Effect.andThen(
-            handle.sideMutationSemaphore.withPermits(1)(
+            handle.withSideMutation(
               recordToolResult({
                 storage: deps.turnStorage,
                 eventPublisher: deps.eventPublisher,
@@ -999,7 +984,7 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
         ensureTarget(operation).pipe(
           Effect.andThen(markWrite),
           Effect.andThen(
-            handle.sideMutationSemaphore.withPermits(1)(
+            handle.withSideMutation(
               Effect.gen(function* () {
                 const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
                 const environment = yield* handle.resolveTurnProfile

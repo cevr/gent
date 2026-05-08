@@ -14,11 +14,12 @@ import {
   DateTime,
   Deferred,
   Effect,
-  Queue,
+  Exit,
   Ref,
   Schema,
   Semaphore,
   Scope,
+  TxQueue,
   TxSubscriptionRef,
   type Stream,
 } from "effect"
@@ -135,8 +136,6 @@ export const resolveStoredAgent = (params: {
   })
 
 export type AgentLoopBehavior = {
-  activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
-  sideMutationSemaphore: Semaphore.Semaphore
   persistenceFailure: Effect.Effect<void, AgentLoopError>
   readState: Effect.Effect<AgentLoopState>
   stateChanges: Stream.Stream<AgentLoopState>
@@ -171,16 +170,16 @@ export type AgentLoopBehavior = {
   /** Read the current FSM state. Replaces effect-machine `actor.snapshot`. */
   snapshot: Effect.Effect<LoopState>
   startTurn: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
+  interruptActiveStream: Effect.Effect<void>
   interrupt: Effect.Effect<void, AgentLoopError>
   switchAgent: (agent: AgentNameType) => Effect.Effect<void, AgentLoopError>
   respondInteraction: (requestId: InteractionRequestId) => Effect.Effect<void, AgentLoopError>
+  withSideMutation: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   /** Mark the per-entity behavior ready to accept state mutations. */
   start: Effect.Effect<void, AgentLoopError>
   /** Resolves once the loop scope is closed. */
   awaitExit: Effect.Effect<void>
-  resourceManager: ResourceManagerService
-  closed: Deferred.Deferred<void>
-  scope: Scope.Closeable
+  close: Effect.Effect<void>
 }
 
 export const interruptActiveStream = (activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>) =>
@@ -267,7 +266,6 @@ export const makeAgentLoopBehavior = (
   deps: AgentLoopBehaviorDeps,
   sessionId: SessionId,
   branchId: BranchId,
-  sideMutationSemaphore: Semaphore.Semaphore,
   initialQueue: LoopQueueState = emptyLoopQueueState(),
 ): Effect.Effect<AgentLoopBehavior, never, never> =>
   Effect.gen(function* () {
@@ -340,8 +338,9 @@ export const makeAgentLoopBehavior = (
     )
 
     const loopScope = yield* Scope.make()
-    const turnWorkerQueue = yield* Queue.unbounded<RunningState>()
+    const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
+    const sideMutationSemaphore = yield* Semaphore.make(1)
     const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
     const interruptedRef = yield* Ref.make(false)
     const currentAgent = yield* resolveStoredAgent({
@@ -1102,7 +1101,7 @@ export const makeAgentLoopBehavior = (
       )
 
     const enqueueTurnWorker = (state: RunningState): Effect.Effect<void> =>
-      Queue.offer(turnWorkerQueue, state).pipe(Effect.asVoid)
+      TxQueue.offer(turnWorkerQueue, state).pipe(Effect.asVoid)
 
     const finishTurnWorker = (
       startState: RunningState,
@@ -1181,7 +1180,7 @@ export const makeAgentLoopBehavior = (
         ),
       )
 
-    const turnWorkerLoop = Queue.take(turnWorkerQueue).pipe(
+    const turnWorkerLoop = TxQueue.take(turnWorkerQueue).pipe(
       Effect.flatMap(runTurnWorker),
       Effect.forever,
       Effect.ignore,
@@ -1285,9 +1284,13 @@ export const makeAgentLoopBehavior = (
       yield* startTurnWorker
     })
 
+    const close = Effect.gen(function* () {
+      yield* interruptActiveStream(activeStreamRef)
+      yield* Deferred.succeed(closed, undefined).pipe(Effect.ignore)
+      yield* Scope.close(loopScope, Exit.void)
+    }).pipe(Effect.ignore)
+
     return {
-      activeStreamRef,
-      sideMutationSemaphore,
       persistenceFailure: Deferred.await(persistenceFailure),
       readState,
       stateChanges,
@@ -1305,13 +1308,13 @@ export const makeAgentLoopBehavior = (
       refreshRuntimeState,
       snapshot: currentLoopState,
       startTurn,
+      interruptActiveStream: interruptActiveStream(activeStreamRef),
       interrupt,
       switchAgent,
       respondInteraction,
+      withSideMutation: (effect) => sideMutationSemaphore.withPermits(1)(effect),
       start,
       awaitExit: Deferred.await(closed),
-      resourceManager,
-      closed,
-      scope: loopScope,
+      close,
     } satisfies AgentLoopBehavior
   })

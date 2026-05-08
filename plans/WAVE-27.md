@@ -377,33 +377,34 @@ primitive until the SessionRuntime spike lands.
 - `bun run test:e2e`
 - `bun run gate`
 
-## Commit 9: refactor(runtime): hide AgentLoop mutable internals behind STM entity state
+## Commit 9: refactor(runtime): hide AgentLoop behavior internals
 
 **Justification**: The actor boundary is correct, but the behavior object
 exposes refs, queues, semaphores, scope, and lifecycle fields as an internal
-service bag. STM should own the state transition primitive more deeply.
+service bag. Behavior should own those primitives and expose intent-shaped
+operations; callers should not hold mutable handles they can misuse.
 
 **Principles**
 
-- `use-the-platform`: use `TxSubscriptionRef`, `TxRef`, and `TxQueue` for
-  atomic state/queue updates.
+- `use-the-platform`: use `TxSubscriptionRef` and `TxQueue` for state and
+  worker queue ownership.
 - `small-interface-deep-implementation`: expose fewer behavior internals.
 
 **Skills**: `effect-v4`, `architecture`, `test`.
 
 **Changes**
 
-| File                                                                                        | Change                                                                                    | Lines                                        |
-| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts` | Collapse exposed mutable fields and move queue transactions behind one STM-backed module. | `137-184`, `342-442`, `464-552`, `1093-1286` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.state.ts`    | Keep pure state transition ownership.                                                     | `32-259`                                     |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/agent-loop-queue-state.ts`     | Keep durable queue schema.                                                                | `5-17`                                       |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop-queue.test.ts`   | Preserve public queue behavior tests.                                                     | multiple                                     |
+| File                                                                                            | Change                                                                                                             | Lines                                                          |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts`     | Own the worker `TxQueue`, semaphore, active-stream ref, close deferred, and scope internally.                      | `138-182`, `340-357`, `1103-1318`                              |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts`        | Call behavior intent methods instead of reaching into refs, semaphores, deferreds, and scopes.                     | `37-83`, `537-542`, `690-698`, `752-758`, `866-873`, `966-995` |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop-queue.test.ts`       | Close behavior through its public lifecycle API and stop constructing its internal semaphore.                      | `1-3`, `96-108`, `180-197`                                     |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent/agent-loop.actor.test.ts` | Pin live-only public ops versus persisted reply commands after independent review caught stale durability wording. | `68-84`, `252-384`                                             |
 
 **Verification**
 
-- Focused queue, interaction, actor, and session-runtime tests.
-- `bun run test`
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/agent-loop-queue.test.ts tests/runtime/agent/agent-loop.actor.test.ts tests/runtime/session-runtime.test.ts`
 - `bun run test:e2e`
 - `bun run gate`
 
