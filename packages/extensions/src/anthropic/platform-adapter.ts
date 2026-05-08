@@ -1,5 +1,7 @@
 import { Context, Layer } from "effect"
-import { type ExtensionHostPlatform } from "@gent/core/extensions/api"
+import type { GentExtension } from "@gent/core/extensions/api"
+
+type ExtensionHostPlatform = Parameters<GentExtension["setup"]>[0]["host"]
 
 export interface AnthropicPlatformShape {
   readonly platform: string

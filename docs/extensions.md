@@ -80,11 +80,12 @@ There is no builtin-internal surface. Shipped extensions are useful defaults,
 not a second trust tier.
 
 `ExtensionSetupContext.host` is the only public host platform view. It exposes
-small, serializable facts and host-owned actions such as OS info, executable
-path, inherited environment, command-name candidates, loopback port probing, and
-best-effort process signaling. Extensions do not yield `GentPlatform`, import
-`runProcess`, or reach into `@gent/core/runtime/*`; when they need more host
-authority, the design answer is a new public authoring primitive or a
+small, serializable facts and narrow host probes such as OS info, executable
+path, home directory, command-name candidates, and loopback port probing.
+Extensions do not yield `GentPlatform`, import `runProcess`, or reach into
+`@gent/core/runtime/*`; process authority is available only through
+`yield* ExtensionContext` and its `Process` facade. When extensions need more
+host authority, the design answer is a new public authoring primitive or a
 host-owned runtime feature.
 
 ## Discovery

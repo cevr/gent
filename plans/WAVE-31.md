@@ -147,6 +147,8 @@ that turn retries into new commands.
 
 ## Commit 2: refactor(extensions): remove public process escape hatch
 
+**Status**: Completed in current batch.
+
 **Justification**: `runProcess` and setup-time platform requirements create a
 second authority path outside the host-provided `ExtensionContext.Process`
 facade.
@@ -159,16 +161,20 @@ facade.
 
 **Changes**
 
-| File                                                                                                | Change                                                                        | Lines |
-| --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`                            | Stop exporting `runProcess` and raw host process types not needed by authors. | ~223  |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts` | Lock the reduced public API.                                                  | ~450  |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/workflow-helpers.ts`                    | Ensure process execution goes through `ExtensionContext.Process`.             | ~1    |
-| `/Users/cvr/Developer/personal/gent/docs/extensions.md`                                             | Document `ExtensionContext.Process` as the only process facade.               | ~80   |
+| File                                                                                                | Change                                                                           | Lines |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ----- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`                            | Stopped exporting `runProcess` and raw host process types.                       | ~223  |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts` | Locked reduced public API for process runner/platform/error exports.             | ~450  |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/anthropic/platform-adapter.ts`          | Moved starting-extension host-platform wiring off the public authoring barrel.   | ~1    |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/executor/platform-adapter.ts`           | Moved starting-extension host-platform wiring off the public authoring barrel.   | ~1    |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/executor/sidecar.ts`                    | Kept public import to `isRecord` only; host-platform type is internal.           | ~26   |
+| `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`                                                | Documented setup host as facts/probes, not process authority.                    | ~340  |
+| `/Users/cvr/Developer/personal/gent/docs/extensions.md`                                             | Documented `ExtensionContext.Process` as the only public process authority path. | ~80   |
 
 **Verification**
 
-- Focused extension-surface tests.
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/extension-surface-locks.test.ts`
+- `bun run typecheck`
 - `bun run gate`
 
 ## Commit 3: refactor(extensions): remove read-write intent ceremony

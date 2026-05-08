@@ -469,9 +469,8 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadTodo = typeof PublicExtensionApi.Todo
     // @ts-expect-error — todo ids belong to @gent/todo, not core author API
     type _BadTodoId = typeof PublicExtensionApi.TodoId
-    // Shipped extensions use the process facade while the author-facing ctx API
-    // collapses around ExtensionContext in the next simplification batch.
-    type _AllowedRunProcess = typeof PublicExtensionApi.runProcess
+    // @ts-expect-error — process spawning is host/internal plumbing; authors use ExtensionContext.Process
+    type _BadRunProcess = typeof PublicExtensionApi.runProcess
     // @ts-expect-error — process errors are paired with the non-public process runner
     type _BadProcessError = typeof PublicExtensionApi.ProcessError
     // @ts-expect-error — host platform service is not public extension author API
@@ -486,8 +485,10 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadEventEnvelope = PublicExtensionApi.EventEnvelope
     // @ts-expect-error — interaction wire state is client/runtime plumbing
     type _BadActiveInteraction = PublicExtensionApi.ActiveInteraction
-    type _AllowedExtensionHostPlatform = PublicExtensionApi.ExtensionHostPlatform
-    type _AllowedExtensionHostProcessError = typeof PublicExtensionApi.ExtensionHostProcessError
+    // @ts-expect-error — raw host platform includes process authority; authors use setup facts or ExtensionContext.Process
+    type _BadExtensionHostPlatform = PublicExtensionApi.ExtensionHostPlatform
+    // @ts-expect-error — raw process errors are mapped through ExtensionServiceError in public facades
+    type _BadExtensionHostProcessError = typeof PublicExtensionApi.ExtensionHostProcessError
     // @ts-expect-error — schema helper is an internal core migration primitive
     type _BadTaggedEnumClass = typeof PublicExtensionApi.TaggedEnumClass
     type _AllowedFileIndex = typeof PublicExtensionApi.FileIndex

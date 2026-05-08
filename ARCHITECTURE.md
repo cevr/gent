@@ -335,9 +335,9 @@ host-owned design. It should expose:
 - stable ids and author-facing schemas: `ExtensionId`, `ArtifactId`,
   `ToolCallId`, `PermissionRule`, output/message projection
   helpers that are safe to serialize across the extension boundary;
-- host facts/actions: `ExtensionSetupContext.host`, a small public view over
-  host-owned platform facts such as OS info, inherited env, command candidates,
-  port probing, and best-effort process signaling;
+- host facts: `ExtensionSetupContext.host`, a small public view over
+  host-owned platform facts such as OS info, executable path, home directory,
+  command candidates, and loopback port probes;
 - author-facing errors: capability, provider-auth, agent-run, and typed
   transition errors that extension code can intentionally return or inspect.
 
