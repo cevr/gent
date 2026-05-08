@@ -16,7 +16,7 @@ import { ChromePanel } from "../components/chrome-panel"
 import type { Branch, BranchTreeNode } from "../client"
 import type { SessionId } from "@gent/core-internal/domain/ids.js"
 import { formatError } from "../utils/format-error"
-import { truncate } from "../utils/truncate"
+import { truncate } from "../utils/format-tool"
 import { useScopedKeyboard } from "../keyboard/context"
 
 export interface BranchPickerProps {

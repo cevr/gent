@@ -28,6 +28,9 @@ export function formatUsageStats(
   return parts.join(" ")
 }
 
+export const truncate = (value: string, max: number): string =>
+  value.length > max ? `${value.slice(0, Math.max(0, max - 3))}...` : value
+
 export function shortenPath(p: string): string {
   return p.startsWith(HOME) ? `~${p.slice(HOME.length)}` : p
 }

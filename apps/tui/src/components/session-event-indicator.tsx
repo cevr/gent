@@ -1,6 +1,6 @@
 import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
-import { truncate } from "../utils/truncate"
+import { truncate } from "../utils/format-tool"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { getSessionEventLabel, type SessionEvent } from "./session-event-label"
 

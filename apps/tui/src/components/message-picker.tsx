@@ -6,7 +6,7 @@ import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { Message } from "./message-list"
 import { MessageId } from "@gent/core-internal/domain/ids.js"
-import { truncate } from "../utils/truncate"
+import { truncate } from "../utils/format-tool"
 import { useScopedKeyboard } from "../keyboard/context"
 
 interface PickerItem {

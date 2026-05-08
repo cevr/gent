@@ -6,7 +6,7 @@ import type { SessionTreeNode } from "../client"
 import { ChromePanel } from "./chrome-panel"
 import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
-import { truncate } from "../utils/truncate"
+import { truncate } from "../utils/format-tool"
 import { useScopedKeyboard } from "../keyboard/context"
 import { SessionTreeEvent, SessionTreeState, transitionSessionTree } from "./session-tree-state"
 
