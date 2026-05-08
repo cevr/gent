@@ -1,11 +1,15 @@
 import { Effect } from "effect"
-import { defineClientExtension, clientCommandContribution } from "../client-facets.js"
+import {
+  defineClientExtension,
+  clientContributions,
+  clientCommandContribution,
+} from "../client-facets.js"
 import { ClientShell } from "../client-services"
 
 export default defineClientExtension("@gent/plan", {
   setup: Effect.gen(function* () {
     const shell = yield* ClientShell
-    return [
+    return clientContributions(
       clientCommandContribution({
         id: "plan.create",
         title: "Plan",
@@ -41,6 +45,6 @@ export default defineClientExtension("@gent/plan", {
               : "Use the audit tool to audit the current changes. Detects concerns, audits in parallel, synthesizes findings, and applies fixes.",
           ),
       }),
-    ]
+    )
   }),
 })

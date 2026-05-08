@@ -2,7 +2,7 @@
  * ClientEffect — the Effect-typed authoring surface for TUI client extensions.
  *
  * Extension setup reads dependencies from `ClientDeps` and returns
- * `ReadonlyArray<ClientContribution>` through an Effect, with errors surfaced
+ * `ClientContributions` through an Effect, with errors surfaced
  * on the typed `ClientSetupError` channel.
  *
  * The runtime accepts only the Effect setup shape.

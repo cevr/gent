@@ -12,7 +12,7 @@
 import { describe, it, test, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { ExtensionId, ref, request } from "@gent/core/extensions/api"
-import { type AutocompleteItem, autocompleteContribution } from "../src/extensions/client-facets.js"
+import type { AutocompleteContribution, AutocompleteItem } from "../src/extensions/client-facets.js"
 import {
   ClientTransport,
   type ClientTransportShape,
@@ -67,7 +67,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
     Effect.gen(function* () {
       const transport = makeFakeTransport()
       const runtime = makeTestRuntime(transport)
-      const contribution = autocompleteContribution({
+      const contribution: AutocompleteContribution = {
         prefix: "$",
         title: "Test",
         items: (filter: string) =>
@@ -78,7 +78,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
             expect(session).toBeDefined()
             return [{ id: filter, label: `got:${filter}` }] as const
           }),
-      })
+      }
       const result = yield* Effect.promise(() =>
         runAutocompleteItems(contribution, "hello", runtime),
       )
@@ -109,7 +109,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       // array when the underlying transport call fails (no active session).
       const transport = makeFakeTransport({ currentSession: () => undefined })
       const runtime = makeTestRuntime(transport)
-      const contribution = autocompleteContribution({
+      const contribution: AutocompleteContribution = {
         prefix: "$",
         title: "Test",
         items: (_filter: string) =>
@@ -117,7 +117,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
             const reply = yield* requestExtension(ref(ListThingsRpc), {})
             return reply.map((label) => ({ id: label, label })) as readonly AutocompleteItem[]
           }),
-      })
+      }
       const result = yield* Effect.tryPromise(() =>
         runAutocompleteItems(contribution, "filter", runtime),
       ).pipe(Effect.catchEager(() => Effect.succeed([] as readonly AutocompleteItem[])))
@@ -140,7 +140,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
     Effect.gen(function* () {
       const transport = makeFakeTransport({ currentSession: () => undefined })
       const runtime = makeTestRuntime(transport)
-      const contribution = autocompleteContribution({
+      const contribution: AutocompleteContribution = {
         prefix: "$",
         title: "Test",
         items: (_filter: string) =>
@@ -148,7 +148,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
             const reply = yield* requestExtension(ref(ListThingsRpc), {})
             return reply.map((label) => ({ id: label, label })) as readonly AutocompleteItem[]
           }),
-      })
+      }
       const result = yield* Effect.tryPromise(() =>
         runAutocompleteItems(contribution, "filter", runtime),
       ).pipe(Effect.catchEager(() => Effect.succeed([] as readonly AutocompleteItem[])))

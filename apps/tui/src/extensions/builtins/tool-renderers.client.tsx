@@ -17,6 +17,7 @@ import { Effect } from "effect"
 import {
   defineClientExtension,
   borderLabelContribution,
+  clientContributions,
   clientCommandContribution,
   interactionRendererContribution,
   overlayContribution,
@@ -39,7 +40,7 @@ const EXT_ID = TODO_EXTENSION_ID
 export const builtinTools = defineClientExtension("@gent/tools", {
   setup: Effect.gen(function* () {
     const shell = yield* ClientShell
-    return [
+    return clientContributions(
       ...BUILTIN_TOOL_RENDERERS.map((entry) =>
         rendererContribution(entry.toolNames, entry.component, { headless: entry.headless }),
       ),
@@ -111,16 +112,18 @@ export const builtinTools = defineClientExtension("@gent/tools", {
               : "Use the loop tool to iterate on the current todo until complete or a condition is met.",
           ),
       }),
-    ]
+    )
   }),
 })
 
 export const builtinInteractions = defineClientExtension("@gent/interaction-tools", {
-  setup: Effect.succeed([
-    interactionRendererContribution(PromptRenderer),
-    interactionRendererContribution(PromptRenderer, "prompt"),
-    interactionRendererContribution(AskUserRenderer, "ask-user"),
-  ]),
+  setup: Effect.succeed(
+    clientContributions(
+      interactionRendererContribution(PromptRenderer),
+      interactionRendererContribution(PromptRenderer, "prompt"),
+      interactionRendererContribution(AskUserRenderer, "ask-user"),
+    ),
+  ),
 })
 
 export const builtinTodos = defineClientExtension("@gent/todo", {
@@ -253,7 +256,7 @@ export const builtinTodos = defineClientExtension("@gent/todo", {
       return null
     }
 
-    return [
+    return clientContributions(
       widgetContribution({
         id: "todos",
         slot: "below-messages",
@@ -288,7 +291,7 @@ export const builtinTodos = defineClientExtension("@gent/todo", {
           return [{ text: `${count} todo${count > 1 ? "s" : ""} ↓`, color: "info" }]
         },
       }),
-    ]
+    )
   }),
 })
 

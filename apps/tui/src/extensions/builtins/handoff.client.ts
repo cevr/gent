@@ -1,6 +1,7 @@
 import { Effect } from "effect"
 import {
   defineClientExtension,
+  clientContributions,
   clientCommandContribution,
   interactionRendererContribution,
 } from "../client-facets.js"
@@ -10,7 +11,7 @@ import { ClientShell } from "../client-services"
 export default defineClientExtension("@gent/handoff", {
   setup: Effect.gen(function* () {
     const shell = yield* ClientShell
-    return [
+    return clientContributions(
       interactionRendererContribution(HandoffRenderer, "handoff"),
       clientCommandContribution({
         id: "handoff.trigger",
@@ -23,6 +24,6 @@ export default defineClientExtension("@gent/handoff", {
             "Please create a handoff by distilling the current context into a concise summary. Use the handoff tool with the distilled context. Include: current task status, key decisions made, relevant file paths, open questions, and any state that needs to carry over to the new session.",
           ),
       }),
-    ]
+    )
   }),
 })

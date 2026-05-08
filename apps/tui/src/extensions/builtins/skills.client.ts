@@ -11,7 +11,7 @@ import { requestExtension } from "../client-transport"
 // The popup adapter runs both the setup and the per-call `items` Effect
 // through `extensionUI.clientRuntime.runPromise`.
 export default defineClientExtension("@gent/skills-ui", {
-  setup: Effect.succeed([
+  setup: Effect.succeed(
     autocompleteContribution({
       prefix: "$",
       title: "Skills",
@@ -30,5 +30,5 @@ export default defineClientExtension("@gent/skills-ui", {
         }),
       formatInsertion: (id: string) => `$${id.split(":").pop() ?? id} `,
     }),
-  ]),
+  ),
 })

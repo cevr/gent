@@ -18,6 +18,7 @@ import { ref } from "@gent/core/extensions/api"
 import {
   defineClientExtension,
   borderLabelContribution,
+  clientContributions,
   clientCommandContribution,
   overlayContribution,
 } from "../client-facets.js"
@@ -110,7 +111,7 @@ export default defineClientExtension(EXT_ID, {
     })
     lifecycle.addCleanup(unsubscribePulse)
 
-    return [
+    return clientContributions(
       borderLabelContribution({
         position: "top-left",
         priority: 20,
@@ -157,6 +158,6 @@ export default defineClientExtension(EXT_ID, {
           }
         },
       }),
-    ]
+    )
   }),
 })

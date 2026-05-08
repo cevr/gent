@@ -15,7 +15,8 @@ import {
 } from "../src/extensions/client-transport"
 import type {
   AnyExtensionClientModule,
-  ClientContribution,
+  BorderLabelPosition,
+  ClientContributions,
   ClientRuntime,
 } from "../src/extensions/client-facets.js"
 
@@ -101,17 +102,17 @@ export const makeClientExtensionRuntime = (
 export const runClientExtensionSetup = (
   runtime: ClientRuntime,
   extension: AnyExtensionClientModule,
-): Effect.Effect<ReadonlyArray<ClientContribution>> =>
+): Effect.Effect<ClientContributions> =>
   Effect.promise(() =>
     runtime.runPromise(
-      extension.setup as unknown as Effect.Effect<ReadonlyArray<ClientContribution>, never, never>,
+      extension.setup as unknown as Effect.Effect<ClientContributions, never, never>,
     ),
   )
 
 export const runClientExtensionSetupWithRuntime = (
   extension: AnyExtensionClientModule,
   opts: ClientExtensionHarnessOptions,
-): Effect.Effect<ReadonlyArray<ClientContribution>> => {
+): Effect.Effect<ClientContributions> => {
   const runtime = makeClientExtensionRuntime(opts)
   return runClientExtensionSetup(runtime, extension).pipe(
     Effect.ensuring(Effect.promise(() => runtime.dispose())),
@@ -119,13 +120,9 @@ export const runClientExtensionSetupWithRuntime = (
 }
 
 export const findBorderLabel = (
-  contributions: ReadonlyArray<ClientContribution>,
-  position: Extract<ClientContribution, { _tag: "border-label" }>["position"],
-): Extract<ClientContribution, { _tag: "border-label" }> | undefined =>
-  contributions.find(
-    (entry): entry is Extract<ClientContribution, { _tag: "border-label" }> =>
-      entry._tag === "border-label" && entry.position === position,
-  )
+  contributions: ClientContributions,
+  position: BorderLabelPosition,
+) => contributions.borderLabels?.find((entry) => entry.position === position)
 
 export const makeClientRuntime = (): ClientRuntime =>
   ManagedRuntime.make(

@@ -99,6 +99,7 @@ beforeAll(() => {
     `import { Effect } from "effect"
 import {
   defineClientExtension,
+  clientContributions,
   clientCommandContribution,
   overlayContribution,
   rendererContribution,
@@ -106,12 +107,12 @@ import {
 } from "../../../src/extensions/client-facets.js"
 
 export default defineClientExtension("@test/custom-read", {
-  setup: Effect.succeed([
+  setup: Effect.succeed(clientContributions(
     rendererContribution(["my_custom_tool"], () => "custom-tool-renderer"),
     widgetContribution({ id: "test-widget", slot: "below-messages", priority: 50, component: () => "test-widget" }),
     clientCommandContribution({ id: "test-cmd", title: "Test Command", category: "test", onSelect: () => {} }),
     overlayContribution({ id: "test-overlay", component: (_props) => "test-overlay" }),
-  ]),
+  )),
 })`,
   )
   writeFileSync(
@@ -120,35 +121,35 @@ export default defineClientExtension("@test/custom-read", {
 import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets.js"
 
 export default defineClientExtension("@test/override-bash", {
-  setup: Effect.succeed([
+  setup: Effect.succeed(
     rendererContribution(["bash"], () => "project-bash-override"),
-  ]),
+  ),
 })`,
   )
   writeFileSync(
     join(USER_DIR, "alpha.client.ts"),
-    "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/alpha', { setup: Effect.succeed([clientCommandContribution({ id: 'alpha', title: 'Alpha', onSelect: () => {} })]) })",
+    "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/alpha', { setup: Effect.succeed(clientCommandContribution({ id: 'alpha', title: 'Alpha', onSelect: () => {} })) })",
   )
   writeFileSync(
     join(USER_DIR, "zeta.client.ts"),
-    "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/zeta', { setup: Effect.succeed([clientCommandContribution({ id: 'zeta', title: 'Zeta', onSelect: () => {} })]) })",
+    "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/zeta', { setup: Effect.succeed(clientCommandContribution({ id: 'zeta', title: 'Zeta', onSelect: () => {} })) })",
   )
   writeFileSync(
     join(USER_DIR, ".hidden.client.tsx"),
-    "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/hidden', { setup: Effect.succeed([clientCommandContribution({ id: 'hidden', title: 'Hidden', onSelect: () => {} })]) })",
+    "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/hidden', { setup: Effect.succeed(clientCommandContribution({ id: 'hidden', title: 'Hidden', onSelect: () => {} })) })",
   )
   writeFileSync(
     join(USER_DIR, "_internal.client.tsx"),
-    "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/internal', { setup: Effect.succeed([clientCommandContribution({ id: 'internal', title: 'Internal', onSelect: () => {} })]) })",
+    "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/internal', { setup: Effect.succeed(clientCommandContribution({ id: 'internal', title: 'Internal', onSelect: () => {} })) })",
   )
   mkdirSync(join(USER_DIR, "__tests__"), { recursive: true })
   writeFileSync(
     join(USER_DIR, "__tests__", "test.client.tsx"),
-    "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../../src/extensions/client-facets.js'; export default defineClientExtension('@test/spec-only', { setup: Effect.succeed([clientCommandContribution({ id: 'spec-only', title: 'Spec Only', onSelect: () => {} })]) })",
+    "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../../src/extensions/client-facets.js'; export default defineClientExtension('@test/spec-only', { setup: Effect.succeed(clientCommandContribution({ id: 'spec-only', title: 'Spec Only', onSelect: () => {} })) })",
   )
   writeFileSync(
     join(PROJECT_DIR, "prebuilt.client.mjs"),
-    "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/prebuilt', { setup: Effect.succeed([clientCommandContribution({ id: 'prebuilt', title: 'Prebuilt', onSelect: () => {} })]) })",
+    "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/prebuilt', { setup: Effect.succeed(clientCommandContribution({ id: 'prebuilt', title: 'Prebuilt', onSelect: () => {} })) })",
   )
 })
 afterAll(() => {
@@ -222,9 +223,9 @@ describe("loadTuiExtensions", () => {
 import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets.js"
 
 export default defineClientExtension("@test/user-bash", {
-  setup: Effect.succeed([
+  setup: Effect.succeed(
     rendererContribution(["bash"], () => "user-bash-override"),
-  ]),
+  ),
 })`,
       )
       const resolved = yield* Effect.promise(() =>
@@ -291,7 +292,7 @@ export default {
 import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets.js"
 
 export default defineClientExtension("@test/a", {
-  setup: Effect.succeed([rendererContribution(["my_tool"], () => "a")]),
+  setup: Effect.succeed(rendererContribution(["my_tool"], () => "a")),
 })`,
       )
       writeFileSync(
@@ -300,7 +301,7 @@ export default defineClientExtension("@test/a", {
 import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets.js"
 
 export default defineClientExtension("@test/b", {
-  setup: Effect.succeed([rendererContribution(["my_tool"], () => "b")]),
+  setup: Effect.succeed(rendererContribution(["my_tool"], () => "b")),
 })`,
       )
       const exit = yield* Effect.tryPromise({

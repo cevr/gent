@@ -1,7 +1,7 @@
 // TUI Extension Client Module
 //
-// Extensions export an Effect-typed `setup` that returns a flat
-// `ClientContribution[]` array. The TUI discovers *.client.{tsx,ts,js,mjs}
+// Extensions export an Effect-typed `setup` that returns contribution buckets.
+// The TUI discovers *.client.{tsx,ts,js,mjs}
 // files from extension directories, imports them, runs each `setup` against
 // the per-provider `clientRuntime`, and resolves contributions with scope
 // precedence (project > user > builtin). Setups yield typed services from
@@ -9,11 +9,10 @@
 // `ClientComposer`, `ClientLifecycle`, `FileSystem`, `Path`) — there is no
 // `(ctx) => Array` arm and no imperative context bag.
 //
-// The `ClientContribution` union is the foundational data structure here —
-// adding a new facet requires registering it in the resolver's HANDLED_TAGS set
-// (apps/tui/src/extensions/resolve.ts) and adding a per-tag resolver, otherwise
-// the resolver throws at the entry guard for any unknown _tag.
-// Per-tag conflict rules are preserved by the resolver:
+// The `ClientContributions` bucket is the foundational data structure here.
+// Adding a new facet means adding an explicit field and resolver path, not
+// another stringly runtime tag table. Per-bucket conflict rules are preserved
+// by the resolver:
 //   - renderers: last (highest scope) wins by tool name
 //   - widgets:   last (highest scope) wins by widget id; sorted by priority
 //   - commands:  last (highest scope) wins by command id; superseded
@@ -91,17 +90,15 @@ export type AutocompleteItemsEffect = Effect.Effect<
   ClientRuntimeServices
 >
 
-// ── Per-tag contribution shapes ──
+// ── Contribution shapes ──
 
 export interface RendererContribution {
-  readonly _tag: "renderer"
   readonly toolNames: ReadonlyArray<string>
   readonly component: ToolRenderer
   readonly headless?: HeadlessToolRenderer
 }
 
 export interface WidgetContribution {
-  readonly _tag: "widget"
   readonly id: string
   readonly slot: WidgetSlot
   /** Lower = earlier; default 100. */
@@ -125,7 +122,6 @@ export interface PaletteLevel {
 }
 
 export interface ClientCommandContribution {
-  readonly _tag: "command"
   readonly id: string
   readonly title: string
   readonly description?: string
@@ -145,21 +141,18 @@ export interface ClientCommandContribution {
 }
 
 export interface OverlayContribution {
-  readonly _tag: "overlay"
   readonly id: string
   /** Receives `{ open, onClose }` props at render time. */
   readonly component: OverlayComponent
 }
 
 export interface InteractionRendererContribution {
-  readonly _tag: "interaction-renderer"
   /** Matches against metadata.type. undefined = default fallback renderer. */
   readonly metadataType?: string
   readonly component: InteractionRendererComponent
 }
 
 export interface ComposerSurfaceContribution {
-  readonly _tag: "composer-surface"
   readonly component: ComposerSurfaceComponent
 }
 
@@ -179,7 +172,6 @@ export interface BorderLabelItem {
 }
 
 export interface BorderLabelContribution {
-  readonly _tag: "border-label"
   readonly position: BorderLabelPosition
   /** Lower = earlier; default 100. */
   readonly priority?: number
@@ -187,7 +179,6 @@ export interface BorderLabelContribution {
 }
 
 export interface AutocompleteContribution {
-  readonly _tag: "autocomplete"
   readonly prefix: string
   readonly title: string
   /** Fetch items for the given filter. Sync OR Effect (no Promise).
@@ -205,19 +196,55 @@ export interface AutocompleteContribution {
   readonly onSelect?: (id: string, filter: string) => void
 }
 
-// ── Union ──
+// ── Buckets ──
 
-export type ClientContribution =
-  | RendererContribution
-  | WidgetContribution
-  | ClientCommandContribution
-  | OverlayContribution
-  | InteractionRendererContribution
-  | ComposerSurfaceContribution
-  | BorderLabelContribution
-  | AutocompleteContribution
+export interface ClientContributions {
+  readonly renderers?: ReadonlyArray<RendererContribution>
+  readonly widgets?: ReadonlyArray<WidgetContribution>
+  readonly commands?: ReadonlyArray<ClientCommandContribution>
+  readonly overlays?: ReadonlyArray<OverlayContribution>
+  readonly interactionRenderers?: ReadonlyArray<InteractionRendererContribution>
+  readonly composerSurface?: ComposerSurfaceContribution
+  readonly borderLabels?: ReadonlyArray<BorderLabelContribution>
+  readonly autocomplete?: ReadonlyArray<AutocompleteContribution>
+}
 
-export type ClientContributionTag = ClientContribution["_tag"]
+const append = <A>(
+  left: ReadonlyArray<A> | undefined,
+  right: ReadonlyArray<A> | undefined,
+): ReadonlyArray<A> | undefined => {
+  if (right === undefined) return left
+  if (left === undefined) return right
+  return [...left, ...right]
+}
+
+export const clientContributions = (
+  ...parts: ReadonlyArray<ClientContributions>
+): ClientContributions => {
+  const out: {
+    renderers?: ReadonlyArray<RendererContribution>
+    widgets?: ReadonlyArray<WidgetContribution>
+    commands?: ReadonlyArray<ClientCommandContribution>
+    overlays?: ReadonlyArray<OverlayContribution>
+    interactionRenderers?: ReadonlyArray<InteractionRendererContribution>
+    composerSurface?: ComposerSurfaceContribution
+    borderLabels?: ReadonlyArray<BorderLabelContribution>
+    autocomplete?: ReadonlyArray<AutocompleteContribution>
+  } = {}
+
+  for (const part of parts) {
+    out.renderers = append(out.renderers, part.renderers)
+    out.widgets = append(out.widgets, part.widgets)
+    out.commands = append(out.commands, part.commands)
+    out.overlays = append(out.overlays, part.overlays)
+    out.interactionRenderers = append(out.interactionRenderers, part.interactionRenderers)
+    out.composerSurface = part.composerSurface ?? out.composerSurface
+    out.borderLabels = append(out.borderLabels, part.borderLabels)
+    out.autocomplete = append(out.autocomplete, part.autocomplete)
+  }
+
+  return out
+}
 
 // ── Smart constructors ──
 
@@ -225,23 +252,23 @@ export const rendererContribution = (
   toolNames: ReadonlyArray<string>,
   component: ToolRenderer,
   options?: { readonly headless?: HeadlessToolRenderer },
-): RendererContribution => ({ _tag: "renderer", toolNames, component, ...options })
+): ClientContributions => ({ renderers: [{ toolNames, component, ...options }] })
 
 export const widgetContribution = (opts: {
   readonly id: string
   readonly slot: WidgetSlot
   readonly priority?: number
   readonly component: WidgetComponent
-}): WidgetContribution => ({ _tag: "widget", ...opts })
+}): ClientContributions => ({ widgets: [opts] })
 
 export const clientCommandContribution = (
-  opts: Omit<ClientCommandContribution, "_tag">,
-): ClientCommandContribution => ({ _tag: "command", ...opts })
+  opts: ClientCommandContribution,
+): ClientContributions => ({ commands: [opts] })
 
 export const overlayContribution = (opts: {
   readonly id: string
   readonly component: OverlayComponent
-}): OverlayContribution => ({ _tag: "overlay", ...opts })
+}): ClientContributions => ({ overlays: [opts] })
 
 /**
  * Build an interaction renderer contribution. The component must be a function
@@ -251,10 +278,8 @@ export const overlayContribution = (opts: {
 export const interactionRendererContribution = (
   component: InteractionRendererComponent,
   metadataType?: string,
-): InteractionRendererContribution => ({
-  _tag: "interaction-renderer",
-  metadataType,
-  component,
+): ClientContributions => ({
+  interactionRenderers: [{ ...(metadataType === undefined ? {} : { metadataType }), component }],
 })
 
 /**
@@ -263,15 +288,15 @@ export const interactionRendererContribution = (
  */
 export const composerSurfaceContribution = (
   component: ComposerSurfaceComponent,
-): ComposerSurfaceContribution => ({ _tag: "composer-surface", component })
+): ClientContributions => ({ composerSurface: { component } })
 
-export const borderLabelContribution = (
-  opts: Omit<BorderLabelContribution, "_tag">,
-): BorderLabelContribution => ({ _tag: "border-label", ...opts })
+export const borderLabelContribution = (opts: BorderLabelContribution): ClientContributions => ({
+  borderLabels: [opts],
+})
 
-export const autocompleteContribution = (
-  opts: Omit<AutocompleteContribution, "_tag">,
-): AutocompleteContribution => ({ _tag: "autocomplete", ...opts })
+export const autocompleteContribution = (opts: AutocompleteContribution): ClientContributions => ({
+  autocomplete: [opts],
+})
 
 /** Overlay identifier (registered in `OverlayContribution`). */
 export type OverlayId = string
@@ -296,7 +321,7 @@ export interface ComposerState {
  * it. Errors flow on the typed `ClientSetupError` channel.
  */
 export type ExtensionClientSetup<R extends ClientRuntimeServices = ClientDeps> = ClientEffect<
-  ReadonlyArray<ClientContribution>,
+  ClientContributions,
   ClientSetupError,
   R
 >
@@ -331,10 +356,6 @@ function standaloneClientModule<R extends ClientRuntimeServices = ClientDeps>(
 }
 
 /** Create a TUI client extension module with typed contributions. */
-export function defineClientExtension<R extends ClientRuntimeServices = ClientDeps>(
-  id: string,
-  spec: { readonly setup: ExtensionClientSetup<R> },
-): ExtensionClientModule<R>
 export function defineClientExtension<R extends ClientRuntimeServices = ClientDeps>(
   id: string,
   spec: { readonly setup: ExtensionClientSetup<R> },

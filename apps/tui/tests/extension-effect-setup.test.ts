@@ -11,8 +11,8 @@ import { join } from "node:path"
 import { Effect, FileSystem, Layer, ManagedRuntime, Path } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
-  type AutocompleteContribution,
   autocompleteContribution,
+  type ClientContributions,
   type ClientRuntime,
   type ExtensionClientModule,
 } from "../src/extensions/client-facets.js"
@@ -26,23 +26,19 @@ const runtime = ManagedRuntime.make(
 describe("loadTuiExtensions Effect setup", () => {
   it.live("Effect setup is run through the runtime; FileSystem is provided", () =>
     Effect.gen(function* () {
-      const fxSetup: ClientEffect<ReadonlyArray<AutocompleteContribution>> = Effect.gen(
-        function* () {
-          // Prove we can reach a FileSystem from the runtime.
-          const fs = yield* FileSystem.FileSystem
-          const path = yield* Path.Path
-          // Touch both services so unused imports don't get optimized away.
-          expect(typeof fs.readFileString).toBe("function")
-          expect(typeof path.join).toBe("function")
-          return [
-            autocompleteContribution({
-              prefix: "!",
-              title: "effect",
-              items: () => [{ id: "y", label: "y" }],
-            }),
-          ]
-        },
-      )
+      const fxSetup: ClientEffect<ClientContributions> = Effect.gen(function* () {
+        // Prove we can reach a FileSystem from the runtime.
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        // Touch both services so unused imports don't get optimized away.
+        expect(typeof fs.readFileString).toBe("function")
+        expect(typeof path.join).toBe("function")
+        return autocompleteContribution({
+          prefix: "!",
+          title: "effect",
+          items: () => [{ id: "y", label: "y" }],
+        })
+      })
       const ext: ExtensionClientModule = { id: "@test/effect", setup: fxSetup }
       const result = yield* Effect.promise(() =>
         loadTuiExtensions({
@@ -59,13 +55,13 @@ describe("loadTuiExtensions Effect setup", () => {
     Effect.gen(function* () {
       const good: ExtensionClientModule = {
         id: "@test/good",
-        setup: Effect.succeed([
+        setup: Effect.succeed(
           autocompleteContribution({
             prefix: "!",
             title: "good",
             items: () => [{ id: "good", label: "good" }],
           }),
-        ]),
+        ),
       }
       const broken: ExtensionClientModule = {
         id: "@test/broken",
@@ -108,13 +104,11 @@ import { autocompleteContribution } from "../../src/extensions/client-facets.js"
 export default {
   id: "@test/discovered-effect",
   setup: Effect.gen(function* () {
-    return [
-      autocompleteContribution({
+    return autocompleteContribution({
         prefix: "#",
         title: "discovered",
         items: () => [{ id: "z", label: "z" }],
-      }),
-    ]
+      })
   }),
 }
 `.trim(),

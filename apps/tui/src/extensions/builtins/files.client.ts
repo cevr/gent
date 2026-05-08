@@ -28,47 +28,45 @@ const formatMatch = (f: { path: string; name: string }) => {
 export default defineClientExtension("@gent/files-ui", {
   setup: Effect.gen(function* () {
     const workspace = yield* ClientWorkspace
-    return [
-      autocompleteContribution({
-        prefix: "@",
-        title: "Files",
-        items: (filter: string) =>
-          Effect.gen(function* () {
-            const cwd = workspace.cwd
+    return autocompleteContribution({
+      prefix: "@",
+      title: "Files",
+      items: (filter: string) =>
+        Effect.gen(function* () {
+          const cwd = workspace.cwd
 
-            // Empty filter: list top-level directory entries via Effect FS.
-            // Drops gitignore filtering at the top level — FFF respects
-            // gitignore for the actual fuzzy search where it matters.
-            if (filter.length === 0) {
-              const fs = yield* FileSystem.FileSystem
-              const entries = yield* Effect.orElseSucceed(
-                fs.readDirectory(cwd),
-                (): ReadonlyArray<string> => [],
-              )
-              return entries
-                .filter((name: string) => !name.startsWith("."))
-                .slice()
-                .sort()
-                .slice(0, MAX_RESULTS)
-                .map((name: string) => formatMatch({ path: name, name }))
-            }
+          // Empty filter: list top-level directory entries via Effect FS.
+          // Drops gitignore filtering at the top level — FFF respects
+          // gitignore for the actual fuzzy search where it matters.
+          if (filter.length === 0) {
+            const fs = yield* FileSystem.FileSystem
+            const entries = yield* Effect.orElseSucceed(
+              fs.readDirectory(cwd),
+              (): ReadonlyArray<string> => [],
+            )
+            return entries
+              .filter((name: string) => !name.startsWith("."))
+              .slice()
+              .sort()
+              .slice(0, MAX_RESULTS)
+              .map((name: string) => formatMatch({ path: name, name }))
+          }
 
-            // Non-empty filter: FFF Effect. Failures (FFF unavailable, init
-            // failure) are caught here so the popup adapter still shows []
-            // instead of swallowing the failure as opaque.
-            const fffResult = yield* Effect.orElseSucceed(
-              searchFiles(cwd, workspace.home, filter, MAX_RESULTS),
-              () => undefined,
-            )
-            if (fffResult === undefined) return []
-            return fffResult.items.map((item: { relativePath: string; fileName: string }) =>
-              formatMatch({ path: item.relativePath, name: item.fileName }),
-            )
-          }),
-        onSelect: (id: string, filter: string) => {
-          trackSelection(workspace.cwd, filter, id)
-        },
-      }),
-    ]
+          // Non-empty filter: FFF Effect. Failures (FFF unavailable, init
+          // failure) are caught here so the popup adapter still shows []
+          // instead of swallowing the failure as opaque.
+          const fffResult = yield* Effect.orElseSucceed(
+            searchFiles(cwd, workspace.home, filter, MAX_RESULTS),
+            () => undefined,
+          )
+          if (fffResult === undefined) return []
+          return fffResult.items.map((item: { relativePath: string; fileName: string }) =>
+            formatMatch({ path: item.relativePath, name: item.fileName }),
+          )
+        }),
+      onSelect: (id: string, filter: string) => {
+        trackSelection(workspace.cwd, filter, id)
+      },
+    })
   }),
 })

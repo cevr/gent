@@ -11,8 +11,7 @@ import { Schema } from "effect"
 import type {
   AutocompleteContribution,
   BorderLabelItem,
-  ClientContribution,
-  ClientContributionTag,
+  ClientContributions,
   ComposerSurfaceComponent,
   InteractionRendererComponent,
   OverlayComponent,
@@ -24,15 +23,13 @@ type CoreExtensionScope = keyof typeof SCOPE_PRECEDENCE
 
 /**
  * Surfaces invariant violations in the TUI extension resolver: a same-scope
- * contribution collision (two extensions claim the same key) or an
- * unknown contribution `_tag`. Both are programmer-misuse-only signals —
- * either two extensions registered conflicting ids in the same scope, or a
- * new contribution tag was added without updating `HANDLED_TAGS`.
+ * contribution collision (two extensions claim the same key). This is a
+ * programmer-misuse-only signal.
  */
 export class TuiExtensionResolveError extends Schema.TaggedErrorClass<TuiExtensionResolveError>()(
   "TuiExtensionResolveError",
   {
-    reason: Schema.Literals(["same-scope-collision", "unknown-tag"]),
+    reason: Schema.Literals(["same-scope-collision"]),
     detail: Schema.String,
   },
 ) {
@@ -50,7 +47,7 @@ export interface LoadedTuiExtension {
   readonly id: string
   readonly scope: ExtensionScope
   readonly filePath: string
-  readonly contributions: ReadonlyArray<ClientContribution>
+  readonly contributions: ClientContributions
 }
 
 export interface ResolvedWidget {
@@ -98,34 +95,20 @@ const checkCollision = (
   }
 }
 
-// ── Per-tag extraction ──
+// ── Per-bucket resolvers ──
 
-interface SortedExtension {
-  readonly ext: LoadedTuiExtension
-  readonly contribution: ClientContribution
-}
-
-const flatten = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArray<SortedExtension> => {
-  const out: SortedExtension[] = []
-  for (const ext of sorted) {
-    for (const contribution of ext.contributions) out.push({ ext, contribution })
-  }
-  return out
-}
-
-// ── Per-tag resolvers ──
-
-const resolveRenderers = (flat: ReadonlyArray<SortedExtension>): Map<string, ToolRenderer> => {
+const resolveRenderers = (sorted: ReadonlyArray<LoadedTuiExtension>): Map<string, ToolRenderer> => {
   const renderers = new Map<string, ToolRenderer>()
   const scopes = new Map<string, ScopeEntry>()
 
-  for (const { ext, contribution } of flat) {
-    if (contribution._tag !== "renderer") continue
-    for (const name of contribution.toolNames) {
-      const key = name.toLowerCase()
-      checkCollision(scopes.get(key), ext, "renderer", name)
-      renderers.set(key, contribution.component)
-      scopes.set(key, { scope: ext.scope, source: ext.filePath })
+  for (const ext of sorted) {
+    for (const contribution of ext.contributions.renderers ?? []) {
+      for (const name of contribution.toolNames) {
+        const key = name.toLowerCase()
+        checkCollision(scopes.get(key), ext, "renderer", name)
+        renderers.set(key, contribution.component)
+        scopes.set(key, { scope: ext.scope, source: ext.filePath })
+      }
     }
   }
 
@@ -133,44 +116,49 @@ const resolveRenderers = (flat: ReadonlyArray<SortedExtension>): Map<string, Too
 }
 
 const resolveHeadlessRenderers = (
-  flat: ReadonlyArray<SortedExtension>,
+  sorted: ReadonlyArray<LoadedTuiExtension>,
 ): Map<string, HeadlessToolRenderer> => {
   const renderers = new Map<string, HeadlessToolRenderer>()
   const scopes = new Map<string, ScopeEntry>()
 
-  for (const { ext, contribution } of flat) {
-    if (contribution._tag !== "renderer" || contribution.headless === undefined) continue
-    for (const name of contribution.toolNames) {
-      const key = name.toLowerCase()
-      checkCollision(scopes.get(key), ext, "headless renderer", name)
-      renderers.set(key, contribution.headless)
-      scopes.set(key, { scope: ext.scope, source: ext.filePath })
+  for (const ext of sorted) {
+    for (const contribution of ext.contributions.renderers ?? []) {
+      if (contribution.headless === undefined) continue
+      for (const name of contribution.toolNames) {
+        const key = name.toLowerCase()
+        checkCollision(scopes.get(key), ext, "headless renderer", name)
+        renderers.set(key, contribution.headless)
+        scopes.set(key, { scope: ext.scope, source: ext.filePath })
+      }
     }
   }
 
   return renderers
 }
 
-const resolveWidgets = (flat: ReadonlyArray<SortedExtension>): ReadonlyArray<ResolvedWidget> => {
+const resolveWidgets = (
+  sorted: ReadonlyArray<LoadedTuiExtension>,
+): ReadonlyArray<ResolvedWidget> => {
   const widgetMap = new Map<string, ResolvedWidget>()
   const scopes = new Map<string, ScopeEntry>()
 
-  for (const { ext, contribution } of flat) {
-    if (contribution._tag !== "widget") continue
-    checkCollision(scopes.get(contribution.id), ext, "widget", contribution.id)
-    widgetMap.set(contribution.id, {
-      id: contribution.id,
-      slot: contribution.slot,
-      priority: contribution.priority ?? 100,
-      component: contribution.component,
-    })
-    scopes.set(contribution.id, { scope: ext.scope, source: ext.filePath })
+  for (const ext of sorted) {
+    for (const contribution of ext.contributions.widgets ?? []) {
+      checkCollision(scopes.get(contribution.id), ext, "widget", contribution.id)
+      widgetMap.set(contribution.id, {
+        id: contribution.id,
+        slot: contribution.slot,
+        priority: contribution.priority ?? 100,
+        component: contribution.component,
+      })
+      scopes.set(contribution.id, { scope: ext.scope, source: ext.filePath })
+    }
   }
 
   return [...widgetMap.values()].sort((a, b) => a.priority - b.priority)
 }
 
-const resolveCommands = (flat: ReadonlyArray<SortedExtension>): ReadonlyArray<Command> => {
+const resolveCommands = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArray<Command> => {
   const commandMap = new Map<string, Command>()
   const idScopes = new Map<string, ScopeEntry>()
   const keybindScopes = new Map<string, ScopeEntry>()
@@ -179,100 +167,105 @@ const resolveCommands = (flat: ReadonlyArray<SortedExtension>): ReadonlyArray<Co
   const keybindOwner = new Map<string, string>() // keybind → command id
   const slashOwner = new Map<string, string>() // slash → command id
 
-  for (const { ext, contribution } of flat) {
-    if (contribution._tag !== "command") continue
-    const entry = contribution
-    checkCollision(idScopes.get(entry.id), ext, "command", entry.id)
+  for (const ext of sorted) {
+    for (const entry of ext.contributions.commands ?? []) {
+      checkCollision(idScopes.get(entry.id), ext, "command", entry.id)
 
-    if (entry.keybind !== undefined) {
-      const kb = entry.keybind.toLowerCase()
-      checkCollision(keybindScopes.get(kb), ext, "keybind", entry.keybind)
-      // Higher scope wins the keybind — strip it from the previous owner
-      const prevOwnerId = keybindOwner.get(kb)
-      if (prevOwnerId !== undefined) {
-        const prevCmd = commandMap.get(prevOwnerId)
-        if (prevCmd !== undefined) {
-          commandMap.set(prevOwnerId, { ...prevCmd, keybind: undefined })
+      if (entry.keybind !== undefined) {
+        const kb = entry.keybind.toLowerCase()
+        checkCollision(keybindScopes.get(kb), ext, "keybind", entry.keybind)
+        // Higher scope wins the keybind — strip it from the previous owner
+        const prevOwnerId = keybindOwner.get(kb)
+        if (prevOwnerId !== undefined) {
+          const prevCmd = commandMap.get(prevOwnerId)
+          if (prevCmd !== undefined) {
+            commandMap.set(prevOwnerId, { ...prevCmd, keybind: undefined })
+          }
         }
+        keybindScopes.set(kb, { scope: ext.scope, source: ext.filePath })
+        keybindOwner.set(kb, entry.id)
       }
-      keybindScopes.set(kb, { scope: ext.scope, source: ext.filePath })
-      keybindOwner.set(kb, entry.id)
-    }
 
-    if (entry.slash !== undefined) {
-      const sl = entry.slash.toLowerCase()
-      checkCollision(slashScopes.get(sl), ext, "slash", entry.slash)
-      // Higher scope wins the slash — strip it from the previous owner
-      const prevOwnerId = slashOwner.get(sl)
-      if (prevOwnerId !== undefined) {
-        const prevCmd = commandMap.get(prevOwnerId)
-        if (prevCmd !== undefined) {
-          commandMap.set(prevOwnerId, { ...prevCmd, slash: undefined })
+      if (entry.slash !== undefined) {
+        const sl = entry.slash.toLowerCase()
+        checkCollision(slashScopes.get(sl), ext, "slash", entry.slash)
+        // Higher scope wins the slash — strip it from the previous owner
+        const prevOwnerId = slashOwner.get(sl)
+        if (prevOwnerId !== undefined) {
+          const prevCmd = commandMap.get(prevOwnerId)
+          if (prevCmd !== undefined) {
+            commandMap.set(prevOwnerId, { ...prevCmd, slash: undefined })
+          }
         }
+        slashScopes.set(sl, { scope: ext.scope, source: ext.filePath })
+        slashOwner.set(sl, entry.id)
       }
-      slashScopes.set(sl, { scope: ext.scope, source: ext.filePath })
-      slashOwner.set(sl, entry.id)
-    }
 
-    commandMap.set(entry.id, {
-      id: entry.id,
-      title: entry.title,
-      description: entry.description,
-      category: entry.category,
-      keybind: entry.keybind,
-      slash: entry.slash,
-      aliases: entry.aliases,
-      slashPriority: entry.slashPriority,
-      onSelect: entry.onSelect,
-      onSlash: entry.onSlash,
-      paletteLevel: entry.paletteLevel,
-    })
-    idScopes.set(entry.id, { scope: ext.scope, source: ext.filePath })
+      commandMap.set(entry.id, {
+        id: entry.id,
+        title: entry.title,
+        description: entry.description,
+        category: entry.category,
+        keybind: entry.keybind,
+        slash: entry.slash,
+        aliases: entry.aliases,
+        slashPriority: entry.slashPriority,
+        onSelect: entry.onSelect,
+        onSlash: entry.onSlash,
+        paletteLevel: entry.paletteLevel,
+      })
+      idScopes.set(entry.id, { scope: ext.scope, source: ext.filePath })
+    }
   }
 
   return [...commandMap.values()]
 }
 
-const resolveOverlays = (flat: ReadonlyArray<SortedExtension>): Map<string, OverlayComponent> => {
+const resolveOverlays = (
+  sorted: ReadonlyArray<LoadedTuiExtension>,
+): Map<string, OverlayComponent> => {
   const overlays = new Map<string, OverlayComponent>()
   const scopes = new Map<string, ScopeEntry>()
 
-  for (const { ext, contribution } of flat) {
-    if (contribution._tag !== "overlay") continue
-    checkCollision(scopes.get(contribution.id), ext, "overlay", contribution.id)
-    overlays.set(contribution.id, contribution.component)
-    scopes.set(contribution.id, { scope: ext.scope, source: ext.filePath })
+  for (const ext of sorted) {
+    for (const contribution of ext.contributions.overlays ?? []) {
+      checkCollision(scopes.get(contribution.id), ext, "overlay", contribution.id)
+      overlays.set(contribution.id, contribution.component)
+      scopes.set(contribution.id, { scope: ext.scope, source: ext.filePath })
+    }
   }
 
   return overlays
 }
 
 const resolveInteractionRenderers = (
-  flat: ReadonlyArray<SortedExtension>,
+  sorted: ReadonlyArray<LoadedTuiExtension>,
 ): Map<string | undefined, InteractionRendererComponent> => {
   const renderers = new Map<string | undefined, InteractionRendererComponent>()
   const scopes = new Map<string | undefined, ScopeEntry>()
 
-  for (const { ext, contribution } of flat) {
-    if (contribution._tag !== "interaction-renderer") continue
-    const key = contribution.metadataType
-    const label = key ?? "(default)"
-    checkCollision(scopes.get(key), ext, "interaction renderer", label)
-    renderers.set(key, contribution.component)
-    scopes.set(key, { scope: ext.scope, source: ext.filePath })
+  for (const ext of sorted) {
+    for (const contribution of ext.contributions.interactionRenderers ?? []) {
+      const key = contribution.metadataType
+      const label = key ?? "(default)"
+      checkCollision(scopes.get(key), ext, "interaction renderer", label)
+      renderers.set(key, contribution.component)
+      scopes.set(key, { scope: ext.scope, source: ext.filePath })
+    }
   }
 
   return renderers
 }
 
 const resolveComposerSurface = (
-  flat: ReadonlyArray<SortedExtension>,
+  sorted: ReadonlyArray<LoadedTuiExtension>,
 ): ComposerSurfaceComponent | undefined => {
   let winner: ComposerSurfaceComponent | undefined
   let winnerScope: ScopeEntry | undefined
 
-  for (const { ext, contribution } of flat) {
-    if (contribution._tag !== "composer-surface") continue
+  for (const ext of sorted) {
+    const contribution = ext.contributions.composerSurface
+    if (contribution === undefined) continue
     if (winnerScope !== undefined) {
       checkCollision(winnerScope, ext, "composer surface", "composerSurface")
     }
@@ -284,55 +277,36 @@ const resolveComposerSurface = (
 }
 
 const resolveBorderLabels = (
-  flat: ReadonlyArray<SortedExtension>,
+  sorted: ReadonlyArray<LoadedTuiExtension>,
 ): ReadonlyArray<ResolvedBorderLabel> => {
   const out: ResolvedBorderLabel[] = []
-  for (const { contribution } of flat) {
-    if (contribution._tag !== "border-label") continue
-    out.push({
-      position: contribution.position,
-      priority: contribution.priority ?? 100,
-      produce: contribution.produce,
-    })
+  for (const ext of sorted) {
+    for (const contribution of ext.contributions.borderLabels ?? []) {
+      out.push({
+        position: contribution.position,
+        priority: contribution.priority ?? 100,
+        produce: contribution.produce,
+      })
+    }
   }
   out.sort((a, b) => a.priority - b.priority)
   return out
 }
 
 const resolveAutocomplete = (
-  flat: ReadonlyArray<SortedExtension>,
+  sorted: ReadonlyArray<LoadedTuiExtension>,
 ): ReadonlyArray<AutocompleteContribution> => {
   const out: AutocompleteContribution[] = []
-  for (const { contribution } of flat) {
-    if (contribution._tag !== "autocomplete") continue
-    out.push(contribution)
+  for (const ext of sorted) {
+    out.push(...(ext.contributions.autocomplete ?? []))
   }
   return out
 }
 
 /**
- * Every tag the resolver knows how to dispatch on. If a new `_tag` is added
- * to `ClientContribution` without a corresponding case here, the type assertion
- * below fails at compile time AND the runtime check below throws — preventing
- * silent drop-on-the-floor handling of new contribution tags.
- */
-const HANDLED_TAGS: ReadonlySet<ClientContributionTag> = new Set<ClientContributionTag>([
-  "renderer",
-  "widget",
-  "command",
-  "overlay",
-  "interaction-renderer",
-  "composer-surface",
-  "border-label",
-  "autocomplete",
-])
-
-/**
  * Resolve all TUI extension contributions with scope precedence.
  * Higher scope wins for same key. Same-scope collisions throw.
  *
- * Adding a new `ClientContribution` tag: register it in HANDLED_TAGS AND add
- * a per-tag resolver below — otherwise this function throws at the entry guard.
  */
 export const resolveTuiExtensions = (
   extensions: ReadonlyArray<LoadedTuiExtension>,
@@ -343,30 +317,15 @@ export const resolveTuiExtensions = (
     if (scopeDiff !== 0) return scopeDiff
     return a.id.localeCompare(b.id)
   })
-
-  const flat = flatten(sorted)
-
-  // Exhaustiveness gate — fail loud if a contribution carries an unknown _tag.
-  for (const { ext, contribution } of flat) {
-    if (!HANDLED_TAGS.has(contribution._tag)) {
-      throw new TuiExtensionResolveError({
-        reason: "unknown-tag",
-        detail:
-          `Unknown TUI client contribution tag "${contribution._tag}" from "${ext.id}" (${ext.filePath}). ` +
-          `Add it to HANDLED_TAGS and register a per-tag resolver in apps/tui/src/extensions/resolve.ts.`,
-      })
-    }
-  }
-
   return {
-    renderers: resolveRenderers(flat),
-    headlessRenderers: resolveHeadlessRenderers(flat),
-    widgets: resolveWidgets(flat),
-    commands: resolveCommands(flat),
-    overlays: resolveOverlays(flat),
-    interactionRenderers: resolveInteractionRenderers(flat),
-    composerSurface: resolveComposerSurface(flat),
-    borderLabels: resolveBorderLabels(flat),
-    autocompleteItems: resolveAutocomplete(flat),
+    renderers: resolveRenderers(sorted),
+    headlessRenderers: resolveHeadlessRenderers(sorted),
+    widgets: resolveWidgets(sorted),
+    commands: resolveCommands(sorted),
+    overlays: resolveOverlays(sorted),
+    interactionRenderers: resolveInteractionRenderers(sorted),
+    composerSurface: resolveComposerSurface(sorted),
+    borderLabels: resolveBorderLabels(sorted),
+    autocompleteItems: resolveAutocomplete(sorted),
   }
 }

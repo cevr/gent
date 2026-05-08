@@ -14,7 +14,7 @@
 import { Effect, Schema } from "effect"
 import type {
   AnyExtensionClientModule,
-  ClientContribution,
+  ClientContributions,
   ClientRuntime,
 } from "./client-facets.js"
 import { ClientSetupError } from "./client-effect.js"
@@ -54,7 +54,7 @@ class TuiExtensionImportError extends Schema.TaggedErrorClass<TuiExtensionImport
 const invokeSetup = (
   ext: AnyExtensionClientModule,
   runtime: ClientRuntime,
-): Promise<ReadonlyArray<ClientContribution>> => runtime.runPromise(ext.setup)
+): Promise<ClientContributions> => runtime.runPromise(ext.setup)
 
 const discoverExtensionsWithRuntime = (
   runtime: ClientRuntime,
