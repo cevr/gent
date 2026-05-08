@@ -37,6 +37,7 @@ export default defineClientExtension(EXT_ID, {
     const modelResource = yield* makeClientSessionResource<AutoSnapshotReplyType>({
       transport,
       lifecycle,
+      cast: shell.cast,
       label: `${EXT_ID} auto snapshot`,
       fetch: (session) => requestExtension(ref(AutoRpc.GetSnapshot), {}, transport, session),
       subscribe: (refetch) =>
@@ -77,7 +78,7 @@ export default defineClientExtension(EXT_ID, {
         onSelect: () => {
           const model = liveModel()
           if (model?.active) {
-            void transport.run(
+            void shell.run(
               requestExtension(ref(AutoRpc.CancelAuto), {}, transport).pipe(
                 Effect.catchEager((err: unknown) =>
                   Effect.logWarning(`[${EXT_ID}] auto cancel failed`).pipe(

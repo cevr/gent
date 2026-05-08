@@ -50,6 +50,14 @@ const stubRuntime = new Proxy(
   {},
   { get: (_target, method) => () => throwOnAccess(`runtime.${String(method)}`) },
 ) as Parameters<typeof makeClientTransportLayer>[0]["runtime"]
+
+const runTestShellEffect = <A, E>(_effect: Effect.Effect<A, E, never>): Promise<A> =>
+  stubRuntime.run(_effect)
+
+const castTestShellEffect = <A, E>(effect: Effect.Effect<A, E, never>): void => {
+  Effect.runFork(effect)
+}
+
 const testRuntime = ManagedRuntime.make(
   Layer.mergeAll(
     BunFileSystem.layer,
@@ -59,6 +67,8 @@ const testRuntime = ManagedRuntime.make(
       sendMessage: () => {},
       openOverlay: () => {},
       closeOverlay: () => {},
+      run: runTestShellEffect,
+      cast: castTestShellEffect,
     }),
     makeClientDriverLayer({
       list: () => Effect.succeed({ drivers: [], overrides: {} }),
@@ -357,6 +367,8 @@ export default defineClientExtension("@test/b", {
             sendMessage: () => {},
             openOverlay: () => {},
             closeOverlay: () => {},
+            run: runTestShellEffect,
+            cast: castTestShellEffect,
           }),
           makeClientDriverLayer({
             list: () => Effect.succeed({ drivers: [], overrides: {} }),

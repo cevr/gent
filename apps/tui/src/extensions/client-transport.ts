@@ -35,10 +35,6 @@ type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId
 export interface ClientTransportShape {
   /** Active (sessionId, branchId) — `undefined` before a session is mounted. */
   readonly currentSession: () => ActiveExtensionSession | undefined
-  /** Run an extension-owned Effect from a sync UI callback. */
-  readonly run: <A, E>(effect: Effect.Effect<A, E, never>) => Promise<A>
-  /** Fork an extension-owned Effect from a sync UI callback. */
-  readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
   readonly request: <Input, Output>(
     ref: CapabilityRef<Input, Output>,
     input: Input,
@@ -87,8 +83,6 @@ export const makeClientTransportLayer = (
 ): Layer.Layer<ClientTransport> => {
   const transport: ClientTransportShape = {
     currentSession: payload.currentSession,
-    run: payload.runtime.run,
-    cast: payload.runtime.cast,
     request: <Input, Output>(
       ref: CapabilityRef<Input, Output>,
       input: Input,

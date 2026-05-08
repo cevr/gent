@@ -47,7 +47,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   },
   {
     file: "apps/tui/src/main.tsx",
-    line: 688,
+    line: 690,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line strictEffectProvide:off entrypoint layer provision",
   },

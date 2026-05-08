@@ -42,6 +42,10 @@ export interface ClientShellShape {
   readonly openOverlay: (id: OverlayId) => void
   /** Close any open overlay. */
   readonly closeOverlay: () => void
+  /** Run an extension-owned Effect from a sync UI callback. */
+  readonly run: <A, E>(effect: Effect.Effect<A, E, never>) => Promise<A>
+  /** Fork an extension-owned Effect from a sync UI callback. */
+  readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
 }
 
 export class ClientShell extends Context.Service<ClientShell, ClientShellShape>()(
@@ -125,6 +129,7 @@ export interface ClientSessionResource<A> {
 export const makeClientSessionResource = <A>(opts: {
   readonly transport: ClientTransportShape
   readonly lifecycle: ClientLifecycleShape
+  readonly cast: <B, E>(effect: Effect.Effect<B, E, never>) => void
   readonly label: string
   readonly fetch: (session: ActiveClientSession) => Effect.Effect<A, Error>
   readonly subscribe?: (refetch: () => void) => () => void
@@ -150,7 +155,7 @@ export const makeClientSessionResource = <A>(opts: {
     }
 
     const refetchCaptured = (captured: ActiveClientSession): void => {
-      opts.transport.cast(
+      opts.cast(
         opts.fetch(captured).pipe(
           Effect.flatMap((value) =>
             Effect.sync(() => {

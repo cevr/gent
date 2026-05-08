@@ -211,6 +211,8 @@ describe("autocomplete Effect items() through ClientTransport", () => {
         sessionId: SessionId.make("sess-1") as SessionId,
         branchId: BranchId.make("branch-1") as BranchId,
       })
+      expect("run" in resolved).toBe(false)
+      expect("cast" in resolved).toBe(false)
       yield* Effect.promise(() => runtime.dispose())
     }),
   )

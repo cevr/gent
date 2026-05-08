@@ -182,6 +182,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         sendMessage: (content) => actions.sendMessage(content),
         openOverlay: (id) => overlayDispatch().open(id),
         closeOverlay: () => overlayDispatch().close(),
+        run: transport.runtime.run,
+        cast: transport.runtime.cast,
       }),
       makeClientDriverLayer({
         list: () => transport.client.driver.list().pipe(Effect.mapError(toError)),

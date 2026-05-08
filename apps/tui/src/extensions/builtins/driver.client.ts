@@ -19,14 +19,12 @@ import { Effect } from "effect"
 import { defineClientExtension, clientCommandContribution } from "../client-facets.js"
 import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/extensions/api"
 import { ClientDriver, ClientShell } from "../client-services"
-import { ClientTransport } from "../client-transport"
 
 const USAGE = "Usage: /driver <agent> <driver-id|default>"
 
 export default defineClientExtension("@gent/driver-ui", {
   setup: Effect.gen(function* () {
     const shell = yield* ClientShell
-    const transport = yield* ClientTransport
     const driverClient = yield* ClientDriver
     return clientCommandContribution({
       id: "driver.route",
@@ -56,7 +54,7 @@ export default defineClientExtension("@gent/driver-ui", {
         }
         const agentName = AgentName.make(rawAgentName)
         if (driverArg === "default" || driverArg === "clear") {
-          void transport
+          void shell
             .run(driverClient.clear({ agentName }))
             .then(() => {
               shell.sendMessage(`Cleared driver override for "${agentName}".`)
@@ -66,7 +64,7 @@ export default defineClientExtension("@gent/driver-ui", {
             })
           return
         }
-        void transport
+        void shell
           .run(
             Effect.gen(function* () {
               const { drivers } = yield* driverClient.list()

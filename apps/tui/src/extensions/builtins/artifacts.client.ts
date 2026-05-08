@@ -17,18 +17,20 @@ import { ref } from "@gent/core/extensions/api"
 import { defineClientExtension, borderLabelContribution } from "../client-facets.js"
 import { ArtifactRpc, type ArtifactType } from "@gent/extensions/client.js"
 import { requestExtension, ClientTransport } from "../client-transport"
-import { ClientLifecycle, makeClientSessionResource } from "../client-services"
+import { ClientLifecycle, ClientShell, makeClientSessionResource } from "../client-services"
 
 const EXT_ID = "@gent/artifacts"
 
 export default defineClientExtension(EXT_ID, {
   setup: Effect.gen(function* () {
     const transport = yield* ClientTransport
+    const shell = yield* ClientShell
     const lifecycle = yield* ClientLifecycle
 
     const itemsResource = yield* makeClientSessionResource<readonly ArtifactType[]>({
       transport,
       lifecycle,
+      cast: shell.cast,
       label: `${EXT_ID} artifact list`,
       fetch: (session) => requestExtension(ref(ArtifactRpc.List), {}, transport, session),
       subscribe: (refetch) =>

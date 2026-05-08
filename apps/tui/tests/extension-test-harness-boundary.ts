@@ -86,6 +86,10 @@ export const makeClientExtensionRuntime = (
         sendMessage: () => {},
         openOverlay: () => {},
         closeOverlay: () => {},
+        run: <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runPromise(effect),
+        cast: <A, E>(effect: Effect.Effect<A, E, never>) => {
+          Effect.runFork(effect)
+        },
       }),
       makeClientDriverLayer({
         list: () => Effect.succeed({ drivers: [], overrides: {} }),

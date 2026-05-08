@@ -144,6 +144,7 @@ export const builtinTodos = defineClientExtension("@gent/todo", {
     const todosResource = yield* makeClientSessionResource<readonly TodoEntry[]>({
       transport,
       lifecycle,
+      cast: shell.cast,
       label: `${EXT_ID} todo list`,
       fetch: (session) => requestExtension(ref(TodoListRequest), {}, transport, session),
       subscribe: (refetch) =>

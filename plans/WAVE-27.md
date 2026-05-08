@@ -641,11 +641,15 @@ subscription surfaces. Raw SDK client/runtime is shell authority.
 
 **Changes**
 
-| File                                                                                   | Change                                                                             | Lines              |
-| -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------ |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/client-transport.ts`       | Split public extension transport from private shell transport.                     | `35-49`, `101-175` |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/driver.client.ts` | Replace raw client/runtime use with a narrow driver request or shell-only service. | `26-97`            |
-| `/Users/cvr/Developer/personal/gent/apps/tui/tests/autocomplete-effect-items.test.ts`  | Preserve visible driver/autocomplete behavior.                                     | multiple           |
+| File                                                                                            | Change                                                                                  | Lines              |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------ |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/client-transport.ts`                | Remove generic `run` / `cast` from the public typed extension transport.                | `35-58`, `88-96`   |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/client-services.ts`                 | Move sync-callback Effect runners onto `ClientShell`; session resources receive `cast`. | `35-50`, `126-155` |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/driver.client.ts`          | Use `ClientShell.run` with the narrow driver service instead of transport runner.       | `24-94`            |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/auto.client.ts`            | Use shell runner for cancel and resource refresh.                                       | `32-84`            |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/artifacts.client.ts`       | Pass shell runner into the shared session resource.                                     | `24-39`            |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/tool-renderers.client.tsx` | Pass shell runner into the todo session resource.                                       | `134-154`          |
+| `/Users/cvr/Developer/personal/gent/apps/tui/tests/autocomplete-effect-items.test.ts`           | Lock `ClientTransport` to request/session/event authority, not generic runners.         | `197-218`          |
 
 **Verification**
 

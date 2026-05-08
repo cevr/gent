@@ -189,6 +189,8 @@ const runHeadlessTurn = (
           sendMessage: () => {},
           openOverlay: () => {},
           closeOverlay: () => {},
+          run: bundle.runtime.run,
+          cast: bundle.runtime.cast,
         }),
         makeClientDriverLayer({
           list: () => bundle.client.driver.list().pipe(Effect.mapError(toError)),
