@@ -6,13 +6,13 @@ import {
   defineAgent,
   defineExtension,
   ExtensionId,
+  ExtensionSession,
   getDurableAgentRunSessionId,
   makeRunSpec,
   action,
   tool,
   ToolNeeds,
   type AgentDefinition,
-  type ModelCapabilityContext,
   type ToolCapabilityContext,
   type ToolCallId,
 } from "@gent/core/extensions/api"
@@ -394,28 +394,28 @@ export const ReviewExtension = defineExtension({
       surface: "slash",
       slash: { trigger: "review" },
       category: "Tools",
-      needs: [ToolNeeds.write("session")],
       input: Schema.String,
       output: Schema.Void,
-      execute: (input: string, ctx: ModelCapabilityContext) =>
-        ctx.session
-          .queueFollowUp({
+      execute: (input: string) =>
+        Effect.gen(function* () {
+          const session = yield* ExtensionSession
+          yield* session.queueFollowUp({
             sourceId: "review-command",
             content:
               input.trim().length > 0
                 ? `Use the review tool in report mode: ${input.trim()}`
                 : "Use the review tool in report mode on the most recent changes. Focus on correctness, edge cases, and architectural issues.",
           })
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new CapabilityError({
-                  extensionId: REVIEW_EXTENSION_ID,
-                  capabilityId: "review-command",
-                  reason: cause.message,
-                }),
-            ),
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new CapabilityError({
+                extensionId: REVIEW_EXTENSION_ID,
+                capabilityId: "review-command",
+                reason: cause.message,
+              }),
           ),
+        ),
     }),
   ],
   tools: [ReviewTool],

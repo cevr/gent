@@ -8,6 +8,7 @@ import {
   type ToolCapability,
 } from "../../domain/capability/tool.js"
 import { provideCapabilityAccessNeeds } from "../../domain/capability-access.js"
+import { provideExtensionServices } from "../../domain/extension-services.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
@@ -273,14 +274,17 @@ const makeExecutionToolkit = (params: {
             branchId: params.ctx.branchId,
           },
           () =>
-            provideCapabilityContext(
-              toolCtx,
-              metadata.intent,
-              provideCapabilityAccessNeeds(metadata.needs)(
-                // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-                metadata
-                  .effect(decodedInput, toolCtx)
-                  .pipe(Effect.mapError(normalizeToolExecutionError)),
+            provideExtensionServices(
+              params.ctx,
+              provideCapabilityContext(
+                toolCtx,
+                metadata.intent,
+                provideCapabilityAccessNeeds(metadata.needs)(
+                  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+                  metadata
+                    .effect(decodedInput, toolCtx)
+                    .pipe(Effect.mapError(normalizeToolExecutionError)),
+                ),
               ),
             ),
           params.ctx,

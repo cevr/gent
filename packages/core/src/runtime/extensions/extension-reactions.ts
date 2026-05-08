@@ -22,6 +22,7 @@ import type { Message } from "../../domain/message.js"
 import type { PermissionResult } from "../../domain/permission.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
+import { provideExtensionServices } from "../../domain/extension-services.js"
 import { exitErasedEffect, sealErasedEffect } from "./extension-effect-membrane.js"
 
 export class ExtensionReactionHaltError extends Schema.TaggedErrorClass<ExtensionReactionHaltError>()(
@@ -185,8 +186,8 @@ const provideHostContext = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> =>
   ctx.capabilityContext === undefined
-    ? effect
-    : effect.pipe(Effect.provideContext(ctx.capabilityContext))
+    ? provideExtensionServices(ctx, effect)
+    : provideExtensionServices(ctx, effect).pipe(Effect.provideContext(ctx.capabilityContext))
 
 const provideProjectionContext = <A, E, R>(
   ctx: ProjectionTurnContext,

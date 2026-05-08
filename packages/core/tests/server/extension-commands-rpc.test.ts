@@ -28,6 +28,7 @@ import { defineResource } from "@gent/core-internal/domain/resource"
 import {
   action,
   CapabilityError,
+  ExtensionSession,
   ToolNeeds,
   request,
   tool,
@@ -193,7 +194,7 @@ describe("extension command RPCs", () => {
       ])
     }),
   )
-  it.live("RPC request exposes live session queueFollowUp capability", () =>
+  it.live("RPC request can queue follow-up through ExtensionSession service", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/queue-follow-up-request")
       const ext: LoadedExtension = {
@@ -206,11 +207,13 @@ describe("extension command RPCs", () => {
               id: "queue-follow-up",
               extensionId,
               intent: "write",
-              needs: [ToolNeeds.write("session")],
               input: Schema.String,
               output: Schema.Void,
-              execute: (input, ctx: ModelCapabilityContext) =>
-                ctx.session.queueFollowUp({ sourceId: "test-rpc-request", content: input }).pipe(
+              execute: (input) =>
+                Effect.gen(function* () {
+                  const session = yield* ExtensionSession
+                  yield* session.queueFollowUp({ sourceId: "test-rpc-request", content: input })
+                }).pipe(
                   Effect.mapError(
                     (cause) =>
                       new CapabilityError({
@@ -255,7 +258,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
-  it.live("RPC request exposes slash action queueFollowUp capability", () =>
+  it.live("RPC request runs slash action with ExtensionSession service", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/queue-follow-up-action")
       const ext: LoadedExtension = {
@@ -270,11 +273,13 @@ describe("extension command RPCs", () => {
               description: "Queue follow-up action",
               surface: "slash",
               slash: { trigger: "queue-follow-up" },
-              needs: [ToolNeeds.write("session")],
               input: Schema.String,
               output: Schema.Void,
-              execute: (input: string, ctx: ModelCapabilityContext) =>
-                ctx.session.queueFollowUp({ sourceId: "test-action", content: input }).pipe(
+              execute: (input: string) =>
+                Effect.gen(function* () {
+                  const session = yield* ExtensionSession
+                  yield* session.queueFollowUp({ sourceId: "test-action", content: input })
+                }).pipe(
                   Effect.mapError(
                     (cause) =>
                       new CapabilityError({

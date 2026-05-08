@@ -3,10 +3,9 @@ import {
   type GentExtension,
   defineExtension,
   defineResource,
+  ExtensionSession,
   ExtensionId,
   tool,
-  ToolNeeds,
-  type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ExecToolsExtension } from "./exec-tools/index.js"
@@ -60,16 +59,15 @@ const RenameSessionResult = Schema.Struct({
 
 const RenameSessionTool = tool({
   id: "rename_session",
-  needs: [ToolNeeds.write("session")],
   description:
     "Rename the current session. Call once you understand the task, and again if the topic shifts significantly.",
   params: RenameSessionParams,
   output: RenameSessionResult,
   execute: Effect.fn("RenameSessionTool.execute")(function* (
     params: typeof RenameSessionParams.Type,
-    ctx: ToolCapabilityContext,
   ) {
-    return yield* ctx.session.renameCurrent(params.name)
+    const session = yield* ExtensionSession
+    return yield* session.renameCurrent(params.name)
   }),
 })
 

@@ -4,6 +4,7 @@ import {
   defineExtension,
   defineResource,
   action,
+  ExtensionSession,
   ToolNeeds,
   type ModelCapabilityContext,
   type Message,
@@ -23,26 +24,26 @@ const HandoffAction = action({
   description: "Distill context into new session",
   surface: "slash",
   slash: { trigger: "handoff" },
-  needs: [ToolNeeds.write("session")],
   input: Schema.String,
   output: Schema.Void,
-  execute: (_input: string, ctx: ModelCapabilityContext) =>
-    ctx.session
-      .queueFollowUp({
+  execute: (_input: string) =>
+    Effect.gen(function* () {
+      const session = yield* ExtensionSession
+      yield* session.queueFollowUp({
         sourceId: "handoff-command",
         content:
           "Please create a handoff by distilling the current context into a concise summary. Use the handoff tool with the distilled context. Include: current task status, key decisions made, relevant file paths, open questions, and any state that needs to carry over to the new session.",
       })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new CapabilityError({
-              extensionId: EXTENSION_ID,
-              capabilityId: "handoff-command",
-              reason: cause.message,
-            }),
-        ),
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new CapabilityError({
+            extensionId: EXTENSION_ID,
+            capabilityId: "handoff-command",
+            reason: cause.message,
+          }),
       ),
+    ),
 })
 
 // ── Cooldown service ──

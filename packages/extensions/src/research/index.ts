@@ -2,13 +2,12 @@ import { Effect, Schema } from "effect"
 import {
   AgentName,
   CapabilityError,
+  ExtensionSession,
   ExtensionId,
   ModelId,
-  ToolNeeds,
   action,
   defineAgent,
   defineExtension,
-  type ModelCapabilityContext,
 } from "@gent/core/extensions/api"
 import { ResearchTool } from "./research-tool.js"
 
@@ -44,28 +43,28 @@ export const ResearchExtension = defineExtension({
       surface: "slash",
       slash: { trigger: "research" },
       category: "Tools",
-      needs: [ToolNeeds.write("session")],
       input: Schema.String,
       output: Schema.Void,
-      execute: (input: string, ctx: ModelCapabilityContext) =>
-        ctx.session
-          .queueFollowUp({
+      execute: (input: string) =>
+        Effect.gen(function* () {
+          const session = yield* ExtensionSession
+          yield* session.queueFollowUp({
             sourceId: "research-command",
             content:
               input.trim().length > 0
                 ? `Use the research tool: ${input.trim()}`
                 : "Use the research tool to understand how an external library or framework works. Ask me which repo to research.",
           })
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new CapabilityError({
-                  extensionId: RESEARCH_EXTENSION_ID,
-                  capabilityId: "research-command",
-                  reason: cause.message,
-                }),
-            ),
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new CapabilityError({
+                extensionId: RESEARCH_EXTENSION_ID,
+                capabilityId: "research-command",
+                reason: cause.message,
+              }),
           ),
+        ),
     }),
   ],
   tools: [ResearchTool],

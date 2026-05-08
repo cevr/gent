@@ -18,6 +18,7 @@ import {
   CapabilityError,
   defineExtension,
   defineResource,
+  ExtensionSession,
   ExtensionId,
   type ReadOnly,
   ReadOnlyBrand,
@@ -362,7 +363,7 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("session.queueFollowUp requires explicit action needs", () => {
+  test("session follow-up authority is imported as an ExtensionSession service", () => {
     defineExtension({
       id: "queue-follow-up-compile-lock",
       actions: [
@@ -371,13 +372,22 @@ describe("Effect-purity locks (compile-time)", () => {
           name: "Queue Follow Up",
           description: "ok",
           surface: "slash",
-          needs: [ToolNeeds.write("session")],
           input: Schema.Struct({}),
           output: Schema.Void,
-          execute: (_input, ctx: ModelCapabilityContext) => {
-            void ctx.session.queueFollowUp({ sourceId: "lock", content: "x" })
-            return Effect.void
-          },
+          execute: () =>
+            Effect.gen(function* () {
+              const session = yield* ExtensionSession
+              yield* session.queueFollowUp({ sourceId: "lock", content: "x" })
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new CapabilityError({
+                    extensionId: ExtensionId.make("queue-follow-up-compile-lock"),
+                    capabilityId: "queue-follow-up",
+                    reason: cause.message,
+                  }),
+              ),
+            ),
         }),
       ],
       reactions: {

@@ -3,13 +3,13 @@ import {
   AgentName,
   CapabilityError,
   ExtensionId,
+  ExtensionSession,
   ToolNeeds,
   action,
   defineAgent,
   defineExtension,
   makeRunSpec,
   tool,
-  type ModelCapabilityContext,
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 
@@ -126,28 +126,28 @@ export const CounselExtension = defineExtension({
       surface: "slash",
       slash: { trigger: "counsel" },
       category: "Tools",
-      needs: [ToolNeeds.write("session")],
       input: Schema.String,
       output: Schema.Void,
-      execute: (input: string, ctx: ModelCapabilityContext) =>
-        ctx.session
-          .queueFollowUp({
+      execute: (input: string) =>
+        Effect.gen(function* () {
+          const session = yield* ExtensionSession
+          yield* session.queueFollowUp({
             sourceId: "counsel-command",
             content:
               input.trim().length > 0
                 ? `Use the counsel tool: ${input.trim()}`
                 : "Use the counsel tool in standard mode to get a second opinion on the current approach.",
           })
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new CapabilityError({
-                  extensionId: COUNSEL_EXTENSION_ID,
-                  capabilityId: "counsel-command",
-                  reason: cause.message,
-                }),
-            ),
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new CapabilityError({
+                extensionId: COUNSEL_EXTENSION_ID,
+                capabilityId: "counsel-command",
+                reason: cause.message,
+              }),
           ),
+        ),
     }),
   ],
   tools: [CounselTool],

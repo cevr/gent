@@ -10,9 +10,8 @@ import {
   action,
   CapabilityError,
   defineExtension,
+  ExtensionSession,
   ExtensionId,
-  ToolNeeds,
-  type ModelCapabilityContext,
 } from "@gent/core/extensions/api"
 import { PlanTool } from "./plan-tool.js"
 
@@ -38,11 +37,13 @@ const PlanAction = action({
   slash: { trigger: "plan" },
   category: "Workflow",
   keybind: "ctrl+shift+p",
-  needs: [ToolNeeds.write("session")],
   input: Schema.String,
   output: Schema.Void,
-  execute: (input: string, ctx: ModelCapabilityContext) =>
-    ctx.session.queueFollowUp({ sourceId: "plan-command", content: planPrompt(input) }).pipe(
+  execute: (input: string) =>
+    Effect.gen(function* () {
+      const session = yield* ExtensionSession
+      yield* session.queueFollowUp({ sourceId: "plan-command", content: planPrompt(input) })
+    }).pipe(
       Effect.mapError(
         (cause) =>
           new CapabilityError({
@@ -61,11 +62,13 @@ const AuditAction = action({
   surface: "slash",
   slash: { trigger: "audit" },
   category: "Workflow",
-  needs: [ToolNeeds.write("session")],
   input: Schema.String,
   output: Schema.Void,
-  execute: (input: string, ctx: ModelCapabilityContext) =>
-    ctx.session.queueFollowUp({ sourceId: "audit-command", content: auditPrompt(input) }).pipe(
+  execute: (input: string) =>
+    Effect.gen(function* () {
+      const session = yield* ExtensionSession
+      yield* session.queueFollowUp({ sourceId: "audit-command", content: auditPrompt(input) })
+    }).pipe(
       Effect.mapError(
         (cause) =>
           new CapabilityError({

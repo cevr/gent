@@ -13,6 +13,7 @@ import {
   CapabilityNotFoundError as CapabilityNotFoundErrorClass,
 } from "../../domain/capability.js"
 import { provideCapabilityAccessNeeds } from "../../domain/capability-access.js"
+import { provideExtensionServices } from "../../domain/extension-services.js"
 import type {
   ExtensionStatusInfo,
   FailedExtension,
@@ -21,6 +22,7 @@ import type {
   RunContext,
   ScheduledJobFailureInfo,
 } from "../../domain/extension.js"
+import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { type PromptSection } from "../../domain/prompt.js"
 import type { PermissionRule } from "../../domain/permission.js"
 import type { ActionCapability } from "../../domain/capability/action.js"
@@ -290,6 +292,15 @@ const runExtensionCapability = (
     return output
   })
 
+const hasExtensionServices = (ctx: CapabilityCoreContext): ctx is ExtensionHostContext =>
+  "session" in ctx && "agent" in ctx && "interaction" in ctx
+
+const provideExtensionServicesIfAvailable = <A, E, R>(
+  ctx: CapabilityCoreContext,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  hasExtensionServices(ctx) ? provideExtensionServices(ctx, effect) : effect
+
 const coreCapabilityContext = (ctx: CapabilityCoreContext): CapabilityCoreContext => ({
   sessionId: ctx.sessionId,
   branchId: ctx.branchId,
@@ -339,12 +350,15 @@ const compileRpcRegistry = (
           ? [{ tag: "*", access: "write" } as const]
           : [{ tag: "*", access: "read" } as const])
       return yield* provideCapabilityAccessNeeds(needs)(
-        runExtensionCapability(
-          extensionId,
-          capabilityId,
-          entry.capability,
-          input,
-          capabilityRuntimeContext(entry.capability, ctx),
+        provideExtensionServicesIfAvailable(
+          ctx,
+          runExtensionCapability(
+            extensionId,
+            capabilityId,
+            entry.capability,
+            input,
+            capabilityRuntimeContext(entry.capability, ctx),
+          ),
         ),
       )
     }),

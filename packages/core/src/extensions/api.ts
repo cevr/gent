@@ -216,6 +216,15 @@ export type {
 } from "../domain/resource.js"
 export type { ScheduledJobContribution } from "../domain/scheduled-job.js"
 export { ProjectionError } from "../domain/projection-error.js"
+export {
+  ExtensionAgent,
+  ExtensionInteraction,
+  ExtensionServiceError,
+  ExtensionSession,
+  type ExtensionAgentService,
+  type ExtensionInteractionService,
+  type ExtensionSessionService,
+} from "../domain/extension-services.js"
 
 // `ReadOnly` brand — type-level fence. Author services that should only
 // be reachable from projections / read-intent capabilities by branding

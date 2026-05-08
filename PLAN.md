@@ -2,16 +2,16 @@
 
 ## Active Wave
 
-Continue from `plans/WAVE-28.md`.
+Continue from `plans/WAVE-29.md`.
 
-Wave 27 closed with a successful implementation gate but did not meet the
-recursive audit close criterion: the final independent audit found no P0s, but
-it did find remaining P1s in runtime ownership, extension API surface, file
-merit, and behavioral guardrails.
+Wave 28 closed several runtime and file-merit items, but the final audit still
+found P1 extension-authority leaks. Wave 29 replaces public `read`/`write`
+authority metadata with constrained Effect services that extension code imports
+and yields.
 
 ## Continuation Rules
 
-- Read `AGENTS.md`, `ARCHITECTURE.md`, and `plans/WAVE-28.md` before editing.
+- Read `AGENTS.md`, `ARCHITECTURE.md`, and `plans/WAVE-29.md` before editing.
 - Preserve the north stars: actor model, Effect ecosystem, and use the
   platform.
 - Prefer bigger cohesive files when a split does not encode a real boundary,
@@ -19,7 +19,7 @@ merit, and behavioral guardrails.
   domain, or high-churn isolation point.
 - Run focused tests and then `bun run gate` between logical batches.
 - If a batch touches runtime actor semantics, also run `bun run test:e2e`.
-- Close Wave 28 only after an independent same-lane audit finds no P0/P1.
+- Close Wave 29 only after an independent same-lane audit finds no P0/P1.
 
 ## Historical Plans
 
