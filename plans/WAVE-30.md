@@ -620,6 +620,10 @@ store. `SubscriptionRef` is the Effect primitive for snapshot plus changes.
 
 ## Final Batch: Independent Recursive Audit
 
+**Status**: Completed. Independent audit found no P0, but found P1s. Wave 30
+does not close; findings are synthesized into
+`/Users/cvr/Developer/personal/gent/plans/WAVE-31.md`.
+
 1. How can we simplify and minimize our codebase while maintaining features? how can we reduce code as much as possible? are we using effect properly? are we redeclaring types, schemas, features that effect natively provides via effect/unstable/ai or STM with txQueue etc?
 2. are we following the actor model properly?
 3. are we using bun/node platform code directly and not creating service layers for maximum portability and testability? GentPlatform etc?
