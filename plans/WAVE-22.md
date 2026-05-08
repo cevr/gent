@@ -380,7 +380,7 @@ Validation:
 
 ### W22.13 — Core Public Export Closure
 
-Status: implemented, awaiting subcommit.
+Status: committed and pushed in `3339164c`.
 
 Work:
 
