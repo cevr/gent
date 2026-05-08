@@ -24,8 +24,8 @@
  * target fields.
  *
  * **Primary key (dedup)** per op:
- * - `Submit` / `QueueFollowUp` / `AcceptSubmit` / `AcceptQueueFollowUp` — `message.id`
- * - `Steer` / `AcceptSteer` — `commandId`
+ * - `Submit` / `QueueFollowUp` — `message.id`
+ * - `Steer` — `commandId`
  * - `Interrupt` — `commandId`
  *
  * Schemas reuse gent's existing domain (`Message`, `RunSpec`,
@@ -262,16 +262,6 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     payload: TurnSubmissionFields,
     success: Schema.Void,
     error: AgentLoopError,
-    persisted: true,
-    id: (p: TurnSubmissionInput) => ({
-      entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
-      primaryKey: p.message.id,
-    }),
-  },
-  AcceptSubmit: {
-    payload: TurnSubmissionFields,
-    success: Schema.Void,
-    error: AgentLoopError,
     id: (p: TurnSubmissionInput) => ({
       entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
       primaryKey: p.message.id,
@@ -290,32 +280,12 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     payload: TurnSubmissionFields,
     success: Schema.Void,
     error: AgentLoopError,
-    persisted: true,
-    id: (p: TurnSubmissionInput) => ({
-      entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
-      primaryKey: p.message.id,
-    }),
-  },
-  AcceptQueueFollowUp: {
-    payload: TurnSubmissionFields,
-    success: Schema.Void,
-    error: AgentLoopError,
     id: (p: TurnSubmissionInput) => ({
       entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
       primaryKey: p.message.id,
     }),
   },
   Steer: {
-    payload: SteerFields,
-    success: Schema.Void,
-    error: AgentLoopError,
-    persisted: true,
-    id: (p: SteerInput) => ({
-      entityId: entityIdOf(p.workspaceId, p.command.sessionId, p.command.branchId),
-      primaryKey: p.commandId,
-    }),
-  },
-  AcceptSteer: {
     payload: SteerFields,
     success: Schema.Void,
     error: AgentLoopError,
@@ -917,21 +887,13 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
   return {
     Submit: ({ operation }: HandlerRequest<Parameters<typeof submitTurn>[0]>) =>
       withWorkspace(submitTurn(operation)),
-    AcceptSubmit: ({ operation }: HandlerRequest<Parameters<typeof submitTurn>[0]>) =>
-      withWorkspace(submitTurn(operation)),
     Run: ({ operation }: HandlerRequest<Parameters<typeof runTurn>[0]>) =>
       withWorkspace(runTurn(operation)),
     QueueFollowUp: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
       withWorkspace(
         ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
       ),
-    AcceptQueueFollowUp: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
-      withWorkspace(
-        ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
-      ),
     Steer: ({ operation }: HandlerRequest<SteerInput>) =>
-      withWorkspace(applySteer(operation.commandId, operation.command)),
-    AcceptSteer: ({ operation }: HandlerRequest<SteerInput>) =>
       withWorkspace(applySteer(operation.commandId, operation.command)),
     Interrupt: ({ operation }: HandlerRequest<InterruptInput>) =>
       withWorkspace(

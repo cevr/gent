@@ -625,26 +625,23 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         createdAt: yield* DateTime.nowAsDate,
         ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
       })
+      const payload = {
+        workspaceId,
+        message,
+        agentOverride: undefined,
+        runSpec: undefined,
+        interactive: undefined,
+      }
       const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-      yield* ref
-        .execute(
-          AgentLoopActor.AcceptQueueFollowUp.make({
-            workspaceId,
-            message,
-            agentOverride: undefined,
-            runSpec: undefined,
-            interactive: undefined,
-          }),
-        )
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new SessionRuntimeError({
-                message: `Failed to queue follow-up ${message.id}`,
-                cause,
-              }),
-          ),
-        )
+      yield* ref.execute(AgentLoopActor.QueueFollowUp.make(payload)).pipe(
+        Effect.mapError(
+          (cause) =>
+            new SessionRuntimeError({
+              message: `Failed to queue follow-up ${message.id}`,
+              cause,
+            }),
+        ),
+      )
     },
   )
 
@@ -725,58 +722,55 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       createdAt: yield* DateTime.nowAsDate,
     })
 
+    const payload = {
+      workspaceId: yield* CurrentWorkspaceId,
+      message,
+      agentOverride: input.agentOverride,
+      interactive: input.interactive,
+      runSpec: input.runSpec,
+    }
     const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-    yield* ref
-      .execute(
-        AgentLoopActor.AcceptSubmit.make({
-          workspaceId: yield* CurrentWorkspaceId,
-          message,
-          agentOverride: input.agentOverride,
-          interactive: input.interactive,
-          runSpec: input.runSpec,
-        }),
-      )
-      .pipe(
-        Effect.tap(() =>
-          shouldHoldCompletion ? waitForCompletedTurnVisible(messageId) : Effect.void,
-        ),
-        Effect.ensuring(releaseSendTurn(messageId, sendTurn)),
-        Effect.tapCause((cause) => {
-          if (Cause.hasInterruptsOnly(cause)) return Effect.void
-          return Effect.gen(function* () {
-            if (Cause.hasDies(cause)) {
-              yield* eventPublisher.publish(
-                AgentRestarted.make({
-                  sessionId: input.sessionId,
-                  branchId: input.branchId,
-                  attempt: 0,
-                  error: Cause.pretty(cause),
-                }),
-              )
-            }
+    yield* ref.execute(AgentLoopActor.Submit.make(payload)).pipe(
+      Effect.tap(() =>
+        shouldHoldCompletion ? waitForCompletedTurnVisible(messageId) : Effect.void,
+      ),
+      Effect.ensuring(releaseSendTurn(messageId, sendTurn)),
+      Effect.tapCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.void
+        return Effect.gen(function* () {
+          if (Cause.hasDies(cause)) {
             yield* eventPublisher.publish(
-              ErrorOccurred.make({
+              AgentRestarted.make({
                 sessionId: input.sessionId,
                 branchId: input.branchId,
+                attempt: 0,
                 error: Cause.pretty(cause),
               }),
             )
-            yield* Effect.logWarning("agent loop submission failed").pipe(
-              Effect.annotateLogs({ error: Cause.pretty(cause) }),
-            )
-          }).pipe(
-            Effect.catchCause((diagnosticCause) =>
-              Effect.logWarning("agent loop submission failure diagnostics failed").pipe(
-                Effect.annotateLogs({
-                  error: Cause.pretty(diagnosticCause),
-                  originalError: Cause.pretty(cause),
-                }),
-                Effect.catchEager(() => Effect.void),
-              ),
-            ),
+          }
+          yield* eventPublisher.publish(
+            ErrorOccurred.make({
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              error: Cause.pretty(cause),
+            }),
           )
-        }),
-      )
+          yield* Effect.logWarning("agent loop submission failed").pipe(
+            Effect.annotateLogs({ error: Cause.pretty(cause) }),
+          )
+        }).pipe(
+          Effect.catchCause((diagnosticCause) =>
+            Effect.logWarning("agent loop submission failure diagnostics failed").pipe(
+              Effect.annotateLogs({
+                error: Cause.pretty(diagnosticCause),
+                originalError: Cause.pretty(cause),
+              }),
+              Effect.catchEager(() => Effect.void),
+            ),
+          ),
+        )
+      }),
+    )
     yield* Effect.logInfo("session-runtime.message.submitted").pipe(
       Effect.annotateLogs({
         sessionId: input.sessionId,
@@ -839,14 +833,13 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         Effect.flatMap(() =>
           Effect.gen(function* () {
             const commandId = ActorCommandId.make(yield* platform.randomId)
+            const payload = {
+              workspaceId: yield* CurrentWorkspaceId,
+              commandId,
+              command,
+            }
             const ref = yield* agentLoopActorRefFor(command.sessionId, command.branchId)
-            yield* ref.execute(
-              AgentLoopActor.AcceptSteer.make({
-                workspaceId: yield* CurrentWorkspaceId,
-                commandId,
-                command,
-              }),
-            )
+            yield* ref.execute(AgentLoopActor.Steer.make(payload))
           }),
         ),
         Effect.catchCause((cause) => Effect.fail(wrapError("steer failed", cause))),

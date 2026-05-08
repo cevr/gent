@@ -346,11 +346,14 @@ expected objects and migration-shaped fixture names obscure the intent.
 - `bun run lint`
 - `bun run gate`
 
-## Commit 8: refactor(runtime): collapse AgentLoop accept operations into durable commands
+## Commit 8: refactor(runtime): collapse AgentLoop accept operations into public commands
 
 **Justification**: Public/accept op pairs duplicate one mailbox concept. The
-actor should own durable commands without requiring callers to know the private
-`Accept*` phase.
+actor should expose one command per intent without requiring callers to know
+the private `Accept*` phase. In the current SessionRuntime entity path, the
+SessionRuntime command boundary owns durability; nested persisted AgentLoop
+commands deadlock under the current entity layering and are not the correct
+primitive until the SessionRuntime spike lands.
 
 **Principles**
 
@@ -362,16 +365,15 @@ actor should own durable commands without requiring callers to know the private
 
 **Changes**
 
-| File                                                                                            | Change                                                                                                   | Lines                           |
-| ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts`        | Remove `AcceptSubmit`, `AcceptQueueFollowUp`, and `AcceptSteer`; merge handlers into public durable ops. | `260-424`, `917-1078`           |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`               | Stop calling private accept ops.                                                                         | `616-649`, `673-786`, `837-853` |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent/agent-loop.actor.test.ts` | Rewrite op idempotency tests around public command behavior.                                             | `70-206`                        |
+| File                                                                                     | Change                                                                                           | Lines                           |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts` | Remove `AcceptSubmit`, `AcceptQueueFollowUp`, and `AcceptSteer`; merge handlers into public ops. | `24-32`, `259-316`, `887-911`   |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`        | Stop calling private accept ops.                                                                 | `625-646`, `722-779`, `833-844` |
+| `/Users/cvr/Developer/personal/gent/packages/tooling/src/suppression-inventory.ts`       | Re-pin the reviewed `Entity.toLayer` Effect-diagnostic boundary after line drift.                | `210-215`                       |
 
 **Verification**
 
-- Focused actor/session-runtime tests.
-- `bun run test`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/session-runtime.test.ts tests/server/extension-commands-rpc.test.ts tests/runtime/agent/agent-loop.actor.test.ts`
 - `bun run test:e2e`
 - `bun run gate`
 
