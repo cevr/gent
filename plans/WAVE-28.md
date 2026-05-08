@@ -25,8 +25,9 @@ surface area while preserving the same feature set and current stack.
 - Split the public extension authoring API from builtin/internal authority.
 - Unify command semantics so slash/palette commands are server capabilities,
   not duplicated TUI client commands.
-- Replace `TaggedEnumClass` with native Effect schema primitives if the worked
-  examples preserve wire shape and constructor ergonomics.
+- Remove the stale `TaggedEnumClass` migration batch unless a native Effect
+  primitive proves source-compatible with Gent's current constructor and wire-tag
+  ergonomics.
 - Audit file merit first-class: prefer bigger cohesive files when the smaller
   split does not earn its existence. Collapse extension wrapper files, todo
   operation files, tiny TUI barrels, single-use utils/classes/services, and
@@ -74,7 +75,9 @@ All final audit lanes found no P0. They did find P1s:
   minimal public authoring surface.
 - Server action/request slash capabilities and TUI client commands duplicate
   command semantics.
-- `TaggedEnumClass` is a custom schema primitive exported to extension authors.
+- `TaggedEnumClass` was a custom schema primitive exported to extension authors.
+  Commit 7 removed that public export; the remaining helper is internal and
+  should only be revisited with a source-compatible Effect primitive proof.
 - Queue/actor tests lock private effect-encore metadata and internal behavior
   shapes rather than product behavior.
 - File-merit audit found extension wrapper files and todo operation files that
@@ -334,34 +337,39 @@ semantics.
 - `bun run smoke`
 - `bun run gate`
 
-## Commit 9: refactor(schema): replace TaggedEnumClass with Effect primitives
+## Commit 9: docs(plan): remove stale TaggedEnumClass migration batch
 
-**Justification**: `TaggedEnumClass` is a custom schema language layered over
-Effect schema and exported publicly.
+**Status**: Completed in this wave.
+
+**Justification**: Effect v4 exposes `Schema.TaggedUnion` /
+`Schema.TaggedStruct`, not a source-compatible `Schema.TaggedEnum` primitive
+with the constructor and explicit wire-tag ergonomics Gent's internal helper
+currently provides. Commit 7 already removed `TaggedEnumClass` from the public
+extension authoring API, which was the P1 boundary leak. Deleting or mass
+migrating the internal helper in this wave would be speculative churn.
 
 **Principles**
 
-- `use-the-platform`: use native Effect schema/data primitives.
-- `correctness-over-pragmatism`: preserve wire shapes with worked examples
-  before mass migration.
+- `correctness-over-pragmatism`: do not replace persisted/transport schemas
+  with a near-match primitive without a worked parity proof.
+- `subtract-before-you-add`: remove a stale batch from the wave rather than
+  carrying an impossible migration forward.
 
 **Changes**
 
-| File                                                                                      | Change                                                                                 |
-| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/schema-tagged-enum-class.ts` | Delete after migration.                                                                |
-| Internal simple users                                                                     | Migrate first: `QueueEntryInfo`, `LoopState`, `SessionRuntimeState`, TUI state events. |
-| Persisted/transport users                                                                 | Migrate only after wire-shape tests prove parity.                                      |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`                  | Remove the public export.                                                              |
+| File                                                                     | Change                                                                                              |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/plans/WAVE-28.md`                    | Removed the stale “replace TaggedEnumClass with Effect primitives” implementation batch from scope. |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts` | Already no longer exports `TaggedEnumClass`; no code change needed in this batch.                   |
 
 **Verification**
 
-- Schema roundtrip tests.
-- Transport contract tests.
-- `bun run typecheck`
-- `bun run gate`
+- `rg -n "TaggedEnumClass" packages/core/src/extensions/api.ts`
+- `rg -n "TaggedEnum|TaggedUnion|TaggedStruct" node_modules/effect/src/Schema.ts`
 
 ## Commit 10: refactor(extensions): collapse thin builtin wrapper files
+
+**Status**: Completed in this wave.
 
 **Justification**: Several extension files mostly name arrays and do not encode
 package boundaries. Bigger cohesive files are preferred when the split does not
@@ -375,18 +383,23 @@ buy a reader or caller a real boundary.
 
 **Changes**
 
-| File                                                                                | Change                                                                    |
-| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/index.ts`               | Own trivial builtin composition directly where appropriate.               |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/network-tools/index.ts` | Merge if still only a two-tool array.                                     |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/fs-tools/index.ts`      | Merge if the extension definition is only a composition wrapper.          |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/plan.ts`                | Merge if it is not an independent boundary.                               |
-| Similar thin wrappers                                                               | Audit before deleting; keep real public entrypoints and high-churn seams. |
+| File                                                                                                | Change                                                                                      |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/index.ts`                               | Own fs, network, session, and interaction builtin composition directly.                     |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/network-tools/index.ts`                 | Deleted the two-tool wrapper.                                                               |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/fs-tools/index.ts`                      | Deleted the shallow resource/tool-array wrapper.                                            |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/session-tools/index.ts`                 | Deleted the wrapper and moved the small system-prompt reaction next to builtin composition. |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/interaction-tools/index.ts`             | Deleted the two-tool wrapper.                                                               |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/tests/session-tools.test.ts`                | Import the builtin from the package composition root.                                       |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/tests/fs-tools/fs-tools-model-turn.test.ts` | Import the builtin from the package composition root.                                       |
 
 **Verification**
 
 - Before/after file-count and `<=120 LOC` report.
-- Extension tests.
+  - Before: 107 extension source files; 51 files `<=120 LOC`.
+  - After: 103 extension source files; 46 files `<=120 LOC`.
+- `bun run --cwd packages/extensions typecheck`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/session-tools.test.ts tests/fs-tools/fs-tools-model-turn.test.ts`
 - `bun run gate`
 
 ## Commit 11: refactor(todo): consolidate todo tool operation files
