@@ -349,6 +349,66 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
+  test("flags ephemeral root composition inside agent runner", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/agent/agent-runner.ts",
+        [
+          "const storage = SqliteStorage.MemoryWithSql()",
+          "const runner = SingleRunner.layer({ runnerStorage: 'memory' })",
+          "const runtime = SessionRuntime.LiveWithEntity({ baseSections: [] })",
+          "const resources = ResourceManagerLive",
+          "const extensions = buildExtensionLayers(resolved)",
+          "const prompt = PromptPresenterLive",
+          "const store = EventStoreLive",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/agent/agent-runner.ts",
+        line: 1,
+        message: "AgentRunner must use the ephemeral child root preset",
+      },
+      {
+        file: "packages/core/src/runtime/agent/agent-runner.ts",
+        line: 2,
+        message: "AgentRunner must use the ephemeral child root preset",
+      },
+      {
+        file: "packages/core/src/runtime/agent/agent-runner.ts",
+        line: 3,
+        message: "AgentRunner must use the ephemeral child root preset",
+      },
+      {
+        file: "packages/core/src/runtime/agent/agent-runner.ts",
+        line: 4,
+        message: "AgentRunner must use the ephemeral child root preset",
+      },
+      {
+        file: "packages/core/src/runtime/agent/agent-runner.ts",
+        line: 5,
+        message: "AgentRunner must use the ephemeral child root preset",
+      },
+      {
+        file: "packages/core/src/runtime/agent/agent-runner.ts",
+        line: 6,
+        message: "AgentRunner must use the ephemeral child root preset",
+      },
+      {
+        file: "packages/core/src/runtime/agent/agent-runner.ts",
+        line: 7,
+        message: "AgentRunner must use the ephemeral child root preset",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/agent/ephemeral-root.ts",
+        "const storage = SqliteStorage.MemoryWithSql()",
+      ),
+    ).toEqual([])
+  })
+
   test("flags deleted provider test statics outside language-model utilities", () => {
     expect(
       findPlatformDuplicationViolations(

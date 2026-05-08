@@ -23,7 +23,7 @@ const approvedEffectDiagnosticFiles = new Set([
   "apps/tui/tests/headless-cli-exit.test.ts",
   "packages/core/src/domain/extension-load-boundary.ts",
   "packages/core/src/extensions/api.ts",
-  "packages/core/src/runtime/agent/agent-runner.ts",
+  "packages/core/src/runtime/agent/ephemeral-root.ts",
   "packages/core/src/runtime/agent/tool-runner.ts",
   "packages/core/src/runtime/extensions/extension-effect-membrane.ts",
   "packages/core/src/runtime/extensions/extension-reactions.ts",

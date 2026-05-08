@@ -129,6 +129,14 @@ const bannedTransportContractPatterns: ReadonlyArray<BannedPattern> = [
   },
 ]
 
+const bannedAgentRunnerCompositionPatterns: ReadonlyArray<BannedPattern> = [
+  {
+    pattern:
+      /\b(?:SqliteStorage\.MemoryWithSql|SingleRunner\.layer|SessionRuntime\.LiveWithEntity|ResourceManagerLive|buildExtensionLayers|PromptPresenterLive|EventStoreLive)\b/,
+    message: "AgentRunner must use the ephemeral child root preset",
+  },
+]
+
 const hostFactPatternSources = new Set([
   "\\bprocess\\.(?:platform|pid|execPath)\\b",
   "\\bos\\.(?:hostname|homedir|release)\\s*\\(",
@@ -175,6 +183,9 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => [
   ...(serverRootConsumerFiles.has(file) ? bannedServerRootConsumerPatterns : []),
   ...(file === "packages/core/src/server/transport-contract.ts"
     ? bannedTransportContractPatterns
+    : []),
+  ...(file === "packages/core/src/runtime/agent/agent-runner.ts"
+    ? bannedAgentRunnerCompositionPatterns
     : []),
 ]
 

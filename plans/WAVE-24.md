@@ -242,7 +242,7 @@ Validation:
 
 ### W24.4 — Ephemeral Runs Use A Root Preset
 
-Status: planned.
+Status: done in `refactor(agent-runner): use ephemeral root preset`.
 
 Work:
 
@@ -254,11 +254,38 @@ Work:
 - Add guard/test coverage preventing a second app/runtime root in
   `agent-runner.ts`.
 
+Receipts:
+
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/ephemeral-root.ts`
+  owns the child-run root preset: child storage, cluster runner, event store,
+  local event publisher, approval, prompt presenter, resource manager, tool
+  runner, session runtime, extension layer reuse, and fresh memoization.
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-runner.ts`
+  now consumes `makeEphemeralAgentRootLayer` and no longer hand-composes the
+  ephemeral runtime graph.
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/dependencies.ts`
+  re-exports root-provided platform services into the built core context so
+  captured parent contexts can seed child-run roots without Bun-layer
+  provisioning in dependency code.
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/profile.ts`
+  documents `ephemeral-root.ts` as the child-run caller of the shared extension
+  layer builder.
+- `/Users/cvr/Developer/personal/gent/packages/tooling/src/platform-duplication-guards.ts`
+  and
+  `/Users/cvr/Developer/personal/gent/packages/tooling/tests/platform-duplication-guards.test.ts`
+  reject reintroduced child-root primitives inside `agent-runner.ts`.
+- `/Users/cvr/Developer/personal/gent/packages/tooling/src/suppression-inventory.ts`
+  moves the existing extension-layer diagnostic membrane approval from
+  `agent-runner.ts` to the extracted root file.
+
 Validation:
 
-- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-runner.test.ts packages/core/tests/runtime/external-turn.test.ts packages/core/tests/runtime/session-runtime.test.ts packages/core/tests/extensions/executor-integration.test.ts`
-- `bun run typecheck`
-- `bun run lint`
+- `bun packages/tooling/src/check-platform-duplication-guards.ts` — pass
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/executor-integration.test.ts -t "public executor commands"` — 1 pass, 17 filtered, 0 fail
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-runner.test.ts packages/core/tests/runtime/external-turn.test.ts packages/core/tests/runtime/session-runtime.test.ts packages/core/tests/extensions/executor-integration.test.ts packages/tooling/tests/platform-duplication-guards.test.ts` — 90 pass, 0 fail
+- `bun run typecheck` — pass
+- `bun run lint` — pass, 0 warnings/errors
+- `bun run fmt:check` — pass
 
 ### W24.5 — Strict Guardrail Closure
 

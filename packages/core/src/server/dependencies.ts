@@ -1,7 +1,8 @@
-import { Effect, Layer, Schema } from "effect"
+import { Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import { FetchHttpClient } from "effect/unstable/http"
 import type { LanguageModel } from "effect/unstable/ai"
+import { ChildProcessSpawner as ProcessSpawner } from "effect/unstable/process"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { AgentRunnerService } from "../domain/agent.js"
 import { Auth, AuthGuard } from "../domain/auth.js"
@@ -12,7 +13,7 @@ import { FileLockService } from "../domain/file-lock.js"
 import type { Permission } from "../domain/permission.js"
 import { PromptPresenterLive } from "../runtime/prompt-presenter-live.js"
 import type { GentExtension } from "../domain/extension.js"
-import type { GentPlatform } from "../runtime/gent-platform.js"
+import { GentPlatform } from "../runtime/gent-platform.js"
 import { ModelResolver } from "../providers/model-resolver.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { DebugSlowLanguageModelDelayMs, LanguageModelLayers } from "../test-utils/language-model.js"
@@ -121,6 +122,16 @@ const makeBaseEventStoreLayer = (
   if (eventStoreMode === "storage-backed") return EventStoreLive
   return persistenceMode === "memory" ? EventStore.Memory : EventStoreLive
 }
+
+const platformServicesLive = Layer.mergeAll(
+  Layer.effect(FileSystem.FileSystem, Effect.service(FileSystem.FileSystem)),
+  Layer.effect(Path.Path, Effect.service(Path.Path)),
+  Layer.effect(
+    ProcessSpawner.ChildProcessSpawner,
+    Effect.service(ProcessSpawner.ChildProcessSpawner),
+  ),
+  Layer.effect(GentPlatform, Effect.service(GentPlatform)),
+)
 
 const makeStorageLayer = (config: DependenciesConfig, persistenceMode: "disk" | "memory") =>
   persistenceMode === "memory"
@@ -392,6 +403,7 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const baseServicesLive = Layer.provideMerge(
     Layer.mergeAll(
+      platformServicesLive,
       runtimeEnvironmentLive,
       clusterRunnerLive,
       eventServicesLive,

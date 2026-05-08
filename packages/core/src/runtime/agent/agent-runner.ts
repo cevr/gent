@@ -1,20 +1,17 @@
 import {
   Cause,
-  Context,
-  type Config,
+  type Context,
   DateTime,
   Duration,
   Effect,
   Fiber,
   FileSystem,
   Layer,
-  Path,
+  type Path,
   Schema,
   Stream,
 } from "effect"
-import { SingleRunner } from "effect/unstable/cluster"
 import { ChildProcessSpawner } from "effect/unstable/process"
-import type { SqlClient } from "effect/unstable/sql"
 import { runProcess } from "../../utils/run-process.js"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import {
@@ -32,11 +29,7 @@ import {
   type EventStoreService,
   type EventEnvelope,
 } from "../../domain/event.js"
-import {
-  ExtensionEventSink,
-  EventPublisher,
-  type EventPublisherService,
-} from "../../domain/event-publisher.js"
+import { EventPublisher, type EventPublisherService } from "../../domain/event-publisher.js"
 import {
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   AgentRunError,
@@ -58,14 +51,10 @@ import {
 } from "../../domain/message-part-projection.js"
 import { SessionId, BranchId } from "../../domain/ids.js"
 import type { ToolCallId } from "../../domain/ids.js"
-import { SqliteStorage } from "../../storage/sqlite-storage.js"
 import { SessionStorage, type SessionStorageService } from "../../storage/session-storage.js"
 import { BranchStorage, type BranchStorageService } from "../../storage/branch-storage.js"
 import { MessageStorage, type MessageStorageService } from "../../storage/message-storage.js"
 import { EventStorage, type EventStorageService } from "../../storage/event-storage.js"
-import type { InteractionStorage } from "../../storage/interaction-storage.js"
-import type { InteractionPendingReader } from "../../storage/interaction-pending-reader.js"
-import type { SearchStorage } from "../../storage/search-storage.js"
 import {
   RelationshipStorage,
   type RelationshipStorageService,
@@ -77,20 +66,13 @@ import {
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { GentPlatform, type GentPlatformShape } from "../gent-platform.js"
 import { SessionRuntime } from "../session-runtime.js"
-import { ToolRunner } from "./tool-runner.js"
-import { ModelResolver } from "../../providers/model-resolver.js"
-import type { PromptPresenter } from "../../domain/prompt-presenter.js"
-import { PromptPresenterLive } from "../prompt-presenter-live.js"
-import { ApprovalService } from "../approval-service.js"
-import { EventStoreLive } from "../event-store-live.js"
-import { ResourceManagerLive, type ResourceManager } from "../resource-manager.js"
-import { RuntimeEnvironment } from "../runtime-environment.js"
-import { ConfigService } from "../config-service.js"
-import { ModelRegistry } from "../model-registry.js"
-import { buildExtensionLayers } from "../profile.js"
+import type { ModelResolver } from "../../providers/model-resolver.js"
+import type { RuntimeEnvironment } from "../runtime-environment.js"
+import type { ConfigService } from "../config-service.js"
+import type { ModelRegistry } from "../model-registry.js"
 import { runWithBuiltLayer } from "../run-with-built-layer.js"
 import type { PromptSection } from "../../domain/prompt.js"
-import type { StorageError } from "../../domain/storage-error.js"
+import { makeEphemeralAgentRootLayer } from "./ephemeral-root.js"
 
 interface ChildMetadata {
   usage?: { input: number; output: number }
@@ -111,101 +93,6 @@ interface AgentRunStorage {
   readonly messages: MessageStorageService
   readonly events: EventStorageService
   readonly relationships: RelationshipStorageService
-}
-
-type EphemeralOverrideError = StorageError | Config.ConfigError
-
-type EphemeralStorageProvides =
-  | SqlClient.SqlClient
-  | SessionStorage
-  | BranchStorage
-  | MessageStorage
-  | EventStorage
-  | RelationshipStorage
-  | StorageTransaction
-  | InteractionStorage
-  | InteractionPendingReader
-  | SearchStorage
-
-type EphemeralOverrideProvides =
-  | EphemeralStorageProvides
-  | EventStore
-  | EventPublisher
-  | ExtensionEventSink
-  | ApprovalService
-  | PromptPresenter
-  | ResourceManager
-  | ToolRunner
-  | SessionRuntime
-
-type EphemeralExtensionRequires =
-  | EphemeralStorageProvides
-  | RuntimeEnvironment
-  | FileSystem.FileSystem
-  | Path.Path
-  | ModelResolver
-  | ConfigService
-  | ModelRegistry
-
-interface EphemeralRuntimeOverrides {
-  readonly storage: Layer.Layer<EphemeralStorageProvides, StorageError, never>
-  readonly eventStore: Layer.Layer<EventStore, EphemeralOverrideError, never>
-  readonly eventPublisher: Layer.Layer<
-    EventPublisher | ExtensionEventSink,
-    EphemeralOverrideError,
-    never
-  >
-  readonly approval: Layer.Layer<ApprovalService, never, never>
-  readonly promptPresenter: Layer.Layer<PromptPresenter, never, never>
-  readonly resourceManager: Layer.Layer<ResourceManager, never, never>
-  readonly toolRunner: Layer.Layer<ToolRunner, never, never>
-  readonly sessionRuntime: Layer.Layer<SessionRuntime, EphemeralOverrideError, never>
-}
-
-const recoverExtensionLayer = <Provides>(
-  layer: Layer.Layer<Provides, unknown, unknown>,
-): Layer.Layer<Provides, never, EphemeralExtensionRequires> =>
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit extension-layer recovery membrane
-  layer as Layer.Layer<Provides, never, EphemeralExtensionRequires> // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- explicit extension-layer recovery membrane
-
-const composeEphemeralRuntimeLayer = <Provides>(params: {
-  readonly parentServices: Context.Context<never>
-  readonly overrides: EphemeralRuntimeOverrides
-  readonly extensionLayers?: Layer.Layer<Provides, unknown, unknown>
-}): Layer.Layer<Provides | EphemeralOverrideProvides, EphemeralOverrideError, never> => {
-  const parentLayer = Layer.succeedContext(params.parentServices)
-  const overridesLayer = Layer.mergeAll(
-    params.overrides.storage,
-    params.overrides.eventStore,
-    params.overrides.eventPublisher,
-    params.overrides.approval,
-    params.overrides.promptPresenter,
-    params.overrides.resourceManager,
-    params.overrides.toolRunner,
-    params.overrides.sessionRuntime,
-  )
-
-  const typedExtensionLayer =
-    params.extensionLayers === undefined
-      ? undefined
-      : // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous upstream shape feeds the recovery membrane
-        recoverExtensionLayer<Provides>(params.extensionLayers)
-  const extensionLayer =
-    typedExtensionLayer === undefined
-      ? undefined
-      : Layer.provideMerge(typedExtensionLayer, Layer.merge(parentLayer, params.overrides.storage))
-
-  const childLayer =
-    extensionLayer === undefined ? overridesLayer : Layer.merge(extensionLayer, overridesLayer)
-
-  // Fresh memoization keeps child-owned layer constants, such as in-memory
-  // SqliteClient, from aliasing the parent runtime's memoized services.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Provides plus override provides is the local composition output
-  return Layer.fresh(Layer.provideMerge(childLayer, parentLayer)) as Layer.Layer<
-    Provides | EphemeralOverrideProvides,
-    EphemeralOverrideError,
-    never
-  >
 }
 
 const createChildMetadataAccumulator = (): ChildMetadataAccumulator => ({
@@ -582,122 +469,6 @@ const makeSharedRunnerHelpers = (
   }
 }
 
-/**
- * Build the layer for an ephemeral child run.
- *
- * Reuses `buildExtensionLayers` (the same builder used by server / per-cwd) so
- * registry/actor/resource/event-bus shape stays identical — extensions don't
- * "see" a different runtime when invoked from a child agent. Ephemeral children
- * rebuild resource services against child storage, but skip process lifecycle:
- * profile resolution owns startup/shutdown. Local-only concerns (in-memory
- * storage, auto-resolve approval, prompt presenter, loop services) are declared
- * as explicit override families.
- */
-const buildEphemeralLayer = (params: {
-  config: AgentRunnerConfig
-  parentServices: Context.Context<never>
-  extensionRegistry: ExtensionRegistryService
-}) => {
-  const resolved = params.extensionRegistry.getResolved()
-  const extensionLayers = buildExtensionLayers(resolved, { lifecycle: "skip" })
-  const parentService = <S>(tag: Context.Key<unknown, S>): S =>
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-    Context.get(params.parentServices as Context.Context<unknown>, tag)
-
-  const storageLayer = SqliteStorage.MemoryWithSql()
-  const clusterRunnerLayer = Layer.provide(
-    SingleRunner.layer({ runnerStorage: "memory" }),
-    storageLayer,
-  )
-  const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
-  const approvalLayer = ApprovalService.LiveAutoResolve
-  const parentRuntimeEnvironmentLayer = Layer.succeed(
-    RuntimeEnvironment,
-    parentService(RuntimeEnvironment),
-  )
-  const parentFileSystemLayer = Layer.succeed(
-    FileSystem.FileSystem,
-    parentService(FileSystem.FileSystem),
-  )
-  const parentPathLayer = Layer.succeed(Path.Path, parentService(Path.Path))
-  const parentModelResolverLayer = Layer.succeed(ModelResolver, parentService(ModelResolver))
-  const parentConfigLayer = Layer.succeed(ConfigService, parentService(ConfigService))
-  const parentModelRegistryLayer = Layer.succeed(ModelRegistry, parentService(ModelRegistry))
-  const parentGentPlatformLayer = Layer.succeed(GentPlatform, parentService(GentPlatform))
-  const promptPresenterLayer = Layer.provide(
-    PromptPresenterLive,
-    Layer.mergeAll(
-      approvalLayer,
-      parentRuntimeEnvironmentLayer,
-      parentFileSystemLayer,
-      parentPathLayer,
-    ),
-  )
-
-  // Ephemeral child sessions are synthetic. Persist local events so the
-  // child loop can complete, but do not run local extension reduction on
-  // those synthetic session ids; mirrored parent observers handle the
-  // subset of child events that should escape.
-  const eventPublisherLayer = Layer.effectContext(
-    Effect.gen(function* () {
-      const baseEventStore = yield* EventStore
-      const publisher = EventPublisher.of({
-        append: (event) => baseEventStore.append(event),
-        deliver: (envelope) => baseEventStore.broadcast(envelope),
-        publish: (event) => baseEventStore.publish(event),
-      })
-      return Context.empty().pipe(
-        Context.add(EventPublisher, publisher),
-        Context.add(ExtensionEventSink, {
-          publish: publisher.publish,
-        }),
-      )
-    }),
-  ).pipe(Layer.provide(eventStoreLayer))
-  const toolRunnerLayer = Layer.provideMerge(
-    ToolRunner.Live,
-    Layer.mergeAll(approvalLayer, extensionLayers, parentRuntimeEnvironmentLayer),
-  )
-  const sessionRuntimeLayer = SessionRuntime.LiveWithEntity({
-    baseSections: params.config.baseSections ?? [],
-  }).pipe(
-    Layer.provide(
-      Layer.provideMerge(
-        Layer.mergeAll(
-          clusterRunnerLayer,
-          eventPublisherLayer,
-          toolRunnerLayer,
-          ResourceManagerLive,
-          extensionLayers,
-          parentModelResolverLayer,
-          parentConfigLayer,
-          parentModelRegistryLayer,
-          parentGentPlatformLayer,
-        ),
-        storageLayer,
-      ),
-    ),
-  )
-  // Each override family is a named child-owned layer; child keys win over
-  // parent keys by `Layer.provideMerge` last-writer-wins. Adding a new
-  // storage sub-Tag means adding it to the focused storage family, not
-  // updating an omit list at every call site.
-  return composeEphemeralRuntimeLayer({
-    parentServices: params.parentServices,
-    overrides: {
-      storage: storageLayer,
-      eventStore: eventStoreLayer,
-      eventPublisher: eventPublisherLayer,
-      approval: approvalLayer,
-      promptPresenter: promptPresenterLayer,
-      resourceManager: ResourceManagerLive,
-      toolRunner: toolRunnerLayer,
-      sessionRuntime: sessionRuntimeLayer,
-    },
-    extensionLayers,
-  })
-}
-
 const reparentEphemeralChildEvent = (
   event: AgentEvent,
   parentSessionId: SessionId,
@@ -771,9 +542,7 @@ const runEphemeralAgent = (params: {
     "ToolCallSucceeded",
     "ToolCallFailed",
   ])
-  // The ephemeral runtime builder centralizes the override-family map;
-  // adding a new child-owned service requires editing one composition root.
-  const ephemeralLayer = buildEphemeralLayer({
+  const ephemeralLayer = makeEphemeralAgentRootLayer({
     config: params.runnerConfig,
     parentServices: params.parentServices,
     extensionRegistry: params.extensionRegistry,
@@ -915,12 +684,9 @@ const runEphemeralAgent = (params: {
     // wrap in `Effect.scoped` so the layer's resources release deterministically
     // when the child finishes/interrupts.
     //
-    // `composeEphemeralRuntimeLayer()` wraps the merged layer in `Layer.fresh` so the
-    // child gets its own memo map. Child override layers like
-    // `SqliteStorage.MemoryWithSql()` reference module-level layer constants
-    // for the underlying SqlClient; without a fresh memo map the parent
-    // runtime's memo would alias those instances and the "ephemeral" SQLite
-    // would share the parent's database.
+    // `makeEphemeralAgentRootLayer()` wraps the merged layer in `Layer.fresh` so the
+    // child gets its own memo map; otherwise the parent runtime's memo could
+    // alias child-owned in-memory storage.
     const { success, reasoning } = yield* runWithBuiltLayer(ephemeralLayer)(childRun).pipe(
       Effect.scoped,
     )

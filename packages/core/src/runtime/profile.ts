@@ -9,7 +9,7 @@
  *      → calls `resolveRuntimeProfile` + `buildExtensionLayers`
  *   2. Per-cwd profile cache (`packages/core/src/runtime/session-profile.ts`)
  *      → calls `resolveRuntimeProfile` + `buildExtensionLayers`
- *   3. Ephemeral child runs (`packages/core/src/runtime/agent/agent-runner.ts`)
+ *   3. Ephemeral child runs (`packages/core/src/runtime/agent/ephemeral-root.ts`)
  *      → forwards parent's already-resolved `ExtensionRegistry` (same cwd, no
  *        rediscovery needed) + calls `buildExtensionLayers(registry.getResolved())`
  *
@@ -155,9 +155,9 @@ export const logRuntimeProfileFailures = (profile: RuntimeProfile) =>
  *   - server startup: invoke once at boot, hold for server lifetime.
  *   - per-cwd cache: invoke per unique cwd, cache by canonical path.
  *
- * Ephemeral runs do not call this — they forward `ExtensionRegistry` from
- * the parent (same cwd, no rediscovery needed) and call `buildExtensionLayers`
- * directly on the forwarded `ResolvedExtensions`.
+ * Ephemeral runs do not call this — their child-run root forwards
+ * `ExtensionRegistry` from the parent (same cwd, no rediscovery needed) and
+ * calls `buildExtensionLayers` directly on the forwarded `ResolvedExtensions`.
  *
  * Requires `Scope.Scope` because `reconcileLoadedExtensions` registers
  * scope-tied finalizers (extension `onShutdown` and scheduled jobs).
