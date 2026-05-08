@@ -27,6 +27,7 @@ import {
 import {
   makeAmbientExtensionHostContextDeps,
   makeExtensionHostContext,
+  readOnlyExtensionHostContext,
 } from "../runtime/make-extension-host-context.js"
 import { ModelRegistry, type ModelRegistryService } from "../runtime/model-registry.js"
 import { RuntimeEnvironment, type RuntimeEnvironmentShape } from "../runtime/runtime-environment.js"
@@ -535,8 +536,9 @@ const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         hostDeps,
       )
       const rpcRegistry = registry.getResolved().rpcRegistry
+      const requestCtx = intent === "read" ? readOnlyExtensionHostContext(hostCtx) : hostCtx
       const request = rpcRegistry
-        .run(extensionId, RpcId.make(capabilityId), input, hostCtx, { intent })
+        .run(extensionId, RpcId.make(capabilityId), input, requestCtx, { intent })
         .pipe(
           Effect.mapError((error) =>
             extensionRequestError({

@@ -123,6 +123,7 @@ describe("queue drain regression", () => {
           expect(reserved.state._tag).toBe("Idle")
           expect(reserved.startingState?._tag).toBe("Running")
           expect(reserved.queue.followUp).toHaveLength(1)
+          expect(reserved.queue.inFlight).toBeUndefined()
 
           yield* behavior.startTurn(first)
           yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
@@ -241,6 +242,11 @@ describe("queue drain regression", () => {
             expect(finalCount).toBe(4)
             const order = yield* Ref.get(streamOrder)
             expect(order).toEqual([0, 1, 2, 3])
+            const queueStorage = yield* AgentLoopQueueStorage
+            const queue = yield* queueStorage.getQueueState(drainSessionId, drainBranchId)
+            expect(queue.inFlight).toBeUndefined()
+            expect(queue.followUp).toEqual([])
+            expect(queue.steering).toEqual([])
           }).pipe(Effect.provide(layer)),
         )
       }),

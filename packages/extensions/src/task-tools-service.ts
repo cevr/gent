@@ -1,6 +1,8 @@
 import { Context, DateTime, Effect, Layer, Option, Random, Schema } from "effect"
 import {
+  CapabilityAccess,
   ExtensionStatePublisher,
+  type CapabilityError,
   type AgentName,
   type SessionId,
   type BranchId,
@@ -17,6 +19,22 @@ import { TASK_TOOLS_EXTENSION_ID } from "./task-tools/identity.js"
 
 // Extension-owned task service. Present only when @gent/task-tools is loaded.
 // Pure state management — no execution, no fibers, no agent spawning.
+
+const requireTaskWrite = (operation: string) =>
+  Effect.serviceOption(CapabilityAccess).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.void,
+        onSome: (access) =>
+          access.requireWrite({
+            tag: "task",
+            extensionId: TASK_TOOLS_EXTENSION_ID,
+            capabilityId: operation,
+            operation,
+          }),
+      }),
+    ),
+  )
 
 export class TaskServiceUnavailableError extends Schema.TaggedErrorClass<TaskServiceUnavailableError>()(
   "TaskServiceUnavailableError",
@@ -63,7 +81,7 @@ export interface TaskServiceApi {
     prompt?: string
     cwd?: string
     metadata?: unknown
-  }) => Effect.Effect<Task, TaskServiceUnavailableError, ExtensionStatePublisher>
+  }) => Effect.Effect<Task, CapabilityError | TaskServiceUnavailableError, ExtensionStatePublisher>
 
   readonly get: (id: TaskId) => Effect.Effect<Task | undefined>
 
@@ -77,12 +95,16 @@ export interface TaskServiceApi {
       owner: string | null
       metadata: unknown | null
     }>,
-  ) => Effect.Effect<Task | undefined, TaskTransitionError, ExtensionStatePublisher>
+  ) => Effect.Effect<
+    Task | undefined,
+    CapabilityError | TaskTransitionError,
+    ExtensionStatePublisher
+  >
 
-  readonly remove: (id: TaskId) => Effect.Effect<void, never, ExtensionStatePublisher>
+  readonly remove: (id: TaskId) => Effect.Effect<void, CapabilityError, ExtensionStatePublisher>
 
-  readonly addDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void>
-  readonly removeDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void>
+  readonly addDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void, CapabilityError>
+  readonly removeDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void, CapabilityError>
   readonly getDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>>
 }
 
@@ -110,7 +132,8 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
 
   static Live: Layer.Layer<TaskService> = Layer.succeed(TaskService, {
     create: (params) =>
-      Effect.serviceOption(TaskStorage).pipe(
+      requireTaskWrite("TaskService.create").pipe(
+        Effect.andThen(Effect.serviceOption(TaskStorage)),
         Effect.flatMap(
           Option.match({
             onNone: () => TaskService.Noop.create(params),
@@ -167,7 +190,8 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
       ),
 
     update: (id, fields) =>
-      Effect.serviceOption(TaskStorage).pipe(
+      requireTaskWrite("TaskService.update").pipe(
+        Effect.andThen(Effect.serviceOption(TaskStorage)),
         Effect.flatMap(
           Option.match({
             onNone: () => TaskService.Noop.update(id, fields),
@@ -203,7 +227,8 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
       ),
 
     remove: (id) =>
-      Effect.serviceOption(TaskStorage).pipe(
+      requireTaskWrite("TaskService.remove").pipe(
+        Effect.andThen(Effect.serviceOption(TaskStorage)),
         Effect.flatMap(
           Option.match({
             onNone: () => TaskService.Noop.remove(id),
@@ -229,7 +254,8 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
       ),
 
     addDep: (taskId, blockedById) =>
-      Effect.serviceOption(TaskStorage).pipe(
+      requireTaskWrite("TaskService.addDep").pipe(
+        Effect.andThen(Effect.serviceOption(TaskStorage)),
         Effect.flatMap(
           Option.match({
             onNone: () => TaskService.Noop.addDep(taskId, blockedById),
@@ -239,7 +265,8 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
         ),
       ),
     removeDep: (taskId, blockedById) =>
-      Effect.serviceOption(TaskStorage).pipe(
+      requireTaskWrite("TaskService.removeDep").pipe(
+        Effect.andThen(Effect.serviceOption(TaskStorage)),
         Effect.flatMap(
           Option.match({
             onNone: () => TaskService.Noop.removeDep(taskId, blockedById),

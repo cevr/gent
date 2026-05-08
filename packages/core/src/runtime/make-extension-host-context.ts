@@ -10,6 +10,7 @@ import {
   ExtensionHostError,
   ExtensionHostSearchResult,
   type ExtensionHostContext,
+  type ReadOnlyExtensionHostContext,
 } from "../domain/extension-host-context.js"
 import {
   AgentRunnerService,
@@ -582,3 +583,29 @@ export const makeExtensionHostContext = (
   }
   return hostCtx
 }
+
+export const readOnlyExtensionHostContext = (
+  ctx: ExtensionHostContext,
+): ReadOnlyExtensionHostContext => ({
+  sessionId: ctx.sessionId,
+  branchId: ctx.branchId,
+  ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
+  cwd: ctx.cwd,
+  home: ctx.home,
+  ...(ctx.capabilityContext !== undefined ? { capabilityContext: ctx.capabilityContext } : {}),
+  agent: {
+    get: ctx.agent.get,
+    require: ctx.agent.require,
+    resolveDualModelPair: ctx.agent.resolveDualModelPair,
+  },
+  session: {
+    listMessages: ctx.session.listMessages,
+    getSession: ctx.session.getSession,
+    getDetail: ctx.session.getDetail,
+    estimateContextPercent: ctx.session.estimateContextPercent,
+    search: ctx.session.search,
+    listBranches: ctx.session.listBranches,
+    getChildSessions: ctx.session.getChildSessions,
+    getSessionAncestors: ctx.session.getSessionAncestors,
+  },
+})

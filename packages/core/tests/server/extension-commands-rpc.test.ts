@@ -805,6 +805,63 @@ describe("extension command RPCs", () => {
       )
     }),
   )
+  it.live("read RPC handlers receive a read-only runtime host context", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/read-context")
+      const ext: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          requests: [
+            request({
+              id: "inspect",
+              extensionId,
+              intent: "read",
+              input: Schema.Void,
+              output: Schema.Struct({
+                hasSessionMutations: Schema.Boolean,
+                hasAgentRun: Schema.Boolean,
+              }),
+              execute: (_input, ctx) =>
+                Effect.succeed({
+                  hasSessionMutations:
+                    "session" in ctx &&
+                    typeof ctx.session === "object" &&
+                    ctx.session !== null &&
+                    "queueFollowUp" in ctx.session,
+                  hasAgentRun:
+                    "agent" in ctx &&
+                    typeof ctx.agent === "object" &&
+                    ctx.agent !== null &&
+                    "run" in ctx.agent,
+                }),
+            }),
+          ],
+        },
+      }
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [ext],
+            cwd: "/tmp",
+          })
+          const result = yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId,
+            capabilityId: "inspect",
+            intent: "read",
+            input: undefined,
+          })
+          expect(result).toEqual({ hasSessionMutations: false, hasAgentRun: false })
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }),
+  )
   it.live("RPC request cannot invoke lower-scope slash request shadowed by project command", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/public-shadow")

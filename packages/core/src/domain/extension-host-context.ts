@@ -52,6 +52,23 @@ export interface ExtensionHostContext {
 }
 
 export declare namespace ExtensionHostContext {
+  interface ReadOnlyAgent {
+    readonly get: Agent["get"]
+    readonly require: Agent["require"]
+    readonly resolveDualModelPair: Agent["resolveDualModelPair"]
+  }
+
+  interface ReadOnlySessionFacet {
+    readonly listMessages: SessionFacet["listMessages"]
+    readonly getSession: SessionFacet["getSession"]
+    readonly getDetail: SessionFacet["getDetail"]
+    readonly estimateContextPercent: SessionFacet["estimateContextPercent"]
+    readonly search: SessionFacet["search"]
+    readonly listBranches: SessionFacet["listBranches"]
+    readonly getChildSessions: SessionFacet["getChildSessions"]
+    readonly getSessionAncestors: SessionFacet["getSessionAncestors"]
+  }
+
   interface Agent {
     readonly get: (name: AgentName) => Effect.Effect<AgentDefinition | undefined>
     readonly require: (name: AgentName) => Effect.Effect<AgentDefinition, ExtensionHostError>
@@ -182,4 +199,15 @@ export declare namespace ExtensionHostContext {
       EventStoreError | PlatformError.PlatformError | InteractionPendingError
     >
   }
+}
+
+export interface ReadOnlyExtensionHostContext {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly agentName?: AgentName
+  readonly cwd: string
+  readonly home: string
+  readonly capabilityContext?: Context.Context<never>
+  readonly agent: ExtensionHostContext.ReadOnlyAgent
+  readonly session: ExtensionHostContext.ReadOnlySessionFacet
 }

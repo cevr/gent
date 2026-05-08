@@ -45,7 +45,7 @@ const stubProjectionCtx = {
   },
 }
 
-const setupOf = (ext: GentExtension) => ext.setup(testSetupCtx())
+const setupOf = (ext: GentExtension<never>) => ext.setup(testSetupCtx())
 
 describe("defineExtension", () => {
   it.live("empty extension produces empty contribution buckets", () =>
@@ -204,7 +204,7 @@ describe("defineExtension", () => {
       yield* setupOf(ext)
       expect(captured?.cwd).toBeDefined()
       expect(captured?.home).toBeDefined()
-      expect(captured?.spawner).toBeDefined()
+      expect("spawner" in (captured ?? {})).toBe(false)
     }),
   )
 

@@ -1,4 +1,5 @@
 import { type GentExtension } from "@gent/core/extensions/api"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { FsToolsExtension } from "./fs-tools/index.js"
 import { ExecToolsExtension } from "./exec-tools/index.js"
 import { NetworkToolsExtension } from "./network-tools/index.js"
@@ -54,7 +55,7 @@ export {
 
 export { AllBuiltinAgents, getBuiltinAgent } from "./all-agents.js"
 
-export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
+export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner>> = [
   HandoffExtension,
   FsToolsExtension,
   ExecToolsExtension,

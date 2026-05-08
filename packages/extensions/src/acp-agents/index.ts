@@ -18,6 +18,7 @@
  * @module
  */
 import { Effect, Layer } from "effect"
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
   AgentName,
   defineAgent,
@@ -27,7 +28,6 @@ import {
   resource,
   sectionPatternFor,
   type ExtensionContributions,
-  type ExtensionSetupContext,
   type GentExtension,
   type ToolCapability,
 } from "@gent/core/extensions/api"
@@ -158,16 +158,16 @@ const rewriteCodemodeSystemPrompt = (input: {
 
 interface AcpAgentsManagerDeps {
   readonly makeAcpSessionManager?: (
-    spawner: ExtensionSetupContext["spawner"],
+    spawner: ChildProcessSpawner["Service"],
   ) => ReturnType<typeof createAcpSessionManager>
   readonly makeClaudeCodeSessionManager?: () => ReturnType<typeof createClaudeCodeSessionManager>
 }
 
 const buildAcpContributions = (
-  ctx: ExtensionSetupContext,
+  spawner: ChildProcessSpawner["Service"],
   deps: AcpAgentsManagerDeps,
 ): ExtensionContributions => {
-  const acpManager = (deps.makeAcpSessionManager ?? createAcpSessionManager)(ctx.spawner)
+  const acpManager = (deps.makeAcpSessionManager ?? createAcpSessionManager)(spawner)
   const claudeCodeManager = (
     deps.makeClaudeCodeSessionManager ?? (() => createClaudeCodeSessionManager(claudeSdkLive))
   )()
@@ -209,9 +209,15 @@ const buildAcpContributions = (
   }
 }
 
-export const makeAcpAgentsExtension = (deps: AcpAgentsManagerDeps = {}): GentExtension => ({
+export const makeAcpAgentsExtension = (
+  deps: AcpAgentsManagerDeps = {},
+): GentExtension<ChildProcessSpawner> => ({
   manifest: { id: ExtensionId.make("@gent/acp-agents") },
-  setup: (ctx) => Effect.sync(() => buildAcpContributions(ctx, deps)),
+  setup: () =>
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner
+      return buildAcpContributions(spawner, deps)
+    }),
 })
 
-export const AcpAgentsExtension: GentExtension = makeAcpAgentsExtension()
+export const AcpAgentsExtension: GentExtension<ChildProcessSpawner> = makeAcpAgentsExtension()

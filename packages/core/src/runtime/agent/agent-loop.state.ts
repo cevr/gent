@@ -158,11 +158,16 @@ export const takeNextQueuedTurn = (
   queue: LoopQueueState,
   createdAt: Date,
 ): { queue: LoopQueueState; nextItem?: QueuedTurnItem } => {
+  if (queue.inFlight !== undefined) {
+    return { queue, nextItem: queue.inFlight }
+  }
+
   const [nextSteer, ...restSteering] = queue.steering
   if (nextSteer !== undefined) {
+    const nextItem = restampQueuedTurnItem(nextSteer, createdAt)
     return {
-      queue: { ...queue, steering: restSteering },
-      nextItem: restampQueuedTurnItem(nextSteer, createdAt),
+      queue: { ...queue, steering: restSteering, inFlight: nextItem },
+      nextItem,
     }
   }
 
@@ -171,13 +176,25 @@ export const takeNextQueuedTurn = (
     return { queue }
   }
 
+  const nextItem = restampQueuedTurnItem(nextFollowUp, createdAt)
   return {
-    queue: { ...queue, followUp: restFollowUp },
-    nextItem: restampQueuedTurnItem(nextFollowUp, createdAt),
+    queue: { ...queue, followUp: restFollowUp, inFlight: nextItem },
+    nextItem,
   }
 }
 
 export const countQueuedFollowUps = (queue: LoopQueueState) => queue.followUp.length
+
+export const clearInFlightQueuedTurn = (
+  queue: LoopQueueState,
+  messageId: QueuedTurnItem["message"]["id"],
+): LoopQueueState =>
+  queue.inFlight?.message.id === messageId
+    ? {
+        steering: queue.steering,
+        followUp: queue.followUp,
+      }
+    : queue
 
 // ── Shared field groups ──
 

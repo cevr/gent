@@ -1,6 +1,6 @@
 import type { PlatformError } from "effect"
 import { Effect, FileSystem, Path } from "effect"
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { ExtensionScope, GentExtension, LoadedExtension } from "../../domain/extension.js"
 import { ExtensionLoadError } from "../../domain/extension.js"
 import { ExtensionId } from "../../domain/ids.js"
@@ -19,6 +19,9 @@ const collectCapabilityPrompts = (cs: ExtensionContributions): ReadonlyArray<Pro
     ...(cs.actions ?? []).map((command) => command.prompt),
     ...(cs.requests ?? []).map((rpc) => rpc.prompt),
   ].filter((p): p is PromptSection => p !== undefined)
+
+type ExtensionSetupServices = FileSystem.FileSystem | Path.Path | ChildProcessSpawner
+type RuntimeLoadedExtension = GentExtension<ExtensionSetupServices>
 
 // Discovery — scan directories for extension files
 
@@ -82,7 +85,9 @@ const discoverDir = (
 // Loading — import extension files via Bun native import()
 
 /** Load a single extension from a file path. */
-const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, ExtensionLoadError> =>
+const loadExtensionFile = (
+  filePath: string,
+): Effect.Effect<RuntimeLoadedExtension, ExtensionLoadError> =>
   Effect.gen(function* () {
     const mod = yield* Effect.tryPromise({
       try: () =>
@@ -97,7 +102,7 @@ const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, Exten
     })
 
     // Find the extension — check default export, then named exports
-    const candidates: GentExtension[] = []
+    const candidates: RuntimeLoadedExtension[] = []
     const seen = new Set<unknown>()
 
     if (mod["default"] !== undefined) {
@@ -142,7 +147,7 @@ const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, Exten
   }).pipe(Effect.withSpan("ExtensionLoader.loadExtensionFile"))
 
 /** Type guard for GentExtension shape */
-const isGentExtension = (value: unknown): value is GentExtension => {
+const isGentExtension = (value: unknown): value is RuntimeLoadedExtension => {
   if (typeof value !== "object" || value === null) return false
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
   const obj = value as Record<string, unknown>
@@ -157,7 +162,7 @@ const isGentExtension = (value: unknown): value is GentExtension => {
 
 /** Extract GentExtension from a module export. Paired-package wrapping is gone;
  *  only raw `GentExtension` values are valid now. */
-const resolveToGentExtension = (value: unknown): GentExtension | undefined => {
+const resolveToGentExtension = (value: unknown): RuntimeLoadedExtension | undefined => {
   if (isGentExtension(value)) return value
   return undefined
 }
@@ -165,7 +170,7 @@ const resolveToGentExtension = (value: unknown): GentExtension | undefined => {
 // Full discovery + loading pipeline
 
 export interface DiscoveredExtension {
-  readonly extension: GentExtension
+  readonly extension: RuntimeLoadedExtension
   readonly scope: ExtensionScope
   readonly sourcePath: string
 }
@@ -242,9 +247,6 @@ export const setupExtension = (
 > =>
   Effect.gen(function* () {
     const { extension, scope, sourcePath } = discovered
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const spawner = yield* ChildProcessSpawner
     const contributions: ExtensionContributions = yield* sealRuntimeLoadedEffect({
       extensionId: extension.manifest.id,
       effect: () =>
@@ -252,9 +254,6 @@ export const setupExtension = (
           cwd,
           source: sourcePath,
           home,
-          fs,
-          path,
-          spawner,
         }),
       failureMessage: (cause) => `Extension setup failed: ${String(cause)}`,
       defectMessage: (cause) => `Extension setup defect: ${String(cause)}`,

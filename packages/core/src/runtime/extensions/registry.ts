@@ -12,6 +12,7 @@ import {
   CapabilityError as CapabilityErrorClass,
   CapabilityNotFoundError as CapabilityNotFoundErrorClass,
 } from "../../domain/capability.js"
+import { CapabilityAccess } from "../../domain/capability-access.js"
 import type {
   ExtensionStatusInfo,
   FailedExtension,
@@ -290,7 +291,13 @@ const compileRpcRegistry = (
           reason: `intent mismatch: expected ${options.intent}, got ${entry.capability.intent}`,
         })
       }
-      return yield* runExtensionCapability(extensionId, capabilityId, entry.capability, input, ctx)
+      const needs =
+        entry.capability.intent === "write"
+          ? [{ tag: "*", access: "write" } as const]
+          : [{ tag: "*", access: "read" } as const]
+      return yield* CapabilityAccess.provideNeeds(needs)(
+        runExtensionCapability(extensionId, capabilityId, entry.capability, input, ctx),
+      )
     }),
 })
 

@@ -5,6 +5,8 @@ import { TaskStorage } from "@gent/extensions/task-tools-storage"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { EventPublisherLive, ExtensionStatePublisher } from "@gent/core/domain/event-publisher"
 import { EventStore } from "@gent/core/domain/event"
+import { CapabilityAccess } from "@gent/core/extensions/api"
+import { CapabilityError } from "@gent/core/domain/capability"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
@@ -86,6 +88,31 @@ describe("TaskService", () => {
         expect(updated).toBeDefined()
         expect(updated!.status).toBe("stopped")
       }).pipe(Effect.provide(layer))
+    }),
+  )
+
+  it.live("read task access cannot call write methods on the full task service", () =>
+    Effect.gen(function* () {
+      const layer = makeLayer()
+
+      yield* Effect.gen(function* () {
+        yield* ensureStorageParents({ sessionId, branchId })
+        const taskService = yield* TaskService
+        const exit = yield* taskService
+          .create({
+            sessionId,
+            branchId,
+            subject: "Should be fenced",
+          })
+          .pipe(Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (!Exit.isFailure(exit)) return yield* Effect.die("expected capability failure")
+        const reason = exit.cause.reasons.find(Cause.isFailReason)
+        expect(reason !== undefined && Schema.is(CapabilityError)(reason.error)).toBe(true)
+      }).pipe(
+        CapabilityAccess.provideNeeds([{ tag: "task", access: "read" }]),
+        Effect.provide(layer),
+      )
     }),
   )
 })

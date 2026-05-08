@@ -1,9 +1,14 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Layer, Path } from "effect"
+import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { testSetupCtx } from "@gent/core/test-utils"
 import { makeAcpAgentsExtension } from "@gent/extensions/acp-agents"
 import type { AcpSessionManager } from "@gent/extensions/acp-agents/executor"
 import type { ClaudeCodeSessionManager } from "@gent/extensions/acp-agents/claude-code-executor"
+
+const spawnerLayer = BunChildProcessSpawner.layer.pipe(
+  Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
+)
 
 describe("AcpAgentsExtension state ownership", () => {
   it.live("creates independent manager state per setup invocation", () =>
@@ -43,8 +48,8 @@ describe("AcpAgentsExtension state ownership", () => {
         },
       })
 
-      const first = yield* ext.setup(testSetupCtx())
-      const second = yield* ext.setup(testSetupCtx())
+      const first = yield* ext.setup(testSetupCtx()).pipe(Effect.provide(spawnerLayer))
+      const second = yield* ext.setup(testSetupCtx()).pipe(Effect.provide(spawnerLayer))
       const firstProtocolDriver = first.externalDrivers?.find(
         (driver) => driver.id !== "acp-claude-code",
       )

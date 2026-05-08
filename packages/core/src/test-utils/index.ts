@@ -1,6 +1,4 @@
-import { Clock, Context, DateTime, Effect, FileSystem, Layer, Path, Ref, Stream } from "effect"
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
+import { Clock, Context, DateTime, Effect, Layer, Ref, Stream } from "effect"
 import type { ExtensionSetupContext } from "../domain/extension.js"
 import { BranchId, SessionId, type ToolCallId } from "../domain/ids.js"
 import { Branch, Session } from "../domain/message.js"
@@ -155,21 +153,13 @@ export const assertSequence = (
 
 // ── Test Extension Setup Context ──
 
-const _platformServices = Effect.runSync(Effect.scoped(Layer.build(BunPlatformLive)))
-const _testFs = Context.get(_platformServices, FileSystem.FileSystem)
-const _testPath = Context.get(_platformServices, Path.Path)
-const _testSpawner = Context.get(_platformServices, ChildProcessSpawner)
-
-/** Pre-built ExtensionSetupContext for tests. Platform services are captured once at module load. */
+/** Pre-built ExtensionSetupContext for tests. */
 export const testSetupCtx = (
   overrides?: Partial<Pick<ExtensionSetupContext, "cwd" | "source" | "home">>,
 ): ExtensionSetupContext => ({
   cwd: overrides?.cwd ?? "/tmp",
   source: overrides?.source ?? "test",
   home: overrides?.home ?? "/tmp",
-  fs: _testFs,
-  path: _testPath,
-  spawner: _testSpawner,
 })
 
 // Mock Helpers

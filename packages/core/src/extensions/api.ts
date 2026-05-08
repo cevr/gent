@@ -231,6 +231,8 @@ export type {
   CapabilityRef,
 } from "../domain/capability.js"
 export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
+export { CapabilityAccess } from "../domain/capability-access.js"
+export type { CapabilityAccessNeed } from "../domain/capability-access.js"
 export type {
   ResourceContribution,
   AnyResourceContribution,
@@ -268,11 +270,11 @@ export type { ExtensionSetupContext } from "../domain/extension.js"
  * helper (`resolveField`) keeps 26 of 30 builtin extensions ceremony-free
  * while preserving Effect for the 4 that genuinely need it.
  */
-export type FieldSpec<A> =
+export type FieldSpec<A, R = never> =
   | ReadonlyArray<A>
   | ((args: {
       readonly ctx: ExtensionSetupContext
-    }) => ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError>)
+    }) => ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R>)
 
 export interface DefineExtensionInput<Client = unknown> {
   readonly id: string
@@ -397,16 +399,16 @@ const resolveField = <A>(
  */
 export function defineExtension(
   params: DefineExtensionInput & { readonly client?: undefined },
-): GentExtension
+): GentExtension<never>
 export function defineExtension<Client>(
   params: DefineExtensionInput<Client> & { readonly client: Client },
-): GentExtension & { readonly client: Client }
+): GentExtension<never> & { readonly client: Client }
 export function defineExtension<Client>(
   params: DefineExtensionInput<Client>,
-): GentExtension & { readonly client?: Client }
+): GentExtension<never> & { readonly client?: Client }
 export function defineExtension(
   params: DefineExtensionInput,
-): GentExtension & { readonly client?: unknown } {
+): GentExtension<never> & { readonly client?: unknown } {
   const manifest: ExtensionManifest = { id: ExtensionId.make(params.id) }
   return {
     manifest,

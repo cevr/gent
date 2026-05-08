@@ -1,4 +1,4 @@
-import type { Context, Effect, FileSystem, Path } from "effect"
+import type { Context, Effect } from "effect"
 import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { AgentDefinition, AgentName, DriverSource } from "./agent"
@@ -350,15 +350,9 @@ export interface ExtensionSetupContext {
   readonly source: string
   /** User home directory (e.g. ~/.gent lives here). Defaults to os.homedir(). */
   readonly home: string
-  /** Platform FileSystem service (captured from Effect context at setup time). */
-  readonly fs: FileSystem.FileSystem
-  /** Platform Path service (captured from Effect context at setup time). */
-  readonly path: Path.Path
-  /** Platform ChildProcessSpawner service (captured from Effect context at setup time). */
-  readonly spawner: ChildProcessSpawner["Service"]
 }
 
-export interface GentExtension {
+export interface GentExtension<R = ChildProcessSpawner> {
   readonly manifest: ExtensionManifest
   /**
    * Returns the typed `ExtensionContributions` buckets for this extension.
@@ -368,7 +362,7 @@ export interface GentExtension {
    */
   readonly setup: (
     ctx: ExtensionSetupContext,
-  ) => Effect.Effect<ExtensionContributions, ExtensionLoadError>
+  ) => Effect.Effect<ExtensionContributions, ExtensionLoadError, R>
 }
 
 // Legacy keyed middleware primitives are gone. Prompt/context shaping,

@@ -6,7 +6,8 @@
  * loop) so the mapping is exercised without a real session.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Path, Schema } from "effect"
+import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { AcpAgentsExtension } from "@gent/extensions/acp-agents"
 import { AgentDefinition, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
 import { tool, type SystemPromptInput, type ToolCapability } from "@gent/core/extensions/api"
@@ -23,8 +24,15 @@ const fakeTool: ToolCapability = tool({
   execute: () => Effect.succeed({ ok: true }),
 })
 const stubHostCtx = testExtensionHostContext()
+const spawnerLayer = BunChildProcessSpawner.layer.pipe(
+  Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
+)
 const getSystemPrompt = Effect.gen(function* () {
-  const contributions = yield* AcpAgentsExtension.setup({ cwd: "/tmp", home: "/home/x" } as never)
+  const contributions = yield* AcpAgentsExtension.setup({
+    cwd: "/tmp",
+    source: "builtin",
+    home: "/home/x",
+  }).pipe(Effect.provide(spawnerLayer))
   const systemPrompt = contributions.reactions?.systemPrompt
   if (systemPrompt === undefined) throw new Error("expected ACP systemPrompt reaction")
   return systemPrompt as (

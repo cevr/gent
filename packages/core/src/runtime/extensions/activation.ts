@@ -29,6 +29,8 @@ import {
 } from "./resource-host/schedule-engine.js"
 import { buildResourceLayer, collectResourceEntries } from "./resource-host/resource-layer.js"
 
+type ExtensionSetupServices = FileSystem.FileSystem | Path.Path | ChildProcessSpawner
+
 export interface ExtensionActivationResult {
   readonly active: ReadonlyArray<LoadedExtension>
   readonly failed: ReadonlyArray<FailedExtension>
@@ -61,7 +63,7 @@ const formatFailure = (error: unknown): string =>
     : String(error)
 
 export const setupBuiltinExtensions = (params: {
-  readonly extensions: ReadonlyArray<GentExtension>
+  readonly extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   readonly cwd: string
   readonly home: string
   readonly disabled: ReadonlySet<string>

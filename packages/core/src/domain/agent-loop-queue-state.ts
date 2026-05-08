@@ -13,5 +13,6 @@ export type QueuedTurnItem = typeof QueuedTurnItemSchema.Type
 export const LoopQueueState = Schema.Struct({
   steering: Schema.Array(QueuedTurnItemSchema),
   followUp: Schema.Array(QueuedTurnItemSchema),
+  inFlight: Schema.optional(QueuedTurnItemSchema),
 })
 export type LoopQueueState = typeof LoopQueueState.Type

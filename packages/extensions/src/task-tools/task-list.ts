@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import { tool, AgentName, SessionId, ToolNeeds } from "@gent/core/extensions/api"
 import { TaskId, TaskStatus } from "./domain.js"
-import { TaskService } from "../task-tools-service.js"
+import { TaskStorageReadOnly } from "../task-tools-storage.js"
 
 export const TaskListParams = Schema.Struct({
   status: Schema.optionalKey(
@@ -38,8 +38,8 @@ export const TaskListTool = tool({
   params: TaskListParams,
   output: TaskListResult,
   execute: Effect.fn("TaskListTool.execute")(function* (params, ctx) {
-    const taskService = yield* TaskService
-    const allTasks = yield* taskService.list(ctx.sessionId, ctx.branchId)
+    const taskService = yield* TaskStorageReadOnly
+    const allTasks = yield* taskService.listTasks(ctx.sessionId, ctx.branchId).pipe(Effect.orDie)
     const tasks =
       params.status === undefined
         ? allTasks

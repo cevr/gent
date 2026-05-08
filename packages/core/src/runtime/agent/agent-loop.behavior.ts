@@ -60,6 +60,7 @@ import { AllowAllPermission, resolveSessionEnvironment } from "../session-runtim
 import {
   buildIdleState,
   buildRunningState,
+  clearInFlightQueuedTurn,
   emptyLoopQueueState,
   takeNextQueuedTurn,
   toWaitingForInteractionState,
@@ -570,6 +571,16 @@ export const makeAgentLoopBehavior = (
     const takeNextQueuedTurnIfIdle = takeNextQueuedTurnFromState({ onlyIfIdle: true })
     const takeNextQueuedTurnCommitted = takeNextQueuedTurnFromState({ onlyIfIdle: false })
 
+    const clearInFlightTurn = (messageId: QueuedTurnItem["message"]["id"]) =>
+      commitQueueTransaction("cleared in-flight turn", (s) => {
+        const queue = clearInFlightQueuedTurn(s.queue, messageId)
+        return {
+          value: undefined,
+          next: { ...s, queue },
+          persist: queue !== s.queue,
+        }
+      })
+
     const appendSteering = (item: QueuedTurnItem) =>
       commitQueueTransaction("queued steering", (s) => ({
         value: s.state,
@@ -971,6 +982,7 @@ export const makeAgentLoopBehavior = (
           eventPublisher,
           message: state.message,
         })
+        yield* clearInFlightTurn(state.message.id)
 
         const resolved = yield* resolveTurnContext({
           agentOverride: state.agentOverride,
