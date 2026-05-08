@@ -78,7 +78,7 @@ const getArrayField = (value: unknown, field: string): Effect.Effect<ReadonlyArr
   return Effect.succeed(fieldValue)
 }
 
-const WAVE_18_C31_LIVE_RULES = [
+const LIVE_RULES_REQUIRING_FIXTURES = [
   "gent/no-projection-writes",
   "gent/no-runpromise-outside-boundary",
   "gent/no-define-extension-throw",
@@ -264,10 +264,10 @@ effectDescribe("custom lint rules", () => {
     }),
   )
 
-  it.live("Wave 18 C31 live rules have positive and negative fixtures", () =>
+  it.live("live custom rules have positive and negative fixtures", () =>
     Effect.gen(function* () {
       const rules = new Map(CASES.map((c) => [c.rule, c]))
-      for (const rule of WAVE_18_C31_LIVE_RULES) {
+      for (const rule of LIVE_RULES_REQUIRING_FIXTURES) {
         const c = rules.get(rule)
         expect(c).toBeDefined()
         expect(c?.invalid).toMatch(/\.invalid/)
