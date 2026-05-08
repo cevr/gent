@@ -154,18 +154,6 @@ const InvokeToolFields = {
 }
 
 /**
- * `EnsureStarted` materializes the entity and registers state without
- * performing any other work. Cold `watchState` callers send this before
- * subscribing to the registered actor state so the entity exists when
- * their watcher attaches.
- */
-const EnsureStartedFields = {
-  ...WorkspaceFields,
-  sessionId: SessionId,
-  branchId: BranchId,
-}
-
-/**
  * `TerminateBranch` shuts down a single branch's loop. Distinct from
  * generic `Interrupt` (which only flushes pending mailbox items) because
  * session termination semantically closes branch resources and must run
@@ -239,11 +227,6 @@ type InvokeToolInput = {
   readonly commandId: ActorCommandId
   readonly toolName: string
   readonly input: unknown
-}
-type EnsureStartedInput = {
-  readonly workspaceId: string
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
 }
 type TerminateBranchInput = {
   readonly workspaceId: string
@@ -373,19 +356,6 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     id: (p: InvokeToolInput) => ({
       entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
       primaryKey: p.commandId,
-    }),
-  },
-  // No-op materialization. Cold `watchState` callers send this before
-  // subscribing to the registered actor state so the entity exists
-  // (build runs, recovery completes, state is registered) when their
-  // watcher attaches. Constant primaryKey collapses redundant calls.
-  EnsureStarted: {
-    payload: EnsureStartedFields,
-    success: Schema.Void,
-    error: AgentLoopError,
-    id: (p: EnsureStartedInput) => ({
-      entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
-      primaryKey: "ensure-started",
     }),
   },
   // Branch-local shutdown. Used by session terminate sweeps to close a
@@ -1061,8 +1031,6 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
           ),
         ),
-      EnsureStarted: ({ operation }: HandlerRequest<EnsureStartedInput>) =>
-        withWorkspace(ensureTarget(operation).pipe(Effect.andThen(ensureStarted))),
       TerminateBranch: ({ operation }: HandlerRequest<TerminateBranchInput>) =>
         withWorkspace(
           ensureTarget(operation).pipe(

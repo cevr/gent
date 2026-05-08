@@ -433,14 +433,10 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const getRuntimeState = Effect.fn("SessionRuntime.getRuntimeState")(function* (
     input: SessionRuntimeTarget,
   ) {
-    const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
     const workspaceId = yield* CurrentWorkspaceId
     return yield* provideActorStateServices(
       AgentLoopActor.getState<SessionRuntimeState, AgentLoopError, never, AgentLoopError>(
         entityIdOf(workspaceId, input.sessionId, input.branchId),
-        {
-          materialize: ref.execute(AgentLoopActor.EnsureStarted.make({ ...input, workspaceId })),
-        },
       ).pipe(Effect.mapError(toAgentLoopError)),
     )
   })
@@ -448,14 +444,10 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const watchRuntimeState = Effect.fn("SessionRuntime.watchRuntimeState")(function* (
     input: SessionRuntimeTarget,
   ) {
-    const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
     const workspaceId = yield* CurrentWorkspaceId
     return provideActorStateServicesToStream(
       AgentLoopActor.watchState<SessionRuntimeState, AgentLoopError, never, AgentLoopError>(
         entityIdOf(workspaceId, input.sessionId, input.branchId),
-        {
-          materialize: ref.execute(AgentLoopActor.EnsureStarted.make({ ...input, workspaceId })),
-        },
       ).pipe(Stream.mapError(toAgentLoopError)),
     )
   })
@@ -752,13 +744,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
               workspaceId: yield* CurrentWorkspaceId,
             })
             yield* ref.send(payload)
-            yield* ref.execute(
-              AgentLoopActor.EnsureStarted.make({
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                workspaceId: yield* CurrentWorkspaceId,
-              }),
-            )
             yield* redeliverPendingActorMessages(input)
             yield* AgentLoopActor.RespondInteraction.waitFor(payload).pipe(
               Effect.provideService(ClusterMessageStorage.MessageStorage, clusterMessageStorage),

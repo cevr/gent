@@ -559,6 +559,8 @@ identity. `effect-wide-event` should match `effect-machine` and
 
 ## Commit 10: feat(effect-encore): absorb actor activation ceremony
 
+**Status**: Completed in current batch.
+
 **Justification**: Gent should not define no-op actor operations just to make
 cold state reads possible.
 
@@ -571,17 +573,21 @@ cold state reads possible.
 
 **Changes**
 
-| File                                                                                     | Change                                                                                                      |
-| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `/Users/cvr/Developer/personal/effect-encore/src/actor.ts`                               | Add a first-class state activation helper if the design can be backed by current Effect cluster primitives. |
-| `/Users/cvr/Developer/personal/effect-encore/src/actor-state.ts`                         | Add tests/helpers as needed.                                                                                |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts` | Delete `EnsureStarted` if the upstream helper lands.                                                        |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`        | Use the upstream helper for `getState`/`watchState`.                                                        |
+| File                                                                                     | Change                                                                                                                             |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/effect-encore/src/actor.ts`                               | Added a hidden activation operation used by `getState`/`watchState` to materialize cold entities without exposing a public handle. |
+| `/Users/cvr/Developer/personal/effect-encore/v3/src/actor.ts`                            | Mirrored hidden activation behavior for the v3 surface.                                                                            |
+| `/Users/cvr/Developer/personal/effect-encore/test/actor-state.test.ts`                   | Covered cold `getState` and `watchState` materialization.                                                                          |
+| `/Users/cvr/Developer/personal/effect-encore/v3/test/actor-state.test.ts`                | Mirrored the v3 materialization regression tests.                                                                                  |
+| `/Users/cvr/Developer/personal/effect-encore/README.md`                                  | Documented that cold state reads materialize automatically.                                                                        |
+| `/Users/cvr/Developer/personal/effect-encore/.changeset/sharp-actors-happen.md`          | Added a minor changeset for actor state materialization.                                                                           |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts` | Deleted Gent's public `EnsureStarted` actor operation.                                                                             |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`        | Removed explicit materialization effects from `getState`/`watchState` and respond-interaction wakeup.                              |
 
 **Verification**
 
-- Upstream `effect-encore` tests.
-- Gent focused runtime tests.
+- Upstream `bun run gate`.
+- Gent `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/session-runtime.test.ts packages/core/tests/runtime/session-runtime-context.test.ts packages/core/tests/runtime/agent-loop-streaming.test.ts packages/core/tests/runtime/agent-loop-queue.test.ts`
 - Gent `bun run test:e2e`
 - Gent `bun run gate`
 
