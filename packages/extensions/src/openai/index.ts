@@ -1,4 +1,4 @@
-import { Config, Duration, Effect, Fiber, Layer, Option, Redacted, SynchronizedRef } from "effect"
+import { Duration, Effect, Fiber, Layer, SynchronizedRef } from "effect"
 import {
   defineExtension,
   AuthMethod,
@@ -19,10 +19,6 @@ import {
   OpenAiClient as OpenAiResponsesClient,
   OpenAiLanguageModel as OpenAiResponsesLanguageModel,
 } from "@effect/ai-openai"
-import {
-  OpenAiClient as OpenAiCompatClient,
-  OpenAiLanguageModel as OpenAiCompatLanguageModel,
-} from "@effect/ai-openai-compat"
 import { Model as AiModel } from "effect/unstable/ai"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import {
@@ -31,27 +27,16 @@ import {
   type CredentialCacheCellRef,
 } from "./credential-service.js"
 import { buildCodexTransformClient } from "./codex-transform.js"
-
-const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
-  Effect.gen(function* () {
-    const opt = yield* Config.option(Config.string(name))
-    return Option.getOrUndefined(opt)
-  }).pipe(Effect.orElseSucceed(() => undefined))
+import {
+  buildOpenAiCompatConfig,
+  makeOpenAiCompatResolution,
+  readOptionalEnv,
+} from "../openai-compatible-driver.js"
 
 type PendingCallbackEntry = {
   readonly flow: OpenAIAuthorizationFlow
   readonly close: Effect.Effect<void>
   readonly timeoutFiber: Fiber.Fiber<void>
-}
-
-const buildOpenAiCompatConfig = (hints?: ProviderHints) => {
-  const config: Record<string, unknown> = {}
-  if (hints?.maxTokens !== undefined) config["max_tokens"] = hints.maxTokens
-  if (hints?.temperature !== undefined) config["temperature"] = hints.temperature
-  if (hints?.reasoning !== undefined && hints.reasoning !== "none") {
-    config["reasoning_effort"] = hints.reasoning
-  }
-  return config
 }
 
 const buildOpenAiResponsesConfig = (hints?: ProviderHints) => {
@@ -70,22 +55,15 @@ const buildOpenAiResponsesConfig = (hints?: ProviderHints) => {
 // ── Layer construction helpers ──
 
 /**
- * API-key path: plain `OpenAiClient.layer` over `FetchHttpClient`. No
+ * API-key path: plain OpenAI-compatible client over `FetchHttpClient`. No
  * Codex transform — the Codex backend rewrite + OAuth headers are
  * specific to the ChatGPT OAuth path.
  */
-const makeApiKeyOpenAILayer = (
+const makeApiKeyOpenAIResolution = (
   modelName: string,
   config: Record<string, unknown>,
   apiKey: string,
-) => {
-  const clientLayer = OpenAiCompatClient.layer({
-    apiKey: Redacted.make(apiKey),
-  }).pipe(Layer.provide(FetchHttpClient.layer))
-  return OpenAiCompatLanguageModel.layer({ model: modelName, config }).pipe(
-    Layer.provide(clientLayer),
-  )
-}
+) => makeOpenAiCompatResolution({ provider: "openai", modelName, apiKey, config })
 
 /**
  * OAuth path: builds `OpenAiClient.layer` with `transformClient` set to
@@ -167,8 +145,11 @@ export const buildOpenAIModelDriver = (
     const apiKey = storedApiKey ?? envApiKey
 
     if (apiKey !== undefined) {
-      const config = buildOpenAiCompatConfig(hints)
-      return AiModel.make("openai", modelName, makeApiKeyOpenAILayer(modelName, config, apiKey))
+      return makeApiKeyOpenAIResolution(
+        modelName,
+        buildOpenAiCompatConfig(hints, { includeReasoning: true }),
+        apiKey,
+      )
     }
 
     // Fail closed — no stored OAuth, no stored API key, no env var.

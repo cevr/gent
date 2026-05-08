@@ -1,30 +1,8 @@
-import { Config, Effect, Layer, Option, Redacted } from "effect"
-import {
-  defineExtension,
-  AuthMethod,
-  ProviderAuthError,
-  type ModelDriverContribution,
-  type ProviderHints,
-  type ProviderResolution,
-} from "@gent/core/extensions/api"
-import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
-import { Model as AiModel } from "effect/unstable/ai"
-import { FetchHttpClient } from "effect/unstable/http"
+import { Effect } from "effect"
+import { defineExtension } from "@gent/core/extensions/api"
+import { makeApiKeyCompatDriver, readOptionalEnv } from "../openai-compatible-driver.js"
 
 const MISTRAL_COMPAT_URL = "https://api.mistral.ai/v1"
-
-const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
-  Effect.gen(function* () {
-    const opt = yield* Config.option(Config.string(name))
-    return Option.getOrUndefined(opt)
-  }).pipe(Effect.orElseSucceed(() => undefined))
-
-const buildConfig = (hints?: ProviderHints) => {
-  const config: Record<string, unknown> = {}
-  if (hints?.maxTokens !== undefined) config["max_tokens"] = hints.maxTokens
-  if (hints?.temperature !== undefined) config["temperature"] = hints.temperature
-  return config
-}
 
 export const MistralExtension = defineExtension({
   id: "@gent/provider-mistral",
@@ -32,36 +10,14 @@ export const MistralExtension = defineExtension({
     Effect.gen(function* () {
       const envApiKey = yield* readOptionalEnv("MISTRAL_API_KEY")
 
-      const mistralProvider: ModelDriverContribution = {
-        id: "mistral",
-        name: "Mistral",
-        resolveModel: (modelName, authInfo, hints): ProviderResolution => {
-          const storedApiKey =
-            authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
-          const apiKey = storedApiKey ?? envApiKey
-
-          if (apiKey === undefined) {
-            throw new ProviderAuthError({
-              message:
-                "Mistral credentials unavailable: no stored API key or MISTRAL_API_KEY env var",
-            })
-          }
-
-          const config = buildConfig(hints)
-          const clientLayer = OpenAiClient.layer({
-            apiKey: Redacted.make(apiKey),
-            apiUrl: MISTRAL_COMPAT_URL,
-          }).pipe(Layer.provide(FetchHttpClient.layer))
-          const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
-            Layer.provide(clientLayer),
-          )
-          return AiModel.make("mistral", modelName, modelLayer)
-        },
-        auth: {
-          methods: [AuthMethod.make({ type: "api", label: "Manually enter API key" })],
-        },
-      }
-
-      return [mistralProvider]
+      return [
+        makeApiKeyCompatDriver({
+          id: "mistral",
+          name: "Mistral",
+          envApiKey,
+          envVarName: "MISTRAL_API_KEY",
+          apiUrl: MISTRAL_COMPAT_URL,
+        }),
+      ]
     }),
 })
