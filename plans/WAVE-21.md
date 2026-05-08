@@ -130,8 +130,9 @@ classes of privilege and races, but the deeper P1s remain:
 - The child session tracker now applies entry/fiber map transitions through
   atomic `Ref.modify` helpers and has a parent/child interleaving regression
   proving child tool state survives parent completion.
-- The scheduler still probes `globalThis.Bun.cron` from core runtime and fails
-  open when cron is unavailable.
+- The scheduler cron runtime is now an explicit Effect service wired by the Bun
+  platform adapter; desired schedules without a cron runtime become scheduled
+  job failures instead of silently succeeding.
 
 Fresh re-audit receipts to carry into the remaining batches:
 
@@ -356,29 +357,28 @@ Required correction:
 
 ### P2.2 — Platform Boundaries Are Declared But Still Porous
 
-`GentPlatform` says Bun/process/OS references live in one file. The scheduler
-has a local `CronRuntime`, reaches `globalThis.Bun.cron`, and emits
-process-shaped wrapper scripts. Some SDK/TUI/extension paths also use Node or
-process APIs directly.
+`GentPlatform` says Bun/process/OS references live in one file. Scheduler cron
+installation is now platform-owned, but some SDK/TUI/extension paths still use
+Node or process APIs directly.
 
 Receipts:
 
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/gent-platform.ts:1`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/gent-platform.ts:30`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/gent-platform-bun.ts:1`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/gent-platform-bun.ts:92`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/gent-platform-bun.ts:22`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/gent-platform-bun.ts:41`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/gent-platform-bun.ts:144`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/schedule-engine.ts:62`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/schedule-engine.ts:69`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/schedule-engine.ts:100`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/schedule-engine.ts:118`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/schedule-engine.ts:152`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/schedule-engine.ts:185`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/schedule-engine.ts:240`
-- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/schedule-engine.ts:309`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/schedule-engine.ts:71`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/schedule-engine.ts:251`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/schedule-engine.ts:253`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/dependencies.ts:156`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/scheduler.test.ts:162`
 
 Required correction:
 
-- Move cron/runtime host APIs behind a real service layer.
+- Keep cron/runtime host APIs behind real service layers.
 - Decide whether `GentPlatform` absorbs `RuntimePlatform` or whether the latter
   is renamed into pure runtime config.
 - Expand static guards to reject Bun/Node/process host APIs outside adapter,
@@ -671,13 +671,15 @@ Validation:
 Goal: host APIs live behind explicit services; product/runtime code stays
 portable and testable.
 
-Status: not started. Fresh platform audit promoted scheduler cron failure-open,
-SDK host identity, and shipped-extension ambient process reads to P1.
+Status: in progress. Commit `f56553eb` closes the scheduler cron failure-open by
+moving cron install/remove behind `CronRuntime` and wiring `BunCronRuntimeLive`
+at the platform boundary. SDK host identity and shipped-extension ambient
+process reads remain open in this lane.
 
 Work:
 
-- Move cron runtime into a platform service and make missing cron a scheduled
-  job failure, not silent success.
+- [x] Move cron runtime into a platform service and make missing cron a
+      scheduled job failure, not silent success.
 - Reconcile `GentPlatform` and `RuntimePlatform` naming/ownership.
 - Add static guards for Bun/Node/process imports outside app-shell, adapter,
   test, tooling, and generated-script boundaries.
@@ -685,6 +687,13 @@ Work:
 
 Validation:
 
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/scheduler.test.ts tests/extensions/activation.test.ts`
+- `bun run typecheck`
+- `bun run lint`
+- `bun run fmt`
+- `bun run gate` (first run hit a Bun 1.3.13 segmentation fault in a core test
+  shard after type/style/build had passed and tests reported no failures; rerun
+  passed unchanged)
 - Guard tests.
 - `bun run lint`
 - `bun run gate`
