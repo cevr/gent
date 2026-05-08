@@ -114,6 +114,8 @@ exports reject.
 
 ## Commit 2: docs: delete stale architecture guides
 
+**Status**: Completed in this wave.
+
 **Justification**: Old maps and migration guides still name packages/apps that
 no longer exist. They are not neutral; they are wrong navigation surfaces.
 
@@ -134,7 +136,7 @@ no longer exist. They are not neutral; they are wrong navigation surfaces.
 
 **Verification**
 
-- `rg -n 'apps/cli|packages/tools|GentCore|src-v3|dist-v3' .`
+- `rg -n 'apps/cli|packages/tools|GentCore|src-v3|dist-v3' . --glob '!plans/**'`
 - `bun run lint`
 - `bun run test`
 - `bun run gate`
