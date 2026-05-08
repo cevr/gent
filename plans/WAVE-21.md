@@ -118,6 +118,8 @@ Commits landed in this wave so far:
 - `37274250 refactor(runtime): rename platform config service`
 - `06dd9a29 refactor(runtime): own agent loop turn worker`
 - `4a7eba38 refactor(runtime): accept submissions through actor ops`
+- `16c733eb fix(runtime): keep actor acceptance serialized`
+- `06724c8d fix(tui): isolate client extension setup failures`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -186,6 +188,18 @@ classes of privilege and races, but the deeper P1s remain:
   subtraction rather than absorption: the host-capability service stays
   `GentPlatform`, and the value-only `{ cwd, home, platform }` service is now
   `RuntimeEnvironment`.
+- Recursive verification at `c570d693` found no P0, but it found four fresh P1
+  classes before Wave 21 could close: concurrent idle submissions could expose
+  a running state without an enqueued worker, steering commands could report
+  success before actor acceptance, read tool needs received write-shaped host
+  authority, and one failing enabled TUI client extension setup could blank the
+  entire client extension surface. Commits `16c733eb` and `06724c8d` close
+  those P1s.
+- Product task semantics are now extension-owned. The task-tools extension owns
+  `Task`, `TaskId`, statuses, transition schemas, and persistence; core keeps
+  only generic machine/event telemetry. Any remaining core names that read as
+  product "task" should be treated as naming debt unless they are genuinely
+  machine execution signals.
 
 Fresh re-audit receipts to carry into the remaining batches:
 
@@ -214,6 +228,21 @@ Fresh re-audit receipts to carry into the remaining batches:
 - `/Users/cvr/Developer/personal/gent/node_modules/effect/src/SynchronizedRef.ts:205`
 - `/Users/cvr/Developer/personal/gent/node_modules/effect/src/TxSubscriptionRef.ts:204`
 - `/Users/cvr/Developer/personal/gent/node_modules/effect/src/TxSubscriptionRef.ts:570`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts:783`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts:832`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts:855`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts:885`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts:1057`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts:488`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts:1210`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:590`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:741`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/tool-runner.ts:99`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-host-context.ts:59`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/session-tools/read-session.ts:100`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/context.tsx:88`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/loader-boundary.ts:72`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/client-effect.ts:29`
 
 ## P1 Findings
 
@@ -761,6 +790,11 @@ submission through branch-actor acceptance ops (`AcceptSubmit` and
 The persisted `Submit` / `QueueFollowUp` mailbox ops remain available for
 durable redelivery and cross-process fire-and-forget producers, while the
 runtime boundary waits only for actor-owned acceptance.
+Recursive audit later found the same acceptance rule was missing from steering
+and that queue start reservations were visible to concurrent submissions too
+early. Commit `16c733eb` adds actor-owned `AcceptSteer`, keeps the worker start
+token private until the starter enqueues the worker, and narrows runtime tool
+facets so `read` needs no longer receive write-shaped authority.
 
 Work:
 
@@ -781,6 +815,10 @@ Validation:
 - `git diff --check`
 - `bun run gate`
 - Pre-commit hook for `4a7eba38`: `lint+fmt`, `typecheck`, `build`, and
+  full workspace test runner.
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/tool-runner.test.ts tests/runtime/agent-loop-queue.test.ts tests/runtime/session-runtime.test.ts`
+- `bun run gate`
+- Pre-commit hook for `16c733eb`: `lint+fmt`, `typecheck`, `build`, and
   full workspace test runner.
 
 ### C21.9 — Enforce Platform Ownership
@@ -1003,6 +1041,25 @@ Validation:
 
 Goal: independently prove there are no P0/P1 findings left.
 
+Status: in progress. First recursive audit batch at `c570d693` found no P0,
+but it did find P1s. Runtime actor/authority P1s were closed by `16c733eb`; TUI
+client extension setup isolation was closed by `06724c8d`. A fresh recursive
+batch must now run against the post-fix head before this wave can close.
+
+First recursive audit results:
+
+- Euclid and Godel: P1 same-branch idle submissions could strand the actor as
+  `Running` with no worker after a concurrent start-reservation race.
+  Fixed by `16c733eb`.
+- Jason: P1 `steer.command` could report success before cancel/interject actor
+  acceptance; P1 read needs could receive write-capable agent/session facets.
+  Fixed by `16c733eb`.
+- Darwin: P1 one enabled TUI client extension setup failure could reject the
+  whole extension loader and blank healthy client contributions. Fixed by
+  `06724c8d`.
+- Feynman: no P0/P1 at `c570d693`; residual findings were P2/P3 architecture
+  and documentation follow-ups.
+
 Work:
 
 - Launch five fresh exploration agents with this prompt, unchanged in substance:
@@ -1023,6 +1080,8 @@ Validation:
 
 - Independent five-lane audit complete.
 - No P0/P1 findings.
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/tool-runner.test.ts tests/runtime/agent-loop-queue.test.ts tests/runtime/session-runtime.test.ts`
+- `cd apps/tui && bun test --reporter=dots --preload ../../packages/tooling/src/test-log-preload.ts --preload ./node_modules/@opentui/solid/scripts/preload.ts tests/extension-effect-setup.test.ts`
 - `bun run gate`
 - `bun run test:e2e`
 - `bun run smoke`
