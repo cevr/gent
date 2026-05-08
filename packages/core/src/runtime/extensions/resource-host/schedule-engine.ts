@@ -1,9 +1,9 @@
 /**
- * Schedule engine — host-side cron reconciliation for `Resource.schedule`
+ * Schedule engine — host-side cron reconciliation for scheduled job
  * entries.
  *
- * Reconciles desired schedules from resources into Bun cron jobs:
- *   - Sources desired jobs from every Resource's `schedule` array
+ * Reconciles desired schedules from extension contributions into Bun cron jobs:
+ *   - Sources desired jobs from every extension's `scheduledJobs` bucket
  *   - Renders a Bun-spawn wrapper script per job
  *   - Installs/removes via `Bun.cron`
  *   - Persists managed-job state in `~/.gent/scheduler/managed-jobs.json`
@@ -19,10 +19,7 @@
 import { Cause, Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import type { LoadedExtension } from "../../../domain/extension.js"
 import type { ExtensionId } from "../../../domain/ids.js"
-import type { AnyResourceContribution, ResourceSchedule } from "../../../domain/resource.js"
-
-const extractResources = (ext: LoadedExtension): ReadonlyArray<AnyResourceContribution> =>
-  ext.contributions.resources ?? []
+import type { ScheduledJobContribution } from "../../../domain/scheduled-job.js"
 
 export type ScheduledJobCommand = readonly [string, ...ReadonlyArray<string>]
 
@@ -115,7 +112,7 @@ const jobName = (extensionId: ExtensionId, jobId: string) =>
 
 const renderCommand = (
   baseCommand: ScheduledJobCommand,
-  job: ResourceSchedule,
+  job: ScheduledJobContribution,
 ): ReadonlyArray<string> => [
   ...baseCommand,
   "--headless",
@@ -177,22 +174,20 @@ const writeState = (
   }).pipe(Effect.catchEager(() => Effect.void))
 
 /**
- * Collect every `ResourceSchedule` from every Resource matching the
- * requested scopes. Scope filtering happens at the collector boundary so
- * non-process schedules cannot accidentally be installed at process scope.
- *
- * Returned tuples carry the owning extension id so reconciliation can
- * namespace + report failures per extension.
+ * Collect every scheduled job contribution. Returned tuples carry the owning
+ * extension id so reconciliation can namespace + report failures per extension.
  */
 export const collectSchedules = (
   extensions: ReadonlyArray<LoadedExtension>,
-): ReadonlyArray<{ readonly extensionId: ExtensionId; readonly schedule: ResourceSchedule }> =>
+): ReadonlyArray<{
+  readonly extensionId: ExtensionId
+  readonly schedule: ScheduledJobContribution
+}> =>
   extensions.flatMap((ext) =>
-    extractResources(ext)
-      .filter((r) => r.scope === "process")
-      .flatMap((r) =>
-        (r.schedule ?? []).map((s) => ({ extensionId: ext.manifest.id, schedule: s })),
-      ),
+    (ext.contributions.scheduledJobs ?? []).map((schedule) => ({
+      extensionId: ext.manifest.id,
+      schedule,
+    })),
   )
 
 const resolveDesiredJobs = (

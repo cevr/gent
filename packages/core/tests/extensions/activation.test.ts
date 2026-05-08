@@ -15,7 +15,7 @@ import {
   setupDiscoveredExtensions,
   validateLoadedExtensions,
 } from "../../src/runtime/extensions/activation"
-import { defineResource } from "@gent/core-internal/domain/contribution"
+import { defineResource, defineScheduledJob } from "@gent/core-internal/domain/contribution"
 import type { ExtensionContributions } from "@gent/core-internal/domain/contribution"
 import { tool } from "@gent/core/extensions/api"
 import { GentToolMetadataTag, getToolMetadata } from "@gent/core-internal/domain/capability/tool"
@@ -418,17 +418,17 @@ describe("extension activation isolation", () => {
                 defineResource({
                   scope: "process",
                   layer: Layer.empty as Layer.Layer<unknown>,
-                  schedule: [
-                    {
-                      id: "reflect",
-                      cron: "0 21 * * 1-5",
-                      target: {
-                        agent: "memory:reflect" as never,
-                        prompt: "Reflect.",
-                      },
-                    },
-                  ],
                 }) as never,
+              ],
+              scheduledJobs: [
+                defineScheduledJob({
+                  id: "reflect",
+                  cron: "0 21 * * 1-5",
+                  target: {
+                    agent: "memory:reflect" as never,
+                    prompt: "Reflect.",
+                  },
+                }),
               ],
             }),
           ],

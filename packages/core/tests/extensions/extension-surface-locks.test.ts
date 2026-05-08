@@ -500,15 +500,15 @@ describe("Effect-purity locks (compile-time)", () => {
             layer: Layer.empty,
             start: Effect.void,
             stop: Effect.void,
-            schedule: [
-              {
-                id: "j",
-                cron: "0 0 * * *",
-                target: { agent: "cowork" as never, prompt: "hi" },
-              },
-            ],
           }),
         ),
+      ],
+      scheduledJobs: [
+        {
+          id: "j",
+          cron: "0 0 * * *",
+          target: { agent: "cowork" as never, prompt: "hi" },
+        },
       ],
     })
 

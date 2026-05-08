@@ -12,10 +12,9 @@
 
 import { describe, expect, it, test } from "effect-bun-test"
 import { Context, Effect, Layer } from "effect"
-import { AgentName } from "@gent/core-internal/domain/agent"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
 import type { AnyResourceContribution } from "@gent/core-internal/domain/resource"
-import { defineResource } from "@gent/core-internal/domain/contribution"
+import { defineResource, defineScheduledJob } from "@gent/core-internal/domain/contribution"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 
 // ── Resource shape + helpers ──
@@ -59,21 +58,14 @@ describe("defineResource", () => {
     expect(r.tag).toBe(TestServiceA)
   })
 
-  test("schedule field round-trips", () => {
-    const r = defineResource({
-      scope: "process",
-      layer: layerA,
-      schedule: [
-        {
-          id: "tick",
-          cron: "0 * * * *",
-          target: { agent: AgentName.make("memory:dream"), prompt: "reflect" },
-        },
-      ],
+  test("scheduled job contribution round-trips", () => {
+    const job = defineScheduledJob({
+      id: "tick",
+      cron: "0 * * * *",
+      target: { agent: "memory:dream" as never, prompt: "reflect" },
     })
-    expect(r.schedule).toHaveLength(1)
-    expect(r.schedule![0]!.id).toBe("tick")
-    expect(r.schedule![0]!.cron).toBe("0 * * * *")
+    expect(job.id).toBe("tick")
+    expect(job.cron).toBe("0 * * * *")
   })
 })
 

@@ -23,6 +23,7 @@ import type { RequestCapability } from "./capability/request.js"
 import type { ToolCapability } from "./capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { AnyResourceContribution, ResourceContribution, ResourceScope } from "./resource.js"
+import type { ScheduledJobContribution } from "./scheduled-job.js"
 import type { ExtensionReactions as ExtensionReactionsType } from "./extension.js"
 
 /**
@@ -48,6 +49,7 @@ export type ExtensionReactions = ExtensionReactionsType<unknown, unknown>
  */
 export interface ExtensionContributions {
   readonly resources?: ReadonlyArray<AnyResourceContribution>
+  readonly scheduledJobs?: ReadonlyArray<ScheduledJobContribution>
   /**
    * LLM-callable tools authored via `tool({...})`. Bucket name IS the
    * dispatch surface: every entry is a `ToolCapability` — no runtime tag check
@@ -119,6 +121,7 @@ export const rpcCapabilities = (
 // Resource leaf that goes straight into the `resources` bucket. After  it
 // no longer sets a `_kind: "resource"` field; the bucket IS the discrimination.
 export { defineResource } from "./resource.js"
+export { defineScheduledJob } from "./scheduled-job.js"
 
 /**
  * Identity smart constructor for the Resource primitive. Generic over

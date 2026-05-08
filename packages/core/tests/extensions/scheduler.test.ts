@@ -7,25 +7,21 @@ import {
   collectSchedules,
   type CronRuntimeShape,
 } from "../../src/runtime/extensions/resource-host/schedule-engine"
-import { defineResource } from "@gent/core-internal/domain/contribution"
-import type { ResourceSchedule } from "@gent/core-internal/domain/resource"
+import type { ScheduledJobContribution } from "@gent/core-internal/domain/scheduled-job"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { AgentName } from "@gent/core-internal/domain/agent"
 
 const fsLayer = Layer.merge(BunFileSystem.layer, Path.layer)
 
-const makeLoaded = (id: string, jobs: ReadonlyArray<ResourceSchedule>): LoadedExtension => ({
+const makeLoaded = (
+  id: string,
+  jobs: ReadonlyArray<ScheduledJobContribution>,
+): LoadedExtension => ({
   manifest: { id: ExtensionId.make(id) },
   scope: "builtin",
   sourcePath: "builtin",
   contributions: {
-    resources: [
-      defineResource({
-        scope: "process",
-        layer: Layer.empty,
-        schedule: jobs,
-      }) as never,
-    ],
+    scheduledJobs: jobs,
   },
 })
 

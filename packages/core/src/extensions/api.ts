@@ -59,6 +59,7 @@ import {
 } from "../domain/extension-package-shape.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
 import type { AnyResourceContribution } from "../domain/resource.js"
+import type { ScheduledJobContribution } from "../domain/scheduled-job.js"
 
 // ── Re-exports for full-power extension authors ──
 
@@ -194,6 +195,7 @@ export {
   // Smart constructor — returns a bare leaf value; the bucket it's placed
   // in is the discrimination (no `_kind` field).
   defineResource,
+  defineScheduledJob,
   resource,
 } from "../domain/contribution.js"
 
@@ -237,8 +239,8 @@ export type {
   ResourceSpec,
   ResourceScope,
   ScopeOf,
-  ResourceSchedule,
 } from "../domain/resource.js"
+export type { ScheduledJobContribution } from "../domain/scheduled-job.js"
 export { ProjectionError } from "../domain/projection-error.js"
 
 // `ReadOnly` brand — type-level fence. Author services that should only
@@ -293,6 +295,7 @@ export interface DefineExtensionInput<Client = unknown, R = never> {
    */
   readonly client?: Client
   readonly resources?: FieldSpec<AnyResourceContribution, R>
+  readonly scheduledJobs?: FieldSpec<ScheduledJobContribution, R>
   /**
    * LLM-callable tools authored via `tool({...})`. The bucket name is the
    * dispatch surface: every entry must be a `ToolCapability` — `request({...})`
@@ -424,6 +427,12 @@ export function defineExtension<Client, R>(
           return yield* new ExtensionLoadError({ extensionId: manifest.id, message: inputMessage })
         }
         const resources = yield* resolveField(manifest, "resources", params.resources, ctx)
+        const scheduledJobs = yield* resolveField(
+          manifest,
+          "scheduledJobs",
+          params.scheduledJobs,
+          ctx,
+        )
         const tools = yield* resolveField(manifest, "tools", params.tools, ctx)
         const actions = yield* resolveField(manifest, "actions", params.actions, ctx)
         const requests = yield* resolveField(manifest, "requests", params.requests, ctx)
@@ -437,6 +446,7 @@ export function defineExtension<Client, R>(
         )
         const contribs: ExtensionContributions = {
           ...(resources.length > 0 ? { resources } : {}),
+          ...(scheduledJobs.length > 0 ? { scheduledJobs } : {}),
           ...(tools.length > 0 ? { tools } : {}),
           ...(actions.length > 0 ? { actions } : {}),
           ...(requests.length > 0 ? { requests } : {}),

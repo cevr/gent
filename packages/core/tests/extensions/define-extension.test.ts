@@ -11,6 +11,7 @@ import { Cause, Effect, Layer, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import { getBuiltinAgent } from "../../../extensions/src/all-agents.js"
 import {
+  defineScheduledJob,
   defineExtension,
   defineResource,
   getToolId,
@@ -97,14 +98,14 @@ describe("defineExtension", () => {
           defineResource({
             scope: "process",
             layer: myLayer,
-            schedule: [
-              {
-                id: "test-job",
-                cron: "0 0 * * *",
-                target: { agent: "cowork" as never, prompt: "hi" },
-              },
-            ],
           }) as never,
+        ],
+        scheduledJobs: [
+          defineScheduledJob({
+            id: "test-job",
+            cron: "0 0 * * *",
+            target: { agent: "cowork" as never, prompt: "hi" },
+          }),
         ],
       })
       const contributions = yield* setupOf(ext)
@@ -118,7 +119,7 @@ describe("defineExtension", () => {
       expect(contributions.reactions?.systemPrompt).toBeDefined()
       const resources = contributions.resources ?? []
       expect(resources).toHaveLength(1)
-      expect(resources[0]!.schedule?.[0]?.id).toBe("test-job")
+      expect(contributions.scheduledJobs?.[0]?.id).toBe("test-job")
     }),
   )
 

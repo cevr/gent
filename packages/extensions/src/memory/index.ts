@@ -37,11 +37,11 @@ export const MemoryExtension = defineExtension({
   reactions: {
     turnProjection: (ctx) => projectMemoryVaultTurn(ctx),
   },
+  scheduledJobs: MemoryDreamJobs(),
   resources: ({ ctx }) => [
     defineResource({
       scope: "process",
       layer: MemoryVaultLive(ctx.home),
-      schedule: MemoryDreamJobs(),
     }),
   ],
 })

@@ -86,6 +86,7 @@ const validateDriverIds = (contribs: ExtensionContributions): string | undefined
 
 const allowedContributionBuckets = new Set([
   "resources",
+  "scheduledJobs",
   "tools",
   "actions",
   "requests",

@@ -2,9 +2,9 @@
  * Resource — long-lived state with explicit scope.
  *
  * Replaces single-purpose contribution kinds (`layer`, `lifecycle`,
- * `job`, `workflow.machine`) with one primitive that
+ * `workflow.machine`) with one primitive that
  * carries the unifying concept: "this extension owns a long-lived service
- * with optional periodic work and optional startup/shutdown."
+ * with optional startup/shutdown."
  *
  * The `scope` discriminator is intentionally narrow. Today the host owns
  * exactly one long-lived resource lifetime:
@@ -19,7 +19,6 @@
  */
 
 import type { Context, Effect, Layer } from "effect"
-import type { AgentName } from "./agent.js"
 import type { ServerScope } from "./scope-brand.js"
 
 // ── Scope discriminator + brand mapping ──
@@ -33,29 +32,6 @@ export type ResourceScope = "process"
  */
 export type ScopeOf<S extends ResourceScope> = S extends "process" ? ServerScope : never
 
-// ── Schedule sub-shape ──
-
-/**
- * One scheduled job. `cron` is a standard cron expression (consumed by
- * `Bun.cron`). The host installs the job at process startup; `target`
- * describes the headless-agent invocation to spawn on each tick.
- *
- * Today's sole job type is `"headless-agent"` — the scheduler renders a
- * wrapper script that invokes `gent --headless --agent <agent> <prompt>`
- * and registers the script with the OS-level cron daemon.
- */
-export interface ResourceSchedule {
-  /** Extension-local id. Host namespaces with extension id when installing. */
-  readonly id: string
-  /** Standard cron expression — consumed by `Bun.cron`. */
-  readonly cron: string
-  readonly target: {
-    readonly agent: AgentName
-    readonly prompt: string
-    readonly cwd?: string
-  }
-}
-
 // ── The Resource contribution ──
 
 /**
@@ -68,7 +44,6 @@ export interface ResourceSchedule {
  * - `start` / `stop` — optional startup + shutdown effects.
  *   `stop` is `Effect<void, never, A>` per Effect finalizer contract — it
  *   may not fail (failures are not propagated through scope teardown).
- * - `schedule` — periodic jobs reconciled at host startup.
  * - `runtime` — explicit runtime slots for long-lived behavior that reacts
  *   to turns/messages or enriches tool results without going through a
  *   string-keyed middleware registry.
@@ -103,7 +78,6 @@ export interface ResourceContribution<
   readonly layer: Layer.Layer<A, E, R | ScopeOf<S>>
   readonly start?: Effect.Effect<void, E, A | R | StartR>
   readonly stop?: Effect.Effect<void, never, A>
-  readonly schedule?: ReadonlyArray<ResourceSchedule>
 }
 
 /**
@@ -135,7 +109,6 @@ export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never, 
    */
   readonly start?: Effect.Effect<void, E, NoInfer<A> | R | StartR>
   readonly stop?: Effect.Effect<void, never, NoInfer<A>>
-  readonly schedule?: ReadonlyArray<ResourceSchedule>
 }
 
 /**

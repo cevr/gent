@@ -1,4 +1,8 @@
-import { AgentName, type ResourceSchedule } from "@gent/core/extensions/api"
+import {
+  AgentName,
+  defineScheduledJob,
+  type ScheduledJobContribution,
+} from "@gent/core/extensions/api"
 
 /**
  * Durable host-owned jobs for memory consolidation.
@@ -11,8 +15,8 @@ import { AgentName, type ResourceSchedule } from "@gent/core/extensions/api"
 const MEMORY_REFLECT_AGENT = AgentName.make("memory:reflect")
 const MEMORY_MEDITATE_AGENT = AgentName.make("memory:meditate")
 
-export const MemoryDreamJobs = (): ReadonlyArray<ResourceSchedule> => [
-  {
+export const MemoryDreamJobs = (): ReadonlyArray<ScheduledJobContribution> => [
+  defineScheduledJob({
     id: "reflect",
     cron: "0 21 * * 1-5",
     target: {
@@ -20,8 +24,8 @@ export const MemoryDreamJobs = (): ReadonlyArray<ResourceSchedule> => [
       prompt:
         "Review today's sessions and extract memories worth keeping. Focus on corrections, preferences, decisions, and gotchas.",
     },
-  },
-  {
+  }),
+  defineScheduledJob({
     id: "meditate",
     cron: "0 9 * * 0",
     target: {
@@ -29,5 +33,5 @@ export const MemoryDreamJobs = (): ReadonlyArray<ResourceSchedule> => [
       prompt:
         "Review all stored memories. Merge duplicates, prune noise, and promote recurring project patterns to global principles.",
     },
-  },
+  }),
 ]
