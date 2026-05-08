@@ -369,7 +369,7 @@ Validation:
 
 ### W23.3 — Split Host Facts From Process Authority
 
-Status: implemented locally; ready for commit.
+Status: committed and pushed in `11539932`.
 
 Work:
 
