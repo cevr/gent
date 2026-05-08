@@ -2,8 +2,8 @@
  * Extension authoring API.
  *
  * Single entry point: `defineExtension({ id, resources?, tools?, actions?, requests?, ... })`.
- * The factory accepts typed sub-arrays (literal arrays OR `(ctx) => array` OR
- * `(ctx) => Effect<array>` per bucket), validates them, and produces a
+ * The factory accepts typed sub-arrays (literal arrays OR `() => array` OR
+ * `() => Effect<array>` per bucket), validates them, and produces a
  * `GentExtension` whose `setup()` returns `ExtensionContributions` buckets.
  *
  * The bucket name IS the discrimination — TypeScript catches a command
@@ -29,8 +29,9 @@
  * ```ts
  * export default defineExtension({
  *   id: "my-ext",
- *   tools: ({ ctx }) =>
+ *   tools: () =>
  *     Effect.gen(function* () {
+ *       const ctx = yield* ExtensionSetupContext
  *       const skills = yield* loadSkills(ctx.cwd)
  *       return [tool(SearchSkillsTool(skills))]
  *     }),
@@ -39,7 +40,7 @@
  *
  * @module
  */
-import { Effect } from "effect"
+import { Context, Effect } from "effect"
 import { ExtensionId } from "../domain/ids.js"
 import { ExtensionLoadError } from "../domain/extension.js"
 import { sealRuntimeLoadedEffect } from "../domain/extension-load-boundary.js"
@@ -224,18 +225,16 @@ export { OutputBuffer, headTailChars, saveFullOutput } from "../domain/output-bu
 /**
  * Per-bucket spec accepted by `defineExtension`. Each bucket field can be:
  *   - a literal array (90% of cases — the extension contributes a constant set)
- *   - a `(args) => array` factory (when the bucket needs `ctx` but no Effect)
- *   - a `(args) => Effect<array>` factory (when setup needs Effect-typed work)
+ *   - a `() => array` factory (when the bucket wants lazy construction)
+ *   - a `() => Effect<array>` factory (when setup needs facts/services)
  *
- * Codex  review: prefer literal arrays as default; the variance behind one
- * helper (`resolveField`) keeps 26 of 30 builtin extensions ceremony-free
- * while preserving Effect for the 4 that genuinely need it.
+ * Factful setup uses `yield* ExtensionSetupContext`; setup facts are provided
+ * by `defineExtension` and do not leak into the loaded extension dependency
+ * type.
  */
 export type FieldSpec<A, R = never> =
   | ReadonlyArray<A>
-  | ((args: {
-      readonly ctx: PublicExtensionSetupContext
-    }) => ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R>)
+  | (() => ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R>)
 
 export type PublicExtensionSetupContext = Omit<RuntimeExtensionSetupContext, "host"> & {
   readonly host: Pick<
@@ -268,9 +267,14 @@ const publicSetupContext = (ctx: RuntimeExtensionSetupContext): PublicExtensionS
 /**
  * Public setup context exposed to extension authors. Runtime loading still uses
  * the wider domain setup context internally; `defineExtension` bucket factories
- * receive this facts-only surface.
+ * access this facts-only surface with `yield* ExtensionSetupContext`.
  */
-export type ExtensionSetupContext = PublicExtensionSetupContext
+export class ExtensionSetupContext extends Context.Service<
+  ExtensionSetupContext,
+  PublicExtensionSetupContext
+>()("@gent/core/src/extensions/api/ExtensionSetupContext") {}
+
+type RemainingSetupRequirements<R> = Exclude<R, ExtensionSetupContext>
 
 export interface DefineExtensionInput<R = never> {
   readonly id: string
@@ -317,13 +321,13 @@ const resolveField = <A, R>(
   field: string,
   spec: FieldSpec<A, R> | undefined,
   ctx: PublicExtensionSetupContext,
-): Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R> =>
+): Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, RemainingSetupRequirements<R>> =>
   Effect.gen(function* () {
     if (spec === undefined) return []
     if (typeof spec !== "function") return spec
     const result: ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R> =
       yield* Effect.try({
-        try: () => spec({ ctx }),
+        try: () => spec(),
         catch: (cause) =>
           new ExtensionLoadError({
             extensionId: manifest.id,
@@ -338,10 +342,10 @@ const resolveField = <A, R>(
     if (Effect.isEffect(result)) {
       const value = yield* sealRuntimeLoadedEffect({
         extensionId: manifest.id,
-        effect: () => result,
+        effect: () => result.pipe(Effect.provideService(ExtensionSetupContext, ctx)),
         failureMessage: (cause) => `${field} factory failed: ${String(cause)}`,
         defectMessage: (cause) => `${field} factory defect: ${String(cause)}`,
-      })
+      }) as Effect.Effect<ReadonlyArray<unknown>, ExtensionLoadError, RemainingSetupRequirements<R>>
       if (!Array.isArray(value)) {
         return yield* new ExtensionLoadError({
           extensionId: manifest.id,
@@ -368,7 +372,7 @@ const resolveField = <A, R>(
  * Define an extension as typed contribution buckets.
  *
  * Each bucket is optional and homogeneously typed. Buckets accept a literal
- * array (most common), a `(ctx) => array` factory, or a `(ctx) => Effect<array>`
+ * array (most common), a `() => array` factory, or a `() => Effect<array>`
  * factory. Errors during resolution are annotated with the bucket name.
  *
  * Cross-bucket validation runs after all buckets resolve.
@@ -384,8 +388,12 @@ const resolveField = <A, R>(
  * })
  * ```
  */
-export function defineExtension<R = never>(params: DefineExtensionInput<R>): GentExtension<R>
-export function defineExtension<R>(params: DefineExtensionInput<R>): GentExtension<R> {
+export function defineExtension<R = never>(
+  params: DefineExtensionInput<R>,
+): GentExtension<RemainingSetupRequirements<R>>
+export function defineExtension<R>(
+  params: DefineExtensionInput<R>,
+): GentExtension<RemainingSetupRequirements<R>> {
   const manifest: ExtensionManifest = { id: ExtensionId.make(params.id) }
   return {
     manifest,

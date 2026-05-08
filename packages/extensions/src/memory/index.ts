@@ -19,7 +19,13 @@
  * turn projection over the on-disk vault.
  */
 
-import { defineExtension, defineResource, ExtensionId } from "@gent/core/extensions/api"
+import { Effect } from "effect"
+import {
+  defineExtension,
+  defineResource,
+  ExtensionId,
+  ExtensionSetupContext,
+} from "@gent/core/extensions/api"
 import { MemoryTools } from "./tools.js"
 import { projectMemoryVaultTurn } from "./projection.js"
 import { MemoryAgents } from "./agents.js"
@@ -38,10 +44,14 @@ export const MemoryExtension = defineExtension({
     turnProjection: (ctx) => projectMemoryVaultTurn(ctx),
   },
   scheduledJobs: MemoryDreamJobs(),
-  resources: ({ ctx }) => [
-    defineResource({
-      scope: "process",
-      layer: MemoryVaultLive(ctx.home),
+  resources: () =>
+    Effect.gen(function* () {
+      const ctx = yield* ExtensionSetupContext
+      return [
+        defineResource({
+          scope: "process",
+          layer: MemoryVaultLive(ctx.home),
+        }),
+      ]
     }),
-  ],
 })

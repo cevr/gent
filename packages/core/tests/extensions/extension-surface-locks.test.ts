@@ -20,6 +20,7 @@ import {
   defineResource,
   ExtensionContext,
   ExtensionId,
+  ExtensionSetupContext,
   type ActionInput,
   makeRunSpec,
   request,
@@ -521,7 +522,8 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("public setup context exposes host facts but not process authority", () => {
-    const setup = (ctx: PublicExtensionApi.ExtensionSetupContext) => {
+    const setup = Effect.gen(function* () {
+      const ctx = yield* ExtensionSetupContext
       const platform = ctx.host.osInfo.platform
       const candidates = ctx.host.commandCandidates("git")
       // @ts-expect-error — public setup sees host facts, not parent process env
@@ -531,7 +533,7 @@ describe("Effect-purity locks (compile-time)", () => {
       // @ts-expect-error — public setup cannot spawn host processes
       ctx.host.runProcess("git", ["status"])
       return `${platform}:${candidates.length}`
-    }
+    })
     void setup
     expect(true).toBe(true)
   })

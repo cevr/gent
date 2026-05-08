@@ -14,6 +14,7 @@ import {
   defineScheduledJob,
   defineExtension,
   defineResource,
+  ExtensionSetupContext,
   getToolId,
   type PublicExtensionSetupContext,
   request,
@@ -181,15 +182,16 @@ describe("defineExtension", () => {
     }),
   )
 
-  it.live("setup context is forwarded to per-bucket factory", () =>
+  it.live("setup context is provided to per-bucket factory", () =>
     Effect.gen(function* () {
       let captured: PublicExtensionSetupContext | undefined
       const ext = defineExtension({
         id: "captures-ctx",
-        tools: ({ ctx }) => {
-          captured = ctx
-          return []
-        },
+        tools: () =>
+          Effect.gen(function* () {
+            captured = yield* ExtensionSetupContext
+            return []
+          }),
       })
       yield* setupOf(ext)
       expect(captured?.cwd).toBeDefined()

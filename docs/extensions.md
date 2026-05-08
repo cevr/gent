@@ -279,9 +279,10 @@ export default defineExtension({
 })
 ```
 
-Use `resources: ({ ctx }) => ...` only when setup needs public host facts such
-as `ctx.host.parentEnv`; the resource itself should still expose the smallest
-service Tag it needs.
+Use `resources: () => Effect.gen(...)` only when setup needs public host facts.
+Inside that factory, `yield* ExtensionSetupContext` exposes facts such as
+`ctx.cwd` and `ctx.host.commandCandidates`; the resource itself should still
+expose the smallest service Tag it needs.
 
 ## Agent
 

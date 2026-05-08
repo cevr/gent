@@ -11,6 +11,7 @@ import {
   defineExtension,
   defineResource,
   ExtensionContext,
+  ExtensionSetupContext,
   isRecord,
   type ToolResultInput,
   type TurnAfterInput,
@@ -261,15 +262,19 @@ export const AutoExtension = defineExtension({
       handler: autoHandoffImpl,
     },
   },
-  resources: ({ ctx }) => [
-    defineResource({
-      scope: "process",
-      layer: AutoControllerLive,
+  resources: () =>
+    Effect.gen(function* () {
+      const ctx = yield* ExtensionSetupContext
+      return [
+        defineResource({
+          scope: "process",
+          layer: AutoControllerLive,
+        }),
+        defineResource({
+          tag: AutoJournal,
+          scope: "process",
+          layer: AutoJournal.Live({ cwd: ctx.cwd }),
+        }),
+      ]
     }),
-    defineResource({
-      tag: AutoJournal,
-      scope: "process",
-      layer: AutoJournal.Live({ cwd: ctx.cwd }),
-    }),
-  ],
 })

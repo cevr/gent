@@ -248,6 +248,8 @@ yield `ExtensionContext` like tools/requests/actions.
 
 ## Commit 5: refactor(extensions): make setup facts context-provided
 
+**Status**: Completed in current batch.
+
 **Justification**: Setup bucket factories still preserve `({ ctx }) => ...`.
 Setup should be Effect-shaped too, using a setup facade from context instead of
 a parameter.
@@ -260,20 +262,22 @@ a parameter.
 
 **Changes**
 
-| File                                                                                | Change                                                               | Lines |
-| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ----- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`            | Replace `FieldSpec` ctx callback with Effect-context setup services. | ~233  |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-services.ts` | Add setup facts to `ExtensionContext` or a focused setup service.    | ~210  |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/index.ts`        | Migrate setup caller.                                                | ~20   |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/memory/index.ts`        | Migrate setup caller.                                                | ~41   |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/librarian/index.ts`     | Migrate setup caller.                                                | ~33   |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/auto/index.ts`          | Migrate setup caller.                                                | ~265  |
-| `/Users/cvr/Developer/personal/gent/docs/extensions.md`                             | Update authoring docs.                                               | ~260  |
+| File                                                                                                | Change                                                               | Lines |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ----- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`                            | Replace `FieldSpec` ctx callback with Effect-context setup services. | ~233  |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/index.ts`                        | Migrate setup caller.                                                | ~20   |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/memory/index.ts`                        | Migrate setup caller.                                                | ~41   |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/librarian/index.ts`                     | Migrate setup caller.                                                | ~33   |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/auto/index.ts`                          | Migrate setup caller.                                                | ~265  |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/define-extension.test.ts`        | Lock setup facts as provided Effect context.                         | ~185  |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts` | Lock public setup facts without process authority.                   | ~520  |
+| `/Users/cvr/Developer/personal/gent/docs/extensions.md`                                             | Update authoring docs.                                               | ~260  |
 
 **Verification**
 
-- Focused define-extension API tests.
-- Shipped extension tests.
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/define-extension.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/extensions/tests/skills/skills-rpc.test.ts packages/extensions/tests/memory/tools.test.ts packages/extensions/tests/auto/auto.test.ts packages/extensions/tests/auto/auto-rpc.test.ts packages/extensions/tests/auto/auto-journal-decode.test.ts`
+- `bun run typecheck`
+- `bun run lint`
 - `bun run gate`
 
 ## Commit 6: refactor(extensions): remove privileged builtin agent registry
