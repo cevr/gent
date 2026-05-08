@@ -8,15 +8,7 @@
  */
 
 import { Clock, Context, Effect, Layer, Option, Schema } from "effect"
-import {
-  AgentName,
-  ReadOnlyBrand,
-  SessionId,
-  dateFromMillis,
-  withReadOnly,
-  type BranchId,
-  type ReadOnly,
-} from "@gent/core/extensions/api"
+import { AgentName, SessionId, dateFromMillis, type BranchId } from "@gent/core/extensions/api"
 import { SqlClient } from "effect/unstable/sql"
 import {
   Todo,
@@ -187,20 +179,15 @@ const resetIncompatibleTodoTables = Effect.fn("TodoStorage.resetIncompatibleTodo
 })
 
 /**
- * Read-only slice of the TodoStorage surface — list/get queries +
- * dependency reads. Projections and `request({ intent: "read" })`
- * capabilities yield this branded sub-Tag instead of `TodoStorage`
- * so the type system blocks accidental write dependencies in read
- * contexts.
+ * Read slice of the TodoStorage surface — list/get queries + dependency reads.
+ * The separate Tag keeps callers from depending on write methods without
+ * requiring public read-only branding ceremony.
  *
  * Why two Tags, not one: `TodoStorage` and `TodoStorageReadOnly`
  * share a single underlying service value — `TodoStorage.Live`
- * builds the substrate once and registers both Tags pointing at
- * it (the read-only Tag wrapped with `withReadOnly`). This is a
- * structural narrowing, not a parallel API: there is one source
- * of truth, but two access surfaces. Read-intent code yields the
- * branded sub-Tag and is statically barred from calling write
- * methods, while write-intent code yields the full Tag.
+ * builds the substrate once and registers both Tags pointing at it. This is a
+ * structural narrowing, not a parallel API: there is one source of truth, but
+ * two access surfaces.
  */
 export interface TodoStorageReadOnlyService {
   readonly getTodo: (id: TodoId) => Effect.Effect<Todo | undefined, TodoStorageError>
@@ -235,17 +222,13 @@ export interface TodoStorageService extends TodoStorageReadOnlyService {
 }
 
 /**
- * Read-only branded Tag onto the TodoStorage substrate. Projections
- * and read-intent request capabilities yield this instead of
- * `TodoStorage`. Provided alongside `TodoStorage` by `TodoStorage.Live`.
+ * Read Tag onto the TodoStorage substrate. Provided alongside `TodoStorage`
+ * by `TodoStorage.Live`.
  */
 export class TodoStorageReadOnly extends Context.Service<
   TodoStorageReadOnly,
-  ReadOnly<TodoStorageReadOnlyService>
->()("@gent/extensions/src/todo-storage/TodoStorageReadOnly") {
-  // Brand on the Tag identifier — see `domain/read-only.ts`.
-  declare readonly [ReadOnlyBrand]: true
-}
+  TodoStorageReadOnlyService
+>()("@gent/extensions/src/todo-storage/TodoStorageReadOnly") {}
 
 /**
  * Construct the underlying TodoStorage service value. Module-local —
@@ -537,10 +520,8 @@ export class TodoStorage extends Context.Service<TodoStorage, TodoStorageService
    * Runs its own DDL — only requires SqlClient, not host Storage.
    *
    * Provides BOTH `TodoStorage` (write surface) and `TodoStorageReadOnly`
-   * (read-only branded Tag) from the same underlying service value —
-   * the read-only Tag is a structurally narrower projection that
-   * downstream projections and read-intent capabilities can yield
-   * without picking up the write methods.
+   * from the same underlying service value. The read Tag is a structurally
+   * narrower projection; it is not a public capability system.
    */
   static Live: Layer.Layer<
     TodoStorage | TodoStorageReadOnly,
@@ -551,14 +532,11 @@ export class TodoStorage extends Context.Service<TodoStorage, TodoStorageService
       const service = yield* makeTodoStorageService
       return Context.empty().pipe(
         Context.add(TodoStorage, service),
-        Context.add(
-          TodoStorageReadOnly,
-          withReadOnly({
-            getTodo: service.getTodo,
-            listTodos: service.listTodos,
-            getTodoDeps: service.getTodoDeps,
-          } satisfies TodoStorageReadOnlyService),
-        ),
+        Context.add(TodoStorageReadOnly, {
+          getTodo: service.getTodo,
+          listTodos: service.listTodos,
+          getTodoDeps: service.getTodoDeps,
+        } satisfies TodoStorageReadOnlyService),
       )
     }),
   )

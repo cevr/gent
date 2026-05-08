@@ -8,7 +8,6 @@
 import type { PlatformError } from "effect"
 import { DateTime, Effect, FileSystem, Layer, Option, Path, Schema, Context } from "effect"
 import { createHash } from "node:crypto"
-import { ReadOnlyBrand, type ReadOnly, withReadOnly } from "@gent/core/extensions/api"
 
 // ── Types ──
 
@@ -149,12 +148,9 @@ export const projectDisplayName = (key: string): string => {
 // ── Service interface ──
 
 /**
- * Read-only slice of MemoryVault — vault path, listing, single-file
- * read, and full-text search. Projections (and `request({ intent: "read" })`
- * capabilities once  lands) yield `MemoryVaultReadOnly` (the branded
- * Tag below) instead of `MemoryVault` so the type system blocks
- * accidental writes (`write`/`remove`/`ensureDirs`/`rebuildIndex`) in
- * read contexts.
+ * Read slice of MemoryVault — vault path, listing, single-file read, and
+ * full-text search. The separate Tag keeps callers from depending on write
+ * methods without requiring public read-only branding ceremony.
  *
  * The Live/Test layers for `MemoryVault` provide BOTH this Tag and the
  * write-capable `MemoryVault` Tag from the same underlying service value.
@@ -192,16 +188,13 @@ export class MemoryVault extends Context.Service<MemoryVault, MemoryVaultShape>(
 ) {}
 
 /**
- * Read-only branded Tag onto the MemoryVault substrate. Projections
- * and read-intent request capabilities yield this instead of
- * `MemoryVault`. Provided alongside `MemoryVault` by `Live`/`Test`.
+ * Read Tag onto the MemoryVault substrate. Provided alongside `MemoryVault`
+ * by `Live`/`Test`.
  */
 export class MemoryVaultReadOnly extends Context.Service<
   MemoryVaultReadOnly,
-  ReadOnly<MemoryVaultReadOnlyShape>
->()("@gent/extensions/src/memory/vault/MemoryVaultReadOnly") {
-  declare readonly [ReadOnlyBrand]: true
-}
+  MemoryVaultReadOnlyShape
+>()("@gent/extensions/src/memory/vault/MemoryVaultReadOnly") {}
 export type MemoryVaultReadOnlyTag = typeof MemoryVaultReadOnly
 
 // ── Implementation ──
@@ -471,11 +464,9 @@ const defaultVaultPath = (path: Path.Path, home: string): string =>
   path.join(home, ".gent", "memory")
 
 /**
- * Provide BOTH `MemoryVault` (write surface) and `MemoryVaultReadOnly`
- * (read-only branded Tag) from the same underlying service value. The
- * read-only Tag is a structurally narrower projection that downstream
- * projections and read-intent capabilities can yield without picking
- * up the write methods.
+ * Provide BOTH `MemoryVault` (write surface) and `MemoryVaultReadOnly` from
+ * the same underlying service value. The read Tag is a structurally narrower
+ * projection; it is not a public capability system.
  */
 const layerFor = (
   buildVault: Effect.Effect<MemoryVaultShape, never, FileSystem.FileSystem | Path.Path>,
@@ -485,15 +476,12 @@ const layerFor = (
       const vault = yield* buildVault
       return Context.empty().pipe(
         Context.add(MemoryVault, vault),
-        Context.add(
-          MemoryVaultReadOnly,
-          withReadOnly({
-            vaultPath: vault.vaultPath,
-            list: vault.list,
-            read: vault.read,
-            search: vault.search,
-          } satisfies MemoryVaultReadOnlyShape),
-        ),
+        Context.add(MemoryVaultReadOnly, {
+          vaultPath: vault.vaultPath,
+          list: vault.list,
+          read: vault.read,
+          search: vault.search,
+        } satisfies MemoryVaultReadOnlyShape),
       )
     }),
   )

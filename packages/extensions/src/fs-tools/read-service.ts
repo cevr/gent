@@ -1,12 +1,5 @@
 import { Context, Effect, FileSystem, Layer, Path } from "effect"
-import {
-  FileIndex,
-  FileIndexError,
-  ReadOnlyBrand,
-  type ReadOnly,
-  type FileIndexService,
-  withReadOnly,
-} from "@gent/core/extensions/api"
+import { FileIndex, FileIndexError, type FileIndexService } from "@gent/core/extensions/api"
 
 interface FsReadShape {
   readonly resolve: Path.Path["resolve"]
@@ -15,18 +8,16 @@ interface FsReadShape {
   readonly listFiles: FileIndexService["listFiles"]
 }
 
-export class FsRead extends Context.Service<FsRead, ReadOnly<FsReadShape>>()(
+export class FsRead extends Context.Service<FsRead, FsReadShape>()(
   "@gent/extensions/src/fs-tools/read-service/FsRead",
 ) {
-  declare readonly [ReadOnlyBrand]: true
-
   static Live: Layer.Layer<FsRead, never, FileSystem.FileSystem | Path.Path> = Layer.effect(
     FsRead,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const fileIndex = yield* Effect.serviceOption(FileIndex)
-      return withReadOnly({
+      return {
         resolve: path.resolve,
         stat: fs.stat,
         readFileString: fs.readFileString,
@@ -39,7 +30,7 @@ export class FsRead extends Context.Service<FsRead, ReadOnly<FsReadShape>>()(
                   cwd: params.cwd,
                 }),
               ),
-      } satisfies FsReadShape)
+      } satisfies FsReadShape
     }),
   )
 }

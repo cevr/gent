@@ -22,15 +22,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, Layer, Path, Schema as S } from "effect"
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/src/all-agents.js"
-import {
-  defineExtension,
-  defineResource,
-  tool,
-  AgentName,
-  type ReadOnly,
-  ReadOnlyBrand,
-  withReadOnly,
-} from "@gent/core/extensions/api"
+import { defineExtension, defineResource, tool, AgentName } from "@gent/core/extensions/api"
 import { ConfigService } from "../../src/runtime/config-service"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
@@ -73,16 +65,13 @@ const sectionExtension = defineExtension({
 interface FakeProviderShape {
   readonly text: () => string
 }
-class FakeProvider extends Context.Service<FakeProvider, ReadOnly<FakeProviderShape>>()(
+class FakeProvider extends Context.Service<FakeProvider, FakeProviderShape>()(
   "@gent/core/tests/runtime/runtime-profile.test/FakeProvider",
-) {
-  declare readonly [ReadOnlyBrand]: true
-}
+) {}
 
-const fakeProviderLive = Layer.succeed(
-  FakeProvider,
-  withReadOnly({ text: () => "dynamic-from-service" } satisfies FakeProviderShape),
-)
+const fakeProviderLive = Layer.succeed(FakeProvider, {
+  text: () => "dynamic-from-service",
+} satisfies FakeProviderShape)
 
 const dynamicExtension = defineExtension({
   id: "@gent/test-runtime-profile-dynamic",

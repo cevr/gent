@@ -10,12 +10,7 @@ import {
   SubscriptionRef,
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
-import {
-  ReadOnlyBrand,
-  type ReadOnly,
-  type TurnProjection,
-  withReadOnly,
-} from "@gent/core/extensions/api"
+import { type TurnProjection } from "@gent/core/extensions/api"
 import {
   ExecutorState,
   projectSnapshot,
@@ -43,11 +38,9 @@ interface ExecutorRuntimeShape extends ExecutorWriteShape {
   readonly turnProjection: () => Effect.Effect<TurnProjection>
 }
 
-export class ExecutorRead extends Context.Service<ExecutorRead, ReadOnly<ExecutorReadShape>>()(
+export class ExecutorRead extends Context.Service<ExecutorRead, ExecutorReadShape>()(
   "@gent/extensions/src/executor/controller/ExecutorRead",
-) {
-  declare readonly [ReadOnlyBrand]: true
-}
+) {}
 
 export class ExecutorWrite extends Context.Service<ExecutorWrite, ExecutorWriteShape>()(
   "@gent/extensions/src/executor/controller/ExecutorWrite",
@@ -164,9 +157,9 @@ export const ExecutorControllerLive = (
           SubscriptionRef.get(state).pipe(Effect.map((current) => viewForState(current))),
       } satisfies ExecutorRuntimeShape
 
-      const read = withReadOnly({
+      const read = {
         snapshot: runtime.snapshot,
-      } satisfies ExecutorReadShape)
+      } satisfies ExecutorReadShape
       const write = {
         snapshot: runtime.snapshot,
         connect: runtime.connect,

@@ -1,12 +1,5 @@
 import { Clock, Context, Effect, Layer, Option, Random, Ref } from "effect"
-import {
-  type BranchId,
-  ArtifactId,
-  type ReadOnly,
-  ReadOnlyBrand,
-  type SessionId,
-  withReadOnly,
-} from "@gent/core/extensions/api"
+import { type BranchId, ArtifactId, type SessionId } from "@gent/core/extensions/api"
 import type { Artifact, ContentPatch, ReadQuery } from "../artifacts-protocol.js"
 
 interface ArtifactsState {
@@ -56,11 +49,9 @@ interface ArtifactsWriteShape extends ArtifactsReadShape {
   readonly clear: (sessionId: SessionId, branchId: BranchId, id: ArtifactId) => Effect.Effect<void>
 }
 
-export class ArtifactsRead extends Context.Service<ArtifactsRead, ReadOnly<ArtifactsReadShape>>()(
+export class ArtifactsRead extends Context.Service<ArtifactsRead, ArtifactsReadShape>()(
   "@gent/extensions/src/artifacts/store/ArtifactsRead",
-) {
-  declare readonly [ReadOnlyBrand]: true
-}
+) {}
 
 export class ArtifactsWrite extends Context.Service<ArtifactsWrite, ArtifactsWriteShape>()(
   "@gent/extensions/src/artifacts/store/ArtifactsWrite",
@@ -190,10 +181,10 @@ export const ArtifactsStoreLive: Layer.Layer<ArtifactsRead | ArtifactsWrite> = L
           ),
         ),
     } satisfies ArtifactsWriteShape
-    const read = withReadOnly({
+    const read = {
       read: write.read,
       list: write.list,
-    } satisfies ArtifactsReadShape)
+    } satisfies ArtifactsReadShape
     return Layer.merge(Layer.succeed(ArtifactsWrite, write), Layer.succeed(ArtifactsRead, read))
   }),
 )

@@ -20,9 +20,6 @@ import {
   defineResource,
   ExtensionContext,
   ExtensionId,
-  type ReadOnly,
-  ReadOnlyBrand,
-  type ReadOnlyTag,
   type ActionInput,
   type ReadRequestInput,
   makeRunSpec,
@@ -43,13 +40,9 @@ interface ReadOnlyShape {
   readonly read: () => Effect.Effect<string>
 }
 
-class ReadOnlyService extends Context.Service<ReadOnlyService, ReadOnly<ReadOnlyShape>>()(
+class ReadOnlyService extends Context.Service<ReadOnlyService, ReadOnlyShape>()(
   "@gent/core/tests/extensions/extension-surface-locks.test/ReadOnlyService",
-) {
-  declare readonly [ReadOnlyBrand]: true
-}
-
-void ReadOnlyBrand
+) {}
 
 const NoInput = Schema.Struct({})
 const StringOutput = Schema.String
@@ -114,7 +107,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("request({ intent: 'read' }) — happy path compiles with ReadOnly Tag", () => {
+  test("request({ intent: 'read' }) — happy path compiles with ordinary Effect services", () => {
     const ok = request({
       id: "ok-read",
       extensionId: ExtensionId.make("test-ext"),
@@ -442,6 +435,14 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadValidatePackageShape = typeof PublicExtensionApi.validatePackageShape
     // @ts-expect-error — request refs are read via ref(...); the symbol stays private
     type _BadCapabilityRefSymbol = typeof PublicExtensionApi.CAPABILITY_REF
+    // @ts-expect-error — read/write authority is host facade behavior, not author branding ceremony
+    type _BadReadOnlyBrand = typeof PublicExtensionApi.ReadOnlyBrand
+    // @ts-expect-error — read/write authority is host facade behavior, not author branding ceremony
+    type _BadWithReadOnly = typeof PublicExtensionApi.withReadOnly
+    // @ts-expect-error — read/write authority is host facade behavior, not author branding ceremony
+    type _BadReadOnly = PublicExtensionApi.ReadOnly<ReadOnlyShape>
+    // @ts-expect-error — read/write authority is host facade behavior, not author branding ceremony
+    type _BadReadOnlyTag = PublicExtensionApi.ReadOnlyTag
     expect(true).toBe(true)
   })
 
@@ -641,7 +642,3 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(ext.manifest.id as string).toBe("purity-positive")
   })
 })
-
-type AssertReadOnlyExtendsTag = ReadOnly<ReadOnlyShape> extends ReadOnlyTag ? true : false
-const readOnlyExtendsTag: AssertReadOnlyExtendsTag = true
-void readOnlyExtendsTag

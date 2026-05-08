@@ -1,10 +1,5 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
-import {
-  ReadOnlyBrand,
-  type ReadOnly,
-  type TurnProjection,
-  withReadOnly,
-} from "@gent/core/extensions/api"
+import { type TurnProjection } from "@gent/core/extensions/api"
 import type { AutoSnapshotReply } from "./protocol.js"
 
 const AUTO_CHECKPOINT_TOOL = "auto_checkpoint"
@@ -209,11 +204,9 @@ interface AutoWriteShape extends AutoReadShape {
   >
 }
 
-export class AutoRead extends Context.Service<AutoRead, ReadOnly<AutoReadShape>>()(
+export class AutoRead extends Context.Service<AutoRead, AutoReadShape>()(
   "@gent/extensions/src/auto/controller/AutoRead",
-) {
-  declare readonly [ReadOnlyBrand]: true
-}
+) {}
 
 export class AutoWrite extends Context.Service<AutoWrite, AutoWriteShape>()(
   "@gent/extensions/src/auto/controller/AutoWrite",
@@ -426,11 +419,11 @@ export const AutoControllerLive: Layer.Layer<AutoRead | AutoWrite> = Layer.unwra
       drainFollowUp: () => Ref.modify(state, drainFollowUp),
     } satisfies AutoWriteShape
 
-    const read = withReadOnly({
+    const read = {
       snapshot: write.snapshot,
       isActive: write.isActive,
       turnProjection: write.turnProjection,
-    } satisfies AutoReadShape)
+    } satisfies AutoReadShape
 
     return Layer.merge(Layer.succeed(AutoWrite, write), Layer.succeed(AutoRead, read))
   }),

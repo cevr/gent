@@ -2,13 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Exit, Layer, Schema } from "effect"
 import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
-import {
-  ReadOnlyBrand,
-  tool,
-  type ReadOnly,
-  withReadOnly,
-  ExtensionContext,
-} from "@gent/core/extensions/api"
+import { tool, ExtensionContext } from "@gent/core/extensions/api"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core-internal/domain/permission"
@@ -35,11 +29,9 @@ interface ToolReadTokenShape {
   readonly read: () => Effect.Effect<string>
 }
 
-class ToolReadToken extends Context.Service<ToolReadToken, ReadOnly<ToolReadTokenShape>>()(
+class ToolReadToken extends Context.Service<ToolReadToken, ToolReadTokenShape>()(
   "@gent/core/tests/runtime/tool-runner.test/ToolReadToken",
-) {
-  declare readonly [ReadOnlyBrand]: true
-}
+) {}
 
 class ToolWriteToken extends Context.Service<
   ToolWriteToken,
@@ -494,12 +486,12 @@ describe("ToolRunner", () => {
       expect(result.result).toEqual({ value: "selected-profile" })
     }),
   )
-  it.live("read tools execute with a read-only capability context", () =>
+  it.live("read tools execute with ordinary profile Effect services", () =>
     Effect.gen(function* () {
       const ReadContextTool = tool({
         id: "read_context_tool",
         intent: "read",
-        description: "Reads only read-only profile-scoped context",
+        description: "Reads profile-scoped context",
         params: Schema.Struct({}),
         output: Schema.Struct({
           readValue: Schema.String,
@@ -534,7 +526,7 @@ describe("ToolRunner", () => {
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
       const capabilityContext = Context.empty().pipe(
-        Context.add(ToolReadToken, withReadOnly({ read: () => Effect.succeed("read-ok") })),
+        Context.add(ToolReadToken, { read: () => Effect.succeed("read-ok") }),
         Context.add(ToolWriteToken, { write: () => Effect.succeed("write-leak") }),
       ) as Context.Context<never>
       const result = yield* Effect.gen(function* () {
@@ -555,10 +547,7 @@ describe("ToolRunner", () => {
         )
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
-      expect(result.result).toEqual({
-        readValue: "read-ok",
-        writeUnavailable: true,
-      })
+      expect(result.result).toEqual({ readValue: "read-ok", writeUnavailable: false })
     }),
   )
   it.live("read tools receive read-intent ExtensionContext authority", () =>

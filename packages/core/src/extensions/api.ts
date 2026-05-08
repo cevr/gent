@@ -228,18 +228,6 @@ export {
 } from "../domain/extension.js"
 export { runProcess } from "../utils/run-process.js"
 
-// `ReadOnly` brand — type-level fence. Author services that should only
-// be reachable from projections / read-intent capabilities by branding
-// their Tag's inner shape with `ReadOnly<MyServiceShape>`. Use
-// `withReadOnly(value)` to apply the brand at the Live layer construction
-// site. See `domain/read-only.ts` for usage.
-export {
-  type ReadOnly,
-  type ReadOnlyTag,
-  ReadOnlyBrand,
-  withReadOnly,
-} from "../domain/read-only.js"
-
 // ── Public API ──
 
 /**

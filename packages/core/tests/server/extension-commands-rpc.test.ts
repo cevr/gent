@@ -898,7 +898,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
-  it.live("read RPC handlers receive a read-only runtime host context", () =>
+  it.live("read RPC handlers receive read-intent ExtensionContext authority", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/read-context")
       const ext: GentExtension = {
@@ -914,7 +914,7 @@ describe("extension command RPCs", () => {
                 output: Schema.Struct({
                   hasSessionMutations: Schema.Boolean,
                   hasAgentRun: Schema.Boolean,
-                  writeStorageUnavailable: Schema.Boolean,
+                  profileStorageAvailable: Schema.Boolean,
                   extensionContextProcessDenied: Schema.Boolean,
                   extensionContextFollowUpDenied: Schema.Boolean,
                   extensionContextParentEnvEmpty: Schema.Boolean,
@@ -936,7 +936,7 @@ describe("extension command RPCs", () => {
                       return {
                         hasSessionMutations: false,
                         hasAgentRun: false,
-                        writeStorageUnavailable: Option.isNone(todoStorage),
+                        profileStorageAvailable: Option.isSome(todoStorage),
                         extensionContextProcessDenied: Exit.isFailure(processExit),
                         extensionContextFollowUpDenied: Exit.isFailure(followUpExit),
                         extensionContextParentEnvEmpty:
@@ -968,7 +968,7 @@ describe("extension command RPCs", () => {
           expect(result).toEqual({
             hasSessionMutations: false,
             hasAgentRun: false,
-            writeStorageUnavailable: true,
+            profileStorageAvailable: true,
             extensionContextProcessDenied: true,
             extensionContextFollowUpDenied: true,
             extensionContextParentEnvEmpty: true,

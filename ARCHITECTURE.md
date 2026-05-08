@@ -327,7 +327,7 @@ host-owned design. It should expose:
   `ExtensionSetupContext`, `DefineExtensionInput`;
 - typed leaves: `tool`, `request`, `ref`, `action`;
 - scoped resources: `defineResource`, `resource`, resource scope/schedule
-  types, `ReadOnly` helpers;
+  types;
 - turn hooks: the public reaction input/output types needed to author
   `reactions`;
 - agents and model ids: `defineAgent`, `AgentName`, `ModelId`, run-spec

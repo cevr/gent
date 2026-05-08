@@ -1,6 +1,5 @@
 import type { PlatformError } from "effect"
 import { Context, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
-import { type ReadOnly, ReadOnlyBrand, withReadOnly } from "@gent/core/extensions/api"
 
 // Skill Schema
 
@@ -28,16 +27,9 @@ export interface SkillsService {
   readonly get: (name: string, level?: SkillLevel) => Effect.Effect<Skill | undefined>
 }
 
-// Skills Service Tag — branded `ReadOnly` so projection R-channels
-// and `request({ intent: "read" })` capabilities can yield it without
-// the type fence flagging a write capability.
-
-export class Skills extends Context.Service<Skills, ReadOnly<SkillsService>>()(
+export class Skills extends Context.Service<Skills, SkillsService>()(
   "@gent/extensions/src/skills/skills",
 ) {
-  // Brand on the Tag identifier so read-intent contexts can keep this service.
-  declare readonly [ReadOnlyBrand]: true
-
   static Live = (options: {
     cwd: string
     home: string
@@ -168,22 +160,19 @@ export class Skills extends Context.Service<Skills, ReadOnly<SkillsService>>()(
         // Initial load
         yield* Ref.set(skillsRef, yield* loadAllSkills)
 
-        return withReadOnly({
+        return {
           list: () => Ref.get(skillsRef),
           get: (name, level) =>
             Ref.get(skillsRef).pipe(Effect.map((skills) => resolveSkillName(skills, name, level))),
-        } satisfies SkillsService)
+        } satisfies SkillsService
       }),
     )
 
   static Test = (testSkills: ReadonlyArray<Skill> = []): Layer.Layer<Skills> =>
-    Layer.succeed(
-      Skills,
-      withReadOnly({
-        list: () => Effect.succeed(testSkills),
-        get: (name, level) => Effect.succeed(resolveSkillName([...testSkills], name, level)),
-      } satisfies SkillsService),
-    )
+    Layer.succeed(Skills, {
+      list: () => Effect.succeed(testSkills),
+      get: (name, level) => Effect.succeed(resolveSkillName([...testSkills], name, level)),
+    } satisfies SkillsService)
 }
 
 // Resolve a skill name with optional level qualifier

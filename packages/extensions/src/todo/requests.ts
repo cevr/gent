@@ -2,8 +2,8 @@
  * Todo requests — typed request Capabilities authored through the
  * unified `request({ intent, ... })` factory.
  *
- * Read-intent requests yield `TodoStorageReadOnly`; write-intent requests
- * yield `TodoService` and publish todo lifecycle events as needed.
+ * Requests yield the smallest extension-owned service they need. Host
+ * authority comes from `ExtensionContext`.
  *
  * @module
  */

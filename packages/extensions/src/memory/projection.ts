@@ -16,7 +16,6 @@ import {
   ProjectionError,
   type ProjectionTurnContext,
   type PromptSection,
-  type ReadOnly,
   type TurnProjection,
 } from "@gent/core/extensions/api"
 import {
@@ -85,7 +84,7 @@ interface VaultProjectionValue {
  */
 const readVaultProjectionValue = (
   ctx: ProjectionTurnContext,
-): Effect.Effect<VaultProjectionValue, ProjectionError, ReadOnly<MemoryVaultReadOnly>> =>
+): Effect.Effect<VaultProjectionValue, ProjectionError, MemoryVaultReadOnly> =>
   Effect.gen(function* () {
     const vault = yield* MemoryVaultReadOnly
     const key = projectKeyOf(ctx.cwd)
@@ -105,7 +104,7 @@ const readVaultProjectionValue = (
 
 export const projectMemoryVaultTurn = (
   ctx: ProjectionTurnContext,
-): Effect.Effect<TurnProjection, ProjectionError, ReadOnly<MemoryVaultReadOnly>> =>
+): Effect.Effect<TurnProjection, ProjectionError, MemoryVaultReadOnly> =>
   readVaultProjectionValue(ctx).pipe(
     Effect.map((value) => {
       const section = buildVaultPromptSection(value.entries, value.projectKey)

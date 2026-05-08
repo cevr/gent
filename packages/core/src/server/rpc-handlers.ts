@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Stream } from "effect"
+import { Clock, Effect, Layer, Stream, type Context } from "effect"
 import { GentRpcs } from "./rpcs"
 import type { DriverRef } from "../domain/agent.js"
 import {
@@ -14,7 +14,6 @@ import { ExtensionProtocolError } from "../domain/extension-protocol.js"
 import { RpcId, SessionId, type BranchId, type ExtensionId } from "../domain/ids.js"
 import type { Session } from "../domain/message.js"
 import { ProviderAuth, type ProviderAuthService } from "../providers/provider-auth.js"
-import { readOnlyCapabilityContext } from "../domain/read-only.js"
 import { ConfigService, type ConfigServiceService } from "../runtime/config-service.js"
 import {
   DriverRegistry,
@@ -548,8 +547,6 @@ const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         hostDeps,
       )
       const rpcRegistry = registry.getResolved().rpcRegistry
-      const requestCapabilityContext =
-        intent === "read" ? readOnlyCapabilityContext(capabilityContext) : capabilityContext
       const request = rpcRegistry
         .run(extensionId, RpcId.make(capabilityId), input, hostCtx, { intent })
         .pipe(
@@ -563,10 +560,7 @@ const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         )
       if (intent === "read") {
         return yield* request.pipe(
-          Effect.updateContext(
-            (current: Context.Context<never>) =>
-              requestCapabilityContext ?? readOnlyCapabilityContext(current) ?? Context.empty(),
-          ),
+          Effect.updateContext((current: Context.Context<never>) => capabilityContext ?? current),
         )
       }
       return yield* capabilityContext !== undefined

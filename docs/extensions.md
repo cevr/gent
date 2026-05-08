@@ -119,7 +119,7 @@ Both `~/.gent/disabled-extensions.json` (user-level) and
 ## Capabilities
 
 Three typed factories own dispatch routing. RPCs declare
-`intent: "read" | "write"` for read-only fencing and host dispatch.
+`intent: "read" | "write"` for host `ExtensionContext` facade selection.
 
 ### tool — LLM-callable
 
@@ -148,8 +148,9 @@ export default defineExtension({
 - `params` — `Schema.Schema` (must be context-free for sync JSON decode)
 - `output` — `Schema.Schema` validated by Effect AI before the tool result is
   returned to the model
-- `execute(params, ctx)` — returns `Effect`
-- Optional: `intent`, `needs`, `interactive`, `permissionRules`, `prompt`,
+- `execute(params)` — returns `Effect`; host access comes from
+  `yield* ExtensionContext`
+- Optional: `intent`, `interactive`, `permissionRules`, `prompt`,
   `promptSnippet`, `promptGuidelines`
 
 ### request — extension-to-extension RPC
@@ -184,9 +185,10 @@ export default defineExtension({
 })
 ```
 
-`intent: "read"` RPCs have a **ReadOnly-branded R channel** — the handler can
-only yield read-only services (`TodoStorageReadOnly`, `MemoryVaultReadOnly`,
-etc.). Write-tagged services fail to compile.
+`intent: "read"` RPCs receive the read facade through `yield* ExtensionContext`.
+Host writes such as `ctx.Session.queueFollowUp` fail through that facade.
+Extension-owned services are ordinary Effect services; authors import the
+smallest service Tag they need rather than declaring capability labels.
 
 ### action — human-triggered UI affordance
 
@@ -213,7 +215,8 @@ export default defineExtension({
 ## Reactions (turn-time derivation)
 
 Use `reactions.turnProjection` for prompt shaping and tool-policy derivation.
-Handlers should depend on read-only service Tags when they only inspect state.
+Handlers should depend on the smallest service Tag they need when they only
+inspect state.
 
 ```ts
 import { defineExtension } from "@gent/core/extensions/api"

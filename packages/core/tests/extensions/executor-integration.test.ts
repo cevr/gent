@@ -42,7 +42,6 @@ import { defineResource } from "@gent/core-internal/domain/contribution"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
-import { withReadOnly } from "@gent/core/extensions/api"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { getBuiltinAgent } from "../../../extensions/src/all-agents.js"
@@ -58,15 +57,12 @@ const notReadySnapshot: ExecutorSnapshotReply = {
   status: "idle",
 }
 const makeExecutorReadLayer = (snapshot: ExecutorSnapshotReply | undefined) =>
-  Layer.succeed(
-    ExecutorRead,
-    withReadOnly({
-      snapshot: () =>
-        snapshot === undefined
-          ? Effect.die("executor snapshot unavailable")
-          : Effect.succeed(snapshot),
-    }),
-  )
+  Layer.succeed(ExecutorRead, {
+    snapshot: () =>
+      snapshot === undefined
+        ? Effect.die("executor snapshot unavailable")
+        : Effect.succeed(snapshot),
+  })
 const makeToolLayer = (
   bridgeLayer: Layer.Layer<ExecutorMcpBridge>,
   snapshot: ExecutorSnapshotReply | undefined,

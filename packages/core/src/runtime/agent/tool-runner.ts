@@ -5,7 +5,7 @@ import {
   type ToolCoreContext,
   type ToolCapability,
 } from "../../domain/capability/tool.js"
-import { ExtensionContext, provideExtensionServices } from "../../domain/extension-services.js"
+import { provideExtensionServices } from "../../domain/extension-services.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
@@ -16,7 +16,6 @@ import { withWideEvent, WideEvent, toolBoundary, ToolError } from "../wide-event
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { extensionHostFacts } from "../make-extension-host-context.js"
 import { ToolCallId } from "../../domain/ids.js"
-import { readOnlyCapabilityContext } from "../../domain/read-only.js"
 import type { Option } from "effect"
 import type * as AiTool from "effect/unstable/ai/Tool"
 import * as Prompt from "effect/unstable/ai/Prompt"
@@ -53,30 +52,11 @@ type ToolRuntimeContext = ToolCoreContext
 
 const provideCapabilityContext = <A, E, R>(
   ctx: ToolCoreContext,
-  intent: "read" | "write",
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> => {
-  if (intent === "read") {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- read tool membrane supplies the erased R channel from the filtered read-only context
-    const closed = effect as Effect.Effect<A, E, never>
-    const masked = closed.pipe(
-      Effect.updateContext((current: Context.Context<never>) => {
-        const currentExtensionContext = Context.getOption(current, ExtensionContext)
-        const base =
-          currentExtensionContext._tag === "Some"
-            ? Context.empty().pipe(Context.add(ExtensionContext, currentExtensionContext.value))
-            : Context.empty()
-        const readContext = readOnlyCapabilityContext(ctx.capabilityContext ?? current)
-        return readContext === undefined ? base : Context.merge(base, readContext)
-      }),
-    )
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- read tool membrane replaces the erased runtime context with the filtered read-only context
-    return masked as Effect.Effect<A, E, R>
-  }
-  return ctx.capabilityContext === undefined
+): Effect.Effect<A, E, R> =>
+  ctx.capabilityContext === undefined
     ? effect
     : effect.pipe(Effect.provideContext(ctx.capabilityContext))
-}
 
 type ToolRunnerToolkit = AiToolkit.WithHandler<ToolCapabilityMap>
 
@@ -119,10 +99,7 @@ const runPermissionCheck = (params: {
     params.ctx,
   )
 
-const deriveToolContext = (
-  ctx: ToolCapabilityContext,
-  intent: "read" | "write",
-): ToolRuntimeContext => ({
+const deriveToolContext = (ctx: ToolCapabilityContext): ToolRuntimeContext => ({
   sessionId: ctx.sessionId,
   branchId: ctx.branchId,
   ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
@@ -130,14 +107,7 @@ const deriveToolContext = (
   cwd: ctx.cwd,
   home: ctx.home,
   host: extensionHostFacts(ctx.host),
-  ...(ctx.capabilityContext !== undefined
-    ? {
-        capabilityContext:
-          intent === "read"
-            ? readOnlyCapabilityContext(ctx.capabilityContext)
-            : ctx.capabilityContext,
-      }
-    : {}),
+  ...(ctx.capabilityContext !== undefined ? { capabilityContext: ctx.capabilityContext } : {}),
 })
 
 const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, message: string) =>
@@ -193,7 +163,7 @@ const makeExecutionToolkit = (params: {
   const metadata = getToolMetadata(params.tool)
   const toolkit = convertTools([params.tool])
   const toolName = String(getToolId(params.tool))
-  const toolCtx = deriveToolContext(params.ctx, metadata.intent)
+  const toolCtx = deriveToolContext(params.ctx)
 
   const handlerMap: AiToolkit.HandlersFrom<ToolCapabilityMap> = {
     [toolName]: (decodedInput: unknown) =>
@@ -211,7 +181,6 @@ const makeExecutionToolkit = (params: {
               params.ctx,
               provideCapabilityContext(
                 toolCtx,
-                metadata.intent,
                 // @effect-diagnostics-next-line anyUnknownInErrorContext:off
                 metadata
                   .effect(decodedInput, toolCtx)

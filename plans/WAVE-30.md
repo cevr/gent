@@ -335,6 +335,11 @@ service. `@gent/core-internal` in shipped extensions is a privileged lane.
 
 ## Commit 4: refactor(extensions): collapse authority vocabulary into ExtensionContext
 
+**Status**: Completed in current batch. Public `ReadOnly` branding and
+`withReadOnly` helpers are deleted; read-intent authority now comes from the
+host-provided `ExtensionContext` facade. Extension-owned read services remain
+ordinary small Effect services instead of branded capability services.
+
 **Justification**: The user-facing API should not ask authors to model access
 control with `capability`, `needs`, `read`, or `write` ceremony. The host owns
 which facade implementation is provided at each runtime boundary.

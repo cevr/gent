@@ -5,7 +5,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { textStep } from "@gent/core-internal/debug/provider"
-import { ref, withReadOnly, type TurnProjection } from "@gent/core/extensions/api"
+import { ref, type TurnProjection } from "@gent/core/extensions/api"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { ExecutorExtension, EXECUTOR_EXTENSION_ID } from "../../src/executor/index.js"
@@ -39,7 +39,7 @@ describe("ExecutorExtension via RPC", () => {
         const executorLayer = Layer.mergeAll(
           Layer.succeed(ExecutorRuntime, fakeRuntime),
           Layer.succeed(ExecutorWrite, fakeRuntime),
-          Layer.succeed(ExecutorRead, withReadOnly({ snapshot: fakeRuntime.snapshot })),
+          Layer.succeed(ExecutorRead, { snapshot: fakeRuntime.snapshot }),
         )
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client, sessionId, branchId } = yield* createRpcHarness({
