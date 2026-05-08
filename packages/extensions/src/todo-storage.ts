@@ -14,11 +14,11 @@ import {
   ReadOnlyBrand,
   SessionId,
   dateFromMillis,
-  requireCapabilityWrite,
   withReadOnly,
   type BranchId,
   type ReadOnly,
 } from "@gent/core/extensions/api"
+import { requireCapabilityWrite } from "@gent/core-internal/domain/capability-access"
 import { SqlClient } from "effect/unstable/sql"
 import {
   Todo,

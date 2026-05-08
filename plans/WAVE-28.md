@@ -260,6 +260,8 @@ mutation owner, not beside it.
 
 ## Commit 7: refactor(extensions): split public authoring api from internal authority
 
+**Status**: Completed in this wave.
+
 **Justification**: `@gent/core/extensions/api` is the only public core export
 and currently re-exports internal/builtin authority. Public extension authors
 should not get private or privileged APIs.
@@ -271,18 +273,21 @@ should not get private or privileged APIs.
 
 **Changes**
 
-| File                                                                                                | Change                                                                                        |
-| --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`                            | Keep minimal authoring symbols; remove builtin/internal exports.                              |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts` | Lock the smaller public API.                                                                  |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/*`                                      | Move builtins to internal imports or extension-owned services without exposing them publicly. |
-| `/Users/cvr/Developer/personal/gent/packages/tooling/tests/core-public-exports.test.ts`             | Add a symbol-level public API inventory if useful.                                            |
+| File                                                                                                | Change                                                                                                                                                                                             |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`                            | Removed raw events, host process platform, internal schema helpers, file index/lock services, output buffers, state publisher, and capability-access enforcement from the public authoring barrel. |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts` | Locked the smaller public API with compile-time negative assertions for the removed internal authority.                                                                                            |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/*`                                      | Moved Gent-owned composition code to explicit `@gent/core-internal/*` imports where it still consumes internal authority.                                                                          |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/*`                                      | Moved TUI-owned client extension plumbing to explicit internal imports for transport/client runtime types.                                                                                         |
+| `/Users/cvr/Developer/personal/gent/lint/no-direct-env.ts`                                          | Kept public-looking `@gent/core/*` internals forbidden while allowing workspace-owned composition code to use the private `@gent/core-internal/*` lane.                                            |
+| `/Users/cvr/Developer/personal/gent/packages/core/package.json`                                     | Reduced the default core shard size from 8 to 4 and raised parallelism from 3 to 4 after Bun repeatedly segfaulted on one 8-file runtime shard.                                                    |
 
 **Verification**
 
-- Extension surface locks.
-- Extension package tests.
+- `bun run --cwd packages/core typecheck`
 - `bun run typecheck`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/extension-surface-locks.test.ts ../tooling/tests/fixtures.test.ts ../tooling/tests/core-public-exports.test.ts`
+- Core test runner shard-size repro with `xargs -n 4 -P 4`
 - `bun run lint`
 - `bun run gate`
 

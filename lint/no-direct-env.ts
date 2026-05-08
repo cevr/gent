@@ -3,8 +3,9 @@
  *
  * Rules:
  * - no-positional-log-error: flags Effect.logWarning("msg", error) (use annotateLogs)
- * - no-extension-internal-imports: enforces extension boundary — extensions must import
- *   from @gent/core/extensions/api, not core internals (domain/, runtime/, etc.)
+ * - no-extension-internal-imports: keeps external-looking extension code off
+ *   public-looking @gent/core/* internals. Workspace-owned implementation can
+ *   use the explicit private @gent/core-internal lane.
  * - no-projection-writes: heuristic AST-string-match fence on
  *   `QueryContribution.handler` AND read-intent `CapabilityContribution.effect`
  *   for write-shaped method names. Projection coverage is enforced
@@ -382,16 +383,20 @@ const plugin: Plugin = {
     /**
      * Enforces the extension boundary contract.
      *
-     * Extensions may import from:
+     * Public extension-facing code may import from:
      *   - `./api.js` or `../api.js` (relative to extension file in core)
      *   - `@gent/core/extensions/api` (package path, for extracted extensions)
      *   - `effect-machine`, `effect`, `@effect/*` (peer deps)
      *   - Sibling extension files (relative `./` or `../` within extensions/src/)
      *
-     * Extensions may NOT import from:
+     * Public-looking @gent/core internals are always forbidden:
      *   - `@gent/core/domain/*`, `@gent/core/runtime/*`, `@gent/core/storage/*`,
      *     `@gent/core/server/*`, `@gent/core/providers/*`
      *   - Relative paths that escape into domain/, runtime/, storage/, etc.
+     *
+     * `@gent/core-internal/*` is allowed for workspace-owned composition code
+     * (`@gent/extensions`, TUI builtins). It is private package surface, not
+     * extension author API.
      *
      * Applies to: packages/core/src/extensions/**, packages/extensions/src/**,
      * and apps/tui/src/extensions/**
@@ -428,7 +433,7 @@ const plugin: Plugin = {
             return
           }
 
-          if (source.startsWith("@gent/core-internal")) {
+          if (source.startsWith("@gent/core-internal") && inCoreExtensions) {
             context.report({
               message: `Extensions must import from "@gent/core/extensions/api", not @gent/core-internal. Forbidden: "${source}"`,
               node,

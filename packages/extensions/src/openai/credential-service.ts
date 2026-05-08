@@ -14,11 +14,8 @@
  */
 
 import { Cause, Clock, Context, Effect, Layer, Option, Schema, SynchronizedRef } from "effect"
-import {
-  ProviderAuthError,
-  TaggedEnumClass,
-  type ProviderAuthInfo,
-} from "@gent/core/extensions/api"
+import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import { refreshOpenAIOauth } from "./oauth.js"
 
 // ── Cache constants ──

@@ -1,12 +1,12 @@
 import { Context, DateTime, Effect, Layer, Option, Random, Schema } from "effect"
 import {
-  ExtensionStatePublisher,
   type CapabilityError,
   type AgentName,
   type SessionId,
   type BranchId,
-  requireCapabilityWrite,
 } from "@gent/core/extensions/api"
+import { requireCapabilityWrite } from "@gent/core-internal/domain/capability-access"
+import { ExtensionStatePublisher } from "@gent/core-internal/domain/event-publisher"
 import { Todo, TodoId, type TodoStatus, type TodoTransitionError } from "./todo/domain.js"
 import { TodoStorage, type TodoStorageError } from "./todo-storage.js"
 import { TODO_EXTENSION_ID } from "./todo/identity.js"

@@ -1,11 +1,11 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
 import {
   ReadOnlyBrand,
-  TaggedEnumClass,
   type ReadOnly,
   type TurnProjection,
   withReadOnly,
 } from "@gent/core/extensions/api"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import type { AutoSnapshotReply } from "./protocol.js"
 
 const AUTO_CHECKPOINT_TOOL = "auto_checkpoint"

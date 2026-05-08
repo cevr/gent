@@ -35,7 +35,8 @@ import {
 } from "../../src/anthropic/credential-service.js"
 import { EMPTY_BETA_CELL, type BetaCacheCell } from "../../src/anthropic/beta-cache.js"
 import { initAnthropicKeychainEnv, SYSTEM_IDENTITY_PREFIX } from "../../src/anthropic/oauth.js"
-import { ExtensionHostProcessError, type ProviderAuthInfo } from "@gent/core/extensions/api"
+import { type ProviderAuthInfo } from "@gent/core/extensions/api"
+import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
 import {
   makeFakeFetchState,

@@ -21,7 +21,7 @@ import {
   Stream,
 } from "effect"
 import type { PlatformError } from "effect/PlatformError"
-import { TaggedEnumClass } from "@gent/core/extensions/api"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import type {
   InitializeRequest,
   InitializeResponse,

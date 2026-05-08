@@ -379,6 +379,30 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadExtensionHostError = typeof PublicExtensionApi.ExtensionHostError
     // @ts-expect-error — raw host search result shape is runtime internals, not authoring API
     type _BadExtensionHostSearchResult = typeof PublicExtensionApi.ExtensionHostSearchResult
+    // @ts-expect-error — raw runtime events can forge product state
+    type _BadAgentEvent = typeof PublicExtensionApi.AgentEvent
+    // @ts-expect-error — transport event envelopes are SDK/TUI plumbing, not authoring API
+    type _BadEventEnvelope = PublicExtensionApi.EventEnvelope
+    // @ts-expect-error — interaction wire state is client/runtime plumbing
+    type _BadActiveInteraction = PublicExtensionApi.ActiveInteraction
+    // @ts-expect-error — provider process host authority is internal runtime plumbing
+    type _BadExtensionHostPlatform = PublicExtensionApi.ExtensionHostPlatform
+    // @ts-expect-error — process runner errors are paired with non-public host authority
+    type _BadExtensionHostProcessError = typeof PublicExtensionApi.ExtensionHostProcessError
+    // @ts-expect-error — schema helper is an internal core migration primitive
+    type _BadTaggedEnumClass = typeof PublicExtensionApi.TaggedEnumClass
+    // @ts-expect-error — file indexing is a runtime service, not an authoring primitive
+    type _BadFileIndex = typeof PublicExtensionApi.FileIndex
+    // @ts-expect-error — file locking is a runtime service, not an authoring primitive
+    type _BadFileLockService = typeof PublicExtensionApi.FileLockService
+    // @ts-expect-error — raw state pulse publisher can bypass extension contracts
+    type _BadExtensionStatePublisher = typeof PublicExtensionApi.ExtensionStatePublisher
+    // @ts-expect-error — capability access enforcement is runtime lowering, not author API
+    type _BadRequireCapabilityWrite = typeof PublicExtensionApi.requireCapabilityWrite
+    // @ts-expect-error — shell output buffering is an extension implementation detail
+    type _BadOutputBuffer = typeof PublicExtensionApi.OutputBuffer
+    // @ts-expect-error — artifact ids belong to @gent/artifacts, not core author API
+    type _BadArtifactId = typeof PublicExtensionApi.ArtifactId
 
     expect(true).toBe(true)
   })

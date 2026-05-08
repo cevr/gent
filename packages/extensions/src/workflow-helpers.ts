@@ -3,11 +3,8 @@
  */
 
 import { Effect } from "effect"
-import {
-  AgentRunError,
-  type AgentRunResult,
-  type ExtensionHostPlatform,
-} from "@gent/core/extensions/api"
+import { AgentRunError, type AgentRunResult } from "@gent/core/extensions/api"
+import type { ExtensionHostPlatform } from "@gent/core-internal/domain/extension"
 
 // ── Shell Command Runner ──
 

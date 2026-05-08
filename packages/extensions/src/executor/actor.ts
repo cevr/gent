@@ -7,7 +7,8 @@
  */
 
 import { Schema } from "effect"
-import { TaggedEnumClass, type PromptSection, type TurnProjection } from "@gent/core/extensions/api"
+import { type PromptSection, type TurnProjection } from "@gent/core/extensions/api"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import { ExecutorMode } from "./domain.js"
 import type { ExecutorSnapshotReply } from "./protocol.js"
 

@@ -1,11 +1,7 @@
 import { Effect, Schema } from "effect"
-import {
-  ExtensionId,
-  ArtifactId,
-  BranchId,
-  TaggedEnumClass,
-  request,
-} from "@gent/core/extensions/api"
+import { ExtensionId, BranchId, request } from "@gent/core/extensions/api"
+import { ArtifactId } from "@gent/core-internal/domain/ids"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import { ArtifactsRead, ArtifactsWrite } from "./artifacts/store.js"
 
 export const ARTIFACTS_EXTENSION_ID = ExtensionId.make("@gent/artifacts")

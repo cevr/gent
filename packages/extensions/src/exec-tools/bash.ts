@@ -19,12 +19,11 @@ import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import {
   tool,
   ToolNeeds,
-  OutputBuffer,
   PermissionRule,
-  saveFullOutput,
   type SessionId,
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
+import { OutputBuffer, saveFullOutput } from "@gent/core-internal/domain/output-buffer"
 import { classify } from "./bash-guardrails.js"
 import {
   BackgroundBashStorage,

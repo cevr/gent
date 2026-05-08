@@ -24,7 +24,7 @@
 //   - autocomplete: collected (no winner), scope-ordered
 
 import { type Effect, type ManagedRuntime } from "effect"
-import type { ActiveInteraction, ApprovalResult } from "@gent/core/extensions/api"
+import type { ActiveInteraction, ApprovalResult } from "@gent/core-internal/domain/event.js"
 import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { HeadlessToolRenderer } from "../headless-tool-renderers"

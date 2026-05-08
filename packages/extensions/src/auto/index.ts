@@ -10,11 +10,11 @@ import { Effect, Schema } from "effect"
 import {
   defineExtension,
   defineResource,
-  isRecord,
   type ExtensionReactions,
   type ToolResultInput,
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
+import { isRecord } from "@gent/core-internal/domain/guards"
 import { AutoCheckpointTool } from "./checkpoint.js"
 import { AutoControllerLive, AutoRead, AutoState, AutoWrite, viewForState } from "./controller.js"
 import { AutoJournal } from "./journal.js"

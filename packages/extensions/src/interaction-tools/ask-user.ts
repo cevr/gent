@@ -1,10 +1,6 @@
 import { Effect, Schema } from "effect"
-import {
-  tool,
-  ToolNeeds,
-  type Question,
-  type ToolCapabilityContext,
-} from "@gent/core/extensions/api"
+import { tool, ToolNeeds, type ToolCapabilityContext } from "@gent/core/extensions/api"
+import type { Question } from "@gent/core-internal/domain/event"
 
 const parseAnswers = (notes: string): string[][] => {
   try {

@@ -365,7 +365,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   },
   {
     file: "packages/extensions/src/executor/sidecar.ts",
-    line: 256,
+    line: 258,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics preferSchemaOverJson:off — parsing sidecar registry file",
   },

@@ -25,7 +25,9 @@ import {
 } from "effect"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
-import { isRecord, TaggedEnumClass, type ExtensionHostPlatform } from "@gent/core/extensions/api"
+import { isRecord } from "@gent/core-internal/domain/guards"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
+import type { ExtensionHostPlatform } from "@gent/core-internal/domain/extension"
 import { fileURLToPath } from "node:url"
 import { ExecutorPlatform } from "./platform-adapter.js"
 import {

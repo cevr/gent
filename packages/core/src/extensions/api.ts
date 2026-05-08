@@ -61,7 +61,7 @@ import type { ExternalDriverContribution, ModelDriverContribution } from "../dom
 import type { AnyResourceContribution } from "../domain/resource.js"
 import type { ScheduledJobContribution } from "../domain/scheduled-job.js"
 
-// ── Re-exports for full-power extension authors ──
+// ── Re-exports for extension authors ──
 
 // `ToolCapabilityContext` (re-exported via the second `domain/capability/tool`
 // block below) is the execution context passed to a tool's `execute(...)` body
@@ -130,24 +130,7 @@ export type {
   PersistAuth,
 } from "../domain/driver.js"
 export { DriverError } from "../domain/driver.js"
-export {
-  AgentEvent,
-  EventEnvelope,
-  type ActiveInteraction,
-  type AgentEventTag,
-  type ApprovalResult,
-  type Question,
-  QuestionSchema,
-  QuestionOptionSchema,
-} from "../domain/event.js"
-export {
-  SessionId,
-  BranchId,
-  ArtifactId,
-  MessageId,
-  ToolCallId,
-  ExtensionId,
-} from "../domain/ids.js"
+export { SessionId, BranchId, MessageId, ToolCallId, ExtensionId } from "../domain/ids.js"
 export { Model, ModelId } from "../domain/model.js"
 export { AuthMethod, AuthOauth } from "../domain/auth.js"
 export {
@@ -181,13 +164,6 @@ export {
   type ToolResultPartProjection,
 } from "../domain/message-part-projection.js"
 export { PermissionRule, type PermissionResult } from "../domain/permission.js"
-export { OutputBuffer, saveFullOutput, headTailChars } from "../domain/output-buffer.js"
-export { isRecord, isRecordArray } from "../domain/guards.js"
-export { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
-export { FileIndex, FileIndexError, type FileIndexService } from "../domain/file-index.js"
-export { FileLockService } from "../domain/file-lock.js"
-export { ExtensionStatePublisher } from "../domain/event-publisher.js"
-export type { ExtensionStatePublisherService } from "../domain/event-publisher.js"
 export {
   type ExtensionContributions,
   type ExtensionReactions,
@@ -231,7 +207,6 @@ export type {
   CapabilityRef,
 } from "../domain/capability.js"
 export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
-export { requireCapabilityWrite } from "../domain/capability-access.js"
 export type {
   ResourceContribution,
   AnyResourceContribution,
@@ -257,14 +232,7 @@ export {
 // ── Public API ──
 
 // ExtensionSetupContext re-exported from domain — single source of truth
-export {
-  ExtensionHostProcessError,
-  type ExtensionHostFacts,
-  type ExtensionHostPlatform,
-  type ExtensionHostProcessResult,
-  type ExtensionHostRunProcessOptions,
-  type ExtensionSetupContext,
-} from "../domain/extension.js"
+export { type ExtensionSetupContext } from "../domain/extension.js"
 
 /**
  * Per-bucket spec accepted by `defineExtension`. Each bucket field can be:

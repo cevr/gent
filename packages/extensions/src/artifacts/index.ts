@@ -7,13 +7,13 @@
 
 import { Effect, Schema } from "effect"
 import {
-  ArtifactId,
   defineExtension,
   defineResource,
   tool,
   ToolNeeds,
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
+import { ArtifactId } from "@gent/core-internal/domain/ids"
 import { ARTIFACTS_EXTENSION_ID, ArtifactRpc, ReadQuery } from "../artifacts-protocol.js"
 import { ArtifactsRead, ArtifactsStoreLive, ArtifactsWrite } from "./store.js"
 

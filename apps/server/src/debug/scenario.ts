@@ -33,7 +33,8 @@ import type {
   CapabilityError,
   CapabilityNotFoundError,
 } from "@gent/core-internal/domain/capability.js"
-import { ExtensionHostProcessError, ref } from "@gent/core/extensions/api"
+import { ref } from "@gent/core/extensions/api"
+import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension.js"
 import {
   TodoCreateRequest,
   TodoDeleteRequest,

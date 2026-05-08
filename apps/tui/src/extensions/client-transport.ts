@@ -28,7 +28,9 @@
 
 import { Context, Effect, Layer, Schema } from "effect"
 import type { GentNamespacedClient, GentRuntime } from "@gent/sdk"
-import type { BranchId, CapabilityRef, EventEnvelope, SessionId } from "@gent/core/extensions/api"
+import type { CapabilityRef } from "@gent/core/extensions/api"
+import type { EventEnvelope } from "@gent/core-internal/domain/event.js"
+import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
 
 type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
 

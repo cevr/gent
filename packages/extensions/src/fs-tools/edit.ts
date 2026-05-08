@@ -1,5 +1,6 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
-import { tool, FileLockService, ToolNeeds } from "@gent/core/extensions/api"
+import { tool, ToolNeeds } from "@gent/core/extensions/api"
+import { FileLockService } from "@gent/core-internal/domain/file-lock"
 
 // Edit Tool Error
 

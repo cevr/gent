@@ -1,5 +1,5 @@
 import { Effect, FileSystem, Layer, Path } from "effect"
-import { FileIndex } from "@gent/core/extensions/api"
+import { FileIndex } from "@gent/core-internal/domain/file-index"
 
 export const TestFileIndexLive: Layer.Layer<FileIndex, never, FileSystem.FileSystem | Path.Path> =
   Layer.effect(

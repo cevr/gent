@@ -1,5 +1,5 @@
 import { Context, Effect, Layer } from "effect"
-import type { ExtensionHostPlatform } from "@gent/core/extensions/api"
+import type { ExtensionHostPlatform } from "@gent/core-internal/domain/extension"
 
 export interface AnthropicPlatformShape {
   readonly platform: string

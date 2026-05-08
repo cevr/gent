@@ -1,7 +1,6 @@
 import { Effect, Schema } from "effect"
 import {
   AgentName,
-  headTailChars,
   makeRunSpec,
   messagePartsDisplayText,
   SessionId,
@@ -11,6 +10,7 @@ import {
   type Message,
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
+import { headTailChars } from "@gent/core-internal/domain/output-buffer"
 
 // Read Session Error
 

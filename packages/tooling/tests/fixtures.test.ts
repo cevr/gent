@@ -109,7 +109,7 @@ const CASES: ReadonlyArray<RuleCase> = [
     rule: "gent/no-extension-internal-imports",
     invalid: "packages/extensions/src/no-extension-internal-imports.invalid.ts",
     valid: "packages/extensions/src/no-extension-internal-imports.valid.ts",
-    expectedCount: 7,
+    expectedCount: 5,
   },
   {
     rule: "gent/no-define-extension-throw",

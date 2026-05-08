@@ -1,12 +1,12 @@
 import { Clock, Context, Effect, Layer, Option, Random, Ref } from "effect"
 import {
-  ArtifactId,
   type BranchId,
   type ReadOnly,
   ReadOnlyBrand,
   type SessionId,
   withReadOnly,
 } from "@gent/core/extensions/api"
+import { ArtifactId } from "@gent/core-internal/domain/ids"
 import type { Artifact, ContentPatch, ReadQuery } from "../artifacts-protocol.js"
 
 interface ArtifactsState {

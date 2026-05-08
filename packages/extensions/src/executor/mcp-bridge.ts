@@ -8,7 +8,7 @@
  */
 
 import { Context, Effect, Layer } from "effect"
-import { isRecord, isRecordArray } from "@gent/core/extensions/api"
+import { isRecord, isRecordArray } from "@gent/core-internal/domain/guards"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import {

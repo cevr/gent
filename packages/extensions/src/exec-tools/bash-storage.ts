@@ -1,11 +1,7 @@
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import {
-  TaggedEnumClass,
-  type BranchId,
-  type SessionId,
-  type ToolCallId,
-} from "@gent/core/extensions/api"
+import { type BranchId, type SessionId, type ToolCallId } from "@gent/core/extensions/api"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 
 export class BackgroundBashStorageError extends Schema.TaggedErrorClass<BackgroundBashStorageError>()(
   "BackgroundBashStorageError",
