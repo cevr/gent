@@ -524,6 +524,8 @@ behavior.
 
 ## Commit 13: refactor(tooling): collapse suppression and regex guardrails
 
+**Status**: Completed in this wave.
+
 **Justification**: Guardrails should be strict, but line-number allowlists and
 parallel regex scanners create maintenance surface. Prefer structural lint
 rules and local reasoned exceptions.
@@ -537,16 +539,22 @@ rules and local reasoned exceptions.
 
 **Changes**
 
-| File                                                                                     | Change                                                                           |
-| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/tooling/src/suppression-inventory.ts`       | Replace line-number inventory with structural policy if it preserves strictness. |
-| `/Users/cvr/Developer/personal/gent/packages/tooling/src/platform-duplication-guards.ts` | Move still-needed bans into custom lint or delete bans covered by exports/types. |
-| `/Users/cvr/Developer/personal/gent/lint/no-direct-env.ts`                               | Extend custom rule substrate where appropriate.                                  |
-| Tooling tests                                                                            | Preserve zero-carveout behavior with less exact-line churn.                      |
+| File                                                                                           | Change                                                                                                            |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/tooling/src/check-guardrails.ts`                  | Added one guardrail runner for blanket disables, suppression inventory, platform duplication, and public exports. |
+| `/Users/cvr/Developer/personal/gent/packages/tooling/src/check-blanket-eslint-disable.ts`      | Deleted the separate entrypoint.                                                                                  |
+| `/Users/cvr/Developer/personal/gent/packages/tooling/src/check-suppression-inventory.ts`       | Deleted the separate entrypoint.                                                                                  |
+| `/Users/cvr/Developer/personal/gent/packages/tooling/src/check-platform-duplication-guards.ts` | Deleted the separate entrypoint.                                                                                  |
+| `/Users/cvr/Developer/personal/gent/packages/tooling/src/check-core-public-exports.ts`         | Deleted the separate entrypoint.                                                                                  |
+| `/Users/cvr/Developer/personal/gent/packages/tooling/src/suppression-inventory.ts`             | Suppression approvals now match exact file/comment/kind, not brittle line numbers.                                |
+| `/Users/cvr/Developer/personal/gent/package.json`                                              | Reduced lint guard execution from four bespoke parallel scripts to one guardrail runner alongside oxlint.         |
+| `/Users/cvr/Developer/personal/gent/packages/tooling/tests/suppression-inventory.test.ts`      | Locked line-churn tolerance while preserving exact reviewed diagnostic text.                                      |
 
 **Verification**
 
-- Tooling tests.
+- `bun run --cwd packages/tooling test`
+- `bun packages/tooling/src/check-guardrails.ts`
+- `bun run typecheck`
 - `bun run lint`
 - `bun run gate`
 

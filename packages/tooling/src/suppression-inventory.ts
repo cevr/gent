@@ -15,6 +15,7 @@ export interface SuppressionInventoryFinding {
 
 interface ApprovedSuppressionEntry {
   readonly file: string
+  /** Historical receipt only; matching intentionally ignores line churn. */
   readonly line: number
   readonly kind: SuppressionFindingKind
   readonly text: string
@@ -379,16 +380,12 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
 
 const approvedSuppression = (
   file: string,
-  line: number,
+  _line: number,
   kind: SuppressionFindingKind,
   text: string,
 ): boolean =>
   approvedSuppressionEntries.some(
-    (entry) =>
-      entry.file === file &&
-      entry.line === line &&
-      entry.kind === kind &&
-      entry.text === text.trim(),
+    (entry) => entry.file === file && entry.kind === kind && entry.text === text.trim(),
   )
 
 const linePatterns: ReadonlyArray<{
