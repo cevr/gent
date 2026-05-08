@@ -111,6 +111,7 @@ Commits landed in this wave so far:
 - `53847ae1 test(extensions): lock resource-owned state`
 - `d7b9f61f refactor(extensions): remove ambient host reads`
 - `1891457c refactor(executor): isolate sidecar platform reads`
+- `6ce15e48 refactor(extensions): isolate provider platform reads`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -161,6 +162,12 @@ classes of privilege and races, but the deeper P1s remain:
 - Executor sidecar orchestration no longer mixes host reads into the sidecar
   service. Commit `1891457c` isolates `node:net`, `node:os`, `process.execPath`,
   and `process.kill` behind `ExecutorPlatform`, an extension-local adapter.
+- Anthropic OAuth and ACP Claude SDK provider paths no longer perform ambient
+  host reads in provider code. Commit `6ce15e48` moves Anthropic `home`,
+  platform, and parent-env ownership behind `AnthropicPlatform`, moves ACP SDK
+  parent-env ownership behind `AcpAgentsPlatform`, feeds
+  `CLAUDE_CODE_ENTRYPOINT` through Config, and removes the stale
+  `oauth.ts` process-env lint carveout.
 
 Fresh re-audit receipts to carry into the remaining batches:
 
@@ -731,9 +738,9 @@ Status: in progress. Commit `f56553eb` closes the scheduler cron failure-open by
 moving cron install/remove behind `CronRuntime` and wiring `BunCronRuntimeLive`
 at the platform boundary. Commit `6338d9b7` moves SDK server-lock hostname,
 PID-liveness, and SIGTERM ownership through `GentPlatform`. Shipped-extension
-ambient process reads remain open in this lane, but incidental Memory/OpenAI
-reads are closed by `d7b9f61f` and Executor sidecar host control is isolated by
-`1891457c`.
+ambient process reads are now closed: incidental Memory/OpenAI reads are closed
+by `d7b9f61f`, Executor sidecar host control is isolated by `1891457c`, and
+Anthropic/ACP provider host reads are isolated by `6ce15e48`.
 
 Work:
 
@@ -745,6 +752,10 @@ Work:
       Done in `d7b9f61f`.
 - [x] Isolate Executor sidecar host process/port/OS reads behind an
       extension-local adapter. Done in `1891457c`.
+- [x] Isolate Anthropic OAuth and ACP Claude SDK host reads behind
+      extension-local adapters. Done in `6ce15e48`.
+- [x] Remove the stale `oauth.ts` `node/no-process-env` carveout after moving
+      billing-header entrypoint reads through Config. Done in `6ce15e48`.
 - Reconcile `GentPlatform` and `RuntimePlatform` naming/ownership.
 - Add static guards for Bun/Node/process imports outside app-shell, adapter,
   test, tooling, and generated-script boundaries.
@@ -776,6 +787,13 @@ Validation:
 - `bun run lint`
 - `bun run gate`
 - `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/memory/vault.test.ts tests/memory/dreaming.test.ts tests/openai/openai-codex-transform.test.ts`
+- `bun run typecheck`
+- `bun run lint`
+- `bun run fmt`
+- `bun run gate`
+- `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/anthropic/anthropic-oauth-refresh.test.ts tests/anthropic/anthropic-credential-service.test.ts tests/anthropic/anthropic-keychain-transform.test.ts tests/anthropic/anthropic-extension-driver.test.ts`
+- `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/acp-agents/acp-system-prompt-slot.test.ts tests/acp-agents/claude-sdk-lifecycle.test.ts tests/acp-agents/acp-agents.test.ts`
+- `rg -n "process\\.platform|process\\.env|node:os|process\\.kill|process\\.execPath|node:net" packages/extensions/src --glob '!**/platform-adapter.ts' --glob '!**/*.test.ts'` (no matches)
 - `bun run typecheck`
 - `bun run lint`
 - `bun run fmt`
