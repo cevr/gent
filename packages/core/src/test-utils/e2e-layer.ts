@@ -9,11 +9,9 @@
  */
 
 import { Effect, Layer, Ref } from "effect"
-import { SingleRunner } from "effect/unstable/cluster"
 import type { LanguageModel } from "effect/unstable/ai"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { BunServices } from "@effect/platform-bun"
-import { BunGentPlatformLive, BunPlatformLive } from "../runtime/gent-platform-bun.js"
 import {
   AgentName,
   AgentRunnerService,
@@ -22,43 +20,21 @@ import {
   type AgentDefinition,
   type AgentRunner,
 } from "../domain/agent.js"
-import { Auth, AuthGuard } from "../domain/auth.js"
+import { Auth } from "../domain/auth.js"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
-import { EventPublisherLive, type EventPublisher } from "../domain/event-publisher.js"
-import { EventStoreError } from "../domain/event.js"
-import { ExtensionId, type InteractionRequestId, SessionId } from "../domain/ids.js"
+import type { EventPublisher } from "../domain/event-publisher.js"
+import { SessionId, type ExtensionId, type InteractionRequestId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
-import {
-  decodeInteractionDecision,
-  decodeInteractionParams,
-} from "../domain/interaction-request.js"
 import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
-import { ModelResolver } from "../providers/model-resolver.js"
-import { ProviderAuth } from "../providers/provider-auth.js"
-import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
-import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
-import { buildResourceLayer } from "../runtime/extensions/resource-host/resource-layer.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
-import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import type { SessionProfileCache } from "../runtime/session-profile.js"
-import { ResourceManagerLive } from "../runtime/resource-manager.js"
-import { SessionRuntime } from "../runtime/session-runtime.js"
-import { EventStoreLive } from "../runtime/event-store-live.js"
-import { SessionCommands } from "../server/session-commands.js"
-import { AppServicesLive } from "../server/index.js"
-import { SqliteStorage } from "../storage/sqlite-storage.js"
-import { InteractionStorage } from "../storage/interaction-storage.js"
-import { ServerIdentity } from "../server/server-identity.js"
-import {
-  reconcileLoadedExtensions,
-  setupBuiltinExtensions,
-} from "../runtime/extensions/activation.js"
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
+import { defineExtension } from "../extensions/api.js"
+import { makeServerRootLayer } from "../server/server-root.js"
 
 export interface E2ELayerConfig {
   /** Language model layer — typically from `LanguageModelLayers.sequence` */
@@ -93,295 +69,133 @@ export interface E2ELayerConfig {
   readonly layerOverrides?: Record<string, () => Layer.Layer<never>>
 }
 
+const defaultSubagentRunner: AgentRunner = {
+  run: () =>
+    Effect.succeed(
+      AgentRunResult.Success.make({
+        text: "",
+        sessionId: SessionId.make("test-subagent-session"),
+        agentName: AgentName.make("cowork"),
+      }),
+    ),
+}
+
+const applyLayerOverride = (
+  contributions: ExtensionContributions,
+  extensionId: ExtensionId,
+  override: (() => Layer.Layer<never>) | undefined,
+): ExtensionContributions => {
+  if (override === undefined) return contributions
+  const processResources = (contributions.resources ?? []).filter((r) => r.scope === "process")
+  if (processResources.length > 1) {
+    throw new Error(
+      `e2e-layer.layerOverrides: extension "${extensionId}" has ${processResources.length} process-scope Resources; the override path replaces all of them with one merged layer. Provide a complete merged layer in the override factory, or extend layerOverrides to address Resources individually.`,
+    )
+  }
+  const rawOverrideLayer = override()
+  type TestOverrideLayer = Layer.Layer<unknown, unknown, never>
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+  const overrideLayer = rawOverrideLayer as unknown as TestOverrideLayer // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
+  const layerOverride = defineResource({
+    scope: "process",
+    // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+    layer: overrideLayer,
+  })
+  const otherResources = (contributions.resources ?? []).filter((r) => r.scope !== "process")
+  return {
+    ...contributions,
+    resources: [...otherResources, layerOverride],
+  }
+}
+
+const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
+  defineExtension({
+    id: "test-agents",
+    agents,
+  })
+
+const fromLoadedExtension = (extension: LoadedExtension): GentExtension<never> => ({
+  manifest: extension.manifest,
+  setup: () => Effect.succeed(extension.contributions),
+})
+
+const wrapExtensionInput = (
+  extension: GentExtension<ChildProcessSpawner | GentPlatform>,
+  layerOverrides: E2ELayerConfig["layerOverrides"],
+): GentExtension<ChildProcessSpawner | GentPlatform> => ({
+  manifest: extension.manifest,
+  setup: (ctx) =>
+    extension
+      .setup(ctx)
+      .pipe(
+        Effect.map((contributions) =>
+          applyLayerOverride(
+            contributions,
+            extension.manifest.id,
+            layerOverrides?.[extension.manifest.id],
+          ),
+        ),
+      ),
+})
+
+const extensionInputsForConfig = (
+  config: E2ELayerConfig,
+): ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>> =>
+  config.extensions === undefined
+    ? config.extensionInputs.map((extension) =>
+        wrapExtensionInput(extension, config.layerOverrides),
+      )
+    : [testAgentsExtension(config.agents), ...config.extensions.map(fromLoadedExtension)]
+
+const approvalOverrideForConfig = (config: E2ELayerConfig) => {
+  if (config.approvalLayer !== undefined) return config.approvalLayer
+  if (config.durableApproval === true) return undefined
+  return ApprovalService.Test()
+}
+
 /**
  * Build a complete E2E test layer with queued event publishing.
  *
- * Key differences from baseLocalLayerWithProvider:
- * - EventPublisherLive — appends and broadcasts committed events
- * - ToolRunner.Live — executes tools for real
- * - session-loop follow-ups — QueueFollowUp enqueues directly into the live loop
+ * The harness is a production-root preset: extension setup, resource startup,
+ * event publishing, interaction recovery, and session runtime wiring flow
+ * through `createDependencies`/`buildServerRoot`.
  */
 export const createE2ELayer = (config: E2ELayerConfig) => {
-  // Resolve extensions — the test-agents pseudo-extension carries the test
-  // agents in its `agents` bucket.
-  const builtinContributions: ExtensionContributions = { agents: config.agents }
+  const subagentRunnerLayer = Layer.succeed(
+    AgentRunnerService,
+    config.subagentRunner ?? defaultSubagentRunner,
+  )
 
-  return Layer.unwrap(
-    Effect.gen(function* () {
-      const setupResult = config.extensions
-        ? { active: config.extensions, failed: [] as const }
-        : yield* setupBuiltinExtensions({
-            extensions: config.extensionInputs,
-            cwd: "/tmp",
-            home: "/tmp",
-            disabled: new Set(),
-          })
-
-      const loadedExtensions: ReadonlyArray<LoadedExtension> = config.extensions
-        ? [
-            {
-              manifest: { id: ExtensionId.make("test-agents") },
-              scope: "builtin" as const,
-              sourcePath: "test",
-              contributions: builtinContributions,
-            },
-            ...setupResult.active,
-          ]
-        : setupResult.active.map((ext) => {
-            const override = config.layerOverrides?.[ext.manifest.id]
-            if (override === undefined) return ext
-            // E2E test override: REPLACE the entire process-Resource layer
-            // set for this extension with one merged override layer.
-            //
-            // This is a 1:1 process-Resource swap. If an extension grows
-            // multiple process Resources, this helper silently drops the
-            // originals — fail loudly so the test gets updated to provide a
-            // complete merged override (or `layerOverrides` grows a
-            // per-resource API).
-            const existingProcessResources = (ext.contributions.resources ?? []).filter(
-              (r) => r.scope === "process",
-            )
-            if (existingProcessResources.length > 1) {
-              throw new Error(
-                `e2e-layer.layerOverrides: extension "${ext.manifest.id}" has ${existingProcessResources.length} process-scope Resources; the override path replaces all of them with one merged layer. Provide a complete merged layer in the override factory, or extend layerOverrides to address Resources individually.`,
-              )
-            }
-            // Test override layers are heterogeneous; the harness erases R/E
-            // at this boundary. Production paths flow through
-            // `collectProcessLayers`.
-            const rawOverrideLayer = override()
-            type TestOverrideLayer = Layer.Layer<unknown, unknown, never>
-            // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-            const overrideLayer = rawOverrideLayer as unknown as TestOverrideLayer // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-            const layerOverride = defineResource({
-              scope: "process",
-              // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-              layer: overrideLayer,
-            })
-            const otherResources = (ext.contributions.resources ?? []).filter(
-              (r) => r.scope !== "process",
-            )
-            return {
-              ...ext,
-              contributions: {
-                ...ext.contributions,
-                resources: [...otherResources, layerOverride],
-              },
-            }
-          })
-
-      const reconciled = yield* reconcileLoadedExtensions({
-        extensions: loadedExtensions,
-        failedExtensions: setupResult.failed,
-        home: "/tmp",
-        command: undefined,
-      })
-      const resolved = reconciled.resolved
-
-      // Build the process-scope Resource layer the same way prod does
-      // (`buildResourceLayer` in profile.ts) so `Resource.start` fires.
-      //
-      // Extension layers may require SqlClient — provide it below via
-      // `provideMerge(resourceLayer, baseDeps)`.
-      const storageLayer =
-        config.storagePath === undefined
-          ? SqliteStorage.MemoryWithSql()
-          : Layer.provide(SqliteStorage.LiveWithSql(config.storagePath), BunServices.layer)
-      const clusterRunnerLive = Layer.provide(
-        SingleRunner.layer({ runnerStorage: "memory" }),
-        storageLayer,
-      )
-      // `buildResourceLayer` returns `ErasedResourceLayer = Layer.Layer<any>` — the
-      // membrane that `resource-layer.ts` uses to merge heterogeneous extension
-      // Resource layers. No additional cast needed here.
-      const extensionResourceLayer = buildResourceLayer(resolved.extensions, "process")
-
-      // Subagent runner
-      const defaultRunner: AgentRunner = {
-        run: () =>
-          Effect.succeed(
-            AgentRunResult.Success.make({
-              text: "",
-              sessionId: SessionId.make("test-subagent-session"),
-              agentName: AgentName.make("cowork"),
-            }),
-          ),
-      }
-      const subagentRunnerLayer = Layer.succeed(
-        AgentRunnerService,
-        config.subagentRunner ?? defaultRunner,
-      )
-
-      // Auth
-      const authLive = config.authLayer ?? Auth.Test()
-      const extensionRegistryLive = ExtensionRegistry.fromResolved(resolved)
-      const driverRegistryLive = DriverRegistry.fromResolved({
-        modelDrivers: resolved.modelDrivers,
-        externalDrivers: resolved.externalDrivers,
-      })
-      const authDeps = Layer.mergeAll(
-        authLive,
-        extensionRegistryLive,
-        driverRegistryLive,
-        BunGentPlatformLive,
-      )
-      const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
-      const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
-      // Base services — everything that doesn't depend on reducing event store
-      const baseDepsCore = Layer.mergeAll(
-        BunServices.layer,
-        storageLayer,
-        clusterRunnerLive,
-        config.providerLayer,
-        ModelResolver.fromLanguageModel(config.providerLayer),
-        extensionRegistryLive,
-        driverRegistryLive,
-        Permission.Test(),
-        config.configServiceLayer ?? ConfigService.Test(),
-        ModelRegistry.Test(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        // Required for resource layers below: extension Resource layers
-        // are fed via `Layer.provideMerge(extensionResourceLayer,
-        // baseDepsCore)` (further down). Many of those layers yield
-        // `GentPlatform`. Outer `Layer.provide(BunPlatformLive)` only
-        // reaches outer requirements, not the requirements satisfied
-        // INSIDE `provideMerge`.
-        BunGentPlatformLive,
-        subagentRunnerLayer,
-        authLive,
-        authGuardLive,
-        providerAuthLive,
-        Layer.provide(FallbackFileIndexLive, BunServices.layer),
-        ResourceManagerLive,
-        ...(config.sessionProfileCacheLayer !== undefined ? [config.sessionProfileCacheLayer] : []),
-        ...(config.extraLayers ?? []),
-      )
-
-      // Mirror `buildExtensionLayers` in profile.ts: feed `baseDepsCore` into
-      // the Resource layer via `provideMerge` so `Resource.start` hooks see the
-      // full service set, while keeping `baseDepsCore`'s outputs in the merged
-      // result.
-      const baseDeps = Layer.provideMerge(extensionResourceLayer, baseDepsCore)
-
-      const baseEventStoreLive = Layer.provide(EventStoreLive, baseDeps)
-      const eventPublisherLive = Layer.provide(
-        EventPublisherLive,
-        Layer.merge(baseDeps, baseEventStoreLive),
-      )
-      const durableApprovalLayer = Layer.provide(
-        Layer.unwrap(
-          Effect.gen(function* () {
-            const store = yield* InteractionStorage
-            return ApprovalService.LiveWithStorage({
-              persist: (record) =>
-                store.persist(record).pipe(
-                  Effect.asVoid,
-                  Effect.mapError(
-                    (cause) =>
-                      new EventStoreError({
-                        message: "Failed to persist interaction request",
-                        cause,
-                      }),
-                  ),
-                ),
-              resolve: (requestId) =>
-                store.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
-              decide: (requestId, decisionJson) =>
-                store.decide(requestId, decisionJson).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new EventStoreError({
-                        message: "Failed to persist interaction decision",
-                        cause,
-                      }),
-                  ),
-                ),
-            })
-          }),
-        ),
-        Layer.mergeAll(baseDeps, eventPublisherLive, BunGentPlatformLive),
-      )
-      const defaultApprovalLayer =
-        config.durableApproval === true ? durableApprovalLayer : ApprovalService.Test()
-      const approvalLayer =
-        config.approvalLayer !== undefined
-          ? Layer.provide(
-              config.approvalLayer,
-              Layer.merge(eventPublisherLive, BunGentPlatformLive),
-            )
-          : defaultApprovalLayer
-      const depsWithApproval = Layer.merge(baseDeps, approvalLayer)
-      const toolRunnerLive = Layer.provide(ToolRunner.Live, depsWithApproval)
-      const sessionRuntimeLive = Layer.provide(
-        SessionRuntime.LiveWithEntity({
-          baseSections: [{ id: "base", content: "e2e test system prompt", priority: 0 }],
-        }),
-        Layer.mergeAll(depsWithApproval, baseEventStoreLive, eventPublisherLive, toolRunnerLive),
-      )
-      const sessionMutationsLive = Layer.provide(
-        SessionCommands.SessionMutationsLive,
-        Layer.mergeAll(baseDeps, baseEventStoreLive, eventPublisherLive, sessionRuntimeLive),
-      )
-      const depsWithRuntime = Layer.mergeAll(depsWithApproval, sessionRuntimeLive)
-      const interactionRecoveryLive = Layer.effectDiscard(
-        Effect.gen(function* () {
-          const interactionStore = yield* InteractionStorage
-          const approvalService = yield* ApprovalService
-          const sessionRuntime = yield* SessionRuntime
-
-          const pending = yield* interactionStore.listPending()
-          for (const record of pending) {
-            const params = yield* decodeInteractionParams(record.paramsJson).pipe(
-              Effect.option,
-              Effect.map((opt) => (opt._tag === "Some" ? opt.value : undefined)),
-            )
-            if (params === undefined) continue
-            const decision =
-              record.decisionJson === undefined
-                ? undefined
-                : yield* decodeInteractionDecision(record.decisionJson).pipe(
-                    Effect.option,
-                    Effect.map((opt) => (opt._tag === "Some" ? opt.value : undefined)),
-                  )
-            yield* approvalService
-              .rehydrate(
-                record.requestId,
-                params,
-                {
-                  sessionId: record.sessionId,
-                  branchId: record.branchId,
-                },
-                decision,
-              )
-              .pipe(Effect.catchEager(() => Effect.void))
-            if (decision !== undefined) {
-              yield* sessionRuntime
-                .respondInteraction({
-                  sessionId: record.sessionId,
-                  branchId: record.branchId,
-                  requestId: record.requestId,
-                })
-                .pipe(Effect.catchEager(() => Effect.void))
-            }
-          }
-        }),
-      ).pipe(Layer.provide(depsWithRuntime))
-
-      return Layer.provideMerge(
-        AppServicesLive,
-        Layer.mergeAll(
-          depsWithApproval,
-          baseEventStoreLive,
-          eventPublisherLive,
-          toolRunnerLive,
-          sessionMutationsLive,
-          sessionRuntimeLive,
-          interactionRecoveryLive,
-          ServerIdentity.Test(),
-        ),
-      )
-    }),
-  ).pipe(Layer.provide(BunPlatformLive))
+  return makeServerRootLayer({
+    dependencies: {
+      cwd: "/tmp",
+      home: "/tmp",
+      platform: "test",
+      persistenceMode: config.storagePath === undefined ? "memory" : "disk",
+      ...(config.storagePath !== undefined ? { dbPath: config.storagePath } : {}),
+      languageModelLayerOverride: config.providerLayer,
+      extensions: extensionInputsForConfig(config),
+      overrides: {
+        eventStoreMode: "storage-backed",
+        authLayer: config.authLayer ?? Auth.Test(),
+        approvalLayer: approvalOverrideForConfig(config),
+        configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),
+        modelRegistryLayer: ModelRegistry.Test(),
+        permissionLayer: Permission.Test(),
+        sessionProfileCacheLayer: config.sessionProfileCacheLayer,
+        fileIndexLayer: Layer.provide(FallbackFileIndexLive, BunServices.layer),
+        extraLayers: [subagentRunnerLayer, ...(config.extraLayers ?? [])],
+      },
+    },
+    identity: {
+      serverId: "test-server",
+      pid: 0,
+      hostname: "test-host",
+      dbPath: config.storagePath ?? ":memory:",
+      buildFingerprint: "test-fingerprint",
+      startedAt: 0,
+    },
+  }).pipe(Layer.provide(BunServices.layer))
 }
 
 // ── Test helpers ──
