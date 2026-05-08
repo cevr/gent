@@ -331,9 +331,12 @@ host-owned design. It should expose:
   `reactions`;
 - agents and model ids: `defineAgent`, `AgentName`, `ModelId`, run-spec
   helpers needed for turn-scoped subagent dispatch;
-- stable ids and author-facing schemas: `ExtensionId`, `TaskId`,
-  `ArtifactId`, `ToolCallId`, `PermissionRule`, output/message projection
+- stable ids and author-facing schemas: `ExtensionId`, `ArtifactId`,
+  `ToolCallId`, `PermissionRule`, output/message projection
   helpers that are safe to serialize across the extension boundary;
+- host facts/actions: `ExtensionSetupContext.host`, a small public view over
+  host-owned platform facts such as OS info, inherited env, command candidates,
+  port probing, and best-effort process signaling;
 - author-facing errors: capability, provider-auth, agent-run, and typed
   transition errors that extension code can intentionally return or inspect.
 
@@ -344,8 +347,8 @@ Everything else is builtin/internal:
   internals);
 - storage, event publisher, event store, task/session mutation services, and
   interaction pending readers;
-- extension-owned runtime services that are part of the authoring contract
-  (`GentPlatform`, `ToolRunner`, `ExtensionEventSink`, `runProcess`);
+- runtime/platform services and helpers (`GentPlatform`, `ToolRunner`,
+  `ExtensionEventSink`, `runProcess`);
 - agent loop/session runtime internals and process runners that are only host
   implementation details;
 - raw event/task/message domain internals that are not part of the serialized
@@ -432,6 +435,11 @@ with `Layer.succeedContext(...)`, merging child-owned override families with
 Each override family, such as `storage`, `eventStore`, or `eventPublisher`,
 maps to a required child layer; matching child Tags occlude parent Tags through
 last-writer-wins context merge.
+
+Ephemeral children reuse the parent-resolved extension registry and rebuild
+resource service layers with `buildExtensionLayers(..., { lifecycle: "skip" })`.
+That keeps extension services available inside the child runtime while leaving
+process resource `start`/`stop` lifecycle ownership with profile resolution.
 
 ## Testing
 

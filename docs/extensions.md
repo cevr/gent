@@ -64,20 +64,28 @@ host owns it.
 
 Public authoring surface:
 
-| Area             | Public exports                                                                  |
-| ---------------- | ------------------------------------------------------------------------------- |
-| Extension shape  | `defineExtension`, `GentExtension`, `ExtensionSetupContext`                     |
-| Capabilities     | `tool`, `request`, `ref`, `action`                                              |
-| Resources        | `defineResource`, `resource`, resource scope/schedule types, `ReadOnly` helpers |
-| Reactions        | Reaction input/output types needed to implement `reactions`                     |
-| Agents           | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                         |
-| Stable ids       | `ExtensionId`, `TaskId`, `ArtifactId`, `ToolCallId`                             |
-| Policies/errors  | `PermissionRule`, capability/provider-auth/agent-run author-facing errors       |
-| Runtime services | `GentPlatform`, `ToolRunner`, `ExtensionEventSink`, `runProcess`                |
-| Serialization    | Message/output projection helpers safe to expose across extension boundaries    |
+| Area            | Public exports                                                                  |
+| --------------- | ------------------------------------------------------------------------------- |
+| Extension shape | `defineExtension`, `GentExtension`, `ExtensionSetupContext`                     |
+| Capabilities    | `tool`, `request`, `ref`, `action`                                              |
+| Resources       | `defineResource`, `resource`, resource scope/schedule types, `ReadOnly` helpers |
+| Reactions       | Reaction input/output types needed to implement `reactions`                     |
+| Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                         |
+| Stable ids      | `ExtensionId`, `ArtifactId`, `ToolCallId`                                       |
+| Policies/errors | `PermissionRule`, capability/provider-auth/agent-run author-facing errors       |
+| Host facts      | `ExtensionSetupContext.host`                                                    |
+| Serialization   | Message/output projection helpers safe to expose across extension boundaries    |
 
 There is no builtin-internal surface. Shipped extensions are useful defaults,
 not a second trust tier.
+
+`ExtensionSetupContext.host` is the only public host platform view. It exposes
+small, serializable facts and host-owned actions such as OS info, executable
+path, inherited environment, command-name candidates, loopback port probing, and
+best-effort process signaling. Extensions do not yield `GentPlatform`, import
+`runProcess`, or reach into `@gent/core/runtime/*`; when they need more host
+authority, the design answer is a new public authoring primitive or a
+host-owned runtime feature.
 
 ## Discovery
 
@@ -259,6 +267,10 @@ export default defineExtension({
 })
 ```
 
+Use `resources: ({ ctx }) => ...` only when setup needs public host facts such
+as `ctx.host.parentEnv`; the resource itself should still expose the smallest
+service Tag it needs.
+
 ## Agent
 
 ```ts
@@ -306,3 +318,6 @@ builtin).
 - Long-lived state lives in `defineResource(...)`.
 - Generic middleware APIs are not part of extension authoring.
 - Bucket names are the discriminator; extension authors do not build flat `_kind` contribution unions.
+- Builtins, user extensions, and project extensions use the same public API.
+- Runtime services such as `GentPlatform`, `ToolRunner`, `ExtensionEventSink`,
+  storage Tags, event stores, and process helpers are not public extension API.
