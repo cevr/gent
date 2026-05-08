@@ -26,10 +26,9 @@ import {
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import { isRecord, TaggedEnumClass } from "@gent/core/extensions/api"
-import { createServer } from "node:net"
-import * as os from "node:os"
 import { fileURLToPath } from "node:url"
 import { runProcess } from "../run-process.js"
+import { ExecutorPlatform } from "./platform-adapter.js"
 import {
   type ExecutorEndpoint,
   type ResolvedExecutorSettings,
@@ -138,8 +137,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
       Effect.gen(function* () {
         const path = yield* Path.Path
         const fs = yield* FileSystem.FileSystem
-        const isWindows = os.platform() === "win32"
-        const execPath = process.execPath
+        const platform = yield* ExecutorPlatform
         const sidecarsByCwd = new Map<string, SidecarRecord>()
         const spawnMutex = yield* Semaphore.make(1)
 
@@ -209,18 +207,6 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
         // ── Port scanning ──
 
-        const isPortFree = (port: number) =>
-          Effect.callback<boolean>((resume) => {
-            const server = createServer()
-            server.once("error", () => {
-              server.close()
-              resume(Effect.succeed(false))
-            })
-            server.listen(port, "127.0.0.1", () => {
-              server.close(() => resume(Effect.succeed(true)))
-            })
-          })
-
         const probePort = (cwd: string, port: number): Effect.Effect<PortProbe> => {
           const baseUrl = `http://127.0.0.1:${port}`
           return fetchScope(baseUrl).pipe(
@@ -231,12 +217,14 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
                   : PortProbe.Occupied.make({ port }),
             ),
             Effect.catchEager(() =>
-              isPortFree(port).pipe(
-                Effect.map(
-                  (free): PortProbe =>
-                    free ? PortProbe.Free.make({ port }) : PortProbe.Occupied.make({ port }),
+              platform
+                .isPortFree(port)
+                .pipe(
+                  Effect.map(
+                    (free): PortProbe =>
+                      free ? PortProbe.Free.make({ port }) : PortProbe.Occupied.make({ port }),
+                  ),
                 ),
-              ),
             ),
           )
         }
@@ -332,11 +320,9 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               .pipe(Effect.catch(() => Effect.succeed(Option.none<string>())))
             const dirs = Option.match(pathEnv, {
               onNone: () => [] as ReadonlyArray<string>,
-              onSome: (raw) => raw.split(isWindows ? ";" : ":").filter((d) => d.length > 0),
+              onSome: (raw) => raw.split(platform.pathListSeparator).filter((d) => d.length > 0),
             })
-            const candidates = isWindows
-              ? [`${command}.exe`, `${command}.cmd`, `${command}.bat`, command]
-              : [command]
+            const candidates = platform.commandCandidates(command)
             for (const dir of dirs) {
               for (const name of candidates) {
                 const candidate = path.join(dir, name)
@@ -362,14 +348,13 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               }),
           })
           const pkgRoot = path.dirname(pkgPath)
-          const binaryName = isWindows ? "executor.exe" : "executor"
-          const runtimePath = path.join(pkgRoot, "bin", "runtime", binaryName)
+          const runtimePath = path.join(pkgRoot, "bin", "runtime", platform.binaryName)
 
           const exists = yield* fs.exists(runtimePath)
           if (!exists) {
             // Run postinstall to bootstrap
             const installerPath = path.join(pkgRoot, "postinstall.cjs")
-            const result = yield* runProcess(execPath, [installerPath], {
+            const result = yield* runProcess(platform.execPath, [installerPath], {
               cwd: pkgRoot,
             }).pipe(
               Effect.catchTag("ProcessError", (e) =>
@@ -469,35 +454,17 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
         // ── Graceful shutdown ──
 
-        const isPidAlive = (pid: number) =>
-          Effect.sync(() => {
-            try {
-              return process.kill(pid, 0)
-            } catch {
-              return false
-            }
-          })
-
-        const signalPid = (pid: number, signal: NodeJS.Signals) =>
-          Effect.sync(() => {
-            try {
-              process.kill(pid, signal)
-            } catch {
-              // Process may have exited between liveness probe and signal.
-            }
-          })
-
         // OS-level grace period between SIGTERM and SIGKILL. The kernel
         // delivers the signal asynchronously and we have no in-process
         // signal back from the foreign pid, so the timed sleep is the
         // right primitive here.
         const terminatePid = (pid: number) =>
           Effect.gen(function* () {
-            if (!(yield* isPidAlive(pid))) return
-            yield* signalPid(pid, "SIGTERM")
+            if (!(yield* platform.isPidAlive(pid))) return
+            yield* platform.signalPid(pid, "SIGTERM")
             yield* Effect.sleep(Duration.millis(SHUTDOWN_TIMEOUT_MS))
-            if (yield* isPidAlive(pid)) {
-              yield* signalPid(pid, "SIGKILL")
+            if (yield* platform.isPidAlive(pid)) {
+              yield* platform.signalPid(pid, "SIGKILL")
             }
           })
 
@@ -665,7 +632,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               const registered = yield* getRegisteredSidecar(normalized)
               if (!registered) return "missing" as const
 
-              if (!(yield* isPidAlive(registered.pid))) {
+              if (!(yield* platform.isPidAlive(registered.pid))) {
                 yield* unregisterSidecar(normalized, registered.pid)
                 return "missing" as const
               }
@@ -680,7 +647,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           resolveSettings: (cwd) => loadSettings(cwd),
         })
       }),
-    ).pipe(Layer.provide(FetchHttpClient.layer))
+    ).pipe(Layer.provide(Layer.merge(FetchHttpClient.layer, ExecutorPlatform.Live)))
 
   static Test = (mock: Partial<ExecutorSidecarService> = {}): Layer.Layer<ExecutorSidecar> =>
     Layer.succeed(
