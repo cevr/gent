@@ -778,6 +778,11 @@ starting extension set; it is a fake API promise.
 
 ## Commit 22: refactor(runtime): separate scheduled jobs from resources
 
+**Status**: Current code already satisfies this lane. `ResourceContribution`
+contains no schedule fields, `ScheduledJobContribution` lives in its own domain
+module, `defineExtension` accepts a `scheduledJobs` bucket, and activation
+reconciles scheduled jobs separately after resource startup.
+
 **Justification**: `ResourceContribution` mixes long-lived service lifecycle
 with scheduled job declarations. The schedule engine can stay, but scheduled
 jobs should be their own extension contribution.
@@ -792,13 +797,14 @@ jobs should be their own extension contribution.
 
 **Changes**
 
-| File                                                                                                       | Change                                                           | Lines                                |
-| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------ |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/resource.ts`                                  | Remove schedule fields from resource contribution.               | `1-18`, `36-57`, `61-107`, `141-155` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/activation.ts`                    | Reconcile scheduled jobs through a separate contribution bucket. | `413-434`                            |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/resource-host/schedule-engine.ts` | Preserve durable schedule runtime.                               | `50-309`                             |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/memory/index.ts`                               | Move memory dreaming jobs to scheduled-job contribution.         | `40-45`                              |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/scheduler.test.ts`                      | Preserve durable schedule behavior.                              | `32-208`                             |
+| File                                                                                      | Evidence                                                                      | Lines                |
+| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/resource.ts`                 | Resource contribution has lifecycle fields only; no scheduler fields.         | `55-128`             |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/scheduled-job.ts`            | Scheduled jobs have their own contribution type and constructor.              | `1-24`               |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`                  | `defineExtension` resolves a separate `scheduledJobs` bucket.                 | `287-288`, `409-428` |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/activation.ts`   | Activation reconciles scheduled jobs after process-resource startup.          | `413-440`            |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/memory/index.ts`              | Memory dreaming jobs are declared through `scheduledJobs: MemoryDreamJobs()`. | `35-42`              |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/resource-host.test.ts` | Stale test header updated to describe the separate scheduled-job shape.       | `1-10`               |
 
 **Verification**
 

@@ -5,7 +5,7 @@
  *   - Resource shape: defineResource produces a contribution with
  *     the typed scope literal flowing through the shape.
  *   - Resource layer assembly merges services and runs lifecycle effects.
- *   - Resource schedule metadata remains attached for the scheduler.
+ *   - Scheduled jobs are their own contribution shape, not Resource metadata.
  *
  * @module
  */
