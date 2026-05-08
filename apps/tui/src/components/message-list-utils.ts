@@ -69,7 +69,8 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 export function formatToolInput(
   toolName: string,
   input: unknown,
-  cwd: string = process.cwd(),
+  cwd = ".",
+  home?: string,
 ): string {
   if (!isRecord(input)) return ""
   const name = toolName.toLowerCase()
@@ -84,7 +85,7 @@ export function formatToolInput(
     return `${prefix} in ${searchPath}`
   }
 
-  const summary = toolArgSummary(name, input)
+  const summary = toolArgSummary(name, input, { home })
   if (summary.length === 0) return ""
 
   // Apply truncatePath for path-heavy tools

@@ -67,7 +67,7 @@ describe("formatUsageStats", () => {
 
 describe("shortenPath", () => {
   test("replaces home directory with ~", () => {
-    expect(shortenPath(`${HOME}/foo/bar.ts`)).toBe("~/foo/bar.ts")
+    expect(shortenPath(`${HOME}/foo/bar.ts`, HOME)).toBe("~/foo/bar.ts")
   })
 
   test("leaves non-home paths unchanged", () => {
@@ -76,7 +76,7 @@ describe("shortenPath", () => {
   })
 
   test("handles home directory exactly", () => {
-    expect(shortenPath(HOME)).toBe("~")
+    expect(shortenPath(HOME, HOME)).toBe("~")
   })
 })
 
@@ -100,7 +100,9 @@ describe("toolArgSummary", () => {
   })
 
   test("read: shortens home paths", () => {
-    expect(toolArgSummary("read", { file_path: `${HOME}/src/app.ts` })).toBe("~/src/app.ts")
+    expect(toolArgSummary("read", { file_path: `${HOME}/src/app.ts` }, { home: HOME })).toBe(
+      "~/src/app.ts",
+    )
   })
 
   test("write: path with line count", () => {
@@ -115,7 +117,9 @@ describe("toolArgSummary", () => {
   })
 
   test("edit: shortened path", () => {
-    expect(toolArgSummary("edit", { file_path: `${HOME}/src/app.ts` })).toBe("~/src/app.ts")
+    expect(toolArgSummary("edit", { file_path: `${HOME}/src/app.ts` }, { home: HOME })).toBe(
+      "~/src/app.ts",
+    )
     expect(toolArgSummary("edit", {})).toBe("")
   })
 

@@ -321,6 +321,8 @@ extension resolution and creates drift.
 
 ## Commit 7: test(tooling): enforce platform authority guardrails
 
+**Status**: Completed in `test(tooling): enforce platform authority guardrails`.
+
 **Justification**: Existing platform guardrails miss core/extensions host facts,
 so the rule does not enforce the architecture it documents.
 
@@ -331,16 +333,20 @@ so the rule does not enforce the architecture it documents.
 
 **Changes**
 
-| File                                                                                            | Change                                                                     | Lines |
-| ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ----- |
-| `/Users/cvr/Developer/personal/gent/packages/tooling/src/platform-duplication-guards.ts`        | Extend host-fact violations to protected packages.                         | ~93   |
-| `/Users/cvr/Developer/personal/gent/packages/tooling/tests/platform-duplication-guards.test.ts` | Add regression for `packages/extensions/src/bad.ts`.                       | ~546  |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/log-paths.ts`                     | Move any remaining ambient process/fs use behind platform or app boundary. | ~14   |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/utils/format-tool.ts`                          | Use existing runtime/env facade or narrow app-edge exception.              | ~1    |
+| File                                                                                            | Change                                                                            | Lines |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ----- |
+| `/Users/cvr/Developer/personal/gent/packages/tooling/src/platform-duplication-guards.ts`        | Extended protected source guardrails for raw cwd and OS module imports.           | ~18   |
+| `/Users/cvr/Developer/personal/gent/packages/tooling/tests/platform-duplication-guards.test.ts` | Added core and extension regressions, including `packages/extensions/src/bad.ts`. | ~57   |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/log-paths.ts`                     | Removed ambient `globalThis.process.cwd()` fallback from log path identity.       | ~15   |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/utils/format-tool.ts`                          | Made path shortening pure; callers pass home when they own it.                    | ~43   |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/components/message-list-utils.ts`              | Removed ambient `process.cwd()` default from tool input formatting.               | ~5    |
+| `/Users/cvr/Developer/personal/gent/apps/tui/tests/format-tool.test.ts`                         | Updated path-shortening assertions to pass explicit home.                         | ~12   |
 
 **Verification**
 
-- Focused tooling guard tests.
+- `bun packages/tooling/src/check-guardrails.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/tooling/tests/platform-duplication-guards.test.ts apps/tui/tests/format-tool.test.ts apps/tui/tests/message-list-utils.test.ts`
+- `bun run typecheck`
 - `bun run gate`
 
 ## Commit 8: refactor(files): collapse dead command/test boundary files

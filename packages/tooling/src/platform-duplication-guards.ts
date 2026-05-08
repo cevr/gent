@@ -142,6 +142,18 @@ const hostFactPatternSources = new Set([
   "\\bos\\.(?:hostname|homedir|release)\\s*\\(",
 ])
 
+const bannedProtectedHostFactPatterns: ReadonlyArray<BannedPattern> = [
+  {
+    pattern: /\b(?:globalThis\.)?process\.cwd\s*\(/,
+    message:
+      "Host working directory facts are adapter-only; use RuntimeEnvironment or GentPlatform",
+  },
+  {
+    pattern: /\bfrom\s+["'](?:node:)?os["']/,
+    message: "Host OS module imports are adapter-only; use GentPlatform",
+  },
+]
+
 const serverRootConsumerFiles = new Set(["apps/server/src/main.ts", "packages/sdk/src/server.ts"])
 const platformProviderRootFiles = new Set([
   "packages/core/src/runtime/gent-platform.ts",
@@ -152,6 +164,11 @@ const platformProviderRootFiles = new Set([
   "apps/tui/src/main.tsx",
   "packages/sdk/src/server.ts",
 ])
+
+const protectedHostFactFile = (file: string): boolean =>
+  (file.startsWith("packages/core/src/") || file.startsWith("packages/extensions/src/")) &&
+  !file.includes("/test-utils/") &&
+  file !== "packages/core/src/runtime/gent-platform-bun.ts"
 
 const bannedServerRootConsumerPatterns: ReadonlyArray<BannedPattern> = [
   {
@@ -180,6 +197,7 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => [
           pattern.source === "\\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\\b")
       ),
   ),
+  ...(protectedHostFactFile(file) ? bannedProtectedHostFactPatterns : []),
   ...(serverRootConsumerFiles.has(file) ? bannedServerRootConsumerPatterns : []),
   ...(file === "packages/core/src/server/transport-contract.ts"
     ? bannedTransportContractPatterns

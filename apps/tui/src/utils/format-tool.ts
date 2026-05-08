@@ -1,7 +1,3 @@
-import os from "node:os"
-
-const HOME = os.homedir()
-
 export function formatTokens(count: number): string {
   if (count < 1000) return count.toString()
   if (count < 10000) return `${(count / 1000).toFixed(1)}k`
@@ -31,8 +27,10 @@ export function formatUsageStats(
 export const truncate = (value: string, max: number): string =>
   value.length > max ? `${value.slice(0, Math.max(0, max - 3))}...` : value
 
-export function shortenPath(p: string): string {
-  return p.startsWith(HOME) ? `~${p.slice(HOME.length)}` : p
+export function shortenPath(p: string, home?: string): string {
+  return home !== undefined && home.length > 0 && p.startsWith(home)
+    ? `~${p.slice(home.length)}`
+    : p
 }
 
 function getStringArg(args: Record<string, unknown>, ...keys: string[]): string {
@@ -57,11 +55,15 @@ function truncateText(text: string, limit: number): string {
   return `${text.slice(0, limit)}…`
 }
 
-function summarizeRead(args: Record<string, unknown>): string {
+interface ToolArgSummaryOptions {
+  readonly home?: string
+}
+
+function summarizeRead(args: Record<string, unknown>, options?: ToolArgSummaryOptions): string {
   const rawPath = getPathArg(args)
   if (rawPath.length === 0) return ""
 
-  let text = shortenPath(rawPath)
+  let text = shortenPath(rawPath, options?.home)
   const offset = getNumberArg(args, "offset")
   const limit = getNumberArg(args, "limit")
   if (offset === undefined && limit === undefined) return text
@@ -73,26 +75,27 @@ function summarizeRead(args: Record<string, unknown>): string {
   return text
 }
 
-function summarizeWrite(args: Record<string, unknown>): string {
+function summarizeWrite(args: Record<string, unknown>, options?: ToolArgSummaryOptions): string {
   const rawPath = getPathArg(args)
   if (rawPath.length === 0) return ""
 
   const content = getStringArg(args, "content")
   const lines = content.length > 0 ? content.split("\n").length : 0
-  let text = shortenPath(rawPath)
+  let text = shortenPath(rawPath, options?.home)
   if (lines > 1) text += ` (${lines} lines)`
   return text
 }
 
 function summarizeScopedPattern(
   args: Record<string, unknown>,
+  options?: ToolArgSummaryOptions,
   patternPrefix = "",
   patternSuffix = "",
 ): string {
   const pattern = getStringArg(args, "pattern")
   if (pattern.length === 0) return ""
   const rawPath = getStringArg(args, "path") || "."
-  return `${patternPrefix}${pattern}${patternSuffix} in ${shortenPath(rawPath)}`
+  return `${patternPrefix}${pattern}${patternSuffix} in ${shortenPath(rawPath, options?.home)}`
 }
 
 function summarizeDelegate(args: Record<string, unknown>): string {
@@ -108,7 +111,7 @@ function summarizeDelegate(args: Record<string, unknown>): string {
   return `${agent}:${truncateText(todo, 40)}`
 }
 
-type ToolArgFormatter = (args: Record<string, unknown>) => string
+type ToolArgFormatter = (args: Record<string, unknown>, options?: ToolArgSummaryOptions) => string
 
 const toolArgFormatters: Record<string, ToolArgFormatter> = {
   bash: (args) => {
@@ -118,12 +121,12 @@ const toolArgFormatters: Record<string, ToolArgFormatter> = {
   },
   read: summarizeRead,
   write: summarizeWrite,
-  edit: (args) => {
+  edit: (args, options) => {
     const rawPath = getPathArg(args)
-    return rawPath.length > 0 ? shortenPath(rawPath) : ""
+    return rawPath.length > 0 ? shortenPath(rawPath, options?.home) : ""
   },
-  grep: (args) => summarizeScopedPattern(args, "/", "/"),
-  glob: (args) => summarizeScopedPattern(args),
+  grep: (args, options) => summarizeScopedPattern(args, options, "/", "/"),
+  glob: (args, options) => summarizeScopedPattern(args, options),
   webfetch: (args) => getStringArg(args, "url"),
   repo: (args) => {
     const spec = getStringArg(args, "spec")
@@ -150,8 +153,12 @@ const toolArgFormatters: Record<string, ToolArgFormatter> = {
   handoff: (args) => truncateText(getStringArg(args, "reason"), 50),
 }
 
-export function toolArgSummary(toolName: string, args: Record<string, unknown>): string {
+export function toolArgSummary(
+  toolName: string,
+  args: Record<string, unknown>,
+  options?: ToolArgSummaryOptions,
+): string {
   const formatter = toolArgFormatters[toolName.toLowerCase()]
   if (formatter === undefined) return ""
-  return formatter(args)
+  return formatter(args, options)
 }

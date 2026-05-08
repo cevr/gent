@@ -14,6 +14,7 @@ import { Config, DateTime, Effect, FileSystem, Option } from "effect"
 import { mkdirSync } from "node:fs"
 
 const LOG_DIR = "/tmp/gent/logs"
+const FALLBACK_CWD_IDENTITY = "unknown-cwd"
 
 /** FNV-1a 32-bit hash → 8-char hex */
 const hashCwd = (cwd: string): string => {
@@ -61,8 +62,9 @@ const buildPaths = (cwd: string): LogPaths => {
 export const resolveLogPaths: Effect.Effect<LogPaths> = Effect.gen(function* () {
   if (cached !== undefined) return cached
 
-  const cwd = Option.getOrElse(yield* Config.option(Config.string("GENT_CWD")), () =>
-    globalThis.process.cwd(),
+  const cwd = Option.getOrElse(
+    yield* Config.option(Config.string("GENT_CWD")),
+    () => FALLBACK_CWD_IDENTITY,
   )
 
   cached = buildPaths(cwd)
@@ -71,13 +73,14 @@ export const resolveLogPaths: Effect.Effect<LogPaths> = Effect.gen(function* () 
 
 /**
  * Get cached log paths. Returns the cached value if {@link resolveLogPaths} has run,
- * otherwise falls back to process.cwd()-based paths (for sync shutdown callsites
- * that may run before Effect startup completes). Creates the directory if needed.
+ * otherwise falls back to a stable sentinel identity for sync shutdown
+ * callsites that may run before Effect startup completes. Creates the
+ * directory if needed.
  */
 export const getLogPaths = (): LogPaths => {
   if (cached !== undefined) return cached
-  // Fallback for sync callsites before Effect init — best effort
-  cached = buildPaths(globalThis.process.cwd())
+  // Fallback for sync callsites before Effect init — best effort.
+  cached = buildPaths(FALLBACK_CWD_IDENTITY)
   try {
     mkdirSync(LOG_DIR, { recursive: true })
   } catch {}

@@ -585,6 +585,63 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
+  test("flags protected package working directory and OS module facts", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        [
+          "const cwd = process.cwd()",
+          "const fallback = globalThis.process.cwd()",
+          'import os from "node:os"',
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 1,
+        message:
+          "Host working directory facts are adapter-only; use RuntimeEnvironment or GentPlatform",
+      },
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 2,
+        message:
+          "Host working directory facts are adapter-only; use RuntimeEnvironment or GentPlatform",
+      },
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 3,
+        message: "Host OS module imports are adapter-only; use GentPlatform",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/extensions/src/bad.ts",
+        ['import os from "os"', "const cwd = process.cwd()"].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/extensions/src/bad.ts",
+        line: 1,
+        message: "Host OS module imports are adapter-only; use GentPlatform",
+      },
+      {
+        file: "packages/extensions/src/bad.ts",
+        line: 2,
+        message:
+          "Host working directory facts are adapter-only; use RuntimeEnvironment or GentPlatform",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/gent-platform-bun.ts",
+        ['import os from "node:os"', "const cwd = process.cwd()"].join("\n"),
+      ),
+    ).toEqual([])
+  })
+
   test("flags server entrypoints that fork the composition root", () => {
     expect(
       findPlatformDuplicationViolations(
