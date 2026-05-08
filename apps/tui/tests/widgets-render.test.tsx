@@ -9,6 +9,7 @@ import { ConnectionWidget } from "../src/components/connection-widget"
 import { QueueWidget } from "../src/components/queue-widget"
 import { TaskWidget } from "../src/components/task-widget"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness"
+import { runEffectBoundary } from "./run-effect-boundary"
 import { useClient, type GentRuntime } from "../src/client"
 import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { dateFromMillis } from "@gent/core-internal/domain/message"
@@ -80,7 +81,7 @@ const createMutableRuntime = (initialState: ConnectionState) => {
       )
     },
     fork: Effect.runFork as never,
-    run: Effect.runPromise as never,
+    run: runEffectBoundary as never,
     lifecycle: {
       getState: () => state,
       subscribe: (listener) => {

@@ -1,7 +1,12 @@
 import { describe, expect, test } from "effect-bun-test"
 import type { Scope } from "effect"
 import { Deferred, Effect, Ref, Stream } from "effect"
-import { directSignalCase, toTestFailure, transportCases, waitFor } from "./transport-harness"
+import {
+  directSignalCase,
+  toTestFailure,
+  transportCases,
+  waitFor,
+} from "./transport-harness-boundary"
 import { waitDeferred } from "../src/effect-test-adapters"
 
 const collectLiveEvents = <A, E>(

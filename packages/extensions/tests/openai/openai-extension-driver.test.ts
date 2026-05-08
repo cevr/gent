@@ -88,14 +88,12 @@ const openaiChatHappyResponse = () => ({
     usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
   }),
 })
-const runOne = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState): Promise<void> =>
-  Effect.runPromise(
-    oneGenerate(layer, state, (req) =>
-      req.url === "https://api.openai.com/v1/chat/completions"
-        ? openaiChatHappyResponse()
-        : openaiResponsesHappyResponse(),
-    ).pipe(Effect.orDie),
-  )
+const runOne = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState) =>
+  oneGenerate(layer, state, (req) =>
+    req.url === "https://api.openai.com/v1/chat/completions"
+      ? openaiChatHappyResponse()
+      : openaiResponsesHappyResponse(),
+  ).pipe(Effect.orDie)
 describe("buildOpenAIModelDriver — OAuth callback state", () => {
   it.live("stale callback state fails instead of reporting success", () =>
     Effect.gen(function* () {
@@ -142,7 +140,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
       )
       const model = driver.resolveModel("gpt-5.4", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
-      yield* Effect.promise(() => runOne(model, fetchState))
+      yield* runOne(model, fetchState)
       expect(fetchState.captured.length).toBeGreaterThan(0)
       const lastReq = fetchState.captured[fetchState.captured.length - 1]!
       expect(lastReq.headers["authorization"]).toBe("Bearer seeded-bearer-token")
@@ -161,7 +159,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
         const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), undefined)
         const model = driver.resolveModel("gpt-5.4", makeOAuthInfo())
         const fetchState = makeFakeFetchState()
-        yield* Effect.promise(() => runOne(model, fetchState))
+        yield* runOne(model, fetchState)
         const lastReq = fetchState.captured.at(-1)!
         // Codex transform replaces the SDK's `/chat/completions` target
         // with the ChatGPT backend Codex endpoint.
@@ -185,7 +183,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
       const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), undefined)
       const model = driver.resolveModel("gpt-5.4", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
-      yield* Effect.promise(() => runOne(model, fetchState))
+      yield* runOne(model, fetchState)
       const headers = fetchState.captured.at(-1)!.headers
       // `OpenAiClient.layer({ transformClient: ... })` is built without
       // an `apiKey` field — the SDK only sets Bearer when apiKey is
@@ -212,7 +210,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
         const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), undefined)
         const model1 = driver.resolveModel("gpt-5.4", makeOAuthInfo())
         const fetchState1 = makeFakeFetchState()
-        yield* Effect.promise(() => runOne(model1, fetchState1))
+        yield* runOne(model1, fetchState1)
         expect(fetchState1.captured.at(-1)!.headers["authorization"]).toBe("Bearer first-token")
         // Mutate the test-owned Ref between calls. If the second
         // `resolveModel` allocated a fresh internal Ref (the  regression
@@ -225,7 +223,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
         )
         const model2 = driver.resolveModel("gpt-5.4", makeOAuthInfo())
         const fetchState2 = makeFakeFetchState()
-        yield* Effect.promise(() => runOne(model2, fetchState2))
+        yield* runOne(model2, fetchState2)
         expect(fetchState2.captured.at(-1)!.headers["authorization"]).toBe("Bearer second-token")
       }),
   )
@@ -303,7 +301,7 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
         const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), undefined)
         const model = driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
         const fetchState = makeFakeFetchState()
-        yield* Effect.promise(() => runOne(model, fetchState))
+        yield* runOne(model, fetchState)
         const lastReq = fetchState.captured.at(-1)!
         // SDK injects standard Bearer auth from apiKey
         expect(lastReq.headers["authorization"]).toBe("Bearer sk-test-1234")
@@ -320,7 +318,7 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
       const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), undefined)
       const model = driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
-      yield* Effect.promise(() => runOne(model, fetchState))
+      yield* runOne(model, fetchState)
       expect(yield* SynchronizedRef.get(credentialCellRef)).toBe(EMPTY_CREDENTIAL_CELL)
     }),
   )

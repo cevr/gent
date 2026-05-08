@@ -24,6 +24,7 @@ import {
   type OpenAICredentials,
 } from "@gent/extensions/openai/credential-service"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
+import { runEffectBoundary } from "../run-effect-boundary.js"
 // ── Fake HttpClient ──
 interface CapturedRequest {
   url: string
@@ -85,7 +86,7 @@ const buildCreds = (
   authInfo: ProviderAuthInfo,
 ): Promise<OpenAICredentialServiceShape> => {
   const layer = OpenAICredentialService.layerFromIO(io, authInfo)
-  return Effect.runPromise(
+  return runEffectBoundary(
     Layer.build(layer).pipe(
       Effect.scoped,
       Effect.map((ctx) => Context.get(ctx, OpenAICredentialService)),
@@ -115,7 +116,7 @@ const noopRefreshIO = (): OpenAICredentialIO => ({
 // outgoing JSON bodies (via `bodyJsonUnsafe`/`bodyText` → Uint8Array).
 const jsonBody = (payload: Record<string, unknown>) => HttpBody.jsonUnsafe(payload)
 const runOk = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> =>
-  Effect.runPromise(Effect.scoped(eff.pipe(Effect.orDie)))
+  runEffectBoundary(Effect.scoped(eff.pipe(Effect.orDie)))
 // ── Tests ──
 describe("codexTransformClient — auth headers (O2)", () => {
   it.live("injects Authorization Bearer from credential service", () =>
@@ -396,7 +397,7 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
     responder: () => new Response("ok", { status: 200 }),
   })
   const buildWrapped = (state: FakeClientState): Promise<HttpClient.HttpClient> =>
-    Effect.runPromise(
+    runEffectBoundary(
       Effect.gen(function* () {
         const creds = yield* Effect.promise(() =>
           buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" })),

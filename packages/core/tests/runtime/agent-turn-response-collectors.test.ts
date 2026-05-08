@@ -1,4 +1,4 @@
-import { describe, expect, test } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import {
@@ -62,7 +62,7 @@ describe("agent turn response collectors", () => {
     expect(toResponseFinishReason("made-up")).toBe("unknown")
   })
 
-  test("model collector retries pre-output provider failures by re-raising them", () =>
+  it.live("model collector retries pre-output provider failures by re-raising them", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(false)
       const { publish } = yield* captureEvents()
@@ -79,9 +79,10 @@ describe("agent turn response collectors", () => {
 
       expect(error._tag).toBe("ProviderError")
       expect(error.message).toBe("boom")
-    }).pipe(Effect.runPromise))
+    }),
+  )
 
-  test("failed model collector treats interrupted failures as non-stream failures", () =>
+  it.live("failed model collector treats interrupted failures as non-stream failures", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(true)
       const { events, publish } = yield* captureEvents()
@@ -97,9 +98,10 @@ describe("agent turn response collectors", () => {
       expect(collected.interrupted).toBe(true)
       expect(collected.streamFailed).toBe(false)
       expect(yield* Ref.get(events)).toEqual([])
-    }).pipe(Effect.runPromise))
+    }),
+  )
 
-  test("external collector preserves tool names and usage in projected parts", () =>
+  it.live("external collector preserves tool names and usage in projected parts", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(false)
       const { events, publish } = yield* captureEvents()
@@ -152,9 +154,10 @@ describe("agent turn response collectors", () => {
           output: '{\n  "ok": true\n}',
         }),
       )
-    }).pipe(Effect.runPromise))
+    }),
+  )
 
-  test("external collector de-duplicates durable tool-start events by response part id", () =>
+  it.live("external collector de-duplicates durable tool-start events by response part id", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(false)
       const { events, publish } = yield* captureEvents()
@@ -176,9 +179,10 @@ describe("agent turn response collectors", () => {
       })
 
       expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual(["ToolCallStarted"])
-    }).pipe(Effect.runPromise))
+    }),
+  )
 
-  test("external collector de-duplicates final tool-result events by response part id", () =>
+  it.live("external collector de-duplicates final tool-result events by response part id", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(false)
       const { events, publish } = yield* captureEvents()
@@ -203,9 +207,10 @@ describe("agent turn response collectors", () => {
       })
 
       expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual(["ToolCallSucceeded"])
-    }).pipe(Effect.runPromise))
+    }),
+  )
 
-  test("model collector keeps partial output when post-output stream fails", () =>
+  it.live("model collector keeps partial output when post-output stream fails", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(false)
       const { events, publish } = yield* captureEvents()
@@ -227,5 +232,6 @@ describe("agent turn response collectors", () => {
       expect(collected.streamFailed).toBe(true)
       expect(collected.messageProjection.assistant.map((part) => part.type)).toEqual(["text"])
       expect((yield* Ref.get(events)).map((event) => event._tag)).toContain("ErrorOccurred")
-    }).pipe(Effect.runPromise))
+    }),
+  )
 })

@@ -12,6 +12,7 @@ import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness"
 import { renderFrame, waitForRenderedFrame } from "./helpers"
+import { runEffectBoundary } from "./run-effect-boundary"
 import { AgentName } from "@gent/core-internal/domain/agent"
 type AppAuthRenderSetup = Awaited<ReturnType<typeof renderWithProviders>>
 
@@ -43,7 +44,7 @@ const waitForMessage = (
       yield* Effect.sleep("10 millis")
       return yield* poll(startedAt)
     })
-  return Effect.runPromise(Clock.currentTimeMillis.pipe(Effect.flatMap(poll)))
+  return runEffectBoundary(Clock.currentTimeMillis.pipe(Effect.flatMap(poll)))
 }
 function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
   const client = useClient()

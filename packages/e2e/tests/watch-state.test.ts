@@ -2,7 +2,12 @@ import { describe, expect, test } from "effect-bun-test"
 import type { Scope } from "effect"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import { extractText } from "@gent/sdk"
-import { directSignalCase, toTestFailure, transportCases, waitFor } from "./transport-harness"
+import {
+  directSignalCase,
+  toTestFailure,
+  transportCases,
+  waitFor,
+} from "./transport-harness-boundary"
 import { waitDeferred } from "../src/effect-test-adapters"
 
 const collectSnapshots = <A, E>(

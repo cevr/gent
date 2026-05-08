@@ -6,7 +6,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Exit, Random, Scope } from "effect"
 import { extractText, Gent } from "@gent/sdk"
 import { createTempDirFixture } from "./seam-fixture"
-import { toTestFailure, waitFor } from "./transport-harness"
+import { toTestFailure, waitFor } from "./transport-harness-boundary"
 import { fromPromise, ignoreSyncDefect, sleepMillis } from "../src/effect-test-adapters"
 import {
   killProcess,

@@ -1,4 +1,4 @@
-import { describe, expect, it, test } from "effect-bun-test"
+import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Clock, Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
@@ -51,7 +51,7 @@ import {
 } from "./agent-loop/helpers"
 
 describe("run completion", () => {
-  test("run returns after a fast turn completes before the caller awaits idle", () =>
+  it.live("run returns after a fast turn completes before the caller awaits idle", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("fast reply")])
       yield* Effect.gen(function* () {
@@ -64,7 +64,8 @@ describe("run completion", () => {
         const state = yield* agentLoop.getState({ sessionId, branchId })
         expect(state._tag).toBe("Idle")
       }).pipe(Effect.provide(makeLayer(providerLayer)))
-    }).pipe(Effect.runPromise))
+    }),
+  )
 })
 describe("streaming", () => {
   it.live("concurrent sessions run independently", () =>
@@ -366,7 +367,7 @@ describe("streaming", () => {
       }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
     }),
   )
-  test("persists assistant image parts from provider response streams", () =>
+  it.live("persists assistant image parts from provider response streams", () =>
     Effect.gen(function* () {
       const messageStorage = yield* MessageStorage
       const agentLoop = yield* makeAgentLoopService
@@ -394,8 +395,8 @@ describe("streaming", () => {
           ]),
         ),
       ),
-      Effect.runPromise,
-    ))
+    ),
+  )
   it.live("interjection runs before queued follow-up with scoped agent override", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>()
@@ -587,7 +588,7 @@ describe("streaming", () => {
       )
     }),
   )
-  test("retries retryable provider stream-consumption failures before output", () =>
+  it.live("retries retryable provider stream-consumption failures before output", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       let streamCalls = 0
@@ -616,53 +617,59 @@ describe("streaming", () => {
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant?.parts).toEqual([Prompt.textPart({ text: "after retry" })])
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
-    }).pipe(Effect.runPromise))
-  test("retries retryable provider stream-consumption failures after metadata but before output", () =>
-    Effect.gen(function* () {
-      const eventsRef = yield* Ref.make<AgentEvent[]>([])
-      let streamCalls = 0
-      const providerLayer = LanguageModelLayers.testStream(() =>
-        Effect.sync(() => {
-          streamCalls += 1
-          if (streamCalls === 1) {
-            return Stream.concat(
-              Stream.fromIterable([
-                Response.makePart("response-metadata", {
-                  id: "response-before-output",
-                  modelId: "test",
-                  timestamp: undefined,
-                  request: undefined,
-                }),
-                Response.makePart("text-start", { id: "text-before-output" }),
-              ]),
-              Stream.fail(retryableStreamError()),
-            )
-          }
-          return Stream.fromIterable([
-            textDeltaPart("after metadata retry"),
-            finishPart({ finishReason: "stop" }),
-          ])
-        }),
-      )
-      yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        const messageStorage = yield* MessageStorage
-        const message = makeMessage(
-          "stream-metadata-retry-session",
-          "stream-metadata-retry-branch",
-          "retry",
+    }),
+  )
+  it.live(
+    "retries retryable provider stream-consumption failures after metadata but before output",
+    () =>
+      Effect.gen(function* () {
+        const eventsRef = yield* Ref.make<AgentEvent[]>([])
+        let streamCalls = 0
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.sync(() => {
+            streamCalls += 1
+            if (streamCalls === 1) {
+              return Stream.concat(
+                Stream.fromIterable([
+                  Response.makePart("response-metadata", {
+                    id: "response-before-output",
+                    modelId: "test",
+                    timestamp: undefined,
+                    request: undefined,
+                  }),
+                  Response.makePart("text-start", { id: "text-before-output" }),
+                ]),
+                Stream.fail(retryableStreamError()),
+              )
+            }
+            return Stream.fromIterable([
+              textDeltaPart("after metadata retry"),
+              finishPart({ finishReason: "stop" }),
+            ])
+          }),
         )
-        yield* runAgentLoop(agentLoop, message)
-        const events = yield* Ref.get(eventsRef)
-        const tags = events.map((event) => event._tag)
-        expect(streamCalls).toBe(2)
-        expect(tags).toContain("ProviderRetrying")
-        expect(tags).not.toContain("ErrorOccurred")
-        const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
-        expect(assistant?.parts).toEqual([Prompt.textPart({ text: "after metadata retry" })])
-      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
-    }).pipe(Effect.runPromise))
-  test("emits stream failure events after pre-output retries are exhausted", () =>
+        yield* Effect.gen(function* () {
+          const agentLoop = yield* makeAgentLoopService
+          const messageStorage = yield* MessageStorage
+          const message = makeMessage(
+            "stream-metadata-retry-session",
+            "stream-metadata-retry-branch",
+            "retry",
+          )
+          yield* runAgentLoop(agentLoop, message)
+          const events = yield* Ref.get(eventsRef)
+          const tags = events.map((event) => event._tag)
+          expect(streamCalls).toBe(2)
+          expect(tags).toContain("ProviderRetrying")
+          expect(tags).not.toContain("ErrorOccurred")
+          const assistant = yield* messageStorage.getMessage(
+            assistantMessageIdForTurn(message.id, 1),
+          )
+          expect(assistant?.parts).toEqual([Prompt.textPart({ text: "after metadata retry" })])
+        }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
+      }),
+  )
+  it.live("emits stream failure events after pre-output retries are exhausted", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       let streamCalls = 0
@@ -691,8 +698,9 @@ describe("streaming", () => {
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeUndefined()
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
-    }).pipe(Effect.runPromise))
-  test("does not retry retryable provider stream failures after partial output", () =>
+    }),
+  )
+  it.live("does not retry retryable provider stream failures after partial output", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       let streamCalls = 0
@@ -724,8 +732,9 @@ describe("streaming", () => {
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant?.parts).toEqual([Prompt.textPart({ text: "partial answer" })])
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
-    }).pipe(Effect.runPromise))
-  test("native response error parts fail the stream and preserve partial output", () =>
+    }),
+  )
+  it.live("native response error parts fail the stream and preserve partial output", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const providerLayer = LanguageModelLayers.testStream(() =>
@@ -755,6 +764,7 @@ describe("streaming", () => {
         expect(assistant).toBeDefined()
         expect(assistant?.parts).toEqual([Prompt.textPart({ text: "partial answer" })])
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
-    }).pipe(Effect.runPromise))
+    }),
+  )
 })
 // ============================================================================

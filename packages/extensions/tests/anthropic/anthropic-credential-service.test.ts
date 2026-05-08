@@ -66,10 +66,8 @@ const FAR_FUTURE = 10 * 60 * 1000 // expiresAt = 10 minutes from t=0
 // `TestClock.adjust` requires a `Scope` (it manages internal sleeper
 // fibers). Wrap with `Effect.scoped` so tests don't have to thread
 // scope manually.
-const runWithTestClock = <A, E>(eff: Effect.Effect<A, E, AnthropicCredentialService>) =>
-  Effect.runPromise(
-    Effect.scoped(eff).pipe(Effect.provide(TestClock.layer())) as Effect.Effect<A, E, never>,
-  )
+const runWithTestClock = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
+  Effect.scoped(eff).pipe(Effect.provide(TestClock.layer()))
 // ── Tests ──
 describe("AnthropicCredentialService — cache hit/miss", () => {
   it.live("returns cached creds within TTL even when source changes", () =>
@@ -88,17 +86,15 @@ describe("AnthropicCredentialService — cache hit/miss", () => {
           Effect.fail(new ProviderAuthError({ message: "should not be called" })),
       }
       const layer = credLayer(makeIO(state))
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* AnthropicCredentialService
-            const first = yield* svc.getFresh
-            callsRef.current = creds2 // source switches; cache should ignore
-            const second = yield* svc.getFresh
-            expect(first.accessToken).toBe("k1-access")
-            expect(second.accessToken).toBe("k1-access")
-          }).pipe(Effect.provide(layer)),
-        ),
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* AnthropicCredentialService
+          const first = yield* svc.getFresh
+          callsRef.current = creds2 // source switches; cache should ignore
+          const second = yield* svc.getFresh
+          expect(first.accessToken).toBe("k1-access")
+          expect(second.accessToken).toBe("k1-access")
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
@@ -115,18 +111,16 @@ describe("AnthropicCredentialService — cache hit/miss", () => {
           Effect.fail(new ProviderAuthError({ message: "should not be called" })),
       }
       const layer = credLayer(makeIO(state))
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* AnthropicCredentialService
-            const first = yield* svc.getFresh
-            callsRef.current = creds2
-            yield* TestClock.adjust("31 seconds")
-            const second = yield* svc.getFresh
-            expect(first.accessToken).toBe("k1-access")
-            expect(second.accessToken).toBe("k2-access")
-          }).pipe(Effect.provide(layer)),
-        ),
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* AnthropicCredentialService
+          const first = yield* svc.getFresh
+          callsRef.current = creds2
+          yield* TestClock.adjust("31 seconds")
+          const second = yield* svc.getFresh
+          expect(first.accessToken).toBe("k1-access")
+          expect(second.accessToken).toBe("k2-access")
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
@@ -151,25 +145,23 @@ describe("AnthropicCredentialService — refresh on stale", () => {
       }
       const persistState: PersistState = { lastWritten: undefined, failNext: false }
       const layer = credLayer(makeIO(state), makeAuthInfo(persistState))
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* AnthropicCredentialService
-            const fiber = yield* Effect.all([svc.getFresh, svc.getFresh], {
-              concurrency: 2,
-            }).pipe(Effect.forkChild)
-            yield* Deferred.await(refreshStarted)
-            yield* Effect.yieldNow
-            yield* Effect.yieldNow
-            expect(refreshCount).toBe(1)
-            yield* Deferred.succeed(releaseRefresh, undefined)
-            const results = yield* Fiber.join(fiber)
-            expect(results[0].accessToken).toBe("fresh-access")
-            expect(results[1].accessToken).toBe("fresh-access")
-            expect(refreshCount).toBe(1)
-            expect(persistState.lastWritten?.access).toBe("fresh-access")
-          }).pipe(Effect.provide(layer)),
-        ),
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* AnthropicCredentialService
+          const fiber = yield* Effect.all([svc.getFresh, svc.getFresh], {
+            concurrency: 2,
+          }).pipe(Effect.forkChild)
+          yield* Deferred.await(refreshStarted)
+          yield* Effect.yieldNow
+          yield* Effect.yieldNow
+          expect(refreshCount).toBe(1)
+          yield* Deferred.succeed(releaseRefresh, undefined)
+          const results = yield* Fiber.join(fiber)
+          expect(results[0].accessToken).toBe("fresh-access")
+          expect(results[1].accessToken).toBe("fresh-access")
+          expect(refreshCount).toBe(1)
+          expect(persistState.lastWritten?.access).toBe("fresh-access")
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
@@ -187,15 +179,13 @@ describe("AnthropicCredentialService — refresh on stale", () => {
       }
       const persistState: PersistState = { lastWritten: undefined, failNext: false }
       const layer = credLayer(makeIO(state), makeAuthInfo(persistState))
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* AnthropicCredentialService
-            const result = yield* svc.getFresh
-            expect(result.accessToken).toBe("fresh-access")
-            expect(persistState.lastWritten?.access).toBe("fresh-access")
-          }).pipe(Effect.provide(layer)),
-        ),
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* AnthropicCredentialService
+          const result = yield* svc.getFresh
+          expect(result.accessToken).toBe("fresh-access")
+          expect(persistState.lastWritten?.access).toBe("fresh-access")
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
@@ -208,13 +198,11 @@ describe("AnthropicCredentialService — refresh on stale", () => {
           Effect.fail(new ProviderAuthError({ message: "OAuth 401 from refresh" })),
       }
       const layer = credLayer(makeIO(state))
-      const result = yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* AnthropicCredentialService
-            return yield* Effect.exit(svc.getFresh)
-          }).pipe(Effect.provide(layer)),
-        ),
+      const result = yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* AnthropicCredentialService
+          return yield* Effect.exit(svc.getFresh)
+        }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
       if (result._tag === "Failure") {
@@ -241,18 +229,16 @@ describe("AnthropicCredentialService — invalidate", () => {
           Effect.fail(new ProviderAuthError({ message: "should not be called" })),
       }
       const layer = credLayer(makeIO(state))
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* AnthropicCredentialService
-            const before = yield* svc.getFresh
-            callsRef.current = creds2
-            yield* svc.invalidate
-            const after = yield* svc.getFresh
-            expect(before.accessToken).toBe("k1-access")
-            expect(after.accessToken).toBe("k2-access")
-          }).pipe(Effect.provide(layer)),
-        ),
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* AnthropicCredentialService
+          const before = yield* svc.getFresh
+          callsRef.current = creds2
+          yield* svc.invalidate
+          const after = yield* svc.getFresh
+          expect(before.accessToken).toBe("k1-access")
+          expect(after.accessToken).toBe("k2-access")
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
@@ -268,13 +254,11 @@ describe("AnthropicCredentialService — durable persist failure", () => {
       }
       const persistState: PersistState = { lastWritten: undefined, failNext: true }
       const layer = credLayer(makeIO(state), makeAuthInfo(persistState))
-      const result = yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* AnthropicCredentialService
-            return yield* Effect.exit(svc.getFresh)
-          }).pipe(Effect.provide(layer)),
-        ),
+      const result = yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* AnthropicCredentialService
+          return yield* Effect.exit(svc.getFresh)
+        }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
       if (result._tag === "Failure") {
@@ -299,16 +283,14 @@ describe("AnthropicCredentialService — keychain miss falls through to refresh"
         refreshResult: () => Effect.succeed(fresh),
       }
       const layer = credLayer(makeIO(state))
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* AnthropicCredentialService
-            const result = yield* svc.getFresh
-            // Outcome: when read fails, the refresh path's creds reach the
-            // caller. No internal call counters needed.
-            expect(result.accessToken).toBe("fresh-access")
-          }).pipe(Effect.provide(layer)),
-        ),
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* AnthropicCredentialService
+          const result = yield* svc.getFresh
+          // Outcome: when read fails, the refresh path's creds reach the
+          // caller. No internal call counters needed.
+          expect(result.accessToken).toBe("fresh-access")
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )

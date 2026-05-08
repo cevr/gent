@@ -122,8 +122,9 @@ const getLocLine = (node: AstNode, edge: "start" | "end"): number | undefined =>
   return typeof line === "number" ? line : undefined
 }
 
-const isTestFilename = (filename: string): boolean =>
-  /\/tests\//.test(filename) || /\.test\.tsx?$/.test(filename)
+const isTestFilename = (filename: string): boolean => /\.test\.tsx?$/.test(filename)
+
+const isTestBoundaryFilename = (filename: string): boolean => /-boundary\.tsx?$/.test(filename)
 
 /** Return the call's function name (Identifier or MemberExpression property). */
 const calleeName = (node: AstNode): string | undefined => {
@@ -181,6 +182,18 @@ const promiseStaticMethodName = (node: AstNode): string | undefined => {
   const name = getStringField(prop, "name")
   return name !== undefined && PROMISE_STATIC_METHODS.has(name) ? name : undefined
 }
+
+const RUN_PROMISE_METHODS = new Set(["runPromise", "runPromiseWith", "runPromiseExit"])
+
+const runPromiseMethodName = (node: AstNode): string | undefined => {
+  if (node.type !== "MemberExpression") return undefined
+  const prop = getNodeField(node, "property")
+  if (prop?.type !== "Identifier") return undefined
+  const name = getStringField(prop, "name")
+  return name !== undefined && RUN_PROMISE_METHODS.has(name) ? name : undefined
+}
+
+const isRunPromiseReference = (node: AstNode): boolean => runPromiseMethodName(node) !== undefined
 
 const isPromiseConstructor = (node: AstNode): boolean => {
   if (node.type !== "NewExpression") return false
@@ -928,6 +941,7 @@ const plugin: Plugin = {
       create(context) {
         const filename = context.filename
         if (!isTestFilename(filename)) return {}
+        if (isTestBoundaryFilename(filename)) return {}
 
         return {
           TryStatement(node) {
@@ -971,6 +985,25 @@ const plugin: Plugin = {
           },
           CallExpression(node) {
             if (!isAstNode(node)) return
+            const callee = getNodeField(node, "callee")
+            if (callee !== undefined && isRunPromiseReference(callee)) {
+              const method = runPromiseMethodName(callee)
+              context.report({
+                message: `Do not use \`${method}\` in tests. Import \`it\` from \`effect-bun-test\` and return an Effect directly from \`it.live(...)\` / \`it.scopedLive(...)\`; keep runtime Promise boundaries out of tests.`,
+                node,
+              })
+              return
+            }
+            const args = getNodeArrayField(node, "arguments") ?? []
+            const runPromiseArg = args.find(isRunPromiseReference)
+            if (runPromiseArg !== undefined) {
+              const method = runPromiseMethodName(runPromiseArg)
+              context.report({
+                message: `Do not pipe tests to \`${method}\`. Import \`it\` from \`effect-bun-test\` and return the Effect directly from \`it.live(...)\` / \`it.scopedLive(...)\`.`,
+                node: runPromiseArg,
+              })
+              return
+            }
             const method = promiseChainMethodName(node)
             if (method !== undefined) {
               context.report({

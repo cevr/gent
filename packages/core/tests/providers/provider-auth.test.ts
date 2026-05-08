@@ -24,20 +24,14 @@ const oauthProvider: ModelDriverContribution = {
   auth: {
     methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
     authorize: (ctx) =>
-      Effect.tryPromise({
-        try: () =>
-          Effect.runPromise(
-            Effect.sync(() => {
-              pendingCallbacks.set(ctx.authorizationId, (code) => code ?? "")
-              return {
-                url: "http://example.com/auth",
-                method: "code" as const,
-                instructions: "Paste code",
-              }
-            }),
-          ),
-        catch: (e) => ({ _tag: "AuthError" as const, cause: e }),
-      }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
+      Effect.sync(() => {
+        pendingCallbacks.set(ctx.authorizationId, (code) => code ?? "")
+        return {
+          url: "http://example.com/auth",
+          method: "code" as const,
+          instructions: "Paste code",
+        }
+      }),
     callback: (ctx) =>
       Effect.gen(function* () {
         const cb = pendingCallbacks.get(ctx.authorizationId)

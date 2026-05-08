@@ -1,4 +1,4 @@
-import { describe, test, expect, it } from "effect-bun-test"
+import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Context, Effect, Layer, Schema, Stream, SubscriptionRef } from "effect"
@@ -239,7 +239,7 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
     }),
   )
 describe("RunSpec", () => {
-  test("dual model pair resolves to cowork and deepwork models", () => {
+  it.live("dual model pair resolves to cowork and deepwork models", () => {
     const registry = resolveExtensions([
       {
         manifest: { id: ExtensionId.make("agents") },
@@ -255,7 +255,7 @@ describe("RunSpec", () => {
       expect(a).toBe(resolveAgentModel(getBuiltinAgent("cowork")!))
       expect(b).toBe(resolveAgentModel(getBuiltinAgent("deepwork")!))
       expect(a).not.toBe(b)
-    }).pipe(Effect.timeout("4 seconds"), Effect.provide(impl), Effect.runPromise)
+    }).pipe(Effect.timeout("4 seconds"), Effect.provide(impl))
   })
   it.live("durable helper-agent runSpec reaches the provider through AgentRunner", () =>
     Effect.gen(function* () {
@@ -1128,7 +1128,7 @@ describe("ephemeral service propagation", () => {
         new Branch({ id: BranchId.make(`${id}-branch`), sessionId: id, createdAt: now }),
       )
     })
-  test("ephemeral agent writes to ephemeral storage, not parent", () =>
+  it.live("ephemeral agent writes to ephemeral storage, not parent", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
         textStep("ephemeral text output"),
@@ -1154,8 +1154,9 @@ describe("ephemeral service propagation", () => {
         const sessionsResult = yield* sessions.listSessions()
         expect(sessionsResult.map((s) => s.id)).toEqual([SessionId.make("parent-svc-prop")])
       }).pipe(Effect.provide(layer))
-    }).pipe(Effect.timeout("4 seconds"), Effect.runPromise))
-  test("ephemeral agent auto-approves interactions", () =>
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  it.live("ephemeral agent auto-approves interactions", () =>
     Effect.gen(function* () {
       const approveTool = tool({
         id: "approve_test",
@@ -1223,9 +1224,10 @@ describe("ephemeral service propagation", () => {
           expect(result.text).toContain("approved")
         }
       }).pipe(Effect.provide(layer))
-    }).pipe(Effect.timeout("4 seconds"), Effect.runPromise))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
 
-  test("ephemeral agent rebuilds resource services without rerunning process lifecycle", () =>
+  it.live("ephemeral agent rebuilds resource services without rerunning process lifecycle", () =>
     Effect.gen(function* () {
       let starts = 0
       class ProbeService extends Context.Service<
@@ -1310,5 +1312,6 @@ describe("ephemeral service propagation", () => {
         }
         expect(starts).toBe(0)
       }).pipe(Effect.provide(layer))
-    }).pipe(Effect.timeout("4 seconds"), Effect.runPromise))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
 })

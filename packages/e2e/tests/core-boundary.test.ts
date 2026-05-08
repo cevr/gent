@@ -1,6 +1,6 @@
 import { describe, expect, test } from "effect-bun-test"
 import { Deferred, Effect, Ref, Stream } from "effect"
-import { toTestFailure, transportCases } from "./transport-harness"
+import { toTestFailure, transportCases } from "./transport-harness-boundary"
 import { waitDeferred } from "../src/effect-test-adapters"
 
 const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>

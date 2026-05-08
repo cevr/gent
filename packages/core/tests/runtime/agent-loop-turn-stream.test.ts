@@ -1,4 +1,4 @@
-import { describe, expect, test } from "effect-bun-test"
+import { describe, expect, it } from "effect-bun-test"
 import { Effect, Ref } from "effect"
 import {
   finishPart,
@@ -21,7 +21,7 @@ import {
 } from "./agent-loop/helpers"
 
 describe("turn stream parity", () => {
-  test("model and external turns produce the same assistant draft and lifecycle tags", () =>
+  it.live("model and external turns produce the same assistant draft and lifecycle tags", () =>
     Effect.gen(function* () {
       const expectedTags = [
         "MessageReceived",
@@ -88,5 +88,6 @@ describe("turn stream parity", () => {
       expect((yield* Ref.get(externalEventsRef)).map((event) => event._tag as string)).toEqual([
         ...expectedTags,
       ])
-    }).pipe(Effect.runPromise))
+    }),
+  )
 })

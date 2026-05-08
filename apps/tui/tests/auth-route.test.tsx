@@ -10,6 +10,7 @@ import { AgentName } from "@gent/core-internal/domain/agent"
 import { SessionId } from "@gent/core-internal/domain/ids"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness"
 import { waitForRenderedFrame } from "./helpers"
+import { runEffectBoundary } from "./run-effect-boundary"
 import { onMount } from "solid-js"
 function ClientProbe(props: { readonly onReady: (ctx: ClientContextValue) => void }) {
   const client = useClient()
@@ -28,7 +29,7 @@ const servicesWithLinkOpener = (
   open: (url: string) => Effect.Effect<void, LinkOpenerError>,
 ): Promise<Context.Context<unknown>> => {
   const layer = Layer.merge(BunServices.layer, LinkOpener.Test({ open }))
-  return Effect.runPromise(
+  return runEffectBoundary(
     Effect.gen(function* () {
       const scope = yield* Scope.make()
       const built = yield* Layer.buildWithScope(layer, scope)

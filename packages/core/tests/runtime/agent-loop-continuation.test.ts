@@ -1,4 +1,4 @@
-import { describe, expect, test } from "effect-bun-test"
+import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Ref, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
@@ -41,7 +41,7 @@ describe("continuation", () => {
     output: Schema.Struct({ text: Schema.String }),
     execute: (_params) => Effect.succeed({ text: _params.text }),
   })
-  test("tool call auto-continues to next LLM call", () =>
+  it.live("tool call auto-continues to next LLM call", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "hello" }),
@@ -53,8 +53,9 @@ describe("continuation", () => {
         expect(yield* controls.callCount).toBe(2)
         yield* controls.assertDone()
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
-    }).pipe(Effect.runPromise))
-  test("text-only response does not trigger continuation", () =>
+    }),
+  )
+  it.live("text-only response does not trigger continuation", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         textStep("Just text, no tools."),
@@ -65,8 +66,9 @@ describe("continuation", () => {
         expect(yield* controls.callCount).toBe(1)
         yield* controls.assertDone()
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
-    }).pipe(Effect.runPromise))
-  test("multi-hop tool calls chain until text response", () =>
+    }),
+  )
+  it.live("multi-hop tool calls chain until text response", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "step 1" }),
@@ -80,8 +82,9 @@ describe("continuation", () => {
         expect(yield* controls.callCount).toBe(4)
         yield* controls.assertDone()
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
-    }).pipe(Effect.runPromise))
-  test("TurnCompleted fires once per turn, not per step", () =>
+    }),
+  )
+  it.live("TurnCompleted fires once per turn, not per step", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "step 1" }),
@@ -97,8 +100,9 @@ describe("continuation", () => {
         const turnCompleted = events.filter((e) => e._tag === "TurnCompleted")
         expect(turnCompleted.length).toBe(1)
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
-    }).pipe(Effect.runPromise))
-  test("interrupt during tool execution stops continuation", () =>
+    }),
+  )
+  it.live("interrupt during tool execution stops continuation", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "step 1" }),
@@ -127,8 +131,9 @@ describe("continuation", () => {
         }
         expect(tc.interrupted).toBe(true)
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
-    }).pipe(Effect.runPromise))
-  test("GUARD: ToolsFinished without interrupt routes to Resolving", () =>
+    }),
+  )
+  it.live("GUARD: ToolsFinished without interrupt routes to Resolving", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "tool" }),
@@ -143,8 +148,9 @@ describe("continuation", () => {
         const events = yield* Ref.get(eventsRef)
         expect(events.filter((e) => e._tag === "TurnCompleted").length).toBe(1)
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
-    }).pipe(Effect.runPromise))
-  test("GUARD: multi-hop persists distinct messages per step", () =>
+    }),
+  )
+  it.live("GUARD: multi-hop persists distinct messages per step", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "step 1" }),
@@ -176,8 +182,9 @@ describe("continuation", () => {
         expect(new Set([a1!.id, a2!.id, a3!.id]).size).toBe(3)
         expect(new Set([t1!.id, t2!.id]).size).toBe(2)
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
-    }).pipe(Effect.runPromise))
-  test("queued follow-up executes normally after interrupt", () =>
+    }),
+  )
+  it.live("queued follow-up executes normally after interrupt", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         toolCallStep("echo", { text: "step 1" }),
@@ -230,5 +237,6 @@ describe("continuation", () => {
         // Follow-up used the third provider step
         expect(yield* controls.callCount).toBe(3)
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
-    }).pipe(Effect.runPromise))
+    }),
+  )
 })

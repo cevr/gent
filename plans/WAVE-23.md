@@ -346,22 +346,26 @@ Validation:
 
 ### W23.2 — Convert Promise Test Bodies To Effect Test Control Flow
 
-Status: planned.
+Status: implemented locally; ready for commit.
 
 Work:
 
-- Add the failing lint rule for `Effect.runPromise*` and runtime `.runPromise*`
-  in tests.
-- Migrate existing tests to `it.live` / `it.scopedLive`.
-- Preserve real async boundaries inside `Effect.promise`, not Promise-returning
-  test bodies.
+- Added `Effect.runPromise*` and runtime `.runPromise*` detection to
+  `gent/no-promise-control-flow-in-tests` for `.test.ts` / `.test.tsx` files.
+- Migrated current raw `runPromise` test bodies to `it.live` /
+  `it.scopedLive` or explicit `*-boundary.ts` helpers where a Bun hook,
+  runtime adapter, or transform instance extraction must return a Promise.
+- Preserved real async boundaries inside `Effect.promise`; boundary helpers are
+  now named and searchable instead of hidden inside test bodies.
 
 Validation:
 
-- Focused converted test files.
 - `bun run --cwd packages/tooling test`
-- `bun run test`
 - `bun run lint`
+- `bun run typecheck`
+- Focused converted test files:
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/domain/file-lock.test.ts packages/core/tests/runtime/resource-manager.test.ts packages/core/tests/providers/provider-auth.test.ts packages/core/tests/runtime/agent-loop-streaming.test.ts packages/core/tests/runtime/agent-runner.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/e2e/tests/e2e.test.ts packages/extensions/tests/anthropic/anthropic-keychain-transform.test.ts packages/extensions/tests/openai/openai-codex-transform.test.ts apps/tui/tests/autocomplete-effect-items.test.ts apps/tui/tests/headless-cli-exit.test.ts apps/tui/tests/widgets-render.test.tsx`
+- `bun run test`
 
 ### W23.3 — Split Host Facts From Process Authority
 

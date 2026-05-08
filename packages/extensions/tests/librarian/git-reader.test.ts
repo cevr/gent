@@ -4,23 +4,22 @@ import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import { GitReader, GitReaderError } from "@gent/extensions/librarian"
 import { $ } from "bun"
+import { runEffectBoundary } from "../run-effect-boundary.js"
 // ---------------------------------------------------------------------------
 // Fixture: create a real git repo with nested files
 // ---------------------------------------------------------------------------
 const FIXTURE_DIR = `/tmp/test-git-reader-fixture-${Bun.randomUUIDv7()}`
 const CLONE_FAIL_DIR = `/tmp/test-clone-fail-fixture-${Bun.randomUUIDv7()}`
 beforeAll(() =>
-  Effect.runPromise(
+  runEffectBoundary(
     Effect.gen(function* () {
       yield* Effect.promise(() => $`rm -rf ${FIXTURE_DIR}`.quiet())
-      yield* Effect.promise(() => $`mkdir -p ${FIXTURE_DIR}`.quiet())
+      yield* Effect.promise(() => $`mkdir -p ${FIXTURE_DIR}/src/utils`.quiet())
       yield* Effect.promise(() => $`git -C ${FIXTURE_DIR} init`.quiet())
       yield* Effect.promise(() =>
         $`git -C ${FIXTURE_DIR} config user.email "test@test.com"`.quiet(),
       )
       yield* Effect.promise(() => $`git -C ${FIXTURE_DIR} config user.name "Test"`.quiet())
-      // Create nested file structure
-      yield* Effect.promise(() => $`mkdir -p ${FIXTURE_DIR}/src/utils`.quiet())
       yield* Effect.promise(() =>
         Bun.write(`${FIXTURE_DIR}/README.md`, "# Test Repo\n\nHello world.\n"),
       )
@@ -34,15 +33,18 @@ beforeAll(() =>
         ),
       )
       yield* Effect.promise(() => Bun.write(`${FIXTURE_DIR}/.gitignore`, "node_modules/\n"))
-      // Create a binary file (PNG header)
-      const binaryContent = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00])
-      yield* Effect.promise(() => Bun.write(`${FIXTURE_DIR}/icon.png`, binaryContent))
+      yield* Effect.promise(() =>
+        Bun.write(
+          `${FIXTURE_DIR}/icon.png`,
+          new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]),
+        ),
+      )
       yield* Effect.promise(() => $`git -C ${FIXTURE_DIR} add -A`.quiet())
       yield* Effect.promise(() => $`git -C ${FIXTURE_DIR} commit -m "initial commit"`.quiet())
     }),
   ),
 )
-afterAll(() => Effect.runPromise(Effect.promise(() => $`rm -rf ${FIXTURE_DIR}`.quiet())))
+afterAll(() => runEffectBoundary(Effect.promise(() => $`rm -rf ${FIXTURE_DIR}`.quiet())))
 // ---------------------------------------------------------------------------
 // Layer
 // ---------------------------------------------------------------------------

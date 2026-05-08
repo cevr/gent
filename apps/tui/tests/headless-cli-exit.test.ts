@@ -20,11 +20,9 @@ const waitForExit = (proc: Bun.Subprocess, timeoutMs: number) => {
     Effect.tap(() => Effect.sync(() => proc.kill())),
     Effect.as(-1),
   )
-  return Effect.runPromise(
-    Effect.race(
-      Effect.promise(() => proc.exited),
-      timeout,
-    ),
+  return Effect.race(
+    Effect.promise(() => proc.exited),
+    timeout,
   )
 }
 afterEach(() => {
@@ -35,13 +33,11 @@ afterEach(() => {
 })
 const seedAuth = (directory: string) => {
   const authLayer = Auth.Live(directory).pipe(Layer.provide(BunServices.layer))
-  return Effect.runPromise(
-    Effect.gen(function* () {
-      const auth = yield* Auth
-      yield* auth.set("anthropic", AuthApi.make({ type: "api", key: "test-key" }))
-      yield* auth.set("openai", AuthApi.make({ type: "api", key: "test-key" }))
-    }).pipe(Effect.provide(authLayer)),
-  )
+  return Effect.gen(function* () {
+    const auth = yield* Auth
+    yield* auth.set("anthropic", AuthApi.make({ type: "api", key: "test-key" }))
+    yield* auth.set("openai", AuthApi.make({ type: "api", key: "test-key" }))
+  }).pipe(Effect.provide(authLayer))
 }
 const makeChildEnv = (homeDir: string, env: ReturnType<typeof createWorkerEnv>) => {
   const childEnv = { ...Bun.env }
@@ -63,7 +59,7 @@ describe("headless CLI", () => {
         const appDir = path.resolve(import.meta.dir, "..")
         const homeDir = makeTempDir()
         const env = createWorkerEnv(homeDir, { providerMode: "debug-scripted" })
-        yield* Effect.promise(() => seedAuth(env["GENT_AUTH_DIRECTORY"]!))
+        yield* seedAuth(env["GENT_AUTH_DIRECTORY"]!)
         const proc = Bun.spawn(
           [
             "bun",
@@ -83,7 +79,7 @@ describe("headless CLI", () => {
         )
         const [exitCode, stdout, stderr] = yield* Effect.all(
           [
-            Effect.promise(() => waitForExit(proc, 15000)),
+            waitForExit(proc, 15000),
             Effect.promise(() => new Response(proc.stdout).text()),
             Effect.promise(() => new Response(proc.stderr).text()),
           ],

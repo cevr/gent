@@ -17,6 +17,7 @@ import {
   type TestContext,
 } from "../src/pty-fixture"
 import { raceWithNullTimeout } from "../src/effect-test-adapters"
+import { runTestCleanupBoundary } from "../src/test-cleanup-boundary"
 
 const TEST_TIMEOUT = 30_000
 
@@ -35,7 +36,7 @@ const currentContext = (): TestContext => {
 }
 
 afterEach(() =>
-  Effect.runPromise(
+  runTestCleanupBoundary(
     Effect.gen(function* () {
       if (testContext !== null) {
         yield* testContext.cleanup

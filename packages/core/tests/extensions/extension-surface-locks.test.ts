@@ -268,7 +268,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
 
 describe("Effect-purity locks (compile-time)", () => {
   test("tool.execute MUST return Effect — Promise handler rejected", () => {
-    const promiseString = Effect.runPromise(Effect.succeed("result"))
+    const promiseString = Bun.file("/dev/null").text()
     tool({
       id: "ok",
       description: "ok",
@@ -380,7 +380,7 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("reactions.systemPrompt MUST return Effect — Promise handler rejected", () => {
-    const promiseString = Effect.runPromise(Effect.succeed("prompt"))
+    const promiseString = Bun.file("/dev/null").text()
     defineExtension({
       id: "bad-prompt-reaction",
       reactions: {
@@ -392,7 +392,7 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("extension reactions and lifecycle hooks reject Promise handlers", () => {
-    const promiseVoid = Effect.runPromise(Effect.void)
+    const promiseVoid = Bun.sleep(0)
     defineExtension({
       id: "purity-reaction",
       reactions: {

@@ -3,7 +3,7 @@ import { Deferred, Effect, Ref, Stream } from "effect"
 import type { EventEnvelope } from "@gent/core-internal/domain/event"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import type { GentClientBundle } from "@gent/sdk"
-import { toTestFailure, transportCases, waitFor } from "./transport-harness"
+import { toTestFailure, transportCases, waitFor } from "./transport-harness-boundary"
 import { waitDeferred } from "../src/effect-test-adapters"
 
 type EventsClient = GentClientBundle["client"]

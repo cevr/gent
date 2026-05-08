@@ -1,4 +1,4 @@
-import { describe, test, expect } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { Effect } from "effect"
 import { PlanExtension, PLAN_EXTENSION_ID } from "@gent/extensions/plan"
 import { testSetupCtx } from "@gent/core-internal/test-utils"
@@ -11,17 +11,19 @@ describe("Plan extension", () => {
     expect(PLAN_EXTENSION_ID as string).toBe("@gent/plan")
   })
 
-  test("registers plan tool", () =>
+  it.live("registers plan tool", () =>
     Effect.gen(function* () {
       const contributions = yield* PlanExtension.setup(testSetupCtx())
       // tool({...}) outputs slot into the typed `tools:` bucket.
       const toolIds = modelCapabilities(contributions).map((cap) => String(getToolId(cap)))
       expect(toolIds).toContain("plan")
-    }).pipe(Effect.runPromise))
+    }),
+  )
 
-  test("has no resources (tool-only extension)", () =>
+  it.live("has no resources (tool-only extension)", () =>
     Effect.gen(function* () {
       const contributions = yield* PlanExtension.setup(testSetupCtx())
       expect(contributions.resources ?? []).toEqual([])
-    }).pipe(Effect.runPromise))
+    }),
+  )
 })

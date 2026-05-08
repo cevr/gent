@@ -31,6 +31,7 @@ import {
 import type { ClaudeCredentials } from "@gent/extensions/anthropic/oauth"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
+import { runEffectBoundary } from "../run-effect-boundary.js"
 // ── Helpers ──
 // Real Clock here (no TestClock), so expiresAt must be a real future
 // Unix-millis timestamp. 10h from real now is comfortably outside the
@@ -102,7 +103,7 @@ const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServi
   const layer = AnthropicCredentialService.layerFromIO(io).pipe(
     Layer.provide(Layer.merge(BunServices.layer, AnthropicPlatform.Live(testSetupCtx().host))),
   )
-  return Effect.runPromise(
+  return runEffectBoundary(
     Layer.build(layer).pipe(
       Effect.scoped,
       Effect.map((ctx) => Context.get(ctx, AnthropicCredentialService)),
@@ -113,7 +114,7 @@ const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServi
 // returns a FRESH cache (the layer builds a new Ref) so tests are
 // isolated.
 const buildBetaCache = (): Promise<AnthropicBetaCacheShape> =>
-  Effect.runPromise(
+  runEffectBoundary(
     Layer.build(AnthropicBetaCache.layer).pipe(
       Effect.scoped,
       Effect.map((ctx) => Context.get(ctx, AnthropicBetaCache)),
@@ -131,7 +132,7 @@ const jsonBody = (payload: Record<string, unknown>) => HttpBody.jsonUnsafe(paylo
 // `Effect.orDie` collapses typed errors to defects so test bodies can
 // assert success without `as Effect<unknown, never, never>` casts.
 const runOk = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> =>
-  Effect.runPromise(Effect.scoped(eff.pipe(Effect.orDie)))
+  runEffectBoundary(Effect.scoped(eff.pipe(Effect.orDie)))
 // Drives Schedule.exponential("1 second") in virtual time. Used by
 // any test path that crosses a retry sleep — primarily 2b's transient
 // retry but also 2d's parity-drift test for 429+long-context-body.
@@ -143,7 +144,7 @@ const runWithTestClock = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> => 
     yield* TestClock.adjust("3 seconds")
     return yield* Fiber.join(fiber)
   })
-  return Effect.runPromise(
+  return runEffectBoundary(
     Effect.scoped(program).pipe(Effect.provide(TestClock.layer())) as Effect.Effect<A, E, never>,
   )
 }

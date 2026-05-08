@@ -22,6 +22,7 @@ import {
 import { runAutocompleteItems } from "../src/components/autocomplete-popup-boundary"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { makeClientExtensionRuntime, makeClientTestTransport } from "./extension-test-harness"
+import { runRuntimeEffectBoundary, runRuntimeExitBoundary } from "./run-effect-boundary"
 class AutocompleteTestError extends Schema.TaggedErrorClass<AutocompleteTestError>()(
   "AutocompleteTestError",
   { message: Schema.String },
@@ -87,7 +88,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       const transport = makeFakeTransport({ currentSession: () => undefined })
       const runtime = makeTestRuntime(transport)
       const exit = yield* Effect.promise(() =>
-        runtime.runPromiseExit(requestExtension(ref(ListThingsRpc), {})),
+        runRuntimeExitBoundary(runtime, requestExtension(ref(ListThingsRpc), {})),
       )
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -126,7 +127,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       const transport = makeFakeTransport({ requestReply: ["effect-v4", "react"] })
       const runtime = makeTestRuntime(transport)
       const result = yield* Effect.promise(() =>
-        runtime.runPromise(requestExtension(ref(ListThingsRpc), {})),
+        runRuntimeEffectBoundary(runtime, requestExtension(ref(ListThingsRpc), {})),
       )
       expect(result).toEqual(["effect-v4", "react"])
       yield* Effect.promise(() => runtime.dispose())
@@ -163,7 +164,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       })
       const runtime = makeTestRuntime(transport)
       const exit = yield* Effect.promise(() =>
-        runtime.runPromiseExit(requestExtension(ref(ListThingsRpc), {})),
+        runRuntimeExitBoundary(runtime, requestExtension(ref(ListThingsRpc), {})),
       )
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -179,7 +180,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       const transport = makeFakeTransport({ requestReply: { nope: true } })
       const runtime = makeTestRuntime(transport)
       const exit = yield* Effect.promise(() =>
-        runtime.runPromiseExit(requestExtension(ref(ListThingsRpc), {})),
+        runRuntimeExitBoundary(runtime, requestExtension(ref(ListThingsRpc), {})),
       )
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -193,8 +194,9 @@ describe("autocomplete Effect items() through ClientTransport", () => {
     Effect.gen(function* () {
       const transport = makeFakeTransport()
       const runtime = makeTestRuntime(transport)
-      const resolved = yield* Effect.promise(() =>
-        runtime.runPromise(
+      const resolved: ClientTransportShape = yield* Effect.promise(() =>
+        runRuntimeEffectBoundary<ClientTransportShape, never, ClientTransport>(
+          runtime,
           Effect.gen(function* () {
             yield* Effect.void
             return yield* ClientTransport

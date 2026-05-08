@@ -8,6 +8,7 @@ import { onMount } from "solid-js"
 import { Effect, Schema } from "effect"
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { createMockClient, renderWithProviders } from "./render-harness"
+import { runEffectBoundary } from "./run-effect-boundary"
 import { useClient } from "../src/client"
 import type { ClientContextValue, SessionState } from "../src/client/context"
 class ClientSessionStateTestError extends Schema.TaggedErrorClass<ClientSessionStateTestError>()(
@@ -27,7 +28,7 @@ const waitForState = (
   predicate: (state: SessionState) => boolean,
   remaining = 10,
 ): Promise<SessionState> =>
-  Effect.runPromise(
+  runEffectBoundary(
     Effect.gen(function* () {
       yield* Effect.promise(() => setup.renderOnce())
       const state = read()
@@ -45,7 +46,7 @@ const waitForAgentError = (
   read: () => string | null,
   remaining = 10,
 ): Promise<string> =>
-  Effect.runPromise(
+  runEffectBoundary(
     Effect.gen(function* () {
       yield* Effect.promise(() => setup.renderOnce())
       const error = read()

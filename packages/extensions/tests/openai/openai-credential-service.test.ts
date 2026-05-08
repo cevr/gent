@@ -70,10 +70,8 @@ const makeAuthInfo = (
 })
 // TestClock starts at time 0, so `expires` values are absolute offsets.
 const FAR_FUTURE = 10 * 60 * 1000
-const runWithTestClock = <A, E>(eff: Effect.Effect<A, E, OpenAICredentialService>) =>
-  Effect.runPromise(
-    Effect.scoped(eff).pipe(Effect.provide(TestClock.layer())) as Effect.Effect<A, E, never>,
-  )
+const runWithTestClock = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
+  Effect.scoped(eff).pipe(Effect.provide(TestClock.layer()))
 // ── Tests ──
 describe("OpenAICredentialService — initial seed from authInfo", () => {
   it.live("seed creds from authInfo are returned without invoking refresh", () =>
@@ -94,15 +92,13 @@ describe("OpenAICredentialService — initial seed from authInfo", () => {
           },
         ),
       )
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* OpenAICredentialService
-            const result = yield* svc.getFresh
-            expect(result.access).toBe("seed-access")
-            expect(result.accountId).toBe("acct1")
-          }).pipe(Effect.provide(layer)),
-        ),
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* OpenAICredentialService
+          const result = yield* svc.getFresh
+          expect(result.access).toBe("seed-access")
+          expect(result.accountId).toBe("acct1")
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
@@ -120,13 +116,11 @@ describe("OpenAICredentialService — initial seed from authInfo", () => {
         expires: 0,
       }
       const layer = OpenAICredentialService.layerFromIO(makeIO(state), authInfo)
-      const result = yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* OpenAICredentialService
-            return yield* Effect.exit(svc.getFresh)
-          }).pipe(Effect.provide(layer)),
-        ),
+      const result = yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* OpenAICredentialService
+          return yield* Effect.exit(svc.getFresh)
+        }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
       if (result._tag === "Failure") {
@@ -164,25 +158,23 @@ describe("OpenAICredentialService — refresh on stale", () => {
           expires: 30000,
         }),
       )
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* OpenAICredentialService
-            const fiber = yield* Effect.all([svc.getFresh, svc.getFresh], {
-              concurrency: 2,
-            }).pipe(Effect.forkChild)
-            yield* Deferred.await(refreshStarted)
-            yield* Effect.yieldNow
-            yield* Effect.yieldNow
-            expect(refreshCount).toBe(1)
-            yield* Deferred.succeed(releaseRefresh, undefined)
-            const results = yield* Fiber.join(fiber)
-            expect(results[0].access).toBe("fresh-access")
-            expect(results[1].access).toBe("fresh-access")
-            expect(refreshCount).toBe(1)
-            expect(persistState.lastWritten?.access).toBe("fresh-access")
-          }).pipe(Effect.provide(layer)),
-        ),
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* OpenAICredentialService
+          const fiber = yield* Effect.all([svc.getFresh, svc.getFresh], {
+            concurrency: 2,
+          }).pipe(Effect.forkChild)
+          yield* Deferred.await(refreshStarted)
+          yield* Effect.yieldNow
+          yield* Effect.yieldNow
+          expect(refreshCount).toBe(1)
+          yield* Deferred.succeed(releaseRefresh, undefined)
+          const results = yield* Fiber.join(fiber)
+          expect(results[0].access).toBe("fresh-access")
+          expect(results[1].access).toBe("fresh-access")
+          expect(refreshCount).toBe(1)
+          expect(persistState.lastWritten?.access).toBe("fresh-access")
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
@@ -206,15 +198,13 @@ describe("OpenAICredentialService — refresh on stale", () => {
           expires: 30000,
         }),
       )
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* OpenAICredentialService
-            const result = yield* svc.getFresh
-            expect(result.access).toBe("fresh-access")
-            expect(persistState.lastWritten?.access).toBe("fresh-access")
-          }).pipe(Effect.provide(layer)),
-        ),
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* OpenAICredentialService
+          const result = yield* svc.getFresh
+          expect(result.access).toBe("fresh-access")
+          expect(persistState.lastWritten?.access).toBe("fresh-access")
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
@@ -259,35 +249,33 @@ describe("OpenAICredentialService — refresh on stale", () => {
             expires: 30000,
           }),
         )
-        yield* Effect.promise(() =>
-          runWithTestClock(
-            Effect.gen(function* () {
-              const svc = yield* OpenAICredentialService
-              // First get: refreshes from bootstrap, rotates to "rotated-*".
-              const first = yield* svc.getFresh
-              expect(first.access).toBe("rotated-access")
-              expect(callTokens[0]).toBe("seed-refresh")
-              // Second get: rotated creds also expire soon → refresh again.
-              // This call fails — must surface ProviderAuthError.
-              const failure = yield* Effect.exit(svc.getFresh)
-              expect(failure._tag).toBe("Failure")
-              if (failure._tag === "Failure") {
-                const errOpt = Cause.findErrorOption(failure.cause)
-                expect(Option.isSome(errOpt)).toBe(true)
-                if (Option.isSome(errOpt)) {
-                  expect(errOpt.value.message).toContain("401")
-                }
+        yield* runWithTestClock(
+          Effect.gen(function* () {
+            const svc = yield* OpenAICredentialService
+            // First get: refreshes from bootstrap, rotates to "rotated-*".
+            const first = yield* svc.getFresh
+            expect(first.access).toBe("rotated-access")
+            expect(callTokens[0]).toBe("seed-refresh")
+            // Second get: rotated creds also expire soon → refresh again.
+            // This call fails — must surface ProviderAuthError.
+            const failure = yield* Effect.exit(svc.getFresh)
+            expect(failure._tag).toBe("Failure")
+            if (failure._tag === "Failure") {
+              const errOpt = Cause.findErrorOption(failure.cause)
+              expect(Option.isSome(errOpt)).toBe(true)
+              if (Option.isSome(errOpt)) {
+                expect(errOpt.value.message).toContain("401")
               }
-              expect(callTokens[1]).toBe("rotated-refresh")
-              // Third get: must use the ROTATED refresh token, NOT the
-              // bootstrap. If the cell were cleared on failure, this would
-              // see "seed-refresh" and the OAuth server might have already
-              // revoked it.
-              const third = yield* svc.getFresh
-              expect(third.access).toBe("third-access")
-              expect(callTokens[2]).toBe("rotated-refresh")
-            }).pipe(Effect.provide(layer)),
-          ),
+            }
+            expect(callTokens[1]).toBe("rotated-refresh")
+            // Third get: must use the ROTATED refresh token, NOT the
+            // bootstrap. If the cell were cleared on failure, this would
+            // see "seed-refresh" and the OAuth server might have already
+            // revoked it.
+            const third = yield* svc.getFresh
+            expect(third.access).toBe("third-access")
+            expect(callTokens[2]).toBe("rotated-refresh")
+          }).pipe(Effect.provide(layer)),
         )
       }),
   )
@@ -312,15 +300,13 @@ describe("OpenAICredentialService — refresh on stale", () => {
           accountId: "prior-acct",
         }),
       )
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* OpenAICredentialService
-            const result = yield* svc.getFresh
-            expect(result.accountId).toBe("prior-acct")
-            expect(persistState.lastWritten?.accountId).toBe("prior-acct")
-          }).pipe(Effect.provide(layer)),
-        ),
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* OpenAICredentialService
+          const result = yield* svc.getFresh
+          expect(result.accountId).toBe("prior-acct")
+          expect(persistState.lastWritten?.accountId).toBe("prior-acct")
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
@@ -347,17 +333,15 @@ describe("OpenAICredentialService — cache hit/miss", () => {
           expires: 30000,
         }),
       )
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* OpenAICredentialService
-            const first = yield* svc.getFresh
-            callsRef.current = fresh2 // would change refresh result if invoked
-            const second = yield* svc.getFresh
-            expect(first.access).toBe("k1-access")
-            expect(second.access).toBe("k1-access")
-          }).pipe(Effect.provide(layer)),
-        ),
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* OpenAICredentialService
+          const first = yield* svc.getFresh
+          callsRef.current = fresh2 // would change refresh result if invoked
+          const second = yield* svc.getFresh
+          expect(first.access).toBe("k1-access")
+          expect(second.access).toBe("k1-access")
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
@@ -378,17 +362,15 @@ describe("OpenAICredentialService — cache hit/miss", () => {
           expires: FAR_FUTURE,
         }),
       )
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* OpenAICredentialService
-            const first = yield* svc.getFresh
-            yield* TestClock.adjust("31 seconds")
-            const second = yield* svc.getFresh
-            expect(first.access).toBe("seed-access")
-            expect(second.access).toBe("seed-access")
-          }).pipe(Effect.provide(layer)),
-        ),
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* OpenAICredentialService
+          const first = yield* svc.getFresh
+          yield* TestClock.adjust("31 seconds")
+          const second = yield* svc.getFresh
+          expect(first.access).toBe("seed-access")
+          expect(second.access).toBe("seed-access")
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
@@ -413,22 +395,20 @@ describe("OpenAICredentialService — invalidate", () => {
           expires: FAR_FUTURE,
         }),
       )
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* OpenAICredentialService
-            // Seed creds are already fresh — no refresh on first call.
-            yield* svc.getFresh
-            expect(refreshCount).toBe(0)
-            // After invalidate the cell is empty, so even with no
-            // accessible authInfo seed (cell holds null), the service
-            // falls back to authInfo.refresh and forces a refresh call.
-            yield* svc.invalidate
-            const after = yield* svc.getFresh
-            expect(after.access).toBe("fresh-access")
-            expect(refreshCount).toBe(1)
-          }).pipe(Effect.provide(layer)),
-        ),
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* OpenAICredentialService
+          // Seed creds are already fresh — no refresh on first call.
+          yield* svc.getFresh
+          expect(refreshCount).toBe(0)
+          // After invalidate the cell is empty, so even with no
+          // accessible authInfo seed (cell holds null), the service
+          // falls back to authInfo.refresh and forces a refresh call.
+          yield* svc.invalidate
+          const after = yield* svc.getFresh
+          expect(after.access).toBe("fresh-access")
+          expect(refreshCount).toBe(1)
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
@@ -449,13 +429,11 @@ describe("OpenAICredentialService — durable persist failure", () => {
           expires: 30000,
         }),
       )
-      const result = yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* OpenAICredentialService
-            return yield* Effect.exit(svc.getFresh)
-          }).pipe(Effect.provide(layer)),
-        ),
+      const result = yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* OpenAICredentialService
+          return yield* Effect.exit(svc.getFresh)
+        }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
       if (result._tag === "Failure") {
@@ -487,25 +465,23 @@ describe("OpenAICredentialService — durable persist failure", () => {
           expires: 30000,
         }),
       )
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* OpenAICredentialService
-            const failure = yield* Effect.exit(svc.getFresh)
-            expect(failure._tag).toBe("Failure")
-            if (failure._tag === "Failure") {
-              const errOpt = Cause.findErrorOption(failure.cause)
-              expect(Option.isSome(errOpt)).toBe(true)
-              if (Option.isSome(errOpt)) {
-                expect(errOpt.value.message).toContain("typed persist failure")
-              }
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* OpenAICredentialService
+          const failure = yield* Effect.exit(svc.getFresh)
+          expect(failure._tag).toBe("Failure")
+          if (failure._tag === "Failure") {
+            const errOpt = Cause.findErrorOption(failure.cause)
+            expect(Option.isSome(errOpt)).toBe(true)
+            if (Option.isSome(errOpt)) {
+              expect(errOpt.value.message).toContain("typed persist failure")
             }
-            const retry = yield* svc.getFresh
-            expect(retry.access).toBe("fresh-access")
-            expect(refreshCount).toBe(1)
-            expect(persistState.lastWritten?.refresh).toBe("fresh-refresh")
-          }).pipe(Effect.provide(layer)),
-        ),
+          }
+          const retry = yield* svc.getFresh
+          expect(retry.access).toBe("fresh-access")
+          expect(refreshCount).toBe(1)
+          expect(persistState.lastWritten?.refresh).toBe("fresh-refresh")
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
@@ -548,29 +524,27 @@ describe("OpenAICredentialService — invalidate preserves durable refresh token
           expires: 30000, // forces refresh on first getFresh
         }),
       )
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* OpenAICredentialService
-            const failure = yield* Effect.exit(svc.getFresh)
-            expect(failure._tag).toBe("Failure")
-            if (failure._tag === "Failure") {
-              const errOpt = Cause.findErrorOption(failure.cause)
-              expect(Option.isSome(errOpt)).toBe(true)
-              if (Option.isSome(errOpt)) {
-                expect(errOpt.value.message).toContain(
-                  "Failed to persist refreshed OpenAI credentials",
-                )
-              }
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* OpenAICredentialService
+          const failure = yield* Effect.exit(svc.getFresh)
+          expect(failure._tag).toBe("Failure")
+          if (failure._tag === "Failure") {
+            const errOpt = Cause.findErrorOption(failure.cause)
+            expect(Option.isSome(errOpt)).toBe(true)
+            if (Option.isSome(errOpt)) {
+              expect(errOpt.value.message).toContain(
+                "Failed to persist refreshed OpenAI credentials",
+              )
             }
-            expect(callTokens[0]).toBe("seed-refresh")
-            expect(persistState.lastWritten).toBeUndefined()
-            yield* svc.invalidate
-            const second = yield* svc.getFresh
-            expect(second.access).toBe("post-invalidate-access")
-            expect(callTokens[1]).toBe("rotated-refresh")
-          }).pipe(Effect.provide(layer)),
-        ),
+          }
+          expect(callTokens[0]).toBe("seed-refresh")
+          expect(persistState.lastWritten).toBeUndefined()
+          yield* svc.invalidate
+          const second = yield* svc.getFresh
+          expect(second.access).toBe("post-invalidate-access")
+          expect(callTokens[1]).toBe("rotated-refresh")
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
@@ -585,23 +559,21 @@ describe("OpenAICredentialService — invalidate preserves durable refresh token
       }
       const authInfo: ProviderAuthInfo = { type: "oauth", access: "", refresh: "", expires: 0 }
       const layer = OpenAICredentialService.layerFromIO(makeIO(state), authInfo)
-      yield* Effect.promise(() =>
-        runWithTestClock(
-          Effect.gen(function* () {
-            const svc = yield* OpenAICredentialService
-            // Invalidate before any successful refresh — cell is empty.
-            yield* svc.invalidate
-            const result = yield* Effect.exit(svc.getFresh)
-            expect(result._tag).toBe("Failure")
-            if (result._tag === "Failure") {
-              const errOpt = Cause.findErrorOption(result.cause)
-              expect(Option.isSome(errOpt)).toBe(true)
-              if (Option.isSome(errOpt)) {
-                expect(errOpt.value.message).toContain("unavailable")
-              }
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* OpenAICredentialService
+          // Invalidate before any successful refresh — cell is empty.
+          yield* svc.invalidate
+          const result = yield* Effect.exit(svc.getFresh)
+          expect(result._tag).toBe("Failure")
+          if (result._tag === "Failure") {
+            const errOpt = Cause.findErrorOption(result.cause)
+            expect(Option.isSome(errOpt)).toBe(true)
+            if (Option.isSome(errOpt)) {
+              expect(errOpt.value.message).toContain("unavailable")
             }
-          }).pipe(Effect.provide(layer)),
-        ),
+          }
+        }).pipe(Effect.provide(layer)),
       )
     }),
   )
