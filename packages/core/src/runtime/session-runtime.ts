@@ -131,7 +131,7 @@ export const InterruptPayload = Schema.Union([
 export type InterruptPayload = typeof InterruptPayload.Type
 
 export const InvokeToolPayload = Schema.Struct({
-  commandId: Schema.optional(ActorCommandId),
+  commandId: ActorCommandId,
   sessionId: SessionId,
   branchId: BranchId,
   toolName: Schema.String,
@@ -700,14 +700,13 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       requireSessionBranch(input).pipe(
         Effect.flatMap(() =>
           Effect.gen(function* () {
-            const commandId = input.commandId ?? ActorCommandId.make(yield* platform.randomId)
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
             yield* ref.execute(
               AgentLoopActor.InvokeTool.make({
                 workspaceId: yield* CurrentWorkspaceId,
                 sessionId: input.sessionId,
                 branchId: input.branchId,
-                commandId,
+                commandId: input.commandId,
                 toolName: input.toolName,
                 input: input.input,
               }),
@@ -728,7 +727,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
               command,
             }
             const ref = yield* agentLoopActorRefFor(command.sessionId, command.branchId)
-            yield* ref.execute(AgentLoopActor.Steer.make(payload))
+            yield* ref.send(AgentLoopActor.Steer.make(payload))
           }),
         ),
         Effect.catchCause((cause) => Effect.fail(wrapError("steer failed", cause))),

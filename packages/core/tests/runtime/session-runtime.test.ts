@@ -563,12 +563,15 @@ describe("SessionRuntime", () => {
           const messageStorage = yield* MessageStorage
           const recorder = yield* SequenceRecorder
           const { sessionId, branchId } = yield* createSessionBranch
-          yield* sessionRuntime.invokeTool({
+          const invokeCommand = {
+            commandId: ActorCommandId.make("invoke-tool-idempotent"),
             sessionId,
             branchId,
             toolName: "read",
             input: {},
-          })
+          }
+          yield* sessionRuntime.invokeTool(invokeCommand)
+          yield* sessionRuntime.invokeTool(invokeCommand)
           const messages = yield* waitFor(
             messageStorage.listMessages(branchId),
             (current) => current.length === 2,
@@ -583,6 +586,8 @@ describe("SessionRuntime", () => {
           expect(queue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
           expect(eventTags(calls)).toContain("ToolCallStarted")
           expect(eventTags(calls)).toContain("ToolCallSucceeded")
+          expect(eventTags(calls).filter((tag) => tag === "ToolCallStarted")).toHaveLength(1)
+          expect(eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(1)
 
           const baselineSucceeded = eventTags(calls).filter(
             (tag) => tag === "ToolCallSucceeded",

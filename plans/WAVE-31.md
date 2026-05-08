@@ -22,6 +22,9 @@ Wave 31 closes the P1s instead of treating the audit as advisory.
 - Remove public process/platform escape hatches from `@gent/core/extensions/api`.
 - Remove setup and reaction `ctx`-parameter pockets so extension authors have
   one mental model: yield host facades from Effect context.
+- Audit and simplify extension authoring ceremony itself: no capability/read-
+  write metadata, no threaded ctx parameters, no privileged builtin/private
+  surface when `ExtensionContext` facades can express authority in code.
 - Remove builtin/starting-extension privileged registries that bypass the real
   extension graph.
 - Tighten platform guardrails so core/extensions are actually protected from
@@ -113,6 +116,8 @@ Comparison evidence:
 
 ## Commit 1: fix(runtime): require durable command identity
 
+**Status**: Completed in current batch.
+
 **Justification**: A public command that accepts `requestId` must be
 durably idempotent, not only deduped while currently queued. Public write
 surfaces must require caller identity instead of generating random identities
@@ -125,18 +130,18 @@ that turn retries into new commands.
 
 **Changes**
 
-| File                                                                                        | Change                                                                         | Lines  |
-| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------ |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`           | Require `commandId`/request identity for `invokeTool`; remove random fallback. | ~133   |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts`    | Mark `Steer` persisted and keep deterministic id.                              | ~250   |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-idempotency.test.ts` | Add retry-after-completion/restart regression.                                 | ~450   |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/session-runtime.test.ts`    | Cover `invokeTool` identity requirement/idempotency.                           | ~518   |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop-queue.test.ts`   | Adjust focused actor expectations if needed.                                   | ~1-420 |
+| File                                                                                        | Change                                                                                                      | Lines |
+| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`           | Required `commandId` for `invokeTool`; removed random fallback; dispatch `steer` persisted fire-and-forget. | ~133  |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts`    | Marked `Steer` and `InvokeTool` persisted with deterministic primary keys.                                  | ~278  |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-idempotency.test.ts` | Added steer retry-after-drain regression so completed commands cannot enqueue again.                        | ~462  |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/session-runtime.test.ts`    | Covered repeated `invokeTool` command id producing one assistant/tool-result/event sequence.                | ~556  |
 
 **Verification**
 
-- Focused server idempotency tests.
-- Focused agent-loop queue tests.
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/session-idempotency.test.ts -t "steer"`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/session-runtime.test.ts -t "persists tool messages"`
+- `bun run typecheck`
 - `bun run test:e2e`
 - `bun run gate`
 

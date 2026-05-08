@@ -26,6 +26,7 @@ import {
   sessionRuntimeLayer,
 } from "./session-commands/helpers"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
+import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 
 describe("requestId idempotency", () => {
   const makePersistentSessionCommandsLayer = (dbPath: string) => {
@@ -477,11 +478,28 @@ describe("requestId idempotency", () => {
         yield* client.steer.command({ command })
         yield* client.steer.command({ command })
 
-        const queued = yield* client.queue.get({
+        const queued = yield* waitFor(
+          client.queue.get({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+          }),
+          (snapshot) => snapshot.steering.length === 1,
+          1_000,
+          "public steer command enqueue",
+        )
+        expect(queued.steering.map((entry) => entry.content)).toEqual(["steer once"])
+
+        yield* client.queue.drain({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+          requestId: "req-rpc-steer-drain",
+        })
+        yield* client.steer.command({ command })
+        const afterRetry = yield* client.queue.get({
           sessionId: created.sessionId,
           branchId: created.branchId,
         })
-        expect(queued.steering.map((entry) => entry.content)).toEqual(["steer once"])
+        expect(afterRetry.steering).toEqual([])
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )

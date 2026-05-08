@@ -27,8 +27,7 @@
  * - `Submit` — `message.id` (live-only)
  * - `SubmitDurable` — `message.id` (persisted; actor owns request idempotency)
  * - `Run` / `QueueFollowUp` — `message.id` (live-only)
- * - `Steer` — `commandId` (live-only; SessionRuntime owns durable request
- *   idempotency for this path)
+ * - `Steer` — `commandId` (persisted; actor owns request idempotency)
  * - `Interrupt` / `RespondInteraction` — durable persisted command key
  *
  * Schemas reuse gent's existing domain (`Message`, `RunSpec`,
@@ -279,6 +278,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     payload: SteerFields,
     success: Schema.Void,
     error: AgentLoopError,
+    persisted: true,
     id: (p: SteerInput) => ({
       entityId: entityIdOf(p.workspaceId, p.command.sessionId, p.command.branchId),
       primaryKey: p.commandId,
@@ -353,6 +353,7 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     payload: InvokeToolFields,
     success: Schema.Void,
     error: AgentLoopError,
+    persisted: true,
     id: (p: InvokeToolInput) => ({
       entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
       primaryKey: p.commandId,
