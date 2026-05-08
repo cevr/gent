@@ -129,6 +129,7 @@ export declare namespace ExtensionHostContext {
     // Follow-up control: slot handlers and direct callers enqueue through the
     // session runtime and receive host-shaped errors.
     readonly queueFollowUp: (params: {
+      readonly sourceId: string
       readonly content: string
       readonly metadata?: MessageMetadata
       readonly branchId?: BranchId

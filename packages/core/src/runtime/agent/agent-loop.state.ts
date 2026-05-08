@@ -73,6 +73,15 @@ const appendFollowUpItem = (
   queue: ReadonlyArray<QueuedTurnItem>,
   item: QueuedTurnItem,
 ): QueuedTurnItem[] => {
+  const existingIndex = queue.findIndex((queued) => queued.message.id === item.message.id)
+  if (existingIndex >= 0) {
+    return queue.map((queued, index) => (index === existingIndex ? item : queued))
+  }
+
+  if (String(item.message.id).startsWith("follow-up:")) {
+    return [...queue, item]
+  }
+
   const last = queue[queue.length - 1]
   if (last === undefined || !canBatchQueuedFollowUp(last, item)) {
     return [...queue, item]
@@ -132,10 +141,13 @@ export const appendSteeringItem = (
 export const appendFollowUpQueueState = (
   queue: LoopQueueState,
   item: QueuedTurnItem,
-): LoopQueueState => ({
-  ...queue,
-  followUp: appendFollowUpItem(queue.followUp, item),
-})
+): LoopQueueState =>
+  queue.inFlight?.message.id === item.message.id
+    ? queue
+    : {
+        ...queue,
+        followUp: appendFollowUpItem(queue.followUp, item),
+      }
 
 export const clearQueueState = (_queue: LoopQueueState): LoopQueueState => emptyLoopQueueState()
 

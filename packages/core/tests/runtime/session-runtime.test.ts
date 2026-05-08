@@ -384,6 +384,7 @@ describe("SessionRuntime", () => {
           })
           const queueExit = yield* Effect.exit(
             sessionRuntime.queueFollowUp({
+              sourceId: "wrong-branch",
               sessionId: queueTarget.sessionId,
               branchId: queueForeign.branchId,
               content: "wrong branch",
@@ -404,12 +405,22 @@ describe("SessionRuntime", () => {
           })
           yield* sessionRuntime.queueFollowUp({
             ...target,
+            sourceId: "direct-follow-up",
+            content: "direct follow-up",
+          })
+          yield* sessionRuntime.queueFollowUp({
+            ...target,
+            sourceId: "direct-follow-up",
             content: "direct follow-up",
           })
           const queue = yield* sessionRuntime.getQueuedMessages(target)
           expect(queue.steering).toEqual([])
           expect(queue.followUp).toEqual([
-            expect.objectContaining({ _tag: "follow-up", content: "direct follow-up" }),
+            expect.objectContaining({
+              _tag: "follow-up",
+              id: expect.stringContaining(":direct-follow-up"),
+              content: "direct follow-up",
+            }),
           ])
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )

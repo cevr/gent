@@ -210,7 +210,7 @@ describe("extension command RPCs", () => {
               input: Schema.String,
               output: Schema.Void,
               execute: (input, ctx) =>
-                ctx.session.queueFollowUp({ content: input }).pipe(
+                ctx.session.queueFollowUp({ sourceId: "test-rpc-request", content: input }).pipe(
                   Effect.mapError(
                     (cause) =>
                       new CapabilityError({

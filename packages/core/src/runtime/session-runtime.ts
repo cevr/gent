@@ -80,6 +80,7 @@ export type SessionRuntimeTarget = typeof SessionRuntimeTarget.Type
  * dedup caches keyed on it. Callers in this repo use `crypto.randomUUID()`.
  */
 const RequestIdSchema = Schema.String.check(Schema.isMaxLength(128))
+const FollowUpSourceIdSchema = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))
 
 export const SendUserMessagePayload = Schema.Struct({
   commandId: Schema.optional(ActorCommandId),
@@ -154,6 +155,7 @@ export const RunPromptPayload = Schema.Struct({
 export type RunPromptPayload = typeof RunPromptPayload.Type
 
 export const QueueFollowUpPayload = Schema.Struct({
+  sourceId: FollowUpSourceIdSchema,
   sessionId: SessionId,
   branchId: BranchId,
   content: Schema.String,
@@ -334,6 +336,15 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
 }
 
 const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.make(commandId)
+const followUpMessageIdForSource = (input: {
+  readonly workspaceId: string
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly sourceId: string
+}) =>
+  MessageId.make(
+    `follow-up:${input.workspaceId}:${input.sessionId}:${input.branchId}:${input.sourceId}`,
+  )
 const commandIdForRequestId = (requestId: string) => ActorCommandId.make(`message:${requestId}`)
 
 const wrapEntitySessionRuntimeError = (operation: string, error: unknown) =>
@@ -604,8 +615,9 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
 
   const queueFollowUpThroughActor = Effect.fn("SessionRuntime.queueFollowUpThroughActor")(
     function* (input: QueueFollowUpPayload) {
+      const workspaceId = yield* CurrentWorkspaceId
       const message = Message.Regular.make({
-        id: MessageId.make(yield* platform.randomId),
+        id: followUpMessageIdForSource({ workspaceId, ...input }),
         sessionId: input.sessionId,
         branchId: input.branchId,
         role: "user",
@@ -617,7 +629,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       yield* ref
         .execute(
           AgentLoopActor.AcceptQueueFollowUp.make({
-            workspaceId: yield* CurrentWorkspaceId,
+            workspaceId,
             message,
             agentOverride: undefined,
             runSpec: undefined,

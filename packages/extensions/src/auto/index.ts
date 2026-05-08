@@ -86,11 +86,12 @@ const drainAndQueueFollowUp = Effect.fn("Auto.drainAndQueueFollowUp")(function* 
   if (auto._tag === "None") return
 
   const followUp = yield* auto.value.drainFollowUp()
-  if (followUp === undefined || followUp === "") return
+  if (followUp === undefined || followUp.content === "") return
 
   yield* ctx.session
     .queueFollowUp({
-      content: followUp,
+      sourceId: followUp.sourceId,
+      content: followUp.content,
       metadata: { extensionId: "auto", hidden: true },
     })
     .pipe(Effect.catchEager(() => Effect.void))

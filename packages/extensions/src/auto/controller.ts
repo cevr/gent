@@ -201,7 +201,13 @@ interface AutoWriteShape extends AutoReadShape {
   readonly autoSignal: (input: AutoSignalInput) => Effect.Effect<void>
   readonly reviewSignal: () => Effect.Effect<void>
   readonly turnCompleted: () => Effect.Effect<void>
-  readonly drainFollowUp: () => Effect.Effect<string | undefined>
+  readonly drainFollowUp: () => Effect.Effect<
+    | {
+        readonly content: string
+        readonly sourceId: string
+      }
+    | undefined
+  >
 }
 
 export class AutoRead extends Context.Service<AutoRead, ReadOnly<AutoReadShape>>()(
@@ -380,6 +386,26 @@ const clearFollowUp = (state: AutoState): AutoState => {
   return AutoState.AwaitingReview.make({ ...state, pendingFollowUp: undefined })
 }
 
+const followUpSourceId = (state: AutoState): string => {
+  if (state._tag === "Inactive") return "auto:inactive"
+  if (state.pendingFollowUp === state.handoffContent) {
+    return `auto:handoff:${state.iteration}:${state.handoffRequestSeq}`
+  }
+  if (state._tag === "AwaitingReview") return `auto:review:${state.iteration}`
+  return `auto:working:${state.iteration}`
+}
+
+const drainFollowUp = (state: AutoState) =>
+  [
+    state.pendingFollowUp === undefined
+      ? undefined
+      : {
+          content: state.pendingFollowUp,
+          sourceId: followUpSourceId(state),
+        },
+    clearFollowUp(state),
+  ] as const
+
 export const AutoControllerLive: Layer.Layer<AutoRead | AutoWrite> = Layer.unwrap(
   Effect.gen(function* () {
     const state = yield* Ref.make<AutoState>(AutoState.Inactive.make({}))
@@ -398,8 +424,7 @@ export const AutoControllerLive: Layer.Layer<AutoRead | AutoWrite> = Layer.unwra
       autoSignal: (input) => update((current) => transitionAutoSignal(current, input)),
       reviewSignal: () => update(transitionReviewSignal),
       turnCompleted: () => update(transitionTurnCompleted),
-      drainFollowUp: () =>
-        Ref.modify(state, (current) => [current.pendingFollowUp, clearFollowUp(current)]),
+      drainFollowUp: () => Ref.modify(state, drainFollowUp),
     } satisfies AutoWriteShape
 
     const read = withReadOnly({

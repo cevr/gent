@@ -302,7 +302,7 @@ describe("Effect-purity locks (compile-time)", () => {
       reactions: {
         turnAfter: {
           failureMode: "continue",
-          handler: (_input, ctx) => ctx.session.queueFollowUp({ content: "x" }),
+          handler: (_input, ctx) => ctx.session.queueFollowUp({ sourceId: "lock", content: "x" }),
         },
       },
     })

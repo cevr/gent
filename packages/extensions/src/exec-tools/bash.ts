@@ -184,6 +184,7 @@ export const BashTool = tool({
       const queueBgFailure = (message: string) =>
         ctx.session
           .queueFollowUp({
+            sourceId: `bash:${ctx.toolCallId}:failure`,
             content: `Background command failed:\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
           })
           .pipe(Effect.catchEager(() => Effect.void))
@@ -215,6 +216,7 @@ export const BashTool = tool({
         }
 
         yield* ctx.session.queueFollowUp({
+          sourceId: `bash:${ctx.toolCallId}:complete`,
           content: `Background command completed (exit code ${bgResult.exitCode}):\n\`\`\`\n$ ${command}\n${outputText}\n\`\`\``,
         })
       }).pipe(

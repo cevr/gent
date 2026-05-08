@@ -79,6 +79,26 @@ describe("Auto runtime", () => {
     }).pipe(Effect.provide(makeLayer())),
   )
 
+  it.live("drained follow-ups carry deterministic source identity", () =>
+    Effect.gen(function* () {
+      const auto = yield* AutoWrite
+      yield* auto.start({ goal: "fix all bugs", maxIterations: 2 })
+
+      const working = yield* auto.drainFollowUp()
+      expect(working?.sourceId).toBe("auto:working:1")
+      expect(working?.content).toContain("Begin: fix all bugs")
+
+      yield* auto.autoSignal({ status: "continue", summary: "ready for review" })
+      const reviewFollowUp = yield* auto.drainFollowUp()
+      expect(reviewFollowUp?.sourceId).toBe("auto:review:1")
+      expect(reviewFollowUp?.content).toContain("review")
+
+      yield* auto.requestHandoff("handoff now")
+      const handoff = yield* auto.drainFollowUp()
+      expect(handoff).toEqual({ sourceId: "auto:handoff:1:1", content: "handoff now" })
+    }).pipe(Effect.provide(makeLayer())),
+  )
+
   it.live("resource layer instances own independent auto state", () =>
     Effect.scoped(
       Effect.gen(function* () {

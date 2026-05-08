@@ -43,6 +43,7 @@ import { readOnlyCapabilityContext } from "../domain/read-only.js"
 
 export interface ExtensionSessionControlService {
   readonly queueFollowUp: (input: {
+    readonly sourceId: string
     readonly sessionId: SessionId
     readonly branchId: BranchId
     readonly content: string
@@ -518,6 +519,7 @@ export const makeExtensionHostContext = (
       queueFollowUp: (params) =>
         deps.sessionControl
           .queueFollowUp({
+            sourceId: params.sourceId,
             sessionId: runInfo.sessionId,
             branchId: params.branchId ?? runInfo.branchId,
             content: params.content,

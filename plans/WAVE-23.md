@@ -452,13 +452,16 @@ Validation:
 
 ### W23.6 — Deterministic Follow-Up Identity
 
-Status: planned.
+Status: done.
 
 Work:
 
-- Require deterministic identity for internal follow-up producers.
-- Derive message ids from identity and persist queue entries by key.
-- Update auto/background command producers.
+- `session.queueFollowUp` now requires a deterministic `sourceId`, and
+  `SessionRuntime` derives `follow-up:<workspace>:<session>:<branch>:<source>`
+  message ids instead of random ids.
+- Follow-up queue state upserts by message id and skips re-enqueue while that
+  keyed follow-up is in flight.
+- Auto and background bash producers now supply stable logical source ids.
 
 Validation:
 
@@ -466,6 +469,7 @@ Validation:
 - Focused extension tests for auto and exec-tools background follow-up.
 - `bun run typecheck`
 - `bun run lint`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/session-runtime.test.ts packages/core/tests/runtime/agent-loop-queue.test.ts packages/core/tests/runtime/agent/agent-loop.actor.test.ts packages/extensions/tests/auto/auto.test.ts packages/extensions/tests/exec-tools/bash-execution.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/server/extension-commands-rpc.test.ts`
 
 ### W23.7 — Resource-Owned Background Bash Supervisor
 

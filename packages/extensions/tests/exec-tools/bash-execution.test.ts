@@ -129,7 +129,7 @@ describe("BashTool execution", () => {
     () =>
       withProcessTimeout(
         Effect.gen(function* () {
-          const sent = yield* Deferred.make<{ content: string }>()
+          const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
           const ctx: ToolCapabilityContext = {
             ...stubCtx,
             session: {
@@ -148,6 +148,7 @@ describe("BashTool execution", () => {
           expect(result.stdout).toContain("Command started in background")
 
           const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
+          expect(message.sourceId).toBe("bash:tc-1:complete")
           expect(message.content).toContain("Background command completed (exit code 0)")
           expect(message.content).toContain("$ printf background-finished")
         }),
