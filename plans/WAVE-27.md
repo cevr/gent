@@ -701,10 +701,11 @@ generic tool names is duplicated registry work.
 
 **Changes**
 
-| File                                                                                 | Change                                                                   | Lines    |
-| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ | -------- |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/components/tool-renderers/index.ts` | Keep UI renderer registry as source for UI-only components.              | `43-66`  |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/headless-tool-renderers.ts`         | Keep only special headless renderers; generic fallback handles the rest. | `89-134` |
+| File                                                                                 | Change                                                                        | Lines     |
+| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- | --------- |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/components/tool-renderers/index.ts` | Register a special headless renderer only for bash; other tools use fallback. | `43-65`   |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/headless-tool-renderers.ts`         | Export the bash special renderer and keep the generic fallback as default.    | `67-114`  |
+| `/Users/cvr/Developer/personal/gent/apps/tui/tests/headless-runner.test.ts`          | Lock generic fallback behavior for non-special tools.                         | `214-227` |
 
 **Verification**
 

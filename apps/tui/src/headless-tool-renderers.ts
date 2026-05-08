@@ -64,7 +64,7 @@ const renderGeneric: HeadlessToolRenderer = (toolCall) => {
   return `[tool done: ${toolCall.toolName}${suffix}]\n${formatHeadTail(text.split("\n"), 12)}`
 }
 
-const renderBash: HeadlessToolRenderer = (toolCall) => {
+export const BashHeadlessToolRenderer: HeadlessToolRenderer = (toolCall) => {
   const command = inputSummary("bash", toolCall.input)
   if (toolCall.status === "running") {
     return command.length > 0 ? `[tool: bash] ${command}` : "[tool: bash]"
@@ -87,7 +87,7 @@ const renderBash: HeadlessToolRenderer = (toolCall) => {
 }
 
 export const BUILTIN_HEADLESS_TOOL_RENDERERS: ReadonlyArray<HeadlessToolRendererEntry> = [
-  { toolNames: ["bash"], render: renderBash },
+  { toolNames: ["bash"], render: BashHeadlessToolRenderer },
 ]
 
 export const resolveHeadlessToolRenderers = (

@@ -9,6 +9,7 @@ import {
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { GentConnectionError } from "@gent/sdk"
 import { runHeadless } from "../src/headless-runner"
+import { renderHeadlessToolCall } from "../src/headless-tool-renderers"
 import { createMockClient } from "./render-harness-boundary"
 class HeadlessRunnerTestError extends Schema.TaggedErrorClass<HeadlessRunnerTestError>()(
   "HeadlessRunnerTestError",
@@ -207,6 +208,21 @@ describe("runHeadless", () => {
       expect(captured.stdout).toContain("line 19")
       expect(captured.stdout).toContain("[8 lines truncated]")
       expect(captured.stdout).not.toContain('"stdout"')
+    }),
+  )
+
+  it.live("renders non-special tools through the generic fallback", () =>
+    Effect.sync(() => {
+      const rendered = renderHeadlessToolCall({
+        toolName: "read",
+        status: "completed",
+        input: { path: "/tmp/example.txt" },
+        output: "plain output",
+        summary: undefined,
+      })
+
+      expect(rendered).toContain("[tool done: read]")
+      expect(rendered).toContain("plain output")
     }),
   )
 })
