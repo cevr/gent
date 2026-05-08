@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool } from "@gent/core/extensions/api"
+import { defineExtension, tool } from "@gent/core/extensions/api"
 import { loadPrinciples, PRINCIPLE_NAMES } from "./data.js"
 
 export const PrinciplesParams = Schema.Struct({
@@ -54,4 +54,9 @@ export const PrinciplesTool = tool({
       }
       return output
     }),
+})
+
+export const PrinciplesExtension = defineExtension({
+  id: "@gent/principles",
+  tools: [PrinciplesTool],
 })

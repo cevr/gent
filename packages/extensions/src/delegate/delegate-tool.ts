@@ -5,6 +5,7 @@ import {
   AgentName,
   AgentRunResultSchema,
   AgentRunToolCallSchema,
+  defineExtension,
   getDurableAgentRunSessionId,
   makeRunSpec,
   type AgentRunError,
@@ -363,4 +364,9 @@ export const DelegateTool = tool({
     if (hasTodos) return yield* foregroundParallel()
     return yield* foregroundSingle()
   }),
+})
+
+export const DelegateExtension = defineExtension({
+  id: "@gent/delegate",
+  tools: [DelegateTool],
 })

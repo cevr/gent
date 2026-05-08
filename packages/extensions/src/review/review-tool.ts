@@ -3,6 +3,7 @@ import {
   AgentName,
   DEFAULT_AGENT_NAME,
   defineAgent,
+  defineExtension,
   getDurableAgentRunSessionId,
   makeRunSpec,
   tool,
@@ -375,4 +376,9 @@ export const ReviewTool = tool({
 
     return { mode, comments: report.comments, summary, raw: report.raw, output: execOutput }
   }),
+})
+
+export const ReviewExtension = defineExtension({
+  id: "@gent/review",
+  tools: [ReviewTool],
 })

@@ -3,6 +3,7 @@ import {
   AgentName,
   ToolNeeds,
   defineAgent,
+  defineExtension,
   makeRunSpec,
   tool,
   type ToolCapabilityContext,
@@ -107,4 +108,9 @@ export const CounselTool = tool({
 
     return { mode, response: result.text }
   }),
+})
+
+export const CounselExtension = defineExtension({
+  id: "@gent/counsel",
+  tools: [CounselTool],
 })
