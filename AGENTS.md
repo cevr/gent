@@ -45,6 +45,7 @@ bun run --cwd apps/tui dev sessions
 - **@effect/platform imports** - Some types not re-exported from main. Use `import type { PlatformError } from "@effect/platform/Error"`.
 - **No `any` casts** - ESLint enforces. Causes type drift bugs. Import the owning type instead of redeclaring it.
 - **Package boundary imports** - `@gent/core` only exposes the public extension authoring API at `@gent/core/extensions/api`. Shipped apps, packages, and tests that need core internals import from `@gent/core-internal/*`. Files inside `packages/core/src/` and `packages/core-internal/src/` use relative imports.
+- **Extension authority** - Extension leaves receive input/event params only. Use `const ctx = yield* ExtensionContext` for host facades and extension-owned service Tags for private state. Do not add ctx parameters, read/write/capability grants, or privileged builtin registries.
 - **No self-imports** - Inside `packages/core/src/`, always use relative imports. Never `@gent/core/*`.
 - **Effect.fn recursive** - For recursive generators, annotate variable type: `const fn: (...) => Effect<A,E,R> = Effect.fn(...)`
 - **Wide event boundaries** - `WideEvent.set()` requires a `withWideEvent` boundary in scope. Use domain context factories from `wide-event-boundary.ts`.

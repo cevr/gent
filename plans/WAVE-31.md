@@ -385,6 +385,8 @@ era boundaries should collapse once their production owner is clear.
 
 ## Commit 9: docs(architecture): document single extension authority model
 
+**Status**: Completed in `docs(architecture): document extension authority model`.
+
 **Justification**: API changes must be reflected in architecture and extension
 docs so future work does not recreate ctx/read-write/private escape hatches.
 
@@ -395,11 +397,11 @@ docs so future work does not recreate ctx/read-write/private escape hatches.
 
 **Changes**
 
-| File                                                    | Change                                                       | Lines |
-| ------------------------------------------------------- | ------------------------------------------------------------ | ----- |
-| `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`    | Update extension/platform/registry sections.                 | ~1    |
-| `/Users/cvr/Developer/personal/gent/docs/extensions.md` | Rewrite authoring examples around `yield* ExtensionContext`. | ~1    |
-| `/Users/cvr/Developer/personal/gent/AGENTS.md`          | Update gotchas if public API/testing instructions change.    | ~1    |
+| File                                                    | Change                                                                                                                                        | Lines |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`    | Documented builtins as a preset, no setup ctx params, and callable leaves using `ExtensionContext`/service Tags for authority.                | ~361  |
+| `/Users/cvr/Developer/personal/gent/docs/extensions.md` | Added the authoring authority model: input-only handlers, `yield* ExtensionContext`, resource-owned private services, no read/write ceremony. | ~82   |
+| `/Users/cvr/Developer/personal/gent/AGENTS.md`          | Added a gotcha locking no ctx parameters, capability grants, or privileged builtin registries.                                                | ~48   |
 
 **Verification**
 

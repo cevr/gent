@@ -38,16 +38,16 @@ That's it. Save as `~/.gent/extensions/greet.ts` and restart gent.
 
 You need at most 8 concepts to write a complete extension:
 
-| #   | Concept           | What it is                                       |
-| --- | ----------------- | ------------------------------------------------ |
-| 1   | `defineExtension` | Extension factory — takes `id` + typed buckets   |
-| 2   | `tool`            | LLM-callable tool (params + execute)             |
-| 3   | `request`         | Extension-to-extension typed RPC (read or write) |
-| 4   | `action`          | Human-triggered UI affordance (slash / palette)  |
-| 5   | `defineResource`  | Scoped service/lifecycle/schedule declaration    |
-| 6   | `reactions`       | Turn/message/tool-result hooks                   |
-| 7   | `defineAgent`     | Spawnable subagent                               |
-| 8   | `PermissionRule`  | Allow/deny rule for tool patterns                |
+| #   | Concept           | What it is                                      |
+| --- | ----------------- | ----------------------------------------------- |
+| 1   | `defineExtension` | Extension factory — takes `id` + typed buckets  |
+| 2   | `tool`            | LLM-callable tool (params + execute)            |
+| 3   | `request`         | Extension-to-extension typed RPC                |
+| 4   | `action`          | Human-triggered UI affordance (slash / palette) |
+| 5   | `defineResource`  | Scoped service/lifecycle/schedule declaration   |
+| 6   | `reactions`       | Turn/message/tool-result hooks                  |
+| 7   | `defineAgent`     | Spawnable subagent                              |
+| 8   | `PermissionRule`  | Allow/deny rule for tool patterns               |
 
 Extensions import authoring primitives from one path:
 `@gent/core/extensions/api`.
@@ -64,20 +64,45 @@ host owns it.
 
 Public authoring surface:
 
-| Area            | Public exports                                                                  |
-| --------------- | ------------------------------------------------------------------------------- |
-| Extension shape | `defineExtension`, `GentExtension`, `ExtensionSetupContext`                     |
-| Capabilities    | `tool`, `request`, `ref`, `action`                                              |
-| Resources       | `defineResource`, `resource`, resource scope/schedule types, `ReadOnly` helpers |
-| Reactions       | Reaction input/output types needed to implement `reactions`                     |
-| Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                         |
-| Stable ids      | `ExtensionId`, `ArtifactId`, `ToolCallId`                                       |
-| Policies/errors | `PermissionRule`, capability/provider-auth/agent-run author-facing errors       |
-| Host facts      | `ExtensionSetupContext.host`                                                    |
-| Serialization   | Message/output projection helpers safe to expose across extension boundaries    |
+| Area            | Public exports                                                               |
+| --------------- | ---------------------------------------------------------------------------- |
+| Extension shape | `defineExtension`, `GentExtension`, `ExtensionSetupContext`                  |
+| Capabilities    | `tool`, `request`, `ref`, `action`                                           |
+| Resources       | `defineResource`, `resource`, resource scope/schedule types                  |
+| Reactions       | Reaction input/output types needed to implement `reactions`                  |
+| Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                      |
+| Stable ids      | `ExtensionId`, `ArtifactId`, `ToolCallId`                                    |
+| Policies/errors | `PermissionRule`, capability/provider-auth/agent-run author-facing errors    |
+| Host facts      | `ExtensionSetupContext.host`                                                 |
+| Serialization   | Message/output projection helpers safe to expose across extension boundaries |
 
 There is no builtin-internal surface. Shipped extensions are useful defaults,
 not a second trust tier.
+
+## Authority Model
+
+Extension handlers receive product input only. They do not receive a `ctx`
+parameter, and they do not declare read/write grants to ask for host power. If a
+handler needs host authority, it yields the public facade:
+
+```ts
+import { ExtensionContext } from "@gent/core/extensions/api"
+import { Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  const messages = yield* ctx.Session.listMessages()
+  return messages.length
+})
+```
+
+`ExtensionContext` is the host-owned facade. It exposes session, agent,
+interaction, and process accessors (`Session`, `Agent`, `Interaction`,
+`Process`) plus stable invocation facts such as `sessionId`, `branchId`, `cwd`,
+and `home`. If an extension needs private state, it should import its own
+service Tag from a `defineResource(...)` layer and yield that service directly.
+Do not add ctx parameters, private builtin APIs, capability labels, or read/write
+metadata when ordinary Effect service access already expresses the authority.
 
 `ExtensionSetupContext.host` is the only public host platform view. It exposes
 small, serializable facts and narrow host probes such as OS info, executable
@@ -154,6 +179,10 @@ export default defineExtension({
   `yield* ExtensionContext`
 - Optional: `intent`, `interactive`, `permissionRules`, `prompt`,
   `promptSnippet`, `promptGuidelines`
+
+`intent` is model/UI policy metadata for a model-callable tool. It is not an
+authority grant. Host authority still comes from `ExtensionContext` or an
+extension-owned service.
 
 ### request — extension-to-extension RPC
 
@@ -332,5 +361,10 @@ builtin).
 - Generic middleware APIs are not part of extension authoring.
 - Bucket names are the discriminator; extension authors do not build flat `_kind` contribution unions.
 - Builtins, user extensions, and project extensions use the same public API.
+- Builtins are the starting extension set, not privileged APIs or registry
+  shortcuts.
+- Handlers take input only; host authority comes from `yield* ExtensionContext`.
+- Extension-private authority is an imported service Tag from a resource layer,
+  not a read/write or capability declaration.
 - Runtime services such as `GentPlatform`, `ToolRunner`, `ExtensionEventSink`,
   storage Tags, event stores, and process helpers are not public extension API.

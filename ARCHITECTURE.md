@@ -361,23 +361,25 @@ Everything else is builtin/internal:
 Rules:
 
 - registration shape is structural — builtins, user, and project extensions share the same setup path
+- builtins are only the initial extension set — app code consumes registry or
+  transport projections instead of privileged `@gent/extensions` registries
 - dispatch compiles once, then runs from typed registries and explicit runtime slots
 - public snapshot schema is enforced at runtime — invalid snapshots are dropped, not passed through
 - activation/startup failures degrade the extension instead of crashing host startup
-- `onInit` receives `sessionCwd` from the framework — extensions should not reach into `Storage`
-- stateful side effects cross explicit slots (`reactions:`, declared `services`), not ambient service lookup inside handlers
+- stateful side effects cross explicit typed slots (`reactions:`, resources, or
+  extension-owned services), not private host imports
 
 For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Example extensions in [examples/extensions/](examples/extensions/).
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, resources?, tools?, actions?, requests?, agents?, reactions?, modelDrivers?, externalDrivers? })`. Each typed bucket is either a literal array, a `(ctx) => array` function, or a `(ctx) => Effect<array>` factory. The bucket name IS the discriminator — TypeScript catches the wrong leaf in `tools`, `actions`, or `requests` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
+One authoring shape: `defineExtension({ id, resources?, tools?, actions?, requests?, agents?, reactions?, modelDrivers?, externalDrivers? })`. Each typed bucket is either a literal array, a `() => array` function, or a `() => Effect<array>` factory. Setup-time host facts come from `yield* ExtensionSetupContext`; runtime host authority comes from `yield* ExtensionContext`. The bucket name IS the discriminator — TypeScript catches the wrong leaf in `tools`, `actions`, or `requests` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
 - **Resource** — `defineResource({ scope, layer?, schedule?, start?, stop? })`. Long-lived state with explicit `scope`. Today only `"process"` is public, because it is the only lifecycle with a host owner. `cwd`, `session`, and `branch` lifetimes stay out of the author API until their runtime owners exist. Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
-- **Capability leaves** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC; `action` = human-palette or human-slash command. See `packages/core/src/domain/capability/{tool,request,action}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
-- **Reactions** — `reactions.turnProjection`, `systemPrompt`, `turnBefore`, `turnAfter`, `messageOutput`, and `toolResult` are the explicit runtime hooks. Turn projection handlers derive prompt sections and tool policy from services. Read-only services should carry the `ReadOnly` brand — `TodoStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-reactions.ts`.
+- **Callable leaves** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC; `action` = human-palette or human-slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Agent`, `Interaction`, `Process`); extension-private authority comes from extension-owned Effect service Tags. See `packages/core/src/domain/capability/{tool,request,action}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
+- **Reactions** — `reactions.turnProjection`, `systemPrompt`, `turnBefore`, `turnAfter`, `messageOutput`, and `toolResult` are the explicit runtime hooks. Reaction handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-reactions.ts`.
 - **Driver** — `modelDrivers` and `externalDrivers` are split buckets of `ModelDriverContribution` and `ExternalDriverContribution`. Model drivers provide LLM provider layers + auth; external drivers stream Effect AI response parts from process-owned executors such as ACP. See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
 
 Other notes:
@@ -397,9 +399,8 @@ Other notes:
 
 - Provided by `@gent/todo` as a process resource layer
   (`TodoStorage.Live + TodoService.Live`).
-- Todo mutation flows through typed extension request capabilities
-  (`intent: "write"`) and extension tools yield `TodoService` from their own
-  extension runtime.
+- Todo mutation flows through typed extension requests and extension tools yield
+  `TodoService` from their own extension runtime.
 - Todo UI reads through typed extension RPC and refetches when
   `@gent/todo` emits an `ExtensionStateChanged` pulse on the normal
   session stream.
