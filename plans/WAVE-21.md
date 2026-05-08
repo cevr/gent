@@ -112,6 +112,7 @@ Commits landed in this wave so far:
 - `d7b9f61f refactor(extensions): remove ambient host reads`
 - `1891457c refactor(executor): isolate sidecar platform reads`
 - `6ce15e48 refactor(extensions): isolate provider platform reads`
+- `9f6b46f7 refactor(runtime): route host process probes through platform`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -168,6 +169,13 @@ classes of privilege and races, but the deeper P1s remain:
   parent-env ownership behind `AcpAgentsPlatform`, feeds
   `CLAUDE_CODE_ENTRYPOINT` through Config, and removes the stale
   `oauth.ts` process-env lint carveout.
+- Remaining product-code process probes are now routed through platform
+  services. Commit `9f6b46f7` adds `GentPlatform.env` for child-process
+  inheritance, moves `agent-runner` subprocess env merging and TUI doctor PID
+  liveness checks through `GentPlatform`, removes the `agent-runner.ts`
+  process-env lint carveout, and expands the custom lint fixture to reject
+  `process.execPath`, `process.platform`, and `process.kill` outside adapter,
+  app-shell, test, tooling, and e2e boundaries.
 
 Fresh re-audit receipts to carry into the remaining batches:
 
@@ -741,6 +749,8 @@ PID-liveness, and SIGTERM ownership through `GentPlatform`. Shipped-extension
 ambient process reads are now closed: incidental Memory/OpenAI reads are closed
 by `d7b9f61f`, Executor sidecar host control is isolated by `1891457c`, and
 Anthropic/ACP provider host reads are isolated by `6ce15e48`.
+Commit `9f6b46f7` then closes the remaining core/TUI process probes covered by
+this lane and gives the lint suite a regression fixture for host process probes.
 
 Work:
 
@@ -756,6 +766,14 @@ Work:
       extension-local adapters. Done in `6ce15e48`.
 - [x] Remove the stale `oauth.ts` `node/no-process-env` carveout after moving
       billing-header entrypoint reads through Config. Done in `6ce15e48`.
+- [x] Route `agent-runner` child-process env inheritance through
+      `GentPlatform.env` and remove its process-env lint carveout. Done in
+      `9f6b46f7`.
+- [x] Route TUI doctor server-liveness probes through `GentPlatform.signal`.
+      Done in `9f6b46f7`.
+- [x] Extend custom host-API guard coverage to `process.execPath`,
+      `process.platform`, and `process.kill` outside adapter/app-shell/test
+      boundaries. Done in `9f6b46f7`.
 - Reconcile `GentPlatform` and `RuntimePlatform` naming/ownership.
 - Add static guards for Bun/Node/process imports outside app-shell, adapter,
   test, tooling, and generated-script boundaries.
@@ -775,6 +793,15 @@ Validation:
 - `bun run lint`
 - `bun run fmt`
 - `bun run gate`
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/agent-runner.test.ts`
+- `cd apps/tui && bun test --reporter=dots --preload ../../packages/tooling/src/test-log-preload.ts --preload ./node_modules/@opentui/solid/scripts/preload.ts tests/local-health.test.ts`
+- `cd packages/tooling && bun test --preload ./src/test-log-preload.ts --reporter=dots tests/fixtures.test.ts tests/platform-duplication-guards.test.ts`
+- `bun run typecheck`
+- `bun run lint`
+- `bun run fmt`
+- `bun run gate` (first run hit a Bun 1.3.13 segmentation fault in a core
+  shard after type/style/build had passed and tests reported no failures; rerun
+  passed unchanged)
 - `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/executor-integration.test.ts`
 - `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/executor/executor.test.ts`
 - `bun run typecheck`
