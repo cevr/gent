@@ -40,6 +40,7 @@ import {
   refreshClaudeCodeCredentials,
   type ClaudeCredentials,
 } from "./oauth.js"
+import { AnthropicPlatform } from "./platform-adapter.js"
 
 // ── Cache constants ──
 
@@ -104,13 +105,13 @@ export interface AnthropicCredentialIO {
   readonly read: Effect.Effect<
     ClaudeCredentials,
     ProviderAuthError,
-    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+    AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
   >
   /** Refresh creds for the primary source via OAuth or CLI fallback. */
   readonly refresh: Effect.Effect<
     ClaudeCredentials,
     ProviderAuthError,
-    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+    AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
   >
 }
 
@@ -142,7 +143,10 @@ export class AnthropicCredentialService extends Context.Service<
     AnthropicCredentialService,
     never,
     ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-  > => AnthropicCredentialService.layerFromIO(realIO, authInfo)
+  > =>
+    AnthropicCredentialService.layerFromIO(realIO, authInfo).pipe(
+      Layer.provide(AnthropicPlatform.Live),
+    )
 
   /**
    * Cache cell Ref provided externally so its lifetime is hoisted above the
@@ -156,7 +160,10 @@ export class AnthropicCredentialService extends Context.Service<
     AnthropicCredentialService,
     never,
     ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-  > => AnthropicCredentialService.layerFromRefAndIO(cellRef, realIO, authInfo)
+  > =>
+    AnthropicCredentialService.layerFromRefAndIO(cellRef, realIO, authInfo).pipe(
+      Layer.provide(AnthropicPlatform.Live),
+    )
 
   /**
    * Test-friendly variant — accepts the IO seam as a parameter so tests
@@ -168,7 +175,7 @@ export class AnthropicCredentialService extends Context.Service<
   ): Layer.Layer<
     AnthropicCredentialService,
     never,
-    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+    AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
   > =>
     Layer.effect(
       AnthropicCredentialService,
@@ -185,7 +192,7 @@ export class AnthropicCredentialService extends Context.Service<
   ): Layer.Layer<
     AnthropicCredentialService,
     never,
-    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+    AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
   > =>
     Layer.effect(
       AnthropicCredentialService,
@@ -199,9 +206,10 @@ export class AnthropicCredentialService extends Context.Service<
   ): Effect.Effect<
     AnthropicCredentialServiceShape,
     never,
-    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+    AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
   > =>
     Effect.gen(function* () {
+      const platform = yield* AnthropicPlatform
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
@@ -209,10 +217,14 @@ export class AnthropicCredentialService extends Context.Service<
         effect: Effect.Effect<
           A,
           E,
-          ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+          | AnthropicPlatform
+          | ChildProcessSpawner.ChildProcessSpawner
+          | FileSystem.FileSystem
+          | Path.Path
         >,
       ): Effect.Effect<A, E> =>
         effect.pipe(
+          Effect.provideService(AnthropicPlatform, platform),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(FileSystem.FileSystem, fs),
           Effect.provideService(Path.Path, path),

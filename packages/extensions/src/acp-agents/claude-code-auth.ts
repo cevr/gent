@@ -8,7 +8,7 @@
  * @module
  */
 import { BunServices } from "@effect/platform-bun"
-import { Clock, Effect } from "effect"
+import { Clock, Effect, Layer } from "effect"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import {
   freshEnoughForUse,
@@ -16,6 +16,7 @@ import {
   readClaudeCodeCredentials,
   refreshClaudeCodeCredentials,
 } from "../anthropic/oauth.js"
+import { AnthropicPlatform } from "../anthropic/platform-adapter.js"
 
 /**
  * Read the Claude Code OAuth access token from macOS Keychain (or
@@ -48,5 +49,5 @@ export const readClaudeCodeOAuthToken = (): Effect.Effect<string, ProviderAuthEr
     return creds.accessToken
   }).pipe(
     // @effect-diagnostics-next-line strictEffectProvide:off
-    Effect.provide(BunServices.layer),
+    Effect.provide(Layer.merge(BunServices.layer, AnthropicPlatform.Live)),
   )

@@ -28,6 +28,7 @@ import {
 } from "./credential-service.js"
 import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-cache.js"
 import { buildKeychainTransformClient } from "./keychain-transform.js"
+import { AnthropicPlatform } from "./platform-adapter.js"
 
 const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
   Effect.gen(function* () {
@@ -227,7 +228,7 @@ export const buildAnthropicModelDriver = (
           ),
         ),
         // @effect-diagnostics-next-line strictEffectProvide:off
-        Effect.provide(BunServices.layer),
+        Effect.provide(Layer.merge(BunServices.layer, AnthropicPlatform.Live)),
       ),
   },
 })
@@ -239,6 +240,7 @@ export const AnthropicExtension = defineExtension({
       const env: AnthropicKeychainEnv = {
         betaFlags: yield* readOptionalEnv("ANTHROPIC_BETA_FLAGS"),
         cliVersion: yield* readOptionalEnv("ANTHROPIC_CLI_VERSION"),
+        entrypoint: yield* readOptionalEnv("CLAUDE_CODE_ENTRYPOINT"),
         userAgent: yield* readOptionalEnv("ANTHROPIC_USER_AGENT"),
       }
       initAnthropicKeychainEnv(env)

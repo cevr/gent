@@ -1,9 +1,9 @@
 import { Clock, Duration, Effect, FileSystem, Option, Path, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import type { ChildProcessSpawner } from "effect/unstable/process"
-import * as os from "node:os"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { runProcess } from "../run-process.js"
+import { AnthropicPlatform } from "./platform-adapter.js"
 
 // ── Claude Code Keychain Reader ──
 
@@ -15,8 +15,8 @@ import { runProcess } from "../run-process.js"
  */
 export const PRIMARY_CLAUDE_SERVICE = "Claude Code-credentials"
 
-const credentialsFilePath = (path: Path.Path): string =>
-  path.join(os.homedir(), ".claude", ".credentials.json")
+const credentialsFilePath = (path: Path.Path, home: string): string =>
+  path.join(home, ".claude", ".credentials.json")
 
 const ClaudeCredentials = Schema.Struct({
   accessToken: Schema.String,
@@ -72,12 +72,13 @@ const decodeCredentials = (raw: string): Effect.Effect<ClaudeCredentials, Provid
 const readCredentialsFile = (): Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError,
-  FileSystem.FileSystem | Path.Path
+  AnthropicPlatform | FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
+    const platform = yield* AnthropicPlatform
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const credentialsFile = credentialsFilePath(path)
+    const credentialsFile = credentialsFilePath(path, platform.home)
     const exists = yield* fs.exists(credentialsFile).pipe(
       Effect.mapError(
         (e) =>
@@ -207,23 +208,25 @@ export const readClaudeCodeCredentials = (
 ): Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-> => {
-  if (process.platform !== "darwin") {
-    return readCredentialsFile()
-  }
-  return readFromKeychain(source).pipe(
-    Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () =>
-      shouldFallBackToCredentialsFile(process.platform, source)
-        ? readCredentialsFile()
-        : Effect.fail(
-            new ProviderAuthError({
-              message: `No Claude credentials found in keychain for source: ${source}`,
-            }),
-          ),
-    ),
-  )
-}
+  AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+> =>
+  Effect.gen(function* () {
+    const platform = yield* AnthropicPlatform
+    if (platform.platform !== "darwin") {
+      return yield* readCredentialsFile()
+    }
+    return yield* readFromKeychain(source).pipe(
+      Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () =>
+        shouldFallBackToCredentialsFile(platform.platform, source)
+          ? readCredentialsFile()
+          : Effect.fail(
+              new ProviderAuthError({
+                message: `No Claude credentials found in keychain for source: ${source}`,
+              }),
+            ),
+      ),
+    )
+  })
 
 // ── Multi-account discovery ──
 
@@ -240,10 +243,11 @@ export const readClaudeCodeCredentials = (
 export const listClaudeCodeKeychainServices = (): Effect.Effect<
   ReadonlyArray<string>,
   ProviderAuthError,
-  ChildProcessSpawner.ChildProcessSpawner
+  AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner
 > =>
   Effect.gen(function* () {
-    if (process.platform !== "darwin") return [PRIMARY_CLAUDE_SERVICE] as ReadonlyArray<string>
+    const platform = yield* AnthropicPlatform
+    if (platform.platform !== "darwin") return [PRIMARY_CLAUDE_SERVICE] as ReadonlyArray<string>
     const result = yield* runProcess("security", ["dump-keychain"], {
       timeout: Duration.millis(5000),
     }).pipe(Effect.catchEager(() => Effect.sync(() => undefined)))
@@ -294,7 +298,7 @@ export interface ClaudeAccount {
 export const listClaudeAccounts = (): Effect.Effect<
   ReadonlyArray<ClaudeAccount>,
   never,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+  AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
     const sources = yield* listClaudeCodeKeychainServices().pipe(
@@ -406,13 +410,14 @@ export const writeBackCredentials = (
 ): Effect.Effect<
   void,
   ProviderAuthError,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+  AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
-    if (process.platform !== "darwin") {
+    const platform = yield* AnthropicPlatform
+    if (platform.platform !== "darwin") {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const credentialsFile = credentialsFilePath(path)
+      const credentialsFile = credentialsFilePath(path, platform.home)
       const mapFsError = (e: { readonly message: string }) =>
         new ProviderAuthError({
           message: `Failed to write Claude credentials file: ${e.message}`,
@@ -558,33 +563,35 @@ const refreshViaOAuth = (
 const spawnClaudeCli = (): Effect.Effect<
   void,
   ProviderAuthError,
-  ChildProcessSpawner.ChildProcessSpawner
-> => {
-  const env = { ...process.env, TERM: "dumb" }
-  return runProcess("claude", ["-p", ".", "--model", "haiku"], {
-    env,
-    timeout: Duration.millis(60_000),
-    stdout: "ignore",
-    stderr: "ignore",
-  }).pipe(
-    Effect.flatMap((result) => {
-      if (result.exitCode === 0) return Effect.void
-      return Effect.fail(
-        new ProviderAuthError({
-          message: `Failed to refresh Claude Code credentials via CLI: claude CLI exited with code ${result.exitCode}`,
-        }),
-      )
-    }),
-    Effect.catchTag("ProcessError", (e) =>
-      Effect.fail(
-        new ProviderAuthError({
-          message: `Failed to refresh Claude Code credentials via CLI: ${e.message}`,
-          cause: e,
-        }),
+  AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner
+> =>
+  Effect.gen(function* () {
+    const platform = yield* AnthropicPlatform
+    const env = { ...platform.parentEnv, TERM: "dumb" }
+    return yield* runProcess("claude", ["-p", ".", "--model", "haiku"], {
+      env,
+      timeout: Duration.millis(60_000),
+      stdout: "ignore",
+      stderr: "ignore",
+    }).pipe(
+      Effect.flatMap((result) => {
+        if (result.exitCode === 0) return Effect.void
+        return Effect.fail(
+          new ProviderAuthError({
+            message: `Failed to refresh Claude Code credentials via CLI: claude CLI exited with code ${result.exitCode}`,
+          }),
+        )
+      }),
+      Effect.catchTag("ProcessError", (e) =>
+        Effect.fail(
+          new ProviderAuthError({
+            message: `Failed to refresh Claude Code credentials via CLI: ${e.message}`,
+            cause: e,
+          }),
+        ),
       ),
-    ),
-  )
-}
+    )
+  })
 
 /**
  * Refresh the cached Claude Code credentials and return the fresh ones
@@ -605,7 +612,7 @@ export const refreshClaudeCodeCredentials = (
 ): Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+  AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
     const current = yield* readClaudeCodeCredentials(source).pipe(
@@ -662,6 +669,7 @@ export const LONG_CONTEXT_BETAS: ReadonlyArray<string> = MODEL_CONFIG.longContex
 export interface AnthropicKeychainEnv {
   betaFlags?: string
   cliVersion?: string
+  entrypoint?: string
   userAgent?: string
 }
 
@@ -736,8 +744,7 @@ export const getUserAgent = (): string =>
  */
 export const getBillingHeaderInputs = (): { version: string; entrypoint: string } => ({
   version: getCliVersion(),
-  // @effect-diagnostics-next-line processEnv:off — adapter site reads parent-process env to form an upstream billing header; Config layer already feeds the rest of the auth surface, this single value is invariant per process.
-  entrypoint: process.env["CLAUDE_CODE_ENTRYPOINT"] ?? "cli",
+  entrypoint: _env.entrypoint ?? "cli",
 })
 
 /**

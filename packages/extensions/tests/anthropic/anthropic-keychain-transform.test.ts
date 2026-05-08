@@ -29,6 +29,7 @@ import {
 } from "@gent/extensions/anthropic/beta-cache"
 import type { ClaudeCredentials } from "@gent/extensions/anthropic/oauth"
 import { ProviderAuthError } from "@gent/core/extensions/api"
+import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
 // ── Helpers ──
 // Real Clock here (no TestClock), so expiresAt must be a real future
 // Unix-millis timestamp. 10h from real now is comfortably outside the
@@ -97,7 +98,9 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
 // and grabbing the service from context. The transform takes this
 // instance directly (closure-based, not yielded from R).
 const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServiceShape> => {
-  const layer = AnthropicCredentialService.layerFromIO(io).pipe(Layer.provide(BunServices.layer))
+  const layer = AnthropicCredentialService.layerFromIO(io).pipe(
+    Layer.provide(Layer.merge(BunServices.layer, AnthropicPlatform.Live)),
+  )
   return Effect.runPromise(
     Layer.build(layer).pipe(
       Effect.scoped,

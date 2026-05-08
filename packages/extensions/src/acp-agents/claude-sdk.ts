@@ -42,6 +42,7 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk"
+import { AcpAgentsPlatform } from "./platform-adapter.js"
 
 // ── Public service shape ──
 
@@ -173,6 +174,7 @@ function makeLiveService(): ClaudeSdkServiceShape {
   return {
     createSession: ({ cwd, oauthToken, systemPrompt, mcpServers }) =>
       Effect.gen(function* () {
+        const platform = yield* AcpAgentsPlatform
         const input = new Pushable<SDKUserMessage>()
 
         // Session-lifetime teardown controller — distinct from any
@@ -202,8 +204,7 @@ function makeLiveService(): ClaudeSdkServiceShape {
           includePartialMessages: true,
           abortController: teardownController,
           env: {
-            // eslint-disable-next-line no-process-env -- Claude SDK child process inherits the user's shell environment
-            ...process.env,
+            ...platform.parentEnv,
             CLAUDE_CODE_OAUTH_TOKEN: oauthToken,
           },
           ...(mcpServers !== undefined ? { mcpServers } : {}),
@@ -280,7 +281,7 @@ function makeLiveService(): ClaudeSdkServiceShape {
           prompt,
           close,
         } satisfies ClaudeSdkSession
-      }),
+      }).pipe(Effect.provideService(AcpAgentsPlatform, AcpAgentsPlatform.Current)),
   }
 }
 
