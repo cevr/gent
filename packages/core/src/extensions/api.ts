@@ -45,7 +45,7 @@ import { ExtensionLoadError } from "../domain/extension.js"
 import { sealRuntimeLoadedEffect } from "../domain/extension-load-boundary.js"
 import type {
   GentExtension,
-  ExtensionSetupContext,
+  ExtensionSetupContext as RuntimeExtensionSetupContext,
   ExtensionManifest,
 } from "../domain/extension.js"
 import type { ExtensionContributions, ExtensionReactions } from "../domain/contribution.js"
@@ -231,9 +231,6 @@ export {
 
 // ── Public API ──
 
-// ExtensionSetupContext re-exported from domain — single source of truth
-export { type ExtensionSetupContext } from "../domain/extension.js"
-
 /**
  * Per-bucket spec accepted by `defineExtension`. Each bucket field can be:
  *   - a literal array (90% of cases — the extension contributes a constant set)
@@ -250,9 +247,9 @@ export type FieldSpec<A, R = never> =
       readonly ctx: PublicExtensionSetupContext
     }) => ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R>)
 
-export type PublicExtensionSetupContext = Omit<ExtensionSetupContext, "host"> & {
+export type PublicExtensionSetupContext = Omit<RuntimeExtensionSetupContext, "host"> & {
   readonly host: Pick<
-    ExtensionSetupContext["host"],
+    RuntimeExtensionSetupContext["host"],
     | "osInfo"
     | "execPath"
     | "homeDirectory"
@@ -262,6 +259,13 @@ export type PublicExtensionSetupContext = Omit<ExtensionSetupContext, "host"> & 
     | "isPidAlive"
   >
 }
+
+/**
+ * Public setup context exposed to extension authors. Runtime loading still uses
+ * the wider domain setup context internally; `defineExtension` bucket factories
+ * receive this facts-only surface.
+ */
+export type ExtensionSetupContext = PublicExtensionSetupContext
 
 export interface DefineExtensionInput<R = never> {
   readonly id: string
@@ -307,7 +311,7 @@ const resolveField = <A, R>(
   manifest: ExtensionManifest,
   field: string,
   spec: FieldSpec<A, R> | undefined,
-  ctx: ExtensionSetupContext,
+  ctx: RuntimeExtensionSetupContext,
 ): Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R> =>
   Effect.gen(function* () {
     if (spec === undefined) return []

@@ -468,6 +468,22 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
+  test("public setup context exposes host facts but not process authority", () => {
+    const setup = (ctx: PublicExtensionApi.ExtensionSetupContext) => {
+      const platform = ctx.host.osInfo.platform
+      const candidates = ctx.host.commandCandidates("git")
+      // @ts-expect-error — public setup sees host facts, not parent process env
+      void ctx.host.parentEnv
+      // @ts-expect-error — public setup cannot signal host processes
+      ctx.host.signalPid(1, "SIGTERM")
+      // @ts-expect-error — public setup cannot spawn host processes
+      ctx.host.runProcess("git", ["status"])
+      return `${platform}:${candidates.length}`
+    }
+    void setup
+    expect(true).toBe(true)
+  })
+
   test("default tool context exposes host facts but not process authority", () => {
     tool({
       id: "facts-only-tool",
