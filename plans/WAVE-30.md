@@ -443,6 +443,11 @@ it from a host-provided internal service or be moved to runtime resources.
 
 ## Commit 7: refactor(schema): retire TaggedEnumClass from shipped extension leaves
 
+**Status**: Completed by earlier Wave 30 batches. `packages/extensions/src` no
+longer imports `TaggedEnumClass` or `schema-tagged-enum-class`; the remaining
+uses are persisted core/domain schemas, SDK/TUI local state, tests for the
+helper itself, and a public-surface negative lock.
+
 **Justification**: `TaggedEnumClass` is a large local schema dialect. It should
 not be needed in shipped extensions once those extensions no longer import
 internals.
