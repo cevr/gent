@@ -16,7 +16,7 @@ import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
-import { makeStorageTransaction } from "../storage/sqlite-storage.js"
+import { withStorageTransaction } from "../storage/sqlite-storage.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import { SessionRuntime, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
 import { buildBranchTree } from "./session-utils.js"
@@ -63,7 +63,8 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       const eventStorage = yield* EventStorage
       const relationshipStorage = yield* RelationshipStorage
       const sql = yield* SqlClient.SqlClient
-      const storageTransaction = makeStorageTransaction(sql)
+      const storageTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        withStorageTransaction(sql, effect)
       const sessionRuntime = yield* SessionRuntime
 
       const listSessions = Effect.fn("SessionQueries.listSessions")(function* () {
@@ -136,7 +137,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
         }
 
-        const snapshotState = yield* storageTransaction.withTransaction(
+        const snapshotState = yield* storageTransaction(
           Effect.gen(function* () {
             const messages = yield* messageStorage.listMessages(input.branchId)
             const lastEventId = yield* eventStorage.getLatestEventId({

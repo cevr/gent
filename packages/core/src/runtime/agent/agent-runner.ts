@@ -60,10 +60,7 @@ import {
   RelationshipStorage,
   type RelationshipStorageService,
 } from "../../storage/relationship-storage.js"
-import {
-  makeStorageTransaction,
-  type StorageTransactionService,
-} from "../../storage/sqlite-storage.js"
+import { type StorageTransaction, withStorageTransaction } from "../../storage/sqlite-storage.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { GentPlatform, type GentPlatformShape } from "../gent-platform.js"
 import { SessionRuntime } from "../session-runtime.js"
@@ -88,7 +85,7 @@ interface ChildMetadataAccumulator {
 }
 
 interface AgentRunStorage {
-  readonly transaction: StorageTransactionService
+  readonly transaction: StorageTransaction
   readonly sessions: SessionStorageService
   readonly branches: BranchStorageService
   readonly messages: MessageStorageService
@@ -353,7 +350,7 @@ const makeSharedRunnerHelpers = (
       const branchId = BranchId.make(yield* platform.randomId)
       const now = yield* DateTime.nowAsDate
 
-      const committed = yield* storage.transaction.withTransaction(
+      const committed = yield* storage.transaction(
         Effect.gen(function* () {
           yield* storage.sessions.createSession(
             new Session({
@@ -772,7 +769,8 @@ export const InProcessRunner = (
       const eventStorage = yield* EventStorage
       const relationshipStorage = yield* RelationshipStorage
       const sql = yield* SqlClient.SqlClient
-      const storageTransaction = makeStorageTransaction(sql)
+      const storageTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        withStorageTransaction(sql, effect)
       const agentRunStorage: AgentRunStorage = {
         transaction: storageTransaction,
         sessions: sessionStorage,
@@ -981,7 +979,8 @@ export const SubprocessRunner = (
       const eventStorage = yield* EventStorage
       const relationshipStorage = yield* RelationshipStorage
       const sql = yield* SqlClient.SqlClient
-      const storageTransaction = makeStorageTransaction(sql)
+      const storageTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        withStorageTransaction(sql, effect)
       const agentRunStorage: AgentRunStorage = {
         transaction: storageTransaction,
         sessions: sessionStorage,

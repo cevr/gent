@@ -19,11 +19,9 @@ export { StorageError }
 
 import { StorageInitLive } from "./schema.js"
 
-export interface StorageTransactionService {
-  readonly withTransaction: <A, E, R>(
-    effect: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E | StorageError, R>
-}
+export type StorageTransaction = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+) => Effect.Effect<A, E | StorageError, R>
 
 export const withStorageTransaction = <A, E, R>(
   sql: SqlClient.SqlClient,
@@ -38,10 +36,6 @@ export const withStorageTransaction = <A, E, R>(
         ),
       ),
     )
-
-export const makeStorageTransaction = (sql: SqlClient.SqlClient): StorageTransactionService => ({
-  withTransaction: (effect) => withStorageTransaction(sql, effect),
-})
 
 const memorySqliteClientLayer: Layer.Layer<SqliteClient.SqliteClient | SqlClient.SqlClient, never> =
   Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))

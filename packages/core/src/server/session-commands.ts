@@ -30,7 +30,7 @@ import {
   type StoredCreateSessionResult,
   type StoredSwitchBranchResult,
 } from "../storage/session-operation-storage.js"
-import { makeStorageTransaction, type StorageError } from "../storage/sqlite-storage.js"
+import { type StorageError, withStorageTransaction } from "../storage/sqlite-storage.js"
 import { ModelResolver } from "../providers/model-resolver.js"
 import { toPrompt } from "../providers/ai-transcript.js"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -224,7 +224,8 @@ const makeSessionMutationsService: Effect.Effect<
   | GentPlatform
 > = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
-  const storageTransaction = makeStorageTransaction(sql)
+  const storageTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    withStorageTransaction(sql, effect)
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
   const messageStorage = yield* MessageStorage
@@ -239,7 +240,7 @@ const makeSessionMutationsService: Effect.Effect<
     event: AgentEvent,
   ): Effect.Effect<A, E | EventStoreError | StorageError, R> =>
     Effect.gen(function* () {
-      const committed = yield* storageTransaction.withTransaction(
+      const committed = yield* storageTransaction(
         Effect.gen(function* () {
           const result = yield* mutation
           const envelope = yield* eventPublisher.append(event)
@@ -508,7 +509,7 @@ const makeSessionMutationsService: Effect.Effect<
         sessionId,
         createdAt: now,
       })
-      const committed = yield* storageTransaction.withTransaction(
+      const committed = yield* storageTransaction(
         Effect.gen(function* () {
           yield* sessionStorage.createSession(session)
           yield* branchStorage.createBranch(branch)
@@ -602,7 +603,8 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const branchStorage = yield* BranchStorage
       const messageStorage = yield* MessageStorage
       const sql = yield* SqlClient.SqlClient
-      const storageTransaction = makeStorageTransaction(sql)
+      const storageTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        withStorageTransaction(sql, effect)
       const sessionOperationStorage = yield* SessionOperationStorage
       const sessionRuntime = yield* SessionRuntime
       const eventPublisher = yield* EventPublisher
@@ -787,7 +789,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           createdAt: now,
         })
 
-        const committed = yield* storageTransaction.withTransaction(
+        const committed = yield* storageTransaction(
           Effect.gen(function* () {
             if (input.requestId !== undefined) {
               const existing = yield* sessionOperationStorage.getCreateSession(input.requestId)
@@ -850,7 +852,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           createdAt: yield* DateTime.nowAsDate,
         })
 
-        const committed = yield* storageTransaction.withTransaction(
+        const committed = yield* storageTransaction(
           Effect.gen(function* () {
             if (input.requestId !== undefined) {
               const existing = yield* sessionOperationStorage.getCreateBranch(input.requestId)
@@ -912,7 +914,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           }
         }
 
-        const committed = yield* storageTransaction.withTransaction(
+        const committed = yield* storageTransaction(
           Effect.gen(function* () {
             if (input.requestId !== undefined) {
               const existing = yield* sessionOperationStorage.getSwitchBranch(input.requestId)
@@ -1011,7 +1013,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           createdAt: yield* DateTime.nowAsDate,
         })
 
-        const committed = yield* storageTransaction.withTransaction(
+        const committed = yield* storageTransaction(
           Effect.gen(function* () {
             if (input.requestId !== undefined) {
               const existing = yield* sessionOperationStorage.getForkBranch(input.requestId)

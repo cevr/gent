@@ -509,10 +509,10 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
       deliver: (envelope) => rawDeps.eventPublisher.deliver(envelope),
       publish: (event) => withWorkspace(rawDeps.eventPublisher.publish(event)),
     } satisfies typeof rawDeps.eventPublisher
-    const workspaceTransaction = {
-      withTransaction: (effect) =>
-        rawDeps.turnStorage.transaction.withTransaction(withWorkspace(effect)),
-    } satisfies typeof rawDeps.turnStorage.transaction
+    const workspaceTransaction = ((effect) =>
+      rawDeps.turnStorage.transaction(
+        withWorkspace(effect),
+      )) satisfies typeof rawDeps.turnStorage.transaction
     const deps = {
       ...rawDeps,
       turnStorage: {

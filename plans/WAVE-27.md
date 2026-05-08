@@ -487,10 +487,9 @@ primitive.
 
 **Changes**
 
-| File                                                                                        | Change                                                                                | Lines                                                                        |
-| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-commands.ts`           | Replace five explicit request cache refs with one typed `makeRequestDeduper` factory. | `72-157`, `617-636`, `697-705`, `829-835`, `879-884`, `974-980`, `1050-1055` |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-idempotency.test.ts` | Preserve in-flight request dedup behavior.                                            | multiple                                                                     |
+| File                                                                              | Change                                                                                | Lines                                                                        |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-commands.ts` | Replace five explicit request cache refs with one typed `makeRequestDeduper` factory. | `72-157`, `617-636`, `697-705`, `829-835`, `879-884`, `974-980`, `1050-1055` |
 
 **Verification**
 
@@ -500,8 +499,9 @@ primitive.
 
 ## Commit 13: refactor(storage): delete shallow storage services
 
-**Justification**: `StorageTransaction` and `InteractionPendingReader` are
-mostly one-method wrappers. Move the behavior to the boundary that owns it.
+**Justification**: The old storage transaction file and pending-interaction
+reader file are already gone; the remaining shallow surface is the object-shaped
+`StorageTransactionService`. A transaction capability is just a function.
 
 **Principles**
 
@@ -513,18 +513,21 @@ mostly one-method wrappers. Move the behavior to the boundary that owns it.
 
 **Changes**
 
-| File                                                                                         | Change                                                                  | Lines              |
-| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------ |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/storage/storage-transaction.ts`        | Delete wrapper; use `sql.withTransaction` at the real storage boundary. | all                |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/storage/interaction-pending-reader.ts` | Delete wrapper; move decode into interaction storage.                   | all                |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-helpers.ts`         | Update transaction dependency.                                          | `38-66`            |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/ephemeral-root.ts`       | Update omitted override types.                                          | `46-60`            |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-runner.ts`         | Update transaction dependency.                                          | `63-90`, `751-981` |
+| File                                                                                          | Change                                                                     | Lines                                                   |
+| --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite-storage.ts`              | Replace one-method `StorageTransactionService` with a function type.       | `22-38`                                                 |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-helpers.ts`          | Call transaction functions directly from turn helpers.                     | `38`, `65-88`                                           |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts`      | Wrap workspace transaction as a function, not an object.                   | `512-515`                                               |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts`   | Build and call the transaction function directly.                          | `55`, `294-295`, `932-933`                              |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-runner.ts`          | Store runner transactions as functions for durable and subprocess runners. | `63`, `87-88`, `353`, `772-775`, `982-985`              |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-commands.ts`             | Use a transaction function in mutation and command handlers.               | `33`, `227-243`, `606-607`, `792`, `854`, `916`, `1015` |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-queries.ts`              | Use the same function boundary for snapshot reads.                         | `19`, `66-67`, `140`                                    |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/session-mutations.test.ts` | Update in-memory rollback fixture to the function shape.                   | `24`, `32-49`, `158`, `198`                             |
 
 **Verification**
 
-- `bun run typecheck`
-- `bun run test`
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/session-mutations.test.ts tests/runtime/agent-runner.test.ts tests/runtime/agent-loop-streaming.test.ts tests/runtime/agent-loop-queue.test.ts tests/runtime/agent/agent-loop.actor.test.ts tests/server/session-idempotency.test.ts tests/server/session-commands tests/server/session-queries.test.ts`
 - `bun run gate`
 
 ## Commit 14: refactor(extensions): narrow public authoring api

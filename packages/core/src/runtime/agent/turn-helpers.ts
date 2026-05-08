@@ -35,7 +35,7 @@ import type { StorageError } from "../../domain/storage-error.js"
 import type { EventStorageService } from "../../storage/event-storage.js"
 import type { MessageStorageService } from "../../storage/message-storage.js"
 import type { SessionStorageService } from "../../storage/session-storage.js"
-import type { StorageTransactionService } from "../../storage/sqlite-storage.js"
+import type { StorageTransaction } from "../../storage/sqlite-storage.js"
 import { ProviderError } from "../../domain/provider-error.js"
 import type { ModelResolverService } from "../../providers/model-resolver.js"
 import { toPrompt } from "../../providers/ai-transcript.js"
@@ -63,7 +63,7 @@ interface CommittedMutation<A> {
 }
 
 export interface TurnStorage {
-  readonly transaction: StorageTransactionService
+  readonly transaction: StorageTransaction
   readonly events: EventStorageService
   readonly messages: MessageStorageService
   readonly sessions: SessionStorageService
@@ -85,7 +85,7 @@ export const commitWithEvent = <A, E, R>(params: {
   mutation: Effect.Effect<CommittedMutation<A>, E, R>
 }) =>
   Effect.gen(function* () {
-    const committed = yield* params.storage.transaction.withTransaction(params.mutation)
+    const committed = yield* params.storage.transaction(params.mutation)
     if (committed.envelope !== undefined) {
       yield* params.eventPublisher.deliver(committed.envelope)
     }

@@ -21,7 +21,7 @@ import type { BranchStorageService } from "@gent/core-internal/storage/branch-st
 import type { MessageStorageService } from "@gent/core-internal/storage/message-storage"
 import type { RelationshipStorageService } from "@gent/core-internal/storage/relationship-storage"
 import type { SessionStorageService } from "@gent/core-internal/storage/session-storage"
-import type { StorageTransactionService } from "../../src/storage/sqlite-storage"
+import type { StorageTransaction } from "../../src/storage/sqlite-storage"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 // Minimal in-memory storage for session mutation tests
 const createTestStorage = () => {
@@ -29,26 +29,24 @@ const createTestStorage = () => {
   const branches = new Map<string, Branch>()
   const messages = new Map<string, Message[]>()
   const die = (label: string) => () => Effect.die(`${label} not implemented in test`)
-  const transaction: StorageTransactionService = {
-    withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      Effect.gen(function* () {
-        const sessionsSnapshot = new Map(sessions)
-        const branchesSnapshot = new Map(branches)
-        const messagesSnapshot = new Map(messages)
-        return yield* effect.pipe(
-          Effect.onError(() =>
-            Effect.sync(() => {
-              sessions.clear()
-              for (const [key, value] of sessionsSnapshot) sessions.set(key, value)
-              branches.clear()
-              for (const [key, value] of branchesSnapshot) branches.set(key, value)
-              messages.clear()
-              for (const [key, value] of messagesSnapshot) messages.set(key, value)
-            }),
-          ),
-        )
-      }),
-  }
+  const transaction: StorageTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* () {
+      const sessionsSnapshot = new Map(sessions)
+      const branchesSnapshot = new Map(branches)
+      const messagesSnapshot = new Map(messages)
+      return yield* effect.pipe(
+        Effect.onError(() =>
+          Effect.sync(() => {
+            sessions.clear()
+            for (const [key, value] of sessionsSnapshot) sessions.set(key, value)
+            branches.clear()
+            for (const [key, value] of branchesSnapshot) branches.set(key, value)
+            messages.clear()
+            for (const [key, value] of messagesSnapshot) messages.set(key, value)
+          }),
+        ),
+      )
+    })
   const sessionStorage: SessionStorageService = {
     getSession: (id: SessionId) => Effect.succeed(sessions.get(id)),
     updateSession: (session: Session) => {
@@ -157,7 +155,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
         return { branchId: branch.id }
       }),
     forkSessionBranch: ({ sessionId, fromBranchId, atMessageId, name }) =>
-      testStorage.transaction.withTransaction(
+      testStorage.transaction(
         Effect.gen(function* () {
           const messages = testStorage.messages.get(fromBranchId) ?? []
           const targetIndex = messages.findIndex((message) => message.id === atMessageId)
@@ -197,7 +195,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
         yield* publish({ _tag: "BranchSwitched" })
       }),
     createChildSession: ({ parentSessionId, parentBranchId, name, cwd }) =>
-      testStorage.transaction.withTransaction(
+      testStorage.transaction(
         Effect.gen(function* () {
           const sessionId = SessionId.make(Bun.randomUUIDv7())
           const branchId = BranchId.make(Bun.randomUUIDv7())

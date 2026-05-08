@@ -52,7 +52,7 @@ import type { StorageError } from "../../domain/storage-error.js"
 import { SessionStorage } from "../../storage/session-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
-import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
+import { withStorageTransaction } from "../../storage/sqlite-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import { SessionProfileCache } from "../session-profile.js"
@@ -291,7 +291,8 @@ export const makeAgentLoopBehaviorDeps = (config: {
     const queueStorage = yield* AgentLoopQueueStorage
     const eventStorage = yield* EventStorage
     const sql = yield* SqlClient.SqlClient
-    const storageTransaction = makeStorageTransaction(sql)
+    const storageTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      withStorageTransaction(sql, effect)
     const modelResolver = yield* ModelResolver
     const extensionRegistry = yield* ExtensionRegistry
     const driverRegistry = yield* DriverRegistry
@@ -928,7 +929,7 @@ export const makeAgentLoopBehavior = (
       const turnEndTime = yield* DateTime.now
       const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
 
-      const envelope = yield* turnStorage.transaction.withTransaction(
+      const envelope = yield* turnStorage.transaction(
         Effect.gen(function* () {
           yield* messageStorage.updateMessageTurnDuration(params.messageId, turnDurationMs)
           return yield* eventPublisher.append(
