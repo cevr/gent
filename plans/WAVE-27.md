@@ -571,8 +571,10 @@ core internals.
 
 ## Commit 15: refactor(tui): remove core client facet overload
 
-**Justification**: Core should not carry an opaque TUI client artifact. TUI
-client modules are the client extension API.
+**Justification**: Core no longer carries an opaque TUI client artifact. The
+remaining file-merit residue is in the TUI client module factory itself: a
+single-call wrapper and bespoke Schema error class around an already typed
+module literal.
 
 **Principles**
 
@@ -583,12 +585,10 @@ client modules are the client extension API.
 
 **Changes**
 
-| File                                                                                 | Change                                                     | Lines                |
-| ------------------------------------------------------------------------------------ | ---------------------------------------------------------- | -------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`             | Remove `client?: Client` and overloads.                    | `284-294`, `404-419` |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/client-facets.ts`        | Remove `UnifiedClientExtension` lowering path.             | `316-356`            |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/auto.client.ts` | Use standalone `defineClientExtension("@gent/auto", ...)`. | `32-34`              |
-| `/Users/cvr/Developer/personal/gent/apps/tui/tests/extension-client-facets.test.ts`  | Update tests around standalone client modules.             | `6-39`               |
+| File                                                                          | Change                                                                                    | Lines     |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | --------- |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/client-facets.ts` | Inline the one-call standalone module wrapper and delete `DefineClientExtensionError`.    | `343-385` |
+| `/Users/cvr/Developer/personal/gent/plans/WAVE-27.md`                         | Record that the larger core/client overload removal had already landed before this batch. | `572-599` |
 
 **Verification**
 

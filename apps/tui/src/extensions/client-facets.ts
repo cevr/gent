@@ -23,7 +23,7 @@
 //   - border labels: collected (no winner), sorted by priority
 //   - autocomplete: collected (no winner), scope-ordered
 
-import { Schema, type Effect, type ManagedRuntime } from "effect"
+import { type Effect, type ManagedRuntime } from "effect"
 import type { ActiveInteraction, ApprovalResult } from "@gent/core/extensions/api"
 import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
 import type { ToolRenderer } from "../components/tool-renderers/types"
@@ -342,45 +342,17 @@ export interface ExtensionClientModule<R extends ClientRuntimeServices = ClientD
 export type AnyExtensionClientModule = ExtensionClientModule<ClientRuntimeServices>
 
 /**
- * Standalone factory for TUI client modules. Server extensions and TUI
- * client modules share an id by convention — the TUI loader looks up the
- * module by id when wiring contributions.
+ * Create a TUI client extension module with typed contributions. Server
+ * extensions and TUI client modules share an id by convention — the TUI
+ * loader looks up the module by id when wiring contributions.
  *
- * The setup is an Effect.
- * Read the typed transport via `yield* ClientTransport` and the other
- * services via `yield* ClientShell` / `ClientComposer` / `ClientWorkspace`.
+ * The setup is an Effect. Read the typed transport via
+ * `yield* ClientTransport` and the other services via `yield* ClientShell` /
+ * `ClientComposer` / `ClientWorkspace`.
  */
-function standaloneClientModule<R extends ClientRuntimeServices = ClientDeps>(
-  id: string,
-  spec: { readonly setup: ExtensionClientSetup<R> },
-): ExtensionClientModule<R> {
-  return { id, setup: spec.setup }
-}
-
-/** Create a TUI client extension module with typed contributions. */
 export function defineClientExtension<R extends ClientRuntimeServices = ClientDeps>(
   id: string,
   spec: { readonly setup: ExtensionClientSetup<R> },
 ): ExtensionClientModule<R> {
-  if (spec === undefined) {
-    throw new DefineClientExtensionError({ reason: "missing-spec" })
-  }
-  return standaloneClientModule(id, spec)
-}
-
-/**
- * Surfaces author-facing misuse of `defineClientExtension`. Thrown
- * synchronously since the factory is called at module top level — by
- * the time the bundler reaches it, only a programmer error can leave
- * `spec` undefined.
- */
-export class DefineClientExtensionError extends Schema.TaggedErrorClass<DefineClientExtensionError>()(
-  "DefineClientExtensionError",
-  {
-    reason: Schema.Literals(["missing-spec"]),
-  },
-) {
-  override get message(): string {
-    return "defineClientExtension(id, spec) requires a setup spec"
-  }
+  return { id, setup: spec.setup }
 }
