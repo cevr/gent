@@ -1,9 +1,10 @@
-import { Effect, Schema, type Config, type Layer } from "effect"
+import { Effect, Schema, type Config, type Layer, type PlatformError } from "effect"
 import {
   baseLocalLayer as _baseLocalLayer,
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
   type InProcessLayerConfig,
 } from "@gent/core-internal/test-utils/in-process-layer.js"
+import type { BootstrapError } from "@gent/core-internal/server/dependencies.js"
 import {
   LanguageModelLayers,
   type SignalLanguageModelControls,
@@ -27,7 +28,11 @@ const defaultConfig: InProcessLayerConfig = {
   extraLayers: [GitReader.Test],
 }
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
-type HarnessLayerError = Config.ConfigError | StorageError
+type HarnessLayerError =
+  | BootstrapError
+  | Config.ConfigError
+  | PlatformError.PlatformError
+  | StorageError
 export const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-scripted") =>
   _baseLocalLayer(defaultConfig, providerMode) satisfies Layer.Layer<
     RpcHandlersContext,

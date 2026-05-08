@@ -3,10 +3,13 @@ import { SingleRunner } from "effect/unstable/cluster"
 import { FetchHttpClient } from "effect/unstable/http"
 import type { LanguageModel } from "effect/unstable/ai"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import type { AgentRunnerService } from "../domain/agent.js"
 import { Auth, AuthGuard } from "../domain/auth.js"
 import { EventStore, EventStoreError } from "../domain/event.js"
-import { FileLockService } from "../domain/file-lock.js"
+import { EventPublisherLive, type EventPublisher } from "../domain/event-publisher.js"
 import type { PromptSection } from "../domain/prompt.js"
+import { FileLockService } from "../domain/file-lock.js"
+import type { Permission } from "../domain/permission.js"
 import { PromptPresenterLive } from "../runtime/prompt-presenter-live.js"
 import type { GentExtension } from "../domain/extension.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
@@ -35,14 +38,27 @@ import {
   decodeInteractionParams,
 } from "../domain/interaction-request.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
-import { EventPublisherLive } from "../domain/event-publisher.js"
 import { SessionCommands } from "./session-commands.js"
 import {
   SessionProfileCache,
   sessionProfileFromRuntime,
   type SessionProfile,
 } from "../runtime/session-profile.js"
-import { FileIndexLive } from "../runtime/file-index/index.js"
+import { FileIndexLive, type FileIndex } from "../runtime/file-index/index.js"
+
+export interface DependencyOverrides {
+  readonly eventStoreMode?: "default" | "storage-backed" | "memory"
+  readonly authLayer?: Layer.Layer<Auth>
+  readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform>
+  readonly configServiceLayer?: Layer.Layer<ConfigService>
+  readonly modelRegistryLayer?: Layer.Layer<ModelRegistry>
+  readonly permissionLayer?: Layer.Layer<Permission>
+  readonly toolRunnerLayer?: Layer.Layer<ToolRunner>
+  readonly agentRunnerLayer?: Layer.Layer<AgentRunnerService>
+  readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
+  readonly fileIndexLayer?: Layer.Layer<FileIndex>
+  readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
+}
 
 /**
  * Wiring contract failure — fires only when a Layer that depends on a
@@ -87,6 +103,8 @@ export interface DependenciesConfig {
   languageModelLayerOverride?: Layer.Layer<LanguageModel.LanguageModel, never, never>
   /** Extensions to load. Composition roots pass this in. */
   extensions: ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>>
+  /** Internal composition-root knobs used by tests to preset the production root. */
+  overrides?: DependencyOverrides
 }
 
 const scheduledJobEnv = (config: DependenciesConfig): Readonly<Record<string, string>> => ({
@@ -100,122 +118,114 @@ const scheduledJobEnv = (config: DependenciesConfig): Readonly<Record<string, st
   ...(config.providerMode !== undefined ? { GENT_PROVIDER_MODE: config.providerMode } : {}),
 })
 
-export const createDependencies = (config: DependenciesConfig) => {
-  let launchSessionProfileSeed: SessionProfile | undefined
-  let baseSectionsSeed: ReadonlyArray<PromptSection> | undefined
-  const runtimeEnvironmentLive = RuntimeEnvironment.Live({
-    cwd: config.cwd,
-    home: config.home,
-    platform: config.platform,
-  })
+const makeBaseEventStoreLayer = (
+  eventStoreMode: DependencyOverrides["eventStoreMode"] | undefined,
+  persistenceMode: "disk" | "memory",
+) => {
+  if (eventStoreMode === "memory") return EventStore.Memory
+  if (eventStoreMode === "storage-backed") return EventStoreLive
+  return persistenceMode === "memory" ? EventStore.Memory : EventStoreLive
+}
 
-  const persistenceMode = config.persistenceMode ?? "disk"
-  const providerMode = config.providerMode ?? "live"
+const makeStorageLayer = (config: DependenciesConfig, persistenceMode: "disk" | "memory") =>
+  persistenceMode === "memory"
+    ? SqliteStorage.MemoryWithSql()
+    : SqliteStorage.LiveWithSql(config.dbPath ?? ".gent/data.db")
 
-  const storageLive =
-    persistenceMode === "memory"
-      ? SqliteStorage.MemoryWithSql()
-      : SqliteStorage.LiveWithSql(config.dbPath ?? ".gent/data.db")
-  const clusterRunnerLive = SingleRunner.layer({
+const makeClusterRunnerLayer = (persistenceMode: "disk" | "memory") =>
+  SingleRunner.layer({
     runnerStorage: persistenceMode === "memory" ? "memory" : "sql",
   })
-  // Base event store: raw storage-backed publish/subscribe storage
-  const baseEventStoreLive = persistenceMode === "memory" ? EventStore.Memory : EventStoreLive
 
-  // Auth lives in `~/.gent/auth/` (one URL-encoded file per provider).
-  // `Auth.Live` requires FileSystem + Path; `BunPlatformLive` bundles
-  // `BunServices.layer` (which provides them) with `BunGentPlatformLive`.
-  const authDirectory = config.authDirectory ?? `${config.home}/.gent/auth`
-  const authLive = Layer.provide(Auth.Live(authDirectory), BunPlatformLive)
+const makeProfileRuntimeInputs = (config: DependenciesConfig) => ({
+  cwd: config.cwd,
+  home: config.home,
+  platform: config.platform,
+  ...(config.shell !== undefined ? { shell: config.shell } : {}),
+  ...(config.osVersion !== undefined ? { osVersion: config.osVersion } : {}),
+  extensions: config.extensions,
+  ...(config.disabledExtensions !== undefined
+    ? { disabledExtensions: config.disabledExtensions }
+    : {}),
+  ...(config.scheduledJobCommand !== undefined
+    ? { scheduledJobCommand: config.scheduledJobCommand }
+    : {}),
+  scheduledJobEnv: scheduledJobEnv(config),
+})
 
-  const configServiceLive = Layer.provide(ConfigService.Live, runtimeEnvironmentLive)
-
-  // Resolve and build the launch cwd profile runtime once. Server startup and
-  // SessionProfileCache share this same profile so cwd-scoped resources have a
-  // single owner.
-  const profileLayers = Layer.unwrap(
-    Effect.gen(function* () {
-      const runtime = yield* resolveProfileRuntime({
-        cwd: config.cwd,
-        home: config.home,
-        platform: config.platform,
-        ...(config.shell !== undefined ? { shell: config.shell } : {}),
-        ...(config.osVersion !== undefined ? { osVersion: config.osVersion } : {}),
-        extensions: config.extensions,
-        ...(config.disabledExtensions !== undefined
-          ? { disabledExtensions: config.disabledExtensions }
-          : {}),
-        ...(config.scheduledJobCommand !== undefined
-          ? { scheduledJobCommand: config.scheduledJobCommand }
-          : {}),
-        scheduledJobEnv: scheduledJobEnv(config),
-      })
-      const profile = sessionProfileFromRuntime(runtime)
-      launchSessionProfileSeed = profile
-      baseSectionsSeed = runtime.baseSections
-      return Layer.succeedContext(runtime.layerContext)
-    }),
-  )
-  // Profile resolution needs config/platform services; storage is provided once at the
-  // shared composition boundary so SQLite initialization cannot run in parallel copies.
-  const extensionRegistryLive = Layer.provide(
-    profileLayers,
-    Layer.mergeAll(
-      configServiceLive,
-      runtimeEnvironmentLive,
-      BunGentPlatformLive,
-      BunCronRuntimeLive,
+const makeProfileLayers = <A, E, R>(
+  config: DependenciesConfig,
+  resolverDeps: Layer.Layer<A, E, R>,
+  onResolved: (runtime: Parameters<typeof sessionProfileFromRuntime>[0]) => void,
+) =>
+  Layer.provide(
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const runtime = yield* resolveProfileRuntime(makeProfileRuntimeInputs(config))
+        onResolved(runtime)
+        return Layer.succeedContext(runtime.layerContext)
+      }),
     ),
+    resolverDeps,
   )
-  const modelRegistryLive = Layer.provide(
-    ModelRegistry.Live,
-    Layer.mergeAll(runtimeEnvironmentLive, extensionRegistryLive, authLive),
-  )
-  const authDeps = Layer.mergeAll(authLive, extensionRegistryLive)
-  const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
-  const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
-  const fileLockServiceLive = FileLockService.layer
 
-  let modelResolverLive = Layer.provide(ModelResolver.Live, authDeps)
+const makeAuthLayer = (config: DependenciesConfig, authDirectory: string) =>
+  config.overrides?.authLayer ?? Layer.provide(Auth.Live(authDirectory), BunPlatformLive)
+
+const makeConfigServiceLayer = (
+  config: DependenciesConfig,
+  runtimeEnvironmentLive: Layer.Layer<RuntimeEnvironment>,
+) =>
+  config.overrides?.configServiceLayer ?? Layer.provide(ConfigService.Live, runtimeEnvironmentLive)
+
+const makeModelRegistryLayer = <A, E, R>(
+  config: DependenciesConfig,
+  liveDeps: Layer.Layer<A, E, R>,
+) => config.overrides?.modelRegistryLayer ?? Layer.provide(ModelRegistry.Live, liveDeps)
+
+const makeModelResolverLayer = <A, E, R>(
+  config: DependenciesConfig,
+  providerMode: NonNullable<DependenciesConfig["providerMode"]>,
+  authDeps: Layer.Layer<A, E, R>,
+) => {
   if (config.languageModelLayerOverride !== undefined) {
-    modelResolverLive = ModelResolver.fromLanguageModel(config.languageModelLayerOverride)
-  } else if (providerMode === "debug-scripted") {
-    modelResolverLive = ModelResolver.fromLanguageModel(LanguageModelLayers.debug())
-  } else if (providerMode === "debug-failing") {
-    modelResolverLive = ModelResolver.fromLanguageModel(LanguageModelLayers.failing)
-  } else if (providerMode === "debug-slow") {
-    modelResolverLive = ModelResolver.fromLanguageModel(
+    return ModelResolver.fromLanguageModel(config.languageModelLayerOverride)
+  }
+  if (providerMode === "debug-scripted") {
+    return ModelResolver.fromLanguageModel(LanguageModelLayers.debug())
+  }
+  if (providerMode === "debug-failing") {
+    return ModelResolver.fromLanguageModel(LanguageModelLayers.failing)
+  }
+  if (providerMode === "debug-slow") {
+    return ModelResolver.fromLanguageModel(
       LanguageModelLayers.debug({ delayMs: DebugSlowLanguageModelDelayMs }),
     )
   }
+  return Layer.provide(ModelResolver.Live, authDeps)
+}
 
-  const eventPublisherLive = EventPublisherLive
-  const eventServicesLive = Layer.provideMerge(eventPublisherLive, baseEventStoreLive)
+const makeToolRunnerLayer = <A, E, R>(
+  override: DependencyOverrides["toolRunnerLayer"] | undefined,
+  liveDeps: Layer.Layer<A, E, R>,
+) => override ?? Layer.provide(ToolRunner.Live, liveDeps)
 
-  const baseServicesLive = Layer.provideMerge(
-    Layer.provideMerge(
-      Layer.mergeAll(
-        runtimeEnvironmentLive,
-        clusterRunnerLive,
-        eventServicesLive,
-        authLive,
-        authGuardLive,
-        providerAuthLive,
-        configServiceLive,
-        Layer.provide(modelRegistryLive, FetchHttpClient.layer),
-        extensionRegistryLive,
-        fileLockServiceLive,
-        modelResolverLive,
-        Layer.provide(FileIndexLive, runtimeEnvironmentLive),
-        FetchHttpClient.layer,
-      ),
-      BunGentPlatformLive,
-    ),
-    storageLive,
-  )
+const optionalPermissionLayer = (override: DependencyOverrides["permissionLayer"] | undefined) =>
+  override === undefined ? [] : [override]
 
-  // ApprovalService — single handler for all interaction types
-  const approvalServiceLive = Layer.provide(
+const makeFileIndexLayer = (
+  override: DependencyOverrides["fileIndexLayer"] | undefined,
+  runtimeEnvironmentLive: Layer.Layer<RuntimeEnvironment>,
+) => override ?? Layer.provide(FileIndexLive, runtimeEnvironmentLive)
+
+const makeApprovalServiceLayer = <A, E, R>(
+  override: DependencyOverrides["approvalLayer"] | undefined,
+  baseServicesLive: Layer.Layer<A, E, R>,
+) => {
+  if (override !== undefined) {
+    return Layer.provide(override, baseServicesLive)
+  }
+  return Layer.provide(
     Layer.unwrap(
       Effect.gen(function* () {
         const store = yield* InteractionStorage
@@ -248,13 +258,184 @@ export const createDependencies = (config: DependenciesConfig) => {
     ),
     baseServicesLive,
   )
+}
+
+const makeSessionProfileCacheLayer = <A, E, R>(
+  config: DependenciesConfig,
+  getLaunchProfileSeed: () => SessionProfile | undefined,
+  allDeps: Layer.Layer<A, E, R>,
+) => {
+  const override = config.overrides?.sessionProfileCacheLayer
+  if (override !== undefined) return override
+  return Layer.provide(
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const launchProfileSeed = getLaunchProfileSeed()
+        if (launchProfileSeed === undefined) {
+          return yield* new BootstrapError({ seed: "launchSessionProfile" })
+        }
+        return SessionProfileCache.Live({
+          home: config.home,
+          platform: config.platform,
+          shell: config.shell,
+          osVersion: config.osVersion,
+          disabledExtensions: config.disabledExtensions,
+          scheduledJobCommand: config.scheduledJobCommand,
+          scheduledJobEnv: scheduledJobEnv(config),
+          extensions: config.extensions,
+          initialProfiles: [launchProfileSeed],
+        })
+      }),
+    ),
+    allDeps,
+  )
+}
+
+const makeSessionRuntimeLayer = <A, E, R>(
+  getBaseSectionsSeed: () => ReadonlyArray<PromptSection> | undefined,
+  runtimeDeps: Layer.Layer<A, E, R>,
+) =>
+  Layer.provide(
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const baseSectionsSeed = getBaseSectionsSeed()
+        if (baseSectionsSeed === undefined) {
+          return yield* new BootstrapError({ seed: "baseSections" })
+        }
+        return SessionRuntime.LiveWithEntity({ baseSections: baseSectionsSeed })
+      }),
+    ),
+    runtimeDeps,
+  )
+
+const makeAgentRuntimeLayer = <A, E, R>(
+  config: DependenciesConfig,
+  getBaseSectionsSeed: () => ReadonlyArray<PromptSection> | undefined,
+  allWithRuntime: Layer.Layer<A, E, R>,
+) => {
+  const override = config.overrides?.agentRunnerLayer
+  if (override !== undefined) return override
+  return Layer.provide(
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const baseSectionsSeed = getBaseSectionsSeed()
+        if (baseSectionsSeed === undefined) {
+          return yield* new BootstrapError({ seed: "baseSections" })
+        }
+        const runnerConfig = {
+          ...(config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
+            ? { subprocessBinaryPath: config.subprocessBinaryPath }
+            : {}),
+          ...(config.dbPath !== undefined && config.dbPath !== "" ? { dbPath: config.dbPath } : {}),
+          ...(config.sharedServerUrl !== undefined
+            ? { sharedServerUrl: config.sharedServerUrl }
+            : {}),
+          baseSections: baseSectionsSeed,
+        }
+        return config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
+          ? SubprocessRunner(runnerConfig)
+          : InProcessRunner(runnerConfig)
+      }),
+    ),
+    allWithRuntime,
+  )
+}
+
+export const createDependencies = (config: DependenciesConfig) => {
+  let launchSessionProfileSeed: SessionProfile | undefined
+  let baseSectionsSeed: ReadonlyArray<PromptSection> | undefined
+  const runtimeEnvironmentLive = RuntimeEnvironment.Live({
+    cwd: config.cwd,
+    home: config.home,
+    platform: config.platform,
+  })
+
+  const persistenceMode = config.persistenceMode ?? "disk"
+  const providerMode = config.providerMode ?? "live"
+
+  const storageLive = makeStorageLayer(config, persistenceMode)
+  const clusterRunnerLive = makeClusterRunnerLayer(persistenceMode)
+  // Base event store: raw storage-backed publish/subscribe storage
+  const baseEventStoreLive = makeBaseEventStoreLayer(
+    config.overrides?.eventStoreMode,
+    persistenceMode,
+  )
+
+  // Auth lives in `~/.gent/auth/` (one URL-encoded file per provider).
+  // `Auth.Live` requires FileSystem + Path; `BunPlatformLive` bundles
+  // `BunServices.layer` (which provides them) with `BunGentPlatformLive`.
+  const authDirectory = config.authDirectory ?? `${config.home}/.gent/auth`
+  const authLive = makeAuthLayer(config, authDirectory)
+
+  const configServiceLive = makeConfigServiceLayer(config, runtimeEnvironmentLive)
+
+  // Resolve and build the launch cwd profile runtime once. Server startup and
+  // SessionProfileCache share this same profile so cwd-scoped resources have a
+  // single owner.
+  const extensionRegistryLive = makeProfileLayers(
+    config,
+    Layer.mergeAll(
+      configServiceLive,
+      runtimeEnvironmentLive,
+      BunGentPlatformLive,
+      BunCronRuntimeLive,
+    ),
+    (runtime) => {
+      const profile = sessionProfileFromRuntime(runtime)
+      launchSessionProfileSeed = profile
+      baseSectionsSeed = runtime.baseSections
+    },
+  )
+  const modelRegistryLive = makeModelRegistryLayer(
+    config,
+    Layer.mergeAll(runtimeEnvironmentLive, extensionRegistryLive, authLive),
+  )
+  const authDeps = Layer.mergeAll(authLive, extensionRegistryLive)
+  const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
+  const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
+  const fileLockServiceLive = FileLockService.layer
+
+  const modelResolverLive = makeModelResolverLayer(config, providerMode, authDeps)
+
+  const eventPublisherLive = EventPublisherLive
+  const eventServicesLive = Layer.provideMerge(eventPublisherLive, baseEventStoreLive)
+
+  const baseServicesLive = Layer.provideMerge(
+    Layer.provideMerge(
+      Layer.mergeAll(
+        runtimeEnvironmentLive,
+        clusterRunnerLive,
+        eventServicesLive,
+        authLive,
+        authGuardLive,
+        providerAuthLive,
+        configServiceLive,
+        Layer.provide(modelRegistryLive, FetchHttpClient.layer),
+        extensionRegistryLive,
+        fileLockServiceLive,
+        modelResolverLive,
+        ...optionalPermissionLayer(config.overrides?.permissionLayer),
+        makeFileIndexLayer(config.overrides?.fileIndexLayer, runtimeEnvironmentLive),
+        ...(config.overrides?.extraLayers ?? []),
+        FetchHttpClient.layer,
+      ),
+      BunGentPlatformLive,
+    ),
+    storageLive,
+  )
+
+  // ApprovalService — single handler for all interaction types
+  const approvalServiceLive = makeApprovalServiceLayer(
+    config.overrides?.approvalLayer,
+    baseServicesLive,
+  )
 
   const promptPresenterLive = Layer.provide(
     PromptPresenterLive,
     Layer.merge(approvalServiceLive, baseServicesLive),
   )
-  const toolRunnerLive = Layer.provide(
-    ToolRunner.Live,
+  const toolRunnerLive = makeToolRunnerLayer(
+    config.overrides?.toolRunnerLayer,
     Layer.merge(baseServicesLive, approvalServiceLive),
   )
 
@@ -322,39 +503,14 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
 
   // SessionProfileCache — lazy per-cwd extension/config/prompt profiles.
-  const sessionProfileCacheLive = Layer.provide(
-    Layer.unwrap(
-      Effect.gen(function* () {
-        const launchProfile = launchSessionProfileSeed
-        if (launchProfile === undefined) {
-          return yield* new BootstrapError({ seed: "launchSessionProfile" })
-        }
-        return SessionProfileCache.Live({
-          home: config.home,
-          platform: config.platform,
-          shell: config.shell,
-          osVersion: config.osVersion,
-          disabledExtensions: config.disabledExtensions,
-          scheduledJobCommand: config.scheduledJobCommand,
-          scheduledJobEnv: scheduledJobEnv(config),
-          extensions: config.extensions,
-          initialProfiles: [launchProfile],
-        })
-      }),
-    ),
+  const sessionProfileCacheLive = makeSessionProfileCacheLayer(
+    config,
+    () => launchSessionProfileSeed,
     allDeps,
   )
 
-  const sessionRuntimeLive = Layer.provide(
-    Layer.unwrap(
-      Effect.gen(function* () {
-        const baseSections = baseSectionsSeed
-        if (baseSections === undefined) {
-          return yield* new BootstrapError({ seed: "baseSections" })
-        }
-        return SessionRuntime.LiveWithEntity({ baseSections })
-      }),
-    ),
+  const sessionRuntimeLive = makeSessionRuntimeLayer(
+    () => baseSectionsSeed,
     Layer.mergeAll(allDeps, sessionProfileCacheLive),
   )
 
@@ -370,30 +526,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     sessionRuntimeLive,
   )
 
-  const agentRuntimeLive = Layer.provide(
-    Layer.unwrap(
-      Effect.gen(function* () {
-        const baseSections = baseSectionsSeed
-        if (baseSections === undefined) {
-          return yield* new BootstrapError({ seed: "baseSections" })
-        }
-        const runnerConfig = {
-          ...(config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
-            ? { subprocessBinaryPath: config.subprocessBinaryPath }
-            : {}),
-          ...(config.dbPath !== undefined && config.dbPath !== "" ? { dbPath: config.dbPath } : {}),
-          ...(config.sharedServerUrl !== undefined
-            ? { sharedServerUrl: config.sharedServerUrl }
-            : {}),
-          baseSections,
-        }
-        return config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
-          ? SubprocessRunner(runnerConfig)
-          : InProcessRunner(runnerConfig)
-      }),
-    ),
-    allWithRuntime,
-  )
+  const agentRuntimeLive = makeAgentRuntimeLayer(config, () => baseSectionsSeed, allWithRuntime)
 
   return Layer.mergeAll(
     allWithRuntime,
