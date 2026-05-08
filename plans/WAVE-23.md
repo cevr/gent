@@ -369,20 +369,24 @@ Validation:
 
 ### W23.3 — Split Host Facts From Process Authority
 
-Status: planned.
+Status: implemented locally; ready for commit.
 
 Work:
 
-- Define facts-only host view for default/read extension contexts.
-- Move process execution, process signaling, and parent env behind explicit
-  write-capable facets/resources.
-- Migrate shipped extensions to request/write facets explicitly.
-- Add compile locks for read requests and default tools.
+- Defined `ExtensionHostFacts` as the default/read host view, with full
+  `ExtensionHostPlatform` now reserved for explicit process authority.
+- Read-only request contexts and default/read tool contexts now expose host
+  facts but not `parentEnv`, `signalPid`, or `runProcess`.
+- Tool runtime only passes full process host authority to tools declaring
+  `ToolNeeds.write("process")`.
+- Added compile locks for read requests/default tools and runtime coverage for
+  derived tool host facets.
+- Marked audit/review tools as explicit process writers because they shell out
+  to `git diff`.
 
 Validation:
 
-- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/extension-surface-locks.test.ts tests/runtime/tool-runner.test.ts tests/server/extension-commands-rpc.test.ts`
-- `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/exec-tools tests/anthropic tests/acp-agents`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/runtime/tool-runner.test.ts packages/core/tests/server/extension-commands-rpc.test.ts packages/extensions/tests/exec-tools packages/extensions/tests/anthropic packages/extensions/tests/acp-agents`
 - `bun run typecheck`
 - `bun run lint`
 

@@ -388,15 +388,18 @@ export interface ExtensionHostRunProcessOptions {
   readonly stderr?: "pipe" | "ignore" | "inherit"
 }
 
-export interface ExtensionHostPlatform {
+export interface ExtensionHostFacts {
   readonly osInfo: ExtensionHostOsInfo
   readonly execPath: string
   readonly homeDirectory: string
-  readonly parentEnv: Record<string, string | undefined>
   readonly pathListSeparator: string
   readonly commandCandidates: (command: string) => ReadonlyArray<string>
   readonly isPortFree: (port: number) => Effect.Effect<boolean>
   readonly isPidAlive: (pid: number) => Effect.Effect<boolean>
+}
+
+export interface ExtensionHostPlatform extends ExtensionHostFacts {
+  readonly parentEnv: Record<string, string | undefined>
   readonly signalPid: (pid: number, signal: ExtensionHostSignal) => Effect.Effect<void>
   readonly runProcess: (
     command: string,

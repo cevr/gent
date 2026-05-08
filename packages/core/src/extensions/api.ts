@@ -258,6 +258,7 @@ export {
 // ExtensionSetupContext re-exported from domain — single source of truth
 export {
   ExtensionHostProcessError,
+  type ExtensionHostFacts,
   type ExtensionHostPlatform,
   type ExtensionHostProcessResult,
   type ExtensionHostRunProcessOptions,

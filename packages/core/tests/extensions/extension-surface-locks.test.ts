@@ -28,6 +28,7 @@ import {
   tool,
   ToolCallId,
   ToolNeeds,
+  type ToolCapabilityContext,
   type ToolInput,
   type WriteRequestInput,
 } from "@gent/core/extensions/api"
@@ -376,6 +377,61 @@ describe("Effect-purity locks (compile-time)", () => {
     // @ts-expect-error — host platform service is not public extension author API
     type _BadGentPlatform = typeof PublicExtensionApi.GentPlatform
 
+    expect(true).toBe(true)
+  })
+
+  test("read request context exposes host facts but not process authority", () => {
+    request({
+      id: "facts-only-read",
+      extensionId: ExtensionId.make("surface-locks"),
+      intent: "read",
+      input: Schema.Struct({}),
+      output: Schema.String,
+      execute: (_input, ctx) => {
+        const platform = ctx.host.osInfo.platform
+        const candidates = ctx.host.commandCandidates("git")
+        // @ts-expect-error — read requests get host facts, not parent process env
+        void ctx.host.parentEnv
+        // @ts-expect-error — read requests cannot signal host processes
+        ctx.host.signalPid(1, "SIGTERM")
+        // @ts-expect-error — read requests cannot spawn host processes
+        ctx.host.runProcess("git", ["status"])
+        return Effect.succeed(`${platform}:${candidates.join(",")}`)
+      },
+    })
+    expect(true).toBe(true)
+  })
+
+  test("default tool context exposes host facts but not process authority", () => {
+    tool({
+      id: "facts-only-tool",
+      description: "facts",
+      params: Schema.Struct({}),
+      output: Schema.String,
+      execute: (_params, ctx) => {
+        const platform = ctx.host.osInfo.platform
+        // @ts-expect-error — default tool context does not expose parent process env
+        void ctx.host.parentEnv
+        // @ts-expect-error — default tool context cannot signal host processes
+        ctx.host.signalPid(1, "SIGTERM")
+        // @ts-expect-error — default tool context cannot spawn host processes
+        ctx.host.runProcess("git", ["status"])
+        return Effect.succeed(platform)
+      },
+    })
+    expect(true).toBe(true)
+  })
+
+  test("process write tools can opt into host process authority", () => {
+    tool({
+      id: "process-authority-tool",
+      description: "process",
+      params: Schema.Struct({}),
+      output: Schema.String,
+      needs: [ToolNeeds.write("process")],
+      execute: (_params, ctx: ToolCapabilityContext) =>
+        ctx.host.runProcess("git", ["status"]).pipe(Effect.as("ok")),
+    })
     expect(true).toBe(true)
   })
 

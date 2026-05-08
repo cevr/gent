@@ -109,6 +109,9 @@ describe("ToolRunner", () => {
         hasSessionListMessages: Schema.Boolean,
         hasSessionDelete: Schema.Boolean,
         hasInteraction: Schema.Boolean,
+        hasHostParentEnv: Schema.Boolean,
+        hasHostSignalPid: Schema.Boolean,
+        hasHostRunProcess: Schema.Boolean,
       })
       const ProbeTool = tool({
         id: "probe",
@@ -123,6 +126,9 @@ describe("ToolRunner", () => {
             hasSessionListMessages: "session" in ctx && hasProperty(ctx.session, "listMessages"),
             hasSessionDelete: "session" in ctx && hasProperty(ctx.session, "deleteSession"),
             hasInteraction: "interaction" in ctx,
+            hasHostParentEnv: hasProperty(ctx.host, "parentEnv"),
+            hasHostSignalPid: hasProperty(ctx.host, "signalPid"),
+            hasHostRunProcess: hasProperty(ctx.host, "runProcess"),
           }),
       })
       const ReadProbeTool = tool({
@@ -139,6 +145,9 @@ describe("ToolRunner", () => {
             hasSessionListMessages: "session" in ctx && hasProperty(ctx.session, "listMessages"),
             hasSessionDelete: "session" in ctx && hasProperty(ctx.session, "deleteSession"),
             hasInteraction: "interaction" in ctx,
+            hasHostParentEnv: hasProperty(ctx.host, "parentEnv"),
+            hasHostSignalPid: hasProperty(ctx.host, "signalPid"),
+            hasHostRunProcess: hasProperty(ctx.host, "runProcess"),
           }),
       })
       const PrivilegedProbeTool = tool({
@@ -159,6 +168,28 @@ describe("ToolRunner", () => {
             hasSessionListMessages: "session" in ctx && hasProperty(ctx.session, "listMessages"),
             hasSessionDelete: "session" in ctx && hasProperty(ctx.session, "deleteSession"),
             hasInteraction: "interaction" in ctx,
+            hasHostParentEnv: hasProperty(ctx.host, "parentEnv"),
+            hasHostSignalPid: hasProperty(ctx.host, "signalPid"),
+            hasHostRunProcess: hasProperty(ctx.host, "runProcess"),
+          }),
+      })
+      const ProcessProbeTool = tool({
+        id: "process_probe",
+        needs: [ToolNeeds.write("process")],
+        description: "Probe process host authority",
+        params: Schema.Struct({}),
+        output: Output,
+        execute: (_input, ctx: ToolCoreContext) =>
+          Effect.succeed({
+            hasAgent: "agent" in ctx,
+            hasAgentRun: "agent" in ctx && hasProperty(ctx.agent, "run"),
+            hasSession: "session" in ctx,
+            hasSessionListMessages: "session" in ctx && hasProperty(ctx.session, "listMessages"),
+            hasSessionDelete: "session" in ctx && hasProperty(ctx.session, "deleteSession"),
+            hasInteraction: "interaction" in ctx,
+            hasHostParentEnv: hasProperty(ctx.host, "parentEnv"),
+            hasHostSignalPid: hasProperty(ctx.host, "signalPid"),
+            hasHostRunProcess: hasProperty(ctx.host, "runProcess"),
           }),
       })
       const deps = Layer.mergeAll(
@@ -168,7 +199,9 @@ describe("ToolRunner", () => {
               manifest: { id: ExtensionId.make("test") },
               scope: "builtin",
               sourcePath: "test",
-              contributions: { tools: [ProbeTool, ReadProbeTool, PrivilegedProbeTool] },
+              contributions: {
+                tools: [ProbeTool, ReadProbeTool, PrivilegedProbeTool, ProcessProbeTool],
+              },
             },
           ]),
         ),
@@ -202,7 +235,15 @@ describe("ToolRunner", () => {
           { toolCallId: ToolCallId.make("tc-read-probe"), toolName: "read_probe", input: {} },
           { ...ctx, toolCallId: ToolCallId.make("tc-read-probe") },
         )
-        return { narrow, read, privileged }
+        const process = yield* runner.run(
+          {
+            toolCallId: ToolCallId.make("tc-process-probe"),
+            toolName: "process_probe",
+            input: {},
+          },
+          { ...ctx, toolCallId: ToolCallId.make("tc-process-probe") },
+        )
+        return { narrow, read, privileged, process }
       }).pipe(Effect.provide(layer))
 
       expect(result.narrow.isFailure).toBe(false)
@@ -213,6 +254,9 @@ describe("ToolRunner", () => {
         hasSessionListMessages: false,
         hasSessionDelete: false,
         hasInteraction: false,
+        hasHostParentEnv: false,
+        hasHostSignalPid: false,
+        hasHostRunProcess: false,
       })
       expect(result.read.isFailure).toBe(false)
       expect(result.read.result).toEqual({
@@ -222,6 +266,9 @@ describe("ToolRunner", () => {
         hasSessionListMessages: true,
         hasSessionDelete: false,
         hasInteraction: false,
+        hasHostParentEnv: false,
+        hasHostSignalPid: false,
+        hasHostRunProcess: false,
       })
       expect(result.privileged.isFailure).toBe(false)
       expect(result.privileged.result).toEqual({
@@ -231,6 +278,21 @@ describe("ToolRunner", () => {
         hasSessionListMessages: true,
         hasSessionDelete: true,
         hasInteraction: true,
+        hasHostParentEnv: false,
+        hasHostSignalPid: false,
+        hasHostRunProcess: false,
+      })
+      expect(result.process.isFailure).toBe(false)
+      expect(result.process.result).toEqual({
+        hasAgent: false,
+        hasAgentRun: false,
+        hasSession: false,
+        hasSessionListMessages: false,
+        hasSessionDelete: false,
+        hasInteraction: false,
+        hasHostParentEnv: true,
+        hasHostSignalPid: true,
+        hasHostRunProcess: true,
       })
     }),
   )

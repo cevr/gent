@@ -7,7 +7,7 @@
 
 import { type Effect, Schema } from "effect"
 import type { AgentName } from "./agent.js"
-import type { ExtensionHostPlatform } from "./extension.js"
+import type { ExtensionHostFacts } from "./extension.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 import {
@@ -68,12 +68,12 @@ export interface CapabilityCoreContext {
   readonly toolCallId?: ToolCallId
   readonly cwd: string
   readonly home: string
-  readonly host: ExtensionHostPlatform
+  readonly host: ExtensionHostFacts
 }
 
 /** The wide tool-execution context. Read+write surfaces, agent runner,
  *  session mutations, interaction, and follow-up controls are all reachable. */
-export interface ModelCapabilityContext extends ExtensionHostContext, CapabilityCoreContext {}
+export interface ModelCapabilityContext extends ExtensionHostContext {}
 
 /**
  * Default ctx parameter type for request/action host signatures.

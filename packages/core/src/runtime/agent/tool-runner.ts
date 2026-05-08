@@ -16,6 +16,7 @@ import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.j
 import type { ResourceManagerService } from "../resource-manager.js"
 import { withWideEvent, WideEvent, toolBoundary, ToolError } from "../wide-event-boundary"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
+import { extensionHostFacts } from "../make-extension-host-context.js"
 import { ToolCallId } from "../../domain/ids.js"
 import { readOnlyCapabilityContext } from "../../domain/read-only.js"
 import type { Option } from "effect"
@@ -48,7 +49,7 @@ interface ToolExecutionProfile {
 type ToolExecutionError = AiError.AiError | InteractionPendingError | Error
 type ToolRuntimeContext = ToolCoreContext &
   Partial<{
-    readonly host: ExtensionHostContext["host"]
+    readonly host: ToolCoreContext["host"] | ExtensionHostContext["host"]
     readonly agent:
       | Pick<ExtensionHostContext.Agent, "get" | "require" | "resolveDualModelPair">
       | ExtensionHostContext.Agent
@@ -178,6 +179,7 @@ const deriveToolContext = (
 ): ToolRuntimeContext => {
   const writeAgent = needsAccess(needs, "agent", "write")
   const writeSession = needsAccess(needs, "session", "write")
+  const writeProcess = needsAccess(needs, "process", "write")
   return {
     sessionId: ctx.sessionId,
     branchId: ctx.branchId,
@@ -185,7 +187,7 @@ const deriveToolContext = (
     toolCallId: ctx.toolCallId,
     cwd: ctx.cwd,
     home: ctx.home,
-    host: ctx.host,
+    host: writeProcess ? ctx.host : extensionHostFacts(ctx.host),
     ...(ctx.capabilityContext !== undefined
       ? {
           capabilityContext:

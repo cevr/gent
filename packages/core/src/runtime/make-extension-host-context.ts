@@ -20,7 +20,11 @@ import {
 } from "../domain/agent.js"
 import { BranchId, SessionId } from "../domain/ids.js"
 import { RuntimeEnvironment, type RuntimeEnvironmentShape } from "./runtime-environment.js"
-import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../domain/extension.js"
+import {
+  ExtensionHostProcessError,
+  type ExtensionHostFacts,
+  type ExtensionHostPlatform,
+} from "../domain/extension.js"
 import { ApprovalService, type ApprovalServiceShape } from "./approval-service.js"
 import { PromptPresenter, type PromptPresenterService } from "../domain/prompt-presenter.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
@@ -113,6 +117,16 @@ const toHostError =
 
 const hostFailure = (operation: string, message: string): ExtensionHostError =>
   new ExtensionHostError({ operation, message })
+
+export const extensionHostFacts = (host: ExtensionHostPlatform): ExtensionHostFacts => ({
+  osInfo: host.osInfo,
+  execPath: host.execPath,
+  homeDirectory: host.homeDirectory,
+  pathListSeparator: host.pathListSeparator,
+  commandCandidates: host.commandCandidates,
+  isPortFree: host.isPortFree,
+  isPidAlive: host.isPidAlive,
+})
 
 export const HostPlatformRef = Context.Reference<RuntimeEnvironmentShape>(
   "@gent/core/src/runtime/make-extension-host-context/HostPlatformRef",
@@ -634,7 +648,7 @@ export const readOnlyExtensionHostContext = (
   ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
   cwd: ctx.cwd,
   home: ctx.home,
-  host: ctx.host,
+  host: extensionHostFacts(ctx.host),
   ...(ctx.capabilityContext !== undefined
     ? { capabilityContext: readOnlyCapabilityContext(ctx.capabilityContext) }
     : {}),
