@@ -1,16 +1,22 @@
 /**
  * @gent/exec-tools — shell-execution capability surface.
  *
- * The bash tool calls `ctx.session.queueFollowUp` directly from its
- * `Effect.forkDetach` watcher (`bash.ts`). Background command completion is
- * modeled as a direct session follow-up, with no extension-owned state machine.
+ * Background shell work is owned by a process-scoped supervisor resource. The
+ * bash tool submits keyed jobs and returns immediately; the resource owns the
+ * child process scope and completion follow-up.
  */
 
-import { defineExtension } from "@gent/core/extensions/api"
-import { BashTool } from "./bash.js"
+import { defineExtension, defineResource } from "@gent/core/extensions/api"
+import { BackgroundBashSupervisorLive, BashTool } from "./bash.js"
 import { EXEC_TOOLS_EXTENSION_ID } from "./protocol.js"
 
 export const ExecToolsExtension = defineExtension({
   id: EXEC_TOOLS_EXTENSION_ID,
   tools: [BashTool],
+  resources: [
+    defineResource({
+      scope: "process",
+      layer: BackgroundBashSupervisorLive,
+    }),
+  ],
 })

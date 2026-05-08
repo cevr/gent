@@ -473,21 +473,26 @@ Validation:
 
 ### W23.7 — Resource-Owned Background Bash Supervisor
 
-Status: planned.
+Status: done.
 
 Work:
 
-- Replace `Effect.forkDetach` background bash execution with a host/resource
-  supervisor.
-- Key jobs by session, branch, and tool call.
-- Own cancellation, restart reconciliation, and completion follow-up in the
-  supervisor.
+- `@gent/exec-tools` now contributes a process-scoped
+  `BackgroundBashSupervisor` resource.
+- Background bash jobs are keyed by session, branch, and tool call, and
+  duplicate completed/active jobs do not restart in the same process.
+- Supervisor-owned jobs check that the target session/branch still exists
+  before queuing deterministic completion/failure follow-ups.
+- Closing the supervisor scope interrupts in-flight background processes.
 
 Validation:
 
 - Focused exec-tools tests for background lifecycle and cancellation.
 - RPC/runtime regression proving deleted/closed sessions do not receive stale
   background completions.
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/extensions/tests/exec-tools/bash-execution.test.ts packages/core/tests/extensions/exec-tools-background.test.ts`
+- `bun run typecheck`
+- `bun run lint`
 - `bun run typecheck`
 - `bun run lint`
 

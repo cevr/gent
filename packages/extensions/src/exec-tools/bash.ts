@@ -1,5 +1,21 @@
-import { Duration, Effect, Exit, Schema, Scope, Stream } from "effect"
-import { ChildProcess } from "effect/unstable/process"
+import {
+  Cause,
+  Context,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  Ref,
+  Schema,
+  Scope,
+  Semaphore,
+  Stream,
+  type Fiber,
+  type FileSystem,
+  type Path,
+} from "effect"
+import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import {
   tool,
   ToolNeeds,
@@ -55,6 +71,19 @@ export const BashResult = Schema.Struct({
 const HEAD_LINES = 50
 const TAIL_LINES = 50
 const SIGKILL_DELAY_MS = 3000
+
+type BackgroundBashJobKey = string
+
+interface BackgroundBashState {
+  readonly active: ReadonlyMap<BackgroundBashJobKey, Fiber.Fiber<void>>
+  readonly completed: ReadonlySet<BackgroundBashJobKey>
+}
+
+interface BackgroundBashJob {
+  readonly command: string
+  readonly cwd: string | undefined
+  readonly ctx: ToolCapabilityContext
+}
 
 /**
  * Detect `cd dir && cmd` or `cd dir; cmd` and split into cwd + command.
@@ -116,6 +145,148 @@ const runBashCommand = (command: string, cwd: string | undefined) =>
     }
   })
 
+const backgroundJobKey = (ctx: ToolCapabilityContext): BackgroundBashJobKey =>
+  `${ctx.sessionId}:${ctx.branchId}:${ctx.toolCallId}`
+
+const markJobCompleted = (state: BackgroundBashState, key: BackgroundBashJobKey) => {
+  const active = new Map(state.active)
+  active.delete(key)
+  const completed = new Set(state.completed)
+  completed.add(key)
+  return { active, completed } satisfies BackgroundBashState
+}
+
+const targetStillExists = (ctx: ToolCapabilityContext) =>
+  Effect.gen(function* () {
+    const session = yield* ctx.session.getSession().pipe(Effect.orElseSucceed(() => undefined))
+    if (session === undefined) return false
+    const branches = yield* ctx.session.listBranches().pipe(Effect.orElseSucceed(() => []))
+    return branches.some((branch) => branch.id === ctx.branchId)
+  })
+
+const queueBackgroundFollowUp = (params: {
+  readonly ctx: ToolCapabilityContext
+  readonly sourceId: string
+  readonly content: string
+}) =>
+  Effect.gen(function* () {
+    if (!(yield* targetStillExists(params.ctx))) return
+    yield* params.ctx.session
+      .queueFollowUp({
+        sourceId: params.sourceId,
+        content: params.content,
+      })
+      .pipe(Effect.catchEager(() => Effect.void))
+  })
+
+export interface BackgroundBashSupervisorService {
+  readonly start: (
+    job: BackgroundBashJob,
+  ) => Effect.Effect<
+    void,
+    never,
+    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+  >
+}
+
+export class BackgroundBashSupervisor extends Context.Service<
+  BackgroundBashSupervisor,
+  BackgroundBashSupervisorService
+>()("@gent/extensions/src/exec-tools/bash/BackgroundBashSupervisor") {}
+
+export const BackgroundBashSupervisorLive: Layer.Layer<BackgroundBashSupervisor> = Layer.effect(
+  BackgroundBashSupervisor,
+  Effect.gen(function* () {
+    const scope = yield* Scope.make()
+    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void).pipe(Effect.asVoid))
+    const gate = yield* Semaphore.make(1)
+    const state = yield* Ref.make<BackgroundBashState>({
+      active: new Map(),
+      completed: new Set(),
+    })
+
+    const runBackgroundJob = Effect.fn("BackgroundBashSupervisor.runBackgroundJob")(function* (
+      job: BackgroundBashJob,
+    ) {
+      const bgResult = yield* runBashCommand(job.command, job.cwd).pipe(
+        Effect.scoped,
+        Effect.catchTag("PlatformError", (e) =>
+          Effect.fail(
+            new BashError({
+              message: `Background command failed: ${e.message}`,
+              command: job.command,
+            }),
+          ),
+        ),
+      )
+
+      const buf = new OutputBuffer(HEAD_LINES, TAIL_LINES)
+      const fullOutput =
+        bgResult.stderr.length > 0 ? `${bgResult.stdout}\n${bgResult.stderr}` : bgResult.stdout
+      buf.add(fullOutput)
+      const formatted = buf.format()
+
+      let outputText = formatted.text
+      if (formatted.truncatedLines > 0) {
+        const path = yield* saveFullOutput(fullOutput, `bash_bg_${job.command.slice(0, 40)}`).pipe(
+          Effect.orElseSucceed(() => undefined),
+        )
+        if (path !== undefined) {
+          outputText = `${formatted.text}\n\nFull output saved to: ${path}`
+        }
+      }
+
+      yield* queueBackgroundFollowUp({
+        ctx: job.ctx,
+        sourceId: `bash:${job.ctx.toolCallId}:complete`,
+        content: `Background command completed (exit code ${bgResult.exitCode}):\n\`\`\`\n$ ${job.command}\n${outputText}\n\`\`\``,
+      })
+    })
+
+    const queueFailure = (job: BackgroundBashJob, message: string) =>
+      queueBackgroundFollowUp({
+        ctx: job.ctx,
+        sourceId: `bash:${job.ctx.toolCallId}:failure`,
+        content: `Background command failed:\n\`\`\`\n$ ${job.command}\n${message}\n\`\`\``,
+      })
+
+    const start = (job: BackgroundBashJob) =>
+      gate.withPermits(1)(
+        Effect.gen(function* () {
+          const key = backgroundJobKey(job.ctx)
+          const current = yield* Ref.get(state)
+          if (current.completed.has(key) || current.active.has(key)) return
+
+          const started = yield* Deferred.make<void>()
+          const jobContext = yield* Effect.context<
+            ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+          >()
+          const fiber = yield* Deferred.await(started).pipe(
+            Effect.andThen(runBackgroundJob(job)),
+            Effect.catchTag("BashError", (e) => queueFailure(job, e.message)),
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.void
+                : queueFailure(job, `Internal error: ${Cause.pretty(cause)}`),
+            ),
+            Effect.ensuring(Ref.update(state, (s) => markJobCompleted(s, key))),
+            Effect.provideContext(jobContext),
+            Effect.forkIn(scope),
+          )
+
+          yield* Ref.update(state, (s) => {
+            const active = new Map(s.active)
+            active.set(key, fiber)
+            return { ...s, active }
+          })
+          yield* Deferred.succeed(started, undefined)
+        }),
+      )
+
+    return { start }
+  }),
+)
+
 // Bash Tool
 
 export const BashTool = tool({
@@ -175,56 +346,12 @@ export const BashTool = tool({
       }
     }
 
-    // Background mode — fork a fiber that spawns, collects, and queues
-    // a follow-up. The spawn lives in the forked fiber's scope, so the
-    // tool can return immediately while the watcher runs to completion.
-    // Failures are surfaced through queueFollowUp instead of being
-    // silently swallowed.
+    // Background mode — hand the process to the process-scoped supervisor.
+    // The tool returns immediately; the resource owns process lifetime and
+    // completion follow-up.
     if (params.run_in_background === true) {
-      const queueBgFailure = (message: string) =>
-        ctx.session
-          .queueFollowUp({
-            sourceId: `bash:${ctx.toolCallId}:failure`,
-            content: `Background command failed:\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
-          })
-          .pipe(Effect.catchEager(() => Effect.void))
-
-      const bgEffect = Effect.gen(function* () {
-        const bgResult = yield* runBashCommand(command, cwd).pipe(
-          Effect.scoped,
-          Effect.catchTag("PlatformError", (e) =>
-            Effect.fail(
-              new BashError({ message: `Background command failed: ${e.message}`, command }),
-            ),
-          ),
-        )
-
-        const buf = new OutputBuffer(HEAD_LINES, TAIL_LINES)
-        const fullOutput =
-          bgResult.stderr.length > 0 ? `${bgResult.stdout}\n${bgResult.stderr}` : bgResult.stdout
-        buf.add(fullOutput)
-        const formatted = buf.format()
-
-        let outputText = formatted.text
-        if (formatted.truncatedLines > 0) {
-          const path = yield* saveFullOutput(fullOutput, `bash_bg_${command.slice(0, 40)}`).pipe(
-            Effect.orElseSucceed(() => undefined),
-          )
-          if (path !== undefined) {
-            outputText = `${formatted.text}\n\nFull output saved to: ${path}`
-          }
-        }
-
-        yield* ctx.session.queueFollowUp({
-          sourceId: `bash:${ctx.toolCallId}:complete`,
-          content: `Background command completed (exit code ${bgResult.exitCode}):\n\`\`\`\n$ ${command}\n${outputText}\n\`\`\``,
-        })
-      }).pipe(
-        Effect.catchTag("BashError", (e) => queueBgFailure(e.message)),
-        Effect.catchCause((cause) => queueBgFailure(`Internal error: ${cause.toString()}`)),
-      )
-
-      yield* bgEffect.pipe(Effect.forkDetach)
+      const supervisor = yield* BackgroundBashSupervisor
+      yield* supervisor.start({ command, cwd, ctx })
 
       return {
         stdout: `Command started in background: \`${command}\`\nYou will be notified when it completes.`,

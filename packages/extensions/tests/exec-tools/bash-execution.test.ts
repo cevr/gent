@@ -1,8 +1,9 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Deferred, Effect, Layer, Path } from "effect"
+import { Deferred, Effect, Exit, Layer, Path, Scope } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
-import { BashTool } from "../../src/exec-tools/bash.js"
+import { BackgroundBashSupervisorLive, BashTool } from "../../src/exec-tools/bash.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
 import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
@@ -12,6 +13,7 @@ const makePlatformLayer = () =>
     BunFileSystem.layer,
     Path.layer,
     BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+    BackgroundBashSupervisorLive,
   )
 const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) =>
   Effect.provide(e, makePlatformLayer()) as Effect.Effect<A, E, never>
@@ -61,6 +63,7 @@ const stubCtx: ToolCapabilityContext = {
     review: dieStub("review"),
   },
 }
+const now = dateFromMillis(0)
 
 describe("BashTool execution", () => {
   it.live(
@@ -134,14 +137,29 @@ describe("BashTool execution", () => {
             ...stubCtx,
             session: {
               ...stubCtx.session,
+              getSession: () =>
+                Effect.succeed(
+                  new Session({
+                    id: stubCtx.sessionId,
+                    activeBranchId: stubCtx.branchId,
+                    createdAt: now,
+                    updatedAt: now,
+                  }),
+                ),
+              listBranches: () =>
+                Effect.succeed([
+                  new Branch({
+                    id: stubCtx.branchId,
+                    sessionId: stubCtx.sessionId,
+                    createdAt: now,
+                  }),
+                ]),
               queueFollowUp: (params) => Deferred.succeed(sent, params),
             },
           }
-          const result = yield* provideBun(
-            getToolEffect(BashTool)(
-              { command: "printf background-finished", run_in_background: true },
-              ctx,
-            ),
+          const result = yield* getToolEffect(BashTool)(
+            { command: "printf background-finished", run_in_background: true },
+            ctx,
           )
 
           expect(result.exitCode).toBe(0)
@@ -151,6 +169,86 @@ describe("BashTool execution", () => {
           expect(message.sourceId).toBe("bash:tc-1:complete")
           expect(message.content).toContain("Background command completed (exit code 0)")
           expect(message.content).toContain("$ printf background-finished")
+        }).pipe(provideBun),
+      ),
+    processTestTimeout,
+  )
+
+  it.live(
+    "background process is cancelled with the supervisor scope",
+    () =>
+      withProcessTimeout(
+        Effect.gen(function* () {
+          const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+          const ctx: ToolCapabilityContext = {
+            ...stubCtx,
+            session: {
+              ...stubCtx.session,
+              getSession: () =>
+                Effect.succeed(
+                  new Session({
+                    id: stubCtx.sessionId,
+                    activeBranchId: stubCtx.branchId,
+                    createdAt: now,
+                    updatedAt: now,
+                  }),
+                ),
+              listBranches: () =>
+                Effect.succeed([
+                  new Branch({
+                    id: stubCtx.branchId,
+                    sessionId: stubCtx.sessionId,
+                    createdAt: now,
+                  }),
+                ]),
+              queueFollowUp: (params) => Deferred.succeed(sent, params),
+            },
+          }
+          const scope = yield* Scope.make()
+          const context = yield* Layer.buildWithScope(makePlatformLayer(), scope)
+          const result = yield* getToolEffect(BashTool)(
+            { command: "sleep 2; printf should-not-arrive", run_in_background: true },
+            ctx,
+          ).pipe(Effect.provideContext(context))
+
+          expect(result.exitCode).toBe(0)
+          yield* Scope.close(scope, Exit.void)
+
+          const followUp = yield* Effect.exit(
+            Deferred.await(sent).pipe(Effect.timeout("250 millis")),
+          )
+          expect(followUp._tag).toBe("Failure")
+        }),
+      ),
+    processTestTimeout,
+  )
+
+  it.live(
+    "background completion is dropped when the session disappeared",
+    () =>
+      withProcessTimeout(
+        Effect.gen(function* () {
+          const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+          const ctx: ToolCapabilityContext = {
+            ...stubCtx,
+            session: {
+              ...stubCtx.session,
+              getSession: () => Effect.sync((): Session | undefined => undefined),
+              listBranches: () => Effect.succeed([]),
+              queueFollowUp: (params) => Deferred.succeed(sent, params),
+            },
+          }
+
+          const result = yield* getToolEffect(BashTool)(
+            { command: "printf stale-session", run_in_background: true },
+            ctx,
+          ).pipe(provideBun)
+
+          expect(result.exitCode).toBe(0)
+          const followUp = yield* Effect.exit(
+            Deferred.await(sent).pipe(Effect.timeout("250 millis")),
+          )
+          expect(followUp._tag).toBe("Failure")
         }),
       ),
     processTestTimeout,
