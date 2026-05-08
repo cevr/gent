@@ -1,4 +1,4 @@
-import { Cause, Clock, Context, DateTime, Effect, Layer, Option, Schema, Stream } from "effect"
+import { Cause, Context, DateTime, Effect, Layer, Option, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Entity, MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { RpcGroup } from "effect/unstable/rpc"
@@ -21,7 +21,6 @@ import { Message, MessageMetadata } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
-import { MessageStorage } from "../storage/message-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { ModelId } from "../domain/model.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
@@ -255,7 +254,6 @@ type SessionRuntimeEntityLayerRequirements =
   | GentPlatform
   | SessionStorage
   | BranchStorage
-  | MessageStorage
   | LayerRequirements<ReturnType<typeof AgentLoopBehaviorDeps.Live>>
 
 export interface SessionRuntimeService {
@@ -389,7 +387,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const clusterMessageStorage = yield* ClusterMessageStorage.MessageStorage
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
-  const messageStorage = yield* MessageStorage
   const eventStorage = yield* EventStorage
   const eventPublisher = yield* EventPublisher
   const agentLoopSessionGovernance = yield* AgentLoopSessionGovernance
@@ -414,62 +411,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
           }),
       ),
     )
-
-  const waitForSubmittedMessageAccepted = (params: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly messageId: MessageId
-    readonly content?: string
-    readonly acceptPersisted?: boolean
-  }): Effect.Effect<void, SessionRuntimeError> =>
-    Effect.gen(function* () {
-      const deadline = (yield* Clock.currentTimeMillis) + 15_000
-      const loop: Effect.Effect<void, SessionRuntimeError> = Effect.gen(function* () {
-        if (params.acceptPersisted !== false) {
-          const persisted = yield* messageStorage.getMessage(params.messageId).pipe(
-            Effect.mapError(
-              (cause) =>
-                new SessionRuntimeError({
-                  message: `Failed to read submitted message ${params.messageId}`,
-                  cause,
-                }),
-            ),
-          )
-          if (persisted !== undefined) return
-        }
-
-        const ref = yield* agentLoopActorRefFor(params.sessionId, params.branchId)
-        const queue = yield* ref
-          .execute(
-            AgentLoopActor.GetQueue.make({ ...params, workspaceId: yield* CurrentWorkspaceId }),
-          )
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new SessionRuntimeError({
-                  message: `Failed to read submitted message queue ${params.messageId}`,
-                  cause,
-                }),
-            ),
-          )
-        const queued = [...queue.steering, ...queue.followUp].some(
-          (entry) =>
-            entry.id === params.messageId ||
-            (params.content !== undefined && entry.content.includes(params.content)),
-        )
-        if (queued) return
-
-        if ((yield* Clock.currentTimeMillis) >= deadline) {
-          return yield* new SessionRuntimeError({
-            message: `Timed out waiting for submitted message ${params.messageId}`,
-          })
-        }
-
-        yield* Effect.sleep("50 millis")
-        return yield* loop
-      })
-      yield* loop
-    })
 
   const provideActorStateServices = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
@@ -605,8 +546,8 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       })
       const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
       yield* ref
-        .send(
-          AgentLoopActor.QueueFollowUp.make({
+        .execute(
+          AgentLoopActor.AcceptQueueFollowUp.make({
             workspaceId: yield* CurrentWorkspaceId,
             message,
             agentOverride: undefined,
@@ -623,12 +564,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
               }),
           ),
         )
-      yield* waitForSubmittedMessageAccepted({
-        sessionId: input.sessionId,
-        branchId: input.branchId,
-        messageId: message.id,
-        content: input.content,
-      })
     },
   )
 
@@ -700,8 +635,8 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
 
     const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
     yield* ref
-      .send(
-        AgentLoopActor.Submit.make({
+      .execute(
+        AgentLoopActor.AcceptSubmit.make({
           workspaceId: yield* CurrentWorkspaceId,
           message,
           agentOverride: input.agentOverride,
@@ -746,12 +681,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
           )
         }),
       )
-    yield* waitForSubmittedMessageAccepted({
-      sessionId: input.sessionId,
-      branchId: input.branchId,
-      messageId: message.id,
-      content,
-    })
     yield* Effect.logInfo("session-runtime.message.submitted").pipe(
       Effect.annotateLogs({
         sessionId: input.sessionId,

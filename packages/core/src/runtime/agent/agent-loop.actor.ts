@@ -24,7 +24,7 @@
  * target fields.
  *
  * **Primary key (dedup)** per op:
- * - `Submit` / `QueueFollowUp` — `message.id`
+ * - `Submit` / `QueueFollowUp` / `AcceptSubmit` / `AcceptQueueFollowUp` — `message.id`
  * - `Steer` — `commandId`
  * - `Interrupt` — `commandId`
  *
@@ -268,6 +268,15 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
       primaryKey: p.message.id,
     }),
   },
+  AcceptSubmit: {
+    payload: TurnSubmissionFields,
+    success: Schema.Void,
+    error: AgentLoopError,
+    id: (p: TurnSubmissionInput) => ({
+      entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
+      primaryKey: p.message.id,
+    }),
+  },
   Run: {
     payload: TurnSubmissionFields,
     success: Schema.Void,
@@ -282,6 +291,15 @@ export const AgentLoop = Actor.fromEntity("AgentLoop", {
     success: Schema.Void,
     error: AgentLoopError,
     persisted: true,
+    id: (p: TurnSubmissionInput) => ({
+      entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
+      primaryKey: p.message.id,
+    }),
+  },
+  AcceptQueueFollowUp: {
+    payload: TurnSubmissionFields,
+    success: Schema.Void,
+    error: AgentLoopError,
     id: (p: TurnSubmissionInput) => ({
       entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
       primaryKey: p.message.id,
@@ -877,9 +895,15 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
   return {
     Submit: ({ operation }: HandlerRequest<Parameters<typeof submitTurn>[0]>) =>
       withWorkspace(submitTurn(operation)),
+    AcceptSubmit: ({ operation }: HandlerRequest<Parameters<typeof submitTurn>[0]>) =>
+      withWorkspace(submitTurn(operation)),
     Run: ({ operation }: HandlerRequest<Parameters<typeof runTurn>[0]>) =>
       withWorkspace(runTurn(operation)),
     QueueFollowUp: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
+      withWorkspace(
+        ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
+      ),
+    AcceptQueueFollowUp: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
       withWorkspace(
         ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
       ),
