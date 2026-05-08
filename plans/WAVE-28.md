@@ -229,6 +229,8 @@ ids. One owner should coordinate idempotency and completion.
 
 ## Commit 6: refactor(server): consolidate session mutation ownership
 
+**Status**: Completed in this wave.
+
 **Justification**: `SessionCommands` and `SessionMutations` both participate in
 branch/session mutation semantics. Request-id persistence should live with the
 mutation owner, not beside it.
@@ -242,16 +244,18 @@ mutation owner, not beside it.
 
 **Changes**
 
-| File                                                                                          | Change                                                       |
-| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/session-mutations.ts`            | Own the mutation vocabulary and request-id operation policy. |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-commands.ts`             | Shrink to transport orchestration.                           |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/session-mutations.test.ts` | Preserve extension-host mutation behavior.                   |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-idempotency.test.ts`   | Preserve request-id behavior.                                |
+| File                                                                                                | Change                                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/session-mutations.ts`                  | Added optional request-id fields to branch mutation operations.                                                                                                                |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-commands.ts`                   | Moved branch create/fork/switch bodies and durable operation rows behind `SessionMutations`; kept transport dedup, session creation, sending, and summarization orchestration. |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-command-persistence.test.ts` | Preserved rollback and mutation validation behavior.                                                                                                                           |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-idempotency.test.ts`         | Preserved request-id behavior.                                                                                                                                                 |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts`      | Preserved extension-host mutation behavior.                                                                                                                                    |
 
 **Verification**
 
-- Focused session mutation/idempotency tests.
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/server/session-idempotency.test.ts tests/server/session-command-persistence.test.ts tests/server/extension-commands-rpc.test.ts`
 - `bun run gate`
 
 ## Commit 7: refactor(extensions): split public authoring api from internal authority

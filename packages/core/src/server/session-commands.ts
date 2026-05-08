@@ -59,6 +59,10 @@ type CreateBranchResult = {
   readonly branchId: BranchId
 }
 
+const createBranchResult = (operation: StoredBranchResult): CreateBranchResult => ({
+  branchId: operation.branchId,
+})
+
 type UpdateSessionReasoningLevelResult = {
   readonly reasoningLevel: UpdateSessionReasoningLevelInput["reasoningLevel"]
 }
@@ -220,6 +224,7 @@ const makeSessionMutationsService: Effect.Effect<
   | BranchStorage
   | MessageStorage
   | RelationshipStorage
+  | SessionOperationStorage
   | SessionRuntime
   | GentPlatform
 > = Effect.gen(function* () {
@@ -230,6 +235,7 @@ const makeSessionMutationsService: Effect.Effect<
   const branchStorage = yield* BranchStorage
   const messageStorage = yield* MessageStorage
   const relationshipStorage = yield* RelationshipStorage
+  const sessionOperationStorage = yield* SessionOperationStorage
   const eventStore = yield* EventStore
   const eventPublisher = yield* EventPublisher
   const sessionRuntime = yield* SessionRuntime
@@ -387,6 +393,11 @@ const makeSessionMutationsService: Effect.Effect<
     }),
 
     createSessionBranch: Effect.fn("SessionMutations.createSessionBranch")(function* (input) {
+      if (input.requestId !== undefined) {
+        const existing = yield* sessionOperationStorage.getCreateBranch(input.requestId)
+        if (existing !== undefined) return createBranchResult(existing)
+      }
+
       const branch = new Branch({
         id: BranchId.make(yield* platform.randomId),
         sessionId: input.sessionId,
@@ -394,18 +405,41 @@ const makeSessionMutationsService: Effect.Effect<
         name: input.name,
         createdAt: yield* DateTime.nowAsDate,
       })
-      yield* transactWithEvent(
-        branchStorage.createBranch(branch),
-        BranchCreated.make({
-          sessionId: branch.sessionId,
-          branchId: branch.id,
-          ...(branch.parentBranchId !== undefined ? { parentBranchId: branch.parentBranchId } : {}),
+      const committed = yield* storageTransaction(
+        Effect.gen(function* () {
+          if (input.requestId !== undefined) {
+            const existing = yield* sessionOperationStorage.getCreateBranch(input.requestId)
+            if (existing !== undefined) return { result: existing }
+          }
+          yield* branchStorage.createBranch(branch)
+          const envelope = yield* eventPublisher.append(
+            BranchCreated.make({
+              sessionId: branch.sessionId,
+              branchId: branch.id,
+              ...(branch.parentBranchId !== undefined
+                ? { parentBranchId: branch.parentBranchId }
+                : {}),
+            }),
+          )
+          const result: StoredBranchResult = { branchId: branch.id }
+          if (input.requestId !== undefined) {
+            yield* sessionOperationStorage.saveCreateBranch(input.requestId, result)
+          }
+          return { envelope, result }
         }),
       )
-      return { branchId: branch.id }
+      if (committed.envelope !== undefined) {
+        yield* eventPublisher.deliver(committed.envelope)
+      }
+      return createBranchResult(committed.result)
     }),
 
     forkSessionBranch: Effect.fn("SessionMutations.forkSessionBranch")(function* (input) {
+      if (input.requestId !== undefined) {
+        const existing = yield* sessionOperationStorage.getForkBranch(input.requestId)
+        if (existing !== undefined) return createBranchResult(existing)
+      }
+
       const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
       if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
         return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
@@ -428,8 +462,12 @@ const makeSessionMutationsService: Effect.Effect<
         name: input.name,
         createdAt: yield* DateTime.nowAsDate,
       })
-      yield* transactWithEvent(
+      const committed = yield* storageTransaction(
         Effect.gen(function* () {
+          if (input.requestId !== undefined) {
+            const existing = yield* sessionOperationStorage.getForkBranch(input.requestId)
+            if (existing !== undefined) return { result: existing }
+          }
           yield* branchStorage.createBranch(branch)
           for (const message of messages.slice(0, targetIndex + 1)) {
             yield* messageStorage.createMessage(
@@ -439,20 +477,37 @@ const makeSessionMutationsService: Effect.Effect<
               }),
             )
           }
-        }),
-        BranchCreated.make({
-          sessionId: branch.sessionId,
-          branchId: branch.id,
-          ...(branch.parentBranchId !== undefined ? { parentBranchId: branch.parentBranchId } : {}),
-          ...(branch.parentMessageId !== undefined
-            ? { parentMessageId: branch.parentMessageId }
-            : {}),
+          const envelope = yield* eventPublisher.append(
+            BranchCreated.make({
+              sessionId: branch.sessionId,
+              branchId: branch.id,
+              ...(branch.parentBranchId !== undefined
+                ? { parentBranchId: branch.parentBranchId }
+                : {}),
+              ...(branch.parentMessageId !== undefined
+                ? { parentMessageId: branch.parentMessageId }
+                : {}),
+            }),
+          )
+          const result: StoredBranchResult = { branchId: branch.id }
+          if (input.requestId !== undefined) {
+            yield* sessionOperationStorage.saveForkBranch(input.requestId, result)
+          }
+          return { envelope, result }
         }),
       )
-      return { branchId: branch.id }
+      if (committed.envelope !== undefined) {
+        yield* eventPublisher.deliver(committed.envelope)
+      }
+      return createBranchResult(committed.result)
     }),
 
     switchActiveBranch: Effect.fn("SessionMutations.switchActiveBranch")(function* (input) {
+      if (input.requestId !== undefined) {
+        const existing = yield* sessionOperationStorage.getSwitchBranch(input.requestId)
+        if (existing !== undefined) return
+      }
+
       const session = yield* sessionStorage.getSession(input.sessionId)
       if (session === undefined) {
         return yield* new NotFoundError({
@@ -474,20 +529,40 @@ const makeSessionMutationsService: Effect.Effect<
           entity: "branch",
         })
       }
-      yield* transactWithEvent(
-        sessionStorage.updateSession(
-          new Session({
-            ...session,
-            activeBranchId: input.toBranchId,
-            updatedAt: yield* DateTime.nowAsDate,
-          }),
-        ),
-        BranchSwitched.make({
-          sessionId: input.sessionId,
-          fromBranchId: input.fromBranchId,
-          toBranchId: input.toBranchId,
+      const committed = yield* storageTransaction(
+        Effect.gen(function* () {
+          if (input.requestId !== undefined) {
+            const existing = yield* sessionOperationStorage.getSwitchBranch(input.requestId)
+            if (existing !== undefined) return { result: existing }
+          }
+          yield* sessionStorage.updateSession(
+            new Session({
+              ...session,
+              activeBranchId: input.toBranchId,
+              updatedAt: yield* DateTime.nowAsDate,
+            }),
+          )
+          const envelope = yield* eventPublisher.append(
+            BranchSwitched.make({
+              sessionId: input.sessionId,
+              fromBranchId: input.fromBranchId,
+              toBranchId: input.toBranchId,
+            }),
+          )
+          const result: StoredSwitchBranchResult = {
+            sessionId: input.sessionId,
+            fromBranchId: input.fromBranchId,
+            toBranchId: input.toBranchId,
+          }
+          if (input.requestId !== undefined) {
+            yield* sessionOperationStorage.saveSwitchBranch(input.requestId, result)
+          }
+          return { envelope, result }
         }),
       )
+      if (committed.envelope !== undefined) {
+        yield* eventPublisher.deliver(committed.envelope)
+      }
     }),
 
     createChildSession: Effect.fn("SessionMutations.createChildSession")(function* (input) {
@@ -729,10 +804,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         name: operation.name,
       })
 
-      const createBranchResult = (operation: StoredBranchResult): CreateBranchResult => ({
-        branchId: operation.branchId,
-      })
-
       const doCreateSession = Effect.fn("SessionCommands.doCreateSession")(function* (
         input: CreateSessionInput,
       ) {
@@ -840,42 +911,11 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const doCreateBranch = Effect.fn("SessionCommands.doCreateBranch")(function* (
         input: CreateBranchInput,
       ) {
-        if (input.requestId !== undefined) {
-          const existing = yield* sessionOperationStorage.getCreateBranch(input.requestId)
-          if (existing !== undefined) return createBranchResult(existing)
-        }
-
-        const branch = new Branch({
-          id: BranchId.make(yield* platform.randomId),
+        return yield* mutations.createSessionBranch({
           sessionId: input.sessionId,
           name: input.name,
-          createdAt: yield* DateTime.nowAsDate,
+          ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
         })
-
-        const committed = yield* storageTransaction(
-          Effect.gen(function* () {
-            if (input.requestId !== undefined) {
-              const existing = yield* sessionOperationStorage.getCreateBranch(input.requestId)
-              if (existing !== undefined) return { result: existing }
-            }
-            yield* branchStorage.createBranch(branch)
-            const envelope = yield* eventPublisher.append(
-              BranchCreated.make({
-                sessionId: branch.sessionId,
-                branchId: branch.id,
-              }),
-            )
-            const result: StoredBranchResult = { branchId: branch.id }
-            if (input.requestId !== undefined) {
-              yield* sessionOperationStorage.saveCreateBranch(input.requestId, result)
-            }
-            return { envelope, result }
-          }),
-        )
-        if (committed.envelope !== undefined) {
-          yield* eventPublisher.deliver(committed.envelope)
-        }
-        return createBranchResult(committed.result)
       })
 
       const switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, AppServiceError> =
@@ -889,15 +929,9 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const doSwitchBranch = Effect.fn("SessionCommands.doSwitchBranch")(function* (
         input: SwitchBranchInput,
       ) {
-        if (input.requestId !== undefined) {
-          const existing = yield* sessionOperationStorage.getSwitchBranch(input.requestId)
-          if (existing !== undefined) return
-        }
-
         // The summarize side-effect lives on SessionCommands because it
         // depends on model resolution and is intentionally outside the durable
-        // mutation tx. The durable operation row is checked before this best
-        // effort work so a committed switch retry does not re-summarize.
+        // mutation tx.
         if (input.summarize !== false && input.fromBranchId !== input.toBranchId) {
           const summary = yield* summarizeBranch(input.fromBranchId).pipe(
             Effect.catchEager(() => Effect.succeed("")),
@@ -914,61 +948,12 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           }
         }
 
-        const committed = yield* storageTransaction(
-          Effect.gen(function* () {
-            if (input.requestId !== undefined) {
-              const existing = yield* sessionOperationStorage.getSwitchBranch(input.requestId)
-              if (existing !== undefined) return { result: existing }
-            }
-            const session = yield* sessionStorage.getSession(input.sessionId)
-            if (session === undefined) {
-              return yield* new NotFoundError({
-                message: "Current session not found",
-                entity: "session",
-              })
-            }
-            const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
-            if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
-              return yield* new NotFoundError({
-                message: `Branch "${input.fromBranchId}" not found in current session`,
-                entity: "branch",
-              })
-            }
-            const toBranch = yield* branchStorage.getBranch(input.toBranchId)
-            if (toBranch === undefined || toBranch.sessionId !== input.sessionId) {
-              return yield* new NotFoundError({
-                message: `Branch "${input.toBranchId}" not found in current session`,
-                entity: "branch",
-              })
-            }
-            yield* sessionStorage.updateSession(
-              new Session({
-                ...session,
-                activeBranchId: input.toBranchId,
-                updatedAt: yield* DateTime.nowAsDate,
-              }),
-            )
-            const envelope = yield* eventPublisher.append(
-              BranchSwitched.make({
-                sessionId: input.sessionId,
-                fromBranchId: input.fromBranchId,
-                toBranchId: input.toBranchId,
-              }),
-            )
-            const result: StoredSwitchBranchResult = {
-              sessionId: input.sessionId,
-              fromBranchId: input.fromBranchId,
-              toBranchId: input.toBranchId,
-            }
-            if (input.requestId !== undefined) {
-              yield* sessionOperationStorage.saveSwitchBranch(input.requestId, result)
-            }
-            return { envelope, result }
-          }),
-        )
-        if (committed.envelope !== undefined) {
-          yield* eventPublisher.deliver(committed.envelope)
-        }
+        yield* mutations.switchActiveBranch({
+          sessionId: input.sessionId,
+          fromBranchId: input.fromBranchId,
+          toBranchId: input.toBranchId,
+          ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+        })
       })
 
       const forkBranch: (
@@ -985,68 +970,13 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const doForkBranch = Effect.fn("SessionCommands.doForkBranch")(function* (
         input: ForkBranchInput,
       ) {
-        if (input.requestId !== undefined) {
-          const existing = yield* sessionOperationStorage.getForkBranch(input.requestId)
-          if (existing !== undefined) return createBranchResult(existing)
-        }
-
-        const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
-        if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
-          return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
-        }
-
-        const messages = yield* messageStorage.listMessages(input.fromBranchId)
-        const targetIndex = messages.findIndex((message) => message.id === input.atMessageId)
-        if (targetIndex === -1) {
-          return yield* new NotFoundError({
-            message: "Message not found in branch",
-            entity: "message",
-          })
-        }
-
-        const branch = new Branch({
-          id: BranchId.make(yield* platform.randomId),
+        return yield* mutations.forkSessionBranch({
           sessionId: input.sessionId,
-          parentBranchId: input.fromBranchId,
-          parentMessageId: input.atMessageId,
+          fromBranchId: input.fromBranchId,
+          atMessageId: input.atMessageId,
           name: input.name,
-          createdAt: yield* DateTime.nowAsDate,
+          ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
         })
-
-        const committed = yield* storageTransaction(
-          Effect.gen(function* () {
-            if (input.requestId !== undefined) {
-              const existing = yield* sessionOperationStorage.getForkBranch(input.requestId)
-              if (existing !== undefined) return { result: existing }
-            }
-            yield* branchStorage.createBranch(branch)
-            for (const message of messages.slice(0, targetIndex + 1)) {
-              yield* messageStorage.createMessage(
-                copyMessageToBranch(message, {
-                  id: MessageId.make(yield* platform.randomId),
-                  branchId: branch.id,
-                }),
-              )
-            }
-            const envelope = yield* eventPublisher.append(
-              BranchCreated.make({
-                sessionId: branch.sessionId,
-                branchId: branch.id,
-                parentBranchId: branch.parentBranchId,
-                parentMessageId: branch.parentMessageId,
-              }),
-            )
-            const result: StoredBranchResult = { branchId: branch.id }
-            if (input.requestId !== undefined) {
-              yield* sessionOperationStorage.saveForkBranch(input.requestId, result)
-            }
-            return { envelope, result }
-          }),
-        )
-        if (committed.envelope !== undefined) {
-          yield* eventPublisher.deliver(committed.envelope)
-        }
-        return createBranchResult(committed.result)
       })
 
       const sendMessage: (input: SendMessageInput) => Effect.Effect<void, AppServiceError> =

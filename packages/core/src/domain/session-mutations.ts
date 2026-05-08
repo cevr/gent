@@ -20,17 +20,20 @@ export interface SessionMutationsService {
     readonly sessionId: SessionId
     readonly parentBranchId?: BranchId
     readonly name?: string
+    readonly requestId?: string
   }) => Effect.Effect<{ branchId: BranchId }, SessionMutationError>
   readonly forkSessionBranch: (input: {
     readonly sessionId: SessionId
     readonly fromBranchId: BranchId
     readonly atMessageId: MessageId
     readonly name?: string
+    readonly requestId?: string
   }) => Effect.Effect<{ branchId: BranchId }, SessionMutationError>
   readonly switchActiveBranch: (input: {
     readonly sessionId: SessionId
     readonly fromBranchId: BranchId
     readonly toBranchId: BranchId
+    readonly requestId?: string
   }) => Effect.Effect<void, SessionMutationError>
   readonly createChildSession: (input: {
     readonly parentSessionId: SessionId
