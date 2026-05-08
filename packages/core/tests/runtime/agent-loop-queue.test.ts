@@ -34,6 +34,7 @@ import {
   type LoopQueueState as LoopQueueStateType,
 } from "../../src/domain/agent-loop-queue-state"
 import { AgentLoopQueueStorage } from "../../src/storage/agent-loop-queue-storage"
+import { StorageError } from "../../src/domain/storage-error"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })
@@ -253,6 +254,96 @@ describe("queue drain regression", () => {
             const recovered = yield* agentLoop.getQueue({ sessionId, branchId })
             expect(recovered.followUp.map((item) => item.content)).toEqual(["second", "third"])
           }).pipe(Effect.timeout("4 seconds"), Effect.provide(makeLayer())),
+        )
+        yield* Deferred.succeed(activeTurnReleased, undefined).pipe(
+          Effect.catchEager(() => Effect.void),
+        )
+      }),
+    15000,
+  )
+
+  it.live(
+    "failed follow-up persistence does not expose the queued item",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-loop-persist-failure")
+        const branchId = BranchId.make("branch-loop-persist-failure")
+        const storedQueueRef = yield* Ref.make<LoopQueueStateType>(emptyPersistedQueue())
+        const activeTurnReleased = yield* Deferred.make<void>()
+        const heldProvider = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            yield* Deferred.await(activeTurnReleased)
+            return Stream.fromIterable([
+              textDeltaPart("held"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        const queueStorageLayer = Layer.succeed(
+          AgentLoopQueueStorage,
+          AgentLoopQueueStorage.of({
+            getQueueState: () => Ref.get(storedQueueRef),
+            putQueueState: (_sessionId, _branchId, queue) =>
+              queue.followUp.length > 0
+                ? Effect.fail(
+                    new StorageError({
+                      message: "queue persistence failed",
+                      cause: "injected test failure",
+                    }),
+                  )
+                : Ref.set(storedQueueRef, queue),
+            clearQueueState: () => Ref.set(storedQueueRef, emptyPersistedQueue()),
+          }),
+        )
+        const deps = Layer.mergeAll(
+          SqliteStorage.TestWithSql(),
+          queueStorageLayer,
+          heldProvider,
+          ModelResolver.fromLanguageModel(heldProvider),
+          makeExtRegistry(),
+          RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          ConfigService.Test(),
+          EventStore.Memory,
+          ToolRunner.Test(),
+          BunServices.layer,
+          ResourceManagerLive,
+          ModelRegistry.Test(),
+          GentPlatform.Test(),
+        )
+        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+        const layer = AgentLoopTestActor.pipe(
+          Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+          Layer.provideMerge(
+            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
+          ),
+        )
+        const makeMessage = (id: string, text: string) =>
+          Message.Regular.make({
+            id: MessageId.make(id),
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text })],
+            createdAt: dateFromMillis(1_767_225_600_000),
+          })
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            yield* submitAgentLoop(agentLoop, makeMessage("msg-persist-failure-0", "first"), {
+              interactive: true,
+            })
+
+            const queuedExit = yield* Effect.exit(
+              submitAgentLoop(agentLoop, makeMessage("msg-persist-failure-1", "second"), {
+                interactive: true,
+              }),
+            )
+
+            expect(queuedExit._tag).toBe("Failure")
+            expect((yield* agentLoop.getQueue({ sessionId, branchId })).followUp).toEqual([])
+            expect((yield* Ref.get(storedQueueRef)).followUp).toEqual([])
+          }).pipe(Effect.provide(layer)),
         )
         yield* Deferred.succeed(activeTurnReleased, undefined).pipe(
           Effect.catchEager(() => Effect.void),

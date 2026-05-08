@@ -364,6 +364,19 @@ export const makeAgentLoopBehavior = (
           )
         : Effect.void
 
+    const recordPersistenceFailure = (error: AgentLoopError) =>
+      Deferred.fail(persistenceFailure, error).pipe(Effect.catchEager(() => Effect.void))
+
+    const mergeConcurrentLoopMetadata = (
+      base: AgentLoopState,
+      current: AgentLoopState,
+      next: AgentLoopState,
+    ): AgentLoopState => ({
+      ...next,
+      turnFailure:
+        current.turnFailure !== base.turnFailure ? current.turnFailure : next.turnFailure,
+    })
+
     const commitQueueTransaction = <A>(
       operation: string,
       decide: (state: AgentLoopState) => {
@@ -374,20 +387,24 @@ export const makeAgentLoopBehavior = (
     ): Effect.Effect<A, AgentLoopError> =>
       queuePersistenceSemaphore.withPermits(1)(
         Effect.gen(function* () {
-          const decision = yield* TxSubscriptionRef.modify(loopRef, (state) => {
-            const next = decide(state)
-            const committed = next.persist
-              ? {
-                  ...next.next,
-                  stateEpoch: next.next.stateEpoch + 1,
-                  startingState: undefined,
-                }
-              : next.next
-            return [{ ...next, next: committed }, committed]
-          })
+          const base = yield* TxSubscriptionRef.get(loopRef)
+          const next = decide(base)
+          const committed = next.persist
+            ? {
+                ...next.next,
+                stateEpoch: next.next.stateEpoch + 1,
+                startingState: undefined,
+              }
+            : next.next
+          const decision = { ...next, next: committed }
           if (decision.persist) {
-            yield* persistCommittedQueue(decision.next.queue, operation)
+            yield* persistCommittedQueue(decision.next.queue, operation).pipe(
+              Effect.tapError(recordPersistenceFailure),
+            )
           }
+          yield* TxSubscriptionRef.update(loopRef, (current) =>
+            mergeConcurrentLoopMetadata(base, current, decision.next),
+          )
           return decision.value
         }),
       )
