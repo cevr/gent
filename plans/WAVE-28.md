@@ -9,6 +9,9 @@ their split.
 
 The next wave should not be a generic cleanup sweep. It should remove structural
 surface area while preserving the same feature set and current stack.
+File count is part of that surface. A small file is not automatically simpler;
+if it mostly names one utility, one class, one service wrapper, or one forwarding
+array, the split is a reader tax until it proves otherwise.
 
 ## Scope
 
@@ -32,6 +35,9 @@ surface area while preserving the same feature set and current stack.
   split does not earn its existence. Collapse extension wrapper files, todo
   operation files, tiny TUI barrels, single-use utils/classes/services, and
   platform-shaped adapters that do not encode a real boundary.
+- Treat file existence as a design claim. Every small file should justify
+  itself as a package entrypoint, generated/fixture artifact, adapter boundary,
+  independently tested cohesive domain, or multi-import reuse point.
 - Replace white-box actor/tool tests with public behavior tests where they lock
   implementation details rather than product contracts.
 
@@ -44,6 +50,52 @@ surface area while preserving the same feature set and current stack.
   ownership duplication.
 - Deleting a small file whose split is a real boundary, generated fixture,
   package entrypoint, or external Effect-to-Promise boundary.
+
+## File Existence Audit Lane
+
+**Thesis**: bigger cohesive files are preferred when the split does not encode a
+real boundary. Fragmentation is architectural surface area, not neutral
+organization.
+
+**A file earns existence if at least one is true**:
+
+- It is a package/subpath entrypoint or public import boundary.
+- It isolates a platform/runtime boundary, especially Effect-to-Bun/Node/TUI
+  edges.
+- It owns a cohesive domain with enough behavior that moving it inline would
+  obscure the caller.
+- It is reused by multiple non-test callers in a way that keeps behavior in one
+  place.
+- It is generated, fixture data, or test support whose isolation prevents test
+  coupling.
+- It is intentionally paired with an external contract, schema, or protocol
+  artifact.
+
+**A file is suspect if any is true**:
+
+- It has one non-test importer and exports one small function, class, service,
+  or array.
+- Its main purpose is naming another abstraction (`index.ts`, `*-tools.ts`,
+  `*-service.ts`, `*-utils.ts`) without adding policy.
+- Tests import it because production structure made internals reachable rather
+  than because the behavior is public.
+- It exists only to avoid a larger file, not to protect a boundary.
+- The split forces readers to hop across files to understand one product
+  behavior.
+
+**Audit commands**
+
+```bash
+find packages apps -path '*/src/*' -type f \( -name '*.ts' -o -name '*.tsx' \) \
+  -not -path '*/dist/*' -not -path '*/node_modules/*' \
+  -exec wc -l {} + | sort -n
+
+rg -n "from \"\\.(/|\\.)|from '@gent|from \"@gent" packages apps --glob '*.ts' --glob '*.tsx'
+```
+
+The first command finds small-file candidates. The second command is the trail
+for import fan-in/fan-out; candidates with one importer need an explicit merit
+reason or should be collapsed.
 
 ## Constraints
 
@@ -494,14 +546,68 @@ rules and local reasoned exceptions.
 - `bun run lint`
 - `bun run gate`
 
+## Commit 14: refactor(structure): collapse files that do not earn existence
+
+**Justification**: The wave already collapsed obvious extension wrapper files,
+but the final audit should not be the first place this principle becomes
+repo-wide. Run the file-existence audit across `packages/` and `apps/`, then
+collapse any remaining tiny one-importer files whose split is only aesthetic.
+
+**Principles**
+
+- `subtract-before-you-add`: delete file boundaries before adding new policy.
+- `small-interface-deep-implementation`: bigger cohesive files beat shallow
+  forwarding files.
+- `redesign-from-first-principles`: if this behavior were written today, it
+  would live at the owning boundary, not in a single-use helper file.
+
+**Changes**
+
+| File set                                                                | Change                                                                                              |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/**/src/**/*.ts`            | Collapse one-importer helpers/services/classes/wrappers that do not encode real package boundaries. |
+| `/Users/cvr/Developer/personal/gent/apps/**/src/**/*.ts(x)`             | Collapse tiny TUI/client files where the split only names one local implementation detail.          |
+| `/Users/cvr/Developer/personal/gent/tests/**` and package test fixtures | Retarget tests through public behavior when they only exist to reach collapsed internals.           |
+| `/Users/cvr/Developer/personal/gent/plans/WAVE-28.md`                   | Record before/after file-count and `<=120 LOC` counts plus explicit keep reasons for small files.   |
+
+**Verification**
+
+- Before/after file-count and `<=120 LOC` report for `packages/` and `apps/`.
+- Focused tests for every collapsed area.
+- `bun run typecheck`
+- `bun run gate`
+
 ## Final Batch: audit: independent simplicity audit
 
 Run the same final audit lanes from Wave 27, including file-merit and split
 justification, without leading the auditors toward the work completed here.
 The file-merit lane must ask whether each split earns its existence; bigger
 cohesive files are preferred over single-use utils, tiny classes/services, or
-wrappers that only name another abstraction. Close only if no P0/P1 remains. If
-P0/P1 remains, synthesize the next wave.
+wrappers that only name another abstraction.
+
+Print these audit lanes verbatim in the final independent prompt:
+
+1. How can we simplify and minimize our codebase while maintaining features?
+   How can we reduce code as much as possible? Are we using Effect properly?
+   Are we redeclaring types, schemas, features that Effect natively provides
+   via `effect/unstable/ai` or STM with `TxQueue`, `TxRef`, etc?
+2. Are we following the actor model properly?
+3. Are we using Bun/Node platform code directly at the edges and not creating
+   service layers that reduce portability or testability? Re-audit
+   `GentPlatform`-shaped abstractions.
+4. Is our extension system as minimal yet expressive as possible compared to
+   `effect-ts/effect-smol`, `badlogic/pi-mono`, and `anomalyco/opencode`?
+   Expressive enough to implement current extensions, but no private or
+   privileged authoring API.
+5. We own `effect-machine`, `effect-encore`, and `effect-wide-event`: can we
+   improve these upstream so Gent needs less local code and better aligns with
+   the actor-model north star?
+6. Does every file merit its existence? Prefer bigger cohesive files. Breaking
+   up code must be meritable, not a default. Flag single-use utils, tiny
+   classes/services, wrapper files, barrels, and files whose split forces
+   readers to hop across boundaries for one behavior.
+
+Close only if no P0/P1 remains. If P0/P1 remains, synthesize the next wave.
 
 **Verification**
 
