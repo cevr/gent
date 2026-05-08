@@ -116,6 +116,7 @@ Commits landed in this wave so far:
 - `37274250 refactor(runtime): rename platform config service`
 - `06dd9a29 refactor(runtime): own agent loop turn worker`
 - `783ecf9a refactor(runtime): derive tool context facets`
+- `3a7ab595 fix(tui): surface extension health in doctor`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -614,9 +615,11 @@ Validation:
 Goal: remove the impossible state where a failed resource has active
 contributions.
 
-Status: startup-failure ownership closed by `3c0843c2`. Public resource scope
-truthfulness is closed by `41a95117`; only process-scoped Resources are exposed
-until narrower lifecycle owners exist.
+Status: closed. Startup-failure ownership is closed by `3c0843c2`. Public
+resource scope truthfulness is closed by `41a95117`; only process-scoped
+Resources are exposed until narrower lifecycle owners exist. `3a7ab595` adds
+extension health to `gent doctor` and refreshes docs so resource startup
+failures are visible through diagnostic paths.
 
 Work:
 
@@ -631,8 +634,8 @@ Work:
 - Make process/cwd/session/branch resource scopes truthful, or delete
   unimplemented scope literals until their owners exist. Done by deletion in
   `41a95117`.
-- Expose resource health to doctor/diagnostic paths.
-- Update docs for resource scope semantics.
+- Expose resource health to doctor/diagnostic paths. Done in `3a7ab595`.
+- Update docs for resource scope semantics. Done in `3a7ab595`.
 
 Validation:
 
@@ -642,6 +645,10 @@ Validation:
   `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/task-tools/task-tool-execution.test.ts tests/task-tools/task-storage.test.ts tests/task-tools/task-rpc.test.ts tests/delegate/delegate-background.test.ts`
 - `bun run test:e2e` where extension startup is exercised.
 - `bun run gate` passed in the `3c0843c2` pre-commit hook.
+- Doctor resource-health regression:
+  `cd apps/tui && bun test --reporter=dots --preload ../../packages/tooling/src/test-log-preload.ts --preload ./node_modules/@opentui/solid/scripts/preload.ts tests/local-health.test.ts`
+- `bun run typecheck`
+- `bun run lint`
 
 ### C21.5 — Narrow The Public Extension Author API
 
