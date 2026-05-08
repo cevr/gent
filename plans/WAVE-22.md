@@ -337,7 +337,7 @@ Validation:
 
 ### W22.11 — Extension-Owned Need Labels
 
-Status: implemented, awaiting subcommit.
+Status: committed and pushed in `15dbf39`.
 
 Work:
 
@@ -351,6 +351,29 @@ Work:
 Validation:
 
 - `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/extension-surface-locks.test.ts tests/runtime/resource-manager.test.ts tests/domain/capability-ref.test.ts`
+- `bun run typecheck`
+- `bun run lint`
+- `bun run fmt:check`
+
+### W22.12 — Extension Operational Errors Stay Typed
+
+Status: implemented, awaiting subcommit.
+
+Work:
+
+- Remove active-source `Effect.orDie` / `Layer.orDie` usage from
+  `packages/extensions/src`.
+- Let task storage DDL and task service operations return `TaskStorageError`
+  instead of defecting.
+- Let auto journal, memory vault, and skills startup/file errors remain typed
+  resource/service failures so extension activation and capability callers can
+  isolate/report them.
+- Add a task-service regression proving a SQLite delete failure returns a
+  `TaskStorageError` through `TaskService.remove(...)`.
+
+Validation:
+
+- `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/task-tools/task-service.test.ts tests/task-tools/task-storage.test.ts tests/task-tools/task-storage-integration.test.ts tests/task-tools/task-tool-execution.test.ts tests/task-tools/task-rpc.test.ts tests/auto/auto-journal-decode.test.ts tests/memory/vault.test.ts tests/memory/tools.test.ts tests/memory/projection.test.ts tests/skills/skills-rpc.test.ts tests/skills/skills.test.ts tests/skills/skills-tools.test.ts`
 - `bun run typecheck`
 - `bun run lint`
 - `bun run fmt:check`

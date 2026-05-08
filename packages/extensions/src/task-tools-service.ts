@@ -14,7 +14,7 @@ import {
   isValidTaskTransition,
   type TaskStatus,
 } from "./task-tools/domain.js"
-import { TaskStorage, type TaskStorageService } from "./task-tools-storage.js"
+import { TaskStorage, type TaskStorageError } from "./task-tools-storage.js"
 import { TASK_TOOLS_EXTENSION_ID } from "./task-tools/identity.js"
 
 // Extension-owned task service. Present only when @gent/task-tools is loaded.
@@ -73,11 +73,18 @@ export interface TaskServiceApi {
     prompt?: string
     cwd?: string
     metadata?: unknown
-  }) => Effect.Effect<Task, CapabilityError | TaskServiceUnavailableError, ExtensionStatePublisher>
+  }) => Effect.Effect<
+    Task,
+    CapabilityError | TaskStorageError | TaskServiceUnavailableError,
+    ExtensionStatePublisher
+  >
 
-  readonly get: (id: TaskId) => Effect.Effect<Task | undefined>
+  readonly get: (id: TaskId) => Effect.Effect<Task | undefined, TaskStorageError>
 
-  readonly list: (sessionId: SessionId, branchId?: BranchId) => Effect.Effect<ReadonlyArray<Task>>
+  readonly list: (
+    sessionId: SessionId,
+    branchId?: BranchId,
+  ) => Effect.Effect<ReadonlyArray<Task>, TaskStorageError>
 
   readonly update: (
     id: TaskId,
@@ -89,15 +96,23 @@ export interface TaskServiceApi {
     }>,
   ) => Effect.Effect<
     Task | undefined,
-    CapabilityError | TaskTransitionError,
+    CapabilityError | TaskStorageError | TaskTransitionError,
     ExtensionStatePublisher
   >
 
-  readonly remove: (id: TaskId) => Effect.Effect<void, CapabilityError, ExtensionStatePublisher>
+  readonly remove: (
+    id: TaskId,
+  ) => Effect.Effect<void, CapabilityError | TaskStorageError, ExtensionStatePublisher>
 
-  readonly addDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void, CapabilityError>
-  readonly removeDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void, CapabilityError>
-  readonly getDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>>
+  readonly addDep: (
+    taskId: TaskId,
+    blockedById: TaskId,
+  ) => Effect.Effect<void, CapabilityError | TaskStorageError>
+  readonly removeDep: (
+    taskId: TaskId,
+    blockedById: TaskId,
+  ) => Effect.Effect<void, CapabilityError | TaskStorageError>
+  readonly getDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>, TaskStorageError>
 }
 
 export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
@@ -124,159 +139,127 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
 
   static Live: Layer.Layer<TaskService> = Layer.succeed(TaskService, {
     create: (params) =>
-      requireTaskWrite("TaskService.create").pipe(
-        Effect.andThen(Effect.serviceOption(TaskStorage)),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => TaskService.Noop.create(params),
-            onSome: (storage: TaskStorageService) =>
-              Effect.gen(function* () {
-                const extensionState = yield* ExtensionStatePublisher
-                const id = TaskId.make(yield* Random.nextUUIDv4)
-                const now = yield* DateTime.nowAsDate
-                const task = Task.make({
-                  id,
-                  sessionId: params.sessionId,
-                  branchId: params.branchId,
-                  subject: params.subject,
-                  description: params.description,
-                  status: "pending",
-                  agentType: params.agentType,
-                  prompt: params.prompt,
-                  cwd: params.cwd,
-                  metadata: params.metadata,
-                  createdAt: now,
-                  updatedAt: now,
-                })
-                yield* storage.createTask(task)
-                yield* extensionState.changed({
-                  sessionId: params.sessionId,
-                  branchId: params.branchId,
-                  extensionId: TASK_TOOLS_EXTENSION_ID,
-                })
-                return task
-              }).pipe(Effect.orDie),
-          }),
-        ),
-      ),
+      Effect.gen(function* () {
+        yield* requireTaskWrite("TaskService.create")
+        const storageOption = yield* Effect.serviceOption(TaskStorage)
+        if (Option.isNone(storageOption)) return yield* TaskService.Noop.create(params)
+        const storage = storageOption.value
+        const extensionState = yield* ExtensionStatePublisher
+        const id = TaskId.make(yield* Random.nextUUIDv4)
+        const now = yield* DateTime.nowAsDate
+        const task = Task.make({
+          id,
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          subject: params.subject,
+          description: params.description,
+          status: "pending",
+          agentType: params.agentType,
+          prompt: params.prompt,
+          cwd: params.cwd,
+          metadata: params.metadata,
+          createdAt: now,
+          updatedAt: now,
+        })
+        yield* storage.createTask(task)
+        yield* extensionState
+          .changed({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            extensionId: TASK_TOOLS_EXTENSION_ID,
+          })
+          .pipe(Effect.catchEager(() => Effect.void))
+        return task
+      }),
 
     get: (id) =>
-      Effect.serviceOption(TaskStorage).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => TaskService.Noop.get(id),
-            onSome: (storage: TaskStorageService) => storage.getTask(id).pipe(Effect.orDie),
-          }),
-        ),
-      ),
+      Effect.gen(function* () {
+        const storageOption = yield* Effect.serviceOption(TaskStorage)
+        if (Option.isNone(storageOption)) return yield* TaskService.Noop.get(id)
+        return yield* storageOption.value.getTask(id)
+      }),
 
     list: (sessionId, branchId) =>
-      Effect.serviceOption(TaskStorage).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => TaskService.Noop.list(sessionId, branchId),
-            onSome: (storage: TaskStorageService) =>
-              storage.listTasks(sessionId, branchId).pipe(Effect.orDie),
-          }),
-        ),
-      ),
+      Effect.gen(function* () {
+        const storageOption = yield* Effect.serviceOption(TaskStorage)
+        if (Option.isNone(storageOption)) return yield* TaskService.Noop.list(sessionId, branchId)
+        return yield* storageOption.value.listTasks(sessionId, branchId)
+      }),
 
     update: (id, fields) =>
-      requireTaskWrite("TaskService.update").pipe(
-        Effect.andThen(Effect.serviceOption(TaskStorage)),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => TaskService.Noop.update(id, fields),
-            onSome: (storage: TaskStorageService) =>
-              Effect.gen(function* () {
-                const extensionState = yield* ExtensionStatePublisher
-                if (fields.status !== undefined) {
-                  const existing = yield* storage.getTask(id).pipe(Effect.orDie)
-                  if (
-                    existing !== undefined &&
-                    !isValidTaskTransition(existing.status, fields.status)
-                  ) {
-                    return yield* new TaskTransitionError({
-                      message: `Invalid task transition: ${existing.status} → ${fields.status}`,
-                      from: existing.status,
-                      to: fields.status,
-                    })
-                  }
-                }
-                const updated = yield* storage.updateTask(id, fields).pipe(Effect.orDie)
-                if (updated !== undefined && fields.status !== undefined) {
-                  yield* extensionState
-                    .changed({
-                      sessionId: updated.sessionId,
-                      branchId: updated.branchId,
-                      extensionId: TASK_TOOLS_EXTENSION_ID,
-                    })
-                    .pipe(Effect.catchEager(() => Effect.void))
-                }
-                return updated
-              }),
-          }),
-        ),
-      ),
+      Effect.gen(function* () {
+        yield* requireTaskWrite("TaskService.update")
+        const storageOption = yield* Effect.serviceOption(TaskStorage)
+        if (Option.isNone(storageOption)) return yield* TaskService.Noop.update(id, fields)
+        const storage = storageOption.value
+        const extensionState = yield* ExtensionStatePublisher
+        if (fields.status !== undefined) {
+          const existing = yield* storage.getTask(id)
+          if (existing !== undefined && !isValidTaskTransition(existing.status, fields.status)) {
+            return yield* new TaskTransitionError({
+              message: `Invalid task transition: ${existing.status} → ${fields.status}`,
+              from: existing.status,
+              to: fields.status,
+            })
+          }
+        }
+        const updated = yield* storage.updateTask(id, fields)
+        if (updated !== undefined && fields.status !== undefined) {
+          yield* extensionState
+            .changed({
+              sessionId: updated.sessionId,
+              branchId: updated.branchId,
+              extensionId: TASK_TOOLS_EXTENSION_ID,
+            })
+            .pipe(Effect.catchEager(() => Effect.void))
+        }
+        return updated
+      }),
 
     remove: (id) =>
-      requireTaskWrite("TaskService.remove").pipe(
-        Effect.andThen(Effect.serviceOption(TaskStorage)),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => TaskService.Noop.remove(id),
-            onSome: (storage: TaskStorageService) =>
-              Effect.gen(function* () {
-                const extensionState = yield* ExtensionStatePublisher
-                const existing = yield* storage.getTask(id).pipe(Effect.orDie)
-                if (existing === undefined) {
-                  yield* storage.deleteTask(id).pipe(Effect.orDie)
-                  return
-                }
-                yield* storage.deleteTask(id).pipe(Effect.orDie)
-                yield* extensionState
-                  .changed({
-                    sessionId: existing.sessionId,
-                    branchId: existing.branchId,
-                    extensionId: TASK_TOOLS_EXTENSION_ID,
-                  })
-                  .pipe(Effect.catchEager(() => Effect.void))
-              }),
-          }),
-        ),
-      ),
+      Effect.gen(function* () {
+        yield* requireTaskWrite("TaskService.remove")
+        const storageOption = yield* Effect.serviceOption(TaskStorage)
+        if (Option.isNone(storageOption)) return yield* TaskService.Noop.remove(id)
+        const storage = storageOption.value
+        const extensionState = yield* ExtensionStatePublisher
+        const existing = yield* storage.getTask(id)
+        if (existing === undefined) {
+          yield* storage.deleteTask(id)
+          return
+        }
+        yield* storage.deleteTask(id)
+        yield* extensionState
+          .changed({
+            sessionId: existing.sessionId,
+            branchId: existing.branchId,
+            extensionId: TASK_TOOLS_EXTENSION_ID,
+          })
+          .pipe(Effect.catchEager(() => Effect.void))
+      }),
 
     addDep: (taskId, blockedById) =>
-      requireTaskWrite("TaskService.addDep").pipe(
-        Effect.andThen(Effect.serviceOption(TaskStorage)),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => TaskService.Noop.addDep(taskId, blockedById),
-            onSome: (storage: TaskStorageService) =>
-              storage.addTaskDep(taskId, blockedById).pipe(Effect.orDie),
-          }),
-        ),
-      ),
+      Effect.gen(function* () {
+        yield* requireTaskWrite("TaskService.addDep")
+        const storageOption = yield* Effect.serviceOption(TaskStorage)
+        if (Option.isNone(storageOption)) return yield* TaskService.Noop.addDep(taskId, blockedById)
+        yield* storageOption.value.addTaskDep(taskId, blockedById)
+      }),
     removeDep: (taskId, blockedById) =>
-      requireTaskWrite("TaskService.removeDep").pipe(
-        Effect.andThen(Effect.serviceOption(TaskStorage)),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => TaskService.Noop.removeDep(taskId, blockedById),
-            onSome: (storage: TaskStorageService) =>
-              storage.removeTaskDep(taskId, blockedById).pipe(Effect.orDie),
-          }),
-        ),
-      ),
+      Effect.gen(function* () {
+        yield* requireTaskWrite("TaskService.removeDep")
+        const storageOption = yield* Effect.serviceOption(TaskStorage)
+        if (Option.isNone(storageOption)) {
+          return yield* TaskService.Noop.removeDep(taskId, blockedById)
+        }
+        yield* storageOption.value.removeTaskDep(taskId, blockedById)
+      }),
     getDeps: (taskId) =>
-      Effect.serviceOption(TaskStorage).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => TaskService.Noop.getDeps(taskId),
-            onSome: (storage: TaskStorageService) => storage.getTaskDeps(taskId).pipe(Effect.orDie),
-          }),
-        ),
-      ),
+      Effect.gen(function* () {
+        const storageOption = yield* Effect.serviceOption(TaskStorage)
+        if (Option.isNone(storageOption)) return yield* TaskService.Noop.getDeps(taskId)
+        return yield* storageOption.value.getTaskDeps(taskId)
+      }),
   })
 
   static Test = (): Layer.Layer<TaskService> => Layer.succeed(TaskService, TaskService.Noop)

@@ -6,7 +6,7 @@
  * turn projection read it directly; no actor mirror is needed.
  */
 
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
 import { defineExtension, defineResource } from "@gent/core/extensions/api"
 import { formatSkillsForPrompt, Skills } from "./skills.js"
 import { SkillsTool } from "./skills-tool.js"
@@ -21,7 +21,7 @@ export const SkillsExtension = defineExtension({
     defineResource({
       tag: Skills,
       scope: "process",
-      layer: Skills.Live({ cwd: ctx.cwd, home: ctx.home }).pipe(Layer.orDie),
+      layer: Skills.Live({ cwd: ctx.cwd, home: ctx.home }),
     }),
   ],
   reactions: {

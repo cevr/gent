@@ -3,6 +3,10 @@ import { tool, AgentName, SessionId, ToolNeeds } from "@gent/core/extensions/api
 import { TaskId, TaskStatus } from "./domain.js"
 import { TaskStorageReadOnly } from "../task-tools-storage.js"
 
+const storageFailure = (operation: string, error: unknown) => ({
+  error: `${operation} failed: ${String(error)}`,
+})
+
 export const TaskGetParams = Schema.Struct({
   taskId: Schema.String.annotate({ description: "Task ID to get details for" }),
 })
@@ -31,12 +35,22 @@ export const TaskGetTool = tool({
   execute: Effect.fn("TaskGetTool.execute")(function* (params) {
     const taskId = TaskId.make(params.taskId)
     const taskService = yield* TaskStorageReadOnly
-    const task = yield* taskService.getTask(taskId).pipe(Effect.orDie)
+    const task = yield* taskService
+      .getTask(taskId)
+      .pipe(Effect.catchEager((error) => Effect.succeed(storageFailure("Task lookup", error))))
+    if (task !== undefined && "error" in task) return task
     if (task == null) {
       return { error: `Task not found: ${params.taskId}` }
     }
 
-    const deps = yield* taskService.getTaskDeps(taskId).pipe(Effect.orDie)
+    const deps = yield* taskService
+      .getTaskDeps(taskId)
+      .pipe(
+        Effect.catchEager((error) =>
+          Effect.succeed(storageFailure("Task dependency lookup", error)),
+        ),
+      )
+    if ("error" in deps) return deps
 
     return {
       id: task.id,

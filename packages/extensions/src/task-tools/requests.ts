@@ -16,6 +16,13 @@ import { TASK_TOOLS_EXTENSION_ID } from "./identity.js"
 
 // ── Read Requests ──
 
+const taskCapabilityError = (capabilityId: string, operation: string, error: unknown) =>
+  new CapabilityError({
+    extensionId: TASK_TOOLS_EXTENSION_ID,
+    capabilityId,
+    reason: `${operation} failed: ${String(error)}`,
+  })
+
 export const TaskGetInput = Schema.Struct({ taskId: TaskId })
 export const TaskGetOutput = Schema.NullOr(Task)
 
@@ -28,17 +35,13 @@ export const TaskGetRequest = request({
   execute: (input) =>
     Effect.gen(function* () {
       const storage = yield* TaskStorageReadOnly
-      const task = yield* storage.getTask(input.taskId).pipe(
-        Effect.catchEager((e) =>
-          Effect.fail(
-            new CapabilityError({
-              extensionId: TASK_TOOLS_EXTENSION_ID,
-              capabilityId: "task.get",
-              reason: `TaskStorage.getTask failed: ${String(e)}`,
-            }),
+      const task = yield* storage
+        .getTask(input.taskId)
+        .pipe(
+          Effect.catchEager((e) =>
+            Effect.fail(taskCapabilityError("task.get", "TaskStorage.getTask", e)),
           ),
-        ),
-      )
+        )
       return task ?? null
     }),
 })
@@ -55,17 +58,13 @@ export const TaskListRequest = request({
   execute: (_input, ctx) =>
     Effect.gen(function* () {
       const storage = yield* TaskStorageReadOnly
-      return yield* storage.listTasks(ctx.sessionId, ctx.branchId).pipe(
-        Effect.catchEager((e) =>
-          Effect.fail(
-            new CapabilityError({
-              extensionId: TASK_TOOLS_EXTENSION_ID,
-              capabilityId: "task.list",
-              reason: `TaskStorage.listTasks failed: ${String(e)}`,
-            }),
+      return yield* storage
+        .listTasks(ctx.sessionId, ctx.branchId)
+        .pipe(
+          Effect.catchEager((e) =>
+            Effect.fail(taskCapabilityError("task.list", "TaskStorage.listTasks", e)),
           ),
-        ),
-      )
+        )
     }),
 })
 
@@ -81,17 +80,13 @@ export const TaskGetDepsRequest = request({
   execute: (input) =>
     Effect.gen(function* () {
       const storage = yield* TaskStorageReadOnly
-      return yield* storage.getTaskDeps(input.taskId).pipe(
-        Effect.catchEager((e) =>
-          Effect.fail(
-            new CapabilityError({
-              extensionId: TASK_TOOLS_EXTENSION_ID,
-              capabilityId: "task.getDeps",
-              reason: `TaskStorage.getTaskDeps failed: ${String(e)}`,
-            }),
+      return yield* storage
+        .getTaskDeps(input.taskId)
+        .pipe(
+          Effect.catchEager((e) =>
+            Effect.fail(taskCapabilityError("task.getDeps", "TaskStorage.getTaskDeps", e)),
           ),
-        ),
-      )
+        )
     }),
 })
 
@@ -129,13 +124,7 @@ export const TaskCreateRequest = request({
         })
         .pipe(
           Effect.catchEager((e) =>
-            Effect.fail(
-              new CapabilityError({
-                extensionId: TASK_TOOLS_EXTENSION_ID,
-                capabilityId: "task.create",
-                reason: `TaskService.create failed: ${String(e)}`,
-              }),
-            ),
+            Effect.fail(taskCapabilityError("task.create", "TaskService.create", e)),
           ),
         )
     }),
@@ -162,7 +151,13 @@ export const TaskUpdateRequest = request({
     Effect.gen(function* () {
       const taskService = yield* TaskService
       const { taskId, ...fields } = input
-      const result = yield* taskService.update(taskId, fields).pipe(Effect.orDie)
+      const result = yield* taskService
+        .update(taskId, fields)
+        .pipe(
+          Effect.catchEager((e) =>
+            Effect.fail(taskCapabilityError("task.update", "TaskService.update", e)),
+          ),
+        )
       return result ?? null
     }),
 })
@@ -179,7 +174,13 @@ export const TaskDeleteRequest = request({
   execute: (input) =>
     Effect.gen(function* () {
       const taskService = yield* TaskService
-      yield* taskService.remove(input.taskId)
+      yield* taskService
+        .remove(input.taskId)
+        .pipe(
+          Effect.catchEager((e) =>
+            Effect.fail(taskCapabilityError("task.delete", "TaskService.remove", e)),
+          ),
+        )
       return null
     }),
 })
@@ -196,17 +197,13 @@ export const TaskAddDepRequest = request({
   execute: (input) =>
     Effect.gen(function* () {
       const taskService = yield* TaskService
-      yield* taskService.addDep(input.taskId, input.blockedById).pipe(
-        Effect.catchEager((e) =>
-          Effect.fail(
-            new CapabilityError({
-              extensionId: TASK_TOOLS_EXTENSION_ID,
-              capabilityId: "task.addDep",
-              reason: `TaskService.addDep failed: ${String(e)}`,
-            }),
+      yield* taskService
+        .addDep(input.taskId, input.blockedById)
+        .pipe(
+          Effect.catchEager((e) =>
+            Effect.fail(taskCapabilityError("task.addDep", "TaskService.addDep", e)),
           ),
-        ),
-      )
+        )
       return null
     }),
 })
@@ -223,17 +220,13 @@ export const TaskRemoveDepRequest = request({
   execute: (input) =>
     Effect.gen(function* () {
       const taskService = yield* TaskService
-      yield* taskService.removeDep(input.taskId, input.blockedById).pipe(
-        Effect.catchEager((e) =>
-          Effect.fail(
-            new CapabilityError({
-              extensionId: TASK_TOOLS_EXTENSION_ID,
-              capabilityId: "task.removeDep",
-              reason: `TaskService.removeDep failed: ${String(e)}`,
-            }),
+      yield* taskService
+        .removeDep(input.taskId, input.blockedById)
+        .pipe(
+          Effect.catchEager((e) =>
+            Effect.fail(taskCapabilityError("task.removeDep", "TaskService.removeDep", e)),
           ),
-        ),
-      )
+        )
       return null
     }),
 })

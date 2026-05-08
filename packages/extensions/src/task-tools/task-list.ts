@@ -39,7 +39,7 @@ export const TaskListTool = tool({
   output: TaskListResult,
   execute: Effect.fn("TaskListTool.execute")(function* (params, ctx) {
     const taskService = yield* TaskStorageReadOnly
-    const allTasks = yield* taskService.listTasks(ctx.sessionId, ctx.branchId).pipe(Effect.orDie)
+    const allTasks = yield* taskService.listTasks(ctx.sessionId, ctx.branchId)
     const tasks =
       params.status === undefined
         ? allTasks

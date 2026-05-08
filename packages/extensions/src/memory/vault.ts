@@ -5,6 +5,7 @@
  * rebuilt inline on every write/remove (idempotent).
  */
 
+import type { PlatformError } from "effect"
 import { DateTime, Effect, FileSystem, Layer, Option, Path, Schema, Context } from "effect"
 import { createHash } from "node:crypto"
 import { ReadOnlyBrand, type ReadOnly, withReadOnly } from "@gent/core/extensions/api"
@@ -163,13 +164,13 @@ export interface MemoryVaultReadOnlyShape {
   readonly list: (
     scope?: MemoryScope,
     project?: string,
-  ) => Effect.Effect<ReadonlyArray<MemoryEntry>>
-  readonly read: (relativePath: string) => Effect.Effect<string>
+  ) => Effect.Effect<ReadonlyArray<MemoryEntry>, PlatformError.PlatformError>
+  readonly read: (relativePath: string) => Effect.Effect<string, PlatformError.PlatformError>
   readonly search: (
     query: string,
     scope?: MemoryScope,
     project?: string,
-  ) => Effect.Effect<ReadonlyArray<MemoryEntry>>
+  ) => Effect.Effect<ReadonlyArray<MemoryEntry>, PlatformError.PlatformError>
 }
 
 export interface MemoryVaultShape extends MemoryVaultReadOnlyShape {
@@ -177,10 +178,13 @@ export interface MemoryVaultShape extends MemoryVaultReadOnlyShape {
     relativePath: string,
     frontmatter: MemoryFrontmatter,
     body: string,
-  ) => Effect.Effect<void>
-  readonly remove: (relativePath: string) => Effect.Effect<void>
-  readonly ensureDirs: (project?: string) => Effect.Effect<void>
-  readonly rebuildIndex: (scope?: MemoryScope, project?: string) => Effect.Effect<void>
+  ) => Effect.Effect<void, PlatformError.PlatformError>
+  readonly remove: (relativePath: string) => Effect.Effect<void, PlatformError.PlatformError>
+  readonly ensureDirs: (project?: string) => Effect.Effect<void, PlatformError.PlatformError>
+  readonly rebuildIndex: (
+    scope?: MemoryScope,
+    project?: string,
+  ) => Effect.Effect<void, PlatformError.PlatformError>
 }
 
 export class MemoryVault extends Context.Service<MemoryVault, MemoryVaultShape>()(
@@ -287,8 +291,7 @@ export const makeMemoryVault = (
         return entries as ReadonlyArray<MemoryEntry>
       })
 
-    const read: MemoryVaultShape["read"] = (relativePath) =>
-      fs.readFileString(abs(relativePath)).pipe(Effect.orDie)
+    const read: MemoryVaultShape["read"] = (relativePath) => fs.readFileString(abs(relativePath))
 
     const rebuildScopeIndex = (scopeDir: string, entries: ReadonlyArray<MemoryEntry>) =>
       Effect.gen(function* () {
@@ -302,7 +305,7 @@ export const makeMemoryVault = (
         } Memories\n\n${buildScopeIndex(entries)}`
         const existing = yield* fs.readFileString(indexPath).pipe(Effect.orElseSucceed(() => ""))
         if (existing !== newContent) {
-          yield* fs.writeFileString(indexPath, newContent).pipe(Effect.orDie)
+          yield* fs.writeFileString(indexPath, newContent)
         }
       })
 
@@ -331,7 +334,7 @@ export const makeMemoryVault = (
 
         const existing = yield* fs.readFileString(indexPath).pipe(Effect.orElseSucceed(() => ""))
         if (existing !== content) {
-          yield* fs.writeFileString(indexPath, content).pipe(Effect.orDie)
+          yield* fs.writeFileString(indexPath, content)
         }
       })
 
@@ -360,12 +363,12 @@ export const makeMemoryVault = (
       Effect.gen(function* () {
         const fullPath = abs(relativePath)
         const dir = path.dirname(fullPath)
-        yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie)
+        yield* fs.makeDirectory(dir, { recursive: true })
 
         const content = `${serializeFrontmatter(frontmatter)}\n\n${body}`
         const tmpPath = `${fullPath}.tmp`
-        yield* fs.writeFileString(tmpPath, content).pipe(Effect.orDie)
-        yield* fs.rename(tmpPath, fullPath).pipe(Effect.orDie)
+        yield* fs.writeFileString(tmpPath, content)
+        yield* fs.rename(tmpPath, fullPath)
         yield* rebuildIndexForPath(relativePath)
       })
 
@@ -374,7 +377,7 @@ export const makeMemoryVault = (
         const fullPath = abs(relativePath)
         const exists = yield* fs.exists(fullPath).pipe(Effect.orElseSucceed(() => false))
         if (exists) {
-          yield* fs.remove(fullPath).pipe(Effect.orDie)
+          yield* fs.remove(fullPath)
         }
         yield* rebuildIndexForPath(relativePath)
       })
@@ -408,14 +411,14 @@ export const makeMemoryVault = (
       Effect.gen(function* () {
         yield* fs
           .makeDirectory(path.join(vaultPath, "global"), { recursive: true })
-          .pipe(Effect.orDie)
+          .pipe(Effect.asVoid)
         yield* fs
           .makeDirectory(path.join(vaultPath, "project"), { recursive: true })
-          .pipe(Effect.orDie)
+          .pipe(Effect.asVoid)
         if (project !== undefined) {
           yield* fs
             .makeDirectory(path.join(vaultPath, "project", project), { recursive: true })
-            .pipe(Effect.orDie)
+            .pipe(Effect.asVoid)
         }
       })
 
