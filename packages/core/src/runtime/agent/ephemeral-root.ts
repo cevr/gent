@@ -6,7 +6,6 @@ import { EventPublisher, ExtensionEventSink } from "../../domain/event-publisher
 import type { PromptPresenter } from "../../domain/prompt-presenter.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { StorageError } from "../../domain/storage-error.js"
-import type { InteractionPendingReader } from "../../storage/interaction-pending-reader.js"
 import type { InteractionStorage } from "../../storage/interaction-storage.js"
 import type { SearchStorage } from "../../storage/search-storage.js"
 import type { BranchStorage } from "../../storage/branch-storage.js"
@@ -45,7 +44,6 @@ type EphemeralStorageProvides =
   | RelationshipStorage
   | StorageTransaction
   | InteractionStorage
-  | InteractionPendingReader
   | SearchStorage
 
 type EphemeralOverrideProvides =

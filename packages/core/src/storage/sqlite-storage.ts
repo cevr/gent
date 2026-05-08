@@ -6,7 +6,6 @@ import type { MessageStorage as ClusterMessageStorage } from "effect/unstable/cl
 import type { EncoreMessageStorage } from "effect-encore"
 import { fromSqlClient as encoreSqlMessageStorage } from "effect-encore"
 import { InteractionStorage } from "./interaction-storage.js"
-import { InteractionPendingReader } from "./interaction-pending-reader.js"
 import { SearchStorage } from "./search-storage.js"
 import { SessionStorage } from "./session-storage.js"
 import { BranchStorage } from "./branch-storage.js"
@@ -36,7 +35,6 @@ type FocusedStorage =
   | RelationshipStorage
   | SessionOperationStorage
   | StorageTransaction
-  | InteractionPendingReader
   | ClusterMessageStorage.MessageStorage
   | EncoreMessageStorage
 
@@ -56,7 +54,6 @@ const provideFocusedRepositories = <E, R>(
     Layer.provide(StorageTransaction.Live, base),
     Layer.provide(encoreSqlMessageStorage(), base),
     interactionStorage,
-    Layer.provide(InteractionPendingReader.Live, interactionStorage),
     Layer.provide(SearchStorage.Live, base),
   )
 }
