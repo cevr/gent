@@ -8,7 +8,6 @@ import {
   AgentLoop as AgentLoopActor,
   AgentLoopTestActor,
 } from "../../../src/runtime/agent/agent-loop.actor"
-import { AgentLoopBehaviorDeps } from "../../../src/runtime/agent/agent-loop.behavior-deps"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
 import { ResourceManagerLive } from "../../../src/runtime/resource-manager"
@@ -262,8 +261,7 @@ export const makeLayer = (
     GentPlatform.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoopTestActor.pipe(
-    Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+  return AgentLoopTestActor({ baseSections: [] }).pipe(
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
@@ -286,8 +284,7 @@ export const makeRecordingLayer = (providerLayer: Layer.Layer<LanguageModel.Lang
     eventStoreLayer,
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoopTestActor.pipe(
-    Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+  return AgentLoopTestActor({ baseSections: [] }).pipe(
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
@@ -333,8 +330,7 @@ export const makeLiveToolLayer = (
   )
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoopTestActor.pipe(
-    Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+  return AgentLoopTestActor({ baseSections: [] }).pipe(
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
@@ -374,8 +370,7 @@ export const makeLayerWithEvents = (
     GentPlatform.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoopTestActor.pipe(
-    Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+  return AgentLoopTestActor({ baseSections: [] }).pipe(
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
@@ -398,8 +393,7 @@ export const makeLayerWithEventPublisher = (
     GentPlatform.Test(),
   )
   const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, deps)
-  return AgentLoopTestActor.pipe(
-    Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+  return AgentLoopTestActor({ baseSections: [] }).pipe(
     Layer.provideMerge(
       Layer.mergeAll(deps, providedEventPublisherLayer, AgentLoopSessionGovernance.Live),
     ),
@@ -465,8 +459,7 @@ export const makeExternalLayerWithEvents = (
     GentPlatform.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoopTestActor.pipe(
-    Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+  return AgentLoopTestActor({ baseSections: [] }).pipe(
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }

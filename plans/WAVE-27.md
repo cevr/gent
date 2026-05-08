@@ -394,12 +394,12 @@ operations; callers should not hold mutable handles they can misuse.
 
 **Changes**
 
-| File                                                                                            | Change                                                                                                             | Lines                                                          |
-| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts`     | Own the worker `TxQueue`, semaphore, active-stream ref, close deferred, and scope internally.                      | `138-182`, `340-357`, `1103-1318`                              |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts`        | Call behavior intent methods instead of reaching into refs, semaphores, deferreds, and scopes.                     | `37-83`, `537-542`, `690-698`, `752-758`, `866-873`, `966-995` |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop-queue.test.ts`       | Close behavior through its public lifecycle API and stop constructing its internal semaphore.                      | `1-3`, `96-108`, `180-197`                                     |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent/agent-loop.actor.test.ts` | Pin live-only public ops versus persisted reply commands after independent review caught stale durability wording. | `68-84`, `252-384`                                             |
+| File                                                                                            | Change                                                                                                                                                                        | Lines                                                          |
+| ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts`     | Own the worker `TxQueue`, active-stream ref, close deferred, and scope internally while accepting the actor-owned side-mutation semaphore for cross-generation serialization. | `138-182`, `340-357`, `1103-1318`                              |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts`        | Call behavior intent methods instead of reaching into refs, deferreds, and scopes; keep one actor-owned semaphore across behavior generations after independent review.       | `37-83`, `537-542`, `690-698`, `752-758`, `866-873`, `966-995` |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop-queue.test.ts`       | Close behavior through its public lifecycle API and stop constructing its internal semaphore.                                                                                 | `1-3`, `96-108`, `180-197`                                     |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent/agent-loop.actor.test.ts` | Pin live-only public ops, including `Run`, versus persisted reply commands after independent review caught stale durability wording.                                          | `68-84`, `252-384`                                             |
 
 **Verification**
 
@@ -423,17 +423,19 @@ Effect context. It is an internal boundary with little behavior.
 
 **Changes**
 
-| File                                                                                             | Change                                                            | Lines     |
-| ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- | --------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior-deps.ts` | Delete Tag and service projection.                                | `39-134`  |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts`         | Yield services in the actor/behavior construction path.           | `501-550` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts`      | Accept only the real behavior inputs.                             | `232-267` |
-| AgentLoop tests using `AgentLoopBehaviorDeps.Live`                                               | Migrate to higher public runtime helpers or a smaller test layer. | multiple  |
+| File                                                                                             | Change                                                                                                                                                     | Lines                             |
+| ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior-deps.ts` | Delete Tag and service projection.                                                                                                                         | whole file                        |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts`      | Replace the Tag layer with `makeAgentLoopBehaviorDeps`, a plain Effect factory.                                                                            | `267-339`                         |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts`         | Parameterize actor layers with base sections and close over deps at layer construction, preserving ephemeral storage memoization without a projection Tag. | `461-465`, `690-699`, `1039-1065` |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`                | Depend on the actual actor requirements instead of the deleted projection layer.                                                                           | `268-286`, `1102-1118`            |
+| AgentLoop tests using `AgentLoopBehaviorDeps.Live`                                               | Call `AgentLoopTestActor({ baseSections: [] })` or the plain deps factory directly.                                                                        | multiple                          |
 
 **Verification**
 
-- `bun run typecheck`
-- `bun run test`
+- `bun run --cwd packages/core typecheck`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/agent-loop-queue.test.ts tests/runtime/agent/agent-loop.actor.test.ts tests/runtime/session-runtime.test.ts tests/runtime/agent-loop-streaming.test.ts tests/runtime/agent-loop-interactions.test.ts tests/runtime/external-turn.test.ts`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts tests/runtime/agent-runner.test.ts -t "ephemeral helper runs mirror child tool events|ephemeral agent writes to ephemeral storage|ephemeral agent auto-approves interactions|ephemeral agent rebuilds resource"`
 - `bun run gate`
 
 ## Commit 11: refactor(events): merge event publication into the event log boundary

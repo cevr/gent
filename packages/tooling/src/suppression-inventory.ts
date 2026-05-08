@@ -185,7 +185,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   },
   {
     file: "packages/core/src/test-utils/extension-harness.ts",
-    line: 154,
+    line: 152,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
   },
@@ -209,7 +209,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   },
   {
     file: "packages/core/src/runtime/session-runtime.ts",
-    line: 1093,
+    line: 1105,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect cluster's Entity.toLayer exposes erased RPC middleware requirements; the exported layer narrows the Gent-owned services at this boundary.",
   },

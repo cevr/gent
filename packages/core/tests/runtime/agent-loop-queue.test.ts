@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref, Semaphore, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   finishPart,
@@ -15,8 +15,10 @@ import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
-import { makeAgentLoopBehavior } from "../../src/runtime/agent/agent-loop.behavior"
-import { AgentLoopBehaviorDeps } from "../../src/runtime/agent/agent-loop.behavior-deps"
+import {
+  makeAgentLoopBehavior,
+  makeAgentLoopBehaviorDeps,
+} from "../../src/runtime/agent/agent-loop.behavior"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
@@ -78,11 +80,7 @@ describe("queue drain regression", () => {
           GentPlatform.Test(),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const behaviorDepsLayer = Layer.provide(
-          AgentLoopBehaviorDeps.Live({ baseSections: [] }),
-          Layer.merge(deps, eventPublisherLayer),
-        )
-        const layer = Layer.mergeAll(deps, eventPublisherLayer, behaviorDepsLayer)
+        const layer = Layer.mergeAll(deps, eventPublisherLayer)
         const makeMessage = (id: string, text: string) =>
           Message.Regular.make({
             id: MessageId.make(id),
@@ -95,7 +93,8 @@ describe("queue drain regression", () => {
 
         yield* Effect.gen(function* () {
           yield* ensureStorageParents({ sessionId, branchId })
-          const behaviorDeps = yield* AgentLoopBehaviorDeps
+          const behaviorDeps = yield* makeAgentLoopBehaviorDeps({ baseSections: [] })
+          const sideMutationSemaphore = yield* Semaphore.make(1)
           const behavior = yield* makeAgentLoopBehavior(
             {
               ...behaviorDeps,
@@ -103,6 +102,7 @@ describe("queue drain regression", () => {
             },
             sessionId,
             branchId,
+            sideMutationSemaphore,
           )
           yield* Effect.addFinalizer(() => behavior.close)
           yield* behavior.start
@@ -162,11 +162,7 @@ describe("queue drain regression", () => {
           GentPlatform.Test(),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const behaviorDepsLayer = Layer.provide(
-          AgentLoopBehaviorDeps.Live({ baseSections: [] }),
-          Layer.merge(deps, eventPublisherLayer),
-        )
-        const layer = Layer.mergeAll(deps, eventPublisherLayer, behaviorDepsLayer)
+        const layer = Layer.mergeAll(deps, eventPublisherLayer)
         const makeMessage = (id: string, text: string) =>
           Message.Regular.make({
             id: MessageId.make(id),
@@ -179,7 +175,8 @@ describe("queue drain regression", () => {
 
         yield* Effect.gen(function* () {
           yield* ensureStorageParents({ sessionId, branchId })
-          const behaviorDeps = yield* AgentLoopBehaviorDeps
+          const behaviorDeps = yield* makeAgentLoopBehaviorDeps({ baseSections: [] })
+          const sideMutationSemaphore = yield* Semaphore.make(1)
           const inFlight = { message: makeMessage("msg-drain-inflight", "in flight") }
           const behavior = yield* makeAgentLoopBehavior(
             {
@@ -188,6 +185,7 @@ describe("queue drain regression", () => {
             },
             sessionId,
             branchId,
+            sideMutationSemaphore,
             LoopQueueState.make({
               steering: [{ message: makeMessage("msg-drain-steering", "steer") }],
               followUp: [{ message: makeMessage("msg-drain-follow-up", "follow") }],
@@ -257,8 +255,7 @@ describe("queue drain regression", () => {
           GentPlatform.Test(),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const layer = AgentLoopTestActor.pipe(
-          Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
           Layer.provideMerge(
             Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
           ),
@@ -385,8 +382,7 @@ describe("queue drain regression", () => {
             GentPlatform.Test(),
           )
           const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-          return AgentLoopTestActor.pipe(
-            Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+          return AgentLoopTestActor({ baseSections: [] }).pipe(
             Layer.provideMerge(
               Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
             ),
@@ -469,8 +465,7 @@ describe("queue drain regression", () => {
           GentPlatform.Test(),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const layer = AgentLoopTestActor.pipe(
-          Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
           Layer.provideMerge(
             Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
           ),
@@ -549,8 +544,7 @@ describe("queue drain regression", () => {
           GentPlatform.Test(),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const layer = AgentLoopTestActor.pipe(
-          Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
           Layer.provideMerge(
             Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
           ),

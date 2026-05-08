@@ -12,8 +12,10 @@ import {
 } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Entity, MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { Rpc } from "effect/unstable/rpc"
+import type { SqlClient } from "effect/unstable/sql"
 import { ActorAddressResolver, ActorStateRegistry } from "effect-encore"
 import { AgentRunError, RunSpecSchema, type RunSpec, AgentName } from "../domain/agent.js"
 import { QueueSnapshot } from "../domain/queue.js"
@@ -30,6 +32,7 @@ import {
 } from "../domain/ids.js"
 import { Message, MessageMetadata } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
+import type { AgentLoopQueueStorage } from "../storage/agent-loop-queue-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
@@ -38,12 +41,15 @@ import { ModelId } from "../domain/model.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
 import { entityIdOf, parseEntityId } from "./agent/agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
-import { AgentLoopBehaviorDeps } from "./agent/agent-loop.behavior-deps.js"
 import { assistantMessageIdForTurn } from "./agent/agent-loop.utils.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import type { ModelRegistry } from "./model-registry.js"
+import type { ModelResolver } from "../providers/model-resolver.js"
 import { GentPlatform } from "./gent-platform.js"
+import type { ToolRunner } from "./agent/tool-runner.js"
+import type { ResourceManager } from "./resource-manager.js"
+import type { ConfigService } from "./config-service.js"
 import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-context.js"
 import { makeExtensionHostPlatform } from "./extensions/host-platform.js"
 import { SessionProfileCache } from "./session-profile.js"
@@ -259,7 +265,6 @@ export const SessionRuntimeEntity = Entity.make("SessionRuntime", [
 export type SessionRuntimeEntityRpcs = RpcGroup.Rpcs<typeof SessionRuntimeEntity.protocol>
 export type SessionRuntimeEntityHandlers = Entity.HandlersFrom<SessionRuntimeEntityRpcs>
 
-type LayerRequirements<T> = T extends Layer.Layer<infer _ROut, infer _E, infer RIn> ? RIn : never
 type SessionRuntimeEntityLayerRequirements =
   | Sharding.Sharding
   | EventStorage
@@ -269,8 +274,15 @@ type SessionRuntimeEntityLayerRequirements =
   | ModelRegistry
   | GentPlatform
   | SessionStorage
+  | MessageStorage
+  | AgentLoopQueueStorage
   | BranchStorage
-  | LayerRequirements<ReturnType<typeof AgentLoopBehaviorDeps.Live>>
+  | SqlClient.SqlClient
+  | ModelResolver
+  | ToolRunner
+  | ResourceManager
+  | ConfigService
+  | ChildProcessSpawner
 
 export interface SessionRuntimeService {
   readonly sendUserMessage: (
@@ -1102,14 +1114,11 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
     ).pipe(
       // `AgentLoopLiveActor` provides the internal actor client consumed by
       // `makeLiveSessionRuntime`.
-      Layer.provide(AgentLoopLiveActor),
+      Layer.provide(AgentLoopLiveActor(config)),
       // `AgentLoopSessionGovernance` is a runtime-internal shared service.
       // Encore owns actor state registration; session governance remains a
       // Gent policy boundary shared by the facade and actor handler.
       Layer.provide(AgentLoopSessionGovernance.Live),
-      // `AgentLoopBehaviorDeps` is the layer-level service snapshot the
-      // per-entity actor build consumes when the entity first materializes.
-      Layer.provide(AgentLoopBehaviorDeps.Live(config)),
     )
 
   static LiveWithEntity = (config: {

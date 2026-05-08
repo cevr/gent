@@ -27,7 +27,6 @@ import {
   ToolCallId,
 } from "@gent/core-internal/domain/ids"
 import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
-import { AgentLoopBehaviorDeps } from "../../src/runtime/agent/agent-loop.behavior-deps"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
@@ -141,8 +140,7 @@ describe("interaction", () => {
     )
     const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-    return AgentLoopTestActor.pipe(
-      Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+    return AgentLoopTestActor({ baseSections: [] }).pipe(
       Layer.provideMerge(
         Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
       ),
@@ -290,8 +288,7 @@ describe("interaction", () => {
         GentPlatform.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const loopLayer = AgentLoopTestActor.pipe(
-        Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+      const loopLayer = AgentLoopTestActor({ baseSections: [] }).pipe(
         Layer.provideMerge(
           Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),

@@ -14,7 +14,7 @@
  *
  * **Entity ID** keys per `(sessionId, branchId)` so all ops for one branch
  * share an actor instance. Handler concurrency is intentionally unbounded;
- * behavior-owned queue and semaphores serialize turn execution, durable queue,
+ * behavior-owned queue and actor-owned semaphore serialize turn execution, durable queue,
  * and side-effect lanes.
  *
  * **Single source of truth for routing** (C5.2 counsel): for ops that
@@ -24,8 +24,8 @@
  * target fields.
  *
  * **Execution id key** per op:
- * - `Submit` / `QueueFollowUp` — `message.id` (live-only; SessionRuntime owns
- *   durable request idempotency for this path)
+ * - `Submit` / `Run` / `QueueFollowUp` — `message.id` (live-only;
+ *   SessionRuntime owns durable request idempotency for this path)
  * - `Steer` — `commandId` (live-only; SessionRuntime owns durable request
  *   idempotency for this path)
  * - `Interrupt` / `RespondInteraction` — durable persisted command key
@@ -36,7 +36,7 @@
  * @module
  */
 
-import { DateTime, Effect, Exit, Ref, Schema, Stream, Layer, Option } from "effect"
+import { DateTime, Effect, Exit, Ref, Schema, Stream, Layer, Option, Semaphore } from "effect"
 import { ShardingConfig } from "effect/unstable/cluster"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Actor } from "effect-encore"
@@ -54,6 +54,7 @@ import {
 import { SteerCommand } from "../../domain/steer.js"
 import { GentPlatform } from "../gent-platform.js"
 import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
+import type { PromptSection } from "../../domain/prompt.js"
 import {
   AgentLoopError,
   assistantMessageIdForCommand,
@@ -71,10 +72,11 @@ import {
 } from "./agent-loop.state.js"
 import {
   type AgentLoopBehavior,
+  type AgentLoopBehaviorDeps,
   causeToAgentLoopError,
+  makeAgentLoopBehaviorDeps,
   makeAgentLoopBehavior,
 } from "./agent-loop.behavior.js"
-import { AgentLoopBehaviorDeps } from "./agent-loop.behavior-deps.js"
 import { entityIdOf, parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { invokeTool, recordToolResult } from "./turn-helpers.js"
@@ -456,583 +458,610 @@ const failIfTurnFailedAfterEpoch = (
  * Encore exposes `CurrentAddress` while keeping that entity-provided service
  * out of the resulting layer requirements.
  */
-const buildAgentLoopActorHandlers = Effect.gen(function* () {
-  const rawDeps = yield* AgentLoopBehaviorDeps
-  const sessionGovernance = yield* AgentLoopSessionGovernance
-  const platform = yield* GentPlatform
-  const addr = yield* Actor.CurrentAddress
-  const { workspaceId, sessionId, branchId } = yield* parseEntityId(addr.entityId).pipe(
-    Effect.orDie,
-  )
-  const withWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
-  const workspaceEventStorage = {
-    appendEvent: (event, options) =>
-      withWorkspace(rawDeps.turnStorage.events.appendEvent(event, options)),
-    listEvents: (input) => withWorkspace(rawDeps.turnStorage.events.listEvents(input)),
-    getLatestEventId: (input) => withWorkspace(rawDeps.turnStorage.events.getLatestEventId(input)),
-    getLatestEvent: (input) => withWorkspace(rawDeps.turnStorage.events.getLatestEvent(input)),
-  } satisfies typeof rawDeps.turnStorage.events
-  const workspaceMessageStorage = {
-    createMessage: (message) => withWorkspace(rawDeps.messageStorage.createMessage(message)),
-    createMessageIfAbsent: (message) =>
-      withWorkspace(rawDeps.messageStorage.createMessageIfAbsent(message)),
-    getMessage: (id) => withWorkspace(rawDeps.messageStorage.getMessage(id)),
-    listMessages: (id) => withWorkspace(rawDeps.messageStorage.listMessages(id)),
-    deleteMessages: (id, after) => withWorkspace(rawDeps.messageStorage.deleteMessages(id, after)),
-    updateMessageTurnDuration: (id, duration) =>
-      withWorkspace(rawDeps.messageStorage.updateMessageTurnDuration(id, duration)),
-  } satisfies typeof rawDeps.messageStorage
-  const workspaceQueueStorage = {
-    getQueueState: (sessionId, branchId) =>
-      withWorkspace(rawDeps.queueStorage.getQueueState(sessionId, branchId)),
-    putQueueState: (sessionId, branchId, queue) =>
-      withWorkspace(rawDeps.queueStorage.putQueueState(sessionId, branchId, queue)),
-    clearQueueState: (sessionId, branchId) =>
-      withWorkspace(rawDeps.queueStorage.clearQueueState(sessionId, branchId)),
-  } satisfies typeof rawDeps.queueStorage
-  const workspaceSessionStorage = {
-    createSession: (session) => withWorkspace(rawDeps.sessionStorage.createSession(session)),
-    getSession: (id) => withWorkspace(rawDeps.sessionStorage.getSession(id)),
-    getLastSessionByCwd: (cwd) => withWorkspace(rawDeps.sessionStorage.getLastSessionByCwd(cwd)),
-    listSessions: () => withWorkspace(rawDeps.sessionStorage.listSessions()),
-    updateSession: (session) => withWorkspace(rawDeps.sessionStorage.updateSession(session)),
-    deleteSession: (id) => withWorkspace(rawDeps.sessionStorage.deleteSession(id)),
-  } satisfies typeof rawDeps.sessionStorage
-  const workspaceEventPublisher = {
-    append: (event) => withWorkspace(rawDeps.eventPublisher.append(event)),
-    deliver: (envelope) => rawDeps.eventPublisher.deliver(envelope),
-    publish: (event) => withWorkspace(rawDeps.eventPublisher.publish(event)),
-  } satisfies typeof rawDeps.eventPublisher
-  const workspaceTransaction = {
-    withTransaction: (effect) =>
-      rawDeps.turnStorage.transaction.withTransaction(withWorkspace(effect)),
-  } satisfies typeof rawDeps.turnStorage.transaction
-  const deps = {
-    ...rawDeps,
-    turnStorage: {
-      transaction: workspaceTransaction,
-      events: workspaceEventStorage,
-      messages: workspaceMessageStorage,
-      sessions: workspaceSessionStorage,
-    },
-    eventPublisher: workspaceEventPublisher,
-    messageStorage: workspaceMessageStorage,
-    queueStorage: workspaceQueueStorage,
-    sessionStorage: workspaceSessionStorage,
-  } satisfies typeof rawDeps
-  const closed = yield* Ref.make(false)
-  const operationSeen = yield* Ref.make(false)
-
-  let handle: AgentLoopBehavior
-  let startupExit: Exit.Exit<void, AgentLoopError>
-
-  const closeBehavior = (loop: AgentLoopBehavior) =>
-    Effect.gen(function* () {
-      if (yield* Ref.get(closed)) return
-      yield* Ref.set(closed, true)
-      yield* loop.close
-    }).pipe(Effect.ignore)
-
-  const cleanupLoop = (loop: AgentLoopBehavior) => closeBehavior(loop)
-
-  const currentRuntimeState = (loop: AgentLoopBehavior) => loop.runtimeState
-
-  const hasPriorMessageHistory = Effect.gen(function* () {
-    const messages = yield* deps.messageStorage
-      .listMessages(branchId)
-      .pipe(Effect.catchEager(() => Effect.succeed([])))
-    return messages.some((message) => message.sessionId === sessionId)
-  })
-
-  const latestIncompleteUserTurn = Effect.gen(function* () {
-    const envelopes = yield* deps.turnStorage.events
-      .listEvents({ sessionId, branchId })
-      .pipe(Effect.catchEager(() => Effect.succeed([])))
-    const completed = new Set(
-      envelopes.flatMap((envelope) =>
-        envelope.event._tag === "TurnCompleted" && envelope.event.messageId !== undefined
-          ? [envelope.event.messageId]
-          : [],
-      ),
+const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enqueueFollowUp">) =>
+  Effect.gen(function* () {
+    const sideMutationSemaphore = yield* Semaphore.make(1)
+    const sessionGovernance = yield* AgentLoopSessionGovernance
+    const platform = yield* GentPlatform
+    const addr = yield* Actor.CurrentAddress
+    const { workspaceId, sessionId, branchId } = yield* parseEntityId(addr.entityId).pipe(
+      Effect.orDie,
     )
-    const incomplete = envelopes.filter(
-      (envelope) =>
-        envelope.event._tag === "MessageReceived" &&
-        envelope.event.message.role === "user" &&
-        !completed.has(envelope.event.message.id),
-    )
-    const latest = incomplete[incomplete.length - 1]?.event
-    return latest?._tag === "MessageReceived" ? latest.message : undefined
-  })
-
-  const hasIncompleteUserTurn = latestIncompleteUserTurn.pipe(
-    Effect.map((message) => message !== undefined),
-  )
-
-  const startNextQueuedTurnIfIdle = Effect.gen(function* () {
-    const start = yield* handle.takeNextQueuedTurnIfIdle
-    if (start !== undefined) {
-      yield* handle
-        .startTurn(start)
-        .pipe(
-          Effect.catchEager((error) =>
-            cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-          ),
-        )
-    }
-  })
-
-  const markWrite = Effect.gen(function* () {
-    if (yield* sessionGovernance.isTerminated(workspaceId, sessionId)) {
-      return yield* new AgentLoopError({
-        message: `Session runtime terminated: ${sessionId}`,
-      })
-    }
-    return yield* Ref.modify(operationSeen, (seen) => [seen, true] as const)
-  })
-
-  const rejectIfTerminated = Effect.gen(function* () {
-    if (yield* sessionGovernance.isTerminated(workspaceId, sessionId)) {
-      return yield* new AgentLoopError({
-        message: `Session terminated: ${sessionId}`,
-      })
-    }
-  })
-
-  const ensureTarget = (target: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
-    target.sessionId === sessionId && target.branchId === branchId
-      ? Effect.void
-      : Effect.fail(
-          new AgentLoopError({
-            message: `AgentLoop op target mismatch: entity=${sessionId}/${branchId} payload=${target.sessionId}/${target.branchId}`,
-          }),
-        )
-
-  const enqueueMessage = Effect.fn("AgentLoopActor.enqueueMessage")(function* (input: {
-    readonly message?: MessageType
-    readonly content?: string
-    readonly metadata?: MessageMetadata
-  }) {
-    const wasAlreadyWarm = yield* markWrite
-    const message =
-      input.message ??
-      Message.Regular.make({
-        id: MessageId.make(yield* platform.randomId),
-        sessionId,
-        branchId,
-        role: "user",
-        parts: [Prompt.textPart({ text: input.content ?? "" })],
-        createdAt: yield* DateTime.nowAsDate,
-        ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
-      })
-
-    yield* ensureTarget(message)
-    const item = { message }
-    const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
-      coldQueueOnly: !wasAlreadyWarm,
-    })
-    if (reservedStart !== undefined) {
-      yield* handle
-        .startTurn(item)
-        .pipe(
-          Effect.catchEager((error) =>
-            cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-          ),
-        )
-    }
-    if (!wasAlreadyWarm) {
-      if ((yield* hasIncompleteUserTurn) || (yield* hasPriorMessageHistory)) {
-        yield* startNextQueuedTurnIfIdle
-      }
-      return
-    }
-  })
-
-  const openLoop = Effect.gen(function* () {
-    yield* Ref.set(closed, false)
-    const initialQueueExit = yield* Effect.exit(
-      deps.queueStorage.getQueueState(sessionId, branchId).pipe(
-        Effect.mapError(
-          (cause) =>
-            new AgentLoopError({
-              message: `Failed to load loop queue for ${sessionId}/${branchId}`,
-              cause,
-            }),
-        ),
-      ),
-    )
-    const initialQueue = Exit.isSuccess(initialQueueExit)
-      ? initialQueueExit.value
-      : emptyLoopQueueState()
-    const initialQueueFailure = Exit.isFailure(initialQueueExit)
-      ? new AgentLoopError({
-          message: `Failed to load loop queue for ${sessionId}/${branchId}`,
-          cause: initialQueueExit.cause,
-        })
-      : undefined
-    if (initialQueueFailure !== undefined) {
-      yield* Effect.logWarning("failed to load loop queue").pipe(
-        Effect.annotateLogs({
-          sessionId,
-          branchId,
-          error: initialQueueFailure.message,
-        }),
-      )
-    }
-    handle = yield* makeAgentLoopBehavior(
-      {
-        ...deps,
-        enqueueFollowUp: (input) => enqueueMessage(input),
+    const withWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      effect.pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
+    const workspaceEventStorage = {
+      appendEvent: (event, options) =>
+        withWorkspace(rawDeps.turnStorage.events.appendEvent(event, options)),
+      listEvents: (input) => withWorkspace(rawDeps.turnStorage.events.listEvents(input)),
+      getLatestEventId: (input) =>
+        withWorkspace(rawDeps.turnStorage.events.getLatestEventId(input)),
+      getLatestEvent: (input) => withWorkspace(rawDeps.turnStorage.events.getLatestEvent(input)),
+    } satisfies typeof rawDeps.turnStorage.events
+    const workspaceMessageStorage = {
+      createMessage: (message) => withWorkspace(rawDeps.messageStorage.createMessage(message)),
+      createMessageIfAbsent: (message) =>
+        withWorkspace(rawDeps.messageStorage.createMessageIfAbsent(message)),
+      getMessage: (id) => withWorkspace(rawDeps.messageStorage.getMessage(id)),
+      listMessages: (id) => withWorkspace(rawDeps.messageStorage.listMessages(id)),
+      deleteMessages: (id, after) =>
+        withWorkspace(rawDeps.messageStorage.deleteMessages(id, after)),
+      updateMessageTurnDuration: (id, duration) =>
+        withWorkspace(rawDeps.messageStorage.updateMessageTurnDuration(id, duration)),
+    } satisfies typeof rawDeps.messageStorage
+    const workspaceQueueStorage = {
+      getQueueState: (sessionId, branchId) =>
+        withWorkspace(rawDeps.queueStorage.getQueueState(sessionId, branchId)),
+      putQueueState: (sessionId, branchId, queue) =>
+        withWorkspace(rawDeps.queueStorage.putQueueState(sessionId, branchId, queue)),
+      clearQueueState: (sessionId, branchId) =>
+        withWorkspace(rawDeps.queueStorage.clearQueueState(sessionId, branchId)),
+    } satisfies typeof rawDeps.queueStorage
+    const workspaceSessionStorage = {
+      createSession: (session) => withWorkspace(rawDeps.sessionStorage.createSession(session)),
+      getSession: (id) => withWorkspace(rawDeps.sessionStorage.getSession(id)),
+      getLastSessionByCwd: (cwd) => withWorkspace(rawDeps.sessionStorage.getLastSessionByCwd(cwd)),
+      listSessions: () => withWorkspace(rawDeps.sessionStorage.listSessions()),
+      updateSession: (session) => withWorkspace(rawDeps.sessionStorage.updateSession(session)),
+      deleteSession: (id) => withWorkspace(rawDeps.sessionStorage.deleteSession(id)),
+    } satisfies typeof rawDeps.sessionStorage
+    const workspaceEventPublisher = {
+      append: (event) => withWorkspace(rawDeps.eventPublisher.append(event)),
+      deliver: (envelope) => rawDeps.eventPublisher.deliver(envelope),
+      publish: (event) => withWorkspace(rawDeps.eventPublisher.publish(event)),
+    } satisfies typeof rawDeps.eventPublisher
+    const workspaceTransaction = {
+      withTransaction: (effect) =>
+        rawDeps.turnStorage.transaction.withTransaction(withWorkspace(effect)),
+    } satisfies typeof rawDeps.turnStorage.transaction
+    const deps = {
+      ...rawDeps,
+      turnStorage: {
+        transaction: workspaceTransaction,
+        events: workspaceEventStorage,
+        messages: workspaceMessageStorage,
+        sessions: workspaceSessionStorage,
       },
-      sessionId,
-      branchId,
-      initialQueue,
-    )
-    if (initialQueueFailure !== undefined) {
-      startupExit = Exit.fail(initialQueueFailure)
-      return
-    }
+      eventPublisher: workspaceEventPublisher,
+      messageStorage: workspaceMessageStorage,
+      queueStorage: workspaceQueueStorage,
+      sessionStorage: workspaceSessionStorage,
+    } satisfies typeof rawDeps
+    const closed = yield* Ref.make(false)
+    const operationSeen = yield* Ref.make(false)
 
-    startupExit = yield* Effect.exit(
-      handle.start.pipe(
-        Effect.andThen(handle.refreshRuntimeState),
-        Effect.andThen(
-          Effect.gen(function* () {
-            const incompleteMessage = yield* latestIncompleteUserTurn
-            if (incompleteMessage !== undefined) {
-              yield* handle
-                .startTurn({ message: incompleteMessage })
-                .pipe(
-                  Effect.catchEager((error) =>
-                    cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-                  ),
-                )
-              return
-            }
-            const hasRecoveredQueue =
-              initialQueue.inFlight !== undefined ||
-              initialQueue.steering.length > 0 ||
-              initialQueue.followUp.length > 0
-            if (!hasRecoveredQueue) return
-            if (yield* hasPriorMessageHistory) {
-              yield* startNextQueuedTurnIfIdle
-            }
-          }),
-        ),
-      ),
-    )
-  })
+    let handle: AgentLoopBehavior
+    let startupExit: Exit.Exit<void, AgentLoopError>
 
-  yield* withWorkspace(openLoop)
-  yield* Effect.addFinalizer(() => cleanupLoop(handle))
+    const closeBehavior = (loop: AgentLoopBehavior) =>
+      Effect.gen(function* () {
+        if (yield* Ref.get(closed)) return
+        yield* Ref.set(closed, true)
+        yield* loop.close
+      }).pipe(Effect.ignore)
 
-  const ensureStarted = Effect.gen(function* () {
-    if (yield* Ref.get(closed)) {
-      yield* openLoop
-    }
-    if (Exit.isSuccess(startupExit)) return
-    return yield* causeToAgentLoopError(startupExit.cause)
-  })
+    const cleanupLoop = (loop: AgentLoopBehavior) => closeBehavior(loop)
 
-  const currentRegisteredState = Effect.gen(function* () {
-    yield* rejectIfTerminated
-    yield* ensureStarted
-    return yield* currentRuntimeState(handle)
-  })
+    const currentRuntimeState = (loop: AgentLoopBehavior) => loop.runtimeState
 
-  const registeredStateChanges = Stream.unwrap(
-    Effect.gen(function* () {
-      yield* rejectIfTerminated
-      yield* ensureStarted
-      return handle.stateChanges.pipe(
-        Stream.map(projectRuntimeState),
-        Stream.interruptWhen(handle.awaitExit),
-      )
-    }),
-  )
-
-  yield* Actor.registerState({
-    get: withWorkspace(currentRegisteredState),
-    watch: registeredStateChanges.pipe(Stream.provideService(CurrentWorkspaceId, workspaceId)),
-  })
-
-  const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (
-    operation: typeof AgentLoop.Submit.make extends (payload: infer P) => unknown ? P : never,
-  ) {
-    yield* ensureStarted
-    yield* ensureTarget(operation.message)
-    yield* markWrite
-    const item = buildQueuedTurnItem(operation)
-    const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
-      coldQueueOnly: false,
+    const hasPriorMessageHistory = Effect.gen(function* () {
+      const messages = yield* deps.messageStorage
+        .listMessages(branchId)
+        .pipe(Effect.catchEager(() => Effect.succeed([])))
+      return messages.some((message) => message.sessionId === sessionId)
     })
-    if (reservedStart !== undefined) {
-      yield* handle
-        .startTurn(item)
-        .pipe(
-          Effect.catchEager((error) =>
-            cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-          ),
-        )
-    }
-  })
 
-  const runTurn = Effect.fn("AgentLoopActor.runTurn")(function* (
-    operation: typeof AgentLoop.Run.make extends (payload: infer P) => unknown ? P : never,
-  ) {
-    yield* ensureStarted
-    yield* ensureTarget(operation.message)
-    yield* markWrite
-    const item = buildQueuedTurnItem(operation)
-    const start = yield* handle.reserveRunStartOrQueueFollowUp(item)
-    if (start === undefined) return
-
-    yield* handle
-      .startTurn(item)
-      .pipe(
-        Effect.catchEager((error) => cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error)))),
+    const latestIncompleteUserTurn = Effect.gen(function* () {
+      const envelopes = yield* deps.turnStorage.events
+        .listEvents({ sessionId, branchId })
+        .pipe(Effect.catchEager(() => Effect.succeed([])))
+      const completed = new Set(
+        envelopes.flatMap((envelope) =>
+          envelope.event._tag === "TurnCompleted" && envelope.event.messageId !== undefined
+            ? [envelope.event.messageId]
+            : [],
+        ),
       )
+      const incomplete = envelopes.filter(
+        (envelope) =>
+          envelope.event._tag === "MessageReceived" &&
+          envelope.event.message.role === "user" &&
+          !completed.has(envelope.event.message.id),
+      )
+      const latest = incomplete[incomplete.length - 1]?.event
+      return latest?._tag === "MessageReceived" ? latest.message : undefined
+    })
 
-    yield* Effect.raceFirst(
-      Effect.raceFirst(
-        waitForIdleAfterEpoch(handle, start.stateEpochBaseline),
-        waitForTurnFailureAfterEpoch(handle, start.turnFailureBaseline),
-      ),
-      handle.persistenceFailure,
-    ).pipe(
-      Effect.catchEager((error) => cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error)))),
+    const hasIncompleteUserTurn = latestIncompleteUserTurn.pipe(
+      Effect.map((message) => message !== undefined),
     )
-    yield* failIfTurnFailedAfterEpoch(handle, start.turnFailureBaseline)
-  })
 
-  const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
-    commandId: ActorCommandId,
-    command: SteerCommandType,
-  ) {
-    yield* ensureStarted
-    yield* ensureTarget(command)
-    yield* markWrite
-    const projectedState = yield* currentRuntimeState(handle)
-
-    switch (command._tag) {
-      case "SwitchAgent":
+    const startNextQueuedTurnIfIdle = Effect.gen(function* () {
+      const start = yield* handle.takeNextQueuedTurnIfIdle
+      if (start !== undefined) {
         yield* handle
-          .switchAgent(command.agent)
+          .startTurn(start)
           .pipe(
             Effect.catchEager((error) =>
               cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
             ),
           )
-        return
+      }
+    })
 
-      case "Cancel":
-      case "Interrupt":
-        if (projectedState._tag === "Running" || projectedState._tag === "WaitingForInteraction") {
-          yield* handle.interrupt.pipe(
-            Effect.catchEager((error) =>
-              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-            ),
-          )
-          return
-        }
-        const loopState = yield* handle.snapshot
-        if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
-          yield* handle.interrupt.pipe(
-            Effect.catchEager((error) =>
-              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-            ),
-          )
-        }
-        return
-
-      case "Interject": {
-        const interjectMessage = Message.Interjection.make({
-          id: interjectionMessageIdForCommand(commandId),
-          sessionId: command.sessionId,
-          branchId: command.branchId,
-          role: "user",
-          parts: [Prompt.textPart({ text: command.message })],
-          createdAt: yield* DateTime.nowAsDate,
+    const markWrite = Effect.gen(function* () {
+      if (yield* sessionGovernance.isTerminated(workspaceId, sessionId)) {
+        return yield* new AgentLoopError({
+          message: `Session runtime terminated: ${sessionId}`,
         })
-        const item: QueuedTurnItem = {
-          message: interjectMessage,
-          ...(command.agent !== undefined ? { agentOverride: command.agent } : {}),
-        }
-        const loopState = yield* handle.appendSteering(item)
-        const shouldInterrupt = projectedState._tag === "Running" || loopState._tag === "Running"
-        if (shouldInterrupt) {
-          yield* handle.interruptActiveStream
+      }
+      return yield* Ref.modify(operationSeen, (seen) => [seen, true] as const)
+    })
+
+    const rejectIfTerminated = Effect.gen(function* () {
+      if (yield* sessionGovernance.isTerminated(workspaceId, sessionId)) {
+        return yield* new AgentLoopError({
+          message: `Session terminated: ${sessionId}`,
+        })
+      }
+    })
+
+    const ensureTarget = (target: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
+      target.sessionId === sessionId && target.branchId === branchId
+        ? Effect.void
+        : Effect.fail(
+            new AgentLoopError({
+              message: `AgentLoop op target mismatch: entity=${sessionId}/${branchId} payload=${target.sessionId}/${target.branchId}`,
+            }),
+          )
+
+    const enqueueMessage = Effect.fn("AgentLoopActor.enqueueMessage")(function* (input: {
+      readonly message?: MessageType
+      readonly content?: string
+      readonly metadata?: MessageMetadata
+    }) {
+      const wasAlreadyWarm = yield* markWrite
+      const message =
+        input.message ??
+        Message.Regular.make({
+          id: MessageId.make(yield* platform.randomId),
+          sessionId,
+          branchId,
+          role: "user",
+          parts: [Prompt.textPart({ text: input.content ?? "" })],
+          createdAt: yield* DateTime.nowAsDate,
+          ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+        })
+
+      yield* ensureTarget(message)
+      const item = { message }
+      const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
+        coldQueueOnly: !wasAlreadyWarm,
+      })
+      if (reservedStart !== undefined) {
+        yield* handle
+          .startTurn(item)
+          .pipe(
+            Effect.catchEager((error) =>
+              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+            ),
+          )
+      }
+      if (!wasAlreadyWarm) {
+        if ((yield* hasIncompleteUserTurn) || (yield* hasPriorMessageHistory)) {
+          yield* startNextQueuedTurnIfIdle
         }
         return
       }
-    }
-  })
+    })
 
-  return {
-    Submit: ({ operation }: HandlerRequest<Parameters<typeof submitTurn>[0]>) =>
-      withWorkspace(submitTurn(operation)),
-    Run: ({ operation }: HandlerRequest<Parameters<typeof runTurn>[0]>) =>
-      withWorkspace(runTurn(operation)),
-    QueueFollowUp: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
-      withWorkspace(
-        ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
-      ),
-    Steer: ({ operation }: HandlerRequest<SteerInput>) =>
-      withWorkspace(applySteer(operation.commandId, operation.command)),
-    Interrupt: ({ operation }: HandlerRequest<InterruptInput>) =>
-      withWorkspace(
-        applySteer(
-          operation.commandId,
-          Schema.decodeSync(SteerCommand)({
-            _tag: "Cancel",
-            sessionId: operation.sessionId,
-            branchId: operation.branchId,
-          }),
+    const openLoop = Effect.gen(function* () {
+      yield* Ref.set(closed, false)
+      const initialQueueExit = yield* Effect.exit(
+        deps.queueStorage.getQueueState(sessionId, branchId).pipe(
+          Effect.mapError(
+            (cause) =>
+              new AgentLoopError({
+                message: `Failed to load loop queue for ${sessionId}/${branchId}`,
+                cause,
+              }),
+          ),
         ),
-      ),
-    RespondInteraction: ({ operation }: HandlerRequest<RespondInteractionInput>) =>
-      withWorkspace(
-        ensureTarget(operation).pipe(
-          Effect.andThen(markWrite),
+      )
+      const initialQueue = Exit.isSuccess(initialQueueExit)
+        ? initialQueueExit.value
+        : emptyLoopQueueState()
+      const initialQueueFailure = Exit.isFailure(initialQueueExit)
+        ? new AgentLoopError({
+            message: `Failed to load loop queue for ${sessionId}/${branchId}`,
+            cause: initialQueueExit.cause,
+          })
+        : undefined
+      if (initialQueueFailure !== undefined) {
+        yield* Effect.logWarning("failed to load loop queue").pipe(
+          Effect.annotateLogs({
+            sessionId,
+            branchId,
+            error: initialQueueFailure.message,
+          }),
+        )
+      }
+      handle = yield* makeAgentLoopBehavior(
+        {
+          ...deps,
+          enqueueFollowUp: (input) => enqueueMessage(input),
+        },
+        sessionId,
+        branchId,
+        sideMutationSemaphore,
+        initialQueue,
+      )
+      if (initialQueueFailure !== undefined) {
+        startupExit = Exit.fail(initialQueueFailure)
+        return
+      }
+
+      startupExit = yield* Effect.exit(
+        handle.start.pipe(
+          Effect.andThen(handle.refreshRuntimeState),
           Effect.andThen(
             Effect.gen(function* () {
-              const projectedState = yield* currentRuntimeState(handle)
-              if (projectedState._tag !== "WaitingForInteraction") {
-                const state = yield* handle.snapshot
-                if (state._tag !== "WaitingForInteraction") {
-                  if (state._tag !== "Idle") return
-                  const message = yield* latestIncompleteUserTurn
-                  if (message === undefined) return
-                  const baseline = (yield* handle.readState).stateEpoch
-                  yield* handle
-                    .startTurn({ message })
-                    .pipe(
-                      Effect.catchEager((error) =>
-                        cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-                      ),
-                    )
-                  yield* Effect.raceFirst(
-                    waitForIdleAfterEpoch(handle, baseline),
-                    waitForTurnFailureAfterEpoch(handle, baseline),
+              const incompleteMessage = yield* latestIncompleteUserTurn
+              if (incompleteMessage !== undefined) {
+                yield* handle
+                  .startTurn({ message: incompleteMessage })
+                  .pipe(
+                    Effect.catchEager((error) =>
+                      cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                    ),
                   )
-                  return
-                }
+                return
               }
-              yield* handle
-                .respondInteraction(operation.requestId)
-                .pipe(
-                  Effect.catchEager((error) =>
-                    cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-                  ),
-                )
+              const hasRecoveredQueue =
+                initialQueue.inFlight !== undefined ||
+                initialQueue.steering.length > 0 ||
+                initialQueue.followUp.length > 0
+              if (!hasRecoveredQueue) return
+              if (yield* hasPriorMessageHistory) {
+                yield* startNextQueuedTurnIfIdle
+              }
             }),
           ),
         ),
-      ),
-    DrainQueue: ({ operation }: HandlerRequest<DrainQueueInput>) =>
-      withWorkspace(
-        ensureTarget(operation).pipe(
-          Effect.andThen(markWrite),
-          Effect.andThen(ensureStarted),
-          Effect.andThen(handle.drainQueue),
+      )
+    })
+
+    yield* withWorkspace(openLoop)
+    yield* Effect.addFinalizer(() => cleanupLoop(handle))
+
+    const ensureStarted = Effect.gen(function* () {
+      if (yield* Ref.get(closed)) {
+        yield* openLoop
+      }
+      if (Exit.isSuccess(startupExit)) return
+      return yield* causeToAgentLoopError(startupExit.cause)
+    })
+
+    const currentRegisteredState = Effect.gen(function* () {
+      yield* rejectIfTerminated
+      yield* ensureStarted
+      return yield* currentRuntimeState(handle)
+    })
+
+    const registeredStateChanges = Stream.unwrap(
+      Effect.gen(function* () {
+        yield* rejectIfTerminated
+        yield* ensureStarted
+        return handle.stateChanges.pipe(
+          Stream.map(projectRuntimeState),
+          Stream.interruptWhen(handle.awaitExit),
+        )
+      }),
+    )
+
+    yield* Actor.registerState({
+      get: withWorkspace(currentRegisteredState),
+      watch: registeredStateChanges.pipe(Stream.provideService(CurrentWorkspaceId, workspaceId)),
+    })
+
+    const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (
+      operation: typeof AgentLoop.Submit.make extends (payload: infer P) => unknown ? P : never,
+    ) {
+      yield* ensureStarted
+      yield* ensureTarget(operation.message)
+      yield* markWrite
+      const item = buildQueuedTurnItem(operation)
+      const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
+        coldQueueOnly: false,
+      })
+      if (reservedStart !== undefined) {
+        yield* handle
+          .startTurn(item)
+          .pipe(
+            Effect.catchEager((error) =>
+              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+            ),
+          )
+      }
+    })
+
+    const runTurn = Effect.fn("AgentLoopActor.runTurn")(function* (
+      operation: typeof AgentLoop.Run.make extends (payload: infer P) => unknown ? P : never,
+    ) {
+      yield* ensureStarted
+      yield* ensureTarget(operation.message)
+      yield* markWrite
+      const item = buildQueuedTurnItem(operation)
+      const start = yield* handle.reserveRunStartOrQueueFollowUp(item)
+      if (start === undefined) return
+
+      yield* handle
+        .startTurn(item)
+        .pipe(
+          Effect.catchEager((error) =>
+            cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+          ),
+        )
+
+      yield* Effect.raceFirst(
+        Effect.raceFirst(
+          waitForIdleAfterEpoch(handle, start.stateEpochBaseline),
+          waitForTurnFailureAfterEpoch(handle, start.turnFailureBaseline),
         ),
-      ),
-    GetQueue: ({ operation }: HandlerRequest<GetQueueInput>) =>
-      withWorkspace(
-        ensureTarget(operation).pipe(
-          Effect.andThen(rejectIfTerminated),
-          Effect.andThen(ensureStarted),
-          Effect.andThen(handle.queueSnapshot),
+        handle.persistenceFailure,
+      ).pipe(
+        Effect.catchEager((error) => cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error)))),
+      )
+      yield* failIfTurnFailedAfterEpoch(handle, start.turnFailureBaseline)
+    })
+
+    const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
+      commandId: ActorCommandId,
+      command: SteerCommandType,
+    ) {
+      yield* ensureStarted
+      yield* ensureTarget(command)
+      yield* markWrite
+      const projectedState = yield* currentRuntimeState(handle)
+
+      switch (command._tag) {
+        case "SwitchAgent":
+          yield* handle
+            .switchAgent(command.agent)
+            .pipe(
+              Effect.catchEager((error) =>
+                cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+              ),
+            )
+          return
+
+        case "Cancel":
+        case "Interrupt":
+          if (
+            projectedState._tag === "Running" ||
+            projectedState._tag === "WaitingForInteraction"
+          ) {
+            yield* handle.interrupt.pipe(
+              Effect.catchEager((error) =>
+                cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+              ),
+            )
+            return
+          }
+          const loopState = yield* handle.snapshot
+          if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
+            yield* handle.interrupt.pipe(
+              Effect.catchEager((error) =>
+                cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+              ),
+            )
+          }
+          return
+
+        case "Interject": {
+          const interjectMessage = Message.Interjection.make({
+            id: interjectionMessageIdForCommand(commandId),
+            sessionId: command.sessionId,
+            branchId: command.branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: command.message })],
+            createdAt: yield* DateTime.nowAsDate,
+          })
+          const item: QueuedTurnItem = {
+            message: interjectMessage,
+            ...(command.agent !== undefined ? { agentOverride: command.agent } : {}),
+          }
+          const loopState = yield* handle.appendSteering(item)
+          const shouldInterrupt = projectedState._tag === "Running" || loopState._tag === "Running"
+          if (shouldInterrupt) {
+            yield* handle.interruptActiveStream
+          }
+          return
+        }
+      }
+    })
+
+    return {
+      Submit: ({ operation }: HandlerRequest<Parameters<typeof submitTurn>[0]>) =>
+        withWorkspace(submitTurn(operation)),
+      Run: ({ operation }: HandlerRequest<Parameters<typeof runTurn>[0]>) =>
+        withWorkspace(runTurn(operation)),
+      QueueFollowUp: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
+        withWorkspace(
+          ensureStarted.pipe(Effect.andThen(enqueueMessage({ message: operation.message }))),
         ),
-      ),
-    GetState: ({ operation }: HandlerRequest<GetStateInput>) =>
-      withWorkspace(
-        ensureTarget(operation).pipe(
-          Effect.andThen(rejectIfTerminated),
-          Effect.andThen(ensureStarted),
-          Effect.andThen(handle.runtimeState),
+      Steer: ({ operation }: HandlerRequest<SteerInput>) =>
+        withWorkspace(applySteer(operation.commandId, operation.command)),
+      Interrupt: ({ operation }: HandlerRequest<InterruptInput>) =>
+        withWorkspace(
+          applySteer(
+            operation.commandId,
+            Schema.decodeSync(SteerCommand)({
+              _tag: "Cancel",
+              sessionId: operation.sessionId,
+              branchId: operation.branchId,
+            }),
+          ),
         ),
-      ),
-    RecordToolResult: ({ operation }: HandlerRequest<RecordToolResultInput>) =>
-      withWorkspace(
-        ensureTarget(operation).pipe(
-          Effect.andThen(markWrite),
-          Effect.andThen(
-            handle.withSideMutation(
-              recordToolResult({
-                storage: deps.turnStorage,
-                eventPublisher: deps.eventPublisher,
-                toolResultMessageId:
-                  operation.commandId !== undefined
-                    ? toolResultMessageIdForCommand(operation.commandId)
-                    : toolResultMessageIdForToolCall(operation.toolCallId),
-                sessionId: operation.sessionId,
-                branchId: operation.branchId,
-                toolCallId: operation.toolCallId,
-                toolName: operation.toolName,
-                output: operation.output,
-                ...(operation.isError !== undefined ? { isError: operation.isError } : {}),
+      RespondInteraction: ({ operation }: HandlerRequest<RespondInteractionInput>) =>
+        withWorkspace(
+          ensureTarget(operation).pipe(
+            Effect.andThen(markWrite),
+            Effect.andThen(
+              Effect.gen(function* () {
+                const projectedState = yield* currentRuntimeState(handle)
+                if (projectedState._tag !== "WaitingForInteraction") {
+                  const state = yield* handle.snapshot
+                  if (state._tag !== "WaitingForInteraction") {
+                    if (state._tag !== "Idle") return
+                    const message = yield* latestIncompleteUserTurn
+                    if (message === undefined) return
+                    const baseline = (yield* handle.readState).stateEpoch
+                    yield* handle
+                      .startTurn({ message })
+                      .pipe(
+                        Effect.catchEager((error) =>
+                          cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                        ),
+                      )
+                    yield* Effect.raceFirst(
+                      waitForIdleAfterEpoch(handle, baseline),
+                      waitForTurnFailureAfterEpoch(handle, baseline),
+                    )
+                    return
+                  }
+                }
+                yield* handle
+                  .respondInteraction(operation.requestId)
+                  .pipe(
+                    Effect.catchEager((error) =>
+                      cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                    ),
+                  )
               }),
             ),
           ),
-          Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
         ),
-      ),
-    InvokeTool: ({ operation }: HandlerRequest<InvokeToolInput>) =>
-      withWorkspace(
-        ensureTarget(operation).pipe(
-          Effect.andThen(markWrite),
-          Effect.andThen(
-            handle.withSideMutation(
-              Effect.gen(function* () {
-                const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
-                const environment = yield* handle.resolveTurnProfile
-                yield* invokeTool({
-                  assistantMessageId: assistantMessageIdForCommand(operation.commandId),
-                  toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
-                  toolCallId: toolCallIdForCommand(operation.commandId),
-                  toolName: operation.toolName,
-                  input: operation.input,
-                  publishEvent: (event) =>
-                    deps.eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
+      DrainQueue: ({ operation }: HandlerRequest<DrainQueueInput>) =>
+        withWorkspace(
+          ensureTarget(operation).pipe(
+            Effect.andThen(markWrite),
+            Effect.andThen(ensureStarted),
+            Effect.andThen(handle.drainQueue),
+          ),
+        ),
+      GetQueue: ({ operation }: HandlerRequest<GetQueueInput>) =>
+        withWorkspace(
+          ensureTarget(operation).pipe(
+            Effect.andThen(rejectIfTerminated),
+            Effect.andThen(ensureStarted),
+            Effect.andThen(handle.queueSnapshot),
+          ),
+        ),
+      GetState: ({ operation }: HandlerRequest<GetStateInput>) =>
+        withWorkspace(
+          ensureTarget(operation).pipe(
+            Effect.andThen(rejectIfTerminated),
+            Effect.andThen(ensureStarted),
+            Effect.andThen(handle.runtimeState),
+          ),
+        ),
+      RecordToolResult: ({ operation }: HandlerRequest<RecordToolResultInput>) =>
+        withWorkspace(
+          ensureTarget(operation).pipe(
+            Effect.andThen(markWrite),
+            Effect.andThen(
+              handle.withSideMutation(
+                recordToolResult({
+                  storage: deps.turnStorage,
                   eventPublisher: deps.eventPublisher,
+                  toolResultMessageId:
+                    operation.commandId !== undefined
+                      ? toolResultMessageIdForCommand(operation.commandId)
+                      : toolResultMessageIdForToolCall(operation.toolCallId),
                   sessionId: operation.sessionId,
                   branchId: operation.branchId,
-                  currentTurnAgent,
-                  toolRunner: deps.toolRunner,
-                  extensionRegistry: environment.turnExtensionRegistry,
-                  permission: environment.turnPermission,
-                  hostCtx: environment.turnHostCtx,
-                  resourceManager: deps.resourceManager,
-                  storage: deps.turnStorage,
-                })
-              }),
+                  toolCallId: operation.toolCallId,
+                  toolName: operation.toolName,
+                  output: operation.output,
+                  ...(operation.isError !== undefined ? { isError: operation.isError } : {}),
+                }),
+              ),
             ),
+            Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
           ),
-          Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
         ),
-      ),
-    EnsureStarted: ({ operation }: HandlerRequest<EnsureStartedInput>) =>
-      withWorkspace(ensureTarget(operation).pipe(Effect.andThen(ensureStarted))),
-    TerminateBranch: ({ operation }: HandlerRequest<TerminateBranchInput>) =>
-      withWorkspace(
-        ensureTarget(operation).pipe(
-          Effect.andThen(sessionGovernance.markTerminated(workspaceId, sessionId)),
-          Effect.andThen(cleanupLoop(handle)),
+      InvokeTool: ({ operation }: HandlerRequest<InvokeToolInput>) =>
+        withWorkspace(
+          ensureTarget(operation).pipe(
+            Effect.andThen(markWrite),
+            Effect.andThen(
+              handle.withSideMutation(
+                Effect.gen(function* () {
+                  const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
+                  const environment = yield* handle.resolveTurnProfile
+                  yield* invokeTool({
+                    assistantMessageId: assistantMessageIdForCommand(operation.commandId),
+                    toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
+                    toolCallId: toolCallIdForCommand(operation.commandId),
+                    toolName: operation.toolName,
+                    input: operation.input,
+                    publishEvent: (event) =>
+                      deps.eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
+                    eventPublisher: deps.eventPublisher,
+                    sessionId: operation.sessionId,
+                    branchId: operation.branchId,
+                    currentTurnAgent,
+                    toolRunner: deps.toolRunner,
+                    extensionRegistry: environment.turnExtensionRegistry,
+                    permission: environment.turnPermission,
+                    hostCtx: environment.turnHostCtx,
+                    resourceManager: deps.resourceManager,
+                    storage: deps.turnStorage,
+                  })
+                }),
+              ),
+            ),
+            Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
+          ),
         ),
+      EnsureStarted: ({ operation }: HandlerRequest<EnsureStartedInput>) =>
+        withWorkspace(ensureTarget(operation).pipe(Effect.andThen(ensureStarted))),
+      TerminateBranch: ({ operation }: HandlerRequest<TerminateBranchInput>) =>
+        withWorkspace(
+          ensureTarget(operation).pipe(
+            Effect.andThen(sessionGovernance.markTerminated(workspaceId, sessionId)),
+            Effect.andThen(cleanupLoop(handle)),
+          ),
+        ),
+    }
+  })
+
+export const AgentLoopLiveActor = (config: {
+  readonly baseSections: ReadonlyArray<PromptSection>
+}) =>
+  Layer.unwrap(
+    makeAgentLoopBehaviorDeps(config).pipe(
+      Effect.map((rawDeps) =>
+        Actor.toLayer(AgentLoop, buildAgentLoopActorHandlers(rawDeps), {
+          // Long-lived turn execution is owned by AgentLoopBehavior's worker queue.
+          // `concurrency: "unbounded"` keeps short ops (RecordToolResult,
+          // RespondInteraction, Steer) from waiting on unrelated mailbox handlers.
+          concurrency: "unbounded",
+        }),
       ),
-  }
-})
+    ),
+  )
 
-export const AgentLoopLiveActor = Actor.toLayer(AgentLoop, buildAgentLoopActorHandlers, {
-  // Long-lived turn execution is owned by AgentLoopBehavior's worker queue.
-  // `concurrency: "unbounded"` keeps short ops (RecordToolResult,
-  // RespondInteraction, Steer) from waiting on unrelated mailbox handlers.
-  concurrency: "unbounded",
-})
-
-export const AgentLoopTestActor = Actor.toTestLayer(AgentLoop, buildAgentLoopActorHandlers, {
-  // Match the production mailbox behavior used by AgentLoopLiveActor.
-  concurrency: "unbounded",
-}).pipe(Layer.provide(ShardingConfig.layerDefaults))
+export const AgentLoopTestActor = (config: {
+  readonly baseSections: ReadonlyArray<PromptSection>
+}) =>
+  Layer.unwrap(
+    makeAgentLoopBehaviorDeps(config).pipe(
+      Effect.map((rawDeps) =>
+        Actor.toTestLayer(AgentLoop, buildAgentLoopActorHandlers(rawDeps), {
+          // Match the production mailbox behavior used by AgentLoopLiveActor.
+          concurrency: "unbounded",
+        }).pipe(Layer.provide(ShardingConfig.layerDefaults)),
+      ),
+    ),
+  )

@@ -23,6 +23,8 @@ import {
   TxSubscriptionRef,
   type Stream,
 } from "effect"
+import { SqlClient } from "effect/unstable/sql"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
   AgentName,
   DEFAULT_AGENT_NAME,
@@ -37,7 +39,7 @@ import {
   TurnCompleted,
   type AgentEvent,
 } from "../../domain/event.js"
-import type { EventPublisher } from "../../domain/event-publisher.js"
+import { EventPublisher } from "../../domain/event-publisher.js"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import type { MessageMetadata } from "../../domain/message.js"
 import { InteractionRequestId, type BranchId, type SessionId } from "../../domain/ids.js"
@@ -47,15 +49,20 @@ import { ConfigService } from "../config-service.js"
 import { DEFAULTS } from "../../domain/defaults.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { StorageError } from "../../domain/storage-error.js"
-import type { SessionStorage } from "../../storage/session-storage.js"
-import type { MessageStorage } from "../../storage/message-storage.js"
-import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
-import type { ModelResolver } from "../../providers/model-resolver.js"
+import { SessionStorage } from "../../storage/session-storage.js"
+import { MessageStorage } from "../../storage/message-storage.js"
+import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
+import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
+import { EventStorage } from "../../storage/event-storage.js"
+import { ModelResolver } from "../../providers/model-resolver.js"
 import { SessionProfileCache } from "../session-profile.js"
-import type { ExtensionRegistryService } from "../extensions/registry.js"
-import type { DriverRegistry, DriverRegistryService } from "../extensions/driver-registry.js"
-import type { ToolRunner } from "./tool-runner.js"
-import type { ResourceManagerService } from "../resource-manager.js"
+import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
+import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
+import { makeExtensionHostPlatform } from "../extensions/host-platform.js"
+import { ToolRunner } from "./tool-runner.js"
+import { ResourceManager, type ResourceManagerService } from "../resource-manager.js"
+import { ModelRegistry } from "../model-registry.js"
+import type { GentPlatform } from "../gent-platform.js"
 import type { ExtensionHostPlatform } from "../../domain/extension.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { AllowAllPermission, resolveSessionEnvironment } from "../session-runtime-context.js"
@@ -257,6 +264,76 @@ export type AgentLoopBehaviorDeps = {
   }) => Effect.Effect<void, AgentLoopError | StorageError>
 }
 
+export const makeAgentLoopBehaviorDeps = (config: {
+  readonly baseSections: ReadonlyArray<PromptSection>
+}): Effect.Effect<
+  Omit<AgentLoopBehaviorDeps, "enqueueFollowUp">,
+  never,
+  | SessionStorage
+  | MessageStorage
+  | AgentLoopQueueStorage
+  | EventStorage
+  | SqlClient.SqlClient
+  | ModelResolver
+  | ExtensionRegistry
+  | DriverRegistry
+  | EventPublisher
+  | ToolRunner
+  | ResourceManager
+  | ConfigService
+  | ModelRegistry
+  | ChildProcessSpawner
+  | GentPlatform
+> =>
+  Effect.gen(function* () {
+    const sessionStorage = yield* SessionStorage
+    const messageStorage = yield* MessageStorage
+    const queueStorage = yield* AgentLoopQueueStorage
+    const eventStorage = yield* EventStorage
+    const sql = yield* SqlClient.SqlClient
+    const storageTransaction = makeStorageTransaction(sql)
+    const modelResolver = yield* ModelResolver
+    const extensionRegistry = yield* ExtensionRegistry
+    const driverRegistry = yield* DriverRegistry
+    const eventPublisher = yield* EventPublisher
+    const toolRunner = yield* ToolRunner
+    const resourceManager = yield* ResourceManager
+    const configServiceForRun = yield* ConfigService
+    const modelRegistryForRun = yield* ModelRegistry
+    const host = yield* makeExtensionHostPlatform
+    const getPricing: PricingLookup = (modelId) =>
+      modelRegistryForRun.get(modelId).pipe(
+        Effect.map((m) => m?.pricing),
+        Effect.catchEager(() =>
+          Effect.sync(
+            (): { readonly input: number; readonly output: number } | undefined => undefined,
+          ),
+        ),
+      )
+
+    return {
+      turnStorage: {
+        transaction: storageTransaction,
+        events: eventStorage,
+        messages: messageStorage,
+        sessions: sessionStorage,
+      },
+      modelResolver,
+      extensionRegistry,
+      driverRegistry,
+      eventPublisher,
+      toolRunner,
+      resourceManager,
+      messageStorage,
+      queueStorage,
+      sessionStorage,
+      configServiceForRun,
+      getPricing,
+      baseSections: config.baseSections,
+      host,
+    }
+  })
+
 /**
  * Per-(sessionId, branchId) loop behavior factory.
  *
@@ -266,6 +343,7 @@ export const makeAgentLoopBehavior = (
   deps: AgentLoopBehaviorDeps,
   sessionId: SessionId,
   branchId: BranchId,
+  sideMutationSemaphore: Semaphore.Semaphore,
   initialQueue: LoopQueueState = emptyLoopQueueState(),
 ): Effect.Effect<AgentLoopBehavior, never, never> =>
   Effect.gen(function* () {
@@ -340,7 +418,6 @@ export const makeAgentLoopBehavior = (
     const loopScope = yield* Scope.make()
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
-    const sideMutationSemaphore = yield* Semaphore.make(1)
     const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
     const interruptedRef = yield* Ref.make(false)
     const currentAgent = yield* resolveStoredAgent({

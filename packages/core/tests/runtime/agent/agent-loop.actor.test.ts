@@ -77,6 +77,7 @@ describe("AgentLoop actor identity", () => {
           Object.entries(definition).some(([key, value]) => key === "persisted" && value === true)
 
         expect(hasPersistedFlag(AgentLoop._meta.definitions.Submit)).toBe(false)
+        expect(hasPersistedFlag(AgentLoop._meta.definitions.Run)).toBe(false)
         expect(hasPersistedFlag(AgentLoop._meta.definitions.QueueFollowUp)).toBe(false)
         expect(hasPersistedFlag(AgentLoop._meta.definitions.Steer)).toBe(false)
         expect(hasPersistedTrueFlag(AgentLoop._meta.definitions.Interrupt)).toBe(true)

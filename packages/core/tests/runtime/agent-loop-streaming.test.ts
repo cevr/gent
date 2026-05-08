@@ -5,7 +5,6 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import * as AiError from "effect/unstable/ai/AiError"
 import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
-import { AgentLoopBehaviorDeps } from "../../src/runtime/agent/agent-loop.behavior-deps"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
@@ -155,8 +154,7 @@ describe("streaming", () => {
         GentPlatform.Test(),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const layer = AgentLoopTestActor.pipe(
-        Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+      const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
         Layer.provideMerge(
           Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
         ),
