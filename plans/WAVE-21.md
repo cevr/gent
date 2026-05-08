@@ -113,6 +113,8 @@ Commits landed in this wave so far:
 - `1891457c refactor(executor): isolate sidecar platform reads`
 - `6ce15e48 refactor(extensions): isolate provider platform reads`
 - `9f6b46f7 refactor(runtime): route host process probes through platform`
+- `783ecf9a refactor(runtime): derive tool context facets`
+- `3a7ab595 fix(tui): surface extension health in doctor`
 - `37274250 refactor(runtime): rename platform config service`
 - `06dd9a29 refactor(runtime): own agent loop turn worker`
 - `783ecf9a refactor(runtime): derive tool context facets`
@@ -910,12 +912,21 @@ Work in `/Users/cvr/Developer/personal/effect-encore`:
   after C21.8.
 - Document when to use `execute`, `send`, receipts, state materialization, and
   long-running worker fibers.
-- Add changeset, commit, push, and handle generated version PR.
+- Add changeset, commit, push, and handle generated version PR. Done for the
+  latest Effect beta/toolchain refresh in upstream commit `dc2131c`, generated
+  version PR `cevr/effect-encore#21`, merge commit `e938cd4`, and tag
+  `v0.11.1`.
+
+Status: partial. The upstream release discipline is closed for the current
+toolchain/beta work, including docs and changeset. The deeper actor-DX items
+remain audit targets unless C21.8 proves Gent no longer needs them.
 
 Validation:
 
-- `bun run gate`
-- Gent adoption commit runs `bun run gate`.
+- `bun run gate` in `/Users/cvr/Developer/personal/effect-encore`
+- GitHub CI and Release succeeded for upstream commit `dc2131c`
+- GitHub CI and Release succeeded after merging `cevr/effect-encore#21`
+- Gent adoption typecheck after lock refresh: `bun run typecheck`
 
 ### C21.11 — Upstream Machine / Wide Event Actor Helpers
 
@@ -930,12 +941,31 @@ Work:
   boundary helpers so actor logs carry one structured boundary by default.
 - Update `effect-wide-event` to the current project-scaffolding baseline:
   `tsgo`, `effect-ts/tsgo`, latest Effect beta, docs, changeset, v3 mirror, gate.
-- Commit, push, and merge generated version PRs where produced.
+- Commit, push, and merge generated version PRs where produced. Done for:
+  - `/Users/cvr/Developer/personal/effect-machine`: upstream commit `99fcb3f`,
+    generated version PR `cevr/effect-machine#28`, merge commit `f804501`,
+    and tag `v0.17.1`.
+  - `/Users/cvr/Developer/personal/effect-wide-event`: upstream commits
+    `5544ec2`, `f8d16fd`, `4ff4aa1`, and `50a2864`, generated version PR
+    `cevr/effect-wide-event#2`, merge commit `8e89736`, and tag `v0.2.1`.
+
+Status: partial. `effect-wide-event` now follows the project-scaffolding
+toolchain baseline with `@effect/tsgo`, Effect `4.0.0-beta.64`, v3 mirror
+validation, docs, changeset, and a merged version PR. `effect-machine` is also
+on Effect `4.0.0-beta.64` with a Bun-runtime bundler and merged version PR.
+The final audit must still decide whether additional actor/request boundary
+helpers are needed.
 
 Validation:
 
-- `bun run gate` in each upstream repo.
-- Gent adoption smoke after dependency updates.
+- `bun run gate` in `/Users/cvr/Developer/personal/effect-machine`
+- `bun run gate` in `/Users/cvr/Developer/personal/effect-wide-event`
+- GitHub CI and Release succeeded for upstream commits `99fcb3f` and `50a2864`
+- GitHub CI and Release succeeded after merging `cevr/effect-machine#28` and
+  `cevr/effect-wide-event#2`
+- Gent lock refresh: `bun update effect-encore effect-wide-event`, then
+  `bun install`
+- Gent adoption typecheck after dependency metadata refresh: `bun run typecheck`
 
 ### C21.12 — Documentation, Changesets, And Final Gate
 
