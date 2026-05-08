@@ -13,7 +13,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useClient } from "../client/index"
 import type { DomainSession } from "../client"
-import { useCommand } from "../command/index"
+import { useCommand } from "../command/context"
 import {
   CommandPaletteEvent,
   CommandPaletteState,

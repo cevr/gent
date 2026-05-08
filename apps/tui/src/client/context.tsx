@@ -31,7 +31,7 @@ import { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
 import type { MessageId } from "@gent/core-internal/domain/ids.js"
 import type { ClientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
-import { useWorkspace } from "../workspace"
+import { useWorkspace } from "../workspace/context"
 import { AgentStatus, type AgentState } from "./agent-state"
 import { reduceAgentLifecycle } from "./agent-lifecycle"
 

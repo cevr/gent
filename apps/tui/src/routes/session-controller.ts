@@ -33,7 +33,7 @@ import {
   type ClientContextValue,
 } from "../client/index"
 import { executeSlashCommand } from "../commands/slash-commands"
-import { useCommand } from "../command/index"
+import { useCommand } from "../command/context"
 import type { Command } from "../command/types"
 import { useRuntime } from "../hooks/use-runtime"
 import { useExit } from "../hooks/use-exit"

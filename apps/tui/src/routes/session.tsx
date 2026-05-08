@@ -13,7 +13,7 @@ import { SessionTree } from "../components/session-tree"
 import { MessagePicker } from "../components/message-picker"
 import { collectDiagrams, MermaidViewer } from "../components/mermaid-viewer"
 import { QueueWidget } from "../components/queue-widget"
-import { useWorkspace } from "../workspace/index"
+import { useWorkspace } from "../workspace/context"
 import {
   BorderedInput,
   formatCwdGit,

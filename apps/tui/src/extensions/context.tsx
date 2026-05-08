@@ -44,7 +44,7 @@ import {
   makeClientComposerLayer,
   makeClientLifecycleLayer,
 } from "./client-services"
-import { useWorkspace } from "../workspace/index"
+import { useWorkspace } from "../workspace/context"
 import {
   useClientActions,
   useClientSession,
