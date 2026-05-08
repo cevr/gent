@@ -850,6 +850,12 @@ replacement primitive can own much of this.
 
 ## Commit 24: spike(runtime): prove SessionRuntime single implementation
 
+**Status**: The spike found two necessary implementation roles, not duplicate
+business logic: the Effect cluster entity hosts the long-lived runtime, and the
+`SessionRuntime` service is the typed client facade. The public API no longer
+exposes that split; `SessionRuntime.Live` now composes both roles and the old
+`LiveWithEntity` / `EntityLive` surface is deleted.
+
 **Justification**: Counsel found two `SessionRuntime` implementation paths. This
 is a high-yield deletion only if caller graph and scope ownership prove one path
 is redundant.
@@ -864,10 +870,13 @@ is redundant.
 
 **Changes**
 
-| File                                                                                     | Change                                                                                                                   | Lines                         |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`        | Map callers of `makeLiveSessionRuntime` and `makeEntityClientSessionRuntime`; delete one only if scoped semantics match. | `399`, `1016`, `1095`, `1102` |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/session-runtime.test.ts` | Add/adjust scope ownership regression before deletion.                                                                   | multiple                      |
+| File                                                                                     | Change                                                                                            | Lines                              |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`        | Keep entity host and client facade as private roles; expose only one `SessionRuntime.Live` layer. | `197-339`, `411-1018`, `1021-1122` |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/server/dependencies.ts`            | Use the single public runtime layer from production wiring.                                       | `308-314`                          |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/ephemeral-root.ts`   | Use the single public runtime layer from ephemeral child runtime wiring.                          | `197-215`                          |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/session-runtime.test.ts` | Keep behavioral runtime coverage on the public layer.                                             | `84-130`                           |
+| `/Users/cvr/Developer/personal/gent/packages/tooling/src/platform-duplication-guards.ts` | Keep the agent-runner composition guard aligned to the renamed public layer.                      | `103-108`                          |
 
 **Verification**
 

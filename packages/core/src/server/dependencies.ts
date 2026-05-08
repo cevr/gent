@@ -308,7 +308,7 @@ const makeSessionRuntimeLayer = <A, E, R>(
         if (baseSectionsSeed === undefined) {
           return yield* new BootstrapError({ seed: "baseSections" })
         }
-        return SessionRuntime.LiveWithEntity({ baseSections: baseSectionsSeed })
+        return SessionRuntime.Live({ baseSections: baseSectionsSeed })
       }),
     ),
     runtimeDeps,

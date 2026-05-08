@@ -1094,35 +1094,29 @@ const makeEntityClientSessionRuntime = Effect.gen(function* () {
 export class SessionRuntime extends Context.Service<SessionRuntime, SessionRuntimeService>()(
   "@gent/core/src/runtime/session-runtime/SessionRuntime",
 ) {
-  static Live = (_config: {
-    readonly baseSections: ReadonlyArray<PromptSection>
-  }): Layer.Layer<SessionRuntime, never, Sharding.Sharding> =>
-    Layer.effect(SessionRuntime, makeEntityClientSessionRuntime)
-
-  static EntityLive = (config: {
-    readonly baseSections: ReadonlyArray<PromptSection>
-  }): Layer.Layer<never, never, SessionRuntimeEntityLayerRequirements> =>
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect cluster's Entity.toLayer exposes erased RPC middleware requirements; the exported layer narrows the Gent-owned services at this boundary.
-    SessionRuntimeEntity.toLayer(
-      makeLiveSessionRuntime.pipe(Effect.map(makeSessionRuntimeEntityHandlers)),
-      {
-        // SessionRuntime hosts long-lived streams and control-plane calls;
-        // per-branch mutation ordering lives in AgentLoop's entity operation
-        // queue and actor-owned mutation gates.
-        concurrency: "unbounded",
-      },
-    ).pipe(
-      // `AgentLoopLiveActor` provides the internal actor client consumed by
-      // `makeLiveSessionRuntime`.
-      Layer.provide(AgentLoopLiveActor(config)),
-      // `AgentLoopSessionGovernance` is a runtime-internal shared service.
-      // Encore owns actor state registration; session governance remains a
-      // Gent policy boundary shared by the facade and actor handler.
-      Layer.provide(AgentLoopSessionGovernance.Live),
-    )
-
-  static LiveWithEntity = (config: {
+  static Live = (config: {
     readonly baseSections: ReadonlyArray<PromptSection>
   }): Layer.Layer<SessionRuntime, never, SessionRuntimeEntityLayerRequirements> =>
-    SessionRuntime.Live(config).pipe(Layer.provideMerge(SessionRuntime.EntityLive(config)))
+    Layer.effect(SessionRuntime, makeEntityClientSessionRuntime).pipe(
+      Layer.provideMerge(
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect cluster's Entity.toLayer exposes erased RPC middleware requirements; the exported layer narrows the Gent-owned services at this boundary.
+        SessionRuntimeEntity.toLayer(
+          makeLiveSessionRuntime.pipe(Effect.map(makeSessionRuntimeEntityHandlers)),
+          {
+            // SessionRuntime hosts long-lived streams and control-plane calls;
+            // per-branch mutation ordering lives in AgentLoop's entity operation
+            // queue and actor-owned mutation gates.
+            concurrency: "unbounded",
+          },
+        ).pipe(
+          // `AgentLoopLiveActor` provides the internal actor client consumed by
+          // `makeLiveSessionRuntime`.
+          Layer.provide(AgentLoopLiveActor(config)),
+          // `AgentLoopSessionGovernance` is a runtime-internal shared service.
+          // Encore owns actor state registration; session governance remains a
+          // Gent policy boundary shared by the facade and actor handler.
+          Layer.provide(AgentLoopSessionGovernance.Live),
+        ),
+      ),
+    )
 }

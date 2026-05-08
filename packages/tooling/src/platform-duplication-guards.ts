@@ -132,7 +132,7 @@ const bannedTransportContractPatterns: ReadonlyArray<BannedPattern> = [
 const bannedAgentRunnerCompositionPatterns: ReadonlyArray<BannedPattern> = [
   {
     pattern:
-      /\b(?:SqliteStorage\.MemoryWithSql|SingleRunner\.layer|SessionRuntime\.LiveWithEntity|ResourceManagerLive|buildExtensionLayers|PromptPresenterLive|EventStoreLive)\b/,
+      /\b(?:SqliteStorage\.MemoryWithSql|SingleRunner\.layer|SessionRuntime\.Live|ResourceManagerLive|buildExtensionLayers|PromptPresenterLive|EventStoreLive)\b/,
     message: "AgentRunner must use the ephemeral child root preset",
   },
 ]

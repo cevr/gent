@@ -82,7 +82,7 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   ])
 }
 const sessionRuntimeLayers = (baseSections: Parameters<typeof SessionRuntime.Live>[0]) =>
-  SessionRuntime.LiveWithEntity(baseSections)
+  SessionRuntime.Live(baseSections)
 const makeClusterRunnerLayer = (storageLayer: ReturnType<typeof SqliteStorage.TestWithSql>) =>
   Layer.provide(SingleRunner.layer({ runnerStorage: "memory" }), storageLayer)
 const makeRuntimeLayer = (

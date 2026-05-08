@@ -79,7 +79,7 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMode
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   const sessionRuntimeLayer = Layer.provide(
-    SessionRuntime.LiveWithEntity({ baseSections: [] }),
+    SessionRuntime.Live({ baseSections: [] }),
     Layer.merge(baseDeps, eventPublisherLayer),
   )
   const sessionMutationsLayer = Layer.provide(

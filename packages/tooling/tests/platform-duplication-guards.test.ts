@@ -356,7 +356,7 @@ describe("platform duplication guards", () => {
         [
           "const storage = SqliteStorage.MemoryWithSql()",
           "const runner = SingleRunner.layer({ runnerStorage: 'memory' })",
-          "const runtime = SessionRuntime.LiveWithEntity({ baseSections: [] })",
+          "const runtime = SessionRuntime.Live({ baseSections: [] })",
           "const resources = ResourceManagerLive",
           "const extensions = buildExtensionLayers(resolved)",
           "const prompt = PromptPresenterLive",

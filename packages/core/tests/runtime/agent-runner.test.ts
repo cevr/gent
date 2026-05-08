@@ -161,7 +161,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<LanguageModel.Langu
     ephemeralParentDeps,
   )
   const sessionRuntimeLayer = Layer.provide(
-    SessionRuntime.LiveWithEntity({ baseSections: [] }),
+    SessionRuntime.Live({ baseSections: [] }),
     Layer.merge(baseDeps, eventPublisherLayer),
   )
   const sessionMutationsLayer = Layer.provide(

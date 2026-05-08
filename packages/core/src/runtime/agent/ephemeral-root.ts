@@ -197,7 +197,7 @@ export const makeEphemeralAgentRootLayer = (params: {
     ToolRunner.Live,
     Layer.mergeAll(approvalLayer, extensionLayers, parentRuntimeEnvironmentLayer),
   )
-  const sessionRuntimeLayer = SessionRuntime.LiveWithEntity({
+  const sessionRuntimeLayer = SessionRuntime.Live({
     baseSections: params.config.baseSections ?? [],
   }).pipe(
     Layer.provide(

@@ -6,7 +6,7 @@ import { SessionQueries } from "./session-queries.js"
 // `SessionCommands.Live` depends on `SessionMutations` and `SessionRuntime`.
 // Neither is provided here: production wiring builds them once in
 // `dependencies.ts` and forwards them via the parent context. Callers must
-// include `SessionMutationsLive` and `SessionRuntime.LiveWithEntity` in the
+// include `SessionMutationsLive` and `SessionRuntime.Live` in the
 // parent layer they provide to `AppServicesLive`.
 const SessionCommandsCluster = Layer.mergeAll(SessionQueries.Live, SessionCommands.Live)
 
