@@ -115,6 +115,7 @@ Commits landed in this wave so far:
 - `9f6b46f7 refactor(runtime): route host process probes through platform`
 - `37274250 refactor(runtime): rename platform config service`
 - `06dd9a29 refactor(runtime): own agent loop turn worker`
+- `783ecf9a refactor(runtime): derive tool context facets`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -673,20 +674,34 @@ Validation:
 
 Goal: tools receive only declared authority.
 
+Status: closed by `783ecf9a`. Tool execution now derives the runtime context
+from each tool's declared `ToolNeeds`; undeclared tools receive only
+`ToolCoreContext`, while tools that declare `agent`, `session`, or
+`interaction` receive those host facets. Shipped tools now declare the facets
+they use.
+
 Work:
 
-- Split read/session/agent/interaction/write capabilities into explicit facets.
-- Make `ToolCapabilityContext` narrow and derived from declared needs.
-- Update shipped tools to request only the facets they actually use.
+- [x] Split read/session/agent/interaction/write capabilities into explicit
+      facets.
+- [x] Make `ToolCapabilityContext` narrow and derived from declared needs.
+- [x] Update shipped tools to request only the facets they actually use.
 - Run apply-tier agents for repetitive extension migrations after the first
   worked example.
 
 Validation:
 
-- Extension behavior tests through RPC/request harnesses.
-- `bun run test -- tests/tools`
-- `bun run test -- tests/extensions`
+- ToolRunner facet derivation regression:
+  `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/tool-runner.test.ts tests/server/extension-commands-rpc.test.ts tests/runtime/agent-loop-interactions.test.ts`
+- Focused shipped extension behavior:
+  `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/artifacts/artifact-persistence.test.ts tests/exec-tools/bash-execution.test.ts tests/handoff.test.ts tests/delegate/delegate-tool.test.ts tests/task-tools/task-tool-execution.test.ts tests/audit/audit-tool.test.ts tests/plan-tool.test.ts tests/review/review-tool.test.ts`
+- Additional extension provider/session behavior:
+  `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/counsel/counsel-tool.test.ts tests/research/research-tool.test.ts tests/session-tools/session-tools.test.ts`
+- `bun run typecheck`
+- `bun run lint`
 - `bun run gate`
+- Pre-commit hook for `783ecf9a`: `lint+fmt`, `typecheck`, `build`, and full
+  workspace `test` passed.
 
 ### C21.7 — Resource-Own Stateful Extensions
 
