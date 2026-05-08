@@ -146,6 +146,32 @@ describe("extension capability registries", () => {
     }),
   )
 
+  it.live("strips undeclared host authority from default action runtime context", () =>
+    Effect.gen(function* () {
+      const cap = action({
+        id: "facts-only-action",
+        name: "Facts Only Action",
+        description: "Action without privileged needs",
+        surface: "slash",
+        input: Schema.Struct({}),
+        output: Schema.Struct({ hasRunProcess: Schema.Boolean }),
+        execute: (_input, actionCtx) =>
+          Effect.succeed({ hasRunProcess: "runProcess" in actionCtx.host }),
+      })
+      const ext: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "/test/facts-only-action",
+        contributions: { actions: [cap] },
+      }
+      const resolved = resolveExtensions([ext])
+      const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, {}, ctx, {
+        intent: "write",
+      })
+      expect(result).toEqual({ hasRunProcess: false })
+    }),
+  )
+
   it.live("public command registry rejects palette-only action capabilities", () =>
     Effect.gen(function* () {
       const cap = action({

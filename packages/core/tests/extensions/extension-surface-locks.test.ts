@@ -15,6 +15,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import type * as PublicExtensionApi from "@gent/core/extensions/api"
 import {
   action,
+  CapabilityError,
   defineExtension,
   defineResource,
   ExtensionId,
@@ -162,6 +163,49 @@ describe("Capability factory-shape locks (compile-time)", () => {
     })
 
     void ok
+    expect(true).toBe(true)
+  })
+
+  test("write request context is not privileged by default", () => {
+    request({
+      id: "write-core-context",
+      extensionId: ExtensionId.make("surface-locks"),
+      intent: "write",
+      input: NoInput,
+      output: StringOutput,
+      execute: (_input, ctx) => {
+        void ctx.sessionId
+        // @ts-expect-error — write requests do not get session mutation authority by default
+        ctx.session.queueFollowUp({ sourceId: "lock", content: "x" })
+        // @ts-expect-error — write requests do not get agent spawning authority by default
+        void ctx.agent.run
+        return Effect.succeed("ok")
+      },
+    })
+    expect(true).toBe(true)
+  })
+
+  test("write request host authority requires explicit needs", () => {
+    request({
+      id: "write-privileged-context",
+      extensionId: ExtensionId.make("surface-locks"),
+      intent: "write",
+      needs: [ToolNeeds.write("session")],
+      input: NoInput,
+      output: StringOutput,
+      execute: (_input, ctx: ModelCapabilityContext) =>
+        ctx.session.queueFollowUp({ sourceId: "lock", content: "x" }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new CapabilityError({
+                extensionId: ExtensionId.make("surface-locks"),
+                capabilityId: "write-privileged-context",
+                reason: cause.message,
+              }),
+          ),
+          Effect.as("ok"),
+        ),
+    })
     expect(true).toBe(true)
   })
 

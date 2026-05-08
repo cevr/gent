@@ -6,11 +6,9 @@
  * controlling where the action appears in the TUI. Actions always lower to
  * `intent: "write"` (UI affordances always express user intent).
  *
- * The handler context is `ModelCapabilityContext` (the wide host
- * surface), not the narrow `CapabilityCoreContext`, so human actions can
- * use session, agent, and storage helpers directly.
- * Handlers asking for `CapabilityCoreContext` get a structurally-narrower
- * view by virtue of the inheritance chain.
+ * The handler context is `CapabilityCoreContext` by default. Actions that need
+ * the wide `ModelCapabilityContext` host/session surface must declare non-empty
+ * `needs`.
  *
  * @module
  */

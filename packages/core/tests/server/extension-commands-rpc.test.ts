@@ -206,9 +206,10 @@ describe("extension command RPCs", () => {
               id: "queue-follow-up",
               extensionId,
               intent: "write",
+              needs: [ToolNeeds.write("session")],
               input: Schema.String,
               output: Schema.Void,
-              execute: (input, ctx) =>
+              execute: (input, ctx: ModelCapabilityContext) =>
                 ctx.session.queueFollowUp({ sourceId: "test-rpc-request", content: input }).pipe(
                   Effect.mapError(
                     (cause) =>
@@ -682,9 +683,10 @@ describe("extension command RPCs", () => {
               id: "fork-current-branch",
               extensionId,
               intent: "write",
+              needs: [ToolNeeds.write("session")],
               input: Schema.String,
               output: Schema.String,
-              execute: (messageId, ctx) =>
+              execute: (messageId, ctx: ModelCapabilityContext) =>
                 ctx.session
                   .forkBranch({
                     atMessageId: MessageId.make(messageId),
@@ -699,9 +701,10 @@ describe("extension command RPCs", () => {
               id: "create-temporary-branch",
               extensionId,
               intent: "write",
+              needs: [ToolNeeds.write("session")],
               input: Schema.Void,
               output: Schema.String,
-              execute: (_input, ctx) =>
+              execute: (_input, ctx: ModelCapabilityContext) =>
                 ctx.session.createBranch({ name: "temporary through extension rpc" }).pipe(
                   Effect.map(({ branchId }) => String(branchId)),
                   Effect.mapError(mapHostError("create-temporary-branch")),
@@ -711,9 +714,10 @@ describe("extension command RPCs", () => {
               id: "delete-branch",
               extensionId,
               intent: "write",
+              needs: [ToolNeeds.write("session")],
               input: Schema.String,
               output: Schema.Void,
-              execute: (branchId, ctx) =>
+              execute: (branchId, ctx: ModelCapabilityContext) =>
                 ctx.session
                   .deleteBranch(BranchId.make(branchId))
                   .pipe(Effect.mapError(mapHostError("delete-branch"))),
@@ -722,9 +726,10 @@ describe("extension command RPCs", () => {
               id: "delete-messages-after",
               extensionId,
               intent: "write",
+              needs: [ToolNeeds.write("session")],
               input: Schema.String,
               output: Schema.Void,
-              execute: (messageId, ctx) =>
+              execute: (messageId, ctx: ModelCapabilityContext) =>
                 ctx.session
                   .deleteMessages({ afterMessageId: MessageId.make(messageId) })
                   .pipe(Effect.mapError(mapHostError("delete-messages-after"))),

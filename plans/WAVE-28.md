@@ -636,17 +636,20 @@ agent, interaction, or session mutation authority accidentally.
 
 **Changes**
 
-| File                                                                                                 | Change                                                                                                        |
-| ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability.ts`                          | Made `CapabilityContext` the narrow core context; wide context is explicit.                                   |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/action.ts`                   | `action()` defaults to core context; wide action context now requires non-empty `needs`.                      |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts`                           | Reactions default to read-only host context; wide reaction context now requires `needs`.                      |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`                             | Public `defineExtension` bucket factories and setup-context export receive host facts, not process authority. |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts`                | RPC command dispatch honors explicit action/request needs before falling back to intent.                      |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/{plan,handoff,research,counsel,review}*` | Slash actions that queue follow-ups now declare session write authority.                                      |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/{anthropic,executor,acp-agents}*`        | Bundled host-owned driver setup marks the internal host-authority boundary explicitly.                        |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-cache.ts`                                 | Deleted dead stateful cache hook found by the file-existence audit.                                           |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts`  | Added compile locks for setup/default action context and explicit action/reaction authority needs.            |
+| File                                                                                                 | Change                                                                                                             |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability.ts`                          | Made `CapabilityContext` the narrow core context; wide context is explicit.                                        |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/action.ts`                   | `action()` defaults to core context; wide action context now requires non-empty `needs`.                           |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/request.ts`                  | Write requests now default to core context; wide request context requires non-empty `needs`.                       |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts`                           | Reactions default to read-only host context; wide reaction context now requires `needs`.                           |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`                             | Public `defineExtension` bucket factories and setup-context export receive host facts, not process authority.      |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts`                | RPC command dispatch strips undeclared host authority and honors explicit action/request needs.                    |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/{plan,handoff,research,counsel,review}*` | Slash actions that queue follow-ups now declare session write authority.                                           |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/{anthropic,executor,acp-agents}*`        | Bundled host-owned driver setup marks the internal host-authority boundary explicitly.                             |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-cache.ts`                                 | Deleted dead stateful cache hook found by the file-existence audit.                                                |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts`  | Added compile locks for setup/default action/request context and explicit action/reaction/request authority needs. |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/capability-host.test.ts`          | Added runtime lock proving undeclared action host process authority is stripped before dispatch.                   |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts`       | Migrated request tests that need session mutation to explicit `ToolNeeds.write("session")`.                        |
 
 **Verification**
 

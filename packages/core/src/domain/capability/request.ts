@@ -15,6 +15,11 @@
  * R-channels use). Write-capable service Tags fail to compile in the
  * read-intent factory's R, mirroring the projection fence from .
  *
+ * Host/session authority: read and write requests both receive the narrow
+ * `CapabilityCoreContext` by default. A write request that needs agent,
+ * session, interaction, or process host authority must declare non-empty
+ * `needs` and annotate `ctx: ModelCapabilityContext`.
+ *
  * @module
  */
 
@@ -32,6 +37,7 @@ import { Capability } from "../capability.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
 import type { ReadOnlyTag } from "../read-only.js"
+import type { ToolNeed } from "./tool.js"
 
 /**
  * `RequestCapability` — `request({...})` return type. The
@@ -53,6 +59,7 @@ export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabi
   readonly slash?: RequestInputBase<Input, Output>["slash"]
   readonly description?: string
   readonly promptSnippet?: string
+  readonly needs?: ReadonlyArray<ToolNeed>
   readonly permissionRules?: ReadonlyArray<PermissionRule>
   readonly prompt?: PromptSection
   readonly input: Schema.Schema<Input>
@@ -104,7 +111,9 @@ export interface ReadRequestInput<
 }
 
 /** Author-facing input to `request({ intent: "write", ... })`. R is
- *  unconstrained — write capabilities may yield any service. */
+ *  unconstrained — write capabilities may yield any service, but host/session
+ *  context stays narrow unless `needs` is declared through the privileged
+ *  overload below. */
 export interface WriteRequestInput<
   Input = unknown,
   Output = unknown,
@@ -113,6 +122,17 @@ export interface WriteRequestInput<
   /** `intent: "write"` → R is unconstrained. */
   readonly intent: "write"
   /** The request handler. */
+  readonly execute: (
+    input: Input,
+    ctx: CapabilityCoreContext,
+  ) => Effect.Effect<Output, CapabilityError, R>
+}
+
+type PrivilegedWriteRequestInput<Input, Output, R> = Omit<
+  WriteRequestInput<Input, Output, R>,
+  "needs" | "execute"
+> & {
+  readonly needs: readonly [ToolNeed, ...ReadonlyArray<ToolNeed>]
   readonly execute: (
     input: Input,
     ctx: ModelCapabilityContext,
@@ -136,6 +156,9 @@ export function request<Input, Output, R extends ReadOnlyTag = never>(
 export function request<Input, Output, R = never>(
   input: WriteRequestInput<Input, Output, R>,
 ): RequestCapability<Input, Output>
+export function request<Input, Output, R = never>(
+  input: PrivilegedWriteRequestInput<Input, Output, R>,
+): RequestCapability<Input, Output>
 export function request(input: {
   readonly id: string
   readonly extensionId: ExtensionId
@@ -145,6 +168,7 @@ export function request(input: {
   readonly prompt?: PromptSection
   readonly description?: string
   readonly slash?: RequestInputBase<unknown, unknown>["slash"]
+  readonly needs?: ReadonlyArray<ToolNeed>
   readonly execute: (
     input: unknown,
     ctx: ModelCapabilityContext,
@@ -173,6 +197,7 @@ export function request(input: {
     input: input.input,
     output: input.output,
     ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+    ...(input.needs !== undefined ? { needs: input.needs } : {}),
     effect: input.execute,
     ref: refValue,
   })

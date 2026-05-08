@@ -290,6 +290,30 @@ const runExtensionCapability = (
     return output
   })
 
+const coreCapabilityContext = (ctx: CapabilityCoreContext): CapabilityCoreContext => ({
+  sessionId: ctx.sessionId,
+  branchId: ctx.branchId,
+  ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
+  ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
+  cwd: ctx.cwd,
+  home: ctx.home,
+  host: {
+    osInfo: ctx.host.osInfo,
+    execPath: ctx.host.execPath,
+    homeDirectory: ctx.host.homeDirectory,
+    pathListSeparator: ctx.host.pathListSeparator,
+    commandCandidates: ctx.host.commandCandidates,
+    isPortFree: ctx.host.isPortFree,
+    isPidAlive: ctx.host.isPidAlive,
+  },
+})
+
+const capabilityRuntimeContext = (
+  capability: ActionCapability | RequestCapability,
+  ctx: CapabilityCoreContext,
+): CapabilityCoreContext =>
+  capability.needs !== undefined && capability.needs.length > 0 ? ctx : coreCapabilityContext(ctx)
+
 const compileRpcRegistry = (
   entries: ReadonlyArray<RegisteredCapabilityEntry>,
 ): CompiledRpcRegistry => ({
@@ -315,7 +339,13 @@ const compileRpcRegistry = (
           ? [{ tag: "*", access: "write" } as const]
           : [{ tag: "*", access: "read" } as const])
       return yield* provideCapabilityAccessNeeds(needs)(
-        runExtensionCapability(extensionId, capabilityId, entry.capability, input, ctx),
+        runExtensionCapability(
+          extensionId,
+          capabilityId,
+          entry.capability,
+          input,
+          capabilityRuntimeContext(entry.capability, ctx),
+        ),
       )
     }),
 })
