@@ -528,21 +528,43 @@ Validation:
 
 ### W23.9 — Test Harnesses Use Production Root Presets
 
-Status: planned.
+Status: done.
 
 Work:
 
-- Parameterize production dependency construction for test storage, providers,
-  identity, extension presets, and approval overrides.
-- Rewrite in-process, e2e, and RPC harness layers as presets over that root.
-- Delete duplicate graph composition.
+- Parameterized `createDependencies` with an internal override surface for
+  test storage/event-store mode, provider layers, identity-adjacent service
+  overrides, approval/auth/config/model registry, file index, and extra
+  resource layers.
+- Added `makeServerRootLayer` so tests can consume the same production root as
+  `apps/server` and SDK-owned servers while still returning a layer for
+  `Gent.test`.
+- Rewrote `baseLocalLayer` as a production-root preset with in-memory SQLite,
+  storage-backed events, debug providers, test service overrides, and the
+  test-agent pseudo-extension.
+- Rewrote `createE2ELayer` as a production-root preset. Extension setup,
+  resource startup, event publishing, interaction recovery, and session runtime
+  wiring now flow through `createDependencies` / `buildServerRoot`; the harness
+  only wraps extension inputs to apply test resource overrides.
+- Kept `createRpcHarness` thin over `createE2ELayer` / `Gent.test` /
+  `session.create`; no graph composition was added there.
 
 Validation:
 
 - `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/test-utils tests/server tests/runtime`
-- `bun run test`
 - `bun run typecheck`
 - `bun run lint`
+- `bun run fmt:check`
+- `bun run build`
+- Focused harness pack:
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/session-metrics.test.ts apps/tui/integration/session-lifecycle.test.tsx apps/tui/integration/session-feed-boundary.test.tsx apps/tui/integration/app-bootstrap.test.tsx packages/e2e/tests/core-boundary.test.ts packages/e2e/tests/event-stream.test.ts packages/e2e/tests/live-event.test.ts packages/e2e/tests/transport-contract.test.ts packages/e2e/tests/queue-contract.test.ts packages/e2e/tests/watch-state.test.ts`
+- Focused E2E/root acceptance packs:
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/auth-rpc.test.ts packages/core/tests/server/workspace-rpc.test.ts packages/core/tests/server/session-delete.test.ts packages/core/tests/server/interaction-commands.test.ts packages/core/tests/server/message-send.test.ts packages/core/tests/server/session-queries.test.ts packages/core/tests/server/driver-rpc.test.ts`
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/auto-integration.test.ts packages/core/tests/extensions/exec-tools-background.test.ts packages/core/tests/extensions/session-snapshot-rpc.test.ts packages/core/tests/extensions/executor-integration.test.ts packages/core/tests/extensions/capability-permission-rules.test.ts`
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/extension-commands-rpc.test.ts`
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests` passed `893 pass, 0 fail`.
+- `bun run test` still hits the known Bun 1.3.13 signal-5 crash in the
+  concurrent core xargs shard; isolated core and all focused W23.9 suites pass.
 
 ### W23.10 — Recursive Verification
 

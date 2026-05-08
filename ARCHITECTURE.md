@@ -490,8 +490,16 @@ One test file per source file. No god tests. Names match source owners.
 ### Important files
 
 - `packages/core/src/test-utils/index.ts` — `SequenceRecorder`, recording layers
-- `packages/core/src/test-utils/in-process-layer.ts` — `baseLocalLayer`
-- `packages/core/src/test-utils/e2e-layer.ts` — `createE2ELayer`
+- `packages/core/src/test-utils/in-process-layer.ts` — `baseLocalLayer`, a
+  production-root preset over `makeServerRootLayer` with in-memory SQLite,
+  storage-backed events, debug providers, and test service overrides
+- `packages/core/src/test-utils/e2e-layer.ts` — `createE2ELayer`, a
+  production-root preset over `makeServerRootLayer` that keeps real
+  `ToolRunner.Live`, extension setup/resource startup, event publishing, and
+  interaction recovery while expressing test storage/provider/auth/approval
+  differences through dependency overrides
+- `packages/core/src/test-utils/rpc-harness.ts` — thin RPC acceptance helper:
+  `createE2ELayer` → `Gent.test` → seeded `session.create`
 - `packages/core/src/test-utils/language-model.ts` — `LanguageModelLayers.debug`, `sequence`, `signal`, `failing` + stream-part helpers
 - `apps/tui/tests/render-harness.tsx` — TUI render test harness
 - `packages/e2e/tests/transport-harness.ts` — direct transport contract harness
