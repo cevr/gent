@@ -13,7 +13,7 @@ import {
   validateWorkspaceId,
   withWorkspaceIdHeader,
 } from "../../src/server/workspace-rpc"
-import { e2ePreset } from "../extensions/helpers/test-preset"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
 const validWorkspaceId = "a".repeat(64)
 

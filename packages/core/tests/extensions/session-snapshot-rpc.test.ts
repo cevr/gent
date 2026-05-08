@@ -8,7 +8,7 @@ import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-mod
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { Gent, extractText } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
-import { e2ePreset } from "./helpers/test-preset"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
 describe("Session snapshot across RPC boundaries", () => {
   it.live(

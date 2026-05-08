@@ -17,7 +17,7 @@ import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { Gent } from "@gent/sdk"
-import { e2ePreset } from "../extensions/helpers/test-preset"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import { CurrentWorkspaceId } from "../../src/server/workspace-rpc.js"
 import { encodeInteractionDecision } from "../../src/domain/interaction-request.js"
 

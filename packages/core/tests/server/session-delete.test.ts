@@ -8,7 +8,7 @@ import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
-import { e2ePreset } from "../extensions/helpers/test-preset"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import { SessionMutations } from "../../src/domain/session-mutations"
 import {
   FIXED_NOW,

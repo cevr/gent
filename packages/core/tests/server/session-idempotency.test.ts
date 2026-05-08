@@ -25,7 +25,7 @@ import {
   sessionCommandsLayer,
   sessionRuntimeLayer,
 } from "./session-commands/helpers"
-import { e2ePreset } from "../extensions/helpers/test-preset"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
 describe("requestId idempotency", () => {
   const makePersistentSessionCommandsLayer = (dbPath: string) => {

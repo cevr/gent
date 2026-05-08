@@ -18,7 +18,7 @@ import { createToolTestLayer } from "@gent/core-internal/test-utils/extension-ha
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { SlashCommandInfo } from "@gent/core-internal/server/transport-contract"
-import { e2ePreset, toolPreset } from "../extensions/helpers/test-preset"
+import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-preset"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"

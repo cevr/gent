@@ -14,7 +14,7 @@ import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core-interna
 import { DriverListResult } from "@gent/core-internal/server/transport-contract"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
-import { e2ePreset } from "../extensions/helpers/test-preset"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
 describe("ExtensionRpcs", () => {
   it.live("driver.list returns registered drivers and current overrides", () =>

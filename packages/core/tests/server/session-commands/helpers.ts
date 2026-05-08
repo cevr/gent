@@ -28,7 +28,7 @@ import {
 import { SqliteStorage, StorageError } from "@gent/core-internal/storage/sqlite-storage"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
-import { e2ePreset } from "../../extensions/helpers/test-preset"
+import { e2ePreset } from "../../../../extensions/tests/helpers/test-preset"
 import type { LoadedExtension } from "../../../src/domain/extension"
 
 export const FIXED_NOW = dateFromMillis(1_767_225_600_000)

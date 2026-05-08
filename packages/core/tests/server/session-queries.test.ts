@@ -6,7 +6,7 @@ import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { Gent } from "@gent/sdk"
-import { e2ePreset } from "../extensions/helpers/test-preset"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
 const makeClient = (reply = "ok") =>
   Effect.gen(function* () {

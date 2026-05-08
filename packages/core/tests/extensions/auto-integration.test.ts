@@ -14,7 +14,7 @@ import {
 } from "@gent/core-internal/test-utils/e2e-layer"
 import { ensureStorageParents } from "@gent/core-internal/test-utils"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
-import { e2ePreset } from "./helpers/test-preset.js"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset.js"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { EventStore, type EventEnvelope } from "@gent/core-internal/domain/event"
 import { dateFromMillis, Message } from "@gent/core-internal/domain/message"

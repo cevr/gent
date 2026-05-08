@@ -7,7 +7,7 @@ import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-mod
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { Gent } from "@gent/sdk"
-import { e2ePreset } from "../extensions/helpers/test-preset"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import { makeClient, parentToolCallProbeExtension } from "./session-commands/helpers"
 
 describe("message.send", () => {

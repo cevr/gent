@@ -11,7 +11,7 @@ import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
-import { e2ePreset } from "./helpers/test-preset.js"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset.js"
 
 describe("exec-tools background runtime", () => {
   it.live("drops background bash completion after session deletion", () =>
