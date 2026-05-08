@@ -315,7 +315,7 @@ Validation:
 
 ### W22.10 — Read-Intent Runtime Membrane
 
-Status: implemented, awaiting subcommit.
+Status: committed and pushed in `b1d6e2c3`.
 
 Work:
 
@@ -331,6 +331,26 @@ Work:
 Validation:
 
 - `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/tool-runner.test.ts tests/server/extension-commands-rpc.test.ts tests/extensions/extension-surface-locks.test.ts`
+- `bun run typecheck`
+- `bun run lint`
+- `bun run fmt:check`
+
+### W22.11 — Extension-Owned Need Labels
+
+Status: implemented, awaiting subcommit.
+
+Work:
+
+- Remove the core `LOCK_REGISTRY` list of product/extension resource names.
+- Keep `ToolNeeds.read(...)` / `ToolNeeds.write(...)` as the authoring helper
+  for read/write conflict labels, but make labels opaque strings instead of
+  a core-maintained union.
+- Remove `LOCK_REGISTRY` from `@gent/core/extensions/api` and add a compile
+  lock so the public extension surface cannot depend on a central registry.
+
+Validation:
+
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/extension-surface-locks.test.ts tests/runtime/resource-manager.test.ts tests/domain/capability-ref.test.ts`
 - `bun run typecheck`
 - `bun run lint`
 - `bun run fmt:check`

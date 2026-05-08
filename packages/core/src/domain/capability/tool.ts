@@ -30,26 +30,7 @@ import type { PromptSection } from "../prompt.js"
 
 export type ToolNeedAccess = "read" | "write"
 
-export const LOCK_REGISTRY = [
-  // Shared subagent budget: review/research/audit/delegate/handoff/plan all
-  // spawn agent work and intentionally serialize against each other.
-  "agent",
-  "artifact",
-  "auto",
-  "fs",
-  "interaction",
-  "memory",
-  "network",
-  "process",
-  "recovery",
-  "repo",
-  "session",
-  "skills",
-  "task",
-  "test-serial",
-] as const
-
-export type ToolNeedTag = (typeof LOCK_REGISTRY)[number]
+export type ToolNeedTag = string
 
 export interface ToolNeed {
   readonly tag: ToolNeedTag

@@ -318,6 +318,8 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadStorageSearchResult = PublicExtensionApi.SearchResult
     // @ts-expect-error — generic capability token is internal; authors use concrete leaf factories
     type _BadCapabilityToken = PublicExtensionApi.CapabilityToken
+    // @ts-expect-error — resource-need labels are extension-authored, not centrally registered by core
+    type _BadLockRegistry = typeof PublicExtensionApi.LOCK_REGISTRY
     // @ts-expect-error — generic capability contribution is internal; authors use concrete leaf factories
     type _BadCapabilityContribution = PublicExtensionApi.CapabilityContribution
     // @ts-expect-error — generic capability contribution is internal; authors use concrete leaf factories

@@ -66,7 +66,6 @@ import type { AnyResourceContribution } from "../domain/resource.js"
 // block below) is the execution context passed to a tool's `execute(...)` body
 // — the wide host context with `toolCallId` narrowed to required.
 export {
-  LOCK_REGISTRY,
   ToolNeeds,
   type ToolNeed,
   type ToolNeedAccess,

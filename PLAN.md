@@ -51,8 +51,9 @@ W7 is one wave in a six-wave program:
   `MachineEngine` / `runtime.*` slots / `subscriptions`. `effect-machine`
   the library survives in `auto` and `executor/actor` (genuine FSMs);
   `MachineEngine` the host dies.
-- **`plans/WAVE-11.md`** — `needs: [Tag, ...]`-derived concurrency +
-  read-safety; central `LOCK_REGISTRY` with fail-closed validation.
+- **`plans/WAVE-11.md`** — `needs: [tag, ...]`-derived concurrency +
+  read-safety. Need labels are opaque extension-authored resource names; core
+  owns only read/write conflict semantics.
 - **`plans/WAVE-12.md`** — 9-lane recursive verification audit on the
   fully settled W7+W8+W9+W10+W11 substrate. Closeout receipt.
 
