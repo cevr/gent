@@ -14,8 +14,9 @@
  *   `Actor.registerState` (or `Actor.withProtocol` later if encore grows
  *   streaming-RPC support).
  *
- * **Entity ID** keys per `(sessionId, branchId)` so all ops for one
- * branch land in the same FIFO mailbox (preserves serialization).
+ * **Entity ID** keys per `(sessionId, branchId)` so all ops for one branch
+ * share an actor instance. Handler concurrency is intentionally unbounded;
+ * behavior-owned semaphores serialize durable queue and side-effect lanes.
  *
  * **Single source of truth for routing** (C5.2 counsel): for ops that
  * carry a domain payload owning its own `(sessionId, branchId)`,
@@ -1032,9 +1033,9 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
 
 export const AgentLoopLiveActor = Actor.toLayer(AgentLoop, buildAgentLoopActorHandlers, {
   // Long-lived ops (Submit/RunTurn) park inside the loop body via
-  // actor-owned queue/side mutation gates. `concurrency: "unbounded"` keeps short ops
-  // (RecordToolResult, RespondInteraction, Steer) from blocking the
-  // mailbox behind a slow Submit.
+  // behavior-owned queue/side mutation gates. `concurrency: "unbounded"` keeps
+  // short ops (RecordToolResult, RespondInteraction, Steer) from blocking behind
+  // a slow Submit.
   concurrency: "unbounded",
 })
 

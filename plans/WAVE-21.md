@@ -109,7 +109,7 @@ classes of privilege and races, but the deeper P1s remain:
 - AgentLoop queue mutation no longer publishes a queued transition before its
   durable write succeeds; failed queue persistence is now recorded through the
   actor persistence-failure path. The remaining AgentLoop work is mailbox/worker
-  ownership and stale FIFO commentary.
+  ownership.
 - Resource lifecycle startup failures now belong to extension reconciliation:
   a failed process resource marks only its owning extension failed with
   `phase: "startup"`, while unaffected extensions remain active. Runtime
@@ -169,11 +169,9 @@ Fresh re-audit receipts to carry into the remaining batches:
 
 ### P1.1 — AgentLoop Queue Durability Is Not Structurally Serialized
 
-The actor header says a `(sessionId, branchId)` entity gives a FIFO mailbox, but
-the actual actor layer is unbounded. Queue changes mutate a `TxSubscriptionRef`
-and then persist a full JSON snapshot afterward. Same-branch concurrent ops can
-therefore commit memory correctly while persisting stale snapshots out of
-order.
+The actor layer is unbounded. Queue changes now persist before publishing the
+`TxSubscriptionRef` transition, but long-running turn execution still shares
+the same unbounded handler surface instead of an explicit worker primitive.
 
 Receipts:
 
@@ -525,8 +523,8 @@ Work:
   slow runs do not require unbounded mailbox mutation.
 - [x] Persist queue snapshots only from the serialized mutation owner and route
       persistence failures through the actor failure state.
-- Remove stale comments claiming FIFO serialization where the code does not
-  enforce it.
+- [x] Remove stale comments claiming FIFO serialization where the code does not
+      enforce it.
 
 Validation:
 
