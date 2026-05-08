@@ -104,6 +104,8 @@ Commits landed in this wave so far:
 - `a14becc5 docs(plan): record queue durability boundary`
 - `3957d9fe docs(runtime): clarify agent loop concurrency`
 - `6338d9b7 refactor(sdk): use platform for server lock identity`
+- `d24f7e76 docs(plan): record server lock platform ownership`
+- `41a95117 refactor(extensions): remove unsupported resource scopes`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -118,9 +120,9 @@ classes of privilege and races, but the deeper P1s remain:
   `phase: "startup"`, while unaffected extensions remain active. Runtime
   profile layer construction skips duplicate lifecycle hooks and still builds
   process resource services normally.
-- Public resource scopes are not truthful yet. The production path builds only
-  process resources, while ephemeral child runtimes can rebuild process-scoped
-  extension resources.
+- Public resource scopes are now truthful by subtraction. Commit `41a95117`
+  deletes unsupported `cwd`/`session`/`branch` literals and brands from the
+  Resource API until those lifetimes have real host owners.
 - The extension author API no longer exposes `runProcess`, `ProcessError`,
   `GentPlatform`, or `GentPlatformShape`. Builtins now use the same setup
   context as external extensions; `runProcess` is local to the shipped builtin
@@ -568,8 +570,9 @@ Validation:
 Goal: remove the impossible state where a failed resource has active
 contributions.
 
-Status: startup-failure ownership closed by `3c0843c2`. Broader resource scope
-truth remains open under C21.7.
+Status: startup-failure ownership closed by `3c0843c2`. Public resource scope
+truthfulness is closed by `41a95117`; only process-scoped Resources are exposed
+until narrower lifecycle owners exist.
 
 Work:
 
@@ -582,7 +585,8 @@ Work:
 - Prove one failed extension resource does not prevent unrelated extensions
   from activating. Done in `3c0843c2`.
 - Make process/cwd/session/branch resource scopes truthful, or delete
-  unimplemented scope literals until their owners exist. Moved to C21.7.
+  unimplemented scope literals until their owners exist. Done by deletion in
+  `41a95117`.
 - Expose resource health to doctor/diagnostic paths.
 - Update docs for resource scope semantics.
 
@@ -645,16 +649,25 @@ Validation:
 
 Goal: make extension state ownership explicit and scoped.
 
+Status: resource scope truthfulness is closed by `41a95117`; the public
+Resource API exposes only process lifetime because that is the only host-owned
+lifecycle today. Stateful extension internals remain open.
+
 Work:
 
 - Convert ACP, auto, and executor process-local state into resource-owned
   services or actors.
-- Implement truthful resource scopes used by current extensions, or delete
-  unsupported scopes from the public API.
+- [x] Implement truthful resource scopes used by current extensions, or delete
+      unsupported scopes from the public API. Done in `41a95117`.
 - Add startup/shutdown/restart behavior tests.
 
 Validation:
 
+- `bun run typecheck`
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/resource-host.test.ts tests/extensions/scheduler.test.ts tests/extensions/activation.test.ts tests/extensions/define-extension.test.ts`
+- `bun run lint`
+- `bun run fmt`
+- `bun run gate`
 - Focused extension tests.
 - `bun run test:e2e` for lifecycle-sensitive paths.
 - `bun run gate`
