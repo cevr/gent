@@ -41,13 +41,13 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   },
   {
     file: "apps/tui/src/main.tsx",
-    line: 104,
+    line: 105,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line globalTimersInEffect:off -- process lifetime handle: OpenTUI render resolves after mount and suspended Effect fibers do not keep Bun alive",
   },
   {
     file: "apps/tui/src/main.tsx",
-    line: 687,
+    line: 688,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line strictEffectProvide:off entrypoint layer provision",
   },

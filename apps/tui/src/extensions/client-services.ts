@@ -12,10 +12,11 @@
  * UI) provide a subset.
  */
 
-import { Context, Layer } from "effect"
-import type { Effect } from "effect"
+import { createEffect, createRoot, createSignal } from "solid-js"
+import { Context, Effect, Layer } from "effect"
 import type { AgentName, DriverRef } from "@gent/core/extensions/api"
 import type { OverlayId, ComposerState } from "./client-facets.js"
+import type { ClientTransportShape } from "./client-transport"
 
 // ── ClientWorkspace ──────────────────────────────────────────────────────
 
@@ -111,3 +112,94 @@ export class ClientLifecycle extends Context.Service<ClientLifecycle, ClientLife
 export const makeClientLifecycleLayer = (
   payload: ClientLifecycleShape,
 ): Layer.Layer<ClientLifecycle> => Layer.succeed(ClientLifecycle, payload)
+
+// ── Session Resource ─────────────────────────────────────────────────────
+
+type ActiveClientSession = NonNullable<ReturnType<ClientTransportShape["currentSession"]>>
+
+export interface ClientSessionResource<A> {
+  readonly read: () => A | undefined
+  readonly refetch: () => void
+}
+
+export const makeClientSessionResource = <A>(opts: {
+  readonly transport: ClientTransportShape
+  readonly lifecycle: ClientLifecycleShape
+  readonly label: string
+  readonly fetch: (session: ActiveClientSession) => Effect.Effect<A, Error>
+  readonly subscribe?: (refetch: () => void) => () => void
+}): Effect.Effect<ClientSessionResource<A>> =>
+  Effect.sync(() => {
+    type Keyed = {
+      readonly sessionId: string
+      readonly branchId: string
+      readonly value: A
+    }
+
+    let getState: () => Keyed | undefined = () => undefined
+    let setState: (next: Keyed | undefined) => void = () => {}
+
+    const read = (): A | undefined => {
+      const state = getState()
+      const current = opts.transport.currentSession()
+      if (state === undefined || current === undefined) return undefined
+      if (state.sessionId !== current.sessionId || state.branchId !== current.branchId) {
+        return undefined
+      }
+      return state.value
+    }
+
+    const refetchCaptured = (captured: ActiveClientSession): void => {
+      opts.transport.cast(
+        opts.fetch(captured).pipe(
+          Effect.flatMap((value) =>
+            Effect.sync(() => {
+              const current = opts.transport.currentSession()
+              if (
+                current === undefined ||
+                current.sessionId !== captured.sessionId ||
+                current.branchId !== captured.branchId
+              ) {
+                return
+              }
+              setState({
+                sessionId: captured.sessionId,
+                branchId: captured.branchId,
+                value,
+              })
+            }),
+          ),
+          Effect.catchEager((err) =>
+            Effect.logWarning(`${opts.label} refresh failed`).pipe(
+              Effect.annotateLogs({ error: String(err) }),
+            ),
+          ),
+        ),
+      )
+    }
+
+    const refetch = (): void => {
+      const session = opts.transport.currentSession()
+      if (session === undefined) return
+      refetchCaptured(session)
+    }
+
+    createRoot((dispose) => {
+      const [state, set] = createSignal<Keyed | undefined>(undefined)
+      getState = state
+      setState = set
+      createEffect(() => {
+        const session = opts.transport.currentSession()
+        setState(undefined)
+        if (session === undefined) return
+        refetchCaptured(session)
+      })
+      opts.lifecycle.addCleanup(dispose)
+    })
+
+    if (opts.subscribe !== undefined) {
+      opts.lifecycle.addCleanup(opts.subscribe(refetch))
+    }
+
+    return { read, refetch }
+  })

@@ -12,7 +12,7 @@
  * provider's `onCleanup` runs them when it unmounts, so this widget
  * leaves no detached root behind.
  */
-import { createSignal, createMemo, createEffect, createRoot } from "solid-js"
+import { createMemo } from "solid-js"
 import { Effect } from "effect"
 import {
   defineClientExtension,
@@ -32,7 +32,12 @@ import { AskUserRenderer } from "../../components/interaction-renderers/ask-user
 import { type TodoEntry, TODO_EXTENSION_ID, TodoListRequest } from "@gent/extensions/client.js"
 import { ref } from "@gent/core/extensions/api"
 import { ClientTransport, requestExtension } from "../client-transport"
-import { ClientShell, ClientComposer, ClientLifecycle } from "../client-services"
+import {
+  ClientShell,
+  ClientComposer,
+  ClientLifecycle,
+  makeClientSessionResource,
+} from "../client-services"
 import { useScopedKeyboard } from "../../keyboard/context"
 
 const EXT_ID = TODO_EXTENSION_ID
@@ -133,97 +138,20 @@ export const builtinTodos = defineClientExtension("@gent/todo", {
     const composer = yield* ClientComposer
     const lifecycle = yield* ClientLifecycle
 
-    type ActiveSession = NonNullable<ReturnType<typeof transport.currentSession>>
-
-    // State owns its (sid, bid) key. The `produce`/component readers gate
-    // on key match against the live session, so a stale leftover from the
-    // prior session never renders or drives commands. The signal is set
-    // up inside the detached `createRoot` below so its reactive scope
-    // matches the lifecycle of the refetch effect.
-    type Keyed = {
-      readonly sessionId: string
-      readonly branchId: string
-      readonly todos: readonly TodoEntry[]
-    }
-    let getState: () => Keyed | undefined = () => undefined
-    let setState: (next: Keyed | undefined) => void = () => {}
-
-    const liveTodos = (): readonly TodoEntry[] => {
-      const s = getState()
-      const cur = transport.currentSession()
-      if (s === undefined || cur === undefined) return []
-      if (s.sessionId !== cur.sessionId || s.branchId !== cur.branchId) return []
-      return s.todos
-    }
-
-    // Refetch keyed by the captured session. Two-stage stale check:
-    // (a) drop the response if the active session changed during the
-    //     request — otherwise late responses overwrite the new session;
-    // (b) `liveTodos()` re-checks at render — covers the gap between
-    //     state set and the next session change.
-    const runRefetch = (captured: ActiveSession): void => {
-      transport.cast(
-        Effect.gen(function* () {
-          const out = yield* requestExtension(ref(TodoListRequest), {}, transport, captured)
-          yield* Effect.sync(() => {
-            const current = transport.currentSession()
-            if (
-              current === undefined ||
-              current.sessionId !== captured.sessionId ||
-              current.branchId !== captured.branchId
-            ) {
-              return
-            }
-            setState({
-              sessionId: captured.sessionId,
-              branchId: captured.branchId,
-              todos: out,
-            })
-          })
-        }).pipe(
-          Effect.catchEager((err) =>
-            Effect.logWarning(`${EXT_ID} todo list refresh failed`).pipe(
-              Effect.annotateLogs({ error: String(err) }),
-            ),
-          ),
-        ),
-      )
-    }
-
     const isTodoMutation = (event: { readonly _tag: string; readonly extensionId?: string }) =>
       event._tag === "ExtensionStateChanged" && event.extensionId === EXT_ID
 
-    // Solid root + event subscription — both disposers registered with
-    // `ClientLifecycle.addCleanup` so the provider's `onCleanup` reaps
-    // them when the surrounding `ExtensionUIProvider` unmounts.
-    yield* Effect.sync(() => {
-      createRoot((dispose) => {
-        const [s, set] = createSignal<Keyed | undefined>(undefined)
-        getState = s
-        setState = set
-        // Refetch on session/branch transition AND clear stale state on
-        // every transition so a no-data window between sessions never
-        // shows the prior session's todos.
-        createEffect(() => {
-          const session = transport.currentSession()
-          // Clear immediately on key change (or undefined) — `liveTodos`
-          // also gates by key, but explicit clear avoids transient
-          // mismatched-key state lingering until the next refetch.
-          setState(undefined)
-          if (session === undefined) return
-          runRefetch(session)
-        })
-        lifecycle.addCleanup(dispose)
-      })
+    const todosResource = yield* makeClientSessionResource<readonly TodoEntry[]>({
+      transport,
+      lifecycle,
+      label: `${EXT_ID} todo list`,
+      fetch: (session) => requestExtension(ref(TodoListRequest), {}, transport, session),
+      subscribe: (refetch) =>
+        transport.onSessionEvent((envelope) => {
+          if (isTodoMutation(envelope.event)) refetch()
+        }),
     })
-
-    const unsubscribeEvents = transport.onSessionEvent((envelope) => {
-      if (!isTodoMutation(envelope.event)) return
-      const session = transport.currentSession()
-      if (session === undefined) return
-      runRefetch(session)
-    })
-    lifecycle.addCleanup(unsubscribeEvents)
+    const liveTodos = (): readonly TodoEntry[] => todosResource.read() ?? []
 
     const runningCount = (): number =>
       liveTodos().filter((t) => t.status === "in_progress" || t.status === "pending").length

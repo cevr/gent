@@ -12,7 +12,6 @@
  * provider's `onCleanup` runs them when it unmounts, so this widget
  * leaves no detached root behind.
  */
-import { createSignal, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
 import { ref } from "@gent/core/extensions/api"
 import {
@@ -25,7 +24,7 @@ import {
 import { AUTO_EXTENSION_ID, AutoRpc, type AutoSnapshotReplyType } from "@gent/extensions/client.js"
 import { AutoGoalOverlay } from "../auto-goal-overlay"
 import { requestExtension, ClientTransport } from "../client-transport"
-import { ClientShell, ClientLifecycle } from "../client-services"
+import { ClientShell, ClientLifecycle, makeClientSessionResource } from "../client-services"
 
 const EXT_ID = String(AUTO_EXTENSION_ID)
 
@@ -35,81 +34,17 @@ export default defineClientExtension(EXT_ID, {
     const shell = yield* ClientShell
     const lifecycle = yield* ClientLifecycle
 
-    type ActiveSession = NonNullable<ReturnType<typeof transport.currentSession>>
-
-    // Keyed state — the readers gate on (sid, bid) match against the live
-    // session, so a stale model from the prior session never renders or
-    // drives commands like /auto cancel.
-    type Keyed = {
-      readonly sessionId: string
-      readonly branchId: string
-      readonly model: AutoSnapshotReplyType
-    }
-    let getState!: () => Keyed | undefined
-    let setState!: (next: Keyed | undefined) => void
-
-    const liveModel = (): AutoSnapshotReplyType | undefined => {
-      const s = getState()
-      const cur = transport.currentSession()
-      if (s === undefined || cur === undefined) return undefined
-      if (s.sessionId !== cur.sessionId || s.branchId !== cur.branchId) return undefined
-      return s.model
-    }
-
-    const runRefetch = (captured: ActiveSession): void => {
-      transport.cast(
-        Effect.gen(function* () {
-          const reply = yield* requestExtension(ref(AutoRpc.GetSnapshot), {}, transport, captured)
-          yield* Effect.sync(() => {
-            const current = transport.currentSession()
-            if (
-              current === undefined ||
-              current.sessionId !== captured.sessionId ||
-              current.branchId !== captured.branchId
-            ) {
-              return
-            }
-            setState({
-              sessionId: captured.sessionId,
-              branchId: captured.branchId,
-              model: reply,
-            })
-          })
-        }).pipe(
-          Effect.catchEager((err) =>
-            Effect.logWarning(`${EXT_ID} auto snapshot refresh failed`).pipe(
-              Effect.annotateLogs({ error: String(err) }),
-            ),
-          ),
-        ),
-      )
-    }
-
-    yield* Effect.sync(() => {
-      createRoot((dispose) => {
-        const [s, set] = createSignal<Keyed | undefined>(undefined)
-        getState = s
-        setState = set
-        createEffect(() => {
-          const session = transport.currentSession()
-          // Clear stale state on every session transition — `liveModel`
-          // also gates by key, but explicit clear avoids transient
-          // mismatched-key state.
-          setState(undefined)
-          if (session === undefined) return
-          runRefetch(session)
-        })
-        lifecycle.addCleanup(dispose)
-      })
+    const modelResource = yield* makeClientSessionResource<AutoSnapshotReplyType>({
+      transport,
+      lifecycle,
+      label: `${EXT_ID} auto snapshot`,
+      fetch: (session) => requestExtension(ref(AutoRpc.GetSnapshot), {}, transport, session),
+      subscribe: (refetch) =>
+        transport.onExtensionStateChanged((p) => {
+          if (p.extensionId === EXT_ID) refetch()
+        }),
     })
-
-    const unsubscribePulse = transport.onExtensionStateChanged((p) => {
-      if (p.extensionId !== EXT_ID) return
-      const session = transport.currentSession()
-      if (session === undefined) return
-      runRefetch(session)
-    })
-    lifecycle.addCleanup(unsubscribePulse)
+    const liveModel = modelResource.read
 
     return clientContributions(
       borderLabelContribution({

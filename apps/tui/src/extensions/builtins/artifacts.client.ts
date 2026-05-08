@@ -12,13 +12,12 @@
  * provider's `onCleanup` runs them when it unmounts, so this widget
  * leaves no detached root behind.
  */
-import { createSignal, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
 import { ref } from "@gent/core/extensions/api"
 import { defineClientExtension, borderLabelContribution } from "../client-facets.js"
 import { ArtifactRpc, type ArtifactType } from "@gent/extensions/client.js"
 import { requestExtension, ClientTransport } from "../client-transport"
-import { ClientLifecycle } from "../client-services"
+import { ClientLifecycle, makeClientSessionResource } from "../client-services"
 
 const EXT_ID = "@gent/artifacts"
 
@@ -27,80 +26,17 @@ export default defineClientExtension(EXT_ID, {
     const transport = yield* ClientTransport
     const lifecycle = yield* ClientLifecycle
 
-    type ActiveSession = NonNullable<ReturnType<typeof transport.currentSession>>
-
-    // Keyed state — readers gate on (sid, bid) match against the live
-    // session, so a stale list from the prior session never renders.
-    type Keyed = {
-      readonly sessionId: string
-      readonly branchId: string
-      readonly items: readonly ArtifactType[]
-    }
-    let getState: () => Keyed | undefined = () => undefined
-    let setState: (next: Keyed | undefined) => void = () => {}
-
-    const liveItems = (): readonly ArtifactType[] => {
-      const s = getState()
-      const cur = transport.currentSession()
-      if (s === undefined || cur === undefined) return []
-      if (s.sessionId !== cur.sessionId || s.branchId !== cur.branchId) return []
-      return s.items
-    }
-
-    const runRefetch = (captured: ActiveSession): void => {
-      transport.cast(
-        Effect.gen(function* () {
-          const reply = yield* requestExtension(ref(ArtifactRpc.List), {}, transport, captured)
-          yield* Effect.sync(() => {
-            const current = transport.currentSession()
-            if (
-              current === undefined ||
-              current.sessionId !== captured.sessionId ||
-              current.branchId !== captured.branchId
-            ) {
-              return
-            }
-            setState({
-              sessionId: captured.sessionId,
-              branchId: captured.branchId,
-              items: reply,
-            })
-          })
-        }).pipe(
-          Effect.catchEager((err) =>
-            Effect.logWarning(`${EXT_ID} artifact list refresh failed`).pipe(
-              Effect.annotateLogs({ error: String(err) }),
-            ),
-          ),
-        ),
-      )
-    }
-
-    yield* Effect.sync(() => {
-      createRoot((dispose) => {
-        const [s, set] = createSignal<Keyed | undefined>(undefined)
-        getState = s
-        setState = set
-        createEffect(() => {
-          const session = transport.currentSession()
-          // Clear stale state on every session transition — `liveItems`
-          // also gates by key, but explicit clear avoids transient
-          // mismatched-key state.
-          setState(undefined)
-          if (session === undefined) return
-          runRefetch(session)
-        })
-        lifecycle.addCleanup(dispose)
-      })
+    const itemsResource = yield* makeClientSessionResource<readonly ArtifactType[]>({
+      transport,
+      lifecycle,
+      label: `${EXT_ID} artifact list`,
+      fetch: (session) => requestExtension(ref(ArtifactRpc.List), {}, transport, session),
+      subscribe: (refetch) =>
+        transport.onExtensionStateChanged((p) => {
+          if (p.extensionId === EXT_ID) refetch()
+        }),
     })
-
-    const unsubscribePulse = transport.onExtensionStateChanged((p) => {
-      if (p.extensionId !== EXT_ID) return
-      const session = transport.currentSession()
-      if (session === undefined) return
-      runRefetch(session)
-    })
-    lifecycle.addCleanup(unsubscribePulse)
+    const liveItems = (): readonly ArtifactType[] => itemsResource.read() ?? []
 
     return borderLabelContribution({
       position: "bottom-right",
