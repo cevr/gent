@@ -530,33 +530,43 @@ reader file are already gone; the remaining shallow surface is the object-shaped
 - `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/session-mutations.test.ts tests/runtime/agent-runner.test.ts tests/runtime/agent-loop-streaming.test.ts tests/runtime/agent-loop-queue.test.ts tests/runtime/agent/agent-loop.actor.test.ts tests/server/session-idempotency.test.ts tests/server/session-commands tests/server/session-queries.test.ts`
 - `bun run gate`
 
-## Commit 14: refactor(extensions): narrow public authoring api
+## Commit 14: refactor(extensions): hide host-context internals
 
-**Justification**: Extension authors should get a small expressive API, not
-private capability writers or privileged host internals.
+**Justification**: Extension authors should get one public authoring lane. The
+repo guard already forbids `@gent/core-internal` imports from extension sources,
+so this batch removes host-context implementation shapes from the public API
+without pretending current extensions can tunnel through private paths. Utility
+and resource services that current workspace extensions actually require remain
+public until a later resource-authority redesign replaces them with
+extension-owned resources.
 
 **Principles**
 
 - `small-interface-deep-implementation`: expose the authoring surface, hide
   internal machinery.
-- `boundary-discipline`: private capability writes stay internal.
+- `boundary-discipline`: host-context implementation errors stay internal.
 
 **Skills**: `architecture`, `effect-v4`, `test`.
 
 **Changes**
 
-| File                                                                                                | Change                                                                                                           | Lines                          |
-| --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`                            | Move internal/full-power exports to explicit internal subpaths; keep `defineExtension` and typed buckets public. | `63-254`, `284-324`, `404-419` |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts` | Lock public authoring exports.                                                                                   | all                            |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/define-extension.test.ts`        | Update authoring API expectations.                                                                               | `64-72`                        |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts`      | Keep private authority export guard.                                                                             | `96-100`                       |
+| File                                                                                                | Change                                                                                                             | Lines               |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`                            | Stop exporting raw host-context error/search-result shapes from the public authoring API.                          | `183-235`           |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts` | Lock host-context internals out while keeping current extension authoring utilities available through one surface. | `351-394`           |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/*`                                      | Keep workspace extension imports on `@gent/core/extensions/api`; do not bypass the extension import guard.         | see changed imports |
+
+**Follow-up seam**: File locks, file index, extension state pulses, and
+capability write checks are still too authoritative for a long-term third-party
+extension API. Removing them correctly requires replacing the authority with
+extension-owned resources or narrower host capabilities, not reimporting private
+core internals.
 
 **Verification**
 
-- Extension surface tests.
 - `bun run typecheck`
-- `bun run test`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/extension-surface-locks.test.ts tests/extensions/define-extension.test.ts tests/server/extension-commands-rpc.test.ts`
+- `bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/fs-tools tests/todo tests/auto tests/executor tests/openai tests/anthropic tests/acp-agents tests/artifacts`
 - `bun run gate`
 
 ## Commit 15: refactor(tui): remove core client facet overload

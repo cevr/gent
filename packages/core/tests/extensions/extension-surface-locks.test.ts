@@ -353,7 +353,6 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadInteractionPendingReader = PublicExtensionApi.InteractionPendingReader
     // @ts-expect-error — event publisher is an app/domain service, not extension api
     type _BadEventPublisher = PublicExtensionApi.EventPublisher
-
     expect(true).toBe(true)
   })
 
@@ -376,6 +375,10 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadProcessError = typeof PublicExtensionApi.ProcessError
     // @ts-expect-error — host platform service is not public extension author API
     type _BadGentPlatform = typeof PublicExtensionApi.GentPlatform
+    // @ts-expect-error — host-context errors are runtime internals, not authoring API
+    type _BadExtensionHostError = typeof PublicExtensionApi.ExtensionHostError
+    // @ts-expect-error — raw host search result shape is runtime internals, not authoring API
+    type _BadExtensionHostSearchResult = typeof PublicExtensionApi.ExtensionHostSearchResult
 
     expect(true).toBe(true)
   })

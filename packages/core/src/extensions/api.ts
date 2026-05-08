@@ -182,7 +182,6 @@ export {
 } from "../domain/message-part-projection.js"
 export { PermissionRule, type PermissionResult } from "../domain/permission.js"
 export { OutputBuffer, saveFullOutput, headTailChars } from "../domain/output-buffer.js"
-export { ExtensionHostError, ExtensionHostSearchResult } from "../domain/extension-host-context.js"
 export { isRecord, isRecordArray } from "../domain/guards.js"
 export { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 export { FileIndex, FileIndexError, type FileIndexService } from "../domain/file-index.js"
