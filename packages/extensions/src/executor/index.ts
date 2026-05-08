@@ -3,8 +3,12 @@
  */
 
 import { Effect, Layer } from "effect"
-import { defineExtension, defineResource } from "@gent/core/extensions/api"
-import type { ExtensionHostPlatform } from "@gent/core-internal/domain/extension"
+import {
+  defineResource,
+  ExtensionId,
+  type ExtensionContributions,
+  type GentExtension,
+} from "@gent/core/extensions/api"
 import { EXECUTOR_EXTENSION_ID } from "./domain.js"
 import { ExecutorSidecar } from "./sidecar.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
@@ -15,30 +19,30 @@ import { ExecutorControllerLive, ExecutorRuntime } from "./controller.js"
 export { ExecutorUiModel } from "./actor.js"
 export { EXECUTOR_EXTENSION_ID } from "./domain.js"
 
-export const ExecutorExtension = defineExtension({
-  id: EXECUTOR_EXTENSION_ID,
-  tools: [ExecuteTool, ResumeTool],
-  requests: [ExecutorRpc.Start, ExecutorRpc.Stop, ExecutorRpc.GetSnapshot],
-  resources: ({ ctx }) => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- executor sidecar is a bundled host-owned extension boundary
-    const host = ctx.host as ExtensionHostPlatform
+export const ExecutorExtension: GentExtension = {
+  manifest: { id: ExtensionId.make(EXECUTOR_EXTENSION_ID) },
+  setup: (ctx) => {
     const executorDependencies = Layer.merge(
-      ExecutorSidecar.Live(ctx.home, host),
+      ExecutorSidecar.Live(ctx.home, ctx.host),
       ExecutorMcpBridge.Live,
     )
     const executorLayer = Layer.provideMerge(ExecutorControllerLive(ctx.cwd), executorDependencies)
-    return [
-      defineResource({
-        scope: "process",
-        layer: executorLayer,
-      }),
-    ]
+    return Effect.succeed({
+      tools: [ExecuteTool, ResumeTool],
+      requests: [ExecutorRpc.Start, ExecutorRpc.Stop, ExecutorRpc.GetSnapshot],
+      resources: [
+        defineResource({
+          scope: "process",
+          layer: executorLayer,
+        }),
+      ],
+      reactions: {
+        turnProjection: () =>
+          Effect.gen(function* () {
+            const executor = yield* ExecutorRuntime
+            return yield* executor.turnProjection()
+          }),
+      },
+    } satisfies ExtensionContributions)
   },
-  reactions: {
-    turnProjection: () =>
-      Effect.gen(function* () {
-        const executor = yield* ExecutorRuntime
-        return yield* executor.turnProjection()
-      }),
-  },
-})
+}

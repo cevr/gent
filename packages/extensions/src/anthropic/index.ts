@@ -1,9 +1,11 @@
 import { BunServices } from "@effect/platform-bun"
 import { Clock, Config, Effect, Layer, Option, Redacted, Ref, SynchronizedRef } from "effect"
 import {
-  defineExtension,
   AuthMethod,
+  ExtensionId,
   ProviderAuthError,
+  type ExtensionContributions,
+  type GentExtension,
   type ModelDriverContribution,
   type ProviderAuthInfo,
   type ProviderHints,
@@ -29,7 +31,6 @@ import {
 import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-cache.js"
 import { buildKeychainTransformClient } from "./keychain-transform.js"
 import { AnthropicPlatform, type AnthropicPlatformShape } from "./platform-adapter.js"
-import type { ExtensionHostPlatform } from "@gent/core-internal/domain/extension"
 
 const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
   Effect.gen(function* () {
@@ -250,9 +251,9 @@ export const buildAnthropicModelDriver = (
   },
 })
 
-export const AnthropicExtension = defineExtension({
-  id: "@gent/provider-anthropic",
-  modelDrivers: ({ ctx }) =>
+export const AnthropicExtension: GentExtension = {
+  manifest: { id: ExtensionId.make("@gent/provider-anthropic") },
+  setup: (ctx) =>
     Effect.gen(function* () {
       const env: AnthropicKeychainEnv = {
         betaFlags: yield* readOptionalEnv("ANTHROPIC_BETA_FLAGS"),
@@ -263,9 +264,7 @@ export const AnthropicExtension = defineExtension({
       initAnthropicKeychainEnv(env)
 
       const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- provider setup is a bundled host-owned extension boundary
-      const host = ctx.host as ExtensionHostPlatform
-      const platform = AnthropicPlatform.fromHost(host)
+      const platform = AnthropicPlatform.fromHost(ctx.host)
 
       // Cache cells are hoisted to extension-closure scope so they
       // survive across `resolveModel` calls. Lifetime: one extension
@@ -275,6 +274,10 @@ export const AnthropicExtension = defineExtension({
       const credentialCellRef = yield* SynchronizedRef.make(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
 
-      return [buildAnthropicModelDriver(credentialCellRef, betaCellRef, envApiKey, platform)]
+      return {
+        modelDrivers: [
+          buildAnthropicModelDriver(credentialCellRef, betaCellRef, envApiKey, platform),
+        ],
+      } satisfies ExtensionContributions
     }),
-})
+}

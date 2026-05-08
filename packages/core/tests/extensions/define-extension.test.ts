@@ -195,6 +195,9 @@ describe("defineExtension", () => {
       expect(captured?.cwd).toBeDefined()
       expect(captured?.home).toBeDefined()
       expect("spawner" in (captured ?? {})).toBe(false)
+      expect("parentEnv" in (captured?.host ?? {})).toBe(false)
+      expect("signalPid" in (captured?.host ?? {})).toBe(false)
+      expect("runProcess" in (captured?.host ?? {})).toBe(false)
     }),
   )
 

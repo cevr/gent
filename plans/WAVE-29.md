@@ -146,7 +146,7 @@ Effect.gen(function* () { const ctx = yield* ExtensionContext; ... })`.
 
 ## Batch 4: refactor(extensions): physically prune setup context
 
-**Status**: Pending.
+**Status**: Completed in current batch.
 
 Split public extension setup from host-owned bundled setup:
 
@@ -154,6 +154,23 @@ Split public extension setup from host-owned bundled setup:
   not a type-only narrowed object.
 - Builtin provider/executor/acp extensions move to an internal host extension
   factory or internal resource wrapper.
+
+Implemented:
+
+- `defineExtension` now constructs a fresh `PublicExtensionSetupContext` before
+  invoking bucket factories. Process authority fields are not present on the
+  object, even if a caller casts the type.
+- Anthropic and Executor setup are explicit host-owned `GentExtension` values,
+  matching the existing ACP host-owned extension shape.
+- Public setup lock tests assert `parentEnv`, `signalPid`, and `runProcess` are
+  absent from the runtime object passed to bucket factories.
+
+**Verification**
+
+- `bun run typecheck`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions/define-extension.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/extensions/executor-integration.test.ts packages/extensions/tests/anthropic/anthropic-keychain-transform.test.ts packages/extensions/tests/acp-agents/acp-extension-state.test.ts`
+- `bun run lint`
+- `bun run fmt`
 
 ## Final Verification Audit
 

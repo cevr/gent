@@ -25,7 +25,7 @@
  * })
  * ```
  *
- * @example with ctx + Effect
+ * @example with setup facts + Effect
  * ```ts
  * export default defineExtension({
  *   id: "my-ext",
@@ -255,6 +255,21 @@ export type PublicExtensionSetupContext = Omit<RuntimeExtensionSetupContext, "ho
   >
 }
 
+const publicSetupContext = (ctx: RuntimeExtensionSetupContext): PublicExtensionSetupContext => ({
+  cwd: ctx.cwd,
+  source: ctx.source,
+  home: ctx.home,
+  host: {
+    osInfo: ctx.host.osInfo,
+    execPath: ctx.host.execPath,
+    homeDirectory: ctx.host.homeDirectory,
+    pathListSeparator: ctx.host.pathListSeparator,
+    commandCandidates: ctx.host.commandCandidates,
+    isPortFree: ctx.host.isPortFree,
+    isPidAlive: ctx.host.isPidAlive,
+  },
+})
+
 /**
  * Public setup context exposed to extension authors. Runtime loading still uses
  * the wider domain setup context internally; `defineExtension` bucket factories
@@ -306,7 +321,7 @@ const resolveField = <A, R>(
   manifest: ExtensionManifest,
   field: string,
   spec: FieldSpec<A, R> | undefined,
-  ctx: RuntimeExtensionSetupContext,
+  ctx: PublicExtensionSetupContext,
 ): Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R> =>
   Effect.gen(function* () {
     if (spec === undefined) return []
@@ -385,23 +400,29 @@ export function defineExtension<R>(params: DefineExtensionInput<R>): GentExtensi
         if (inputMessage !== undefined) {
           return yield* new ExtensionLoadError({ extensionId: manifest.id, message: inputMessage })
         }
-        const resources = yield* resolveField(manifest, "resources", params.resources, ctx)
+        const setupCtx = publicSetupContext(ctx)
+        const resources = yield* resolveField(manifest, "resources", params.resources, setupCtx)
         const scheduledJobs = yield* resolveField(
           manifest,
           "scheduledJobs",
           params.scheduledJobs,
-          ctx,
+          setupCtx,
         )
-        const tools = yield* resolveField(manifest, "tools", params.tools, ctx)
-        const actions = yield* resolveField(manifest, "actions", params.actions, ctx)
-        const requests = yield* resolveField(manifest, "requests", params.requests, ctx)
-        const agents = yield* resolveField(manifest, "agents", params.agents, ctx)
-        const modelDrivers = yield* resolveField(manifest, "modelDrivers", params.modelDrivers, ctx)
+        const tools = yield* resolveField(manifest, "tools", params.tools, setupCtx)
+        const actions = yield* resolveField(manifest, "actions", params.actions, setupCtx)
+        const requests = yield* resolveField(manifest, "requests", params.requests, setupCtx)
+        const agents = yield* resolveField(manifest, "agents", params.agents, setupCtx)
+        const modelDrivers = yield* resolveField(
+          manifest,
+          "modelDrivers",
+          params.modelDrivers,
+          setupCtx,
+        )
         const externalDrivers = yield* resolveField(
           manifest,
           "externalDrivers",
           params.externalDrivers,
-          ctx,
+          setupCtx,
         )
         const contribs: ExtensionContributions = {
           ...(resources.length > 0 ? { resources } : {}),
