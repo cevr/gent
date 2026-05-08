@@ -587,11 +587,11 @@ const makeSharedRunnerHelpers = (
  *
  * Reuses `buildExtensionLayers` (the same builder used by server / per-cwd) so
  * registry/actor/resource/event-bus shape stays identical — extensions don't
- * "see" a different runtime when invoked from a child agent. Local-only
- * concerns (in-memory storage, auto-resolve approval, prompt presenter, loop
- * services) are declared as explicit override families. Each family is a
- * named child-owned layer; the composer's `Layer.provideMerge` makes child
- * keys win over parent keys via last-writer-wins on `Context.merge`.
+ * "see" a different runtime when invoked from a child agent. Ephemeral children
+ * rebuild resource services against child storage, but skip process lifecycle:
+ * profile resolution owns startup/shutdown. Local-only concerns (in-memory
+ * storage, auto-resolve approval, prompt presenter, loop services) are declared
+ * as explicit override families.
  */
 const buildEphemeralLayer = (params: {
   config: AgentRunnerConfig
@@ -599,7 +599,7 @@ const buildEphemeralLayer = (params: {
   extensionRegistry: ExtensionRegistryService
 }) => {
   const resolved = params.extensionRegistry.getResolved()
-  const extensionLayers = buildExtensionLayers(resolved)
+  const extensionLayers = buildExtensionLayers(resolved, { lifecycle: "skip" })
   const parentService = <S>(tag: Context.Key<unknown, S>): S =>
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
     Context.get(params.parentServices as Context.Context<unknown>, tag)

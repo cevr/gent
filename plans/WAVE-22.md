@@ -146,12 +146,25 @@ Validation:
 
 ### W22.3 — One Runtime Layer Factory
 
+Status: implemented, awaiting recursive verification.
+
 Work:
 
 - Extract the single composition factory.
 - Rewire server dependencies, profile build, ephemeral runner, and test harnesses
   to use it.
 - Remove duplicate parent-service extraction where the factory can own it.
+
+Implementation notes:
+
+- Server/per-cwd profile paths and ephemeral child paths already shared
+  `buildExtensionLayers`; the remaining duplication was lifecycle ownership.
+- Ephemeral child runtimes now call `buildExtensionLayers(resolved, {
+lifecycle: "skip" })`: child resource services still rebuild against child
+  storage, but process resource `start`/`stop` hooks remain owned by profile
+  resolution.
+- Added a regression proving an ephemeral child can use a resource-backed tool
+  without rerunning the resource `start` hook.
 
 Validation:
 

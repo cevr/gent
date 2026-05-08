@@ -1,7 +1,7 @@
 import { describe, test, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Effect, Layer, Schema, Stream, SubscriptionRef } from "effect"
+import { Context, Effect, Layer, Schema, Stream, SubscriptionRef } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import {
   finishPart,
@@ -41,7 +41,7 @@ import { MessageStorage } from "@gent/core/storage/message-storage"
 import { EventStorage } from "@gent/core/storage/event-storage"
 import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
-import { tool, ToolNeeds } from "@gent/core/extensions/api"
+import { defineResource, tool, ToolNeeds } from "@gent/core/extensions/api"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 import { SessionCommands } from "../../src/server/session-commands"
@@ -1212,6 +1212,93 @@ describe("ephemeral service propagation", () => {
         if (result._tag === "success") {
           expect(result.text).toContain("approved")
         }
+      }).pipe(Effect.provide(layer))
+    }).pipe(Effect.timeout("4 seconds"), Effect.runPromise))
+
+  test("ephemeral agent rebuilds resource services without rerunning process lifecycle", () =>
+    Effect.gen(function* () {
+      let starts = 0
+      class ProbeService extends Context.Service<
+        ProbeService,
+        { readonly read: Effect.Effect<string> }
+      >()("@gent/core/tests/runtime/agent-runner.test/ProbeService") {}
+      const probeTool = tool({
+        id: "probe_resource",
+        description: "Reads a resource-backed service",
+        params: Schema.Struct({}),
+        output: Schema.Struct({ value: Schema.String }),
+        execute: Effect.fn("probe_resource")(function* () {
+          const probe = yield* ProbeService
+          return { value: yield* probe.read }
+        }),
+      })
+      const registryLayer = ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("agents") },
+            scope: "builtin" as const,
+            sourcePath: "test",
+            contributions: {
+              agents: AllBuiltinAgents,
+            },
+          },
+          {
+            manifest: { id: ExtensionId.make("resource-probe") },
+            scope: "builtin" as const,
+            sourcePath: "test",
+            contributions: {
+              resources: [
+                defineResource({
+                  scope: "process",
+                  layer: Layer.succeed(ProbeService, { read: Effect.succeed("service-ok") }),
+                  start: Effect.sync(() => {
+                    starts += 1
+                  }),
+                }),
+              ],
+              tools: [probeTool],
+            },
+          },
+        ]),
+      )
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("probe_resource", {}),
+        textStep("done"),
+      ])
+      const storageLayer = Layer.orDie(SqliteStorage.TestWithSql())
+      const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
+      const eventPublisherLayer = withEventPublisher(eventStoreLayer)
+      const deps = Layer.mergeAll(
+        storageLayer,
+        eventStoreLayer,
+        eventPublisherLayer,
+        registryLayer,
+        providerLayer,
+        ModelResolver.fromLanguageModel(providerLayer),
+        sessionRuntimeStub(),
+        ephemeralParentDeps,
+      )
+      const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+      const layer = Layer.mergeAll(deps, runnerLayer)
+      yield* Effect.gen(function* () {
+        const runner = yield* AgentRunnerService
+        yield* setupParentSession(SessionId.make("parent-resource-probe"))
+        const result = yield* runner.run({
+          agent: getBuiltinAgent("explore")!,
+          prompt: "test resource service",
+          parentSessionId: SessionId.make("parent-resource-probe"),
+          parentBranchId: BranchId.make("parent-resource-probe-branch"),
+          cwd: process.cwd(),
+          runSpec: {
+            persistence: "ephemeral",
+            overrides: { allowedTools: ["probe_resource"] },
+          },
+        })
+        expect(result._tag).toBe("success")
+        if (result._tag === "success") {
+          expect(result.text).toContain("done")
+        }
+        expect(starts).toBe(0)
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.timeout("4 seconds"), Effect.runPromise))
 })
