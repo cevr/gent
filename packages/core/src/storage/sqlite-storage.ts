@@ -14,6 +14,7 @@ import { MessageStorage } from "./message-storage.js"
 import { AgentLoopQueueStorage } from "./agent-loop-queue-storage.js"
 import { EventStorage } from "./event-storage.js"
 import { RelationshipStorage } from "./relationship-storage.js"
+import { SessionOperationStorage } from "./session-operation-storage.js"
 import { StorageTransaction } from "./storage-transaction.js"
 import { StorageError } from "../domain/storage-error.js"
 export { StorageError }
@@ -33,6 +34,7 @@ type FocusedStorage =
   | AgentLoopQueueStorage
   | EventStorage
   | RelationshipStorage
+  | SessionOperationStorage
   | StorageTransaction
   | InteractionPendingReader
   | ClusterMessageStorage.MessageStorage
@@ -50,6 +52,7 @@ const provideFocusedRepositories = <E, R>(
     Layer.provide(AgentLoopQueueStorage.Live, base),
     Layer.provide(EventStorage.Live, base),
     Layer.provide(RelationshipStorage.Live, base),
+    Layer.provide(SessionOperationStorage.Live, base),
     Layer.provide(StorageTransaction.Live, base),
     Layer.provide(encoreSqlMessageStorage(), base),
     interactionStorage,

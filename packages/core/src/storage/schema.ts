@@ -248,6 +248,22 @@ const interactionDecisionMigration = Effect.gen(function* () {
   yield* sql.unsafe(`ALTER TABLE interaction_requests ADD COLUMN decision_json TEXT`)
 })
 
+const durableOperationsMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  yield* sql.unsafe(`
+    CREATE TABLE durable_operations (
+      workspace_id TEXT NOT NULL DEFAULT '${DefaultWorkspaceId}',
+      operation TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (workspace_id, operation, request_id)
+    )
+  `)
+  yield* sql.unsafe(`CREATE INDEX idx_durable_operations_created ON durable_operations(created_at)`)
+})
+
 const wrapMigrationError = (error: unknown): StorageError =>
   new StorageError({ message: "Storage migration failed", cause: error })
 
@@ -276,6 +292,7 @@ const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient>
       "003_session_workspace": sessionWorkspaceMigration,
       "004_agent_loop_queue_workspace": agentLoopQueueWorkspaceMigration,
       "005_interaction_decision": interactionDecisionMigration,
+      "006_durable_operations": durableOperationsMigration,
     }),
     table: "gent_storage_migrations",
   }).pipe(

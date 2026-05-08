@@ -1,7 +1,8 @@
 import { describe, expect, it } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
+import { BunServices } from "@effect/platform-bun"
 import type { Deferred } from "effect"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, FileSystem, Layer, Path, Ref } from "effect"
 import { TestClock } from "effect/testing"
 import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { Branch, Message } from "@gent/core-internal/domain/message"
@@ -10,6 +11,7 @@ import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
 import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { GentPlatform } from "../../src/runtime/gent-platform"
+import { SessionRuntimeError } from "../../src/runtime/session-runtime"
 import { dedupRequest, SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
@@ -334,31 +336,29 @@ describe("requestId idempotency", () => {
   )
 
   // Dedup-cache TTL eviction. The cache schedules a delayed
-  // eviction via `Effect.forkDetach(Effect.sleep(60s))` after each
-  // success. Beyond the TTL window, a retry of the same `requestId`
-  // must NOT collide with the prior outcome — it must execute fresh.
-  // Drive `Effect.sleep` deterministically via `TestClock` so the test
-  // does not actually wait 60s.
-  it.effect(
-    "dedup cache evicts success entry past TTL — retried requestId creates a new session",
-    () =>
-      Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        const sessions = yield* SessionStorage
-        const first = yield* commands.createSession({
-          cwd: "/tmp/ttl",
-          requestId: "req-ttl-1",
-        })
-        // Advance past the 60s TTL so the detached eviction fork wakes
-        // up and removes the cache entry.
-        yield* TestClock.adjust("61 seconds")
-        const second = yield* commands.createSession({
-          cwd: "/tmp/ttl",
-          requestId: "req-ttl-1",
-        })
-        expect(second.sessionId).not.toBe(first.sessionId)
-        expect((yield* sessions.listSessions()).length).toBe(2)
-      }).pipe(Effect.provide(sessionCommandsLayer())),
+  // eviction via `Effect.forkDetach(Effect.sleep(60s))`, but createSession
+  // now has a durable operation result underneath the process cache. Beyond
+  // the TTL window, a retry of the same `requestId` still returns the
+  // original session/branch ids.
+  it.effect("durable createSession result survives process-cache TTL eviction", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const first = yield* commands.createSession({
+        cwd: "/tmp/ttl",
+        requestId: "req-ttl-1",
+      })
+      // Advance past the 60s TTL so the detached eviction fork wakes
+      // up and removes the cache entry.
+      yield* TestClock.adjust("61 seconds")
+      const second = yield* commands.createSession({
+        cwd: "/tmp/ttl",
+        requestId: "req-ttl-1",
+      })
+      expect(second.sessionId).toBe(first.sessionId)
+      expect(second.branchId).toBe(first.branchId)
+      expect((yield* sessions.listSessions()).length).toBe(1)
+    }).pipe(Effect.provide(sessionCommandsLayer())),
   )
 
   // Companion to the TTL eviction test: prove the bound is the bound.
@@ -408,5 +408,79 @@ describe("requestId idempotency", () => {
       expect(retry).toBe(4)
       expect(Array.from((yield* Ref.get(cache)).keys())).toEqual(["req-cap-third", "req-cap-first"])
     }),
+  )
+
+  it.scoped("createSession requestId replays durable result after command layer restart", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const dbPath = path.join(dir, "gent.db")
+      const deliveredPrompts: string[] = []
+      const deliveredPromptRequestIds = new Set<string>()
+
+      const makeLayer = (failPrompt: boolean) => {
+        const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(
+          Layer.provide(BunServices.layer),
+        )
+        const runtimeLayer = sessionRuntimeLayer({
+          sendUserMessage: (input) => {
+            if (failPrompt) {
+              return Effect.fail(new SessionRuntimeError({ message: "prompt dispatch failed" }))
+            }
+            return Effect.sync(() => {
+              const key = input.requestId ?? ""
+              if (deliveredPromptRequestIds.has(key)) return
+              deliveredPromptRequestIds.add(key)
+              deliveredPrompts.push(`${input.content}:${key}`)
+            })
+          },
+        })
+        const deps = Layer.mergeAll(
+          storageLayer,
+          runtimeLayer,
+          EventStore.Memory,
+          EventPublisher.Test(),
+          LanguageModelLayers.debug(),
+          ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
+          GentPlatform.Test(),
+        )
+        return Layer.provideMerge(
+          SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+          deps,
+        )
+      }
+
+      const firstExit = yield* Effect.exit(
+        Effect.gen(function* () {
+          const commands = yield* SessionCommands
+          yield* commands.createSession({
+            cwd: "/tmp/restart-create",
+            requestId: "req-create-restart",
+            initialPrompt: "stored prompt",
+          })
+        }).pipe(Effect.provide(makeLayer(true))),
+      )
+      expect(firstExit._tag).toBe("Failure")
+
+      const second = yield* Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        return yield* commands.createSession({
+          cwd: "/tmp/restart-create",
+          requestId: "req-create-restart",
+          initialPrompt: "retry prompt should not win",
+        })
+      }).pipe(Effect.provide(makeLayer(false)))
+
+      const sessions = yield* Effect.gen(function* () {
+        const storage = yield* SessionStorage
+        return yield* storage.listSessions()
+      }).pipe(Effect.provide(makeLayer(false)))
+
+      expect(sessions).toHaveLength(1)
+      expect(sessions[0]?.id).toBe(second.sessionId)
+      expect(sessions[0]?.activeBranchId).toBe(second.branchId)
+      expect(deliveredPrompts).toEqual(["stored prompt:session.create:req-create-restart:initial"])
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
 })

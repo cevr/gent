@@ -23,6 +23,10 @@ import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
+import {
+  SessionOperationStorage,
+  type StoredCreateSessionResult,
+} from "../storage/session-operation-storage.js"
 import type { StorageError } from "../storage/sqlite-storage.js"
 import { StorageTransaction } from "../storage/storage-transaction.js"
 import { ModelResolver } from "../providers/model-resolver.js"
@@ -567,6 +571,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const branchStorage = yield* BranchStorage
       const messageStorage = yield* MessageStorage
       const storageTransaction = yield* StorageTransaction
+      const sessionOperationStorage = yield* SessionOperationStorage
       const sessionRuntime = yield* SessionRuntime
       const eventPublisher = yield* EventPublisher
       const modelResolver = yield* ModelResolver
@@ -580,11 +585,11 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
       // ── requestId dedup ──
       //
-      // Clients generate a `requestId` per create/send so a WS-level retry
-      // after an ambiguous failure converges on a single session/message id
-      // instead of forking state. Cache is per-server, in-memory only: the
-      // window of ambiguity is the transport retry window (seconds), not
-      // cross-process. If the server crashes, the client learns on reconnect.
+      // Clients generate a `requestId` per mutation so a WS-level retry after
+      // an ambiguous failure converges on one durable outcome. Session create
+      // additionally stores its result in SQLite; the in-memory cache only
+      // collapses concurrent same-process fibers while the durable operation
+      // table owns restart/retry correctness.
       //
       // Dedup is *concurrency-safe*: `RpcServer.layerHttp` runs with
       // `concurrency: "unbounded"` and the client has
@@ -593,14 +598,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       // results) + atomic Ref.modify claim ensures the second fiber waits on
       // the first's outcome instead of racing it.
       //
-      // Note on initialPrompt: the cache only remembers the
-      // createSession *outcome*. If createSession returns successfully and
-      // the follow-up `sessionRuntime.sendUserMessage` fails inside the
-      // runtime, a retried create with the same requestId short-circuits to
-      // the cached result and does NOT re-send the prompt. The TUI does not
-      // pass initialPrompt on create (it sends separately via a dedicated send
-      // with its own requestId), so this is an advisory, not an active failure
-      // mode.
       const createRequestCache = yield* Ref.make(
         new Map<string, Deferred.Deferred<CreateSessionResult, AppServiceError>>(),
       )
@@ -704,9 +701,39 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         })
       })
 
+      const sendInitialPrompt = Effect.fn("SessionCommands.sendInitialPrompt")(function* (
+        operation: StoredCreateSessionResult,
+        requestId: string | undefined,
+      ) {
+        if (operation.initialPrompt === undefined || operation.initialPrompt.length === 0) return
+        yield* sessionRuntime.sendUserMessage({
+          sessionId: operation.sessionId,
+          branchId: operation.branchId,
+          content: operation.initialPrompt,
+          ...(operation.agentOverride !== undefined
+            ? { agentOverride: operation.agentOverride }
+            : {}),
+          ...(requestId !== undefined ? { requestId: `session.create:${requestId}:initial` } : {}),
+        })
+      })
+
+      const createSessionResult = (operation: StoredCreateSessionResult): CreateSessionResult => ({
+        sessionId: operation.sessionId,
+        branchId: operation.branchId,
+        name: operation.name,
+      })
+
       const doCreateSession = Effect.fn("SessionCommands.doCreateSession")(function* (
         input: CreateSessionInput,
       ) {
+        if (input.requestId !== undefined) {
+          const existing = yield* sessionOperationStorage.getCreateSession(input.requestId)
+          if (existing !== undefined) {
+            yield* sendInitialPrompt(existing, input.requestId)
+            return createSessionResult(existing)
+          }
+        }
+
         const sessionId = SessionId.make(yield* platform.randomId)
         if (input.parentBranchId !== undefined && input.parentSessionId === undefined) {
           return yield* new NotFoundError({
@@ -754,36 +781,41 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
         const committed = yield* storageTransaction.withTransaction(
           Effect.gen(function* () {
+            if (input.requestId !== undefined) {
+              const existing = yield* sessionOperationStorage.getCreateSession(input.requestId)
+              if (existing !== undefined) return { result: existing }
+            }
             yield* sessionStorage.createSession(session)
             yield* branchStorage.createBranch(branch)
             const envelope = yield* eventPublisher.append(
               SessionStarted.make({ sessionId, branchId }),
             )
-            return { envelope }
+            const result: StoredCreateSessionResult = {
+              sessionId,
+              branchId,
+              name,
+              ...(input.initialPrompt !== undefined ? { initialPrompt: input.initialPrompt } : {}),
+              ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
+            }
+            if (input.requestId !== undefined) {
+              yield* sessionOperationStorage.saveCreateSession(input.requestId, result)
+            }
+            return { envelope, result }
           }),
         )
-        yield* eventPublisher.deliver(committed.envelope)
-        yield* Effect.logInfo("session.created").pipe(
-          Effect.annotateLogs({
-            sessionId,
-            branchId,
-            ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
-          }),
-        )
-
-        // Optional initial prompt — sends immediately after creation
-        if (input.initialPrompt !== undefined && input.initialPrompt.length > 0) {
-          yield* sessionRuntime.sendUserMessage({
-            sessionId,
-            branchId,
-            content: input.initialPrompt,
-            ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
-            ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
-          })
+        if (committed.envelope !== undefined) {
+          yield* eventPublisher.deliver(committed.envelope)
+          yield* Effect.logInfo("session.created").pipe(
+            Effect.annotateLogs({
+              sessionId: committed.result.sessionId,
+              branchId: committed.result.branchId,
+              ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+            }),
+          )
         }
 
-        const result: CreateSessionResult = { sessionId, branchId, name }
-        return result
+        yield* sendInitialPrompt(committed.result, input.requestId)
+        return createSessionResult(committed.result)
       })
 
       const createBranch = Effect.fn("SessionCommands.createBranch")(function* (
