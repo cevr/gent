@@ -11,7 +11,7 @@ import {
   messagePartsToolResultParts,
   messageSingleText,
 } from "../../domain/message-part-projection.js"
-import { MessageId } from "../../domain/ids.js"
+import { type ActorCommandId, MessageId, ToolCallId } from "../../domain/ids.js"
 import { Schema } from "effect"
 import { compileSystemPrompt, withSectionMarkers, type PromptSection } from "../../domain/prompt.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
@@ -151,6 +151,20 @@ export const assistantMessageIdForTurn = (messageId: MessageId, step = 1): Messa
 
 export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
   MessageId.make(`${messageId}:tool-result:${step}`)
+
+export const toolCallIdForCommand = (commandId: ActorCommandId) => ToolCallId.make(commandId)
+
+export const assistantMessageIdForCommand = (commandId: ActorCommandId) =>
+  MessageId.make(`${commandId}:assistant`)
+
+export const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>
+  MessageId.make(`${commandId}:tool-result`)
+
+export const interjectionMessageIdForCommand = (commandId: ActorCommandId) =>
+  MessageId.make(`${commandId}:interjection`)
+
+export const toolResultMessageIdForToolCall = (toolCallId: ToolCallId) =>
+  MessageId.make(`tool-call:${toolCallId}:tool-result`)
 
 export const assistantDraftFromMessage = (message: Message): AssistantDraft => ({
   text: messagePartsText(message.parts),

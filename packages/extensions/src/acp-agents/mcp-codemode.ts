@@ -48,7 +48,7 @@ export interface CodemodeConfig {
   /** Run a tool by name with args. Routes through ToolRunner.run() in the
    *  parent Effect runtime — full permission checks, interceptors, and
    *  result enrichment apply. Returns the tool result value. */
-  readonly runTool: (toolName: string, args: unknown) => Promise<unknown>
+  readonly runTool: (toolName: string, args: unknown) => unknown
 }
 
 // ── Tool description generator ──

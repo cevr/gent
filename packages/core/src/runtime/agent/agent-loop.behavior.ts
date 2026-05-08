@@ -80,6 +80,7 @@ import {
   appendSteeringItem,
   countQueuedFollowUps,
   projectRuntimeState,
+  AgentLoopError,
   queueSnapshotFromQueueState,
   type AgentLoopState,
   type LoopQueueState,
@@ -94,7 +95,6 @@ import {
   assistantMessageIdForTurn,
   toolResultMessageIdForTurn,
 } from "./agent-loop.utils.js"
-import { AgentLoopError } from "./agent-loop.commands.js"
 import {
   collectExternalTurnResponse,
   collectModelTurnResponse,

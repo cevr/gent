@@ -351,6 +351,8 @@ so the rule does not enforce the architecture it documents.
 
 ## Commit 8: refactor(files): collapse dead command/test boundary files
 
+**Status**: Completed in `refactor(files): collapse dead boundary files`.
+
 **Justification**: File splits must earn their existence. Low-risk migration
 era boundaries should collapse once their production owner is clear.
 
@@ -363,17 +365,22 @@ era boundaries should collapse once their production owner is clear.
 
 **Changes**
 
-| File                                                                                             | Change                                                                                 | Lines |
-| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- | ----- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.commands.ts`      | Move surviving `AgentLoopError`/ids to actor-owned files or prove file earns boundary. | ~1    |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop-commands.test.ts`     | Move behavioral coverage to actor/runtime tests or delete if redundant.                | ~1    |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/mcp-codemode-boundary.ts` | Move test-only run boundary into tests or prove production boundary.                   | ~1    |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/tests/acp-agents/acp-agents.test.ts`     | Update imports if boundary moves.                                                      | ~20   |
+| File                                                                                             | Change                                                                                     | Lines |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ----- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.commands.ts`      | Deleted legacy command schema file; actor owns operation schemas.                          | ~92   |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.state.ts`         | Moved surviving `AgentLoopError` beside loop state.                                        | ~5    |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.utils.ts`         | Moved deterministic command-derived message/tool id helpers beside other loop utilities.   | ~16   |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop-commands.test.ts`     | Deleted schema-only legacy test file.                                                      | ~111  |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop-queue.test.ts`        | Preserved stable command-id behavior coverage in an existing agent-loop runtime test file. | ~22   |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/mcp-codemode-boundary.ts` | Deleted test-only `Effect.runPromise` wrapper from production source.                      | ~7    |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/mcp-codemode.ts`          | Let codemode `runTool` return plain values or Promises, matching JS `await` semantics.     | ~2    |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/tests/acp-agents/acp-agents.test.ts`     | Inlined direct stub result and kept real boundary coverage through `makeAcpRunTool`.       | ~13   |
 
 **Verification**
 
-- Focused runtime agent-loop tests.
-- Focused ACP agent tests.
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/runtime/agent-loop-queue.test.ts packages/core/tests/runtime/agent-loop-concurrency.test.ts packages/core/tests/runtime/external-turn.test.ts packages/extensions/tests/acp-agents/acp-agents.test.ts`
+- `bun run typecheck`
+- `bun run lint`
 - `bun run gate`
 
 ## Commit 9: docs(architecture): document single extension authority model

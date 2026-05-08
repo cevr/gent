@@ -9,7 +9,7 @@ import { BunServices } from "@effect/platform-bun"
 import { Clock, Effect, Layer, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
-import type { AgentLoopError } from "../../src/runtime/agent/agent-loop.commands"
+import type { AgentLoopError } from "../../src/runtime/agent/agent-loop.state"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopTestActor,

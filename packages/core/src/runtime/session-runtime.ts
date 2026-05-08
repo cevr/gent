@@ -47,8 +47,11 @@ import {
   resolveExistingSessionBranch,
   resolveSessionEnvironmentOrFail,
 } from "./session-runtime-context.js"
-import { AgentLoopError } from "./agent/agent-loop.commands.js"
-import { SessionRuntimeStateSchema, type SessionRuntimeState } from "./agent/agent-loop.state.js"
+import {
+  AgentLoopError,
+  SessionRuntimeStateSchema,
+  type SessionRuntimeState,
+} from "./agent/agent-loop.state.js"
 export { SessionRuntimeStateSchema, type SessionRuntimeState }
 
 export class SessionRuntimeError extends Schema.TaggedErrorClass<SessionRuntimeError>()(

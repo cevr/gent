@@ -56,14 +56,14 @@ import { GentPlatform } from "../gent-platform.js"
 import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import {
-  AgentLoopError,
   assistantMessageIdForCommand,
   interjectionMessageIdForCommand,
   toolCallIdForCommand,
   toolResultMessageIdForCommand,
   toolResultMessageIdForToolCall,
-} from "./agent-loop.commands.js"
+} from "./agent-loop.utils.js"
 import {
+  AgentLoopError,
   emptyLoopQueueState,
   projectRuntimeState,
   SessionRuntimeStateSchema,

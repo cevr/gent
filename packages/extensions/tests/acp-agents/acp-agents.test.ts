@@ -17,7 +17,7 @@ import {
 import { SessionNotification } from "../../src/acp-agents/schema.js"
 import { startCodemodeServer } from "../../src/acp-agents/mcp-codemode.js"
 import { makeAcpRunTool } from "../../src/acp-agents/executor-boundary.js"
-import { runMcpToolHandler } from "../../src/acp-agents/mcp-codemode-boundary.js"
+
 // ── ACP → response part mapping ──
 const makeNotification = (update: unknown) =>
   Schema.decodeUnknownSync(SessionNotification)({ sessionId: SessionId.make("s1"), update })
@@ -316,13 +316,10 @@ describe("codemode proxy", () => {
       })
       const server = yield* startCodemodeServer({
         tools: [mockTool],
-        runTool: (toolName, args) =>
-          runMcpToolHandler(
-            Effect.sync(() => {
-              calls.push({ toolName, args })
-              return { result: "ok" }
-            }),
-          ),
+        runTool: (toolName, args) => {
+          calls.push({ toolName, args })
+          return { result: "ok" }
+        },
       })
       const response = yield* Effect.promise(() =>
         callMcp(server.url, {

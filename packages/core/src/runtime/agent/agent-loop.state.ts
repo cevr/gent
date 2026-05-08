@@ -29,6 +29,11 @@ import {
 import { messageText, getSingleText } from "./agent-loop.utils.js"
 import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
 
+export class AgentLoopError extends Schema.TaggedErrorClass<AgentLoopError>()("AgentLoopError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect),
+}) {}
+
 // ── Queue ──
 
 const canBatchQueuedFollowUp = (existing: QueuedTurnItem, incoming: QueuedTurnItem): boolean => {

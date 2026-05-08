@@ -21,7 +21,7 @@
 
 import { Effect } from "effect"
 import { BranchId, SessionId } from "../../domain/ids.js"
-import { AgentLoopError } from "./agent-loop.commands.js"
+import { AgentLoopError } from "./agent-loop.state.js"
 
 /** Encode `(workspaceId, sessionId, branchId)` into a unique reversible string. */
 export const entityIdOf = (workspaceId: string, sessionId: SessionId, branchId: BranchId): string =>

@@ -3,7 +3,11 @@ import { BunServices } from "@effect/platform-bun"
 import { Clock, Duration, Effect, Layer, Ref, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
-import type { AgentLoopError, SteerCommand } from "../../../src/runtime/agent/agent-loop.commands"
+import type {
+  AgentLoopError,
+  SessionRuntimeState,
+} from "../../../src/runtime/agent/agent-loop.state"
+import type { SteerCommand } from "../../../src/domain/steer"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopTestActor,
@@ -52,7 +56,6 @@ import {
   ensureStorageParents,
 } from "@gent/core-internal/test-utils"
 import type { QueueSnapshot } from "@gent/core-internal/domain/queue"
-import type { SessionRuntimeState } from "../../../src/runtime/agent/agent-loop.state"
 import type { BranchId, InteractionRequestId, SessionId } from "@gent/core-internal/domain/ids"
 import { ActorCommandId, ExtensionId, MessageId } from "@gent/core-internal/domain/ids"
 import type { TurnStreamPart } from "@gent/core-internal/domain/driver"

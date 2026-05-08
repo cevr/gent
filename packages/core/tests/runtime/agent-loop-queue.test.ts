@@ -1,3 +1,4 @@
+import { test } from "bun:test"
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect"
@@ -13,7 +14,7 @@ import { EventStore, MessageReceived } from "@gent/core-internal/domain/event"
 import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { EventStorage } from "@gent/core-internal/storage/event-storage"
-import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
+import { ActorCommandId, BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
@@ -36,9 +37,28 @@ import {
 import { AgentLoopQueueStorage } from "../../src/storage/agent-loop-queue-storage"
 import { StorageError } from "../../src/domain/storage-error"
 import { ensureStorageParents } from "@gent/core-internal/test-utils"
+import {
+  assistantMessageIdForCommand,
+  toolCallIdForCommand,
+  toolResultMessageIdForCommand,
+  toolResultMessageIdForToolCall,
+} from "../../src/runtime/agent/agent-loop.utils"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })
+
+describe("agent loop command ids", () => {
+  test("derive stable message and tool ids", () => {
+    const commandId = ActorCommandId.make("test-command-id")
+
+    expect(String(toolCallIdForCommand(commandId))).toBe(String(commandId))
+    expect(String(assistantMessageIdForCommand(commandId))).toBe(`${commandId}:assistant`)
+    expect(String(toolResultMessageIdForCommand(commandId))).toBe(`${commandId}:tool-result`)
+    expect(String(toolResultMessageIdForToolCall(toolCallIdForCommand(commandId)))).toBe(
+      `tool-call:${commandId}:tool-result`,
+    )
+  })
+})
 
 describe("queue drain regression", () => {
   it.live(
