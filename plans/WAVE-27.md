@@ -86,6 +86,23 @@ signal is consistent:
 
 ## Research Synthesis
 
+### File Existence Audit Lane
+
+Every batch in this wave includes a file-merit pass. A file earns its existence
+when it is at least one of these:
+
+- a public entrypoint or package/subpath boundary;
+- a real domain, process, or actor boundary with behavior behind it;
+- a generated fixture or external contract mirror;
+- a high-churn ownership seam that keeps unrelated change streams apart;
+- a test harness whose name describes behavior and whose helpers are shared
+  enough to pay for their import surface.
+
+Files that only rename, forward, wrap one function, or isolate a tiny service
+because "small files are cleaner" should be merged into the owning module or
+deleted. Larger cohesive files are preferred when the split does not buy a
+reader, caller, or test a real boundary.
+
 ### Strongest Agreed Findings
 
 | Finding                                                                                                                                                                             | Severity | Principle                                                      | File Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
