@@ -90,7 +90,7 @@ const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
     message: "Bun.randomUUIDv7 is adapter-only; use GentPlatform.randomId",
   },
   {
-    pattern: /\bprocess\.(?:platform|pid|execPath)\b/,
+    pattern: /\bprocess\.(?:platform|pid|execPath|kill)\b/,
     message: "Host process facts are adapter-only; use GentPlatform",
   },
   {
@@ -138,7 +138,7 @@ const bannedAgentRunnerCompositionPatterns: ReadonlyArray<BannedPattern> = [
 ]
 
 const hostFactPatternSources = new Set([
-  "\\bprocess\\.(?:platform|pid|execPath)\\b",
+  "\\bprocess\\.(?:platform|pid|execPath|kill)\\b",
   "\\bos\\.(?:hostname|homedir|release)\\s*\\(",
 ])
 
@@ -172,7 +172,7 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => [
       !(
         (file === "packages/core/src/runtime/gent-platform-bun.ts" &&
           (pattern.source === "\\bBun\\.randomUUIDv7\\b" ||
-            pattern.source === "\\bprocess\\.(?:platform|pid|execPath)\\b" ||
+            pattern.source === "\\bprocess\\.(?:platform|pid|execPath|kill)\\b" ||
             pattern.source === "\\bos\\.(?:hostname|homedir|release)\\s*\\(")) ||
         (file === "packages/core/src/test-utils/language-model.ts" &&
           pattern.source === "\\bProvider\\.(?:Sequence|Signal|Debug|Failing)\\b") ||

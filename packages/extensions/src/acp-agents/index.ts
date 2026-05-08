@@ -226,7 +226,7 @@ export const makeAcpAgentsExtension = (
   setup: (ctx) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner
-      const anthropicPlatform = AnthropicPlatform.fromHost(ctx.host, spawner)
+      const anthropicPlatform = AnthropicPlatform.fromHost(ctx.host)
       const acpPlatform = {
         parentEnv: anthropicPlatform.parentEnv,
       } satisfies AcpAgentsPlatformShape

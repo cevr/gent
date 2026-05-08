@@ -1,6 +1,5 @@
 import { BunServices } from "@effect/platform-bun"
 import { Clock, Config, Effect, Layer, Option, Redacted, Ref, SynchronizedRef } from "effect"
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
   AuthMethod,
   ExtensionId,
@@ -252,11 +251,10 @@ export const buildAnthropicModelDriver = (
   },
 })
 
-export const AnthropicExtension: GentExtension<ChildProcessSpawner> = {
+export const AnthropicExtension: GentExtension = {
   manifest: { id: ExtensionId.make("@gent/provider-anthropic") },
   setup: (ctx) =>
     Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner
       const env: AnthropicKeychainEnv = {
         betaFlags: yield* readOptionalEnv("ANTHROPIC_BETA_FLAGS"),
         cliVersion: yield* readOptionalEnv("ANTHROPIC_CLI_VERSION"),
@@ -266,7 +264,7 @@ export const AnthropicExtension: GentExtension<ChildProcessSpawner> = {
       initAnthropicKeychainEnv(env)
 
       const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
-      const platform = AnthropicPlatform.fromHost(ctx.host, spawner)
+      const platform = AnthropicPlatform.fromHost(ctx.host)
 
       // Cache cells are hoisted to extension-closure scope so they
       // survive across `resolveModel` calls. Lifetime: one extension

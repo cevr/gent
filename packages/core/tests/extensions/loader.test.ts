@@ -43,14 +43,15 @@ describe("setupExtension", () => {
     }).pipe(Effect.provide(fsLayer)),
   )
 
-  it.live("runtime-loaded setup receives public host facts only", () =>
+  it.live("runtime-loaded setup receives host process facade", () =>
     Effect.gen(function* () {
       const sawProcessAuthority = yield* Effect.sync(() => ({ value: false }))
       const extension: GentExtension = {
         manifest: { id: ExtensionId.make("@gent/test-public-setup") },
         setup: (ctx) =>
           Effect.sync(() => {
-            sawProcessAuthority.value = "runProcess" in ctx.host || "parentEnv" in ctx.host
+            sawProcessAuthority.value =
+              "runProcess" in ctx.host && "parentEnv" in ctx.host && "signalPid" in ctx.host
             return {}
           }),
       }
@@ -65,7 +66,7 @@ describe("setupExtension", () => {
         "/tmp/home",
       )
 
-      expect(sawProcessAuthority.value).toBe(false)
+      expect(sawProcessAuthority.value).toBe(true)
     }).pipe(Effect.provide(fsLayer)),
   )
 })

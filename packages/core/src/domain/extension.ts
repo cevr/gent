@@ -350,7 +350,7 @@ export interface ExtensionSetupContext {
   readonly source: string
   /** User home directory (e.g. ~/.gent lives here). Defaults to the platform home directory. */
   readonly home: string
-  readonly host: ExtensionHostFacts
+  readonly host: ExtensionHostPlatform
 }
 
 export interface ExtensionHostOsInfo {

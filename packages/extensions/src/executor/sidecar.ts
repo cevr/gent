@@ -23,7 +23,7 @@ import {
   Scope,
   Semaphore,
 } from "effect"
-import { isRecord, type ExtensionHostFacts } from "@gent/core/extensions/api"
+import { isRecord, type ExtensionHostPlatform } from "@gent/core/extensions/api"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import { fileURLToPath } from "node:url"
@@ -130,7 +130,7 @@ export interface ExecutorSidecarService {
 export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSidecarService>()(
   "@gent/extensions/src/executor/sidecar/ExecutorSidecar",
 ) {
-  static Live = (home: string, host: ExtensionHostFacts) =>
+  static Live = (home: string, host: ExtensionHostPlatform) =>
     Layer.effect(
       ExecutorSidecar,
       Effect.gen(function* () {

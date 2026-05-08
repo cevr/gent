@@ -407,6 +407,11 @@ the public boundary. Actor primary keys cannot be random inside
 
 ## Commit 6: refactor(platform): keep process authority at host edges
 
+**Status**: Completed in current batch. Runtime setup now receives the
+host-owned process facade; `defineExtension` continues to expose setup facts.
+Anthropic and executor adapters reuse `ctx.host` for env/process/signal work,
+and the duplication guard now catches `process.kill` outside platform roots.
+
 **Justification**: Shipped setup code should not rebuild platform access through
 `GentPlatform` or raw Bun/Node. If setup needs process authority, it should get
 it from a host-provided internal service or be moved to runtime resources.

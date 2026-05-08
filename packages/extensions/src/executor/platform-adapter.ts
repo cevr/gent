@@ -1,11 +1,5 @@
-import { Context, Effect, Layer } from "effect"
-import {
-  ExtensionHostProcessError,
-  runProcess,
-  type ExtensionHostFacts,
-  type ExtensionHostPlatform,
-} from "@gent/core/extensions/api"
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { Context, Layer, type Effect } from "effect"
+import { type ExtensionHostPlatform } from "@gent/core/extensions/api"
 
 export interface ExecutorPlatformShape {
   readonly execPath: string
@@ -21,37 +15,18 @@ export interface ExecutorPlatformShape {
 export class ExecutorPlatform extends Context.Service<ExecutorPlatform, ExecutorPlatformShape>()(
   "@gent/extensions/src/executor/platform-adapter/ExecutorPlatform",
 ) {
-  static Live = (host: ExtensionHostFacts) =>
-    Layer.effect(
+  static Live = (host: ExtensionHostPlatform) =>
+    Layer.succeed(
       ExecutorPlatform,
-      Effect.gen(function* () {
-        const spawner = yield* ChildProcessSpawner
-        const isWindows = host.osInfo.platform === "win32"
-        return ExecutorPlatform.of({
-          execPath: host.execPath,
-          pathListSeparator: host.pathListSeparator,
-          binaryName: isWindows ? "executor.exe" : "executor",
-          commandCandidates: host.commandCandidates,
-          isPortFree: host.isPortFree,
-          isPidAlive: host.isPidAlive,
-          signalPid: (pid, signal) =>
-            Effect.sync(() => {
-              process.kill(pid, signal)
-            }),
-          runProcess: (command, args, options) =>
-            runProcess(command, args, options).pipe(
-              Effect.provideService(ChildProcessSpawner, spawner),
-              Effect.mapError(
-                (e) =>
-                  new ExtensionHostProcessError({
-                    command: e.command,
-                    message: e.message,
-                    cause: e.cause,
-                    timedOut: e.timedOut,
-                  }),
-              ),
-            ),
-        })
+      ExecutorPlatform.of({
+        execPath: host.execPath,
+        pathListSeparator: host.pathListSeparator,
+        binaryName: host.osInfo.platform === "win32" ? "executor.exe" : "executor",
+        commandCandidates: host.commandCandidates,
+        isPortFree: host.isPortFree,
+        isPidAlive: host.isPidAlive,
+        signalPid: host.signalPid,
+        runProcess: host.runProcess,
       }),
     )
 }

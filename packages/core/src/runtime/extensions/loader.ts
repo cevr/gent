@@ -10,7 +10,6 @@ import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js
 import { validateExtensionPackageShape } from "../../domain/extension-package-shape.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { getToolMetadata } from "../../domain/capability/tool.js"
-import { extensionHostFacts } from "../make-extension-host-context.js"
 import { makeExtensionHostPlatform } from "./host-platform.js"
 
 /** Static prompt sections live on capability leaf `prompt` (folded by the
@@ -256,7 +255,7 @@ export const setupExtension = (
       cwd,
       source: discovered.sourcePath,
       home,
-      host: extensionHostFacts(host),
+      host,
     })
     const contributions: ExtensionContributions = yield* sealRuntimeLoadedEffect({
       extensionId: discovered.extension.manifest.id,

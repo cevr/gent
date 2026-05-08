@@ -550,6 +550,7 @@ describe("platform duplication guards", () => {
         [
           "const pid = process.pid",
           "const runtime = process.execPath",
+          "process.kill(pid, 'SIGTERM')",
           "const hostname = os.hostname()",
         ].join("\n"),
       ),
@@ -567,6 +568,11 @@ describe("platform duplication guards", () => {
       {
         file: "apps/server/src/main.ts",
         line: 3,
+        message: "Host process facts are adapter-only; use GentPlatform",
+      },
+      {
+        file: "apps/server/src/main.ts",
+        line: 4,
         message: "Host OS facts are adapter-only; use GentPlatform",
       },
     ])
