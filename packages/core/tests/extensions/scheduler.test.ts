@@ -5,6 +5,7 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 import {
   reconcileScheduledJobs,
   collectSchedules,
+  type CronRuntimeShape,
 } from "../../src/runtime/extensions/resource-host/schedule-engine"
 import { defineResource } from "@gent/core/domain/contribution"
 import type { ResourceSchedule } from "@gent/core/domain/resource"
@@ -108,7 +109,7 @@ describe("scheduled jobs", () => {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const home = yield* fs.makeTempDirectoryScoped()
-      const runtime = {
+      const runtime: CronRuntimeShape = {
         install: (_entryPath: string, _schedule: string, name: string) => {
           if (name.includes("meditate")) {
             return Effect.die(new Error("cron install boom"))
@@ -116,7 +117,7 @@ describe("scheduled jobs", () => {
           return Effect.void
         },
         remove: (_name: string) => Effect.void,
-      } as never
+      }
 
       const failures = yield* reconcileScheduledJobs({
         extensions: [
@@ -155,6 +156,39 @@ describe("scheduled jobs", () => {
         Schema.fromJsonString(Schema.Struct({ jobs: Schema.Record(Schema.String, Schema.String) })),
       )(yield* fs.readFileString(statePath))
       expect(Object.keys(state.jobs)).toHaveLength(1)
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
+  it.scopedLive("missing cron runtime reports desired schedules as degraded", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+
+      const failures = yield* reconcileScheduledJobs({
+        extensions: [
+          makeLoaded("@gent/memory", [
+            {
+              id: "reflect",
+              cron: "0 21 * * 1-5",
+              target: {
+                agent: AgentName.make("memory:reflect"),
+                prompt: "Reflect on recent sessions.",
+              },
+            },
+          ]),
+        ],
+        home,
+        command: ["/usr/local/bin/gent"],
+        env: { HOME: home },
+      })
+
+      expect(failures).toEqual([
+        {
+          extensionId: ExtensionId.make("@gent/memory"),
+          jobId: "reflect",
+          error: "Cron runtime unavailable",
+        },
+      ])
     }).pipe(Effect.provide(fsLayer)),
   )
 

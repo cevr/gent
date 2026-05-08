@@ -14,9 +14,61 @@
  */
 
 import * as os from "node:os"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform, SignalError } from "./gent-platform.js"
+import { CronRuntime, SchedulerRuntimeError } from "./extensions/resource-host/schedule-engine.js"
+
+const bunCronFunction = (): Function | undefined => {
+  const bun = Reflect.get(globalThis, "Bun")
+  if (typeof bun !== "object" || bun === null) return undefined
+  const cron = Reflect.get(bun, "cron")
+  return typeof cron === "function" ? cron : undefined
+}
+
+const bunCronRemoveFunction = (cron: Function): Function | undefined => {
+  const remove = Reflect.get(cron, "remove")
+  return typeof remove === "function" ? remove : undefined
+}
+
+const missingCronRuntime = (operation: "install" | "remove", jobName: string) =>
+  new SchedulerRuntimeError({
+    operation,
+    jobName,
+    cause: "Bun.cron is unavailable",
+  })
+
+export const BunCronRuntimeLive: Layer.Layer<CronRuntime> = Layer.succeed(
+  CronRuntime,
+  CronRuntime.of({
+    install: (entryPath, schedule, name) =>
+      Effect.try({
+        try: () => {
+          const cron = bunCronFunction()
+          if (cron === undefined) throw missingCronRuntime("install", name)
+          Reflect.apply(cron, undefined, [entryPath, schedule, name])
+        },
+        catch: (cause) =>
+          Schema.is(SchedulerRuntimeError)(cause)
+            ? cause
+            : new SchedulerRuntimeError({ operation: "install", jobName: name, cause }),
+      }),
+    remove: (name) =>
+      Effect.try({
+        try: () => {
+          const cron = bunCronFunction()
+          if (cron === undefined) throw missingCronRuntime("remove", name)
+          const remove = bunCronRemoveFunction(cron)
+          if (remove === undefined) throw missingCronRuntime("remove", name)
+          Reflect.apply(remove, cron, [name])
+        },
+        catch: (cause) =>
+          Schema.is(SchedulerRuntimeError)(cause)
+            ? cause
+            : new SchedulerRuntimeError({ operation: "remove", jobName: name, cause }),
+      }),
+  }),
+)
 
 export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
   GentPlatform,
@@ -89,4 +141,8 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
  * so this is purely an output-context bundle (`Layer.merge`), not a
  * dependency wiring (`Layer.provideMerge`).
  */
-export const BunPlatformLive = Layer.merge(BunServices.layer, BunGentPlatformLive)
+export const BunPlatformLive = Layer.mergeAll(
+  BunServices.layer,
+  BunGentPlatformLive,
+  BunCronRuntimeLive,
+)

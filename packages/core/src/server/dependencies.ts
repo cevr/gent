@@ -20,7 +20,11 @@ import { SessionRuntime } from "../runtime/session-runtime.js"
 import { resolveProfileRuntime } from "../runtime/profile.js"
 import { type ScheduledJobCommand } from "../runtime/extensions/resource-host/schedule-engine.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
-import { BunGentPlatformLive, BunPlatformLive } from "../runtime/gent-platform-bun.js"
+import {
+  BunCronRuntimeLive,
+  BunGentPlatformLive,
+  BunPlatformLive,
+} from "../runtime/gent-platform-bun.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
@@ -151,7 +155,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   // shared composition boundary so SQLite initialization cannot run in parallel copies.
   const extensionRegistryLive = Layer.provide(
     profileLayers,
-    Layer.mergeAll(configServiceLive, runtimePlatformLive, BunGentPlatformLive),
+    Layer.mergeAll(configServiceLive, runtimePlatformLive, BunGentPlatformLive, BunCronRuntimeLive),
   )
   const modelRegistryLive = Layer.provide(
     ModelRegistry.Live,

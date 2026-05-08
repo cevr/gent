@@ -16,7 +16,7 @@
  * @module
  */
 
-import { Cause, Effect, FileSystem, Path, Schema } from "effect"
+import { Cause, Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import type { LoadedExtension } from "../../../domain/extension.js"
 import type { ExtensionId } from "../../../domain/ids.js"
 import type { AnyResourceContribution, ResourceSchedule } from "../../../domain/resource.js"
@@ -38,7 +38,7 @@ export interface SchedulerFailure {
   readonly error: string
 }
 
-class SchedulerRuntimeError extends Schema.TaggedErrorClass<SchedulerRuntimeError>()(
+export class SchedulerRuntimeError extends Schema.TaggedErrorClass<SchedulerRuntimeError>()(
   "@gent/core/runtime/extensions/resource-host/schedule-engine/SchedulerRuntimeError",
   {
     operation: Schema.Literals(["install", "remove"]),
@@ -59,13 +59,40 @@ const SchedulerStateJson = Schema.fromJsonString(SchedulerStateSchema)
 const decodeSchedulerState = Schema.decodeUnknownEffect(SchedulerStateJson)
 const encodeSchedulerState = Schema.encodeEffect(SchedulerStateJson)
 
-interface CronRuntime {
+export interface CronRuntimeShape {
   readonly install: (
     entryPath: string,
     schedule: string,
     name: string,
   ) => Effect.Effect<void, SchedulerRuntimeError>
   readonly remove: (name: string) => Effect.Effect<void, SchedulerRuntimeError>
+}
+
+export class CronRuntime extends Context.Service<CronRuntime, CronRuntimeShape>()(
+  "@gent/core/src/runtime/extensions/resource-host/schedule-engine/CronRuntime",
+) {
+  static unavailable = (reason: string): Layer.Layer<CronRuntime> =>
+    Layer.succeed(
+      CronRuntime,
+      CronRuntime.of({
+        install: (_entryPath, _schedule, name) =>
+          Effect.fail(
+            new SchedulerRuntimeError({
+              operation: "install",
+              jobName: name,
+              cause: reason,
+            }),
+          ),
+        remove: (name) =>
+          Effect.fail(
+            new SchedulerRuntimeError({
+              operation: "remove",
+              jobName: name,
+              cause: reason,
+            }),
+          ),
+      }),
+    )
 }
 
 interface DesiredScheduledJob {
@@ -149,41 +176,6 @@ const writeState = (
     yield* fs.writeFileString(statePath, encoded).pipe(Effect.catchEager(() => Effect.void))
   }).pipe(Effect.catchEager(() => Effect.void))
 
-const resolveCronRuntime = (): CronRuntime | undefined => {
-  const bunLike = globalThis as { readonly Bun?: unknown }
-  if (typeof bunLike.Bun !== "object" || bunLike.Bun === null) return undefined
-  const cron = (bunLike.Bun as { readonly cron?: unknown }).cron
-  if (typeof cron !== "function") return undefined
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-  const cronWithRemove = cron as ((entryPath: string, schedule: string, name: string) => void) & {
-    readonly remove?: (name: string) => void
-  }
-  if (typeof cronWithRemove.remove !== "function") return undefined
-  const remove = cronWithRemove.remove
-  return {
-    install: (entryPath, schedule, name) =>
-      Effect.try({
-        try: () => cronWithRemove(entryPath, schedule, name),
-        catch: (error) =>
-          new SchedulerRuntimeError({
-            operation: "install",
-            jobName: name,
-            cause: error,
-          }),
-      }),
-    remove: (name) =>
-      Effect.try({
-        try: () => remove(name),
-        catch: (error) =>
-          new SchedulerRuntimeError({
-            operation: "remove",
-            jobName: name,
-            cause: error,
-          }),
-      }),
-  }
-}
-
 /**
  * Collect every `ResourceSchedule` from every Resource matching the
  * requested scopes. Scope filtering happens at the collector boundary so
@@ -242,13 +234,10 @@ export const reconcileScheduledJobs = (params: {
   readonly home: string
   readonly command: ScheduledJobCommand | undefined
   readonly env?: Readonly<Record<string, string>>
-  readonly runtime?: CronRuntime
+  readonly runtime?: CronRuntimeShape
 }): Effect.Effect<ReadonlyArray<SchedulerFailure>, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     if (params.command === undefined) return []
-
-    const runtime = params.runtime ?? resolveCronRuntime()
-    if (runtime === undefined) return []
 
     const path = yield* Path.Path
     const fs = yield* FileSystem.FileSystem
@@ -259,6 +248,17 @@ export const reconcileScheduledJobs = (params: {
       schedulerHome,
       params.env ?? {},
     )
+    const runtimeOption = yield* Effect.serviceOption(CronRuntime)
+    const runtime = params.runtime ?? Option.getOrUndefined(runtimeOption)
+    if (runtime === undefined && desired.length > 0) {
+      return desired.map((job) => ({
+        extensionId: job.extensionId,
+        jobId: job.jobId,
+        error: "Cron runtime unavailable",
+      }))
+    }
+    if (runtime === undefined) return []
+
     const statePath = path.join(schedulerHome, ...STATE_FILE)
     const previous = yield* readState(statePath)
     const desiredNames = new Set(desired.map((job) => job.name))
