@@ -4,17 +4,7 @@
   "type": "module",
   "exports": {
     "./extensions/api": "./src/extensions/api.ts",
-    "./extensions/api.js": "./src/extensions/api.ts",
-    "./debug/*": null,
-    "./domain/*": null,
-    "./providers/*": null,
-    "./runtime/*": null,
-    "./server/*": null,
-    "./storage/*": null,
-    "./test-utils": null,
-    "./test-utils.js": null,
-    "./test-utils/*": null,
-    "./utils/*": null
+    "./extensions/api.js": "./src/extensions/api.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.locks.json",

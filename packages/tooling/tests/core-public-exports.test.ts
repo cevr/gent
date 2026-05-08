@@ -5,17 +5,13 @@ import {
 } from "../src/core-public-exports"
 
 describe("core public export guard", () => {
-  test("allows only extension api plus null internal export tombstones", () => {
+  test("allows only extension api exports", () => {
     expect(
       findCorePublicExportFindings(
         {
           exports: {
             "./extensions/api": "./src/extensions/api.ts",
             "./extensions/api.js": "./src/extensions/api.ts",
-            "./domain/*": null,
-            "./runtime/*": null,
-            "./test-utils": null,
-            "./test-utils/*": null,
           },
         },
         {
@@ -65,6 +61,26 @@ describe("core public export guard", () => {
       {
         path: 'tsconfig.json compilerOptions.paths["@gent/core/domain/ids"]',
         message: "Do not give TypeScript a public-looking @gent/core/* path for internal modules",
+      },
+    ])
+  })
+
+  test("flags null tombstones as extra public export surface", () => {
+    expect(
+      findCorePublicExportFindings(
+        {
+          exports: {
+            "./extensions/api": "./src/extensions/api.ts",
+            "./runtime/*": null,
+          },
+        },
+        { compilerOptions: { paths: {} } },
+      ),
+    ).toEqual([
+      {
+        path: 'packages/core/package.json exports["./runtime/*"]',
+        message:
+          "Only @gent/core/extensions/api is public; workspace internals must use @gent/core-internal/*",
       },
     ])
   })

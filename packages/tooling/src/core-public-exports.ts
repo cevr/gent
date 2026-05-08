@@ -20,17 +20,6 @@ export interface ExtensionsPublicSurfaceFinding {
 }
 
 const publicCoreExports = new Set(["./extensions/api", "./extensions/api.js"])
-const forbiddenPublicExportPrefixes = [
-  "./debug",
-  "./domain",
-  "./providers",
-  "./runtime",
-  "./server",
-  "./storage",
-  "./test-utils",
-  "./utils",
-] as const
-
 const forbiddenCorePathPrefixes = [
   "@gent/core/debug",
   "@gent/core/domain",
@@ -42,11 +31,6 @@ const forbiddenCorePathPrefixes = [
   "@gent/core/utils",
 ] as const
 
-const isForbiddenExport = (key: string): boolean =>
-  forbiddenPublicExportPrefixes.some(
-    (prefix) => key === prefix || key === `${prefix}.js` || key.startsWith(`${prefix}/`),
-  )
-
 const isForbiddenCorePath = (key: string): boolean =>
   forbiddenCorePathPrefixes.some((prefix) => key === prefix || key.startsWith(`${prefix}/`))
 
@@ -57,9 +41,8 @@ export const findCorePublicExportFindings = (
 ): ReadonlyArray<CorePublicSurfaceFinding> => {
   const findings: CorePublicSurfaceFinding[] = []
   const exportsMap = packageJson.exports ?? {}
-  for (const [key, value] of Object.entries(exportsMap)) {
+  for (const key of Object.keys(exportsMap)) {
     if (publicCoreExports.has(key)) continue
-    if (isForbiddenExport(key) && value === null) continue
     findings.push({
       path: `packages/core/package.json exports["${key}"]`,
       message:
