@@ -2,10 +2,10 @@ import { Effect, Schema } from "effect"
 import {
   AgentName,
   defineAgent,
+  ExtensionAgent,
   makeRunSpec,
   tool,
-  ToolNeeds,
-  type ToolCapabilityContext,
+  type ToolCoreContext,
 } from "@gent/core/extensions/api"
 import { requireText } from "../workflow-helpers.js"
 import { fetchRepo, getRepoCachePath } from "../librarian/repo-explorer.js"
@@ -87,7 +87,6 @@ const buildSynthesisPrompt = (
 
 export const ResearchTool = tool({
   id: "research",
-  needs: [ToolNeeds.write("agent")],
   description:
     "Research external repositories to understand how they work. Single repo for focused explanation, multiple repos for comparative analysis.",
   promptSnippet: "Research external repositories",
@@ -102,7 +101,7 @@ export const ResearchTool = tool({
   output: ResearchResult,
   execute: Effect.fn("ResearchTool.execute")(function* (
     params: typeof ResearchParams.Type,
-    ctx: ToolCapabilityContext,
+    ctx: ToolCoreContext,
   ) {
     if (params.repos.length === 0) {
       return { error: "At least one repository spec required" }
@@ -123,10 +122,11 @@ export const ResearchTool = tool({
     )
 
     // Dispatch research agent per repo
+    const agent = yield* ExtensionAgent
     const results = yield* Effect.forEach(
       repoPaths,
       ({ spec, path }) =>
-        ctx.agent.run({
+        agent.run({
           agent: researchAgent,
           prompt: buildResearchPrompt(params.question, path, spec, params.focus),
           runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
@@ -155,8 +155,8 @@ export const ResearchTool = tool({
     }
 
     // Multiple findings — synthesize with cross-vendor model
-    const [, modelB] = yield* ctx.agent.resolveDualModelPair()
-    const synthesisResult = yield* ctx.agent.run({
+    const [, modelB] = yield* agent.resolveDualModelPair()
+    const synthesisResult = yield* agent.run({
       agent: researchAgent,
       prompt: buildSynthesisPrompt(params.question, findings, params.focus),
       runSpec: makeRunSpec({

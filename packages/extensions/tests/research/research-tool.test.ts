@@ -5,6 +5,7 @@ import { ResearchTool } from "../../src/research/research-tool.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import {
   AgentRunResult,
+  ExtensionAgent,
   ModelId,
   SessionId,
   type ToolCapabilityContext,
@@ -48,6 +49,18 @@ const platformLayer = Layer.mergeAll(BunFileSystem.layer, Path.layer, GitReader.
 const withRepoFixtures = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   ensureRepoFixtures.pipe(Effect.andThen(effect))
 
+const provideAgent =
+  (ctx: ToolCapabilityContext) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.provideService(ExtensionAgent, {
+        get: ctx.agent.get,
+        require: (name) => ctx.agent.require(name).pipe(Effect.orDie),
+        run: ctx.agent.run,
+        resolveDualModelPair: () => ctx.agent.resolveDualModelPair().pipe(Effect.orDie),
+      }),
+    )
+
 describe("ResearchTool", () => {
   it.live("single repo returns direct response", () => {
     const ctx = makeCtx({
@@ -73,6 +86,7 @@ describe("ResearchTool", () => {
           expect(result.response).toContain("Effect uses fibers")
           expect(result.repos).toEqual(["effect-ts/effect"])
         }),
+        provideAgent(ctx),
         Effect.provide(platformLayer),
       ),
     )
@@ -124,6 +138,7 @@ describe("ResearchTool", () => {
           expect(synthesisModelId).toBe("openai/gpt-5.4")
           expect(prompts.some((p) => p.includes("Synthesize"))).toBe(true)
         }),
+        provideAgent(ctx),
         Effect.provide(platformLayer),
       ),
     )
@@ -160,6 +175,7 @@ describe("ResearchTool", () => {
           expect(capturedPrompt).toContain("src/internal/scheduler")
           expect(capturedPrompt).toContain("How does the scheduler work?")
         }),
+        provideAgent(ctx),
         Effect.provide(platformLayer),
       ),
     )

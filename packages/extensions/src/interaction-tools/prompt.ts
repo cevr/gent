@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool, ToolNeeds, type ToolCapabilityContext } from "@gent/core/extensions/api"
+import { ExtensionInteraction, tool, type ToolCoreContext } from "@gent/core/extensions/api"
 
 // Prompt Params — single object shape because Anthropic rejects top-level anyOf tool inputs.
 
@@ -38,7 +38,6 @@ export const PromptResult = Schema.Union([PresentResult, ConfirmResult, ReviewRe
 
 export const PromptTool = tool({
   id: "prompt",
-  needs: [ToolNeeds.write("interaction")],
   description:
     "Present content to the user for review, confirmation, or informational display. " +
     "Use mode=present for informational content (no response needed), " +
@@ -48,10 +47,11 @@ export const PromptTool = tool({
   output: PromptResult,
   execute: Effect.fn("PromptTool.execute")(function* (
     params: typeof PromptParams.Type,
-    ctx: ToolCapabilityContext,
+    ctx: ToolCoreContext,
   ) {
+    const interaction = yield* ExtensionInteraction
     if (params.mode === "present") {
-      yield* ctx.interaction.present({
+      yield* interaction.present({
         content: params.content,
         title: params.title,
       })
@@ -59,7 +59,7 @@ export const PromptTool = tool({
     }
 
     if (params.mode === "confirm") {
-      const decision = yield* ctx.interaction.confirm({
+      const decision = yield* interaction.confirm({
         content: params.content,
         title: params.title,
       })
@@ -67,7 +67,7 @@ export const PromptTool = tool({
     }
 
     // review mode
-    const result = yield* ctx.interaction.review({
+    const result = yield* interaction.review({
       content: params.content,
       title: params.title,
       fileNameSeed: ctx.toolCallId,

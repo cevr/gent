@@ -2,15 +2,15 @@ import { Effect, Schema } from "effect"
 import {
   AgentName,
   CapabilityError,
+  ExtensionAgent,
   ExtensionId,
   ExtensionSession,
-  ToolNeeds,
   action,
   defineAgent,
   defineExtension,
   makeRunSpec,
   tool,
-  type ToolCapabilityContext,
+  type ToolCoreContext,
 } from "@gent/core/extensions/api"
 
 const COUNSEL_EXTENSION_ID = ExtensionId.make("@gent/counsel")
@@ -63,7 +63,6 @@ const buildCounselPrompt = (prompt: string, context?: string) =>
 
 export const CounselTool = tool({
   id: "counsel",
-  needs: [ToolNeeds.write("agent")],
   description:
     "Get a cross-vendor second opinion. Deep mode for thorough analysis with exploration tools. Standard mode for quick focused opinions.",
   promptSnippet: "Cross-vendor second opinion",
@@ -75,14 +74,15 @@ export const CounselTool = tool({
   ],
   params: CounselParams,
   output: CounselResult,
-  execute: Effect.fn("CounselTool.execute")(function* (params, ctx: ToolCapabilityContext) {
+  execute: Effect.fn("CounselTool.execute")(function* (params, ctx: ToolCoreContext) {
     const mode = params.mode ?? "standard"
-    const [, modelB] = yield* ctx.agent.resolveDualModelPair()
+    const agent = yield* ExtensionAgent
+    const [, modelB] = yield* agent.resolveDualModelPair()
 
     const isDeep = mode === "deep"
     const prompt = buildCounselPrompt(params.prompt, params.context)
 
-    const result = yield* ctx.agent.run({
+    const result = yield* agent.run({
       agent: counselAgent,
       prompt,
       runSpec: makeRunSpec({

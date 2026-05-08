@@ -1,10 +1,5 @@
 import { Clock, Effect, Schema } from "effect"
-import {
-  dateFromMillis,
-  tool,
-  ToolNeeds,
-  type ToolCapabilityContext,
-} from "@gent/core/extensions/api"
+import { dateFromMillis, ExtensionSession, tool } from "@gent/core/extensions/api"
 
 // Search Sessions Error
 
@@ -83,14 +78,12 @@ export function parseRelativeDate(s: string, now: number): number | undefined {
 
 export const SearchSessionsTool = tool({
   id: "search_sessions",
-  needs: [ToolNeeds.read("session")],
   description:
     "Search past session content by keyword, file path, or date range. Returns session summaries with match excerpts.",
   params: SearchSessionsParams,
   output: SearchSessionsResult,
   execute: Effect.fn("SearchSessionsTool.execute")(function* (
     params: typeof SearchSessionsParams.Type,
-    ctx: ToolCapabilityContext,
   ) {
     if (params.query === undefined && params.file === undefined) {
       return yield* new SearchSessionsError({
@@ -113,7 +106,8 @@ export const SearchSessionsTool = tool({
       }
     }
 
-    const results = yield* ctx.session.search(searchQuery, {
+    const session = yield* ExtensionSession
+    const results = yield* session.search(searchQuery, {
       dateAfter,
       limit: params.limit ?? 20,
     })

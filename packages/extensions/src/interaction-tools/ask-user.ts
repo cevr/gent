@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool, ToolNeeds, type ToolCapabilityContext } from "@gent/core/extensions/api"
+import { ExtensionInteraction, tool } from "@gent/core/extensions/api"
 import type { Question } from "@gent/core-internal/domain/event"
 
 const parseAnswers = (notes: string): string[][] => {
@@ -55,7 +55,7 @@ export const AskUserResult = Schema.Struct({
   }),
 })
 
-// AskUser Tool — uses ctx.interaction.approve() with structured question metadata
+// AskUser Tool — uses ExtensionInteraction.approve() with structured question metadata
 
 const formatQuestionsText = (questions: ReadonlyArray<Question>): string =>
   questions
@@ -69,18 +69,15 @@ const formatQuestionsText = (questions: ReadonlyArray<Question>): string =>
 
 export const AskUserTool = tool({
   id: "ask_user",
-  needs: [ToolNeeds.write("interaction")],
   interactive: true,
   description:
     "Ask user questions with optional predefined options. Supports single or multi-select. Use for gathering preferences, clarifying requirements, or validating assumptions.",
   promptSnippet: "Ask the user questions with optional predefined options",
   params: AskUserParams,
   output: AskUserResult,
-  execute: Effect.fn("AskUserTool.execute")(function* (
-    params: typeof AskUserParams.Type,
-    ctx: ToolCapabilityContext,
-  ) {
-    const decision = yield* ctx.interaction.approve({
+  execute: Effect.fn("AskUserTool.execute")(function* (params: typeof AskUserParams.Type) {
+    const interaction = yield* ExtensionInteraction
+    const decision = yield* interaction.approve({
       text: formatQuestionsText(params.questions),
       metadata: { type: "ask-user", questions: params.questions },
     })

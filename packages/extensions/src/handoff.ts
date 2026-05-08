@@ -4,9 +4,8 @@ import {
   defineExtension,
   defineResource,
   action,
+  ExtensionInteraction,
   ExtensionSession,
-  ToolNeeds,
-  type ModelCapabilityContext,
   type Message,
   type TurnAfterInput,
   messagePartsTextLines,
@@ -16,7 +15,6 @@ import { HandoffTool } from "./handoff-tool.js"
 import { AutoRead } from "./auto/controller.js"
 
 const EXTENSION_ID = ExtensionId.make("@gent/handoff")
-type TurnAfterContext = ModelCapabilityContext
 
 const HandoffAction = action({
   id: "handoff-command",
@@ -89,7 +87,7 @@ const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
   return recentText.length > 0 ? recentText.slice(0, 4000) : "Session context"
 }
 
-const autoHandoffImpl = (input: TurnAfterInput, ctx: TurnAfterContext) =>
+const autoHandoffImpl = (input: TurnAfterInput) =>
   Effect.gen(function* () {
     if (input.interrupted) return
 
@@ -111,7 +109,8 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: TurnAfterContext) =>
     const cooldownCount = yield* cooldown.get().pipe(Effect.catchEager(() => Effect.succeed(0)))
     if (cooldownCount > 0) return
 
-    const contextPercent = yield* ctx.session.estimateContextPercent()
+    const session = yield* ExtensionSession
+    const contextPercent = yield* session.estimateContextPercent()
     const handoffThreshold = 85
     if (contextPercent < handoffThreshold) return
 
@@ -122,8 +121,9 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: TurnAfterContext) =>
       }),
     )
 
-    const allMessages = yield* ctx.session.listMessages()
-    const decision = yield* ctx.interaction
+    const allMessages = yield* session.listMessages()
+    const interaction = yield* ExtensionInteraction
+    const decision = yield* interaction
       .approve({
         text: summarizeRecentMessages(allMessages),
         metadata: {
@@ -148,7 +148,6 @@ export const HandoffExtension = defineExtension({
   reactions: {
     turnAfter: {
       failureMode: "isolate",
-      needs: [ToolNeeds.read("session"), ToolNeeds.write("interaction")],
       handler: autoHandoffImpl,
     },
   },

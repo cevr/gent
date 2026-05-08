@@ -1,10 +1,11 @@
 import { Effect, Schema } from "effect"
 import {
   AgentName,
+  ExtensionAgent,
+  ExtensionInteraction,
   makeRunSpec,
   tool,
-  ToolNeeds,
-  type ToolCapabilityContext,
+  type ToolCoreContext,
 } from "@gent/core/extensions/api"
 
 // Handoff Tool Error
@@ -41,7 +42,6 @@ export const HandoffResult = Schema.Struct({
 
 export const HandoffTool = tool({
   id: "handoff",
-  needs: [ToolNeeds.write("agent"), ToolNeeds.write("interaction")],
   description:
     "Create a new session with distilled context from the current one. Use when context is getting large and you want to continue with a clean slate while preserving key information. Blocks until the user confirms.",
   promptSnippet: "Transfer context to a new session",
@@ -53,13 +53,14 @@ export const HandoffTool = tool({
   output: HandoffResult,
   execute: Effect.fn("HandoffTool.execute")(function* (
     params: typeof HandoffParams.Type,
-    ctx: ToolCapabilityContext,
+    ctx: ToolCoreContext,
   ) {
     // Use summarizer agent to refine context if it's large
     let summary = params.context
     if (params.context.length > 2000) {
-      const summarizer = yield* ctx.agent.require(AgentName.make("summarizer"))
-      const summarizeResult = yield* ctx.agent.run({
+      const agent = yield* ExtensionAgent
+      const summarizer = yield* agent.require(AgentName.make("summarizer"))
+      const summarizeResult = yield* agent.run({
         agent: summarizer,
         prompt: `Distill this context for a handoff to a new session. Preserve: current task, key decisions, relevant files, open questions, state to carry over. Be concise.\n\n${params.context}`,
         runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
@@ -69,8 +70,8 @@ export const HandoffTool = tool({
       }
     }
 
-    // Present handoff to user via ctx.interaction.approve() — blocks until confirmed or rejected
-    const decision = yield* ctx.interaction.approve({
+    const interaction = yield* ExtensionInteraction
+    const decision = yield* interaction.approve({
       text: summary,
       metadata: { type: "handoff", reason: params.reason },
     })

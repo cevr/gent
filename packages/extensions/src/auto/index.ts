@@ -10,8 +10,7 @@ import { Effect, Schema } from "effect"
 import {
   defineExtension,
   defineResource,
-  ToolNeeds,
-  type ModelCapabilityContext,
+  ExtensionSession,
   type ToolResultInput,
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
@@ -44,8 +43,6 @@ const CheckpointOutput = Schema.Struct({
   nextIdea: Schema.optional(Schema.String),
 })
 const decodeCheckpointOutput = Schema.decodeUnknownSync(CheckpointOutput)
-type ToolResultContext = ModelCapabilityContext
-type TurnAfterContext = ModelCapabilityContext
 
 const parseCheckpointParams = (
   input: Record<string, unknown>,
@@ -80,16 +77,15 @@ const readSnapshot = Effect.fn("Auto.readSnapshot")(function* () {
   return yield* auto.value.snapshot()
 })
 
-const drainAndQueueFollowUp = Effect.fn("Auto.drainAndQueueFollowUp")(function* (
-  ctx: ToolResultContext,
-) {
+const drainAndQueueFollowUp = Effect.fn("Auto.drainAndQueueFollowUp")(function* () {
   const auto = yield* Effect.serviceOption(AutoWrite)
   if (auto._tag === "None") return
 
   const followUp = yield* auto.value.drainFollowUp()
   if (followUp === undefined || followUp.content === "") return
 
-  yield* ctx.session
+  const session = yield* ExtensionSession
+  yield* session
     .queueFollowUp({
       sourceId: followUp.sourceId,
       content: followUp.content,
@@ -191,7 +187,7 @@ const journalInterceptorImpl = (
     return result
   })
 
-const autoHandoffImpl = (input: TurnAfterInput, ctx: TurnAfterContext) =>
+const autoHandoffImpl = (input: TurnAfterInput) =>
   Effect.gen(function* () {
     if (input.interrupted) return
 
@@ -199,12 +195,13 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: TurnAfterContext) =>
     if (auto._tag === "None") return
 
     yield* auto.value.turnCompleted()
-    yield* drainAndQueueFollowUp(ctx)
+    yield* drainAndQueueFollowUp()
 
     const snapshot = yield* auto.value.snapshot()
     if (!snapshot.active) return
 
-    const contextPercent = yield* ctx.session.estimateContextPercent()
+    const session = yield* ExtensionSession
+    const contextPercent = yield* session.estimateContextPercent()
     if (contextPercent < 85) return
 
     yield* Effect.logInfo("auto.handoff.threshold").pipe(
@@ -236,7 +233,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: TurnAfterContext) =>
         .join("\n"),
     )
 
-    yield* drainAndQueueFollowUp(ctx)
+    yield* drainAndQueueFollowUp()
   }).pipe(Effect.catchEager(() => Effect.void))
 
 const turnProjection = () =>
@@ -263,7 +260,6 @@ export const AutoExtension = defineExtension({
       journalInterceptorImpl(input, (next) => Effect.succeed(next.result)),
     turnAfter: {
       failureMode: "isolate",
-      needs: [ToolNeeds.read("session"), ToolNeeds.write("session")],
       handler: autoHandoffImpl,
     },
   },

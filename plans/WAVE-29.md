@@ -40,7 +40,7 @@ The current design was informed by:
 
 ## Batch 1: refactor(extensions): introduce extension services
 
-**Status**: In progress.
+**Status**: Completed in `f53f5daa`.
 
 Add public Effect services for constrained extension authority and provide them
 from all runtime extension execution seams:
@@ -62,11 +62,18 @@ to `yield* ExtensionSession`.
 
 ## Batch 2: refactor(extensions): migrate remaining builtin host consumers
 
-**Status**: Pending.
+**Status**: In progress.
 
 Migrate builtin tools/actions/reactions from `ModelCapabilityContext` to
 `ExtensionSession`, `ExtensionAgent`, and `ExtensionInteraction`. Keep process
 platform access internal to bundled host-owned extensions.
+
+Completed so far:
+
+- Session slash commands and `rename_session`.
+- Interaction tools.
+- Session search/read tools.
+- Counsel, research, handoff, auto, and handoff-threshold reactions.
 
 Targets include:
 
