@@ -174,21 +174,25 @@ Receipts:
 
 ### W24.1 — Durable Branch Operations
 
-Status: planned.
+Status: done.
 
 Work:
 
-- Generalize durable operation storage beyond `session.create`.
-- Make `createBranch`, `switchBranch`, and `forkBranch` request-id semantics
-  crash-safe, or remove/forbid request ids where the operation is not
-  replay-safe.
-- Add restart-style regressions for branch create/fork/switch retries.
+- Generalized durable operation storage beyond `session.create` with typed
+  `branch.create`, `branch.fork`, and `branch.switch` result codecs.
+- Moved RPC request-id branch create/fork/switch bodies into
+  `SessionCommands` so the storage mutation, event append, and durable
+  operation row commit in one transaction.
+- Added restart-style regressions for branch create/fork/switch retries over a
+  file-backed SQLite database. The retry layers have fresh in-process request
+  caches, proving durability comes from SQLite instead of `Ref` state.
 
 Validation:
 
-- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/session-idempotency.test.ts packages/core/tests/server/session-commands`
-- `bun run typecheck`
-- `bun run lint`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/session-idempotency.test.ts packages/core/tests/server/session-commands` — 16 pass, 0 fail
+- `bun run typecheck` — pass
+- `bun run lint` — pass, 0 warnings/errors
+- `bun run fmt:check` — pass
 
 ### W24.2 — Durable Background Bash Reconciliation
 

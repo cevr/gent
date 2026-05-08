@@ -25,6 +25,23 @@ import {
 } from "./session-commands/helpers"
 
 describe("requestId idempotency", () => {
+  const makePersistentSessionCommandsLayer = (dbPath: string) => {
+    const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(Layer.provide(BunServices.layer))
+    const deps = Layer.mergeAll(
+      storageLayer,
+      sessionRuntimeLayer(),
+      EventStore.Memory,
+      EventPublisher.Test(),
+      LanguageModelLayers.debug(),
+      ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
+      GentPlatform.Test(),
+    )
+    return Layer.provideMerge(
+      SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+      deps,
+    )
+  }
+
   it.live("duplicate createSession requestId converges on a single session id", () =>
     Effect.gen(function* () {
       const commands = yield* SessionCommands
@@ -481,6 +498,189 @@ describe("requestId idempotency", () => {
       expect(sessions[0]?.id).toBe(second.sessionId)
       expect(sessions[0]?.activeBranchId).toBe(second.branchId)
       expect(deliveredPrompts).toEqual(["stored prompt:session.create:req-create-restart:initial"])
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
+  )
+
+  it.scoped("createBranch requestId replays durable result after command layer restart", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const dbPath = path.join(dir, "gent.db")
+      const layer = makePersistentSessionCommandsLayer(dbPath)
+      const sessionId = SessionId.make("session-create-branch-restart")
+      const branchId = BranchId.make("branch-create-branch-restart")
+
+      yield* Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        yield* createActiveSessionFixture({
+          sessions,
+          branches,
+          sessionId,
+          branchId,
+          now: FIXED_NOW,
+        })
+      }).pipe(Effect.provide(layer))
+
+      const first = yield* Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        return yield* commands.createBranch({
+          sessionId,
+          name: "durable branch",
+          requestId: "req-create-branch-restart",
+        })
+      }).pipe(Effect.provide(layer))
+
+      const second = yield* Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        return yield* commands.createBranch({
+          sessionId,
+          name: "retry name should not win",
+          requestId: "req-create-branch-restart",
+        })
+      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+
+      const branches = yield* Effect.gen(function* () {
+        const storage = yield* BranchStorage
+        return yield* storage.listBranches(sessionId)
+      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+
+      expect(second.branchId).toBe(first.branchId)
+      expect(branches).toHaveLength(2)
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
+  )
+
+  it.scoped("switchBranch requestId replays durable result after command layer restart", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const dbPath = path.join(dir, "gent.db")
+      const layer = makePersistentSessionCommandsLayer(dbPath)
+      const sessionId = SessionId.make("session-switch-branch-restart")
+      const fromBranchId = BranchId.make("branch-switch-branch-restart-from")
+      const toBranchId = BranchId.make("branch-switch-branch-restart-to")
+
+      yield* Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        yield* createActiveSessionFixture({
+          sessions,
+          branches,
+          sessionId,
+          branchId: fromBranchId,
+          now: FIXED_NOW,
+        })
+        yield* branches.createBranch(
+          new Branch({ id: toBranchId, sessionId, createdAt: FIXED_NOW }),
+        )
+      }).pipe(Effect.provide(layer))
+
+      yield* Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        yield* commands.switchBranch({
+          sessionId,
+          fromBranchId,
+          toBranchId,
+          summarize: false,
+          requestId: "req-switch-branch-restart",
+        })
+      }).pipe(Effect.provide(layer))
+
+      yield* Effect.gen(function* () {
+        const branches = yield* BranchStorage
+        yield* branches.deleteBranch(fromBranchId)
+      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+
+      yield* Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        yield* commands.switchBranch({
+          sessionId,
+          fromBranchId,
+          toBranchId,
+          summarize: false,
+          requestId: "req-switch-branch-restart",
+        })
+      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+
+      const session = yield* Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        return yield* sessions.getSession(sessionId)
+      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+
+      expect(session?.activeBranchId).toBe(toBranchId)
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
+  )
+
+  it.scoped("forkBranch requestId replays durable result after command layer restart", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const dbPath = path.join(dir, "gent.db")
+      const layer = makePersistentSessionCommandsLayer(dbPath)
+      const sessionId = SessionId.make("session-fork-branch-restart")
+      const branchId = BranchId.make("branch-fork-branch-restart")
+      const messageId = MessageId.make("message-fork-branch-restart")
+
+      yield* Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
+        yield* createActiveSessionFixture({
+          sessions,
+          branches,
+          sessionId,
+          branchId,
+          now: FIXED_NOW,
+        })
+        yield* messages.createMessage(
+          Message.Regular.make({
+            id: messageId,
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: "seed" })],
+            createdAt: FIXED_NOW,
+          }),
+        )
+      }).pipe(Effect.provide(layer))
+
+      const first = yield* Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        return yield* commands.forkBranch({
+          sessionId,
+          fromBranchId: branchId,
+          atMessageId: messageId,
+          name: "fork",
+          requestId: "req-fork-branch-restart",
+        })
+      }).pipe(Effect.provide(layer))
+
+      yield* Effect.gen(function* () {
+        const messages = yield* MessageStorage
+        yield* messages.deleteMessages(branchId)
+      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+
+      const second = yield* Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        return yield* commands.forkBranch({
+          sessionId,
+          fromBranchId: branchId,
+          atMessageId: messageId,
+          name: "retry fork should not allocate",
+          requestId: "req-fork-branch-restart",
+        })
+      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+
+      const branches = yield* Effect.gen(function* () {
+        const storage = yield* BranchStorage
+        return yield* storage.listBranches(sessionId)
+      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+
+      expect(second.branchId).toBe(first.branchId)
+      expect(branches).toHaveLength(2)
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
 })
