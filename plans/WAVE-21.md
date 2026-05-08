@@ -113,6 +113,7 @@ Commits landed in this wave so far:
 - `1891457c refactor(executor): isolate sidecar platform reads`
 - `6ce15e48 refactor(extensions): isolate provider platform reads`
 - `9f6b46f7 refactor(runtime): route host process probes through platform`
+- `37274250 refactor(runtime): rename platform config service`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
@@ -176,6 +177,10 @@ classes of privilege and races, but the deeper P1s remain:
   process-env lint carveout, and expands the custom lint fixture to reject
   `process.execPath`, `process.platform`, and `process.kill` outside adapter,
   app-shell, test, tooling, and e2e boundaries.
+- The remaining `GentPlatform`/`RuntimePlatform` naming collision is resolved by
+  subtraction rather than absorption: the host-capability service stays
+  `GentPlatform`, and the value-only `{ cwd, home, platform }` service is now
+  `RuntimeEnvironment`.
 
 Fresh re-audit receipts to carry into the remaining batches:
 
@@ -420,8 +425,9 @@ Receipts:
 Required correction:
 
 - Keep cron/runtime host APIs behind real service layers.
-- Decide whether `GentPlatform` absorbs `RuntimePlatform` or whether the latter
-  is renamed into pure runtime config.
+- The `GentPlatform` / `RuntimePlatform` split is resolved by keeping
+  `GentPlatform` as the host-capability owner and renaming the value-only
+  runtime config service to `RuntimeEnvironment`.
 - Expand static guards to reject Bun/Node/process host APIs outside adapter,
   app-shell, test, and generated-script boundaries.
 
@@ -774,10 +780,11 @@ Work:
 - [x] Extend custom host-API guard coverage to `process.execPath`,
       `process.platform`, and `process.kill` outside adapter/app-shell/test
       boundaries. Done in `9f6b46f7`.
-- Reconcile `GentPlatform` and `RuntimePlatform` naming/ownership.
-- Add static guards for Bun/Node/process imports outside app-shell, adapter,
-  test, tooling, and generated-script boundaries.
-- Fix SDK/TUI/extension violations found by the new guard.
+- [x] Reconcile `GentPlatform` and `RuntimePlatform` naming/ownership by
+      renaming the value-only runtime config service to `RuntimeEnvironment`.
+- [x] Add static guards for Bun/Node/process imports outside app-shell, adapter,
+      test, tooling, and generated-script boundaries.
+- [x] Fix SDK/TUI/extension violations found by the new guard.
 
 Validation:
 
@@ -789,6 +796,13 @@ Validation:
   shard after type/style/build had passed and tests reported no failures; rerun
   passed unchanged)
 - `cd packages/sdk && bun test --reporter=dots tests/server-lock.test.ts`
+- `bun run typecheck`
+- `bun run lint`
+- `bun run fmt`
+- `bun run gate`
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/config-service.test.ts tests/runtime/file-index/file-index.test.ts tests/runtime/session-runtime-context.test.ts tests/server/auth-rpc.test.ts`
+- `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/fs-tools/read.test.ts tests/fs-tools/grep.test.ts tests/fs-tools/glob.test.ts tests/audit/audit-tool.test.ts tests/review/review-tool.test.ts`
+- `rg -n "runtime-platform|RuntimePlatform|RuntimePlatformShape|runtimePlatform|TestRuntimePlatform" . --glob '!**/dist/**' --glob '!**/node_modules/**' --glob '!bun.lock'` (only plan prose/history remains; no source/config aliases)
 - `bun run typecheck`
 - `bun run lint`
 - `bun run fmt`
