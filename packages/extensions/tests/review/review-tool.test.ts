@@ -1,5 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
+import { narrowR } from "../../../core/tests/helpers/effect"
 import { ReviewTool } from "../../src/review/review-tool.js"
 import {
   AgentName,
@@ -18,8 +19,6 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 // Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide everything via ctx; narrow R for it.live compatibility.
-const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
 
 const makeCtx = (overrides: {
   agentRun: (

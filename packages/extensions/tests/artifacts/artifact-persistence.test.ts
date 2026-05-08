@@ -5,13 +5,12 @@
 
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
+import { narrowR } from "../../../core/tests/helpers/effect"
 
 // PlanTool/AuditTool/ReviewTool execution signatures inherit their
 // dependency channels from Gent metadata. Tests run
 // with no real services beyond ctx, so we narrow R to never at the
 // call site for it.live compatibility.
-const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
 import {
   AgentRunResult,
   ModelId,

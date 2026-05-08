@@ -1,6 +1,7 @@
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { narrowR } from "../helpers/effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import type {
   ExtensionLoadError,
@@ -42,9 +43,6 @@ const makeLoaded = (id: string, contributions: ExtensionContributions): LoadedEx
   sourcePath: "builtin",
   contributions,
 })
-
-const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
 
 describe("extension activation isolation", () => {
   it.live("builtin setup failure is isolated instead of crashing activation", () =>

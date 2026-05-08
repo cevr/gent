@@ -1,7 +1,6 @@
 import { describe, test, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Path } from "effect"
-const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
+import { narrowR } from "../../../core/tests/helpers/effect"
 import { BunServices } from "@effect/platform-bun"
 import {
   detectRedaction,

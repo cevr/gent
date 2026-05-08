@@ -1,8 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
 import { Effect, type Layer } from "effect"
-const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
+import { narrowR } from "../helpers/effect"
 import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { Model, ModelId, ProviderId } from "@gent/core-internal/domain/model"

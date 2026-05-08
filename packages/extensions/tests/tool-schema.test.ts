@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer } from "effect"
+import { narrowR } from "../../core/tests/helpers/effect"
 import { homedir } from "node:os"
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
@@ -7,9 +8,6 @@ import { getToolId } from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
 import { GentPlatform } from "../../core/src/runtime/gent-platform"
 import { setupExtension } from "../../core/src/runtime/extensions/loader"
-
-const narrowR = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  effect as Effect.Effect<A, E, never>
 
 describe("builtin tool schemas", () => {
   it.live("are compatible with Anthropic tool structured output", () => {

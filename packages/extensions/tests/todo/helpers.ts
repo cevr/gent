@@ -1,4 +1,5 @@
 import { Effect } from "effect"
+export { narrowR } from "../../../core/tests/helpers/effect"
 import { AllBuiltinAgents } from "../../src/all-agents.js"
 import { TodoExtension } from "../../src/todo/index.js"
 import { AgentRunResult, type AgentRunner } from "@gent/core-internal/domain/agent"
@@ -12,9 +13,6 @@ import {
   testToolContext,
 } from "@gent/core-internal/test-utils"
 import { toolPreset } from "../helpers/test-preset.js"
-
-export const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
 
 export const withTodoWrite = provideCapabilityAccessNeeds([{ tag: "todo", access: "write" }])
 

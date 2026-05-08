@@ -1,5 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
+import { narrowR } from "../../../core/tests/helpers/effect"
 import { CounselTool } from "../../src/counsel/counsel-tool.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import {
@@ -9,9 +10,6 @@ import {
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
-
-const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
 
 const makeCtx = (overrides: {
   agentRun: (

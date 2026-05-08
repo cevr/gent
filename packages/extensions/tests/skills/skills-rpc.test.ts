@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
+import { narrowR } from "../../../core/tests/helpers/effect"
 import { ref, type ProjectionTurnContext, type TurnProjection } from "@gent/core/extensions/api"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
@@ -16,9 +17,6 @@ import { Skill, Skills } from "../../src/skills/skills.js"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { testSetupCtx } from "@gent/core-internal/test-utils"
 import { e2ePreset } from "../helpers/test-preset"
-
-const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
 
 const testSkills = [
   new Skill({

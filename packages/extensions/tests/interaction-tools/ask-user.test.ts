@@ -1,8 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
+import { narrowR } from "../../../core/tests/helpers/effect"
 
-const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
 import { AskUserTool } from "../../src/interaction-tools/ask-user.js"
 import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"

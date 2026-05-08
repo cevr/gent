@@ -1,8 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
+import { narrowR } from "../../../core/tests/helpers/effect"
 
-const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
 import { SkillsTool } from "../../src/skills/skills-tool.js"
 import { SearchSkillsTool } from "../../src/skills/search-skills.js"
 import { Skill, Skills } from "../../src/skills/skills.js"

@@ -2,6 +2,7 @@ import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
 import { Cause, Clock, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
+import { narrowR } from "../helpers/effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
 import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
@@ -59,8 +60,6 @@ import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { SessionRuntime, interruptPayloadToSteerCommand } from "../../src/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
-const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   const cowork = AgentDefinition.make({
     name: "cowork" as never,

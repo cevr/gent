@@ -1,5 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
+import { narrowR } from "../../core/tests/helpers/effect"
 import { HandoffTool } from "../src/handoff-tool.js"
 import { HandoffCooldown, HandoffExtension } from "../src/handoff.js"
 import { AgentRunResult, SessionId, type ToolCapabilityContext } from "@gent/core/extensions/api"
@@ -7,9 +8,6 @@ import { AllBuiltinAgents } from "../src/all-agents.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { testSetupCtx } from "@gent/core-internal/test-utils"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
-
-const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 

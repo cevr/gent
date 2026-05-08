@@ -8,6 +8,7 @@ import { describe, expect, it } from "effect-bun-test"
  * RPC/controller services end-to-end.
  */
 import { Context, Deferred, Effect, Layer } from "effect"
+import { narrowR } from "../helpers/effect"
 import { BunServices } from "@effect/platform-bun"
 import { testSetupCtx } from "@gent/core-internal/test-utils"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
@@ -48,8 +49,6 @@ import { getBuiltinAgent } from "../../../extensions/src/all-agents.js"
 import { AgentName } from "@gent/core-internal/domain/agent"
 // Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide all needed services; narrow R so runPromise/it.live accept it.
-const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
 // ── Tool test helpers ──
 const readySnapshot: ExecutorSnapshotReply = {
   status: "ready",

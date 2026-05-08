@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Context, Effect, FileSystem, Layer, Option, Schema } from "effect"
+import { narrowR } from "../helpers/effect"
 import {
   ExtensionLoadError,
   type GentExtension,
@@ -42,8 +43,6 @@ class ProfileToken extends Context.Service<
     readonly read: () => Effect.Effect<string, never, never>
   }
 >()("@gent/core/tests/server/extension-commands-rpc.test/ProfileToken") {}
-const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  e as Effect.Effect<A, E, never>
 const expectExtensionProtocolFailure = (cause: Cause.Cause<unknown>, message?: string) => {
   const error = Cause.squash(cause) as { readonly _tag?: string; readonly message?: string }
   expect(error._tag).toBe("ExtensionProtocolError")
