@@ -87,6 +87,8 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
 
     execPath: Effect.sync(() => process.execPath),
 
+    env: Effect.sync(() => Bun.env),
+
     signal: (pid, signal) =>
       Effect.try({
         try: () => {

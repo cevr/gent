@@ -10,6 +10,8 @@
  *   - `osInfo`           — `{ platform, arch, release, hostname, type }`
  *   - `pid`              — current process id
  *   - `execPath`         — absolute path to the running executable
+ *   - `env`              — snapshot of parent process environment for child
+ *                          process launches that must inherit shell config
  *   - `signal(pid, sig)` — deliver a POSIX signal (or `0` for liveness probe)
  *   - `exit(code)`       — request the host to exit with `code`. NOT
  *                          finalizer-safe: `process.exit` is synchronous and
@@ -64,6 +66,7 @@ export interface GentPlatformShape {
   readonly osInfo: Effect.Effect<GentPlatformOsInfo>
   readonly pid: Effect.Effect<number>
   readonly execPath: Effect.Effect<string>
+  readonly env: Effect.Effect<Record<string, string | undefined>>
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
   readonly exit: (code: number) => Effect.Effect<never>
   readonly now: Effect.Effect<number>
@@ -96,6 +99,7 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformShap
           }),
           pid: Effect.succeed(1),
           execPath: Effect.succeed("/usr/bin/node"),
+          env: Effect.succeed({}),
           signal: () => Effect.void,
           // The default Test stub dies loudly: silent `Effect.never` would
           // make accidental `platform.exit(...)` calls in a test hang

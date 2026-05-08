@@ -98,7 +98,7 @@
       }
     },
     {
-      "files": ["**/core/src/runtime/agent/agent-runner.ts", "**/sdk/src/supervisor.ts"],
+      "files": ["**/sdk/src/supervisor.ts"],
       "rules": {
         "node/no-process-env": "off"
       }

@@ -1298,8 +1298,9 @@ export const SubprocessRunner = (
                   params.prompt,
                 ]
 
+                const parentEnv = yield* platform.env
                 const env: Record<string, string | undefined> = {
-                  ...process.env,
+                  ...parentEnv,
                   ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
                   ...(config.sharedServerUrl !== undefined
                     ? { GENT_SHARED_SERVER_URL: config.sharedServerUrl }

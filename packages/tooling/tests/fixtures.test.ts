@@ -163,8 +163,8 @@ const CASES: ReadonlyArray<RuleCase> = [
     // valid file lives at `runtime/gent-platform-bun.ts` — the canonical
     // GentPlatform live impl. That path is the only allowlist entry.
     valid: "runtime/gent-platform-bun.ts",
-    // 5 distinct Bun.* member expressions in the invalid fixture
-    expectedCount: 5,
+    // 5 Bun.* member expressions + 3 process host probes
+    expectedCount: 8,
   },
   {
     rule: "gent/no-hand-rolled-tagged-union",

@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite"
 import { DateTime, Effect, FileSystem, Option } from "effect"
+import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
 
 const LOG_DIR = "/tmp/gent/logs"
 const STORAGE_TABLES = ["sessions", "branches", "messages", "events"] as const
@@ -143,37 +144,35 @@ export const inspectLogs = (): Effect.Effect<LogHealth, never, FileSystem.FileSy
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null
 
-export const inspectServer = (entry: unknown): ServerHealth => {
-  if (entry === undefined) return { status: "none", summary: "No shared server." }
-  if (!isRecord(entry)) return { status: "dead", summary: "Invalid server lock." }
-  const pid = entry["pid"]
-  if (typeof pid !== "number") return { status: "dead", summary: "Invalid server lock." }
-  const alive = (() => {
-    try {
-      process.kill(pid, 0)
-      return true
-    } catch {
-      return false
-    }
-  })()
-  const serverId = entry["serverId"]
-  const rpcUrl = entry["rpcUrl"]
-  const id = typeof serverId === "string" ? serverId : "unknown"
-  const url = typeof rpcUrl === "string" ? rpcUrl : "unknown"
-  return alive
-    ? { status: "alive", summary: `Shared server alive: pid ${pid}, ${id}, ${url}` }
-    : { status: "dead", summary: `Shared server lock is stale: pid ${pid}, ${id}` }
-}
+export const inspectServer = (entry: unknown): Effect.Effect<ServerHealth, never, GentPlatform> =>
+  Effect.gen(function* () {
+    if (entry === undefined) return { status: "none", summary: "No shared server." }
+    if (!isRecord(entry)) return { status: "dead", summary: "Invalid server lock." }
+    const pid = entry["pid"]
+    if (typeof pid !== "number") return { status: "dead", summary: "Invalid server lock." }
+    const platform = yield* GentPlatform
+    const alive = yield* platform.signal(pid, 0).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    )
+    const serverId = entry["serverId"]
+    const rpcUrl = entry["rpcUrl"]
+    const id = typeof serverId === "string" ? serverId : "unknown"
+    const url = typeof rpcUrl === "string" ? rpcUrl : "unknown"
+    return alive
+      ? { status: "alive", summary: `Shared server alive: pid ${pid}, ${id}, ${url}` }
+      : { status: "dead", summary: `Shared server lock is stale: pid ${pid}, ${id}` }
+  })
 
 export const makeDoctorReport = (
   home: string,
   serverEntry: unknown,
-): Effect.Effect<DoctorReport, never, FileSystem.FileSystem> =>
+): Effect.Effect<DoctorReport, never, FileSystem.FileSystem | GentPlatform> =>
   Effect.gen(function* () {
     return {
       home,
       storage: yield* inspectStorage(home),
-      server: inspectServer(serverEntry),
+      server: yield* inspectServer(serverEntry),
       logs: yield* inspectLogs(),
     }
   })

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
-import { Effect, FileSystem, Path } from "effect"
+import { Effect, FileSystem, Layer, Path } from "effect"
 import { SqlClient } from "effect/unstable/sql"
+import { GentPlatform } from "@gent/core/runtime/gent-platform"
 import {
   formatDoctorReport,
   inspectStorage,
@@ -39,7 +40,7 @@ describe("local health", () => {
       expect(report).toContain("Gent doctor")
       expect(report).toContain("incompatible")
       expect(report).toContain("Migration table: missing")
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
   )
 
   it.scopedLive("archives storage files on reset", () =>

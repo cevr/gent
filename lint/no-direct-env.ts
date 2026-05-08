@@ -1137,11 +1137,21 @@ const plugin: Plugin = {
             if (!isAstNode(node)) return
             const object = getNodeField(node, "object")
             if (object?.type !== "Identifier") return
-            if (getStringField(object, "name") !== "Bun") return
             const prop = getNodeField(node, "property")
             let propName: string | undefined
             if (prop?.type === "Identifier") propName = getStringField(prop, "name")
             else if (prop?.type === "StringLiteral") propName = getStringField(prop, "value")
+            const objectName = getStringField(object, "name")
+            if (objectName === "process") {
+              if (propName !== "execPath" && propName !== "kill" && propName !== "platform") return
+              const suffix = propName !== undefined ? `.${propName}` : ""
+              context.report({
+                message: `\`process${suffix}\` is not allowed here. Route host process and OS access through \`GentPlatform\` or an adapter-local Effect service.`,
+                node,
+              })
+              return
+            }
+            if (objectName !== "Bun") return
             const suffix = propName !== undefined ? `.${propName}` : ""
             context.report({
               message: `\`Bun${suffix}\` is not allowed here. Route platform I/O through an Effect service (e.g., \`GentPlatform\`, \`FileSystem\`, \`ChildProcess\`, \`KeyValueStore\`, \`Config\`). Bun APIs are allowed only in adapter, entrypoint, tooling, and test harness boundaries.`,
