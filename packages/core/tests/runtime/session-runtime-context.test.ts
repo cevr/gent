@@ -15,7 +15,7 @@ import {
   type SessionEnvironmentDefaults,
 } from "../../src/runtime/session-runtime-context"
 import { makeAmbientExtensionHostContextDeps } from "../../src/runtime/make-extension-host-context"
-import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import {
   SessionProfileCache,
   type SessionProfile,
@@ -54,13 +54,13 @@ describe("resolveSessionEnvironment", () => {
           })
         yield* writeProjectConfig(launch, [{ tool: "bash", action: "deny" }])
         yield* writeProjectConfig(secondary, [{ tool: "bash", action: "allow" }])
-        const runtimePlatformLive = RuntimePlatform.Live({
+        const runtimeEnvironmentLive = RuntimeEnvironment.Live({
           cwd: launch,
           home,
           platform: "darwin",
         })
         const configServiceLive = ConfigService.Live.pipe(
-          Layer.provide(Layer.merge(BunServices.layer, runtimePlatformLive)),
+          Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
         )
         const sessionProfileCacheLive = SessionProfileCache.Live({
           home,
@@ -76,13 +76,13 @@ describe("resolveSessionEnvironment", () => {
           SqliteStorage.MemoryWithSql(),
           emptyRegistryLayer,
           emptyDriverRegistryLayer,
-          runtimePlatformLive,
+          runtimeEnvironmentLive,
           sessionProfileCacheLive,
         )
         yield* Effect.gen(function* () {
           const sessionStorage = yield* SessionStorage
           const extensionRegistry = yield* ExtensionRegistry
-          const platform = yield* RuntimePlatform
+          const platform = yield* RuntimeEnvironment
           const profileCache = yield* SessionProfileCache
           const now = dateFromMillis(1_767_225_600_000)
           yield* sessionStorage.createSession(
@@ -119,7 +119,7 @@ describe("resolveSessionEnvironment", () => {
   )
   it.live("falls back to host deps and defaults when no session profile is available", () =>
     Effect.gen(function* () {
-      const runtimePlatformLayer = RuntimePlatform.Test({
+      const runtimeEnvironmentLayer = RuntimeEnvironment.Test({
         cwd: "/tmp/runtime-context-default",
         home: "/tmp/runtime-context-home",
         platform: "test",
@@ -150,12 +150,12 @@ describe("resolveSessionEnvironment", () => {
       const testLayer = Layer.mergeAll(
         SqliteStorage.MemoryWithSql(),
         emptyRegistryLayer,
-        runtimePlatformLayer,
+        runtimeEnvironmentLayer,
       )
       yield* Effect.gen(function* () {
         const sessionStorage = yield* SessionStorage
         const extensionRegistry = yield* ExtensionRegistry
-        const platform = yield* RuntimePlatform
+        const platform = yield* RuntimeEnvironment
         const resolved = yield* resolveSessionEnvironment({
           sessionId: SessionId.make("missing-session"),
           branchId: BranchId.make("missing-branch"),
@@ -180,7 +180,7 @@ describe("resolveSessionEnvironment", () => {
   )
   it.live("preserves storage lookup failures when fallback is disabled", () =>
     Effect.gen(function* () {
-      const runtimePlatformLayer = RuntimePlatform.Test({
+      const runtimeEnvironmentLayer = RuntimeEnvironment.Test({
         cwd: "/tmp/runtime-context-fail",
         home: "/tmp/runtime-context-home",
         platform: "test",
@@ -189,12 +189,12 @@ describe("resolveSessionEnvironment", () => {
         SqliteStorage.MemoryWithSql(),
         emptyRegistryLayer,
         emptyDriverRegistryLayer,
-        runtimePlatformLayer,
+        runtimeEnvironmentLayer,
       )
       yield* Effect.gen(function* () {
         const sessionStorage = yield* SessionStorage
         const extensionRegistry = yield* ExtensionRegistry
-        const platform = yield* RuntimePlatform
+        const platform = yield* RuntimeEnvironment
         const failingSessionStorage: SessionStorageService = {
           ...sessionStorage,
           getSession: () => Effect.fail(new StorageError({ message: "lookup failed" })),
@@ -270,7 +270,7 @@ describe("resolveSessionEnvironment", () => {
           ],
         ]),
       })
-      const runtimePlatformLayer = RuntimePlatform.Test({
+      const runtimeEnvironmentLayer = RuntimeEnvironment.Test({
         cwd: "/tmp/runtime-context-default",
         home: "/tmp/runtime-context-home",
         platform: "test",
@@ -279,12 +279,12 @@ describe("resolveSessionEnvironment", () => {
         SqliteStorage.MemoryWithSql(),
         emptyRegistryLayer,
         defaultDriverRegistryLayer,
-        runtimePlatformLayer,
+        runtimeEnvironmentLayer,
       )
       yield* Effect.gen(function* () {
         const sessionStorage = yield* SessionStorage
         const extensionRegistry = yield* ExtensionRegistry
-        const platform = yield* RuntimePlatform
+        const platform = yield* RuntimeEnvironment
         const defaultDriverRegistry = yield* DriverRegistry
         const profileDriverRegistry = yield* Layer.build(profileDriverRegistryLayer).pipe(
           Effect.map((ctx) => Context.get(ctx, DriverRegistry)),

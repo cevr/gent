@@ -8,7 +8,7 @@ import { BunServices } from "@effect/platform-bun"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
 import { ConfigService, UserConfig } from "../../src/runtime/config-service"
-import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
@@ -126,7 +126,7 @@ describe("ConfigService", () => {
         const platformLayer = Layer.mergeAll(
           delayedFsLayer,
           Path.layer,
-          RuntimePlatform.Live({ cwd, home, platform: "darwin" }),
+          RuntimeEnvironment.Live({ cwd, home, platform: "darwin" }),
         )
         const live = ConfigService.Live.pipe(Layer.provide(platformLayer))
         yield* Effect.gen(function* () {
@@ -376,7 +376,7 @@ describe("ConfigService", () => {
       yield* writeProjectConfig(projectB, "cowork", "acp-projectB-driver")
 
       const live = ConfigService.Live.pipe(
-        Layer.provide(RuntimePlatform.Live({ cwd: launch, home, platform: "darwin" })),
+        Layer.provide(RuntimeEnvironment.Live({ cwd: launch, home, platform: "darwin" })),
         Layer.provide(BunServices.layer),
       )
       return { live, projectA, projectB }

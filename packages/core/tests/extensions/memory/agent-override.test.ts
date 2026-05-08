@@ -19,7 +19,7 @@ import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
-import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
+import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"
 import { SessionProfileCache } from "../../../src/runtime/session-profile"
 import { Permission } from "@gent/core/domain/permission"
@@ -68,7 +68,7 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMode
       externalDrivers: resolvedExtensions.externalDrivers,
     }),
     ToolRunner.Test(),
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     BunServices.layer,
     ResourceManagerLive,

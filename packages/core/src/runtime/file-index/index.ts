@@ -6,7 +6,7 @@ import {
   ensureDbDir,
 } from "./native-adapter.js"
 import { makeFallbackService } from "./fallback-adapter.js"
-import { RuntimePlatform } from "../runtime-platform.js"
+import { RuntimeEnvironment } from "../runtime-environment.js"
 
 export {
   FileIndex,
@@ -41,7 +41,7 @@ const withFallback = (primary: FileIndexService, fallback: FileIndexService): Fi
 export const FileIndexLive: Layer.Layer<
   FileIndex,
   never,
-  FileSystem.FileSystem | Path.Path | RuntimePlatform
+  FileSystem.FileSystem | Path.Path | RuntimeEnvironment
 > = Layer.unwrap(
   Effect.gen(function* () {
     const path = yield* Path.Path
@@ -52,7 +52,7 @@ export const FileIndexLive: Layer.Layer<
       return Layer.succeed(FileIndex, fallback)
     }
 
-    const { home } = yield* RuntimePlatform
+    const { home } = yield* RuntimeEnvironment
     const dbDir = yield* ensureDbDir(home, path, fs)
 
     const { service, finalize } = makeNativeServiceFromModule(dbDir, path)

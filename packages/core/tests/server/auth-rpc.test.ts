@@ -20,7 +20,7 @@ import { AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { ConfigService } from "../../src/runtime/config-service.js"
-import { RuntimePlatform } from "../../src/runtime/runtime-platform.js"
+import { RuntimeEnvironment } from "../../src/runtime/runtime-environment.js"
 import { e2ePreset } from "../extensions/helpers/test-preset"
 import type { ModelDriverContribution } from "../../src/domain/driver.js"
 import type { LoadedExtension } from "../../src/domain/extension.js"
@@ -130,13 +130,13 @@ describe("auth.listProviders", () => {
             path.join(sessionCwd, ".gent", "config.json"),
             '{"driverOverrides":{"cowork":{"_tag":"external","id":"acp-claude-code"}}}',
           )
-          const runtimePlatformLive = RuntimePlatform.Live({
+          const runtimeEnvironmentLive = RuntimeEnvironment.Live({
             cwd: launch,
             home,
             platform: "darwin",
           })
           const configServiceLive = ConfigService.Live.pipe(
-            Layer.provide(Layer.merge(BunServices.layer, runtimePlatformLive)),
+            Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
           )
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client } = yield* Gent.test(

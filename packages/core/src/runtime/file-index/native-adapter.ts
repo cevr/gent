@@ -5,7 +5,7 @@ import {
   type FileIndexService,
   type IndexedFile,
 } from "../../domain/file-index.js"
-import { RuntimePlatform } from "../runtime-platform.js"
+import { RuntimeEnvironment } from "../runtime-environment.js"
 import { FileFinder as NativeFileFinder, type FileItem } from "@ff-labs/fff-bun"
 
 type FileFinder = NativeFileFinder
@@ -200,7 +200,7 @@ export const makeNativeServiceFromModule = (
 export const NativeFileIndexLive: Layer.Layer<
   FileIndex,
   FileIndexError,
-  FileSystem.FileSystem | Path.Path | RuntimePlatform
+  FileSystem.FileSystem | Path.Path | RuntimeEnvironment
 > = Layer.unwrap(
   Effect.gen(function* () {
     if (!isNativeFileIndexAvailable()) {
@@ -209,7 +209,7 @@ export const NativeFileIndexLive: Layer.Layer<
 
     const path = yield* Path.Path
     const fs = yield* FileSystem.FileSystem
-    const { home } = yield* RuntimePlatform
+    const { home } = yield* RuntimeEnvironment
     const dbDir = yield* ensureDbDir(home, path, fs)
 
     const { service, finalize } = makeNativeServiceFromModule(dbDir, path)

@@ -84,7 +84,7 @@ import { PromptPresenterLive } from "../prompt-presenter-live.js"
 import { ApprovalService } from "../approval-service.js"
 import { EventStoreLive } from "../event-store-live.js"
 import { ResourceManagerLive, type ResourceManager } from "../resource-manager.js"
-import { RuntimePlatform } from "../runtime-platform.js"
+import { RuntimeEnvironment } from "../runtime-environment.js"
 import { ConfigService } from "../config-service.js"
 import { ModelRegistry } from "../model-registry.js"
 import { buildExtensionLayers } from "../profile.js"
@@ -140,7 +140,7 @@ type EphemeralOverrideProvides =
 
 type EphemeralExtensionRequires =
   | EphemeralStorageProvides
-  | RuntimePlatform
+  | RuntimeEnvironment
   | FileSystem.FileSystem
   | Path.Path
   | ModelResolver
@@ -611,7 +611,10 @@ const buildEphemeralLayer = (params: {
   )
   const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
   const approvalLayer = ApprovalService.LiveAutoResolve
-  const parentRuntimePlatformLayer = Layer.succeed(RuntimePlatform, parentService(RuntimePlatform))
+  const parentRuntimeEnvironmentLayer = Layer.succeed(
+    RuntimeEnvironment,
+    parentService(RuntimeEnvironment),
+  )
   const parentFileSystemLayer = Layer.succeed(
     FileSystem.FileSystem,
     parentService(FileSystem.FileSystem),
@@ -625,7 +628,7 @@ const buildEphemeralLayer = (params: {
     PromptPresenterLive,
     Layer.mergeAll(
       approvalLayer,
-      parentRuntimePlatformLayer,
+      parentRuntimeEnvironmentLayer,
       parentFileSystemLayer,
       parentPathLayer,
     ),
@@ -653,7 +656,7 @@ const buildEphemeralLayer = (params: {
   ).pipe(Layer.provide(eventStoreLayer))
   const toolRunnerLayer = Layer.provideMerge(
     ToolRunner.Live,
-    Layer.mergeAll(approvalLayer, extensionLayers, parentRuntimePlatformLayer),
+    Layer.mergeAll(approvalLayer, extensionLayers, parentRuntimeEnvironmentLayer),
   )
   const sessionRuntimeLayer = SessionRuntime.LiveWithEntity({
     baseSections: params.config.baseSections ?? [],
@@ -985,7 +988,7 @@ export const InProcessRunner = (
   | SessionRuntime
   | ExtensionRegistry
   | ModelResolver
-  | RuntimePlatform
+  | RuntimeEnvironment
   | FileSystem.FileSystem
   | Path.Path
   | ConfigService
@@ -1193,7 +1196,7 @@ export const SubprocessRunner = (
   | EventPublisher
   | ExtensionRegistry
   | ModelResolver
-  | RuntimePlatform
+  | RuntimeEnvironment
   | FileSystem.FileSystem
   | Path.Path
   | ConfigService

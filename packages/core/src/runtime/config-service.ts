@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Ref, Schema, FileSystem, Path, SynchronizedRef } from "effect"
 import { AgentName, DriverRef } from "../domain/agent.js"
 import { PermissionRule } from "../domain/permission.js"
-import { RuntimePlatform } from "./runtime-platform.js"
+import { RuntimeEnvironment } from "./runtime-environment.js"
 
 // User config schema - stored at ~/.gent/config.json
 
@@ -86,17 +86,17 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
   static Live: Layer.Layer<
     ConfigService,
     never,
-    FileSystem.FileSystem | Path.Path | RuntimePlatform
+    FileSystem.FileSystem | Path.Path | RuntimeEnvironment
   > = Layer.effect(
     ConfigService,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const runtimePlatform = yield* RuntimePlatform
-      const home = runtimePlatform.home
+      const runtimeEnvironment = yield* RuntimeEnvironment
+      const home = runtimeEnvironment.home
       const userConfigPath = path.join(home, ConfigService.USER_CONFIG_RELATIVE)
       const projectConfigPath = path.join(
-        runtimePlatform.cwd,
+        runtimeEnvironment.cwd,
         ConfigService.PROJECT_CONFIG_RELATIVE,
       )
 
@@ -198,7 +198,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           // No cwd, or cwd matches the server's launch cwd: short-circuit
           // to the cached project ref so launch-cwd callers don't pay an
           // extra disk read per request.
-          if (cwd === undefined || cwd === runtimePlatform.cwd) {
+          if (cwd === undefined || cwd === runtimeEnvironment.cwd) {
             const project = yield* Ref.get(projectConfigRef)
             return mergeConfigs(user, project)
           }

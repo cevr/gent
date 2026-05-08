@@ -29,7 +29,7 @@ import {
   makeExtensionHostContext,
 } from "../runtime/make-extension-host-context.js"
 import { ModelRegistry, type ModelRegistryService } from "../runtime/model-registry.js"
-import { RuntimePlatform, type RuntimePlatformShape } from "../runtime/runtime-platform.js"
+import { RuntimeEnvironment, type RuntimeEnvironmentShape } from "../runtime/runtime-environment.js"
 import { SessionRuntime, type SessionRuntimeService } from "../runtime/session-runtime.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
 import { WideEvent, rpcBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
@@ -91,7 +91,7 @@ interface RpcHandlerDeps {
   readonly authGuard: AuthGuardService
   readonly providerAuth: ProviderAuthService
   readonly extensionRegistry: ExtensionRegistryService
-  readonly platform: RuntimePlatformShape
+  readonly platform: RuntimeEnvironmentShape
   readonly sessionStorage: SessionStorageService
   readonly branchStorage: BranchStorageService
   readonly connectionTracker: ConnectionTrackerService | undefined
@@ -609,7 +609,7 @@ const RpcHandlers = GentRpcs.toLayer(
     const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
     const extensionRegistry = yield* ExtensionRegistry
-    const platform = yield* RuntimePlatform
+    const platform = yield* RuntimeEnvironment
     const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
     const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
     const sessionStorage = yield* SessionStorage

@@ -4,7 +4,7 @@ import { BunServices } from "@effect/platform-bun"
 import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
-import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -48,13 +48,13 @@ describe("SessionProfileCache", () => {
       const path = yield* Path.Path
       const launch = yield* fs.makeTempDirectoryScoped()
       const home = yield* fs.makeTempDirectoryScoped()
-      const runtimePlatformLive = RuntimePlatform.Live({
+      const runtimeEnvironmentLive = RuntimeEnvironment.Live({
         cwd: launch,
         home,
         platform: "darwin",
       })
       const configServiceLive = ConfigService.Live.pipe(
-        Layer.provide(Layer.merge(BunServices.layer, runtimePlatformLive)),
+        Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
       )
       const initialProfile = yield* makeEmptyProfile(launch)
       const sessionProfileCacheLive = SessionProfileCache.Live({
@@ -100,13 +100,13 @@ describe("SessionProfileCache", () => {
       yield* writeProjectConfig(launch, [{ tool: "bash", action: "deny" }])
       yield* writeProjectConfig(secondary, [])
 
-      const runtimePlatformLive = RuntimePlatform.Live({
+      const runtimeEnvironmentLive = RuntimeEnvironment.Live({
         cwd: launch,
         home,
         platform: "darwin",
       })
       const configServiceLive = ConfigService.Live.pipe(
-        Layer.provide(Layer.merge(BunServices.layer, runtimePlatformLive)),
+        Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
       )
       const sessionProfileCacheLive = SessionProfileCache.Live({
         home,

@@ -7,7 +7,7 @@ import { Model, ModelId, ProviderId } from "../domain/model.js"
 import type { ModelPricing } from "../domain/model.js"
 import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
-import { RuntimePlatform } from "./runtime-platform.js"
+import { RuntimeEnvironment } from "./runtime-environment.js"
 
 const MODELS_URL = "https://models.dev"
 const CACHE_RELATIVE = ".gent/models.json"
@@ -138,7 +138,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
     never,
     | FileSystem.FileSystem
     | Path.Path
-    | RuntimePlatform
+    | RuntimeEnvironment
     | DriverRegistry
     | Auth
     | HttpClientService.HttpClient
@@ -148,10 +148,10 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const http = yield* HttpClient.HttpClient
-      const runtimePlatform = yield* RuntimePlatform
+      const runtimeEnvironment = yield* RuntimeEnvironment
       const driverRegistry = yield* DriverRegistry
       const authStore = yield* Auth
-      const cachePath = path.join(runtimePlatform.home, CACHE_RELATIVE)
+      const cachePath = path.join(runtimeEnvironment.home, CACHE_RELATIVE)
       const cacheRef = yield* Ref.make<readonly Model[] | null>(null)
 
       const loadFromDisk = Effect.gen(function* () {

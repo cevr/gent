@@ -10,7 +10,7 @@ import {
 } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { RuntimeEnvironment } from "@gent/core/runtime/runtime-environment"
 import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
@@ -60,8 +60,8 @@ const makeCtx = (overrides: {
     },
   })
 
-// RuntimePlatform still needed — resolveAuditPaths carries it in the type even when paths are provided
-const runtimePlatformLayer = RuntimePlatform.Test({
+// RuntimeEnvironment still needed — resolveAuditPaths carries it in the type even when paths are provided
+const runtimeEnvironmentLayer = RuntimeEnvironment.Test({
   cwd: process.cwd(),
   home: "/tmp/test-home",
   platform: "test",
@@ -130,7 +130,7 @@ describe("Audit Tool", () => {
             expect(parentToolCallIds.every((id) => id === "test-call")).toBe(true)
             expect(auditCalls.every((c) => c.agentName === "auditor")).toBe(true)
           }),
-          Effect.provide(runtimePlatformLayer),
+          Effect.provide(runtimeEnvironmentLayer),
         ),
       )
     },
@@ -164,7 +164,7 @@ describe("Audit Tool", () => {
           const executeCalls = calls.filter((c) => c.prompt.includes("Execute this audit plan"))
           expect(executeCalls.length).toBe(0)
         }),
-        Effect.provide(runtimePlatformLayer),
+        Effect.provide(runtimeEnvironmentLayer),
       ),
     )
   })
@@ -180,7 +180,7 @@ describe("Audit Tool", () => {
           expect(result.findings.length).toBe(0)
           expect(result.output).toBe("No findings to fix.")
         }),
-        Effect.provide(runtimePlatformLayer),
+        Effect.provide(runtimeEnvironmentLayer),
       ),
     )
   })
@@ -213,7 +213,7 @@ describe("Audit Tool", () => {
           expect(executorAgents.length).toBeGreaterThan(0)
           expect(executorAgents[0]).toBe("cowork")
         }),
-        Effect.provide(runtimePlatformLayer),
+        Effect.provide(runtimeEnvironmentLayer),
       ),
     )
   })
@@ -249,7 +249,7 @@ describe("Audit Tool", () => {
             expect(overrides?.["deniedTools"]).toEqual(["bash"])
           }
         }),
-        Effect.provide(runtimePlatformLayer),
+        Effect.provide(runtimeEnvironmentLayer),
       ),
     )
   })

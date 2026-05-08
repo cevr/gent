@@ -211,7 +211,10 @@ Core runtime should not reach for ambient process state unless the app shell is 
 
 Explicit platform/runtime seams:
 
-- `RuntimePlatform`
+- `GentPlatform` owns host capabilities such as process identity, signals, env,
+  executable path, ids, time, and OS info.
+- `RuntimeEnvironment` carries launch/session configuration values:
+  `cwd`, `home`, and platform name.
 - tracer/logger services
 - file system / path / OS services
 

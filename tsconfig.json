@@ -220,8 +220,12 @@
       "@gent/core/runtime/log-paths.js": ["./packages/core/src/runtime/log-paths.ts"],
       "@gent/core/runtime/logger": ["./packages/core/src/runtime/logger.ts"],
       "@gent/core/runtime/logger.js": ["./packages/core/src/runtime/logger.ts"],
-      "@gent/core/runtime/runtime-platform": ["./packages/core/src/runtime/runtime-platform.ts"],
-      "@gent/core/runtime/runtime-platform.js": ["./packages/core/src/runtime/runtime-platform.ts"],
+      "@gent/core/runtime/runtime-environment": [
+        "./packages/core/src/runtime/runtime-environment.ts"
+      ],
+      "@gent/core/runtime/runtime-environment.js": [
+        "./packages/core/src/runtime/runtime-environment.ts"
+      ],
       "@gent/core/runtime/tracer": ["./packages/core/src/runtime/tracer.ts"],
       "@gent/core/runtime/tracer.js": ["./packages/core/src/runtime/tracer.ts"],
       "@gent/core/server/build-fingerprint": ["./packages/core/src/server/build-fingerprint.ts"],

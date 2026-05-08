@@ -25,7 +25,7 @@ import {
   BunGentPlatformLive,
   BunPlatformLive,
 } from "../runtime/gent-platform-bun.js"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
+import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import { decodeInteractionParams } from "../domain/interaction-request.js"
@@ -98,7 +98,7 @@ const scheduledJobEnv = (config: DependenciesConfig): Readonly<Record<string, st
 export const createDependencies = (config: DependenciesConfig) => {
   let launchSessionProfileSeed: SessionProfile | undefined
   let baseSectionsSeed: ReadonlyArray<PromptSection> | undefined
-  const runtimePlatformLive = RuntimePlatform.Live({
+  const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: config.cwd,
     home: config.home,
     platform: config.platform,
@@ -123,7 +123,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   const authDirectory = config.authDirectory ?? `${config.home}/.gent/auth`
   const authLive = Layer.provide(Auth.Live(authDirectory), BunPlatformLive)
 
-  const configServiceLive = Layer.provide(ConfigService.Live, runtimePlatformLive)
+  const configServiceLive = Layer.provide(ConfigService.Live, runtimeEnvironmentLive)
 
   // Resolve and build the launch cwd profile runtime once. Server startup and
   // SessionProfileCache share this same profile so cwd-scoped resources have a
@@ -155,11 +155,16 @@ export const createDependencies = (config: DependenciesConfig) => {
   // shared composition boundary so SQLite initialization cannot run in parallel copies.
   const extensionRegistryLive = Layer.provide(
     profileLayers,
-    Layer.mergeAll(configServiceLive, runtimePlatformLive, BunGentPlatformLive, BunCronRuntimeLive),
+    Layer.mergeAll(
+      configServiceLive,
+      runtimeEnvironmentLive,
+      BunGentPlatformLive,
+      BunCronRuntimeLive,
+    ),
   )
   const modelRegistryLive = Layer.provide(
     ModelRegistry.Live,
-    Layer.mergeAll(runtimePlatformLive, extensionRegistryLive, authLive),
+    Layer.mergeAll(runtimeEnvironmentLive, extensionRegistryLive, authLive),
   )
   const authDeps = Layer.mergeAll(authLive, extensionRegistryLive)
   const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
@@ -185,7 +190,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   const baseServicesLive = Layer.provideMerge(
     Layer.provideMerge(
       Layer.mergeAll(
-        runtimePlatformLive,
+        runtimeEnvironmentLive,
         clusterRunnerLive,
         eventServicesLive,
         authLive,
@@ -196,7 +201,7 @@ export const createDependencies = (config: DependenciesConfig) => {
         extensionRegistryLive,
         fileLockServiceLive,
         modelResolverLive,
-        Layer.provide(FileIndexLive, runtimePlatformLive),
+        Layer.provide(FileIndexLive, runtimeEnvironmentLive),
         FetchHttpClient.layer,
       ),
       BunGentPlatformLive,

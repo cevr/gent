@@ -16,7 +16,7 @@ import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
-import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
+import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import {
@@ -243,7 +243,7 @@ export const makeLayer = (
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(tools, resources),
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     EventStore.Memory,
     ToolRunner.Test(),
@@ -266,7 +266,7 @@ export const makeRecordingLayer = (providerLayer: Layer.Layer<LanguageModel.Lang
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(),
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     ToolRunner.Test(),
     BunServices.layer,
@@ -312,7 +312,7 @@ export const makeLiveToolLayer = (
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     extRegistry,
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     EventStore.Memory,
     ApprovalService.Test(),
@@ -355,7 +355,7 @@ export const makeLayerWithEvents = (
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(tools),
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     makeCountingEventStore(eventsRef),
     ToolRunner.Test(),
@@ -379,7 +379,7 @@ export const makeLayerWithEventPublisher = (
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(),
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     EventStore.Memory,
     ToolRunner.Test(),
@@ -446,7 +446,7 @@ export const makeExternalLayerWithEvents = (
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     registryLayer,
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     makeCountingEventStore(eventsRef),
     ToolRunner.Test(),

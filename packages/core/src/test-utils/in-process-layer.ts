@@ -20,7 +20,7 @@ import { DebugSlowLanguageModelDelayMs, LanguageModelLayers } from "./language-m
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
+import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
@@ -76,7 +76,7 @@ const buildLayer = (
     languageModelLive,
     ModelResolver.fromLanguageModel(languageModelLive),
     extensionRegistryLive,
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunGentPlatformLive,
     Permission.Test(),
     ConfigService.Test(),

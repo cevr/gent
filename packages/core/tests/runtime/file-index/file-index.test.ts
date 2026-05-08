@@ -7,10 +7,10 @@ import {
   FallbackFileIndexLive,
   FileIndexLive,
 } from "../../../src/runtime/file-index/index"
-import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
+import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 
 const PlatformLayer = BunServices.layer
-const TestRuntimePlatform = RuntimePlatform.Test({
+const TestRuntimeEnvironment = RuntimeEnvironment.Test({
   cwd: process.cwd(),
   home: "/tmp",
   platform: "test",
@@ -117,7 +117,7 @@ describe("FileIndex.Live", () => {
       Effect.provide(
         Layer.merge(
           PlatformLayer,
-          Layer.provide(FileIndexLive, Layer.merge(PlatformLayer, TestRuntimePlatform)),
+          Layer.provide(FileIndexLive, Layer.merge(PlatformLayer, TestRuntimeEnvironment)),
         ),
       ),
     ),
@@ -136,7 +136,7 @@ describe("FileIndex.Live", () => {
       Effect.provide(
         Layer.merge(
           PlatformLayer,
-          Layer.provide(FileIndexLive, Layer.merge(PlatformLayer, TestRuntimePlatform)),
+          Layer.provide(FileIndexLive, Layer.merge(PlatformLayer, TestRuntimeEnvironment)),
         ),
       ),
     ),
@@ -159,7 +159,7 @@ describe("FileIndex.Live", () => {
       Effect.provide(
         Layer.merge(
           PlatformLayer,
-          Layer.provide(FileIndexLive, Layer.merge(PlatformLayer, TestRuntimePlatform)),
+          Layer.provide(FileIndexLive, Layer.merge(PlatformLayer, TestRuntimeEnvironment)),
         ),
       ),
     ),

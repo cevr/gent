@@ -29,7 +29,7 @@ import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { BunGentPlatformLive, BunPlatformLive } from "../runtime/gent-platform-bun.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
+import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { EventPublisherLive } from "../domain/event-publisher.js"
 import { ModelResolver } from "../providers/model-resolver.js"
 import { LanguageModelLayers } from "./language-model.js"
@@ -114,7 +114,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         subagentRunnerLayer,
         PromptPresenter.Test(),
         Permission.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         languageModelLayer,
         ModelResolver.fromLanguageModel(languageModelLayer),
         ToolRunner.Test(),

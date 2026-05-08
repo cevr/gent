@@ -28,7 +28,7 @@ import { BranchStorage } from "@gent/core/storage/branch-storage.js"
 import { MessageStorage } from "@gent/core/storage/message-storage.js"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry.js"
 import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform.js"
+import { RuntimeEnvironment } from "@gent/core/runtime/runtime-environment.js"
 import type { CapabilityError, CapabilityNotFoundError } from "@gent/core/domain/capability.js"
 import { ref } from "@gent/core/extensions/api"
 import {
@@ -577,7 +577,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
 const runTaskLifecycle = (params: DebugScenarioParams) =>
   Effect.gen(function* () {
     const registry = yield* ExtensionRegistry
-    const platform = yield* RuntimePlatform
+    const platform = yield* RuntimeEnvironment
     const rpcRegistry = registry.getResolved().rpcRegistry
     const ctx = {
       sessionId: params.sessionId,

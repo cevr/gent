@@ -40,7 +40,7 @@ import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { buildResourceLayer } from "../runtime/extensions/resource-host/resource-layer.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
+import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import type { SessionProfileCache } from "../runtime/session-profile.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
@@ -235,7 +235,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         Permission.Test(),
         config.configServiceLayer ?? ConfigService.Test(),
         ModelRegistry.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         // Required for resource layers below: extension Resource layers
         // are fed via `Layer.provideMerge(extensionResourceLayer,
         // baseDepsCore)` (further down). Many of those layers yield

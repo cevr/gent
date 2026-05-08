@@ -41,7 +41,7 @@ import { ModelRegistry } from "../../src/runtime/model-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
-import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { SessionCommands } from "../../src/server/session-commands"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
@@ -99,7 +99,7 @@ const makeRuntimeLayer = (
     eventStoreLayer,
     recorderLayer,
     ToolRunner.Test(),
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     BunServices.layer,
     ResourceManagerLive,
@@ -142,7 +142,7 @@ const makeRuntimeLayerWithEventPublisher = (
     eventStoreLayer,
     recorderLayer,
     ToolRunner.Test(),
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     BunServices.layer,
     ResourceManagerLive,
@@ -185,7 +185,7 @@ const makeLiveToolRuntimeLayer = (
     }),
     eventStoreLayer,
     recorderLayer,
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     ApprovalService.Test(),
     Permission.Live([], "allow"),

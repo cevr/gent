@@ -20,7 +20,7 @@ import { entityIdOf } from "../../src/runtime/agent/agent-loop.entity-id"
 import { assistantMessageIdForTurn } from "../../src/runtime/agent/agent-loop.utils"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ModelResolver } from "@gent/core/providers/model-resolver"
 import { finishPart, LanguageModelLayers } from "@gent/core/test-utils/language-model"
@@ -281,7 +281,7 @@ const makeLayerWithEvents = (
     makeDriverRegistry(executor, options?.tools),
     makeCountingEventStore(eventsRef),
     ToolRunner.Test(),
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunServices.layer,
     ResourceManagerLive,
     ModelRegistry.Test(),
@@ -484,7 +484,7 @@ describe("external turn execution", () => {
         }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
         ResourceManagerLive,
@@ -641,7 +641,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         // Messages go through focused storage directly — EventStore path is orthogonal.
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
         ResourceManagerLive,
@@ -725,7 +725,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
         ResourceManagerLive,
@@ -824,7 +824,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
         ResourceManagerLive,
@@ -922,7 +922,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
         ResourceManagerLive,

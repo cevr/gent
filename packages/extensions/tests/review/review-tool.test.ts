@@ -10,7 +10,7 @@ import {
 } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { RuntimeEnvironment } from "@gent/core/runtime/runtime-environment"
 import { getToolEffect } from "@gent/core/domain/capability/tool"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
@@ -48,8 +48,8 @@ const makeCtx = (overrides: {
     },
   })
 
-// RuntimePlatform needed — resolveReviewInput carries it in the type even when content is provided
-const runtimePlatformLayer = RuntimePlatform.Test({
+// RuntimeEnvironment needed — resolveReviewInput carries it in the type even when content is provided
+const runtimeEnvironmentLayer = RuntimeEnvironment.Test({
   cwd: process.cwd(),
   home: "/tmp/test-home",
   platform: "test",
@@ -95,7 +95,7 @@ describe("ReviewTool", () => {
           ])
           expect(reviewOverrides?.["deniedTools"]).toEqual(["bash"])
         }),
-        Effect.provide(runtimePlatformLayer),
+        Effect.provide(runtimeEnvironmentLayer),
       ),
     )
   })
@@ -129,7 +129,7 @@ describe("ReviewTool", () => {
           expect(result.comments[0]!.severity).toBe("high")
           expect(result.summary?.high).toBe(1)
         }),
-        Effect.provide(runtimePlatformLayer),
+        Effect.provide(runtimeEnvironmentLayer),
       ),
     )
   })
@@ -154,7 +154,7 @@ describe("ReviewTool", () => {
           expect(error._tag).toBe("ReviewError")
           expect(error.message).toContain("not valid JSON")
         }),
-        Effect.provide(runtimePlatformLayer),
+        Effect.provide(runtimeEnvironmentLayer),
       ),
     )
   })
@@ -214,7 +214,7 @@ describe("ReviewTool", () => {
             ),
           ).toBe(false)
         }),
-        Effect.provide(runtimePlatformLayer),
+        Effect.provide(runtimeEnvironmentLayer),
       ),
     )
   })
@@ -240,7 +240,7 @@ describe("ReviewTool", () => {
         Effect.map((result) => {
           expect(result.session).toBeUndefined()
         }),
-        Effect.provide(runtimePlatformLayer),
+        Effect.provide(runtimeEnvironmentLayer),
       ),
     )
   })

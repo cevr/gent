@@ -46,7 +46,7 @@ import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 import { SessionCommands } from "../../src/server/session-commands"
 import { Permission } from "@gent/core/domain/permission"
-import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import {
   SessionRuntime,
   SessionRuntimeStateSchema,
@@ -98,7 +98,7 @@ const withEventPublisher = (baseEventStoreLayer: Layer.Layer<EventStore>) =>
     Layer.mergeAll(
       baseEventStoreLayer,
       testRegistryLayer,
-      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ),
   )
 const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
@@ -126,7 +126,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<LanguageModel.Langu
       storageLayer,
       eventStoreLayer,
       registryLayer,
-      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ),
   )
   const baseDeps = Layer.mergeAll(
@@ -142,7 +142,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<LanguageModel.Langu
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     ToolRunner.Test(),
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunPlatformLive,
     ConfigService.Test(),
     ResourceManagerLive,
@@ -167,7 +167,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<LanguageModel.Langu
 const ephemeralParentDeps = Layer.mergeAll(
   BunPlatformLive,
   Permission.Live([], "allow"),
-  RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+  RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   ConfigService.Test(),
   ModelRegistry.Test(),
 )

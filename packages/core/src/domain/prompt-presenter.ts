@@ -10,7 +10,7 @@ import type { InteractionPendingError } from "./interaction-request"
 //
 // The Tag + interface live here in domain. The Live layer is in
 // `runtime/prompt-presenter-live.ts` because it depends on runtime
-// services (ApprovalService, RuntimePlatform).
+// services (ApprovalService, RuntimeEnvironment).
 
 export interface PromptPresenterService {
   readonly present: (params: {

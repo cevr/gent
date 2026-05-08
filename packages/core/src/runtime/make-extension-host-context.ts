@@ -18,7 +18,7 @@ import {
   type AgentName,
 } from "../domain/agent.js"
 import { BranchId, SessionId } from "../domain/ids.js"
-import { RuntimePlatform, type RuntimePlatformShape } from "./runtime-platform.js"
+import { RuntimeEnvironment, type RuntimeEnvironmentShape } from "./runtime-environment.js"
 import { ApprovalService, type ApprovalServiceShape } from "./approval-service.js"
 import { PromptPresenter, type PromptPresenterService } from "../domain/prompt-presenter.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
@@ -44,7 +44,7 @@ export interface ExtensionSessionControlService {
 }
 
 export interface MakeExtensionHostContextDeps {
-  readonly platform: RuntimePlatformShape
+  readonly platform: RuntimeEnvironmentShape
   readonly approvalService: ApprovalServiceShape
   readonly promptPresenter: PromptPresenterService
   readonly extensionRegistry: ExtensionRegistryService
@@ -63,7 +63,7 @@ export interface MakeExtensionHostContextRunInfo {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly agentName?: AgentName
-  /** Session-scoped cwd. Falls back to RuntimePlatform.cwd when absent. */
+  /** Session-scoped cwd. Falls back to RuntimeEnvironment.cwd when absent. */
   readonly sessionCwd?: string
 }
 
@@ -109,7 +109,7 @@ const toHostError =
 const hostFailure = (operation: string, message: string): ExtensionHostError =>
   new ExtensionHostError({ operation, message })
 
-export const HostPlatformRef = Context.Reference<RuntimePlatformShape>(
+export const HostPlatformRef = Context.Reference<RuntimeEnvironmentShape>(
   "@gent/core/src/runtime/make-extension-host-context/HostPlatformRef",
   {
     defaultValue: () => ({ cwd: "", home: "", platform: "unknown" }),
@@ -255,7 +255,7 @@ type AmbientHostContextOverrides = Partial<AmbientHostContextDefaults>
 const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOverrides> = Effect.gen(
   function* () {
     const available = yield* Effect.all({
-      platform: Effect.serviceOption(RuntimePlatform),
+      platform: Effect.serviceOption(RuntimeEnvironment),
       approvalService: Effect.serviceOption(ApprovalService),
       promptPresenter: Effect.serviceOption(PromptPresenter),
       sessionStorage: Effect.serviceOption(SessionStorage),

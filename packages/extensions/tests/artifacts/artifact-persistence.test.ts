@@ -31,7 +31,7 @@ import { PlanTool } from "@gent/extensions/plan-tool"
 import { AuditTool } from "@gent/extensions/audit/audit-tool"
 import { ReviewTool } from "@gent/extensions/review/review-tool"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { RuntimeEnvironment } from "@gent/core/runtime/runtime-environment"
 import {
   ArtifactsWrite,
   type ArtifactSaveInput,
@@ -100,7 +100,7 @@ const agentLookup = {
     ] as const),
 }
 
-const runtimePlatformLayer = RuntimePlatform.Test({
+const runtimeEnvironmentLayer = RuntimeEnvironment.Test({
   cwd: process.cwd(),
   home: "/tmp/test-home",
   platform: "test",
@@ -282,7 +282,7 @@ describe("ReviewTool artifact persistence", () => {
           expect(saves[0]!.input.label).toContain("Review:")
           expect(saves[0]!.input.metadata).toBeDefined()
         }),
-        Effect.provide(Layer.merge(runtimePlatformLayer, spy.layer)),
+        Effect.provide(Layer.merge(runtimeEnvironmentLayer, spy.layer)),
       ),
     )
   })

@@ -1,7 +1,7 @@
 import { Effect, Layer, FileSystem, Path } from "effect"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { ApprovalService } from "./approval-service.js"
-import { RuntimePlatform } from "./runtime-platform.js"
+import { RuntimeEnvironment } from "./runtime-environment.js"
 
 const slugify = (text: string): string =>
   text
@@ -18,14 +18,14 @@ const defaultPromptPath = (cwd: string, title: string | undefined, fileNameSeed:
 export const PromptPresenterLive: Layer.Layer<
   PromptPresenter,
   never,
-  ApprovalService | FileSystem.FileSystem | Path.Path | RuntimePlatform
+  ApprovalService | FileSystem.FileSystem | Path.Path | RuntimeEnvironment
 > = Layer.effect(
   PromptPresenter,
   Effect.gen(function* () {
     const approvalService = yield* ApprovalService
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const platform = yield* RuntimePlatform
+    const platform = yield* RuntimeEnvironment
 
     return PromptPresenter.of({
       present: Effect.fn("PromptPresenter.present")(function* (params) {

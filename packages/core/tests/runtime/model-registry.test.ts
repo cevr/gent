@@ -7,7 +7,7 @@ import type { ModelDriverContribution, ProviderResolution } from "../../src/doma
 import { Model, ModelId, ProviderId } from "../../src/domain/model.js"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry.js"
 import { ModelRegistry } from "../../src/runtime/model-registry.js"
-import { RuntimePlatform } from "../../src/runtime/runtime-platform.js"
+import { RuntimeEnvironment } from "../../src/runtime/runtime-environment.js"
 import { waitFor } from "../../src/test-utils/fixtures.js"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { failingLanguageModel } from "../helpers/failing-language-model.js"
@@ -99,7 +99,7 @@ const makeRegistryLayer = (home: string, responseText: string) =>
       Layer.mergeAll(
         BunFileSystem.layer,
         Path.layer,
-        RuntimePlatform.Test({ cwd: home, home, platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: home, home, platform: "test" }),
         passThroughDrivers,
         authLayer,
         makeHttpLayer(responseText),
@@ -118,7 +118,7 @@ const makeRegistryLayerWithDrivers = (
       Layer.mergeAll(
         BunFileSystem.layer,
         Path.layer,
-        RuntimePlatform.Test({ cwd: home, home, platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: home, home, platform: "test" }),
         DriverRegistry.fromResolved({
           modelDrivers: new Map(modelDrivers.map((driver) => [driver.id, driver])),
           externalDrivers: new Map(),
@@ -139,7 +139,7 @@ const makeDeferredRegistryLayer = (
       Layer.mergeAll(
         BunFileSystem.layer,
         Path.layer,
-        RuntimePlatform.Test({ cwd: home, home, platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: home, home, platform: "test" }),
         passThroughDrivers,
         authLayer,
         makeDeferredHttpLayer(started, response),

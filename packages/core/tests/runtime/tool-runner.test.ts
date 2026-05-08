@@ -6,7 +6,7 @@ import { tool } from "@gent/core/extensions/api"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
-import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import type { ToolCallStarted } from "../../src/domain/event"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import {
@@ -53,7 +53,7 @@ describe("ToolRunner", () => {
         ),
         Permission.Test(),
         ApprovalService.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -95,7 +95,7 @@ describe("ToolRunner", () => {
         ),
         Permission.Test(),
         ApprovalService.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -143,7 +143,7 @@ describe("ToolRunner", () => {
         ),
         Permission.Test(),
         ApprovalService.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -202,7 +202,7 @@ describe("ToolRunner", () => {
         ),
         Permission.Test(),
         ApprovalService.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -255,7 +255,7 @@ describe("ToolRunner", () => {
         ),
         denyAllPermission,
         ApprovalService.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -369,7 +369,7 @@ describe("ToolRunner", () => {
         ),
         Permission.Test(),
         ApprovalService.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -422,7 +422,7 @@ describe("ToolRunner", () => {
         ),
         Permission.Test(),
         ApprovalService.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)

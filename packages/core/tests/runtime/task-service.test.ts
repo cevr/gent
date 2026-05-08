@@ -7,7 +7,7 @@ import { EventPublisherLive, ExtensionStatePublisher } from "@gent/core/domain/e
 import { EventStore } from "@gent/core/domain/event"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { ensureStorageParents } from "@gent/core/test-utils"
 
@@ -21,7 +21,7 @@ const makeLayer = () => {
     storageLayer,
     EventStore.Memory,
     registryLayer,
-    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     GentPlatform.Test(),
   )
   const runtimeLayer = Layer.provideMerge(EventPublisherLive, baseDeps)

@@ -27,7 +27,7 @@ import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.s
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ModelResolver } from "@gent/core/providers/model-resolver"
@@ -123,7 +123,7 @@ describe("interaction", () => {
       resolvedProviderLayer,
       ModelResolver.fromLanguageModel(resolvedProviderLayer),
       makeExtRegistry(tools),
-      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ConfigService.Test(),
       ApprovalService.Test(),
       Permission.Live([], "allow"),
@@ -275,7 +275,7 @@ describe("interaction", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         makeExtRegistry(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         EventStore.Memory,
         ToolRunner.Test(),

@@ -3,7 +3,7 @@ import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GrepTool } from "@gent/extensions/fs-tools/grep"
 import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { RuntimeEnvironment } from "@gent/core/runtime/runtime-environment"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { getToolEffect } from "@gent/core/domain/capability/tool"
@@ -19,7 +19,7 @@ const ctx: ToolCapabilityContext = testToolContext({
 
 const PlatformLayer = Layer.mergeAll(
   BunServices.layer,
-  RuntimePlatform.Test({
+  RuntimeEnvironment.Test({
     cwd: process.cwd(),
     home: "/tmp/test-home",
     platform: "test",
