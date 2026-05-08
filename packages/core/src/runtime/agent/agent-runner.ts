@@ -8,6 +8,7 @@ import {
   FileSystem,
   Layer,
   type Path,
+  Ref,
   Schema,
   Stream,
 } from "effect"
@@ -581,6 +582,7 @@ const runEphemeralAgent = (params: {
     const localEventPublisher = yield* EventPublisher
     const sessionRuntime = yield* SessionRuntime
     const now = yield* DateTime.nowAsDate
+    const mirroredEnvelopeIds = yield* Ref.make<ReadonlySet<EventEnvelope["id"]>>(new Set())
 
     yield* localSessionStorage.createSession(
       new Session({
@@ -599,25 +601,37 @@ const runEphemeralAgent = (params: {
       }),
     )
 
+    const mirrorEnvelope = (envelope: EventEnvelope) =>
+      Ref.modify(mirroredEnvelopeIds, (current) => {
+        if (current.has(envelope.id)) return [false, current] as const
+        const next = new Set(current)
+        next.add(envelope.id)
+        return [true, next] as const
+      }).pipe(
+        Effect.flatMap((shouldMirror) =>
+          shouldMirror
+            ? Effect.sync(() =>
+                reparentEphemeralChildEvent(
+                  envelope.event,
+                  params.parentSessionId,
+                  params.parentBranchId,
+                ),
+              ).pipe(
+                Effect.flatMap((event) =>
+                  params.parentBaseEventStore
+                    .publish(event)
+                    .pipe(Effect.tap(() => params.notifyMirroredEventObservers(event))),
+                ),
+                Effect.catchEager(() => Effect.void),
+              )
+            : Effect.void,
+        ),
+      )
+
     const mirrorFiber = yield* Effect.forkChild(
       localEventStore.subscribe({ sessionId }).pipe(
         Stream.filter((envelope) => mirroredChildEventTags.has(envelope.event._tag)),
-        Stream.runForEach((envelope) =>
-          Effect.sync(() =>
-            reparentEphemeralChildEvent(
-              envelope.event,
-              params.parentSessionId,
-              params.parentBranchId,
-            ),
-          ).pipe(
-            Effect.flatMap((event) =>
-              params.parentBaseEventStore
-                .publish(event)
-                .pipe(Effect.tap(() => params.notifyMirroredEventObservers(event))),
-            ),
-            Effect.catchEager(() => Effect.void),
-          ),
-        ),
+        Stream.runForEach(mirrorEnvelope),
         Effect.catchEager(() => Effect.void),
       ),
     )
@@ -651,7 +665,7 @@ const runEphemeralAgent = (params: {
         }),
       )
 
-      return yield* loadAgentRunSuccessData({
+      const result = yield* loadAgentRunSuccessData({
         storage: {
           messages: localMessageStorage,
           events: localEventStorage,
@@ -661,6 +675,13 @@ const runEphemeralAgent = (params: {
         agentName: params.agentName,
         persistence: params.persistence,
       })
+      const persistedEvents = yield* localEventStorage.listEvents({ sessionId })
+      yield* Effect.forEach(
+        persistedEvents.filter((envelope) => mirroredChildEventTags.has(envelope.event._tag)),
+        mirrorEnvelope,
+        { discard: true },
+      )
+      return result
     }).pipe(Effect.ensuring(Fiber.interrupt(mirrorFiber)))
   })
 

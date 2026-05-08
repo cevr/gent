@@ -9,26 +9,25 @@ import {
   Ref,
   Schema,
   Stream,
+  type Scope,
 } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Entity, MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
+import { MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import type { RpcGroup } from "effect/unstable/rpc"
-import { Rpc } from "effect/unstable/rpc"
 import type { SqlClient } from "effect/unstable/sql"
 import { ActorAddressResolver, ActorStateRegistry } from "effect-encore"
 import { AgentRunError, RunSpecSchema, type RunSpec, AgentName } from "../domain/agent.js"
-import { QueueSnapshot } from "../domain/queue.js"
+import type { QueueSnapshot } from "../domain/queue.js"
 import { Permission } from "../domain/permission.js"
 import { AgentRestarted, ErrorOccurred } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import {
   ActorCommandId,
   BranchId,
-  InteractionRequestId,
   MessageId,
   SessionId,
   ToolCallId,
+  type InteractionRequestId,
 } from "../domain/ids.js"
 import { Message, MessageMetadata } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
@@ -54,7 +53,7 @@ import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-conte
 import { makeExtensionHostPlatform } from "./extensions/host-platform.js"
 import { SessionProfileCache } from "./session-profile.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
-import { SteerCommand as SteerCommandType } from "../domain/steer.js"
+import type { SteerCommand as SteerCommandType } from "../domain/steer.js"
 import {
   AllowAllPermission,
   resolveExistingSessionBranch,
@@ -194,79 +193,10 @@ export const SessionRuntimeMetrics = Schema.Struct({
 })
 export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
-export const SessionRuntimeEntity = Entity.make("SessionRuntime", [
-  Rpc.make("sendUserMessage", {
-    payload: SendUserMessagePayload.fields,
-    error: SessionRuntimeError,
-  }),
-  Rpc.make("recordToolResult", {
-    payload: SendToolResultPayload.fields,
-    error: SessionRuntimeError,
-  }),
-  Rpc.make("invokeTool", {
-    payload: InvokeToolPayload.fields,
-    error: SessionRuntimeError,
-  }),
-  Rpc.make("steer", {
-    payload: SteerCommandType,
-    error: SessionRuntimeError,
-  }),
-  Rpc.make("respondInteraction", {
-    payload: {
-      ...SessionRuntimeTarget.fields,
-      requestId: InteractionRequestId,
-    },
-    error: SessionRuntimeError,
-  }),
-  Rpc.make("runPrompt", {
-    payload: RunPromptPayload.fields,
-    error: AgentRunError,
-  }),
-  Rpc.make("queueFollowUp", {
-    payload: QueueFollowUpPayload.fields,
-    error: SessionRuntimeError,
-  }),
-  Rpc.make("drainQueuedMessages", {
-    payload: SessionRuntimeTarget.fields,
-    success: QueueSnapshot,
-    error: SessionRuntimeError,
-  }),
-  Rpc.make("getQueuedMessages", {
-    payload: SessionRuntimeTarget.fields,
-    success: QueueSnapshot,
-    error: SessionRuntimeError,
-  }),
-  Rpc.make("getState", {
-    payload: SessionRuntimeTarget.fields,
-    success: SessionRuntimeStateSchema,
-    error: SessionRuntimeError,
-  }),
-  Rpc.make("getMetrics", {
-    payload: SessionRuntimeTarget.fields,
-    success: SessionRuntimeMetrics,
-    error: SessionRuntimeError,
-  }),
-  Rpc.make("watchState", {
-    payload: SessionRuntimeTarget.fields,
-    success: SessionRuntimeStateSchema,
-    stream: true,
-    error: SessionRuntimeError,
-  }),
-  Rpc.make("terminateSession", {
-    payload: SessionRuntimeSessionTarget.fields,
-    error: SessionRuntimeError,
-  }),
-  Rpc.make("restoreSession", {
-    payload: SessionRuntimeSessionTarget.fields,
-    error: SessionRuntimeError,
-  }),
-])
-
-export type SessionRuntimeEntityRpcs = RpcGroup.Rpcs<typeof SessionRuntimeEntity.protocol>
-export type SessionRuntimeEntityHandlers = Entity.HandlersFrom<SessionRuntimeEntityRpcs>
-
-type SessionRuntimeEntityLayerRequirements =
+type SessionRuntimeLayerRequirements =
   | Sharding.Sharding
+  | ClusterMessageStorage.MessageStorage
+  | ActorStateRegistry
   | EventStorage
   | EventPublisher
   | ExtensionRegistry
@@ -283,6 +213,7 @@ type SessionRuntimeEntityLayerRequirements =
   | ResourceManager
   | ConfigService
   | ChildProcessSpawner
+  | Scope.Scope
 
 export interface SessionRuntimeService {
   readonly sendUserMessage: (
@@ -317,27 +248,6 @@ export interface SessionRuntimeService {
   readonly restoreSession: (sessionId: SessionId) => Effect.Effect<void, SessionRuntimeError>
 }
 
-export const makeSessionRuntimeEntityHandlers = (
-  service: SessionRuntimeService,
-): SessionRuntimeEntityHandlers =>
-  SessionRuntimeEntity.of({
-    sendUserMessage: ({ payload }) => Rpc.uninterruptible(service.sendUserMessage(payload)),
-    recordToolResult: ({ payload }) => Rpc.uninterruptible(service.recordToolResult(payload)),
-    invokeTool: ({ payload }) => Rpc.uninterruptible(service.invokeTool(payload)),
-    steer: ({ payload }) => Rpc.uninterruptible(service.steer(payload)),
-    respondInteraction: ({ payload }) => Rpc.uninterruptible(service.respondInteraction(payload)),
-    runPrompt: ({ payload }) => Rpc.uninterruptible(service.runPrompt(payload)),
-    queueFollowUp: ({ payload }) => Rpc.uninterruptible(service.queueFollowUp(payload)),
-    drainQueuedMessages: ({ payload }) => service.drainQueuedMessages(payload),
-    getQueuedMessages: ({ payload }) => service.getQueuedMessages(payload),
-    getState: ({ payload }) => service.getState(payload),
-    getMetrics: ({ payload }) => service.getMetrics(payload),
-    watchState: ({ payload }) => Stream.unwrap(service.watchState(payload)),
-    terminateSession: ({ payload }) =>
-      Rpc.uninterruptible(service.terminateSession(payload.sessionId)),
-    restoreSession: ({ payload }) => Rpc.uninterruptible(service.restoreSession(payload.sessionId)),
-  })
-
 const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
   // Preserve inner typed SessionRuntimeError (e.g. from `requireSessionExists`)
   // so callers observing the cause chain see the specific "Session not found"
@@ -359,18 +269,10 @@ const followUpMessageIdForSource = (input: {
   )
 const commandIdForRequestId = (requestId: string) => ActorCommandId.make(`message:${requestId}`)
 
-const wrapEntitySessionRuntimeError = (operation: string, error: unknown) =>
+const wrapStreamSessionRuntimeError = (operation: string, error: unknown) =>
   Schema.is(SessionRuntimeError)(error)
     ? error
     : new SessionRuntimeError({
-        message: `${operation} failed`,
-        cause: error,
-      })
-
-const wrapEntityAgentRunError = (operation: string, error: unknown) =>
-  Schema.is(AgentRunError)(error)
-    ? error
-    : new AgentRunError({
         message: `${operation} failed`,
         cause: error,
       })
@@ -997,7 +899,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* requireSessionBranch(input)
         return (yield* watchRuntimeState(input)).pipe(
-          Stream.mapError((error) => wrapEntitySessionRuntimeError("watchState", error)),
+          Stream.mapError((error) => wrapStreamSessionRuntimeError("watchState", error)),
         )
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
 
@@ -1018,105 +920,22 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   } satisfies SessionRuntimeService
 })
 
-const makeEntityClientSessionRuntime = Effect.gen(function* () {
-  const makeClient = yield* SessionRuntimeEntity.client
-  const clientForTarget = (target: SessionRuntimeTarget | SessionRuntimeSessionTarget) =>
-    makeClient(target.sessionId)
-
-  return {
-    sendUserMessage: (input) =>
-      clientForTarget(input)
-        .sendUserMessage(input)
-        .pipe(Effect.mapError((error) => wrapEntitySessionRuntimeError("sendUserMessage", error))),
-    recordToolResult: (input) =>
-      clientForTarget(input)
-        .recordToolResult(input)
-        .pipe(Effect.mapError((error) => wrapEntitySessionRuntimeError("recordToolResult", error))),
-    invokeTool: (input) =>
-      clientForTarget(input)
-        .invokeTool(input)
-        .pipe(Effect.mapError((error) => wrapEntitySessionRuntimeError("invokeTool", error))),
-    steer: (command) =>
-      clientForTarget(command)
-        .steer(command)
-        .pipe(Effect.mapError((error) => wrapEntitySessionRuntimeError("steer", error))),
-    respondInteraction: (input) =>
-      clientForTarget(input)
-        .respondInteraction(input)
-        .pipe(
-          Effect.mapError((error) => wrapEntitySessionRuntimeError("respondInteraction", error)),
-        ),
-    runPrompt: (input) =>
-      clientForTarget(input)
-        .runPrompt(input)
-        .pipe(Effect.mapError((error) => wrapEntityAgentRunError("runPrompt", error))),
-    queueFollowUp: (input) =>
-      clientForTarget(input)
-        .queueFollowUp(input)
-        .pipe(Effect.mapError((error) => wrapEntitySessionRuntimeError("queueFollowUp", error))),
-    drainQueuedMessages: (input) =>
-      clientForTarget(input)
-        .drainQueuedMessages(input)
-        .pipe(
-          Effect.mapError((error) => wrapEntitySessionRuntimeError("drainQueuedMessages", error)),
-        ),
-    getQueuedMessages: (input) =>
-      clientForTarget(input)
-        .getQueuedMessages(input)
-        .pipe(
-          Effect.mapError((error) => wrapEntitySessionRuntimeError("getQueuedMessages", error)),
-        ),
-    getState: (input) =>
-      clientForTarget(input)
-        .getState(input)
-        .pipe(Effect.mapError((error) => wrapEntitySessionRuntimeError("getState", error))),
-    getMetrics: (input) =>
-      clientForTarget(input)
-        .getMetrics(input)
-        .pipe(Effect.mapError((error) => wrapEntitySessionRuntimeError("getMetrics", error))),
-    watchState: (input) =>
-      Effect.succeed(
-        clientForTarget(input)
-          .watchState(input)
-          .pipe(Stream.mapError((error) => wrapEntitySessionRuntimeError("watchState", error))),
-      ),
-    terminateSession: (sessionId) =>
-      clientForTarget({ sessionId })
-        .terminateSession({ sessionId })
-        .pipe(Effect.mapError((error) => wrapEntitySessionRuntimeError("terminateSession", error))),
-    restoreSession: (sessionId) =>
-      clientForTarget({ sessionId })
-        .restoreSession({ sessionId })
-        .pipe(Effect.mapError((error) => wrapEntitySessionRuntimeError("restoreSession", error))),
-  } satisfies SessionRuntimeService
-})
-
 export class SessionRuntime extends Context.Service<SessionRuntime, SessionRuntimeService>()(
   "@gent/core/src/runtime/session-runtime/SessionRuntime",
 ) {
   static Live = (config: {
     readonly baseSections: ReadonlyArray<PromptSection>
-  }): Layer.Layer<SessionRuntime, never, SessionRuntimeEntityLayerRequirements> =>
-    Layer.effect(SessionRuntime, makeEntityClientSessionRuntime).pipe(
-      Layer.provideMerge(
-        // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect cluster's Entity.toLayer exposes erased RPC middleware requirements; the exported layer narrows the Gent-owned services at this boundary.
-        SessionRuntimeEntity.toLayer(
-          makeLiveSessionRuntime.pipe(Effect.map(makeSessionRuntimeEntityHandlers)),
-          {
-            // SessionRuntime hosts long-lived streams and control-plane calls;
-            // per-branch mutation ordering lives in AgentLoop's entity operation
-            // queue and actor-owned mutation gates.
-            concurrency: "unbounded",
-          },
-        ).pipe(
-          // `AgentLoopLiveActor` provides the internal actor client consumed by
-          // `makeLiveSessionRuntime`.
-          Layer.provide(AgentLoopLiveActor(config)),
-          // `AgentLoopSessionGovernance` is a runtime-internal shared service.
-          // Encore owns actor state registration; session governance remains a
-          // Gent policy boundary shared by the facade and actor handler.
-          Layer.provide(AgentLoopSessionGovernance.Live),
-        ),
-      ),
+  }): Layer.Layer<SessionRuntime, never, SessionRuntimeLayerRequirements> => {
+    const live = Layer.effect(SessionRuntime, makeLiveSessionRuntime).pipe(
+      // Keep actor support services in the live context. `SessionRuntime`
+      // captures actor clients, but the AgentLoop entity manager must remain
+      // scoped for those clients to make progress.
+      Layer.provideMerge(AgentLoopLiveActor(config)),
+      // `AgentLoopSessionGovernance` is a runtime-internal shared service.
+      // Encore owns actor state registration; session governance remains a
+      // Gent policy boundary shared by the facade and actor handler.
+      Layer.provideMerge(AgentLoopSessionGovernance.Live),
     )
+    return live as Layer.Layer<SessionRuntime, never, SessionRuntimeLayerRequirements>
+  }
 }

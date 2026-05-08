@@ -143,6 +143,8 @@ no longer exist. They are not neutral; they are wrong navigation surfaces.
 
 ## Commit 3: spike(runtime): prove SessionRuntime entity ownership
 
+**Status**: Completed in this wave.
+
 **Justification**: The final audit found `SessionRuntimeEntity` may be mostly a
 second actor facade over the real `AgentLoop` actor. Prove the ownership before
 deleting anything.
@@ -155,11 +157,11 @@ deleting anything.
 
 **Changes**
 
-| File                                                                                     | Change                                                                                     |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`        | Map which behavior is unique to `SessionRuntimeEntity` versus direct `AgentLoop` dispatch. |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts` | Confirm actor-owned state, routing, redelivery, and execution-id semantics.                |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/session-runtime.test.ts` | Add or adjust public behavior coverage needed before deletion.                             |
+| File                                                                                     | Change                                                                                             |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`        | Proved no unique branch-local ownership: the entity only forwarded to direct `AgentLoop` dispatch. |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts` | Confirm actor-owned state, routing, redelivery, and execution-id semantics.                        |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/session-runtime.test.ts` | Add or adjust public behavior coverage needed before deletion.                                     |
 
 **Verification**
 
@@ -168,6 +170,8 @@ deleting anything.
 - `bun run gate`
 
 ## Commit 4: refactor(runtime): collapse SessionRuntime shallow entity
+
+**Status**: Completed in this wave.
 
 **Justification**: If Commit 3 proves the outer entity is a shallow forwarding
 surface, remove it and keep `SessionRuntime` as the app service that dispatches
