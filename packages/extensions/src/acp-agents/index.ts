@@ -39,8 +39,7 @@ import {
   makeClaudeCodeTurnExecutor,
 } from "./claude-code-executor.js"
 import { readClaudeCodeOAuthToken } from "./claude-code-auth.js"
-import { live as claudeSdkLive } from "./claude-sdk.js"
-import { AcpAgentsPlatform } from "./platform-adapter.js"
+import { live as claudeSdkLive, type AcpAgentsPlatformShape } from "./claude-sdk.js"
 import { AnthropicPlatform } from "../anthropic/platform-adapter.js"
 import { generateToolDescription } from "./mcp-codemode.js"
 
@@ -170,7 +169,7 @@ const buildAcpContributions = (
   spawner: ChildProcessSpawner["Service"],
   deps: AcpAgentsManagerDeps,
   platform: {
-    readonly acp: AcpAgentsPlatform["Service"]
+    readonly acp: AcpAgentsPlatformShape
     readonly anthropic: AnthropicPlatform["Service"]
   },
 ): ExtensionContributions => {
@@ -227,7 +226,7 @@ export const makeAcpAgentsExtension = (
   setup: (ctx) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner
-      const acpPlatform = AcpAgentsPlatform.fromHost(ctx.host)
+      const acpPlatform = { parentEnv: ctx.host.parentEnv } satisfies AcpAgentsPlatformShape
       const anthropicPlatform = AnthropicPlatform.fromHost(ctx.host)
       return buildAcpContributions(spawner, deps, {
         acp: acpPlatform,

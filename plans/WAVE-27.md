@@ -238,16 +238,17 @@ surface, search noise, and architecture weight.
 
 **Changes**
 
-| File                                                                               | Change                                                                                                          | Lines    |
-| ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------- |
-| small files baseline                                                               | Audit all `apps/` and `packages/` source files at `<=120` LOC. Current baseline: 258 files, 14,265 LOC.         | all      |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/utils/truncate.ts`                | Merge into the owning formatter/view module if it has one caller.                                               | all      |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/router/*`                         | Collapse the tiny router barrel/types/reducer/context split into one cohesive router module.                    | all      |
-| `/Users/cvr/Developer/personal/gent/apps/server/src/check.ts`                      | Inline into the server entrypoint if it is only a health/check helper.                                          | all      |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/index.ts`      | Covered by Commit 3; delete tiny barrel.                                                                        | all      |
-| `/Users/cvr/Developer/personal/gent/packages/e2e/src/effect-test-adapters.ts`      | Covered by platform-primitive cleanup; remove if it only renames Effect functions.                              | all      |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/*/index.ts`            | Merge extension index files that only re-export one local module, unless they are package entrypoints.          | multiple |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/*/platform-adapter.ts` | Merge tiny platform adapters into the extension host-facing module unless they protect a real portability edge. | multiple |
+| File                                                                                        | Change                                                                                                          | Lines    |
+| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------- |
+| small files baseline                                                                        | Audit all `apps/` and `packages/` source files at `<=120` LOC. Current baseline: 258 files, 14,265 LOC.         | all      |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/utils/truncate.ts`                         | Merge into the owning formatter/view module if it has one caller.                                               | all      |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/router/*`                                  | Collapse the tiny router barrel/types/reducer/context split into one cohesive router module.                    | all      |
+| `/Users/cvr/Developer/personal/gent/apps/server/src/check.ts`                               | Inline into the server entrypoint if it is only a health/check helper.                                          | all      |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/index.ts`               | Covered by Commit 3; delete tiny barrel.                                                                        | all      |
+| `/Users/cvr/Developer/personal/gent/packages/e2e/src/effect-test-adapters.ts`               | Covered by platform-primitive cleanup; remove if it only renames Effect functions.                              | all      |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/*/index.ts`                     | Merge extension index files that only re-export one local module, unless they are package entrypoints.          | multiple |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/*/platform-adapter.ts`          | Merge tiny platform adapters into the extension host-facing module unless they protect a real portability edge. | multiple |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/platform-adapter.ts` | Delete the unused Context.Service wrapper; the Claude SDK only needs a host environment shape.                  | all      |
 
 **Verification**
 
@@ -986,6 +987,7 @@ Focus on whether tests are behavioral, whether test file names mirror code file 
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/router/router.ts`
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/router/types.ts`
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/utils/truncate.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/platform-adapter.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/package.json:5`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event-publisher.ts:13`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts:343`

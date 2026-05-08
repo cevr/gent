@@ -42,9 +42,12 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk"
-import type { AcpAgentsPlatformShape } from "./platform-adapter.js"
 
 // ── Public service shape ──
+
+export interface AcpAgentsPlatformShape {
+  readonly parentEnv: Record<string, string | undefined>
+}
 
 /**
  * Per-session SDK handle. The shape hides the Pushable input stream and
