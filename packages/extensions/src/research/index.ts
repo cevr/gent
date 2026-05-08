@@ -1,5 +1,16 @@
-import { AgentName, defineAgent, defineExtension, ModelId } from "@gent/core/extensions/api"
+import { Effect, Schema } from "effect"
+import {
+  AgentName,
+  CapabilityError,
+  ExtensionId,
+  ModelId,
+  action,
+  defineAgent,
+  defineExtension,
+} from "@gent/core/extensions/api"
 import { ResearchTool } from "./research-tool.js"
+
+const RESEARCH_EXTENSION_ID = ExtensionId.make("@gent/research")
 
 const ARCHITECT_PROMPT = `
 Architect agent. Design implementation approach.
@@ -22,7 +33,38 @@ export const architect = defineAgent({
 })
 
 export const ResearchExtension = defineExtension({
-  id: "@gent/research",
+  id: RESEARCH_EXTENSION_ID,
+  actions: [
+    action({
+      id: "research-command",
+      name: "Research",
+      description: "Research external repositories",
+      surface: "slash",
+      slash: { trigger: "research" },
+      category: "Tools",
+      input: Schema.String,
+      output: Schema.Void,
+      execute: (input, ctx) =>
+        ctx.session
+          .queueFollowUp({
+            sourceId: "research-command",
+            content:
+              input.trim().length > 0
+                ? `Use the research tool: ${input.trim()}`
+                : "Use the research tool to understand how an external library or framework works. Ask me which repo to research.",
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new CapabilityError({
+                  extensionId: RESEARCH_EXTENSION_ID,
+                  capabilityId: "research-command",
+                  reason: cause.message,
+                }),
+            ),
+          ),
+    }),
+  ],
   tools: [ResearchTool],
   agents: [architect],
 })

@@ -27,9 +27,10 @@ surface area while preserving the same feature set and current stack.
   not duplicated TUI client commands.
 - Replace `TaggedEnumClass` with native Effect schema primitives if the worked
   examples preserve wire shape and constructor ergonomics.
-- Audit file merit first-class: collapse extension wrapper files, todo
-  operation files, tiny TUI barrels, and platform-shaped adapters that do not
-  encode a real boundary.
+- Audit file merit first-class: prefer bigger cohesive files when the smaller
+  split does not earn its existence. Collapse extension wrapper files, todo
+  operation files, tiny TUI barrels, single-use utils/classes/services, and
+  platform-shaped adapters that do not encode a real boundary.
 - Replace white-box actor/tool tests with public behavior tests where they lock
   implementation details rather than product contracts.
 
@@ -293,6 +294,8 @@ should not get private or privileged APIs.
 
 ## Commit 8: refactor(tui): route commands through server capabilities
 
+**Status**: Completed in this wave.
+
 **Justification**: Server action/request capabilities already carry slash
 metadata. TUI client commands duplicate visibility, permission, and command
 semantics.
@@ -305,18 +308,29 @@ semantics.
 
 **Changes**
 
-| File                                                                                | Change                                                                          |
-| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/action.ts`  | Ensure server actions can represent current prompt-only commands.               |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/request.ts` | Ensure slash requests represent current RPC-backed commands.                    |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/*.client.ts`   | Remove duplicated client command definitions where server capabilities suffice. |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/client-facets.ts`       | Shrink or delete the client command bucket.                                     |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/resolve.ts`             | Resolve command UI from `extension.listSlashCommands`.                          |
+| File                                                                                            | Change                                                                                                                                 |
+| ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/action.ts`              | Added action slash trigger metadata so `/review` can route to `review-command` without shadowing the model `review` tool.              |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts`           | Public command dispatch now accepts slash actions as well as slash requests; palette-only actions remain non-invokable.                |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/handoff.ts`                         | Moved `/handoff` prompt enqueueing into a server action capability.                                                                    |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/plan.ts`                            | Moved `/plan` and `/audit` prompt enqueueing into server action capabilities.                                                          |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/review/review-tool.ts`              | Moved `/review` prompt enqueueing into a server action while preserving the `review` model tool id.                                    |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/counsel/counsel-tool.ts`            | Moved `/counsel` prompt enqueueing into a server action while preserving the `counsel` model tool id.                                  |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/research/index.ts`                  | Moved `/research` prompt enqueueing into a server action while preserving the `research` model tool id.                                |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/plan.client.ts`            | Deleted the now-empty client command wrapper.                                                                                          |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/handoff.client.ts`         | Kept only the handoff interaction renderer.                                                                                            |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/tool-renderers.client.tsx` | Removed duplicated `/review`, `/counsel`, and `/research` prompt commands; kept UI-only tool renderers, todo UI, and `/loop`.          |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts`  | Locked slash action listing, transport dispatch, and queue-follow-up behavior.                                                         |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/capability-host.test.ts`     | Locked direct registry semantics for slash actions, palette-only rejection, and higher-scope action shadowing of lower-scope requests. |
+| `/Users/cvr/Developer/personal/gent/apps/tui/tests/extension-integration.test.ts`               | Retargeted builtin client loader expectations away from server-owned slash commands.                                                   |
+| `/Users/cvr/Developer/personal/gent/packages/tooling/src/suppression-inventory.ts`              | Updated the strict line-number receipt after formatting shifted an existing Effect diagnostic suppression.                             |
 
 **Verification**
 
-- Command palette tests.
-- Extension command RPC tests.
+- `bun run typecheck`
+- `cd packages/core && env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/extensions/capability-host.test.ts tests/extensions/registry.test.ts tests/extensions/extension-surface-locks.test.ts tests/server/extension-commands-rpc.test.ts`
+- `cd apps/tui && env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-log-preload.ts --preload ./node_modules/@opentui/solid/scripts/preload.ts tests/extension-integration.test.ts`
+- `bun run lint`
 - `bun run smoke`
 - `bun run gate`
 
@@ -461,7 +475,10 @@ rules and local reasoned exceptions.
 
 Run the same final audit lanes from Wave 27, including file-merit and split
 justification, without leading the auditors toward the work completed here.
-Close only if no P0/P1 remains. If P0/P1 remains, synthesize the next wave.
+The file-merit lane must ask whether each split earns its existence; bigger
+cohesive files are preferred over single-use utils, tiny classes/services, or
+wrappers that only name another abstraction. Close only if no P0/P1 remains. If
+P0/P1 remains, synthesize the next wave.
 
 **Verification**
 

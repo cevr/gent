@@ -1,8 +1,9 @@
 /**
  * Extension capability registry regression locks.
  *
- * Model tools are compiled through the model tool registry. Public transport
- * dispatch is the RPC registry only; human actions stay on local surfaces.
+ * Model tools are compiled through the model tool registry. Public command
+ * dispatch accepts slash-capable requests and actions; palette-only actions
+ * stay on local surfaces.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Exit, Schema } from "effect"
@@ -20,7 +21,7 @@ import {
   type ToolCapability,
 } from "@gent/core/extensions/api"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
-import { BranchId, ExtensionId, RpcId, SessionId } from "@gent/core-internal/domain/ids"
+import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 
 const extensionId = ExtensionId.make("@test/c")
@@ -120,7 +121,7 @@ describe("extension capability registries", () => {
     }),
   )
 
-  it.live("rpc registry does not dispatch action capabilities", () =>
+  it.live("dispatches slash action capabilities through the public command registry", () =>
     Effect.gen(function* () {
       const cap = action({
         id: "private-ping",
@@ -138,8 +139,33 @@ describe("extension capability registries", () => {
         contributions: { actions: [cap] },
       }
       const resolved = resolveExtensions([ext])
+      const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx, {
+        intent: "write",
+      })
+      expect(result).toEqual({ value: "hi" })
+    }),
+  )
+
+  it.live("public command registry rejects palette-only action capabilities", () =>
+    Effect.gen(function* () {
+      const cap = action({
+        id: "private-ping",
+        name: "Private Ping",
+        description: "Private action",
+        surface: "palette",
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.Struct({ value: Schema.String }),
+        execute: (input) => Effect.succeed({ value: input.value }),
+      })
+      const ext: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "/test/private-action",
+        contributions: { actions: [cap] },
+      }
+      const resolved = resolveExtensions([ext])
       const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, RpcId.make(String(cap.id)), { value: "hi" }, ctx, {
+        resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx, {
           intent: "write",
         }),
       )
@@ -181,12 +207,16 @@ describe("extension capability registries", () => {
           contributions: { actions: [project] },
         },
       ])
-      const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx, {
+      const result = yield* resolved.rpcRegistry.run(
+        extensionId,
+        project.id,
+        { value: "hi" },
+        ctx,
+        {
           intent: "write",
-        }),
+        },
       )
-      expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
+      expect(result).toEqual({ value: "hi" })
     }),
   )
 
@@ -213,7 +243,9 @@ describe("extension capability registries", () => {
           intent: "read",
         }),
       )
-      expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
+      expect(Schema.is(CapabilityError)(result)).toBe(true)
+      if (!Schema.is(CapabilityError)(result)) return
+      expect(result.reason).toContain("intent mismatch")
     }),
   )
 

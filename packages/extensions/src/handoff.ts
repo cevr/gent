@@ -1,7 +1,9 @@
-import { Context, Effect, Layer, Ref } from "effect"
+import { Context, Effect, Layer, Ref, Schema } from "effect"
 import {
+  CapabilityError,
   defineExtension,
   defineResource,
+  action,
   type ExtensionReactions,
   type Message,
   type TurnAfterInput,
@@ -13,6 +15,33 @@ import { AutoRead } from "./auto/controller.js"
 
 const EXTENSION_ID = ExtensionId.make("@gent/handoff")
 type TurnAfterContext = Parameters<NonNullable<ExtensionReactions["turnAfter"]>["handler"]>[1]
+
+const HandoffAction = action({
+  id: "handoff-command",
+  name: "Handoff",
+  description: "Distill context into new session",
+  surface: "slash",
+  slash: { trigger: "handoff" },
+  input: Schema.String,
+  output: Schema.Void,
+  execute: (_input, ctx) =>
+    ctx.session
+      .queueFollowUp({
+        sourceId: "handoff-command",
+        content:
+          "Please create a handoff by distilling the current context into a concise summary. Use the handoff tool with the distilled context. Include: current task status, key decisions made, relevant file paths, open questions, and any state that needs to carry over to the new session.",
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new CapabilityError({
+              extensionId: EXTENSION_ID,
+              capabilityId: "handoff-command",
+              reason: cause.message,
+            }),
+        ),
+      ),
+})
 
 // ── Cooldown service ──
 //
@@ -108,6 +137,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: TurnAfterContext) =>
 
 export const HandoffExtension = defineExtension({
   id: EXTENSION_ID,
+  actions: [HandoffAction],
   tools: [HandoffTool],
   resources: [
     defineResource({ tag: HandoffCooldown, scope: "process", layer: HandoffCooldown.Live }),

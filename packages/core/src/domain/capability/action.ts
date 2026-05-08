@@ -50,6 +50,14 @@ export type ActionCapability<Input = unknown, Output = unknown> = ActionCapabili
   readonly displayName: string
   readonly category?: string
   readonly keybind?: string
+  readonly slash?: {
+    /** Slash trigger without the leading `/`. Defaults to `id`. */
+    readonly trigger?: string
+    readonly name?: string
+    readonly description?: string
+    readonly category?: string
+    readonly keybind?: string
+  }
   readonly promptSnippet?: string
   readonly prompt?: PromptSection
   readonly permissionRules?: ReadonlyArray<PermissionRule>
@@ -74,6 +82,15 @@ export interface ActionInput<Input = unknown, Output = unknown, R = never> {
   readonly category?: string
   /** Optional keybind hint (display-only — TUI may ignore). */
   readonly keybind?: string
+  /** Optional slash presentation metadata. */
+  readonly slash?: {
+    /** Slash trigger without the leading `/`. Defaults to `id`. */
+    readonly trigger?: string
+    readonly name?: string
+    readonly description?: string
+    readonly category?: string
+    readonly keybind?: string
+  }
   /** Schema for input — typically `Schema.Struct({})` for no-arg actions. */
   readonly input: Schema.Schema<Input>
   /** Schema for output. */
@@ -117,6 +134,7 @@ export const action = <Input, Output, R>(
     ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),
     ...(input.category !== undefined ? { category: input.category } : {}),
     ...(input.keybind !== undefined ? { keybind: input.keybind } : {}),
+    ...(input.slash !== undefined ? { slash: input.slash } : {}),
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
     effect: input.execute as CapabilityEffect<Input, Output, R, CapabilityError>,
   })

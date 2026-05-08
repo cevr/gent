@@ -105,7 +105,7 @@ export interface CapabilityRunOptions {
 export interface CompiledRpcRegistry {
   readonly run: (
     extensionId: ExtensionId,
-    capabilityId: RpcId,
+    capabilityId: RpcId | CommandId | string,
     input: unknown,
     ctx: CapabilityCoreContext,
     options?: CapabilityRunOptions,
@@ -173,14 +173,12 @@ const compileCapabilityWinners = (
 
 const compileSlashCommands = (
   winners: ReadonlyMap<string, RegisteredCapabilityEntry>,
-  options?: { readonly publicOnly?: boolean },
 ): ReadonlyArray<SlashCommand> => {
   const commands: SlashCommand[] = []
   for (const entry of winners.values()) {
     if (entry.kind !== "command" && entry.kind !== "rpc") continue
     if (entry.kind === "command" && !entry.capability.surface.includes("slash")) continue
     if (entry.kind === "rpc" && entry.capability.slash === undefined) continue
-    if (options?.publicOnly === true && entry.kind !== "rpc") continue
     commands.push(capabilityToCommand(entry.extensionId, entry.capability))
   }
   return commands
@@ -298,7 +296,10 @@ const compileRpcRegistry = (
   run: (extensionId, capabilityId, input, ctx, options) =>
     Effect.gen(function* () {
       const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)
-      if (entry === undefined || entry.kind !== "rpc") {
+      if (entry === undefined || (entry.kind !== "rpc" && entry.kind !== "command")) {
+        return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
+      }
+      if (entry.kind === "command" && !entry.capability.surface.includes("slash")) {
         return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
       }
       if (options?.intent !== undefined && entry.capability.intent !== options.intent) {
@@ -335,13 +336,13 @@ const capabilityToCommand = (
   // cap.promptSnippet (LLM-prompt fragment) so action() callers don't have
   // to duplicate the same string into both fields.
   const isRequest = isRequestCapability(cap)
-  const slash = isRequest ? cap.slash : undefined
+  const slash = cap.slash
   const description = slash?.description ?? cap.description ?? cap.promptSnippet
   const displayName = slash?.name ?? (isRequest ? undefined : cap.displayName)
   const category = slash?.category ?? (isRequest ? undefined : cap.category)
   const keybind = slash?.keybind ?? (isRequest ? undefined : cap.keybind)
   return {
-    name: String(cap.id),
+    name: slash?.trigger ?? String(cap.id),
     ...(displayName !== undefined ? { displayName } : {}),
     ...(description !== undefined ? { description } : {}),
     ...(category !== undefined ? { category } : {}),
@@ -410,7 +411,7 @@ export const resolveExtensions = (
     if (rules) permissionRules.push(...rules)
   }
   const slashCommands = compileSlashCommands(capabilityWinners)
-  const publicSlashCommands = compileSlashCommands(capabilityWinners, { publicOnly: true })
+  const publicSlashCommands = compileSlashCommands(capabilityWinners)
 
   const extensionReactions = compileExtensionReactions(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [

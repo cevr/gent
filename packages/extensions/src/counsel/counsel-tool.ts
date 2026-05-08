@@ -1,13 +1,18 @@
 import { Effect, Schema } from "effect"
 import {
   AgentName,
+  CapabilityError,
+  ExtensionId,
   ToolNeeds,
+  action,
   defineAgent,
   defineExtension,
   makeRunSpec,
   tool,
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
+
+const COUNSEL_EXTENSION_ID = ExtensionId.make("@gent/counsel")
 
 const COUNSEL_DEEP_PROMPT = `
 You are providing a thorough second opinion. Read widely, explore adjacent code,
@@ -111,6 +116,37 @@ export const CounselTool = tool({
 })
 
 export const CounselExtension = defineExtension({
-  id: "@gent/counsel",
+  id: COUNSEL_EXTENSION_ID,
+  actions: [
+    action({
+      id: "counsel-command",
+      name: "Counsel",
+      description: "Get a cross-vendor second opinion",
+      surface: "slash",
+      slash: { trigger: "counsel" },
+      category: "Tools",
+      input: Schema.String,
+      output: Schema.Void,
+      execute: (input, ctx) =>
+        ctx.session
+          .queueFollowUp({
+            sourceId: "counsel-command",
+            content:
+              input.trim().length > 0
+                ? `Use the counsel tool: ${input.trim()}`
+                : "Use the counsel tool in standard mode to get a second opinion on the current approach.",
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new CapabilityError({
+                  extensionId: COUNSEL_EXTENSION_ID,
+                  capabilityId: "counsel-command",
+                  reason: cause.message,
+                }),
+            ),
+          ),
+    }),
+  ],
   tools: [CounselTool],
 })

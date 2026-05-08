@@ -138,6 +138,7 @@ export const Capability = TaggedEnumClass("Capability", {
     displayName: Schema.String,
     category: Schema.optional(Schema.String),
     keybind: Schema.optional(Schema.String),
+    slash: Schema.optional(Schema.Unknown),
   }),
   Request: TaggedEnumClass.variant("request", {
     id: RpcId,

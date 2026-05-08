@@ -206,6 +206,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
       name: "Ok Action",
       description: "ok",
       surface: "slash",
+      slash: { trigger: "ok" },
       input: NoInput,
       output: StringOutput,
       execute: () => Effect.succeed("done"),

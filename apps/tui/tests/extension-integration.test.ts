@@ -187,7 +187,8 @@ describe("loadTuiExtensions", () => {
       )
       expect(resolved.renderers.has("read")).toBe(true)
       expect(resolved.renderers.has("bash")).toBe(true)
-      expect(resolved.commands.some((command) => command.id === "plan.create")).toBe(true)
+      expect(resolved.interactionRenderers.has("handoff")).toBe(true)
+      expect(resolved.commands.some((command) => command.id === "plan.create")).toBe(false)
       rmSync(emptyUser, { recursive: true, force: true })
       rmSync(emptyProject, { recursive: true, force: true })
     }),
@@ -278,7 +279,8 @@ export default {
       )
       expect(resolved.renderers.has("read")).toBe(false)
       expect(resolved.renderers.has("bash")).toBe(false)
-      expect(resolved.commands.some((command) => command.id === "plan.create")).toBe(true)
+      expect(resolved.interactionRenderers.has("handoff")).toBe(true)
+      expect(resolved.commands.some((command) => command.id === "plan.create")).toBe(false)
       rmSync(disabledDir, { recursive: true, force: true })
     }),
   )

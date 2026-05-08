@@ -79,6 +79,8 @@ interface RequestInputBase<Input, Output> {
   readonly description?: string
   /** Optional slash-command presentation for public transport clients. */
   readonly slash?: {
+    /** Slash trigger without the leading `/`. Defaults to `id`. */
+    readonly trigger?: string
     readonly name?: string
     readonly description?: string
     readonly category?: string

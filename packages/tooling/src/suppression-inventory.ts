@@ -233,7 +233,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   },
   {
     file: "packages/core/src/runtime/extensions/registry.ts",
-    line: 252,
+    line: 250,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
   },

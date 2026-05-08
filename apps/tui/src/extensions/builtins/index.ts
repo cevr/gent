@@ -6,7 +6,6 @@ import builtinConnection from "./connection.client"
 import builtinDriver from "./driver.client"
 import builtinFiles from "./files.client"
 import builtinHandoff from "./handoff.client"
-import builtinPlan from "./plan.client"
 import builtinSkills from "./skills.client"
 import { builtinInteractions, builtinTodos, builtinTools } from "./tool-renderers.client"
 
@@ -20,7 +19,6 @@ export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinFiles,
   builtinHandoff,
   builtinInteractions,
-  builtinPlan,
   builtinSkills,
   builtinTodos,
   builtinTools,

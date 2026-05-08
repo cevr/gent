@@ -1,11 +1,14 @@
 import { Effect, Schema } from "effect"
 import {
   AgentName,
+  CapabilityError,
   DEFAULT_AGENT_NAME,
   defineAgent,
   defineExtension,
+  ExtensionId,
   getDurableAgentRunSessionId,
   makeRunSpec,
+  action,
   tool,
   ToolNeeds,
   type AgentDefinition,
@@ -19,6 +22,8 @@ export class ReviewError extends Schema.TaggedErrorClass<ReviewError>()("ReviewE
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
+
+const REVIEW_EXTENSION_ID = ExtensionId.make("@gent/review")
 
 export const ReviewComment = Schema.Struct({
   file: Schema.String,
@@ -379,6 +384,37 @@ export const ReviewTool = tool({
 })
 
 export const ReviewExtension = defineExtension({
-  id: "@gent/review",
+  id: REVIEW_EXTENSION_ID,
+  actions: [
+    action({
+      id: "review-command",
+      name: "Review",
+      description: "Run adversarial dual-model code review",
+      surface: "slash",
+      slash: { trigger: "review" },
+      category: "Tools",
+      input: Schema.String,
+      output: Schema.Void,
+      execute: (input, ctx) =>
+        ctx.session
+          .queueFollowUp({
+            sourceId: "review-command",
+            content:
+              input.trim().length > 0
+                ? `Use the review tool in report mode: ${input.trim()}`
+                : "Use the review tool in report mode on the most recent changes. Focus on correctness, edge cases, and architectural issues.",
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new CapabilityError({
+                  extensionId: REVIEW_EXTENSION_ID,
+                  capabilityId: "review-command",
+                  reason: cause.message,
+                }),
+            ),
+          ),
+    }),
+  ],
   tools: [ReviewTool],
 })

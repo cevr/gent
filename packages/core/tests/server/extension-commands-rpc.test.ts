@@ -54,9 +54,8 @@ describe("extension command RPCs", () => {
     sessionId: string
     cwd: string
   }> = []
-  // Server-visible slash commands are slash-decorated RPC requests. Local
-  // human-only commands stay in the `actions:` bucket and are not listed by
-  // the transport API.
+  // Server-visible slash commands are slash-decorated requests or actions.
+  // Palette-only actions stay local to the client surface.
   const TestCommandsExtension: GentExtension = {
     manifest: { id: ExtensionId.make("@test/commands") },
     setup: () =>
@@ -167,7 +166,7 @@ describe("extension command RPCs", () => {
             createdSessionId = sessionId
             const commands = yield* client.extension.listSlashCommands({ sessionId })
             expect(commands[0]).toBeInstanceOf(SlashCommandInfo)
-            expect(commands.map((command) => command.name)).toEqual(["greet"])
+            expect(commands.map((command) => command.name)).toEqual(["noop", "greet"])
             const greet = commands.find((command) => command.name === "greet")
             expect(greet?.description).toBe("Say hello")
             expect(greet?.extensionId).toBe(ExtensionId.make("@test/commands"))
@@ -247,6 +246,70 @@ describe("extension command RPCs", () => {
               expect.objectContaining({
                 _tag: "follow-up",
                 content: "queued through public rpc",
+              }),
+            ])
+          }).pipe(Effect.timeout("4 seconds")),
+        ),
+      )
+    }),
+  )
+  it.live("RPC request exposes slash action queueFollowUp capability", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/queue-follow-up-action")
+      const ext: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          actions: [
+            action({
+              id: "queue-follow-up-action",
+              name: "Queue Follow Up",
+              description: "Queue follow-up action",
+              surface: "slash",
+              slash: { trigger: "queue-follow-up" },
+              input: Schema.String,
+              output: Schema.Void,
+              execute: (input, ctx) =>
+                ctx.session.queueFollowUp({ sourceId: "test-action", content: input }).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new CapabilityError({
+                        extensionId,
+                        capabilityId: "queue-follow-up-action",
+                        reason: cause.message,
+                      }),
+                  ),
+                ),
+            }),
+          ],
+        },
+      }
+      yield* narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [ext],
+              cwd: "/tmp/gent-extension-queue-follow-up-action",
+            })
+            const commands = yield* client.extension.listSlashCommands({ sessionId })
+            expect(commands.map((command) => command.name)).toEqual(["queue-follow-up"])
+            yield* client.extension.request({
+              sessionId,
+              branchId,
+              extensionId,
+              capabilityId: "queue-follow-up-action",
+              intent: "write",
+              input: "queued through slash action",
+            })
+            const queue = yield* client.queue.get({ sessionId, branchId })
+            expect(queue.followUp).toEqual([
+              expect.objectContaining({
+                _tag: "follow-up",
+                content: "queued through slash action",
               }),
             ])
           }).pipe(Effect.timeout("4 seconds")),
@@ -765,7 +828,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
-  it.live("RPC listSlashCommands omits local slash actions and lists slash requests", () =>
+  it.live("RPC listSlashCommands lists slash actions and omits palette actions", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/public-filter")
       const ext: LoadedExtension = {
@@ -786,10 +849,19 @@ describe("extension command RPCs", () => {
           ],
           actions: [
             action({
+              id: "visible-action",
+              name: "visible action",
+              description: "visible action",
+              surface: "slash",
+              input: Schema.String,
+              output: Schema.Void,
+              execute: () => Effect.void,
+            }),
+            action({
               id: "hidden",
               name: "hidden",
               description: "hidden",
-              surface: "slash",
+              surface: "palette",
               input: Schema.String,
               output: Schema.Void,
               execute: () => Effect.void,
@@ -807,7 +879,7 @@ describe("extension command RPCs", () => {
             cwd: "/tmp",
           })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toEqual(["visible"])
+          expect(commands.map((command) => command.name)).toEqual(["visible-action", "visible"])
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
@@ -879,27 +951,9 @@ describe("extension command RPCs", () => {
       )
     }),
   )
-  it.live("RPC request cannot invoke lower-scope slash request shadowed by project command", () =>
+  it.live("RPC request invokes slash actions through the transport boundary", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/public-shadow")
-      const builtinExt: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "builtin",
-        sourcePath: "builtin",
-        contributions: {
-          requests: [
-            request({
-              id: "shadowed",
-              extensionId,
-              intent: "write",
-              slash: { name: "shadowed", description: "shadowed" },
-              input: Schema.Struct({ value: Schema.String }),
-              output: Schema.Struct({ value: Schema.String }),
-              execute: () => Effect.succeed({ value: "builtin" }),
-            }),
-          ],
-        },
-      }
       const projectExt: LoadedExtension = {
         manifest: { id: extensionId },
         scope: "project",
@@ -924,25 +978,20 @@ describe("extension command RPCs", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extensions: [builtinExt, projectExt],
+            extensions: [projectExt],
             cwd: "/tmp",
           })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toEqual([])
-          const result = yield* Effect.exit(
-            client.extension.request({
-              sessionId,
-              branchId,
-              extensionId,
-              capabilityId: "shadowed",
-              intent: "write",
-              input: { value: "hi" },
-            }),
-          )
-          expect(result._tag).toBe("Failure")
-          if (result._tag === "Failure") {
-            expectExtensionProtocolFailure(result.cause)
-          }
+          expect(commands.map((command) => command.name)).toEqual(["shadowed"])
+          const result = yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId,
+            capabilityId: "shadowed",
+            intent: "write",
+            input: { value: "hi" },
+          })
+          expect(result).toEqual({ value: "hi" })
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
