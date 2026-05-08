@@ -392,24 +392,33 @@ Validation:
 
 ### W23.4 — Close `@gent/extensions` Public Internals
 
-Status: planned.
+Status: committed in `a0d75751`.
 
 Work:
 
-- Introduce internal import lane for first-party extension implementation/test
-  internals if needed.
-- Shrink `@gent/extensions` package exports to the minimal composition/client
-  surface.
-- Replace TUI/client deep imports with extension-owned stable client contracts.
-- Add package export guard for `@gent/extensions`.
+- Shrank `@gent/extensions` package exports to root composition plus
+  `./client`; marked the package private so builtins remain the starting
+  workspace composition set, not a published privileged API.
+- Added `packages/extensions/src/client.ts` as the stable client contract for
+  task, auto, artifact, and skills request schemas/types used by the TUI and
+  server debug scenario.
+- Replaced TUI/app production deep imports with either root composition or
+  `@gent/extensions/client.js`.
+- Moved first-party implementation/test reaches off public package subpaths
+  and onto explicit relative source imports.
+- Extended the public export guard to fail on `@gent/extensions/*`
+  implementation exports or root TS path aliases.
 
 Validation:
 
-- `bun packages/tooling/src/check-extension-public-exports.ts`
-- `bun run --cwd packages/tooling test`
-- TUI focused tests for task widgets/background tasks/tool renderers.
 - `bun run typecheck`
 - `bun run lint`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/tooling/tests/core-public-exports.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots apps/tui/tests/extension-lifecycle.test.ts apps/tui/integration/app-bootstrap.test.tsx apps/tui/integration/session-lifecycle.test.tsx apps/tui/integration/session-feed-boundary.test.tsx`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/extensions/tests/task-tools packages/extensions/tests/auto packages/extensions/tests/artifacts packages/extensions/tests/skills packages/extensions/tests/helpers packages/core/tests/extensions/helpers packages/core/tests/runtime/task-service.test.ts packages/core/tests/server/extension-commands-rpc.test.ts`
+- `bun run --cwd packages/extensions test`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/extensions packages/core/tests/runtime/agent-loop packages/core/tests/runtime/agent-runner.test.ts packages/core/tests/runtime/external-turn.test.ts packages/core/tests/runtime/runtime-profile.test.ts packages/core/tests/runtime/task-service.test.ts packages/core/tests/server/extension-commands-rpc.test.ts packages/e2e/tests/transport-harness-boundary.ts`
+- `bun run test`
 
 ### W23.5 — Durable Operation Idempotency
 
