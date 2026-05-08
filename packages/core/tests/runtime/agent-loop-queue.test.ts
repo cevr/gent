@@ -9,9 +9,10 @@ import {
   type LanguageModelStreamPart,
 } from "@gent/core/test-utils/language-model"
 import { dateFromMillis, Message } from "@gent/core/domain/message"
-import { EventStore } from "@gent/core/domain/event"
+import { EventStore, MessageReceived } from "@gent/core/domain/event"
 import { EventPublisherLive } from "@gent/core/domain/event-publisher"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
+import { EventStorage } from "@gent/core/storage/event-storage"
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
 import { makeAgentLoopBehavior } from "../../src/runtime/agent/agent-loop.behavior"
@@ -434,6 +435,70 @@ describe("queue drain regression", () => {
         )
         yield* Deferred.succeed(activeTurnReleased, undefined).pipe(
           Effect.catchEager(() => Effect.void),
+        )
+      }),
+    15000,
+  )
+
+  it.live(
+    "startup resumes an incomplete user turn even after the queue token was cleared",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-loop-incomplete-recovery")
+        const branchId = BranchId.make("branch-loop-incomplete-recovery")
+        const providerCalled = yield* Deferred.make<void>()
+        const providerCalls = yield* Ref.make(0)
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            yield* Ref.update(providerCalls, (n) => n + 1)
+            yield* Deferred.succeed(providerCalled, undefined).pipe(Effect.ignore)
+            return Stream.fromIterable([
+              textDeltaPart("recovered"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        const deps = Layer.mergeAll(
+          SqliteStorage.TestWithSql(),
+          providerLayer,
+          ModelResolver.fromLanguageModel(providerLayer),
+          makeExtRegistry(),
+          RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          ConfigService.Test(),
+          EventStore.Memory,
+          ToolRunner.Test(),
+          BunServices.layer,
+          ResourceManagerLive,
+          ModelRegistry.Test(),
+          GentPlatform.Test(),
+        )
+        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+        const layer = AgentLoopTestActor.pipe(
+          Layer.provide(AgentLoopBehaviorDeps.Live({ baseSections: [] })),
+          Layer.provideMerge(
+            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
+          ),
+        )
+        const message = Message.Regular.make({
+          id: MessageId.make("msg-incomplete-recovery"),
+          sessionId,
+          branchId,
+          role: "user",
+          parts: [Prompt.textPart({ text: "recover me" })],
+          createdAt: dateFromMillis(1_767_225_600_000),
+        })
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* ensureStorageParents({ sessionId, branchId })
+            const eventStorage = yield* EventStorage
+            yield* eventStorage.appendEvent(MessageReceived.make({ message }))
+
+            const agentLoop = yield* makeAgentLoopService
+            yield* agentLoop.getState({ sessionId, branchId })
+            yield* Deferred.await(providerCalled).pipe(Effect.timeout("4 seconds"))
+            expect(yield* Ref.get(providerCalls)).toBe(1)
+          }).pipe(Effect.provide(layer)),
         )
       }),
     15000,

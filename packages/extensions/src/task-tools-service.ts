@@ -190,9 +190,8 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
             onSome: (storage: TaskStorageService) =>
               Effect.gen(function* () {
                 const extensionState = yield* ExtensionStatePublisher
-                // Validate status transition if status is being changed
                 if (fields.status !== undefined) {
-                  const existing = yield* storage.getTask(id)
+                  const existing = yield* storage.getTask(id).pipe(Effect.orDie)
                   if (
                     existing !== undefined &&
                     !isValidTaskTransition(existing.status, fields.status)
@@ -204,16 +203,18 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                     })
                   }
                 }
-                const updated = yield* storage.updateTask(id, fields)
+                const updated = yield* storage.updateTask(id, fields).pipe(Effect.orDie)
                 if (updated !== undefined && fields.status !== undefined) {
-                  yield* extensionState.changed({
-                    sessionId: updated.sessionId,
-                    branchId: updated.branchId,
-                    extensionId: TASK_TOOLS_EXTENSION_ID,
-                  })
+                  yield* extensionState
+                    .changed({
+                      sessionId: updated.sessionId,
+                      branchId: updated.branchId,
+                      extensionId: TASK_TOOLS_EXTENSION_ID,
+                    })
+                    .pipe(Effect.catchEager(() => Effect.void))
                 }
                 return updated
-              }).pipe(Effect.orDie),
+              }),
           }),
         ),
       ),

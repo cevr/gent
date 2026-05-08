@@ -158,4 +158,23 @@ describe("TaskUpdateTool", () => {
       }).pipe(withTaskWrite, Effect.provide(layer)),
     ),
   )
+
+  it.live("returns a typed error for invalid status transitions", () =>
+    narrowR(
+      Effect.gen(function* () {
+        yield* setup
+        const ctx = yield* makeCtx
+        const created = yield* getToolEffect(TaskCreateTool)({ subject: "Already done" }, ctx)
+        yield* getToolEffect(TaskUpdateTool)({ taskId: created.taskId, status: "in_progress" }, ctx)
+        yield* getToolEffect(TaskUpdateTool)({ taskId: created.taskId, status: "completed" }, ctx)
+
+        const result = yield* getToolEffect(TaskUpdateTool)(
+          { taskId: created.taskId, status: "in_progress" },
+          ctx,
+        )
+
+        expect(result.error).toContain("Invalid task transition")
+      }).pipe(withTaskWrite, Effect.provide(layer)),
+    ),
+  )
 })

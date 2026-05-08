@@ -1108,6 +1108,18 @@ First recursive audit results:
 - Bernoulli at `a472f895`: P1 `CapabilityAccess.provideNeeds` was exported
   through the public extension API, so a read handler could forge write
   authority locally.
+- Maxwell at `797030b8`: P1 startup could still strand a turn when the process
+  died after durable `MessageReceived` but before `TurnCompleted`, because
+  `inFlight` had already been cleared and startup gated incomplete-turn
+  recovery behind recovered queue state.
+- Hume at `797030b8`: P1 `TaskService.update` declared
+  `TaskTransitionError` but converted it to a defect via `Effect.orDie`.
+- Huygens at `797030b8`: P1 `tool({ intent: "read" })` could still declare
+  write needs, marking the Effect AI tool read-only while the runner granted
+  write authority.
+- Turing at `797030b8`: P1 architecture findings remain for platform-boundary
+  leaks and the ephemeral runtime acting as a second composition root.
+- Lagrange at `797030b8`: no test/suppression P0/P1/P2/P3 findings.
 
 Current fix batch:
 
@@ -1124,6 +1136,15 @@ Current fix batch:
   the private recovery token.
 - Added regressions for read RPC direct-storage mutation denial, public API
   non-export of authority providers, and `queue.drain` preserving `inFlight`.
+- Resumed the latest incomplete user turn at actor startup even when the queue
+  token was already cleared, with a regression for the
+  `MessageReceived`-without-`TurnCompleted` crash window.
+- Kept invalid task transitions in the typed error channel and converted them
+  to `task_update` result errors instead of defects.
+- Rejected read-intent tools with write needs at both the type surface and the
+  runtime constructor.
+- Synthesized `/Users/cvr/Developer/personal/gent/plans/WAVE-22.md` for the
+  two remaining architecture P1s instead of calling Wave 21 complete.
 
 Work:
 
@@ -1137,9 +1158,9 @@ Work:
   `/Users/cvr/Developer/personal/effect-wide-event`.
 - Require each lane to classify findings as P0/P1/P2/P3 with full file
   receipts.
-- If any P0/P1 remains, synthesize `plans/WAVE-22.md` before declaring Wave 21
-  complete.
-- If no P0/P1 remains, close the wave with final gates and a summary commit.
+- Since architecture P1s remain, Wave 21 closes as a bugfix/audit wave only
+  after committing the fixes and `plans/WAVE-22.md`; Wave 22 owns the remaining
+  P1s.
 
 Validation:
 
@@ -1150,6 +1171,8 @@ Validation:
 - `bun run typecheck`
 - `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/agent-loop-queue.test.ts tests/runtime/task-service.test.ts tests/server/extension-commands-rpc.test.ts`
 - `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/task-tools/task-service.test.ts tests/task-tools/task-storage.test.ts tests/task-tools/task-storage-integration.test.ts tests/task-tools/task-tool-execution.test.ts`
+- `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/agent-loop-queue.test.ts tests/runtime/task-service.test.ts tests/extensions/extension-surface-locks.test.ts`
+- `cd packages/extensions && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/task-tools/task-tool-execution.test.ts`
 - `bun run lint`
 - `bun run fmt:check`
 - `bun run gate`

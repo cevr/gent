@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { tool, ToolNeeds } from "@gent/core/extensions/api"
-import { TaskId, TaskStatus } from "./domain.js"
+import { TaskId, TaskStatus, TaskTransitionError } from "./domain.js"
 import { TaskService } from "../task-tools-service.js"
 
 export const TaskUpdateParams = Schema.Struct({
@@ -29,14 +29,21 @@ export const TaskUpdateTool = tool({
   output: TaskUpdateResult,
   execute: Effect.fn("TaskUpdateTool.execute")(function* (params: typeof TaskUpdateParams.Type) {
     const taskService = yield* TaskService
-    const updated = yield* taskService.update(TaskId.make(params.taskId), {
-      status: params.status,
-      description: params.description,
-    })
+    const updated = yield* taskService
+      .update(TaskId.make(params.taskId), {
+        status: params.status,
+        description: params.description,
+      })
+      .pipe(
+        Effect.catchIf(Schema.is(TaskTransitionError), (error) =>
+          Effect.succeed({ error: error.message }),
+        ),
+      )
 
     if (updated == null) {
       return { error: `Task not found: ${params.taskId}` }
     }
+    if ("error" in updated) return updated
 
     return {
       id: updated.id,

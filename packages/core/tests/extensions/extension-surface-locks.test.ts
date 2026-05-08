@@ -27,6 +27,7 @@ import {
   resource,
   tool,
   ToolCallId,
+  ToolNeeds,
   type ToolInput,
   type WriteRequestInput,
 } from "@gent/core/extensions/api"
@@ -277,6 +278,21 @@ describe("Effect-purity locks (compile-time)", () => {
       execute: () => promiseString,
     })
     expect(true).toBe(true)
+  })
+
+  test("read-intent tool cannot declare write needs", () => {
+    expect(() =>
+      // @ts-expect-error — read tools cannot request write authority
+      tool({
+        id: "bad-read-tool",
+        description: "bad",
+        intent: "read",
+        needs: [ToolNeeds.write("task")] as const,
+        params: Schema.Struct({}),
+        output: Schema.String,
+        execute: () => Effect.succeed("x"),
+      }),
+    ).toThrow("Read-only tool")
   })
 
   test("session.queueFollowUp is exposed for slot handlers and extension authors", () => {

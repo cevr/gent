@@ -2,6 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { TaskService, TaskServiceUnavailableError } from "@gent/extensions/task-tools-service"
 import { TaskStorage } from "@gent/extensions/task-tools-storage"
+import { TaskTransitionError } from "@gent/extensions/task-tools/domain"
 import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
 import { EventPublisherLive, ExtensionStatePublisher } from "@gent/core/domain/event-publisher"
 import { EventStore } from "@gent/core/domain/event"
@@ -91,6 +92,29 @@ describe("TaskService", () => {
         const updated = yield* taskService.update(task.id, { status: "stopped" })
         expect(updated).toBeDefined()
         expect(updated!.status).toBe("stopped")
+      }).pipe(withTaskWrite, Effect.provide(layer))
+    }),
+  )
+
+  it.live("invalid status transition stays in the typed error channel", () =>
+    Effect.gen(function* () {
+      const layer = makeLayer()
+
+      yield* Effect.gen(function* () {
+        yield* ensureStorageParents({ sessionId, branchId })
+        const taskService = yield* TaskService
+        const task = yield* taskService.create({
+          sessionId,
+          branchId,
+          subject: "Terminal task",
+        })
+        yield* taskService.update(task.id, { status: "in_progress" })
+        yield* taskService.update(task.id, { status: "completed" })
+        const exit = yield* taskService.update(task.id, { status: "in_progress" }).pipe(Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (!Exit.isFailure(exit)) return yield* Effect.die("expected transition failure")
+        const reason = exit.cause.reasons.find(Cause.isFailReason)
+        expect(reason !== undefined && Schema.is(TaskTransitionError)(reason.error)).toBe(true)
       }).pipe(withTaskWrite, Effect.provide(layer))
     }),
   )

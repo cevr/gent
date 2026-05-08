@@ -744,12 +744,23 @@ const buildAgentLoopActorHandlers = Effect.gen(function* () {
         Effect.andThen(handle.refreshRuntimeState),
         Effect.andThen(
           Effect.gen(function* () {
+            const incompleteMessage = yield* latestIncompleteUserTurn
+            if (incompleteMessage !== undefined) {
+              yield* handle
+                .startTurn({ message: incompleteMessage })
+                .pipe(
+                  Effect.catchEager((error) =>
+                    cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                  ),
+                )
+              return
+            }
             const hasRecoveredQueue =
               initialQueue.inFlight !== undefined ||
               initialQueue.steering.length > 0 ||
               initialQueue.followUp.length > 0
             if (!hasRecoveredQueue) return
-            if ((yield* hasIncompleteUserTurn) || (yield* hasPriorMessageHistory)) {
+            if (yield* hasPriorMessageHistory) {
               yield* startNextQueuedTurnIfIdle
             }
           }),

@@ -56,6 +56,17 @@ export interface ToolNeed {
   readonly access: ToolNeedAccess
 }
 
+type ReadToolNeeds<Needs extends ReadonlyArray<ToolNeed> | undefined> = Needs extends readonly [
+  infer Head,
+  ...infer Tail,
+]
+  ? Head extends { readonly access: "write" }
+    ? never
+    : Tail extends ReadonlyArray<ToolNeed>
+      ? ReadToolNeeds<Tail>
+      : Needs
+  : Needs
+
 export const ToolNeeds = {
   read: (tag: ToolNeedTag): ToolNeed => ({ tag, access: "read" }),
   write: (tag: ToolNeedTag): ToolNeed => ({ tag, access: "write" }),
@@ -228,6 +239,45 @@ export interface ToolInput<
   ) => Effect.Effect<Schema.Schema.Type<Output>, Error, Deps>
 }
 
+type ReadIntentToolInput<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
+  Params extends Schema.Decoder<any, never>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
+  Output extends Schema.Encoder<any, never>,
+  Error,
+  Deps,
+  Ctx extends ToolCoreContext,
+  Needs extends ReadonlyArray<ToolNeed> | undefined,
+> = Omit<ToolInput<Params, Output, Error, Deps, Ctx>, "intent" | "needs"> & {
+  readonly intent: "read"
+  readonly needs?: ReadToolNeeds<Needs>
+}
+
+type WriteIntentToolInput<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
+  Params extends Schema.Decoder<any, never>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
+  Output extends Schema.Encoder<any, never>,
+  Error,
+  Deps,
+  Ctx extends ToolCoreContext,
+> = ToolInput<Params, Output, Error, Deps, Ctx> & {
+  readonly intent?: "write"
+}
+
+type CheckedToolInput<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
+  Params extends Schema.Decoder<any, never>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
+  Output extends Schema.Encoder<any, never>,
+  Error,
+  Deps,
+  Ctx extends ToolCoreContext,
+  Needs extends ReadonlyArray<ToolNeed> | undefined,
+> =
+  | ReadIntentToolInput<Params, Output, Error, Deps, Ctx, Needs>
+  | WriteIntentToolInput<Params, Output, Error, Deps, Ctx>
+
 /**
  * Lower a `ToolInput` to a `ToolCapability` with `intent: "write"` by default.
  */
@@ -239,12 +289,16 @@ export const tool = <
   Error,
   Deps,
   Ctx extends ToolCoreContext = ToolCoreContext,
+  Needs extends ReadonlyArray<ToolNeed> | undefined = undefined,
 >(
-  input: ToolInput<Params, Output, Error, Deps, Ctx>,
+  input: CheckedToolInput<Params, Output, Error, Deps, Ctx, Needs>,
 ): ToolCapability<Schema.Schema.Type<Params>, Schema.Schema.Type<Output>, Error> => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
   const params = input.params as Schema.Schema<Schema.Schema.Type<Params>>
   const id = ToolId.make(input.id)
+  if (input.intent === "read" && input.needs?.some((need) => need.access === "write") === true) {
+    throw new Error(`Read-only tool "${input.id}" cannot declare write needs`)
+  }
   const metadata: GentToolMetadata<
     Schema.Schema.Type<Params>,
     Schema.Schema.Type<Output>,
