@@ -1,4 +1,14 @@
-import { Context, Effect, Fiber, Layer, Ref, Schema, Semaphore, SubscriptionRef } from "effect"
+import {
+  Context,
+  Effect,
+  type Fiber,
+  Layer,
+  Ref,
+  Schema,
+  ScopedRef,
+  Semaphore,
+  SubscriptionRef,
+} from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import {
   ReadOnlyBrand,
@@ -62,14 +72,12 @@ export const ExecutorControllerLive = (
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
       const state = yield* SubscriptionRef.make<ExecutorState>(ExecutorState.Idle.make({}))
       const gate = yield* Semaphore.make(1)
-      const inFlight = yield* Ref.make<Fiber.Fiber<void> | null>(null)
+      const connection = yield* ScopedRef.fromAcquire(
+        Effect.succeed<Fiber.Fiber<void> | null>(null),
+      )
       const generation = yield* Ref.make(0)
 
       const snapshot = () => SubscriptionRef.get(state).pipe(Effect.map(projectSnapshot))
-
-      const clearInFlight = Ref.getAndSet(inFlight, null).pipe(
-        Effect.flatMap((fiber) => (fiber === null ? Effect.void : Fiber.interrupt(fiber))),
-      )
 
       const setIfCurrent = (expectedGeneration: number, next: ExecutorState) =>
         gate.withPermits(1)(
@@ -77,7 +85,6 @@ export const ExecutorControllerLive = (
             const currentGeneration = yield* Ref.get(generation)
             const current = yield* SubscriptionRef.get(state)
             if (currentGeneration !== expectedGeneration || current._tag !== "Connecting") return
-            yield* Ref.set(inFlight, null)
             yield* SubscriptionRef.set(state, next)
           }),
         )
@@ -128,11 +135,12 @@ export const ExecutorControllerLive = (
             const current = yield* SubscriptionRef.get(state)
             const next = transitionConnect(current, targetCwd)
             if (next === current) return
-            yield* clearInFlight
             const nextGeneration = yield* Ref.updateAndGet(generation, (n) => n + 1)
             yield* SubscriptionRef.set(state, next)
-            const fiber = yield* runConnection(targetCwd, nextGeneration).pipe(Effect.forkIn(scope))
-            yield* Ref.set(inFlight, fiber)
+            yield* ScopedRef.set(
+              connection,
+              runConnection(targetCwd, nextGeneration).pipe(Effect.forkScoped),
+            )
           }),
         )
 
@@ -143,7 +151,7 @@ export const ExecutorControllerLive = (
             const next = transitionDisconnect(current)
             if (next === current) return
             yield* Ref.update(generation, (n) => n + 1)
-            yield* clearInFlight
+            yield* ScopedRef.set(connection, Effect.succeed(null))
             yield* SubscriptionRef.set(state, next)
           }),
         )
