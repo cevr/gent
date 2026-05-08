@@ -320,7 +320,7 @@ Fix direction:
 
 ### W23.1 — Guard Extension/Core-Internal Boundaries
 
-Status: implemented, awaiting subcommit.
+Status: committed and pushed in `33f158ca`.
 
 Work:
 
