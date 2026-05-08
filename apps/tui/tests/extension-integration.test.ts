@@ -16,6 +16,7 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { loadTuiExtensions as _loadTuiExtensions } from "../src/extensions/loader-boundary"
 import {
   makeClientComposerLayer,
+  makeClientDriverLayer,
   makeClientLifecycleLayer,
   makeClientShellLayer,
   makeClientWorkspaceLayer,
@@ -58,6 +59,11 @@ const testRuntime = ManagedRuntime.make(
       sendMessage: () => {},
       openOverlay: () => {},
       closeOverlay: () => {},
+    }),
+    makeClientDriverLayer({
+      list: () => Effect.succeed({ drivers: [], overrides: {} }),
+      set: () => Effect.void,
+      clear: () => Effect.void,
     }),
     makeClientComposerLayer({
       state: () => ({
@@ -351,6 +357,11 @@ export default defineClientExtension("@test/b", {
             sendMessage: () => {},
             openOverlay: () => {},
             closeOverlay: () => {},
+          }),
+          makeClientDriverLayer({
+            list: () => Effect.succeed({ drivers: [], overrides: {} }),
+            set: () => Effect.void,
+            clear: () => Effect.void,
           }),
           makeClientComposerLayer({
             state: () => ({

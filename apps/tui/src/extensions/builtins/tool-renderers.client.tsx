@@ -162,7 +162,7 @@ export const builtinTodos = defineClientExtension("@gent/todo", {
     // (b) `liveTodos()` re-checks at render — covers the gap between
     //     state set and the next session change.
     const runRefetch = (captured: ActiveSession): void => {
-      transport.runtime.cast(
+      transport.cast(
         Effect.gen(function* () {
           const out = yield* requestExtension(ref(TodoListRequest), {}, transport, captured)
           yield* Effect.sync(() => {

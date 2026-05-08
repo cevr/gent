@@ -33,6 +33,7 @@ import type { RGBA } from "@opentui/core"
 import type { ClientTransport } from "./client-transport"
 import type {
   ClientComposer,
+  ClientDriver,
   ClientLifecycle,
   ClientShell,
   ClientWorkspace,
@@ -72,6 +73,7 @@ export type ClientRuntimeServices =
   | ClientTransport
   | ClientWorkspace
   | ClientShell
+  | ClientDriver
   | ClientComposer
   | ClientLifecycle
 

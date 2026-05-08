@@ -13,6 +13,8 @@
  */
 
 import { Context, Layer } from "effect"
+import type { Effect } from "effect"
+import type { AgentName, DriverRef } from "@gent/core/extensions/api"
 import type { OverlayId, ComposerState } from "./client-facets.js"
 
 // ── ClientWorkspace ──────────────────────────────────────────────────────
@@ -47,6 +49,29 @@ export class ClientShell extends Context.Service<ClientShell, ClientShellShape>(
 
 export const makeClientShellLayer = (payload: ClientShellShape): Layer.Layer<ClientShell> =>
   Layer.succeed(ClientShell, payload)
+
+// ── ClientDriver ─────────────────────────────────────────────────────────
+
+export interface ClientDriverShape {
+  readonly list: () => Effect.Effect<
+    {
+      readonly drivers: ReadonlyArray<{ readonly _tag: "model" | "external"; readonly id: string }>
+    },
+    Error
+  >
+  readonly set: (input: {
+    readonly agentName: AgentName
+    readonly driver: DriverRef
+  }) => Effect.Effect<void, Error>
+  readonly clear: (input: { readonly agentName: AgentName }) => Effect.Effect<void, Error>
+}
+
+export class ClientDriver extends Context.Service<ClientDriver, ClientDriverShape>()(
+  "@gent/tui/src/extensions/client-services/ClientDriver",
+) {}
+
+export const makeClientDriverLayer = (payload: ClientDriverShape): Layer.Layer<ClientDriver> =>
+  Layer.succeed(ClientDriver, payload)
 
 // ── ClientComposer ───────────────────────────────────────────────────────
 

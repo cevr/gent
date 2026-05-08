@@ -18,7 +18,7 @@
 import { Effect } from "effect"
 import { defineClientExtension, clientCommandContribution } from "../client-facets.js"
 import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/extensions/api"
-import { ClientShell } from "../client-services"
+import { ClientDriver, ClientShell } from "../client-services"
 import { ClientTransport } from "../client-transport"
 
 const USAGE = "Usage: /driver <agent> <driver-id|default>"
@@ -26,7 +26,8 @@ const USAGE = "Usage: /driver <agent> <driver-id|default>"
 export default defineClientExtension("@gent/driver-ui", {
   setup: Effect.gen(function* () {
     const shell = yield* ClientShell
-    const { client, runtime } = yield* ClientTransport
+    const transport = yield* ClientTransport
+    const driverClient = yield* ClientDriver
     return clientCommandContribution({
       id: "driver.route",
       title: "Driver routing",
@@ -55,8 +56,8 @@ export default defineClientExtension("@gent/driver-ui", {
         }
         const agentName = AgentName.make(rawAgentName)
         if (driverArg === "default" || driverArg === "clear") {
-          void runtime
-            .run(client.driver.clear({ agentName }))
+          void transport
+            .run(driverClient.clear({ agentName }))
             .then(() => {
               shell.sendMessage(`Cleared driver override for "${agentName}".`)
             })
@@ -65,10 +66,10 @@ export default defineClientExtension("@gent/driver-ui", {
             })
           return
         }
-        void runtime
+        void transport
           .run(
             Effect.gen(function* () {
-              const { drivers } = yield* client.driver.list()
+              const { drivers } = yield* driverClient.list()
               const matches = drivers.filter((driver) => driver.id === driverArg)
               if (matches.length === 0) {
                 shell.sendMessage(`Unknown driver "${driverArg}".`)
@@ -84,7 +85,7 @@ export default defineClientExtension("@gent/driver-ui", {
                 match._tag === "external"
                   ? ExternalDriverRef.make({ id: match.id })
                   : ModelDriverRef.make({ id: match.id })
-              yield* client.driver.set({ agentName, driver })
+              yield* driverClient.set({ agentName, driver })
               return true
             }),
           )

@@ -15,6 +15,7 @@ import { ExtensionId, ref, request } from "@gent/core/extensions/api"
 import type { AutocompleteContribution, AutocompleteItem } from "../src/extensions/client-facets.js"
 import {
   ClientTransport,
+  type ClientShellTransportShape,
   type ClientTransportShape,
   NoActiveSessionError,
   requestExtension,
@@ -49,7 +50,7 @@ const makeFakeTransport = (
     readonly requestReply?: unknown
     readonly requestEffect?: () => Effect.Effect<unknown, Error>
   } = {},
-): ClientTransportShape =>
+): ClientShellTransportShape =>
   makeClientTestTransport({
     currentSession:
       opts.currentSession ??
@@ -60,7 +61,7 @@ const makeFakeTransport = (
     requestEffect: opts.requestEffect,
     requestReply: opts.requestReply ?? [],
   })
-const makeTestRuntime = (transport: ClientTransportShape) =>
+const makeTestRuntime = (transport: ClientShellTransportShape) =>
   makeClientExtensionRuntime({ transport })
 describe("autocomplete Effect items() through ClientTransport", () => {
   it.live("Effect items yielding ClientTransport resolves via runtime.runPromise", () =>

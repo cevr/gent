@@ -48,7 +48,7 @@ export default defineClientExtension(EXT_ID, {
     }
 
     const runRefetch = (captured: ActiveSession): void => {
-      transport.runtime.cast(
+      transport.cast(
         Effect.gen(function* () {
           const reply = yield* requestExtension(ref(ArtifactRpc.List), {}, transport, captured)
           yield* Effect.sync(() => {

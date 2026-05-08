@@ -7,7 +7,7 @@
  *  deleted the paired-package snapshot cache. Widgets that need
  * server-side state subscribe to `ClientTransport.onSessionEvent` or
  * `ClientTransport.onExtensionStateChanged` and call
- * `client.extension.request` directly — see e.g.
+ * `requestExtension(...)` directly — see e.g.
  * `builtins/tool-renderers.client.tsx`.
  */
 
@@ -41,6 +41,7 @@ import { makeClientTransportLayer } from "./client-transport"
 import {
   makeClientWorkspaceLayer,
   makeClientShellLayer,
+  makeClientDriverLayer,
   makeClientComposerLayer,
   makeClientLifecycleLayer,
 } from "./client-services"
@@ -96,6 +97,9 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   borderLabels: [],
   autocompleteItems: [],
 }
+
+const toError = (cause: unknown): Error =>
+  cause instanceof Error ? cause : new Error(String(cause))
 
 const ExtensionUIContext = createContext<ExtensionUIContextValue>()
 
@@ -178,6 +182,11 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         sendMessage: (content) => actions.sendMessage(content),
         openOverlay: (id) => overlayDispatch().open(id),
         closeOverlay: () => overlayDispatch().close(),
+      }),
+      makeClientDriverLayer({
+        list: () => transport.client.driver.list().pipe(Effect.mapError(toError)),
+        set: (input) => transport.client.driver.set(input).pipe(Effect.mapError(toError)),
+        clear: (input) => transport.client.driver.clear(input).pipe(Effect.mapError(toError)),
       }),
       makeClientComposerLayer({
         state: () => {

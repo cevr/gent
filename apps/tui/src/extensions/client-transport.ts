@@ -1,10 +1,9 @@
 /**
  * TUI-side `ClientTransport` — typed transport surface for client extensions.
  *
- * Core can't declare this with typed payloads because `GentNamespacedClient`
- * + `GentRuntime` are SDK types and `@gent/core` is upstream of `@gent/sdk`.
- * The TUI shell publishes the typed tag here; client extensions yield this
- * tag to reach the typed transport in their Effect-typed setups.
+ * Core can't declare this with typed payloads because TUI extension transport
+ * runs above the SDK. The TUI shell owns the raw SDK client/runtime and
+ * publishes only typed extension request/session/event helpers here.
  *
  * Usage from a client extension:
  *
@@ -15,8 +14,7 @@
  *   export default defineClientExtension("@gent/x", {
  *     id: "@gent/x",
  *     setup: Effect.gen(function* () {
- *       const { client } = yield* ClientTransport
- *       const result = yield* client.session.list()
+ *       const result = yield* requestExtension(ref(MyRpc.List), {})
  *       return [...]
  *     }),
  *   })
@@ -32,11 +30,39 @@ import { Context, Effect, Layer, Schema } from "effect"
 import type { GentNamespacedClient, GentRuntime } from "@gent/sdk"
 import type { BranchId, CapabilityRef, EventEnvelope, SessionId } from "@gent/core/extensions/api"
 
+type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
+
 export interface ClientTransportShape {
+  /** Active (sessionId, branchId) — `undefined` before a session is mounted. */
+  readonly currentSession: () => ActiveExtensionSession | undefined
+  /** Run an extension-owned Effect from a sync UI callback. */
+  readonly run: <A, E>(effect: Effect.Effect<A, E, never>) => Promise<A>
+  /** Fork an extension-owned Effect from a sync UI callback. */
+  readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
+  readonly request: <Input, Output>(
+    ref: CapabilityRef<Input, Output>,
+    input: Input,
+    activeSession?: ActiveExtensionSession,
+  ) => Effect.Effect<
+    Output,
+    NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError
+  >
+  /** Subscribe to `ExtensionStateChanged` pulses from the active session.
+   *  Returns an unsubscribe function. Multiple subscribers receive each
+   *  pulse independently. Widgets use this to invalidate cached state
+   *  when their server-side extension publishes a state change. */
+  readonly onExtensionStateChanged: (
+    cb: (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void,
+  ) => () => void
+  /** Subscribe to every event for the active session/branch. */
+  readonly onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
+}
+
+export interface ClientShellTransportShape {
   readonly client: GentNamespacedClient
   readonly runtime: GentRuntime
   /** Active (sessionId, branchId) — `undefined` before a session is mounted. */
-  readonly currentSession: () => { sessionId: SessionId; branchId: BranchId } | undefined
+  readonly currentSession: () => ActiveExtensionSession | undefined
   /** Subscribe to `ExtensionStateChanged` pulses from the active session.
    *  Returns an unsubscribe function. Multiple subscribers receive each
    *  pulse independently. Widgets use this to invalidate cached state
@@ -54,12 +80,25 @@ export class ClientTransport extends Context.Service<ClientTransport, ClientTran
 
 /**
  * Build a Layer providing `ClientTransport` from a connected `useClient()`
- * result. Called once inside `ExtensionUIProvider` per provider mount; the
- * layer is then merged into the per-provider `ManagedRuntime`.
+ * result. The input carries shell authority; the provided service does not.
  */
 export const makeClientTransportLayer = (
-  payload: ClientTransportShape,
-): Layer.Layer<ClientTransport> => Layer.succeed(ClientTransport, payload)
+  payload: ClientShellTransportShape,
+): Layer.Layer<ClientTransport> => {
+  const transport: ClientTransportShape = {
+    currentSession: payload.currentSession,
+    run: payload.runtime.run,
+    cast: payload.runtime.cast,
+    request: <Input, Output>(
+      ref: CapabilityRef<Input, Output>,
+      input: Input,
+      activeSession?: ActiveExtensionSession,
+    ) => requestExtensionAt(payload, ref, input, activeSession),
+    onExtensionStateChanged: payload.onExtensionStateChanged,
+    onSessionEvent: payload.onSessionEvent,
+  }
+  return Layer.succeed(ClientTransport, transport)
+}
 
 // ── request helper ────────────────────────────────────────────────────────
 
@@ -88,10 +127,8 @@ export class ClientTransportReplyDecodeError extends Schema.TaggedErrorClass<Cli
   },
 ) {}
 
-type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
-
 const currentOrActiveSession = (
-  transport: ClientTransportShape,
+  transport: ClientShellTransportShape,
   activeSession?: ActiveExtensionSession,
 ): Effect.Effect<ActiveExtensionSession, NoActiveSessionError> => {
   const session = activeSession ?? transport.currentSession()
@@ -99,7 +136,7 @@ const currentOrActiveSession = (
 }
 
 const requestExtensionAt = <Input, Output>(
-  transport: ClientTransportShape,
+  transport: ClientShellTransportShape,
   ref: CapabilityRef<Input, Output>,
   input: Input,
   activeSession?: ActiveExtensionSession,
@@ -167,9 +204,9 @@ export function requestExtension<Input, Output>(
   transport?: ClientTransportShape,
   activeSession?: ActiveExtensionSession,
 ) {
-  if (transport !== undefined) return requestExtensionAt(transport, ref, input, activeSession)
+  if (transport !== undefined) return transport.request(ref, input, activeSession)
   return Effect.gen(function* () {
     const service = yield* ClientTransport
-    return yield* requestExtensionAt(service, ref, input)
+    return yield* service.request(ref, input)
   })
 }

@@ -5,13 +5,14 @@ import type { EventEnvelope } from "@gent/core-internal/domain/event"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import {
   makeClientComposerLayer,
+  makeClientDriverLayer,
   makeClientLifecycleLayer,
   makeClientShellLayer,
   makeClientWorkspaceLayer,
 } from "../src/extensions/client-services"
 import {
   makeClientTransportLayer,
-  type ClientTransportShape,
+  type ClientShellTransportShape,
 } from "../src/extensions/client-transport"
 import type {
   AnyExtensionClientModule,
@@ -24,7 +25,7 @@ export type ActiveClientSession = { readonly sessionId: SessionId; readonly bran
 export type ActiveClientSessionRef = { value: ActiveClientSession | undefined }
 
 export interface ClientExtensionHarnessOptions {
-  readonly transport?: ClientTransportShape
+  readonly transport?: ClientShellTransportShape
   readonly currentSession?: () => ActiveClientSession | undefined
   readonly activeSession?: ActiveClientSessionRef
   readonly requestDeferred?: Deferred.Deferred<unknown, never>
@@ -41,7 +42,7 @@ export const makeActiveSessionRef = (value?: ActiveClientSession): ActiveClientS
 
 export const makeClientTestTransport = (
   opts: ClientExtensionHarnessOptions = {},
-): ClientTransportShape => {
+): ClientShellTransportShape => {
   const client = {
     extension: {
       request: () => {
@@ -85,6 +86,11 @@ export const makeClientExtensionRuntime = (
         sendMessage: () => {},
         openOverlay: () => {},
         closeOverlay: () => {},
+      }),
+      makeClientDriverLayer({
+        list: () => Effect.succeed({ drivers: [], overrides: {} }),
+        set: () => Effect.void,
+        clear: () => Effect.void,
       }),
       makeClientComposerLayer({
         state: () => ({

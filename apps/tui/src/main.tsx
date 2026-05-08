@@ -72,6 +72,7 @@ import { loadExtensionUi } from "./services/extension-context-boundary"
 import { makeClientTransportLayer } from "./extensions/client-transport"
 import {
   makeClientComposerLayer,
+  makeClientDriverLayer,
   makeClientLifecycleLayer,
   makeClientShellLayer,
   makeClientWorkspaceLayer,
@@ -94,6 +95,9 @@ const formatMissingProviders = (providers: readonly ProviderId[]): string =>
   providers.map((provider) => provider).join(", ")
 
 const ATOM_CACHE_MAX = 256
+
+const toError = (cause: unknown): Error =>
+  cause instanceof Error ? cause : new Error(String(cause))
 
 const waitForRendererDestroy = (renderer: CliRenderer) =>
   Effect.callback<void>((resume) => {
@@ -185,6 +189,11 @@ const runHeadlessTurn = (
           sendMessage: () => {},
           openOverlay: () => {},
           closeOverlay: () => {},
+        }),
+        makeClientDriverLayer({
+          list: () => bundle.client.driver.list().pipe(Effect.mapError(toError)),
+          set: (input) => bundle.client.driver.set(input).pipe(Effect.mapError(toError)),
+          clear: (input) => bundle.client.driver.clear(input).pipe(Effect.mapError(toError)),
         }),
         makeClientComposerLayer({
           state: () => ({

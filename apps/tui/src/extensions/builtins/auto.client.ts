@@ -57,7 +57,7 @@ export default defineClientExtension(EXT_ID, {
     }
 
     const runRefetch = (captured: ActiveSession): void => {
-      transport.runtime.cast(
+      transport.cast(
         Effect.gen(function* () {
           const reply = yield* requestExtension(ref(AutoRpc.GetSnapshot), {}, transport, captured)
           yield* Effect.sync(() => {
@@ -142,7 +142,7 @@ export default defineClientExtension(EXT_ID, {
         onSelect: () => {
           const model = liveModel()
           if (model?.active) {
-            void transport.runtime.run(
+            void transport.run(
               requestExtension(ref(AutoRpc.CancelAuto), {}, transport).pipe(
                 Effect.catchEager((err: unknown) =>
                   Effect.logWarning(`[${EXT_ID}] auto cancel failed`).pipe(
