@@ -24,7 +24,7 @@ import {
 import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useScopedKeyboard } from "../keyboard/context"
-import { useRouter } from "../router/index"
+import { useRouter } from "../router"
 import { useTheme } from "../theme/index"
 
 const fuzzyMatch = (text: string, query: string): boolean => {

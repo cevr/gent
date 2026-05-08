@@ -1,6 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { createAppRouter } from "../src/router/router"
-import { Route, type AppRouterState } from "../src/router/types"
+import { createAppRouter, Route, type AppRouterState } from "../src/router"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 
 const s1 = SessionId.make("s1")

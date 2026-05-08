@@ -9,8 +9,8 @@ import type {
   Session as DomainSession,
 } from "@gent/sdk"
 import type { Session as ClientSession } from "./client/index"
-import { Route } from "./router/index"
-import type { AppRoute } from "./router/index"
+import { Route } from "./router"
+import type { AppRoute } from "./router"
 
 /**
  * Surfaces a corrupt session record (session row exists but has no
