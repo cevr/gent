@@ -320,7 +320,7 @@ Fix direction:
 
 ### W23.1 — Guard Extension/Core-Internal Boundaries
 
-Status: planned.
+Status: implemented, awaiting subcommit.
 
 Work:
 
@@ -331,11 +331,18 @@ Work:
 - Remove `@gent/core-internal` from `@gent/extensions` runtime dependencies
   unless a real runtime use remains.
 
+Implementation notes:
+
+- `@gent/core-internal` remains available as a devDependency for extension
+  package tests, but shipped extension source is now locked to
+  `@gent/core/extensions/api`.
+
 Validation:
 
 - `bun packages/tooling/src/check-core-public-exports.ts`
 - `bun run --cwd packages/tooling test`
 - `bun run lint`
+- `bun run fmt:check`
 
 ### W23.2 — Convert Promise Test Bodies To Effect Test Control Flow
 

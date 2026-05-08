@@ -206,13 +206,15 @@
     "@effect/ai-openai": "catalog:",
     "@effect/ai-openai-compat": "catalog:",
     "@gent/core": "workspace:*",
-    "@gent/core-internal": "workspace:*",
     "@modelcontextprotocol/sdk": "^1",
     "@types/turndown": "^5.0.6",
     "es-git": "^0.6.0",
     "linkedom": "^0.18.12",
     "picomatch": "catalog:",
     "turndown": "^7.2.4"
+  },
+  "devDependencies": {
+    "@gent/core-internal": "workspace:*"
   },
   "peerDependencies": {
     "@effect/platform-bun": "catalog:",

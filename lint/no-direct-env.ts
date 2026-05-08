@@ -418,6 +418,14 @@ const plugin: Plugin = {
               return
             }
 
+            if (source.startsWith("@gent/core-internal")) {
+              context.report({
+                message: `Extensions must import from "@gent/core/extensions/api", not @gent/core-internal. Forbidden: "${source}"`,
+                node,
+              })
+              return
+            }
+
             // Package imports into core internals (skip allowed paths)
             if (source.startsWith("@gent/core/") && !ALLOWED_PACKAGE.test(source)) {
               context.report({
