@@ -10,11 +10,11 @@ import {
   type Message as DomainMessage,
 } from "../src/index"
 import { makeNamespacedClient } from "../src/namespaced-client"
-import { GentRpcs, type GentRpcClient } from "@gent/core/server/rpcs"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { dateFromMillis } from "@gent/core/domain/message"
-import { projectMessagesWithToolInteractions } from "@gent/core/domain/message-part-projection"
-import { WORKSPACE_ID_HEADER } from "@gent/core/server/workspace-rpc"
+import { GentRpcs, type GentRpcClient } from "@gent/core-internal/server/rpcs"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { dateFromMillis } from "@gent/core-internal/domain/message"
+import { projectMessagesWithToolInteractions } from "@gent/core-internal/domain/message-part-projection"
+import { WORKSPACE_ID_HEADER } from "@gent/core-internal/server/workspace-rpc"
 import { workspaceHeadersForCwd, workspaceIdForCwd } from "../src/transport-headers"
 
 describe("sdk client helpers", () => {

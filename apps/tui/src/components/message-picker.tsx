@@ -5,7 +5,7 @@ import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { Message } from "./message-list"
-import { MessageId } from "@gent/core/domain/ids.js"
+import { MessageId } from "@gent/core-internal/domain/ids.js"
 import { truncate } from "../utils/truncate"
 import { useScopedKeyboard } from "../keyboard/context"
 

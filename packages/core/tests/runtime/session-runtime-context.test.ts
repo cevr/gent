@@ -1,10 +1,10 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun"
+import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { Cause, Context, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect"
-import { PermissionRule } from "@gent/core/domain/permission"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { dateFromMillis, Session } from "@gent/core/domain/message"
+import { PermissionRule } from "@gent/core-internal/domain/permission"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { dateFromMillis, Session } from "@gent/core-internal/domain/message"
 import { ConfigService } from "../../src/runtime/config-service"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
@@ -21,9 +21,12 @@ import {
   type SessionProfile,
   type SessionProfileCacheService,
 } from "../../src/runtime/session-profile"
-import { SqliteStorage, StorageError } from "@gent/core/storage/sqlite-storage"
-import { SessionStorage, type SessionStorageService } from "@gent/core/storage/session-storage"
-import type { ExternalDriverContribution } from "@gent/core/domain/driver"
+import { SqliteStorage, StorageError } from "@gent/core-internal/storage/sqlite-storage"
+import {
+  SessionStorage,
+  type SessionStorageService,
+} from "@gent/core-internal/storage/session-storage"
+import type { ExternalDriverContribution } from "@gent/core-internal/domain/driver"
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 const emptyDriverRegistryLayer = DriverRegistry.fromResolved({

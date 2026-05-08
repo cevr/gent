@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Duration, Effect, Layer, Path } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
-import { runProcess, ProcessError } from "@gent/core/utils/run-process"
+import { runProcess, ProcessError } from "@gent/core-internal/utils/run-process"
 const makePlatformLayer = () =>
   Layer.mergeAll(
     BunFileSystem.layer,

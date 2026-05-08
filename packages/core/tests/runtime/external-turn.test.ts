@@ -22,38 +22,44 @@ import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensio
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
-import { ModelResolver } from "@gent/core/providers/model-resolver"
-import { finishPart, LanguageModelLayers } from "@gent/core/test-utils/language-model"
-import { dateFromMillis, Message } from "@gent/core/domain/message"
+import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
+import { finishPart, LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import {
   messagePartsText,
   messagePartsToolCallParts,
   messagePartsToolResultParts,
-} from "@gent/core/domain/message-part-projection"
+} from "@gent/core-internal/domain/message-part-projection"
 import {
   AgentDefinition,
   AgentName,
   ExternalDriverRef,
   type RunSpec,
-} from "@gent/core/domain/agent"
-import type { TurnExecutor, TurnContext, TurnStreamPart } from "@gent/core/domain/driver"
-import { TurnError } from "@gent/core/domain/driver"
-import type { AgentEvent } from "@gent/core/domain/event"
-import { EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
-import { EventPublisherLive } from "@gent/core/domain/event-publisher"
-import { SqliteStorage, type StorageError } from "@gent/core/storage/sqlite-storage"
-import { MessageStorage } from "@gent/core/storage/message-storage"
-import type { BranchStorage } from "@gent/core/storage/branch-storage"
-import type { SessionStorage } from "@gent/core/storage/session-storage"
-import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+} from "@gent/core-internal/domain/agent"
+import type { TurnExecutor, TurnContext, TurnStreamPart } from "@gent/core-internal/domain/driver"
+import { TurnError } from "@gent/core-internal/domain/driver"
+import type { AgentEvent } from "@gent/core-internal/domain/event"
+import { EventEnvelope, EventId, EventStore } from "@gent/core-internal/domain/event"
+import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
+import { SqliteStorage, type StorageError } from "@gent/core-internal/storage/sqlite-storage"
+import { MessageStorage } from "@gent/core-internal/storage/message-storage"
+import type { BranchStorage } from "@gent/core-internal/storage/branch-storage"
+import type { SessionStorage } from "@gent/core-internal/storage/session-storage"
+import {
+  BranchId,
+  ExtensionId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core-internal/domain/ids"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ConfigService } from "../../src/runtime/config-service"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
-import { ensureStorageParents } from "@gent/core/test-utils"
+import { ensureStorageParents } from "@gent/core-internal/test-utils"
 import { getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
-import { DefaultWorkspaceId } from "@gent/core/server/workspace-rpc"
+import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 // ── Helpers ──
 const sessionId = SessionId.make("test-session")
 const branchId = BranchId.make("test-branch")

@@ -7,12 +7,12 @@ import {
   StreamEnded,
   StreamStarted,
   TurnCompleted,
-} from "@gent/core/domain/event"
-import { dateFromMillis, Message } from "@gent/core/domain/message"
+} from "@gent/core-internal/domain/event"
+import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import { reduceAgentLifecycle } from "../src/client/agent-lifecycle"
 import { AgentStatus } from "../src/client/agent-state"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { AgentName } from "@gent/core/domain/agent"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { AgentName } from "@gent/core-internal/domain/agent"
 
 const makeMessage = (role: "user" | "assistant") =>
   Message.Regular.make({

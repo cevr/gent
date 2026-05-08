@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import type { AuthAuthorization, AuthMethod, AuthProviderInfo } from "@gent/core/domain/auth"
-import { ProviderId } from "@gent/core/domain/model"
+import type {
+  AuthAuthorization,
+  AuthMethod,
+  AuthProviderInfo,
+} from "@gent/core-internal/domain/auth"
+import { ProviderId } from "@gent/core-internal/domain/model"
 import { AuthState, transitionAuth } from "../src/routes/auth-state"
 
 const provider = {

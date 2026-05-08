@@ -3,8 +3,8 @@ import { Deferred, Effect } from "effect"
 import autoBuiltin from "../src/extensions/builtins/auto.client"
 import artifactsBuiltin from "../src/extensions/builtins/artifacts.client"
 import tasksBuiltin from "../src/extensions/builtins/tool-renderers.client"
-import { AgentEvent, EventId, type EventEnvelope } from "@gent/core/domain/event"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { AgentEvent, EventId, type EventEnvelope } from "@gent/core-internal/domain/event"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { TASK_TOOLS_EXTENSION_ID } from "@gent/extensions/task-tools/identity.js"
 import {
   findBorderLabel,

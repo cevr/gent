@@ -14,12 +14,18 @@ import type {
   TurnBeforeInput,
   TurnAfterInput,
 } from "../../src/domain/extension.js"
-import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import { testExtensionHostContext } from "@gent/core/test-utils"
-import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { dateFromMillis, Message } from "@gent/core/domain/message"
+import type { ExtensionHostContext } from "@gent/core-internal/domain/extension-host-context"
+import { testExtensionHostContext } from "@gent/core-internal/test-utils"
+import {
+  BranchId,
+  ExtensionId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core-internal/domain/ids"
+import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
-import { AgentName } from "@gent/core/domain/agent"
+import { AgentName } from "@gent/core-internal/domain/agent"
 
 const stubHostCtx = testExtensionHostContext()
 

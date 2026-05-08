@@ -4,11 +4,16 @@ import type { LanguageModel } from "effect/unstable/ai"
 import { Cause, Clock, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
-import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
-import { dateFromMillis, Branch, Session } from "@gent/core/domain/message"
-import type { QueueSnapshot } from "@gent/core/domain/queue"
-import { textStep } from "@gent/core/debug/provider"
-import { EventEnvelope, EventId, EventStoreError, type AgentEvent } from "@gent/core/domain/event"
+import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
+import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
+import type { QueueSnapshot } from "@gent/core-internal/domain/queue"
+import { textStep } from "@gent/core-internal/debug/provider"
+import {
+  EventEnvelope,
+  EventId,
+  EventStoreError,
+  type AgentEvent,
+} from "@gent/core-internal/domain/event"
 import { tool, ToolNeeds, type ToolCapability } from "@gent/core/extensions/api"
 import {
   finishPart,
@@ -16,11 +21,15 @@ import {
   textDeltaPart,
   toolCallPart,
   type LanguageModelStreamPart,
-} from "@gent/core/test-utils/language-model"
-import { ModelResolver } from "@gent/core/providers/model-resolver"
-import { EventPublisher, EventPublisherLive } from "@gent/core/domain/event-publisher"
-import { waitFor } from "@gent/core/test-utils/fixtures"
-import { RecordingEventStore, SequenceRecorder, type CallRecord } from "@gent/core/test-utils"
+} from "@gent/core-internal/test-utils/language-model"
+import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
+import { EventPublisher, EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
+import { waitFor } from "@gent/core-internal/test-utils/fixtures"
+import {
+  RecordingEventStore,
+  SequenceRecorder,
+  type CallRecord,
+} from "@gent/core-internal/test-utils"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import {
@@ -31,9 +40,9 @@ import {
   MessageId,
   SessionId,
   ToolCallId,
-} from "@gent/core/domain/ids"
-import { Permission } from "@gent/core/domain/permission"
-import { InteractionPendingError } from "@gent/core/domain/interaction-request"
+} from "@gent/core-internal/domain/ids"
+import { Permission } from "@gent/core-internal/domain/permission"
+import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
@@ -43,11 +52,11 @@ import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { SessionCommands } from "../../src/server/session-commands"
-import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
-import { BranchStorage } from "@gent/core/storage/branch-storage"
-import { EventStorage } from "@gent/core/storage/event-storage"
-import { MessageStorage } from "@gent/core/storage/message-storage"
-import { SessionStorage } from "@gent/core/storage/session-storage"
+import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
+import { EventStorage } from "@gent/core-internal/storage/event-storage"
+import { MessageStorage } from "@gent/core-internal/storage/message-storage"
+import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { SessionRuntime, interruptPayloadToSteerCommand } from "../../src/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>

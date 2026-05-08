@@ -4,7 +4,7 @@ import {
   headTail,
   formatHeadTail,
   headTailChars,
-} from "@gent/core/domain/output-buffer"
+} from "@gent/core-internal/domain/output-buffer"
 
 describe("headTail", () => {
   test("returns all items when under limit", () => {

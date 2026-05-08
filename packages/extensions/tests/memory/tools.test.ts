@@ -15,11 +15,11 @@ import {
   Test as MemoryVaultTest,
   projectKey as projectKeyOf,
 } from "@gent/extensions/memory/vault"
-import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { testToolContext } from "@gent/core/test-utils/extension-harness"
+import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
+import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
-import { getToolEffect } from "@gent/core/domain/capability/tool"
+import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 
 const memoryToolTest = it.scopedLive.layer(Layer.merge(BunFileSystem.layer, Path.layer))
 

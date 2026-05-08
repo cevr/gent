@@ -5,7 +5,7 @@
  * prod-shaped event publisher, real ToolRunner.Live, and direct session-loop
  * follow-ups — so QueueFollowUp actually drives multi-turn loops.
  *
- * Import from @gent/core/test-utils/e2e-layer
+ * Import from @gent/core-internal/test-utils/e2e-layer
  */
 
 import { Effect, Layer, Ref } from "effect"

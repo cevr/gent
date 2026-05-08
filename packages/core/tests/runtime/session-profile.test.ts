@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun"
+import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"

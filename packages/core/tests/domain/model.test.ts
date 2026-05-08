@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { parseModelId, parseModelProvider, ProviderId } from "@gent/core/domain/model"
+import { parseModelId, parseModelProvider, ProviderId } from "@gent/core-internal/domain/model"
 
 describe("model id parsing", () => {
   test("extracts provider and model segments", () => {

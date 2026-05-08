@@ -2,7 +2,7 @@
  * Shared in-process test layer for integration tests.
  * Provides a complete service graph that can be used with Gent.test().
  *
- * Import from @gent/core/test-utils/in-process-layer.js
+ * Import from @gent/core-internal/test-utils/in-process-layer.js
  */
 
 import { Layer } from "effect"

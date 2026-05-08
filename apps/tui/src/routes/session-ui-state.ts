@@ -1,6 +1,9 @@
 import { Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
-import { Session as SessionSchema, SessionTreeNode } from "@gent/core/server/transport-contract"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
+import {
+  Session as SessionSchema,
+  SessionTreeNode,
+} from "@gent/core-internal/server/transport-contract"
 import type { DomainSession, SessionTreeNode as DomainSessionTreeNode } from "../client/index"
 import type { PromptSearchState } from "../components/prompt-search-state"
 import {

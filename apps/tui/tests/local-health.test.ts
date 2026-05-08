@@ -3,12 +3,12 @@ import { BunServices } from "@effect/platform-bun"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import { Effect, FileSystem, Layer, Path } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { GentPlatform } from "@gent/core/runtime/gent-platform"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
 import {
   ExtensionHealth,
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
-} from "@gent/core/server/transport-contract"
+} from "@gent/core-internal/server/transport-contract"
 import {
   extensionHealthFromSnapshot,
   formatDoctorReport,

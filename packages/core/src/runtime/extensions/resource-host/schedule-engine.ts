@@ -39,7 +39,7 @@ export interface SchedulerFailure {
 }
 
 export class SchedulerRuntimeError extends Schema.TaggedErrorClass<SchedulerRuntimeError>()(
-  "@gent/core/runtime/extensions/resource-host/schedule-engine/SchedulerRuntimeError",
+  "@gent/core-internal/runtime/extensions/resource-host/schedule-engine/SchedulerRuntimeError",
   {
     operation: Schema.Literals(["install", "remove"]),
     jobName: Schema.String,

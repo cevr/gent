@@ -206,6 +206,7 @@
     "@effect/ai-openai": "catalog:",
     "@effect/ai-openai-compat": "catalog:",
     "@gent/core": "workspace:*",
+    "@gent/core-internal": "workspace:*",
     "@modelcontextprotocol/sdk": "^1",
     "@types/turndown": "^5.0.6",
     "es-git": "^0.6.0",

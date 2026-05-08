@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
-import { isRecord } from "@gent/core/domain/guards.js"
+import { isRecord } from "@gent/core-internal/domain/guards.js"
 import type { InteractionRendererProps } from "../../extensions/client-facets.js"
 import { OptionList } from "./option-list"
 

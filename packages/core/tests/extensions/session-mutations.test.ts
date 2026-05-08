@@ -5,10 +5,10 @@ import {
   makeExtensionHostContext,
   type MakeExtensionHostContextDeps,
 } from "../../src/runtime/make-extension-host-context"
-import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
-import { EventStoreError } from "@gent/core/domain/event"
-import { AgentName } from "@gent/core/domain/agent"
-import { ExtensionHostError } from "@gent/core/domain/extension-host-context"
+import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
+import { EventStoreError } from "@gent/core-internal/domain/event"
+import { AgentName } from "@gent/core-internal/domain/agent"
+import { ExtensionHostError } from "@gent/core-internal/domain/extension-host-context"
 import { InvalidStateError, NotFoundError } from "../../src/domain/business-errors"
 import {
   dateFromMillis,
@@ -16,13 +16,13 @@ import {
   Session,
   Branch,
   copyMessageToBranch,
-} from "@gent/core/domain/message"
-import type { BranchStorageService } from "@gent/core/storage/branch-storage"
-import type { MessageStorageService } from "@gent/core/storage/message-storage"
-import type { RelationshipStorageService } from "@gent/core/storage/relationship-storage"
-import type { SessionStorageService } from "@gent/core/storage/session-storage"
+} from "@gent/core-internal/domain/message"
+import type { BranchStorageService } from "@gent/core-internal/storage/branch-storage"
+import type { MessageStorageService } from "@gent/core-internal/storage/message-storage"
+import type { RelationshipStorageService } from "@gent/core-internal/storage/relationship-storage"
+import type { SessionStorageService } from "@gent/core-internal/storage/session-storage"
 import type { StorageTransactionService } from "../../src/storage/storage-transaction"
-import { testExtensionHostContext } from "@gent/core/test-utils"
+import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 // Minimal in-memory storage for session mutation tests
 const createTestStorage = () => {
   const sessions = new Map<string, Session>()

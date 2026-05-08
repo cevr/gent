@@ -1,5 +1,5 @@
 import { createPatch } from "diff"
-import { isRecord } from "@gent/core/domain/guards.js"
+import { isRecord } from "@gent/core-internal/domain/guards.js"
 
 /**
  * Detect filetype from path extension

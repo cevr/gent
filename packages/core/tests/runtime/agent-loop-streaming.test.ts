@@ -17,24 +17,24 @@ import {
   finishPart,
   LanguageModelLayers,
   textDeltaPart,
-} from "@gent/core/test-utils/language-model"
-import { ModelResolver } from "@gent/core/providers/model-resolver"
-import { textStep } from "@gent/core/debug/provider"
+} from "@gent/core-internal/test-utils/language-model"
+import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
+import { textStep } from "@gent/core-internal/debug/provider"
 import {
   EventEnvelope,
   EventId,
   EventStore,
   EventStoreError,
   type AgentEvent,
-} from "@gent/core/domain/event"
-import { EventPublisher, EventPublisherLive } from "@gent/core/domain/event-publisher"
-import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
-import { EventStorage } from "@gent/core/storage/event-storage"
-import { MessageStorage } from "@gent/core/storage/message-storage"
-import { SequenceRecorder } from "@gent/core/test-utils"
-import { emptyQueueSnapshot } from "@gent/core/domain/queue"
-import { AgentName } from "@gent/core/domain/agent"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+} from "@gent/core-internal/domain/event"
+import { EventPublisher, EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
+import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { EventStorage } from "@gent/core-internal/storage/event-storage"
+import { MessageStorage } from "@gent/core-internal/storage/message-storage"
+import { SequenceRecorder } from "@gent/core-internal/test-utils"
+import { emptyQueueSnapshot } from "@gent/core-internal/domain/queue"
+import { AgentName } from "@gent/core-internal/domain/agent"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { assistantMessageIdForTurn } from "../../src/runtime/agent/agent-loop.utils"
 import {
   makeAgentLoopService,

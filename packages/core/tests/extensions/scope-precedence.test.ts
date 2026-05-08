@@ -13,18 +13,18 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
-import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
-import { PermissionRule } from "@gent/core/domain/permission"
+import { PermissionRule } from "@gent/core-internal/domain/permission"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
-import { getToolEffect } from "@gent/core/domain/capability/tool"
-import { testExtensionHostContext } from "@gent/core/test-utils"
-import type { AgentDefinition } from "@gent/core/domain/agent"
-import { AgentName } from "@gent/core/domain/agent"
+import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { testExtensionHostContext } from "@gent/core-internal/test-utils"
+import type { AgentDefinition } from "@gent/core-internal/domain/agent"
+import { AgentName } from "@gent/core-internal/domain/agent"
 
 const stubCtx = testExtensionHostContext()
 

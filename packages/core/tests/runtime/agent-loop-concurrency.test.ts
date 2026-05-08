@@ -1,12 +1,12 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Schema } from "effect"
-import { finishPart, toolCallPart } from "@gent/core/test-utils/language-model"
-import { dateFromMillis, Branch, Session } from "@gent/core/domain/message"
-import { AgentName } from "@gent/core/domain/agent"
+import { finishPart, toolCallPart } from "@gent/core-internal/test-utils/language-model"
+import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
+import { AgentName } from "@gent/core-internal/domain/agent"
 import { tool, ToolNeeds } from "@gent/core/extensions/api"
-import { BranchStorage } from "@gent/core/storage/branch-storage"
-import { SessionStorage } from "@gent/core/storage/session-storage"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
+import { SessionStorage } from "@gent/core-internal/storage/session-storage"
+import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { makeAgentLoopService, makeLiveToolLayer, scriptedProvider } from "./agent-loop/helpers"
 
 describe("concurrency", () => {

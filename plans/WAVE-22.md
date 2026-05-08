@@ -357,7 +357,7 @@ Validation:
 
 ### W22.12 — Extension Operational Errors Stay Typed
 
-Status: implemented, awaiting subcommit.
+Status: committed and pushed in `54d8205b`.
 
 Work:
 
@@ -377,3 +377,32 @@ Validation:
 - `bun run typecheck`
 - `bun run lint`
 - `bun run fmt:check`
+
+### W22.13 — Core Public Export Closure
+
+Status: implemented, awaiting subcommit.
+
+Work:
+
+- Move workspace-internal imports from public-looking `@gent/core/*` subpaths
+  to `@gent/core-internal/*`.
+- Add private workspace package `@gent/core-internal` as the only runtime
+  resolver for core internals used by first-party packages and tests.
+- Keep `@gent/core/extensions/api` as the only live public export from
+  `@gent/core`; internal export families are explicit `null` tombstones.
+- Add a core-public-export lint guard that checks `packages/core/package.json`,
+  `packages/core-internal/package.json`, and root `tsconfig.json`.
+
+Validation:
+
+- `bun packages/tooling/src/check-core-public-exports.ts`
+- `bun run --cwd packages/tooling test`
+- `bun -e 'import("@gent/core/extensions/api")...'`
+- `bun -e 'import("@gent/core/domain/ids")...'` blocks
+- `bun -e 'import("@gent/core-internal/domain/ids")...'`
+- `cd packages/sdk && bun -e 'import("@gent/core-internal/domain/ids.js")...'`
+- `bun run typecheck`
+- `bun run lint`
+- `bun run fmt:check`
+- `bun run build`
+- `bun run test`

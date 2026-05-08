@@ -10,8 +10,8 @@ import { QueueWidget } from "../src/components/queue-widget"
 import { TaskWidget } from "../src/components/task-widget"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness"
 import { useClient, type GentRuntime } from "../src/client"
-import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
-import { dateFromMillis } from "@gent/core/domain/message"
+import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
+import { dateFromMillis } from "@gent/core-internal/domain/message"
 const syntaxStyle = () => SyntaxStyle.create()
 const testSession: Session = {
   id: SessionId.make("session-test"),

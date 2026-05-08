@@ -1,16 +1,16 @@
 import { Effect } from "effect"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { TaskExtension } from "@gent/extensions/task-tools"
-import { AgentRunResult, type AgentRunner } from "@gent/core/domain/agent"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { dateFromMillis, Branch, Session } from "@gent/core/domain/message"
-import { BranchStorage } from "@gent/core/storage/branch-storage"
-import { SessionStorage } from "@gent/core/storage/session-storage"
+import { AgentRunResult, type AgentRunner } from "@gent/core-internal/domain/agent"
+import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
+import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
+import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import {
   createToolTestLayer,
   provideCapabilityAccessNeeds,
   testToolContext,
-} from "@gent/core/test-utils"
+} from "@gent/core-internal/test-utils"
 import { toolPreset } from "../helpers/test-preset.js"
 
 export const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>

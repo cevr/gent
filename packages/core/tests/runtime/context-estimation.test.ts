@@ -1,12 +1,12 @@
 import { describe, test, expect } from "bun:test"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { dateFromMillis, Message } from "@gent/core/domain/message"
+import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import {
   estimateTokens,
   estimateContextPercent,
   getContextWindow,
 } from "../../src/runtime/context-estimation"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 
 describe("Token Estimation", () => {
   test("estimateTokens calculates token count", () => {

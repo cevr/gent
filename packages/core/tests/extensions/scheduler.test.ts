@@ -7,10 +7,10 @@ import {
   collectSchedules,
   type CronRuntimeShape,
 } from "../../src/runtime/extensions/resource-host/schedule-engine"
-import { defineResource } from "@gent/core/domain/contribution"
-import type { ResourceSchedule } from "@gent/core/domain/resource"
-import { ExtensionId } from "@gent/core/domain/ids"
-import { AgentName } from "@gent/core/domain/agent"
+import { defineResource } from "@gent/core-internal/domain/contribution"
+import type { ResourceSchedule } from "@gent/core-internal/domain/resource"
+import { ExtensionId } from "@gent/core-internal/domain/ids"
+import { AgentName } from "@gent/core-internal/domain/agent"
 
 const fsLayer = Layer.merge(BunFileSystem.layer, Path.layer)
 

@@ -9,11 +9,11 @@ import {
   destroyRenderSetup,
   renderWithProviders,
 } from "../tests/render-harness"
-import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer.js"
+import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core-internal/test-utils/in-process-layer.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian.js"
-import { LanguageModelLayers } from "@gent/core/test-utils/language-model.js"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { Gent } from "@gent/sdk"
 import { waitForFrame, makeSessionState, repoRoot } from "./helpers"
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>

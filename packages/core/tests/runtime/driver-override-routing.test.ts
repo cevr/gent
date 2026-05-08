@@ -16,7 +16,7 @@ import {
   ExternalDriverRef,
   ModelDriverRef,
   resolveAgentDriver,
-} from "@gent/core/domain/agent"
+} from "@gent/core-internal/domain/agent"
 import { ConfigService, UserConfig } from "../../src/runtime/config-service"
 
 const cowork = AgentDefinition.make({ name: AgentName.make("cowork") })

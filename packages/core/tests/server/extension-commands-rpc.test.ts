@@ -5,8 +5,8 @@ import {
   type GentExtension,
   type LoadedExtension,
 } from "../../src/domain/extension.js"
-import { textStep, toolCallStep } from "@gent/core/debug/provider"
-import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
+import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import {
   ExtensionRegistry,
   listSlashCommands,
@@ -14,16 +14,16 @@ import {
 } from "../../src/runtime/extensions/registry"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { ApprovalService } from "../../src/runtime/approval-service"
-import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
-import { createRpcHarness } from "@gent/core/test-utils/rpc-harness"
-import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun"
-import { SlashCommandInfo } from "@gent/core/server/transport-contract"
+import { createToolTestLayer } from "@gent/core-internal/test-utils/extension-harness"
+import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
+import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
+import { SlashCommandInfo } from "@gent/core-internal/server/transport-contract"
 import { e2ePreset, toolPreset } from "../extensions/helpers/test-preset"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
-import { waitFor } from "@gent/core/test-utils/fixtures"
+import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { buildExtensionLayers } from "../../src/runtime/profile"
-import { defineResource } from "@gent/core/domain/resource"
+import { defineResource } from "@gent/core-internal/domain/resource"
 import {
   action,
   CapabilityError,
@@ -33,7 +33,7 @@ import {
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 import * as ExtensionApi from "@gent/core/extensions/api"
-import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { ConfigService } from "../../src/runtime/config-service"
 import { TaskStorage } from "@gent/extensions/task-tools-storage"
 class ProfileToken extends Context.Service<

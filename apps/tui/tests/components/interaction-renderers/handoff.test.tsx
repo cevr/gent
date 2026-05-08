@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
-import type { ActiveInteraction, ApprovalResult } from "@gent/core/domain/event"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import type { ActiveInteraction, ApprovalResult } from "@gent/core-internal/domain/event"
 import { HandoffRenderer } from "../../../src/components/interaction-renderers/handoff"
 import { destroyRenderSetup, renderWithProviders } from "../../render-harness"
 import { waitForRenderedFrame } from "../../helpers"

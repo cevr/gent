@@ -3,18 +3,18 @@ import type { LanguageModel } from "effect/unstable/ai"
 import { Effect, type Layer } from "effect"
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
-import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { Model, ModelId, ProviderId } from "@gent/core/domain/model"
-import { dateFromMillis, Branch, Session } from "@gent/core/domain/message"
-import { textStep } from "@gent/core/debug/provider"
-import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
+import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { Model, ModelId, ProviderId } from "@gent/core-internal/domain/model"
+import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
+import { textStep } from "@gent/core-internal/debug/provider"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
-import { EventStorage } from "@gent/core/storage/event-storage"
-import { BranchStorage } from "@gent/core/storage/branch-storage"
-import { SessionStorage } from "@gent/core/storage/session-storage"
-import { baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer"
+import { EventStorage } from "@gent/core-internal/storage/event-storage"
+import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
+import { SessionStorage } from "@gent/core-internal/storage/session-storage"
+import { baseLocalLayerWithProvider } from "@gent/core-internal/test-utils/in-process-layer"
 const cowork = AgentDefinition.make({
   name: "cowork" as never,
   model: "test/priced" as never,

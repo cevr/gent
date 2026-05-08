@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Layer, Schema } from "effect"
-import { InteractionPendingError } from "@gent/core/domain/interaction-request"
+import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import {
   ReadOnlyBrand,
@@ -12,18 +12,18 @@ import {
 } from "@gent/core/extensions/api"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../src/runtime/approval-service"
-import { Permission, PermissionRule } from "@gent/core/domain/permission"
+import { Permission, PermissionRule } from "@gent/core-internal/domain/permission"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import type { ToolCallStarted } from "../../src/domain/event"
-import { testToolContext } from "@gent/core/test-utils/extension-harness"
+import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import {
   BranchId,
   ExtensionId,
   InteractionRequestId,
   SessionId,
   ToolCallId,
-} from "@gent/core/domain/ids"
-import { AgentName } from "@gent/core/domain/agent"
+} from "@gent/core-internal/domain/ids"
+import { AgentName } from "@gent/core-internal/domain/agent"
 
 class ToolProfileToken extends Context.Service<
   ToolProfileToken,

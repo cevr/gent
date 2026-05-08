@@ -1,6 +1,6 @@
 import { Config, Effect, Option } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
 const readColorFgBg = Effect.gen(function* () {
   const opt = yield* Config.option(Config.string("COLORFGBG"))

@@ -2,10 +2,10 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
-import { testExtensionHostContext } from "@gent/core/test-utils"
-import { AgentName } from "@gent/core/domain/agent"
+import { testExtensionHostContext } from "@gent/core-internal/test-utils"
+import { AgentName } from "@gent/core-internal/domain/agent"
 
 const stubHostCtx = testExtensionHostContext()
 

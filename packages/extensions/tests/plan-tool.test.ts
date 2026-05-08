@@ -11,8 +11,8 @@ import {
 } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { PlanTool } from "@gent/extensions/plan-tool"
-import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { getToolEffect } from "@gent/core/domain/capability/tool"
+import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 
 // Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide everything via ctx; narrow R for it.live compatibility.

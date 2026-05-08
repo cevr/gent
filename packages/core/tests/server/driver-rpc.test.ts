@@ -8,12 +8,12 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { textStep } from "@gent/core/debug/provider"
-import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
-import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
-import { DriverListResult } from "@gent/core/server/transport-contract"
+import { textStep } from "@gent/core-internal/debug/provider"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core-internal/domain/agent"
+import { DriverListResult } from "@gent/core-internal/server/transport-contract"
 import { Gent } from "@gent/sdk"
-import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
+import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
 import { e2ePreset } from "../extensions/helpers/test-preset"
 
 describe("ExtensionRpcs", () => {

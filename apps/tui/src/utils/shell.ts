@@ -2,7 +2,7 @@
  * Shell execution utility with truncation and output saving
  */
 
-import { runProcess } from "@gent/core/utils/run-process"
+import { runProcess } from "@gent/core-internal/utils/run-process"
 import { DateTime, FileSystem, Effect, Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { homedir } from "os"

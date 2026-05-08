@@ -11,7 +11,7 @@ import { Effect } from "effect"
 import { SessionToolsExtension } from "@gent/extensions/session-tools"
 import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import type { SystemPromptInput } from "@gent/core/extensions/api"
-import { testExtensionHostContext, testSetupCtx } from "@gent/core/test-utils"
+import { testExtensionHostContext, testSetupCtx } from "@gent/core-internal/test-utils"
 
 const stubHostCtx = testExtensionHostContext()
 

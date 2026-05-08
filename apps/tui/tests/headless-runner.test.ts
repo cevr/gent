@@ -5,8 +5,8 @@ import {
   ToolCallStarted,
   ToolCallSucceeded,
   TurnCompleted,
-} from "@gent/core/domain/event"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+} from "@gent/core-internal/domain/event"
+import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { GentConnectionError } from "@gent/sdk"
 import { runHeadless } from "../src/headless-runner"
 import { createMockClient } from "./render-harness"

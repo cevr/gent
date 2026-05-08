@@ -18,7 +18,7 @@ import { expandFileRefs } from "../utils/file-refs"
 import { executeShell } from "../utils/shell"
 import { ComposerInteractionEvent, type AutocompleteState } from "./composer-interaction-state"
 import { ComposerEvent } from "./composer-state"
-import type { ApprovalResult } from "@gent/core/domain/event.js"
+import type { ApprovalResult } from "@gent/core-internal/domain/event.js"
 import { useExtensionUI } from "../extensions/context"
 
 const PASTE_THRESHOLD_LINES = 3

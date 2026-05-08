@@ -2,13 +2,19 @@ import { describe, expect, it, test } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
-import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
-import { MessageStorage } from "@gent/core/storage/message-storage"
-import { BranchStorage } from "@gent/core/storage/branch-storage"
-import { SessionStorage } from "@gent/core/storage/session-storage"
-import { Branch, dateFromMillis, Message, Session } from "@gent/core/domain/message"
-import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { RelationshipStorage } from "@gent/core-internal/storage/relationship-storage"
+import { MessageStorage } from "@gent/core-internal/storage/message-storage"
+import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
+import { SessionStorage } from "@gent/core-internal/storage/session-storage"
+import { Branch, dateFromMillis, Message, Session } from "@gent/core-internal/domain/message"
+import {
+  BranchId,
+  ExtensionId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core-internal/domain/ids"
 
 const FIXED_NOW_MILLIS = 1_767_225_600_000
 const FIXED_NOW = dateFromMillis(FIXED_NOW_MILLIS)

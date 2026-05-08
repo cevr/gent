@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Ref, type Path } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { FileLockService } from "@gent/core/domain/file-lock"
+import { FileLockService } from "@gent/core-internal/domain/file-lock"
 
 const layer = Layer.merge(
   FileLockService.layer.pipe(Layer.provide(BunServices.layer)),

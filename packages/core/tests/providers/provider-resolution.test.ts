@@ -2,20 +2,24 @@ import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Layer, Schema, Stream } from "effect"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import type { ModelDriverContribution, ProviderResolution } from "@gent/core/domain/driver"
+import type { ModelDriverContribution, ProviderResolution } from "@gent/core-internal/domain/driver"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import {
   DriverRegistry,
   type DriverRegistryService,
 } from "../../src/runtime/extensions/driver-registry"
-import { Auth, AuthError, type AuthInfo, type AuthService } from "@gent/core/domain/auth"
-import { finishPart, LanguageModelLayers, toolCallPart } from "@gent/core/test-utils/language-model"
-import type { ProviderError } from "@gent/core/domain/provider-error"
-import { ModelResolver } from "@gent/core/providers/model-resolver"
+import { Auth, AuthError, type AuthInfo, type AuthService } from "@gent/core-internal/domain/auth"
+import {
+  finishPart,
+  LanguageModelLayers,
+  toolCallPart,
+} from "@gent/core-internal/test-utils/language-model"
+import type { ProviderError } from "@gent/core-internal/domain/provider-error"
+import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import { convertTools } from "../../src/runtime/agent/tool-runner"
-import { ProviderAuthError } from "@gent/core/domain/driver"
-import { toPrompt } from "@gent/core/providers/ai-transcript"
-import { dateFromMillis, Message } from "@gent/core/domain/message"
+import { ProviderAuthError } from "@gent/core-internal/domain/driver"
+import { toPrompt } from "@gent/core-internal/providers/ai-transcript"
+import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -23,7 +27,7 @@ import * as AiTool from "effect/unstable/ai/Tool"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import type { ToolkitInput } from "effect/unstable/ai/LanguageModel"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { failingLanguageModel, makeLanguageModel } from "../helpers/failing-language-model"
 const missingAuthInfo: AuthInfo | undefined = undefined
 const testAuthStorage: AuthService = {

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { DelegateTool } from "@gent/extensions/delegate/delegate-tool"
-import { AgentName } from "@gent/core/domain/agent"
-import { getToolEffect } from "@gent/core/domain/capability/tool"
+import { AgentName } from "@gent/core-internal/domain/agent"
+import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 import { layer, makeCtx, narrowR, setup, withTaskWrite } from "../task-tools/helpers.js"
 
 describe("DelegateTool background mode", () => {

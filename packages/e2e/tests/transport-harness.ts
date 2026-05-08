@@ -3,12 +3,12 @@ import {
   baseLocalLayer as _baseLocalLayer,
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
   type InProcessLayerConfig,
-} from "@gent/core/test-utils/in-process-layer.js"
+} from "@gent/core-internal/test-utils/in-process-layer.js"
 import {
   LanguageModelLayers,
   type SignalLanguageModelControls,
-} from "@gent/core/test-utils/language-model.js"
-import type { StorageError } from "@gent/core/storage/sqlite-storage.js"
+} from "@gent/core-internal/test-utils/language-model.js"
+import type { StorageError } from "@gent/core-internal/storage/sqlite-storage.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian.js"
 import { Gent, type GentClientBundle, type RpcHandlersContext } from "@gent/sdk"

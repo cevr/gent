@@ -7,7 +7,7 @@
 
 import { createSignal, Show, For, type JSX } from "solid-js"
 import { SyntaxStyle } from "@opentui/core"
-import type { QuestionOption } from "@gent/core/domain/event.js"
+import type { QuestionOption } from "@gent/core-internal/domain/event.js"
 import { useTheme } from "../../theme/index"
 import { useScopedKeyboard } from "../../keyboard/context"
 

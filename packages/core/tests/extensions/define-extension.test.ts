@@ -18,16 +18,16 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { validateExtensionPackageShape } from "../../src/domain/extension-package-shape"
-import { GentToolMetadataTag, getToolMetadata } from "@gent/core/domain/capability/tool"
+import { GentToolMetadataTag, getToolMetadata } from "@gent/core-internal/domain/capability/tool"
 import type { GentExtension } from "@gent/core/extensions/api"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
-import { PermissionRule } from "@gent/core/domain/permission"
+import { PermissionRule } from "@gent/core-internal/domain/permission"
 import type { ExtensionSetupContext } from "../../src/domain/extension.js"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
-import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
-import { testExtensionHostContext, testSetupCtx } from "@gent/core/test-utils"
-import { AgentName } from "@gent/core/domain/agent"
+import { testExtensionHostContext, testSetupCtx } from "@gent/core-internal/test-utils"
+import { AgentName } from "@gent/core-internal/domain/agent"
 
 const stubHostCtx = testExtensionHostContext()
 

@@ -20,7 +20,7 @@ import {
   requestExtension,
 } from "../src/extensions/client-transport"
 import { runAutocompleteItems } from "../src/components/autocomplete-popup-boundary"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { makeClientExtensionRuntime, makeClientTestTransport } from "./extension-test-harness"
 class AutocompleteTestError extends Schema.TaggedErrorClass<AutocompleteTestError>()(
   "AutocompleteTestError",

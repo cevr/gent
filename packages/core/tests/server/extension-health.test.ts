@@ -5,8 +5,8 @@ import {
   ExtensionHealth,
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
-} from "@gent/core/server/transport-contract"
-import { ExtensionId } from "@gent/core/domain/ids"
+} from "@gent/core-internal/server/transport-contract"
+import { ExtensionId } from "@gent/core-internal/domain/ids"
 
 describe("buildExtensionHealthSnapshot", () => {
   test("merges activation and scheduler failures into typed issue rows", () => {

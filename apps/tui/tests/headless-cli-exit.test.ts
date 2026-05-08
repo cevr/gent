@@ -7,8 +7,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer } from "effect"
-import { Auth, AuthApi } from "@gent/core/domain/auth"
-import { createWorkerEnv } from "@gent/core/test-utils/fixtures.js"
+import { Auth, AuthApi } from "@gent/core-internal/domain/auth"
+import { createWorkerEnv } from "@gent/core-internal/test-utils/fixtures.js"
 const tempDirs: string[] = []
 const makeTempDir = () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "gent-headless-exit-"))

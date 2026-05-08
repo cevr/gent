@@ -1,8 +1,8 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect } from "effect"
 import { entityIdOf, parseEntityId } from "../../../src/runtime/agent/agent-loop.entity-id"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { DefaultWorkspaceId } from "@gent/core/server/workspace-rpc"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 
 const cases: ReadonlyArray<{ readonly session: string; readonly branch: string }> = [
   { session: "session-a", branch: "branch-main" },

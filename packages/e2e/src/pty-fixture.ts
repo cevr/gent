@@ -1,4 +1,4 @@
-import { createTempDirFixture } from "@gent/core/test-utils/fixtures"
+import { createTempDirFixture } from "@gent/core-internal/test-utils/fixtures"
 import { Clock, Config, Effect, Option } from "effect"
 import { spawn, type IPty } from "zigpty"
 import { seedAuthBoundary } from "./auth-seed-boundary"

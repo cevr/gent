@@ -14,9 +14,9 @@
  */
 import { describe, test, expect, it } from "effect-bun-test"
 import { Effect, Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
-import { AgentEvent } from "@gent/core/domain/event"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
+import { AgentEvent } from "@gent/core-internal/domain/event"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 describe("TaggedEnumClass — basic shape", () => {
   const Shape = TaggedEnumClass("Shape", {
     Circle: { radius: Schema.Number },

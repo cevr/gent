@@ -1,6 +1,6 @@
 /**
  * Shared test fixtures for integration tests across packages.
- * Import from @gent/core/test-utils/fixtures
+ * Import from @gent/core-internal/test-utils/fixtures
  */
 
 // @effect-diagnostics nodeBuiltinImport:off — test fixture lifecycle comes from bun:test
@@ -56,7 +56,7 @@ export const createWorkerEnv = (
 }
 
 class WaitForError extends Schema.TaggedErrorClass<WaitForError>()(
-  "@gent/core/test-utils/fixtures/WaitForError",
+  "@gent/core-internal/test-utils/fixtures/WaitForError",
   { message: Schema.String },
 ) {}
 

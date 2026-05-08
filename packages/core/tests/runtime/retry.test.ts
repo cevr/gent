@@ -1,5 +1,5 @@
 import { describe, test, expect, it } from "effect-bun-test"
-import { dateFromMillis } from "@gent/core/domain/message"
+import { dateFromMillis } from "@gent/core-internal/domain/message"
 import { Clock, Effect } from "effect"
 import {
   isRetryable,
@@ -7,7 +7,7 @@ import {
   DEFAULT_RETRY_CONFIG,
   withRetry,
 } from "../../src/runtime/retry"
-import { ProviderError } from "@gent/core/domain/provider-error"
+import { ProviderError } from "@gent/core-internal/domain/provider-error"
 
 describe("getRetryAfter", () => {
   test("parses retry-after seconds from Headers", () => {

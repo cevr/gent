@@ -2,10 +2,10 @@ import { describe, it, expect } from "effect-bun-test"
 import { Deferred, Effect, Layer, Path } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { BashTool } from "@gent/extensions/exec-tools/bash"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
-import { getToolEffect } from "@gent/core/domain/capability/tool"
-import { testExtensionHostContext } from "@gent/core/test-utils"
+import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
+import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 
 const makePlatformLayer = () =>
   Layer.mergeAll(

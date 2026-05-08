@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
-import type { GentPlatform } from "@gent/core/runtime/gent-platform.js"
-import { BunPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
+import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import {
   Cause,
   Config,
@@ -24,13 +24,13 @@ import type { Context } from "effect"
 import { RegistryProvider } from "./atom-solid/solid"
 import { LinkOpener } from "./services/link-opener"
 import { OsService } from "./services/os-service"
-import type { ProviderId } from "@gent/core/domain/model.js"
+import type { ProviderId } from "@gent/core-internal/domain/model.js"
 import {
   RunSpecSchema,
   AgentName as AgentNameSchema,
   type RunSpec,
   type AgentName,
-} from "@gent/core/domain/agent.js"
+} from "@gent/core-internal/domain/agent.js"
 
 import { render } from "@opentui/solid"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"

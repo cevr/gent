@@ -1,13 +1,13 @@
 import { describe, expect, test } from "effect-bun-test"
 import { Effect, Fiber, Ref, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
-import { textStep, toolCallStep } from "@gent/core/debug/provider"
-import { dateFromMillis, Message } from "@gent/core/domain/message"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
+import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import { tool } from "@gent/core/extensions/api"
-import type { AgentEvent } from "@gent/core/domain/event"
-import { MessageStorage } from "@gent/core/storage/message-storage"
-import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
+import type { AgentEvent } from "@gent/core-internal/domain/event"
+import { MessageStorage } from "@gent/core-internal/storage/message-storage"
+import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import {
   assistantMessageIdForTurn,
   toolResultMessageIdForTurn,

@@ -6,12 +6,12 @@
  */
 
 import { Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import {
   InteractionPresented,
   type ActiveInteraction,
   type ApprovalResult,
-} from "@gent/core/domain/event.js"
+} from "@gent/core-internal/domain/event.js"
 
 const ApprovalResultSchema = Schema.Struct({
   approved: Schema.Boolean,

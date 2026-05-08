@@ -7,7 +7,7 @@
 
 import { Schema } from "effect"
 import { For, Show, createMemo } from "solid-js"
-import { headTail } from "@gent/core/domain/output-buffer.js"
+import { headTail } from "@gent/core-internal/domain/output-buffer.js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"

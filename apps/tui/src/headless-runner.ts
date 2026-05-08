@@ -1,6 +1,6 @@
 import { Cause, Deferred, Effect, Exit, Fiber, Random, Schedule, Stream } from "effect"
-import type { AgentName, RunSpec } from "@gent/core/domain/agent.js"
-import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
+import type { AgentName, RunSpec } from "@gent/core-internal/domain/agent.js"
+import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
 import { GentConnectionError, type GentNamespacedClient } from "@gent/sdk"
 import {
   DEFAULT_HEADLESS_TOOL_RENDERERS,

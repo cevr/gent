@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { dateFromMillis } from "@gent/core/domain/message"
+import { dateFromMillis } from "@gent/core-internal/domain/message"
 import { toSlug, memoryPath, newFrontmatter } from "@gent/extensions/memory/state"
 
 describe("toSlug", () => {

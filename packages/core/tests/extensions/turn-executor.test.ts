@@ -10,9 +10,9 @@ import * as Response from "effect/unstable/ai/Response"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
-import { ExtensionId } from "@gent/core/domain/ids"
-import { finishPart } from "@gent/core/test-utils/language-model"
-import type { TurnExecutor, TurnContext } from "@gent/core/domain/driver"
+import { ExtensionId } from "@gent/core-internal/domain/ids"
+import { finishPart } from "@gent/core-internal/test-utils/language-model"
+import type { TurnExecutor, TurnContext } from "@gent/core-internal/domain/driver"
 const noopExecutor: TurnExecutor = {
   executeTurn: () => Stream.empty,
 }

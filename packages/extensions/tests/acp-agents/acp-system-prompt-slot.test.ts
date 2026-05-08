@@ -9,10 +9,14 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Path, Schema } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { AcpAgentsExtension } from "@gent/extensions/acp-agents"
-import { AgentDefinition, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
+import {
+  AgentDefinition,
+  ExternalDriverRef,
+  ModelDriverRef,
+} from "@gent/core-internal/domain/agent"
 import { tool, type SystemPromptInput, type ToolCapability } from "@gent/core/extensions/api"
-import { withSectionMarkers } from "@gent/core/domain/prompt"
-import { testExtensionHostContext, testSetupCtx } from "@gent/core/test-utils"
+import { withSectionMarkers } from "@gent/core-internal/domain/prompt"
+import { testExtensionHostContext, testSetupCtx } from "@gent/core-internal/test-utils"
 const baseAgent = AgentDefinition.make({
   name: "cowork" as never,
 })

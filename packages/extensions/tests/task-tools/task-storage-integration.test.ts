@@ -1,14 +1,14 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
-import { BranchStorage } from "@gent/core/storage/branch-storage"
-import { SessionStorage } from "@gent/core/storage/session-storage"
+import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
+import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { TaskStorage, TaskStorageReadOnly } from "@gent/extensions/task-tools-storage"
-import { dateFromMillis, Session, Branch } from "@gent/core/domain/message"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { dateFromMillis, Session, Branch } from "@gent/core-internal/domain/message"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { Task, TaskId } from "@gent/extensions/task-tools/domain"
-import { capabilityAccessNeedsLayer } from "@gent/core/test-utils"
+import { capabilityAccessNeedsLayer } from "@gent/core-internal/test-utils"
 
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 

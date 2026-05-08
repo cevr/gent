@@ -12,10 +12,10 @@
 
 import { describe, test, expect } from "bun:test"
 import { Context, Effect, Layer } from "effect"
-import { AgentName } from "@gent/core/domain/agent"
+import { AgentName } from "@gent/core-internal/domain/agent"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
-import type { AnyResourceContribution } from "@gent/core/domain/resource"
-import { defineResource } from "@gent/core/domain/contribution"
+import type { AnyResourceContribution } from "@gent/core-internal/domain/resource"
+import { defineResource } from "@gent/core-internal/domain/contribution"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 
 // ── Resource shape + helpers ──

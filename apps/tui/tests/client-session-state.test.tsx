@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
-import { AgentName } from "@gent/core/domain/agent"
-import { ModelId } from "@gent/core/domain/model"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { dateFromMillis } from "@gent/core/domain/message"
+import { AgentName } from "@gent/core-internal/domain/agent"
+import { ModelId } from "@gent/core-internal/domain/model"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { dateFromMillis } from "@gent/core-internal/domain/message"
 import { onMount } from "solid-js"
 import { Effect, Schema } from "effect"
 import { emptyQueueSnapshot } from "@gent/sdk"

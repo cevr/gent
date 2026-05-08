@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite"
 import { DateTime, Effect, FileSystem, Option } from "effect"
 import type { ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/sdk"
-import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
 const LOG_DIR = "/tmp/gent/logs"
 const STORAGE_TABLES = ["sessions", "branches", "messages", "events"] as const

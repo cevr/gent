@@ -5,9 +5,14 @@ import {
   renderMessageParts,
   renderSessionTree,
 } from "@gent/extensions/session-tools/read-session"
-import { messagePartsDisplayText } from "@gent/core/domain/message-part-projection"
-import { dateFromMillis, Branch, Message, type MessagePart } from "@gent/core/domain/message"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { messagePartsDisplayText } from "@gent/core-internal/domain/message-part-projection"
+import {
+  dateFromMillis,
+  Branch,
+  Message,
+  type MessagePart,
+} from "@gent/core-internal/domain/message"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 
 describe("truncate", () => {
   test("under max → unchanged", () => {

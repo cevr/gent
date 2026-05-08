@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { MemoryExtension } from "@gent/extensions/memory"
-import { testSetupCtx } from "@gent/core/test-utils"
+import { testSetupCtx } from "@gent/core-internal/test-utils"
 
 describe("memory scheduled jobs", () => {
   it.live("declares durable schedules on a Resource", () =>

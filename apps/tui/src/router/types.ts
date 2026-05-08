@@ -2,7 +2,7 @@
  * Route discriminated union and helpers
  */
 
-import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
+import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
 import type { Branch } from "../client"
 
 export type AppRoute =

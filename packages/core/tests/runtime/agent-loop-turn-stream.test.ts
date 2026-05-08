@@ -1,8 +1,12 @@
 import { describe, expect, test } from "effect-bun-test"
 import { Effect, Ref } from "effect"
-import { finishPart, reasoningDeltaPart, textDeltaPart } from "@gent/core/test-utils/language-model"
-import type { AgentEvent } from "@gent/core/domain/event"
-import { MessageStorage } from "@gent/core/storage/message-storage"
+import {
+  finishPart,
+  reasoningDeltaPart,
+  textDeltaPart,
+} from "@gent/core-internal/test-utils/language-model"
+import type { AgentEvent } from "@gent/core-internal/domain/event"
+import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import {
   assistantDraftFromMessage,
   assistantMessageIdForTurn,

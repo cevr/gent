@@ -18,7 +18,7 @@ import {
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
 import type { ClaudeCredentials } from "@gent/extensions/anthropic/oauth"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
-import { testSetupCtx } from "@gent/core/test-utils"
+import { testSetupCtx } from "@gent/core-internal/test-utils"
 const credLayer = (
   ...args: Parameters<typeof AnthropicCredentialService.layerFromIO>
 ): Layer.Layer<AnthropicCredentialService> =>

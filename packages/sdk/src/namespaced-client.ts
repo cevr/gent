@@ -1,9 +1,12 @@
 import { Stream, type Effect, type Fiber } from "effect"
 import { RpcClient } from "effect/unstable/rpc"
 import { Headers } from "effect/unstable/http"
-import { GentRpcs, type GentRpcClient } from "@gent/core/server/rpcs.js"
-import { ConnectionState } from "@gent/core/server/transport-contract.js"
-import type { GentConnectionError, GentLifecycle } from "@gent/core/server/transport-contract.js"
+import { GentRpcs, type GentRpcClient } from "@gent/core-internal/server/rpcs.js"
+import { ConnectionState } from "@gent/core-internal/server/transport-contract.js"
+import type {
+  GentConnectionError,
+  GentLifecycle,
+} from "@gent/core-internal/server/transport-contract.js"
 
 // ---------------------------------------------------------------------------
 // Namespaced client — typed nested view over the flat RPC transport

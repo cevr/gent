@@ -9,9 +9,9 @@ import {
 } from "solid-js"
 import { Effect, Fiber, Random, Schedule } from "effect"
 import { autocompleteContribution } from "../extensions/client-facets.js"
-import type { ActiveInteraction } from "@gent/core/domain/event.js"
-import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
-import type { ReasoningEffort } from "@gent/core/domain/agent.js"
+import type { ActiveInteraction } from "@gent/core-internal/domain/event.js"
+import type { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids.js"
+import type { ReasoningEffort } from "@gent/core-internal/domain/agent.js"
 import type { Message, SessionItem } from "../components/message-list"
 import {
   ComposerInteractionEvent,

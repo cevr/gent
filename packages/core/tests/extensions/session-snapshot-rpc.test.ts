@@ -3,11 +3,11 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import { textStep } from "@gent/core/debug/provider"
-import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
-import { waitFor } from "@gent/core/test-utils/fixtures"
+import { textStep } from "@gent/core-internal/debug/provider"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { Gent, extractText } from "@gent/sdk"
-import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
+import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
 import { e2ePreset } from "./helpers/test-preset"
 
 describe("Session snapshot across RPC boundaries", () => {

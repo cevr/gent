@@ -8,10 +8,14 @@
  */
 import { Effect, Fiber, FiberSet, PubSub, Ref, Stream } from "effect"
 import type { Scope } from "effect"
-import { EventStore, type AgentEvent, type EventEnvelope } from "@gent/core/domain/event.js"
-import type { AgentName } from "@gent/core/domain/agent.js"
-import { SessionId } from "@gent/core/domain/ids.js"
-import type { BranchId, ToolCallId } from "@gent/core/domain/ids.js"
+import {
+  EventStore,
+  type AgentEvent,
+  type EventEnvelope,
+} from "@gent/core-internal/domain/event.js"
+import type { AgentName } from "@gent/core-internal/domain/agent.js"
+import { SessionId } from "@gent/core-internal/domain/ids.js"
+import type { BranchId, ToolCallId } from "@gent/core-internal/domain/ids.js"
 
 // =============================================================================
 // Constants

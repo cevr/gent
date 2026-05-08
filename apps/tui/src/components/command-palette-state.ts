@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import type { Accessor } from "solid-js"
-import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 
 /** A menu item in the command palette. */
 export interface PaletteItem {

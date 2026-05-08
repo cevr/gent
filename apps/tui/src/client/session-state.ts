@@ -1,7 +1,7 @@
 import { Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
-import { BranchId, SessionId } from "@gent/core/domain/ids.js"
-import { ReasoningEffort } from "@gent/core/domain/agent.js"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
+import { ReasoningEffort } from "@gent/core-internal/domain/agent.js"
 
 export interface Session {
   readonly sessionId: SessionId

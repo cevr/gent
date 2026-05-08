@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import type { SessionId } from "@gent/core/domain/ids.js"
+import type { SessionId } from "@gent/core-internal/domain/ids.js"
 import type { SessionTreeNode } from "../client"
 import { ChromePanel } from "./chrome-panel"
 import { useTheme } from "../theme/index"

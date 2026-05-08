@@ -21,7 +21,7 @@ import {
   makeClientWorkspaceLayer,
 } from "../src/extensions/client-services"
 import { makeClientTransportLayer } from "../src/extensions/client-transport"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 class ExtensionIntegrationTestError extends Schema.TaggedErrorClass<ExtensionIntegrationTestError>()(
   "ExtensionIntegrationTestError",
   { message: Schema.String, cause: Schema.optional(Schema.Unknown) },

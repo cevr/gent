@@ -2,8 +2,8 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { tool } from "@gent/core/extensions/api"
-import { testExtensionRegistryLayer } from "@gent/core/test-utils/reconciled-extensions"
-import { ExtensionId } from "@gent/core/domain/ids"
+import { testExtensionRegistryLayer } from "@gent/core-internal/test-utils/reconciled-extensions"
+import { ExtensionId } from "@gent/core-internal/domain/ids"
 
 describe("reconcileTestExtensions", () => {
   it.live("degrades same-scope collisions before building helper registries", () =>

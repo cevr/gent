@@ -4,7 +4,7 @@
 
 import { createContext, createSignal, onCleanup, useContext, type ParentProps } from "solid-js"
 import { type AppRoute, Route } from "./types"
-import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
+import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
 import type { Branch } from "../client"
 import { createAppRouter, type AppRouter } from "./router"
 

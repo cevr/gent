@@ -1,5 +1,5 @@
-import type { AgentName } from "@gent/core/domain/agent"
-import type { AgentEvent } from "@gent/core/domain/event"
+import type { AgentName } from "@gent/core-internal/domain/agent"
+import type { AgentEvent } from "@gent/core-internal/domain/event"
 import { AgentStatus } from "./agent-state"
 
 export interface AgentLifecycleUpdate {

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Effect, Schema } from "effect"
-import { AgentLoop } from "@gent/core/runtime/agent/agent-loop.actor"
+import { AgentLoop } from "@gent/core-internal/runtime/agent/agent-loop.actor"
 import {
   ActorCommandId,
   BranchId,
@@ -9,10 +9,10 @@ import {
   MessageId,
   SessionId,
   ToolCallId,
-} from "@gent/core/domain/ids"
-import { dateFromMillis, Message } from "@gent/core/domain/message"
-import { SteerCommand } from "@gent/core/domain/steer"
-import { DefaultWorkspaceId } from "@gent/core/server/workspace-rpc"
+} from "@gent/core-internal/domain/ids"
+import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
+import { SteerCommand } from "@gent/core-internal/domain/steer"
+import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 
 const sessionA = SessionId.make("session-a")
 const sessionB = SessionId.make("session-b")

@@ -5,7 +5,7 @@ import {
   stripBackground,
 } from "@gent/extensions/exec-tools/bash"
 
-import { SessionId } from "@gent/core/domain/ids"
+import { SessionId } from "@gent/core-internal/domain/ids"
 
 describe("splitCdCommand", () => {
   test("cd /foo && ls → { cwd: '/foo', command: 'ls' }", () => {

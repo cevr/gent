@@ -1,14 +1,14 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
-import { EventStorage } from "@gent/core/storage/event-storage"
-import { BranchStorage } from "@gent/core/storage/branch-storage"
-import { SessionStorage } from "@gent/core/storage/session-storage"
-import { Branch, dateFromMillis, Session } from "@gent/core/domain/message"
-import { AgentSwitched, SessionStarted } from "@gent/core/domain/event"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { AgentName } from "@gent/core/domain/agent"
+import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { EventStorage } from "@gent/core-internal/storage/event-storage"
+import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
+import { SessionStorage } from "@gent/core-internal/storage/session-storage"
+import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
+import { AgentSwitched, SessionStarted } from "@gent/core-internal/domain/event"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { AgentName } from "@gent/core-internal/domain/agent"
 
 const FIXED_NOW_MILLIS = 1_767_225_600_000
 const FIXED_NOW = dateFromMillis(FIXED_NOW_MILLIS)

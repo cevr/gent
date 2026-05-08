@@ -8,8 +8,8 @@ import { describe, test, expect, it } from "effect-bun-test"
 import { Context, Effect, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
-import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
-import { SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
+import { SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import {
   makeAcpResponsePartMapper,
   mapAcpUpdateToResponsePart,

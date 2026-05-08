@@ -8,8 +8,8 @@ import {
   type GentRpcClient,
   type GentRpcClientError,
   type GentRpcsClient,
-} from "@gent/core/server/rpcs.js"
-import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
+} from "@gent/core-internal/server/rpcs.js"
+import { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
 import {
   ConnectionState,
   GentConnectionError,
@@ -23,22 +23,26 @@ import {
   type ExtensionHealth,
   type ExtensionHealthIssue,
   type ExtensionHealthSnapshot,
-} from "@gent/core/server/transport-contract.js"
-import type { AuthProviderInfo, AuthAuthorization, AuthMethod } from "@gent/core/domain/auth.js"
-import type { PermissionRule } from "@gent/core/domain/permission.js"
-import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids.js"
+} from "@gent/core-internal/server/transport-contract.js"
+import type {
+  AuthProviderInfo,
+  AuthAuthorization,
+  AuthMethod,
+} from "@gent/core-internal/domain/auth.js"
+import type { PermissionRule } from "@gent/core-internal/domain/permission.js"
+import type { SessionId, BranchId, MessageId } from "@gent/core-internal/domain/ids.js"
 import type {
   Message,
   MessagePart,
   ProjectedMessage,
   ToolInteraction,
-} from "@gent/core/domain/message.js"
+} from "@gent/core-internal/domain/message.js"
 import {
   messagePartsImages,
   messagePartsReasoning,
   messagePartsText,
-} from "@gent/core/domain/message-part-projection.js"
-import type { QueueEntryInfo, QueueSnapshot } from "@gent/core/domain/queue.js"
+} from "@gent/core-internal/domain/message-part-projection.js"
+import type { QueueEntryInfo, QueueSnapshot } from "@gent/core-internal/domain/queue.js"
 import {
   makeNamespacedClient,
   type GentNamespacedClient,

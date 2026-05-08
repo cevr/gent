@@ -10,9 +10,9 @@ import {
   findMatch,
   EditTool,
 } from "@gent/extensions/fs-tools/edit"
-import { FileLockService } from "@gent/core/domain/file-lock"
-import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { getToolEffect } from "@gent/core/domain/capability/tool"
+import { FileLockService } from "@gent/core-internal/domain/file-lock"
+import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 describe("detectRedaction", () => {
   test("clean replacement → undefined", () => {
     expect(detectRedaction("old code", "new code")).toBeUndefined()

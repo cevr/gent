@@ -41,7 +41,7 @@ export type ApprovalDecision = Schema.Schema.Type<typeof ApprovalDecisionSchema>
 // ============================================================================
 
 export class InteractionPendingError extends Schema.TaggedErrorClass<InteractionPendingError>(
-  "@gent/core/domain/interaction-request/InteractionPendingError",
+  "@gent/core-internal/domain/interaction-request/InteractionPendingError",
 )("InteractionPendingError", {
   requestId: InteractionRequestId,
   sessionId: SessionId,
@@ -49,7 +49,7 @@ export class InteractionPendingError extends Schema.TaggedErrorClass<Interaction
 }) {}
 
 export class InteractionRequestMismatchError extends Schema.TaggedErrorClass<InteractionRequestMismatchError>(
-  "@gent/core/domain/interaction-request/InteractionRequestMismatchError",
+  "@gent/core-internal/domain/interaction-request/InteractionRequestMismatchError",
 )("InteractionRequestMismatchError", {
   message: Schema.String,
   expectedRequestId: Schema.optional(InteractionRequestId),

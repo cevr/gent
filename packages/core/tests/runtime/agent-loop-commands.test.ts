@@ -14,7 +14,7 @@ import {
   InteractionRequestId,
   MessageId,
   SessionId,
-} from "@gent/core/domain/ids"
+} from "@gent/core-internal/domain/ids"
 
 const sessionId = SessionId.make("command-session")
 const branchId = BranchId.make("command-branch")

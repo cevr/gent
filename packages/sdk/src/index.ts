@@ -1,7 +1,11 @@
 // Shared transport contract
-export { QueueEntryInfo, QueueSnapshot, emptyQueueSnapshot } from "@gent/core/domain/queue.js"
+export {
+  QueueEntryInfo,
+  QueueSnapshot,
+  emptyQueueSnapshot,
+} from "@gent/core-internal/domain/queue.js"
 
-export { Message } from "@gent/core/domain/message.js"
+export { Message } from "@gent/core-internal/domain/message.js"
 
 export {
   Session,
@@ -12,7 +16,7 @@ export {
   DriverListResult,
   ConnectionState,
   GentConnectionError,
-} from "@gent/core/server/transport-contract.js"
+} from "@gent/core-internal/server/transport-contract.js"
 export type {
   GentLifecycle,
   BranchTreeNode,
@@ -21,7 +25,7 @@ export type {
   ExtensionHealthSnapshot,
   SteerCommand,
   SessionTreeNode,
-} from "@gent/core/server/transport-contract.js"
+} from "@gent/core-internal/server/transport-contract.js"
 export type { CreateSessionResult } from "./client.js"
 
 // Client constructors

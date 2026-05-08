@@ -7,7 +7,7 @@
 
 import { Schema } from "effect"
 import { Show, For, createMemo } from "solid-js"
-import { windowItems, headTailExcerpts } from "@gent/core/domain/windowing.js"
+import { windowItems, headTailExcerpts } from "@gent/core-internal/domain/windowing.js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { GutterText } from "../gutter-text"

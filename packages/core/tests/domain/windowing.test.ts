@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { windowItems, headTailExcerpts, type Excerpt } from "@gent/core/domain/windowing"
+import { windowItems, headTailExcerpts, type Excerpt } from "@gent/core-internal/domain/windowing"
 
 const elision = (n: number): number | string => `[${n} skipped]`
 

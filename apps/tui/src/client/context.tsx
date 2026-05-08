@@ -19,16 +19,16 @@ import {
   resolveAgentModel,
   type AgentName,
   type ReasoningEffort,
-} from "@gent/core/domain/agent.js"
+} from "@gent/core-internal/domain/agent.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 
 const AgentsByName: Record<string, AgentDefinition> = Object.fromEntries(
   AllBuiltinAgents.map((a) => [a.name, a]),
 )
-import { type Model, type ModelId } from "@gent/core/domain/model.js"
-import type { EventEnvelope } from "@gent/core/domain/event.js"
-import { BranchId, SessionId } from "@gent/core/domain/ids.js"
-import type { MessageId } from "@gent/core/domain/ids.js"
+import { type Model, type ModelId } from "@gent/core-internal/domain/model.js"
+import type { EventEnvelope } from "@gent/core-internal/domain/event.js"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
+import type { MessageId } from "@gent/core-internal/domain/ids.js"
 import type { ClientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { useWorkspace } from "../workspace"
@@ -50,7 +50,7 @@ import type {
   SessionTreeNode,
   SteerCommand,
 } from "@gent/sdk"
-import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import {
   SessionState,
   SessionStateEvent,

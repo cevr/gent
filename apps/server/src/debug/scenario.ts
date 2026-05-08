@@ -13,8 +13,8 @@ import {
   ToolCallStarted,
   ToolCallSucceeded,
   TurnCompleted,
-} from "@gent/core/domain/event.js"
-import { dateFromMillis, Branch, Message, Session } from "@gent/core/domain/message.js"
+} from "@gent/core-internal/domain/event.js"
+import { dateFromMillis, Branch, Message, Session } from "@gent/core-internal/domain/message.js"
 import {
   BranchId,
   ExtensionId,
@@ -22,14 +22,17 @@ import {
   RpcId,
   SessionId,
   ToolCallId,
-} from "@gent/core/domain/ids.js"
-import { SessionStorage } from "@gent/core/storage/session-storage.js"
-import { BranchStorage } from "@gent/core/storage/branch-storage.js"
-import { MessageStorage } from "@gent/core/storage/message-storage.js"
-import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry.js"
-import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
-import { RuntimeEnvironment } from "@gent/core/runtime/runtime-environment.js"
-import type { CapabilityError, CapabilityNotFoundError } from "@gent/core/domain/capability.js"
+} from "@gent/core-internal/domain/ids.js"
+import { SessionStorage } from "@gent/core-internal/storage/session-storage.js"
+import { BranchStorage } from "@gent/core-internal/storage/branch-storage.js"
+import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
+import { ExtensionRegistry } from "@gent/core-internal/runtime/extensions/registry.js"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment.js"
+import type {
+  CapabilityError,
+  CapabilityNotFoundError,
+} from "@gent/core-internal/domain/capability.js"
 import { ExtensionHostProcessError, ref } from "@gent/core/extensions/api"
 import {
   TaskCreateRequest,

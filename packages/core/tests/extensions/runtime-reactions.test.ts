@@ -6,13 +6,13 @@ import type {
   LoadedExtension,
   TurnAfterInput,
 } from "../../src/domain/extension.js"
-import { testExtensionHostContext } from "@gent/core/test-utils"
-import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
+import { testExtensionHostContext } from "@gent/core-internal/test-utils"
+import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import {
   compileExtensionReactions,
   ExtensionReactionHaltError,
 } from "../../src/runtime/extensions/extension-reactions"
-import { AgentName } from "@gent/core/domain/agent"
+import { AgentName } from "@gent/core-internal/domain/agent"
 
 const stubCtx = testExtensionHostContext()
 

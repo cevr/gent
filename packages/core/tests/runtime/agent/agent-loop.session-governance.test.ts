@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
-import { SessionId } from "@gent/core/domain/ids"
+import { SessionId } from "@gent/core-internal/domain/ids"
 
 const sessionA = SessionId.make("session-a")
 const sessionB = SessionId.make("session-b")

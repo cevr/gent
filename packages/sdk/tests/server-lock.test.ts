@@ -1,8 +1,8 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Path, type Scope } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
-import type { GentPlatform } from "@gent/core/runtime/gent-platform.js"
+import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
+import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 // @effect-diagnostics nodeBuiltinImport:off
 import { hostname, tmpdir } from "node:os"
 import { Gent } from "../src/client"

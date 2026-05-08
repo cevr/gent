@@ -7,13 +7,13 @@ import {
   LanguageModelLayers,
   textDeltaPart,
   type LanguageModelStreamPart,
-} from "@gent/core/test-utils/language-model"
-import { dateFromMillis, Message } from "@gent/core/domain/message"
-import { EventStore, MessageReceived } from "@gent/core/domain/event"
-import { EventPublisherLive } from "@gent/core/domain/event-publisher"
-import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
-import { EventStorage } from "@gent/core/storage/event-storage"
-import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
+} from "@gent/core-internal/test-utils/language-model"
+import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
+import { EventStore, MessageReceived } from "@gent/core-internal/domain/event"
+import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
+import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { EventStorage } from "@gent/core-internal/storage/event-storage"
+import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
 import { makeAgentLoopBehavior } from "../../src/runtime/agent/agent-loop.behavior"
 import { AgentLoopBehaviorDeps } from "../../src/runtime/agent/agent-loop.behavior-deps"
@@ -24,7 +24,7 @@ import { GentPlatform } from "../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
-import { ModelResolver } from "@gent/core/providers/model-resolver"
+import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import {
   makeAgentLoopService,
   makeExtRegistry,
@@ -37,7 +37,7 @@ import {
 } from "../../src/domain/agent-loop-queue-state"
 import { AgentLoopQueueStorage } from "../../src/storage/agent-loop-queue-storage"
 import { StorageError } from "../../src/domain/storage-error"
-import { ensureStorageParents } from "@gent/core/test-utils"
+import { ensureStorageParents } from "@gent/core-internal/test-utils"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })

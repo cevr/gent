@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import type { AutocompleteContribution } from "../extensions/client-facets.js"
 
 export interface AutocompleteState {

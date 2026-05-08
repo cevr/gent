@@ -70,7 +70,7 @@ export type ExtensionScope = "builtin" | "user" | "project"
 // Extension Load Error
 
 export class ExtensionLoadError extends Schema.TaggedErrorClass<ExtensionLoadError>(
-  "@gent/core/domain/extension/ExtensionLoadError",
+  "@gent/core-internal/domain/extension/ExtensionLoadError",
 )("ExtensionLoadError", {
   extensionId: ExtensionId,
   message: Schema.String,

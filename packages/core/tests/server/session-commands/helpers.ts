@@ -1,14 +1,14 @@
 import { Deferred, Effect, Layer, Stream } from "effect"
-import { textStep } from "@gent/core/debug/provider"
-import { DEFAULT_AGENT_NAME } from "@gent/core/domain/agent"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
-import { ExtensionId } from "@gent/core/domain/ids"
-import { Branch, dateFromMillis, Session } from "@gent/core/domain/message"
-import { emptyQueueSnapshot } from "@gent/core/domain/queue"
-import { EventStore, EventStoreError } from "@gent/core/domain/event"
-import { EventPublisher } from "@gent/core/domain/event-publisher"
-import { ModelResolver } from "@gent/core/providers/model-resolver"
-import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
+import { textStep } from "@gent/core-internal/debug/provider"
+import { DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
+import type { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { ExtensionId } from "@gent/core-internal/domain/ids"
+import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
+import { emptyQueueSnapshot } from "@gent/core-internal/domain/queue"
+import { EventStore, EventStoreError } from "@gent/core-internal/domain/event"
+import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
+import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import {
   SessionRuntime,
@@ -17,10 +17,16 @@ import {
   type SessionRuntimeService,
 } from "../../../src/runtime/session-runtime"
 import { SessionCommands } from "../../../src/server/session-commands"
-import { BranchStorage, type BranchStorageService } from "@gent/core/storage/branch-storage"
-import { SessionStorage, type SessionStorageService } from "@gent/core/storage/session-storage"
-import { SqliteStorage, StorageError } from "@gent/core/storage/sqlite-storage"
-import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
+import {
+  BranchStorage,
+  type BranchStorageService,
+} from "@gent/core-internal/storage/branch-storage"
+import {
+  SessionStorage,
+  type SessionStorageService,
+} from "@gent/core-internal/storage/session-storage"
+import { SqliteStorage, StorageError } from "@gent/core-internal/storage/sqlite-storage"
+import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../../extensions/helpers/test-preset"
 import type { LoadedExtension } from "../../../src/domain/extension"

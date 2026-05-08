@@ -9,18 +9,23 @@ import {
   textDeltaPart,
   toolCallPart,
   type LanguageModelStreamPart,
-} from "@gent/core/test-utils/language-model"
-import { dateFromMillis, Message } from "@gent/core/domain/message"
-import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
+} from "@gent/core-internal/test-utils/language-model"
+import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
+import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
 import { getToolId, tool, ToolNeeds, type ToolCapability } from "@gent/core/extensions/api"
-import { Permission } from "@gent/core/domain/permission"
-import { EventStore } from "@gent/core/domain/event"
-import { InteractionPendingError } from "@gent/core/domain/interaction-request"
+import { Permission } from "@gent/core-internal/domain/permission"
+import { EventStore } from "@gent/core-internal/domain/event"
+import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
 import { ApprovalService } from "../../src/runtime/approval-service"
-import { EventPublisherLive } from "@gent/core/domain/event-publisher"
-import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
-import { RecordingEventStore, SequenceRecorder } from "@gent/core/test-utils"
-import { BranchId, InteractionRequestId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
+import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { RecordingEventStore, SequenceRecorder } from "@gent/core-internal/test-utils"
+import {
+  BranchId,
+  InteractionRequestId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core-internal/domain/ids"
 import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopBehaviorDeps } from "../../src/runtime/agent/agent-loop.behavior-deps"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
@@ -30,7 +35,7 @@ import { GentPlatform } from "../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
-import { ModelResolver } from "@gent/core/providers/model-resolver"
+import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import {
   makeAgentLoopService,
   makeExtRegistry,

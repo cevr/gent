@@ -12,7 +12,7 @@
  * client + ids) into a single yield. Pass `cwd` to override the default
  * `/tmp` working directory.
  *
- * The harness lives in `@gent/core/test-utils` so it can be imported from
+ * The harness lives in `@gent/core-internal/test-utils` so it can be imported from
  * any test file. Because `core` cannot reach into `@gent/extensions`, the
  * caller passes pre-loaded extensions and an agents bucket — the same
  * fragments callers already pass to `createE2ELayer`.

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core/domain/ids"
-import { dateFromMillis, Message, copyMessageToBranch } from "@gent/core/domain/message"
+import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
+import { dateFromMillis, Message, copyMessageToBranch } from "@gent/core-internal/domain/message"
 
 describe("copyMessageToBranch", () => {
   test("preserves interjection variant when copying to a new branch", () => {

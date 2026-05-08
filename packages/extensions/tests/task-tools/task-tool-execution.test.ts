@@ -4,10 +4,10 @@ import { TaskCreateTool } from "@gent/extensions/task-tools/task-create"
 import { TaskListTool } from "@gent/extensions/task-tools/task-list"
 import { TaskGetTool } from "@gent/extensions/task-tools/task-get"
 import { TaskUpdateTool } from "@gent/extensions/task-tools/task-update"
-import { EventStore } from "@gent/core/domain/event"
-import { SessionId } from "@gent/core/domain/ids"
+import { EventStore } from "@gent/core-internal/domain/event"
+import { SessionId } from "@gent/core-internal/domain/ids"
 import { TaskId } from "@gent/extensions/task-tools/domain"
-import { getToolEffect } from "@gent/core/domain/capability/tool"
+import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 import { layer, makeCtx, narrowR, setup, withTaskWrite } from "./helpers.js"
 
 describe("TaskCreateTool", () => {

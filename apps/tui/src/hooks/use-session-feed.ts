@@ -9,15 +9,19 @@
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { createStore, produce, type SetStoreFunction } from "solid-js/store"
 import { Clock, Effect, Fiber, Random, Stream } from "effect"
-import type { ActiveInteraction, AgentEvent, EventEnvelope } from "@gent/core/domain/event.js"
-import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
-import { projectMessage } from "@gent/core/domain/message.js"
+import type {
+  ActiveInteraction,
+  AgentEvent,
+  EventEnvelope,
+} from "@gent/core-internal/domain/event.js"
+import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
+import { projectMessage } from "@gent/core-internal/domain/message.js"
 import {
   messagePartImage,
   messagePartReasoning,
   messagePartText,
   messagePartToolCall,
-} from "@gent/core/domain/message-part-projection.js"
+} from "@gent/core-internal/domain/message-part-projection.js"
 import {
   extractText,
   extractReasoning,

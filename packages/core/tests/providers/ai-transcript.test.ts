@@ -5,10 +5,16 @@ import {
   promptFromResponseParts,
   projectResponsePartsToMessageParts,
   responsePartsFromMessages,
-} from "@gent/core/domain/message-part-projection"
-import { toPrompt, toPromptMessages } from "@gent/core/providers/ai-transcript"
-import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { dateFromMillis, Message } from "@gent/core/domain/message"
+} from "@gent/core-internal/domain/message-part-projection"
+import { toPrompt, toPromptMessages } from "@gent/core-internal/providers/ai-transcript"
+import {
+  BranchId,
+  ExtensionId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core-internal/domain/ids"
+import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import * as Response from "effect/unstable/ai/Response"
 
 const baseMessage = (

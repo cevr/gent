@@ -9,6 +9,7 @@
   "dependencies": {
     "@effect/platform-bun": "catalog:",
     "@gent/core": "workspace:*",
+    "@gent/core-internal": "workspace:*",
     "@gent/extensions": "workspace:*",
     "msgpackr": "catalog:",
     "multipasta": "catalog:"

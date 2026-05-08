@@ -9,9 +9,9 @@ import {
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
-import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { RuntimeEnvironment } from "@gent/core/runtime/runtime-environment"
-import { getToolEffect } from "@gent/core/domain/capability/tool"
+import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
+import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 

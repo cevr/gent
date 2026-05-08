@@ -4,10 +4,10 @@ import { Effect } from "effect"
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>
 import { AskUserTool } from "@gent/extensions/interaction-tools/ask-user"
-import type { ToolCapabilityContext } from "@gent/core/domain/capability/tool"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { getToolEffect } from "@gent/core/domain/capability/tool"
+import type { ToolCapabilityContext } from "@gent/core-internal/domain/capability/tool"
+import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 
 const makeCtx = (
   decision: Effect.Effect<{ readonly approved: boolean; readonly notes?: string }>,

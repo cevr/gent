@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { Task, TaskId } from "@gent/extensions/task-tools/domain"
 import { TaskService } from "@gent/extensions/task-tools-service"
 import { TaskStorage } from "@gent/extensions/task-tools-storage"

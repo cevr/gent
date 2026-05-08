@@ -32,7 +32,7 @@ import {
   withReadOnly,
 } from "@gent/core/extensions/api"
 import { ConfigService } from "../../src/runtime/config-service"
-import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun"
+import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import {
   buildExtensionLayers,

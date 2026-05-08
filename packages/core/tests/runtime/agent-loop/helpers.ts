@@ -24,31 +24,40 @@ import {
   type AgentName,
   ExternalDriverRef,
   type RunSpec,
-} from "@gent/core/domain/agent"
+} from "@gent/core-internal/domain/agent"
 import {
   finishPart,
   LanguageModelLayers,
   type LanguageModelStreamPart,
-} from "@gent/core/test-utils/language-model"
-import { ModelResolver } from "@gent/core/providers/model-resolver"
-import { dateFromMillis, Message } from "@gent/core/domain/message"
+} from "@gent/core-internal/test-utils/language-model"
+import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
+import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
 import { type AnyResourceContribution, type ToolCapability } from "@gent/core/extensions/api"
-import { Permission } from "@gent/core/domain/permission"
-import { EventEnvelope, EventId, EventStore, type AgentEvent } from "@gent/core/domain/event"
+import { Permission } from "@gent/core-internal/domain/permission"
+import {
+  EventEnvelope,
+  EventId,
+  EventStore,
+  type AgentEvent,
+} from "@gent/core-internal/domain/event"
 import { ApprovalService } from "../../../src/runtime/approval-service"
-import type { EventPublisher } from "@gent/core/domain/event-publisher"
-import { EventPublisherLive } from "@gent/core/domain/event-publisher"
-import { SqliteStorage, type StorageError } from "@gent/core/storage/sqlite-storage"
-import type { BranchStorage } from "@gent/core/storage/branch-storage"
-import type { SessionStorage } from "@gent/core/storage/session-storage"
-import { RecordingEventStore, SequenceRecorder, ensureStorageParents } from "@gent/core/test-utils"
-import type { QueueSnapshot } from "@gent/core/domain/queue"
+import type { EventPublisher } from "@gent/core-internal/domain/event-publisher"
+import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
+import { SqliteStorage, type StorageError } from "@gent/core-internal/storage/sqlite-storage"
+import type { BranchStorage } from "@gent/core-internal/storage/branch-storage"
+import type { SessionStorage } from "@gent/core-internal/storage/session-storage"
+import {
+  RecordingEventStore,
+  SequenceRecorder,
+  ensureStorageParents,
+} from "@gent/core-internal/test-utils"
+import type { QueueSnapshot } from "@gent/core-internal/domain/queue"
 import type { SessionRuntimeState } from "../../../src/runtime/agent/agent-loop.state"
-import type { BranchId, InteractionRequestId, SessionId } from "@gent/core/domain/ids"
-import { ActorCommandId, ExtensionId, MessageId } from "@gent/core/domain/ids"
-import type { TurnStreamPart } from "@gent/core/domain/driver"
-import { DefaultWorkspaceId } from "@gent/core/server/workspace-rpc"
+import type { BranchId, InteractionRequestId, SessionId } from "@gent/core-internal/domain/ids"
+import { ActorCommandId, ExtensionId, MessageId } from "@gent/core-internal/domain/ids"
+import type { TurnStreamPart } from "@gent/core-internal/domain/driver"
+import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 // ============================================================================
 // Shared helpers
 // ============================================================================

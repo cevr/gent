@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { MessageId } from "@gent/core/domain/ids.js"
+import { MessageId } from "@gent/core-internal/domain/ids.js"
 import type { QueueEntryInfo } from "@gent/sdk"
 import {
   beginAuthCheck,

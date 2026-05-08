@@ -1,9 +1,14 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
-import { AgentEvent, type EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { dateFromMillis } from "@gent/core/domain/message"
-import { EventPublisher, EventPublisherLive } from "@gent/core/domain/event-publisher"
+import {
+  AgentEvent,
+  type EventEnvelope,
+  EventId,
+  EventStore,
+} from "@gent/core-internal/domain/event"
+import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { dateFromMillis } from "@gent/core-internal/domain/message"
+import { EventPublisher, EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
 
 const FIXED_NOW_MILLIS = dateFromMillis(1_767_225_600_000).getTime()
 

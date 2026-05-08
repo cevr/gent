@@ -11,7 +11,7 @@ import {
   type CapabilityCoreContext,
   CapabilityError,
   CapabilityNotFoundError,
-} from "@gent/core/domain/capability"
+} from "@gent/core-internal/domain/capability"
 import {
   action,
   request,
@@ -20,8 +20,8 @@ import {
   type ToolCapability,
 } from "@gent/core/extensions/api"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
-import { BranchId, ExtensionId, RpcId, SessionId } from "@gent/core/domain/ids"
-import { testExtensionHostContext } from "@gent/core/test-utils"
+import { BranchId, ExtensionId, RpcId, SessionId } from "@gent/core-internal/domain/ids"
+import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 
 const extensionId = ExtensionId.make("@test/c")
 const ctx: CapabilityCoreContext = {

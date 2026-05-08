@@ -1,5 +1,5 @@
 import { Context, Effect, Layer } from "effect"
-import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
 export type OsPlatform = "darwin" | "win32" | "linux" | "other"
 

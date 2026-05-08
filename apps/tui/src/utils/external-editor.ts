@@ -5,7 +5,7 @@
 
 import { Effect, FileSystem } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
-import { runProcess } from "@gent/core/utils/run-process"
+import { runProcess } from "@gent/core-internal/utils/run-process"
 
 export function resolveEditor(visual: string | undefined, editor: string | undefined): string {
   return visual || editor || "vi"

@@ -6,7 +6,7 @@
  */
 
 import { createSignal } from "solid-js"
-import { isRecord } from "@gent/core/domain/guards.js"
+import { isRecord } from "@gent/core-internal/domain/guards.js"
 import { homedir } from "os"
 import {
   makeDirectory,

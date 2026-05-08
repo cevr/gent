@@ -9,27 +9,27 @@
 import { BunHttpServer, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { FetchHttpClient, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
 import { Clock, Effect, Layer, Context, Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class.js"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class.js"
 import type { Scope } from "effect"
 // @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution
 import { resolve as pathResolve, join as pathJoin } from "node:path"
 // @effect-diagnostics nodeBuiltinImport:off — server primitive reads process host metadata
 import * as os from "node:os"
 
-import { createDependencies } from "@gent/core/server/dependencies.js"
+import { createDependencies } from "@gent/core-internal/server/dependencies.js"
 import { BuiltinExtensions } from "@gent/extensions/index.js"
-import { AppServicesLive } from "@gent/core/server/index.js"
-import { GentLogger, GentLogLevel } from "@gent/core/runtime/logger.js"
-import { GentTracerLive } from "@gent/core/runtime/tracer.js"
-import { ConnectionTracker } from "@gent/core/server/connection-tracker.js"
-import { ServerIdentity } from "@gent/core/server/server-identity.js"
-import { buildServerRoutes } from "@gent/core/server/server-routes.js"
-import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
-import { seedDebugSession } from "@gent/core/debug/session.js"
-import { LanguageModelLayers } from "@gent/core/test-utils/language-model.js"
+import { AppServicesLive } from "@gent/core-internal/server/index.js"
+import { GentLogger, GentLogLevel } from "@gent/core-internal/runtime/logger.js"
+import { GentTracerLive } from "@gent/core-internal/runtime/tracer.js"
+import { ConnectionTracker } from "@gent/core-internal/server/connection-tracker.js"
+import { ServerIdentity } from "@gent/core-internal/server/server-identity.js"
+import { buildServerRoutes } from "@gent/core-internal/server/server-routes.js"
+import { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
+import { seedDebugSession } from "@gent/core-internal/debug/session.js"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import type { LanguageModel } from "effect/unstable/ai"
-import { resolveBuildFingerprint } from "@gent/core/server/build-fingerprint.js"
-import { GentConnectionError } from "@gent/core/server/transport-contract.js"
+import { resolveBuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
+import { GentConnectionError } from "@gent/core-internal/server/transport-contract.js"
 import { workspaceHeadersForCwd, type WorkspaceHeaders } from "./transport-headers.js"
 import {
   readServerLock,
@@ -41,8 +41,8 @@ import {
   serverLockIdentityOf,
   signalIfIdentityOwned,
 } from "./server-lock.js"
-import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
-import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 // ── Types ──
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer output helper intentionally ignores empty error/context channels

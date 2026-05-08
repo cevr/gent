@@ -1,8 +1,8 @@
 import { Deferred, Effect, Layer, ManagedRuntime } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import type { GentNamespacedClient, GentRuntime } from "@gent/sdk"
-import type { EventEnvelope } from "@gent/core/domain/event"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import type { EventEnvelope } from "@gent/core-internal/domain/event"
+import type { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import {
   makeClientComposerLayer,
   makeClientLifecycleLayer,

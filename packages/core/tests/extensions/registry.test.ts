@@ -1,10 +1,10 @@
 import { describe, test, expect, it } from "effect-bun-test"
 import { Cause, Effect, Layer, Option, Schema } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
-import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
+import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
 import type { LoadedExtension, RunContext } from "../../src/domain/extension.js"
-import type { ModelDriverContribution } from "@gent/core/domain/driver"
-import { BranchId, ExtensionId, SessionId } from "@gent/core/domain/ids"
+import type { ModelDriverContribution } from "@gent/core-internal/domain/driver"
+import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import {
   action,
   getToolId,
@@ -15,7 +15,7 @@ import {
   type RequestCapability,
   type ToolCapability,
 } from "@gent/core/extensions/api"
-import { getToolMetadata } from "@gent/core/domain/capability/tool"
+import { getToolMetadata } from "@gent/core-internal/domain/capability/tool"
 import {
   ExtensionRegistryError,
   ExtensionRegistry,
@@ -24,7 +24,7 @@ import {
   resolveExtensions,
 } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import type { PromptSection } from "@gent/core/domain/prompt"
+import type { PromptSection } from "@gent/core-internal/domain/prompt"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 // Test helper: build a no-op model Capability directly. The `tool({...})`
 // factory rejects metadata-free tool records, so fixtures here construct the

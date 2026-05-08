@@ -24,14 +24,14 @@ import {
   BranchId,
   type BranchId as BranchIdType,
   SessionId,
-} from "@gent/core/domain/ids"
-import { getToolEffect } from "@gent/core/domain/capability/tool"
+} from "@gent/core-internal/domain/ids"
+import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 import type { Artifact } from "@gent/extensions/artifacts-protocol"
 import { PlanTool } from "@gent/extensions/plan-tool"
 import { AuditTool } from "@gent/extensions/audit/audit-tool"
 import { ReviewTool } from "@gent/extensions/review/review-tool"
-import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { RuntimeEnvironment } from "@gent/core/runtime/runtime-environment"
+import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
 import {
   ArtifactsWrite,
   type ArtifactSaveInput,

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Schema } from "effect"
-import { AgentName } from "@gent/core/domain/agent"
-import { AgentEvent, EventStore } from "@gent/core/domain/event"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { AgentName } from "@gent/core-internal/domain/agent"
+import { AgentEvent, EventStore } from "@gent/core-internal/domain/event"
+import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import {
   make as makeChildSessionTracker,
   type ChildSessionEntry,

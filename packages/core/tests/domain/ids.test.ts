@@ -22,7 +22,7 @@ import {
   SessionId,
   ToolCallId,
   ToolId,
-} from "@gent/core/domain/ids"
+} from "@gent/core-internal/domain/ids"
 
 describe("branded ids — roundtrip", () => {
   test("SessionId decodes from a plain string and brand survives", () => {

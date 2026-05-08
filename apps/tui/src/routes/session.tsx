@@ -5,7 +5,7 @@
 import { createMemo } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { RGBA } from "@opentui/core"
-import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
+import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
 import { MessageList } from "../components/message-list"
 import { Composer } from "../components/composer"
 import { useTheme, buildSyntaxStyle } from "../theme/index"

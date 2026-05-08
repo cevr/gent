@@ -9,7 +9,7 @@ import {
   ModelDriverRef,
   resolveAgentDriver,
   type DriverRef,
-} from "@gent/core/domain/agent"
+} from "@gent/core-internal/domain/agent"
 
 const makeAgent = (
   name: string,

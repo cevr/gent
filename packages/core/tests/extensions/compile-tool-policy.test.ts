@@ -2,8 +2,8 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import { getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { compileToolPolicy } from "../../src/runtime/extensions/registry"
-import { AgentDefinition, AgentName } from "@gent/core/domain/agent"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 
 describe("compileToolPolicy", () => {
   const makeTool = (name: string): ToolCapability =>

@@ -18,7 +18,7 @@ import { ToolCallTree } from "./tool-call-tree"
 import { LiveChildTree } from "./live-child-tree"
 import type { ToolCall } from "./types"
 import type { ChildSessionEntry } from "../../services/child-session-tracker"
-import { BranchId } from "@gent/core/domain/ids.js"
+import { BranchId } from "@gent/core-internal/domain/ids.js"
 
 interface AgentTreeProps {
   /** Tool display name */

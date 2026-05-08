@@ -33,6 +33,7 @@
       "dependencies": {
         "@effect/platform-bun": "catalog:",
         "@gent/core": "workspace:*",
+        "@gent/core-internal": "workspace:*",
         "@gent/extensions": "workspace:*",
         "msgpackr": "catalog:",
         "multipasta": "catalog:",
@@ -51,6 +52,7 @@
         "@effect/platform-bun": "catalog:",
         "@ff-labs/fff-bun": "catalog:",
         "@gent/core": "workspace:*",
+        "@gent/core-internal": "workspace:*",
         "@gent/extensions": "workspace:*",
         "@gent/sdk": "workspace:*",
         "@opentui/core": "^0.2.4",
@@ -72,6 +74,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@effect/opentelemetry": "4.0.0-beta.64",
+        "@gent/core-internal": "workspace:*",
         "@opentelemetry/api": "^1.9",
         "@opentelemetry/exporter-trace-otlp-http": "^0.217.0",
         "@opentelemetry/resources": "^2.0.0",
@@ -93,11 +96,26 @@
         "effect-bun-test": "catalog:",
       },
     },
+    "packages/core-internal": {
+      "name": "@gent/core-internal",
+      "version": "0.0.0",
+      "optionalDependencies": {
+        "@ff-labs/fff-bun": "catalog:",
+      },
+      "peerDependencies": {
+        "@effect/platform-bun": "catalog:",
+        "@effect/sql-pg": "catalog:",
+        "@effect/sql-sqlite-bun": "catalog:",
+        "effect": "catalog:",
+        "effect-bun-test": "catalog:",
+      },
+    },
     "packages/e2e": {
       "name": "@gent/e2e",
       "version": "0.0.0",
       "dependencies": {
         "@gent/core": "workspace:*",
+        "@gent/core-internal": "workspace:*",
         "@gent/extensions": "workspace:*",
         "@gent/sdk": "workspace:*",
         "@gent/server-http": "workspace:*",
@@ -119,6 +137,7 @@
         "@effect/ai-openai": "catalog:",
         "@effect/ai-openai-compat": "catalog:",
         "@gent/core": "workspace:*",
+        "@gent/core-internal": "workspace:*",
         "@modelcontextprotocol/sdk": "^1",
         "@types/turndown": "^5.0.6",
         "es-git": "^0.6.0",
@@ -137,6 +156,7 @@
       "dependencies": {
         "@effect/platform-bun": "catalog:",
         "@gent/core": "workspace:*",
+        "@gent/core-internal": "workspace:*",
         "@gent/extensions": "workspace:*",
       },
       "peerDependencies": {
@@ -360,6 +380,8 @@
     "@ff-labs/fff-bun": ["@ff-labs/fff-bun@0.7.2", "", { "optionalDependencies": { "@ff-labs/fff-bin-darwin-arm64": "0.7.2", "@ff-labs/fff-bin-darwin-x64": "0.7.2", "@ff-labs/fff-bin-linux-arm64-gnu": "0.7.2", "@ff-labs/fff-bin-linux-arm64-musl": "0.7.2", "@ff-labs/fff-bin-linux-x64-gnu": "0.7.2", "@ff-labs/fff-bin-linux-x64-musl": "0.7.2", "@ff-labs/fff-bin-win32-arm64": "0.7.2", "@ff-labs/fff-bin-win32-x64": "0.7.2" }, "peerDependencies": { "bun": ">=1.0.0" }, "os": [ "linux", "win32", "darwin", ], "cpu": [ "x64", "arm64", ], "bin": { "fff-demo": "examples/search.ts", "fff-grep": "examples/grep.ts" } }, "sha512-WQCmYCwyPKksbPj8cyF3WZR9V0MGu+cDnVzE9VJG65d3FJUHdn3/q8LqTCx4SFhGob9JuN4Y+ghQCF4M9NtWxA=="],
 
     "@gent/core": ["@gent/core@workspace:packages/core"],
+
+    "@gent/core-internal": ["@gent/core-internal@workspace:packages/core-internal"],
 
     "@gent/e2e": ["@gent/e2e@workspace:packages/e2e"],
 

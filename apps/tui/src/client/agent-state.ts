@@ -1,7 +1,7 @@
 import { Schema } from "effect"
-import type { AgentName } from "@gent/core/domain/agent.js"
-import type { ModelId } from "@gent/core/domain/model.js"
-import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+import type { AgentName } from "@gent/core-internal/domain/agent.js"
+import type { ModelId } from "@gent/core-internal/domain/model.js"
+import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 
 export const AgentStatus = TaggedEnumClass("AgentStatus", {
   Idle: TaggedEnumClass.variant("idle", {}),

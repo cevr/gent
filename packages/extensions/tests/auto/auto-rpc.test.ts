@@ -4,10 +4,10 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import { textStep } from "@gent/core/debug/provider"
+import { textStep } from "@gent/core-internal/debug/provider"
 import { ref } from "@gent/core/extensions/api"
-import { createRpcHarness } from "@gent/core/test-utils/rpc-harness"
-import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
+import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { AutoExtension } from "@gent/extensions/auto"
 import { AutoRpc } from "@gent/extensions/auto/protocol"
 import { e2ePreset } from "../helpers/test-preset"

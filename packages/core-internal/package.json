@@ -1,0 +1,20 @@
+{
+  "name": "@gent/core-internal",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*.js": "./src/*.ts",
+    "./*": "./src/*.ts"
+  },
+  "peerDependencies": {
+    "@effect/platform-bun": "catalog:",
+    "@effect/sql-pg": "catalog:",
+    "@effect/sql-sqlite-bun": "catalog:",
+    "effect": "catalog:",
+    "effect-bun-test": "catalog:"
+  },
+  "optionalDependencies": {
+    "@ff-labs/fff-bun": "catalog:"
+  }
+}

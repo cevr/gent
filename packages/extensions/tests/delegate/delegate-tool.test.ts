@@ -9,8 +9,8 @@ import {
   type ToolCapabilityContext,
 } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
-import { testToolContext } from "@gent/core/test-utils/extension-harness"
-import { getToolEffect } from "@gent/core/domain/capability/tool"
+import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 
 const narrowR = <A, E, R>(e: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
   e as Effect.Effect<A, E, never>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Path } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
-import { testSetupCtx } from "@gent/core/test-utils"
+import { testSetupCtx } from "@gent/core-internal/test-utils"
 import { makeAcpAgentsExtension } from "@gent/extensions/acp-agents"
 import type { AcpSessionManager } from "@gent/extensions/acp-agents/executor"
 import type { ClaudeCodeSessionManager } from "@gent/extensions/acp-agents/claude-code-executor"

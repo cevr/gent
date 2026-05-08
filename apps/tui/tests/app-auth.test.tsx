@@ -2,9 +2,9 @@
 import { describe, it, expect } from "effect-bun-test"
 import { onMount } from "solid-js"
 import { Clock, Deferred, Effect, Schema } from "effect"
-import { ProviderAuthError } from "@gent/core/domain/driver"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { dateFromMillis } from "@gent/core/domain/message"
+import { ProviderAuthError } from "@gent/core-internal/domain/driver"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { dateFromMillis } from "@gent/core-internal/domain/message"
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { App } from "../src/app"
 import { Route } from "../src/router"
@@ -12,7 +12,7 @@ import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness"
 import { renderFrame, waitForRenderedFrame } from "./helpers"
-import { AgentName } from "@gent/core/domain/agent"
+import { AgentName } from "@gent/core-internal/domain/agent"
 type AppAuthRenderSetup = Awaited<ReturnType<typeof renderWithProviders>>
 
 class MessageTimeoutError extends Schema.TaggedErrorClass<MessageTimeoutError>()(

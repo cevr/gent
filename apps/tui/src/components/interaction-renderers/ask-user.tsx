@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 
 import { createSignal, Show } from "solid-js"
-import { isRecord } from "@gent/core/domain/guards.js"
+import { isRecord } from "@gent/core-internal/domain/guards.js"
 import type { InteractionRendererProps } from "../../extensions/client-facets.js"
-import type { Question } from "@gent/core/domain/event.js"
+import type { Question } from "@gent/core-internal/domain/event.js"
 import { OptionList } from "./option-list"
 
 interface AskUserMetadata {

@@ -1,9 +1,9 @@
 import { describe, test, expect } from "bun:test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { extractText, extractImages, Message, type Message as DomainMessage } from "@gent/sdk"
-import { dateFromMillis, type MessagePart } from "@gent/core/domain/message"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { projectMessagesWithToolInteractions } from "@gent/core/domain/message-part-projection"
+import { dateFromMillis, type MessagePart } from "@gent/core-internal/domain/message"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { projectMessagesWithToolInteractions } from "@gent/core-internal/domain/message-part-projection"
 
 describe("extractText", () => {
   test("extracts text from text part", () => {

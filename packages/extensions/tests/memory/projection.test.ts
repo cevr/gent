@@ -8,7 +8,7 @@ import {
   type MemoryFrontmatter,
 } from "@gent/extensions/memory/vault"
 import type { ProjectionTurnContext } from "@gent/core/extensions/api"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
 
 const projectionTest = it.scopedLive.layer(Layer.merge(BunFileSystem.layer, Path.layer))

@@ -10,11 +10,11 @@ import {
   toResponseFinishReason,
   type ActiveStreamHandle,
 } from "../../src/runtime/agent/turn-response/collectors"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import type { TurnError } from "@gent/core/domain/driver"
-import { ProviderError } from "@gent/core/domain/provider-error"
-import { finishPart, textDeltaPart } from "@gent/core/test-utils/language-model"
-import type { AgentEvent } from "@gent/core/domain/event"
+import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import type { TurnError } from "@gent/core-internal/domain/driver"
+import { ProviderError } from "@gent/core-internal/domain/provider-error"
+import { finishPart, textDeltaPart } from "@gent/core-internal/test-utils/language-model"
+import type { AgentEvent } from "@gent/core-internal/domain/event"
 
 const sessionId = SessionId.make("collector-session")
 const branchId = BranchId.make("collector-branch")

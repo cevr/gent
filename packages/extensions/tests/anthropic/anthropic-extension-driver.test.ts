@@ -41,7 +41,7 @@ import {
   makeFakeFetchState,
   oneGenerate,
   type FakeFetchState,
-} from "@gent/core/test-utils/fake-fetch"
+} from "@gent/core-internal/test-utils/fake-fetch"
 const FUTURE_MS = 1_800_000_000_000
 const testPlatform = AnthropicPlatform.of({
   platform: "darwin",

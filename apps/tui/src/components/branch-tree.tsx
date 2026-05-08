@@ -5,7 +5,7 @@ import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { BranchTreeNode } from "../client"
-import { BranchId } from "@gent/core/domain/ids.js"
+import { BranchId } from "@gent/core-internal/domain/ids.js"
 import { truncate } from "../utils/truncate"
 import { useScopedKeyboard } from "../keyboard/context"
 

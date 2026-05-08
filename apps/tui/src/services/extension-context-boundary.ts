@@ -10,7 +10,7 @@
  */
 
 import { Effect } from "effect"
-import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
+import { readDisabledExtensions } from "@gent/core-internal/runtime/extensions/disabled"
 import type { AnyExtensionClientModule, ClientRuntime } from "../extensions/client-facets.js"
 import { loadTuiExtensions } from "../extensions/loader-boundary"
 import type { ResolvedTuiExtensions } from "../extensions/resolve"

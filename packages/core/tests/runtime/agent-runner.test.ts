@@ -9,10 +9,10 @@ import {
   textDeltaPart,
   toolCallPart,
   type LanguageModelStreamPart,
-} from "@gent/core/test-utils/language-model"
+} from "@gent/core-internal/test-utils/language-model"
 import type { ToolCapabilityContext } from "@gent/core/extensions/api"
-import { ModelResolver } from "@gent/core/providers/model-resolver"
-import { textStep, toolCallStep } from "@gent/core/debug/provider"
+import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
+import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-runner"
@@ -20,32 +20,42 @@ import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { emptyQueueSnapshot } from "@gent/core/domain/queue"
-import { dateFromMillis, Session, Branch, Message } from "@gent/core/domain/message"
+import { emptyQueueSnapshot } from "@gent/core-internal/domain/queue"
+import { dateFromMillis, Session, Branch, Message } from "@gent/core-internal/domain/message"
 import {
   resolveAgentModel,
   AgentRunnerService,
   AgentRunError,
   AgentName,
   DEFAULT_MAX_AGENT_RUN_DEPTH,
-} from "@gent/core/domain/agent"
+} from "@gent/core-internal/domain/agent"
 import { AllBuiltinAgents, getBuiltinAgent } from "@gent/extensions/all-agents"
-import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { ModelId } from "@gent/core/domain/model"
-import { AgentEvent, EventStore, EventStoreError } from "@gent/core/domain/event"
-import { EventPublisher, EventPublisherLive } from "@gent/core/domain/event-publisher"
-import { SqliteStorage } from "@gent/core/storage/sqlite-storage"
-import { SessionStorage } from "@gent/core/storage/session-storage"
-import { BranchStorage } from "@gent/core/storage/branch-storage"
-import { MessageStorage } from "@gent/core/storage/message-storage"
-import { EventStorage } from "@gent/core/storage/event-storage"
-import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
+import {
+  BranchId,
+  ExtensionId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core-internal/domain/ids"
+import { ModelId } from "@gent/core-internal/domain/model"
+import { AgentEvent, EventStore, EventStoreError } from "@gent/core-internal/domain/event"
+import { EventPublisher, EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
+import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { SessionStorage } from "@gent/core-internal/storage/session-storage"
+import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
+import { MessageStorage } from "@gent/core-internal/storage/message-storage"
+import { EventStorage } from "@gent/core-internal/storage/event-storage"
+import { RelationshipStorage } from "@gent/core-internal/storage/relationship-storage"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { defineResource, tool, ToolNeeds } from "@gent/core/extensions/api"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
-import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
+import {
+  SequenceRecorder,
+  RecordingEventStore,
+  assertSequence,
+} from "@gent/core-internal/test-utils"
 import { SessionCommands } from "../../src/server/session-commands"
-import { Permission } from "@gent/core/domain/permission"
+import { Permission } from "@gent/core-internal/domain/permission"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import {
   SessionRuntime,

@@ -4,10 +4,10 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer } from "effect"
-import { textStep } from "@gent/core/debug/provider"
+import { textStep } from "@gent/core-internal/debug/provider"
 import { ref, withReadOnly, type TurnProjection } from "@gent/core/extensions/api"
-import { createRpcHarness } from "@gent/core/test-utils/rpc-harness"
-import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
+import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { ExecutorExtension, EXECUTOR_EXTENSION_ID } from "@gent/extensions/executor"
 import { ExecutorRead, ExecutorRuntime, ExecutorWrite } from "@gent/extensions/executor/controller"
 import { ExecutorRpc } from "@gent/extensions/executor/protocol"

@@ -1,7 +1,7 @@
 import { Console, Effect, Option, Random, Schema } from "effect"
-import { DEFAULT_AGENT_NAME, type AgentName } from "@gent/core/domain/agent.js"
-import { SessionId } from "@gent/core/domain/ids.js"
-import type { ProviderId } from "@gent/core/domain/model.js"
+import { DEFAULT_AGENT_NAME, type AgentName } from "@gent/core-internal/domain/agent.js"
+import { SessionId } from "@gent/core-internal/domain/ids.js"
+import type { ProviderId } from "@gent/core-internal/domain/model.js"
 import type {
   GentNamespacedClient,
   GentRpcError,

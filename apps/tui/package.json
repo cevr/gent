@@ -16,6 +16,7 @@
     "@effect/platform-bun": "catalog:",
     "@ff-labs/fff-bun": "catalog:",
     "@gent/core": "workspace:*",
+    "@gent/core-internal": "workspace:*",
     "@gent/extensions": "workspace:*",
     "@gent/sdk": "workspace:*",
     "@opentui/core": "^0.2.4",

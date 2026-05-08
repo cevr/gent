@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Stream } from "effect"
-import { LanguageModelLayers } from "@gent/core/test-utils/language-model"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { LanguageModel } from "effect/unstable/ai"
 
 const callProvider = LanguageModel.streamText({ prompt: [] }).pipe(Stream.runCollect)

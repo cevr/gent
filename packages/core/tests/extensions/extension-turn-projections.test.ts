@@ -9,7 +9,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { getBuiltinAgent } from "@gent/extensions/all-agents"
 import type { ExtensionTurnContext, LoadedExtension } from "../../src/domain/extension.js"
-import { ExtensionId } from "@gent/core/domain/ids"
+import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { ProjectionError, type ProjectionTurnContext } from "@gent/core/extensions/api"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 

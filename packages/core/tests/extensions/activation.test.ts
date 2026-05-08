@@ -7,19 +7,19 @@ import type {
   GentExtension,
   LoadedExtension,
 } from "../../src/domain/extension.js"
-import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun"
+import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import {
   reconcileLoadedExtensions,
   setupBuiltinExtensions,
   setupDiscoveredExtensions,
   validateLoadedExtensions,
 } from "../../src/runtime/extensions/activation"
-import { defineResource } from "@gent/core/domain/contribution"
-import type { ExtensionContributions } from "@gent/core/domain/contribution"
+import { defineResource } from "@gent/core-internal/domain/contribution"
+import type { ExtensionContributions } from "@gent/core-internal/domain/contribution"
 import { tool } from "@gent/core/extensions/api"
-import { GentToolMetadataTag, getToolMetadata } from "@gent/core/domain/capability/tool"
-import { ExtensionId } from "@gent/core/domain/ids"
-import type { PromptSection } from "@gent/core/domain/prompt"
+import { GentToolMetadataTag, getToolMetadata } from "@gent/core-internal/domain/capability/tool"
+import { ExtensionId } from "@gent/core-internal/domain/ids"
+import type { PromptSection } from "@gent/core-internal/domain/prompt"
 
 const fsLayer = Layer.mergeAll(
   BunFileSystem.layer,

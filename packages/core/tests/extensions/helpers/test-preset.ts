@@ -8,8 +8,8 @@ import { BunFileSystem } from "@effect/platform-bun"
 import { BuiltinExtensions, AllBuiltinAgents } from "@gent/extensions"
 import { GitReader } from "@gent/extensions/librarian.js"
 import { Test as MemoryVaultTest } from "@gent/extensions/memory/vault.js"
-import type { E2ELayerConfig } from "@gent/core/test-utils/e2e-layer"
-import type { ToolTestLayerConfig } from "@gent/core/test-utils/extension-harness"
+import type { E2ELayerConfig } from "@gent/core-internal/test-utils/e2e-layer"
+import type { ToolTestLayerConfig } from "@gent/core-internal/test-utils/extension-harness"
 
 let memoryVaultLayerIndex = 0
 
