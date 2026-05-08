@@ -114,15 +114,17 @@ Commits landed in this wave so far:
 - `6ce15e48 refactor(extensions): isolate provider platform reads`
 - `9f6b46f7 refactor(runtime): route host process probes through platform`
 - `37274250 refactor(runtime): rename platform config service`
+- `06dd9a29 refactor(runtime): own agent loop turn worker`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
 classes of privilege and races, but the deeper P1s remain:
 
 - AgentLoop queue mutation no longer publishes a queued transition before its
-  durable write succeeds; failed queue persistence is now recorded through the
-  actor persistence-failure path. The remaining AgentLoop work is mailbox/worker
-  ownership.
+  durable write succeeds; failed queue persistence is recorded through the actor
+  persistence-failure path. Commit `06dd9a29` moves long-running turn execution
+  behind a behavior-owned worker queue while keeping the side-effect mutation
+  lane serialized.
 - Resource lifecycle startup failures now belong to extension reconciliation:
   a failed process resource marks only its owning extension failed with
   `phase: "startup"`, while unaffected extensions remain active. Runtime
@@ -565,8 +567,8 @@ Work:
       do not appear accepted to observers.
 - [x] Change AgentLoop actor handling so mutation commands are sequential or make
       the mutation result visible only after the durable commit succeeds.
-- Move long-running turn execution behind an owned worker queue/fiber map so
-  slow runs do not require unbounded mailbox mutation.
+- [x] Move long-running turn execution behind an owned worker queue/fiber map so
+      slow runs do not require unbounded mailbox mutation.
 - [x] Persist queue snapshots only from the serialized mutation owner and route
       persistence failures through the actor failure state.
 - [x] Remove stale comments claiming FIFO serialization where the code does not
