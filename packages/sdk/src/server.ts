@@ -381,7 +381,7 @@ const resolveServerInternal = (
     // Check the single shared server lock.
     const existing = yield* readServerLock(home)
     if (existing !== undefined) {
-      const validation = validateServerLockEntry(existing)
+      const validation = yield* validateServerLockEntry(existing)
       if (validation.valid && existing.buildFingerprint === fingerprint) {
         // Probe the server before trusting — verify serverId, dbPath, fingerprint
         const alive = yield* probeServer(existing.rpcUrl, {

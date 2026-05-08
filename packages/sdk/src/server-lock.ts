@@ -7,10 +7,8 @@
  * unrelated process.
  */
 
-// @effect-diagnostics nodeBuiltinImport:off — server lock identity is host-local
-import { hostname } from "node:os"
-
 import { Effect, FileSystem, Path, Schema } from "effect"
+import { GentPlatform } from "@gent/core/runtime/gent-platform.js"
 
 export {
   computeLocalFingerprint,
@@ -51,15 +49,21 @@ const serverLockPath = (
 
 export const readServerLock = (
   home: string,
-): Effect.Effect<ServerLockEntry | undefined, never, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<
+  ServerLockEntry | undefined,
+  never,
+  FileSystem.FileSystem | GentPlatform | Path.Path
+> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* serverLockPath(home)
+    const platform = yield* GentPlatform
+    const osInfo = yield* platform.osInfo
     const content = yield* fs.readFileString(path).pipe(Effect.option)
     if (content._tag === "None") return undefined
     const decoded = Schema.decodeUnknownOption(ServerLockEntryJson)(content.value)
     if (decoded._tag === "None") return undefined
-    if (decoded.value.hostname !== hostname()) return undefined
+    if (decoded.value.hostname !== osInfo.hostname) return undefined
     return decoded.value
   })
 
@@ -77,7 +81,7 @@ export const writeServerLock = (
 export const removeServerLock = (
   home: string,
   serverId: string,
-): Effect.Effect<boolean, never, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<boolean, never, FileSystem.FileSystem | GentPlatform | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const current = yield* readServerLock(home)
@@ -89,28 +93,37 @@ export const removeServerLock = (
     )
   })
 
-export const getLocalHostname = (): string => hostname()
+export const getLocalHostname: Effect.Effect<string, never, GentPlatform> = Effect.gen(
+  function* () {
+    const platform = yield* GentPlatform
+    const osInfo = yield* platform.osInfo
+    return osInfo.hostname
+  },
+)
 
-export const isPidAlive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
+export const isPidAlive = (pid: number): Effect.Effect<boolean, never, GentPlatform> =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    return yield* platform.signal(pid, 0).pipe(
+      Effect.as(true),
+      Effect.catchEager(() => Effect.succeed(false)),
+    )
+  })
 
 export const validateServerLockEntry = (
   entry: ServerLockEntry,
-): { valid: boolean; reason?: string } => {
-  if (entry.hostname !== hostname()) {
-    return { valid: false, reason: "different-host" }
-  }
-  if (!isPidAlive(entry.pid)) {
-    return { valid: false, reason: "dead-pid" }
-  }
-  return { valid: true }
-}
+): Effect.Effect<{ valid: boolean; reason?: string }, never, GentPlatform> =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    const osInfo = yield* platform.osInfo
+    if (entry.hostname !== osInfo.hostname) {
+      return { valid: false, reason: "different-host" }
+    }
+    if (!(yield* isPidAlive(entry.pid))) {
+      return { valid: false, reason: "dead-pid" }
+    }
+    return { valid: true }
+  })
 
 export interface ServerLockIdentity {
   readonly serverId: string
@@ -128,21 +141,25 @@ export const serverLockIdentityOf = (entry: ServerLockEntry): ServerLockIdentity
   buildFingerprint: entry.buildFingerprint,
 })
 
-export const canSignalServerLockEntry = (entry: ServerLockEntry): boolean =>
-  entry.hostname === hostname() && isPidAlive(entry.pid)
+export const canSignalServerLockEntry = (
+  entry: ServerLockEntry,
+): Effect.Effect<boolean, never, GentPlatform> =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    const osInfo = yield* platform.osInfo
+    return entry.hostname === osInfo.hostname && (yield* isPidAlive(entry.pid))
+  })
 
 export const signalIfIdentityOwned = <E, R>(
   entry: ServerLockEntry,
   probe: (entry: ServerLockEntry) => Effect.Effect<boolean, E, R>,
-): Effect.Effect<"signaled" | "skipped", never, R> =>
+): Effect.Effect<"signaled" | "skipped", never, R | GentPlatform> =>
   Effect.gen(function* () {
-    if (!canSignalServerLockEntry(entry)) return "skipped" as const
+    if (!(yield* canSignalServerLockEntry(entry))) return "skipped" as const
     const owns = yield* probe(entry).pipe(Effect.catchEager(() => Effect.succeed(false)))
     if (!owns) return "skipped" as const
-    const sent = yield* Effect.try({
-      try: () => process.kill(entry.pid, "SIGTERM"),
-      catch: () => undefined,
-    }).pipe(
+    const platform = yield* GentPlatform
+    const sent = yield* platform.signal(entry.pid, "SIGTERM").pipe(
       Effect.as(true),
       Effect.catchEager(() => Effect.succeed(false)),
     )

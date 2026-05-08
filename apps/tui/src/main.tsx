@@ -527,7 +527,7 @@ const serverStatus = Command.make("status", {}, () =>
     )
     yield* Console.log("─".repeat(120))
 
-    const validation = validateServerLockEntry(entry)
+    const validation = yield* validateServerLockEntry(entry)
     const status = validation.valid ? "alive" : `dead (${validation.reason})`
     yield* Console.log(
       `${String(entry.pid).padEnd(8)} ${status.padEnd(10)} ${entry.serverId.padEnd(40)} ${entry.dbPath.padEnd(40)} ${entry.rpcUrl}`,
@@ -547,7 +547,7 @@ const serverStop = Command.make(
   ({ all }) =>
     Effect.gen(function* () {
       const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
-      const thisHost = getLocalHostname()
+      const thisHost = yield* getLocalHostname
       const entry = yield* readServerLock(home)
 
       if (entry === undefined) {
@@ -555,7 +555,7 @@ const serverStop = Command.make(
         return
       }
 
-      if (entry.hostname !== thisHost || (!all && !isPidAlive(entry.pid))) {
+      if (entry.hostname !== thisHost || (!all && !(yield* isPidAlive(entry.pid)))) {
         yield* Console.log("No live shared server to stop on this host.")
         return
       }
@@ -572,7 +572,7 @@ const serverStop = Command.make(
       // Wait for the process to exit, then cleanup the server lock.
       yield* Effect.sleep("2 seconds")
 
-      if (isPidAlive(entry.pid)) {
+      if (yield* isPidAlive(entry.pid)) {
         yield* Console.log("\nShared server is still running after SIGTERM.")
       } else {
         yield* removeServerLock(home, entry.serverId)
@@ -599,7 +599,7 @@ const storageReset = Command.make("reset", {}, () =>
   Effect.gen(function* () {
     const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
     const entry = yield* readServerLock(home)
-    if (entry !== undefined && validateServerLockEntry(entry).valid) {
+    if (entry !== undefined && (yield* validateServerLockEntry(entry)).valid) {
       yield* Console.error(
         "Error: shared server is running. Stop it with `gent server stop` first.",
       )

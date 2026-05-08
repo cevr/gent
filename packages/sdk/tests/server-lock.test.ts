@@ -2,6 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Path, type Scope } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { BunGentPlatformLive } from "@gent/core/runtime/gent-platform-bun.js"
+import type { GentPlatform } from "@gent/core/runtime/gent-platform.js"
 // @effect-diagnostics nodeBuiltinImport:off
 import { hostname, tmpdir } from "node:os"
 import { Gent } from "../src/client"
@@ -21,8 +22,8 @@ import {
 const PlatformLayer = Layer.mergeAll(BunServices.layer, BunGentPlatformLive)
 
 const provideFs = <A, E>(
-  effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Scope.Scope>,
-): Effect.Effect<A, E, Scope.Scope> => effect.pipe(Effect.provide(BunServices.layer))
+  effect: Effect.Effect<A, E, FileSystem.FileSystem | GentPlatform | Path.Path | Scope.Scope>,
+): Effect.Effect<A, E, Scope.Scope> => effect.pipe(Effect.provide(PlatformLayer))
 
 const makeTmpHomeScoped = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -171,13 +172,13 @@ describe("Server Lock", () => {
 
 describe("Server Lock Ownership", () => {
   it.live("validates lock host and PID", () =>
-    Effect.sync(() => {
-      expect(validateServerLockEntry(makeEntry()).valid).toBe(true)
-      expect(validateServerLockEntry(makeEntry({ hostname: "alien-host" })).reason).toBe(
+    Effect.gen(function* () {
+      expect((yield* validateServerLockEntry(makeEntry())).valid).toBe(true)
+      expect((yield* validateServerLockEntry(makeEntry({ hostname: "alien-host" }))).reason).toBe(
         "different-host",
       )
-      expect(validateServerLockEntry(makeEntry({ pid: 99999999 })).reason).toBe("dead-pid")
-    }),
+      expect((yield* validateServerLockEntry(makeEntry({ pid: 99999999 }))).reason).toBe("dead-pid")
+    }).pipe(Effect.provide(PlatformLayer)),
   )
 
   it.live("serverLockIdentityOf returns the owned identity tuple", () =>
@@ -194,11 +195,11 @@ describe("Server Lock Ownership", () => {
   )
 
   it.live("canSignalServerLockEntry requires same host and live PID", () =>
-    Effect.sync(() => {
-      expect(canSignalServerLockEntry(makeEntry())).toBe(true)
-      expect(canSignalServerLockEntry(makeEntry({ hostname: "other-host" }))).toBe(false)
-      expect(canSignalServerLockEntry(makeEntry({ pid: 99999999 }))).toBe(false)
-    }),
+    Effect.gen(function* () {
+      expect(yield* canSignalServerLockEntry(makeEntry())).toBe(true)
+      expect(yield* canSignalServerLockEntry(makeEntry({ hostname: "other-host" }))).toBe(false)
+      expect(yield* canSignalServerLockEntry(makeEntry({ pid: 99999999 }))).toBe(false)
+    }).pipe(Effect.provide(PlatformLayer)),
   )
 
   it.scopedLive("PID-reused stale server locks are removed without SIGTERM", () =>
@@ -311,7 +312,7 @@ describe("signalIfIdentityOwned", () => {
       })
       expect(result).toBe("skipped")
       expect(probeCalled).toBe(false)
-    }),
+    }).pipe(Effect.provide(PlatformLayer)),
   )
 
   it.scopedLive("skips when probe says identity does not match", () =>
@@ -321,7 +322,7 @@ describe("signalIfIdentityOwned", () => {
       )
       expect(result).toBe("skipped")
       expect(signals).toEqual([])
-    }),
+    }).pipe(Effect.provide(PlatformLayer)),
   )
 
   it.scopedLive("signals when probe confirms identity", () =>
@@ -331,7 +332,7 @@ describe("signalIfIdentityOwned", () => {
       )
       expect(result).toBe("signaled")
       expect(signals).toEqual(["SIGTERM"])
-    }),
+    }).pipe(Effect.provide(PlatformLayer)),
   )
 
   it.scopedLive("skips when probe fails", () =>
@@ -341,6 +342,6 @@ describe("signalIfIdentityOwned", () => {
       )
       expect(result).toBe("skipped")
       expect(signals).toEqual([])
-    }),
+    }).pipe(Effect.provide(PlatformLayer)),
   )
 })
