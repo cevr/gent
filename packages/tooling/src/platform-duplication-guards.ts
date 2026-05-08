@@ -130,6 +130,16 @@ const hostFactPatternSources = new Set([
   "\\bos\\.(?:hostname|homedir|release)\\s*\\(",
 ])
 
+const serverRootConsumerFiles = new Set(["apps/server/src/main.ts", "packages/sdk/src/server.ts"])
+
+const bannedServerRootConsumerPatterns: ReadonlyArray<BannedPattern> = [
+  {
+    pattern:
+      /@gent\/core-internal\/server\/(?:dependencies|index|connection-tracker|server-identity|server-routes)\.js/,
+    message: "Server entrypoints must use server-root instead of hand-composing app services",
+  },
+]
+
 const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => [
   ...bannedActiveSourcePatterns.filter(
     ({ pattern }) =>
@@ -147,6 +157,7 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => [
           pattern.source === "\\bProvider\\.(?:Sequence|Signal|Debug|Failing)\\b")
       ),
   ),
+  ...(serverRootConsumerFiles.has(file) ? bannedServerRootConsumerPatterns : []),
   ...(file === "packages/core/src/server/transport-contract.ts"
     ? bannedTransportContractPatterns
     : []),

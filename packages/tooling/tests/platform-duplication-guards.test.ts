@@ -496,4 +496,40 @@ describe("platform duplication guards", () => {
       ),
     ).toEqual([])
   })
+
+  test("flags server entrypoints that fork the composition root", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "apps/server/src/main.ts",
+        [
+          'import { createDependencies } from "@gent/core-internal/server/dependencies.js"',
+          'import { AppServicesLive } from "@gent/core-internal/server/index.js"',
+          'import { buildServerRoutes } from "@gent/core-internal/server/server-routes.js"',
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "apps/server/src/main.ts",
+        line: 1,
+        message: "Server entrypoints must use server-root instead of hand-composing app services",
+      },
+      {
+        file: "apps/server/src/main.ts",
+        line: 2,
+        message: "Server entrypoints must use server-root instead of hand-composing app services",
+      },
+      {
+        file: "apps/server/src/main.ts",
+        line: 3,
+        message: "Server entrypoints must use server-root instead of hand-composing app services",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/sdk/src/server.ts",
+        'import { buildServerRoot } from "@gent/core-internal/server/server-root.js"',
+      ),
+    ).toEqual([])
+  })
 })

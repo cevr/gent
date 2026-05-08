@@ -498,29 +498,33 @@ Validation:
 
 ### W23.8 — One Production Server Root
 
-Status: planned.
+Status: done.
 
-Progress:
+Work:
 
+- Added `packages/core/src/server/server-root.ts` as the single production
+  composition root for dependencies, app services, connection tracker, server
+  identity, HTTP routes, and in-process RPC handlers.
+- Rewired `apps/server` and the SDK owned-server path to call `buildServerRoot`
+  instead of hand-composing `createDependencies`, `AppServicesLive`,
+  `ConnectionTracker`, `ServerIdentity`, and `buildServerRoutes`.
 - Host process/OS facts in `apps/server` now flow through `GentPlatform`.
 - Platform duplication guard now rejects `process.platform`, `process.pid`,
   `process.execPath`, `os.hostname()`, `os.homedir()`, and `os.release()` in
   server/SDK composition code outside the platform adapter.
-
-Work:
-
-- Extract a core-internal server bootstrap/root builder.
-- Rewire `apps/server` and SDK server to call it.
-- Route process identity through `GentPlatform`.
-- Strengthen platform guard for app/server host fact reads.
+- Platform duplication guard also rejects server entrypoints that import the
+  old composition-root pieces directly.
 
 Validation:
 
-- SDK server tests.
-- App server smoke or route construction test.
+- `bun packages/tooling/src/check-platform-duplication-guards.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/tooling/tests/platform-duplication-guards.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/sdk/tests/server-lock.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/e2e/tests/server-lifecycle.test.ts`
 - `bun run typecheck`
 - `bun run lint`
 - `bun run build`
+- `bun run fmt:check`
 
 ### W23.9 — Test Harnesses Use Production Root Presets
 

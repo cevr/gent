@@ -1,19 +1,13 @@
 import { BunHttpServer, BunRuntime, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import { GentTracerLive } from "@gent/core-internal/runtime/tracer.js"
-import { GentLogger, GentLogLevel } from "@gent/core-internal/runtime/logger.js"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { Clock, Config, Deferred, Effect, Layer, Option, Context } from "effect"
 import { seedDebugSession } from "@gent/core-internal/debug/session.js"
 import { startDebugScenario } from "./debug/scenario.js"
-import { createDependencies } from "@gent/core-internal/server/dependencies.js"
 import { BuiltinExtensions } from "@gent/extensions"
-import { AppServicesLive } from "@gent/core-internal/server/index.js"
-import { ConnectionTracker } from "@gent/core-internal/server/connection-tracker.js"
-import { ServerIdentity } from "@gent/core-internal/server/server-identity.js"
 import { resolveBuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
-import { buildServerRoutes } from "@gent/core-internal/server/server-routes.js"
+import { buildServerRoot } from "@gent/core-internal/server/server-root.js"
 
 const joinPath = (...parts: readonly string[]) => parts.join("/").replace(/\/+/g, "/")
 
@@ -101,81 +95,47 @@ const program = Effect.scoped(
       httpServer.address._tag === "TcpAddress" ? httpServer.address.port : config.port
     const baseUrl = `http://localhost:${boundPort}`
 
-    // Dependencies layer
-    // Shared server URL: either passed via env or derived from this server's port
     const sharedServerUrl =
       config.sharedServerUrl ?? (config.isManaged ? `${baseUrl}/rpc` : undefined)
-
-    const depsLive = createDependencies({
-      cwd: config.cwd,
-      home: config.home,
-      platform: config.platform,
-      shell: config.shell,
-      osVersion: config.osVersion,
-      dbPath: config.dbPath,
-      authDirectory: config.authDirectory,
-      persistenceMode: config.persistenceMode,
-      providerMode: config.providerMode,
-      scheduledJobCommand: config.scheduledJobCommand,
-      sharedServerUrl,
-      extensions: BuiltinExtensions,
-    }).pipe(
-      Layer.provide(PlatformLayer),
-      Layer.provide(GentLogger),
-      Layer.provide(GentLogLevel),
-      Layer.provide(GentTracerLive),
-    )
-
     const buildFingerprint = yield* resolveBuildFingerprint
     const startedAt = yield* Clock.currentTimeMillis
 
-    // Connection tracker for idle shutdown
-    const connectionTrackerCtx = yield* Layer.buildWithScope(ConnectionTracker.Live, scope)
-    const connectionTracker = Context.get(connectionTrackerCtx, ConnectionTracker)
-
-    // Server identity
-    const serverIdentityLive = ServerIdentity.Live({
-      serverId: config.serverId,
-      pid: config.pid,
-      hostname: config.hostname,
-      dbPath: config.dbPath,
-      buildFingerprint,
-      startedAt,
-    })
-
-    const depsServices = yield* Layer.buildWithScope(depsLive, scope)
-    const appServices = yield* Layer.buildWithScope(
-      AppServicesLive.pipe(Layer.provide(Layer.succeedContext(depsServices))),
-      scope,
-    )
-    const coreServices = Context.merge(
-      Context.merge(depsServices, appServices),
-      connectionTrackerCtx,
-    )
-    const serverIdentityCtx = yield* Layer.buildWithScope(serverIdentityLive, scope)
-    const allServices = Context.merge(coreServices, serverIdentityCtx)
-    const coreServicesLive = Layer.succeedContext(allServices)
-
-    // Build all HTTP routes (RPC + identity)
-    const AllRoutes = buildServerRoutes(coreServicesLive, {
+    const serverRoot = yield* buildServerRoot({
+      dependencies: {
+        cwd: config.cwd,
+        home: config.home,
+        platform: config.platform,
+        shell: config.shell,
+        osVersion: config.osVersion,
+        dbPath: config.dbPath,
+        authDirectory: config.authDirectory,
+        persistenceMode: config.persistenceMode,
+        providerMode: config.providerMode,
+        scheduledJobCommand: config.scheduledJobCommand,
+        sharedServerUrl,
+        extensions: BuiltinExtensions,
+      },
       identity: {
         serverId: config.serverId,
         pid: config.pid,
         hostname: config.hostname,
         dbPath: config.dbPath,
         buildFingerprint,
+        startedAt,
       },
     })
 
-    // Server
-    const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(
+    const HttpServerLive = HttpRouter.serve(serverRoot.httpRoutes).pipe(
       Layer.provide(Layer.succeedContext(httpServerCtx)),
-      Layer.provide(coreServicesLive),
+      Layer.provide(serverRoot.coreServicesLive),
       Layer.provide(BunFileSystem.layer),
     )
 
     if (config.isManaged && config.isDebug) {
-      const seeded = yield* Effect.provideContext(seedDebugSession(config.cwd), coreServices)
+      const seeded = yield* Effect.provideContext(
+        seedDebugSession(config.cwd),
+        serverRoot.coreServices,
+      )
       yield* Effect.forkScoped(
         Effect.provideContext(
           startDebugScenario({
@@ -183,7 +143,7 @@ const program = Effect.scoped(
             branchId: seeded.branchId,
             cwd: config.cwd,
           }),
-          coreServices,
+          serverRoot.coreServices,
         ),
       )
     }
@@ -211,13 +171,13 @@ const program = Effect.scoped(
 
           while (true) {
             yield* Effect.sleep(`${idleCheckIntervalMs} millis`)
-            const count = yield* connectionTracker.count()
+            const count = yield* serverRoot.connectionTracker.count()
 
             if (count === 0) {
               if (idleStartMs === undefined) idleStartMs = yield* Clock.currentTimeMillis
               if ((yield* Clock.currentTimeMillis) - idleStartMs >= idleTimeoutMs) {
                 // Final liveness check before shutdown
-                const finalCount = yield* connectionTracker.count()
+                const finalCount = yield* serverRoot.connectionTracker.count()
                 if (finalCount === 0) {
                   yield* Effect.logInfo("idle-shutdown.triggered").pipe(
                     Effect.annotateLogs({ idleMs: (yield* Clock.currentTimeMillis) - idleStartMs }),

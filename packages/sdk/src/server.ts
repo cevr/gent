@@ -14,15 +14,8 @@ import type { Scope } from "effect"
 // @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution
 import { resolve as pathResolve, join as pathJoin } from "node:path"
 
-import { createDependencies } from "@gent/core-internal/server/dependencies.js"
 import { BuiltinExtensions } from "@gent/extensions"
-import { AppServicesLive } from "@gent/core-internal/server/index.js"
-import { GentLogger, GentLogLevel } from "@gent/core-internal/runtime/logger.js"
-import { GentTracerLive } from "@gent/core-internal/runtime/tracer.js"
-import { ConnectionTracker } from "@gent/core-internal/server/connection-tracker.js"
-import { ServerIdentity } from "@gent/core-internal/server/server-identity.js"
-import { buildServerRoutes } from "@gent/core-internal/server/server-routes.js"
-import { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
+import type { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
 import { seedDebugSession } from "@gent/core-internal/debug/session.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import type { LanguageModel } from "effect/unstable/ai"
@@ -41,6 +34,7 @@ import {
 } from "./server-lock.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
+import { buildServerRoot } from "@gent/core-internal/server/server-root.js"
 // ── Types ──
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer output helper intentionally ignores empty error/context channels
@@ -206,64 +200,23 @@ const buildOwnedServer = (
         Effect.provide(BunServices.layer),
       )
 
-      // Build language model layer (undefined = let createDependencies resolve from auth deps)
       const languageModelLayer = resolveLanguageModelLayer(providerSpec)
-
-      // Build dependency config
       const dbPath = stateSpec._tag === "sqlite" ? resolveDbPath(home, stateSpec) : undefined
-      const depsLive = createDependencies({
-        cwd: options.cwd,
-        home,
-        platform: osInfo.platform,
-        osVersion: osInfo.release,
-        dbPath,
-        ...(options.authDirectory !== undefined ? { authDirectory: options.authDirectory } : {}),
-        persistenceMode: stateSpec._tag === "memory" ? "memory" : "disk",
-        sharedServerUrl: url,
-        extensions: BuiltinExtensions,
-        ...(languageModelLayer !== undefined
-          ? { languageModelLayerOverride: languageModelLayer }
-          : {}),
-      }).pipe(
-        Layer.provide(LocalPlatformLayer),
-        Layer.provide(GentLogger),
-        Layer.provide(GentLogLevel),
-        Layer.provide(GentTracerLive),
-      )
-
-      // Connection tracker
-      const connectionTrackerCtx = yield* Layer.buildWithScope(ConnectionTracker.Live, scope).pipe(
-        Effect.orDie,
-      )
-
-      // Server identity
-      const serverIdentityLive = ServerIdentity.Live({
-        serverId,
-        pid,
-        hostname: osInfo.hostname,
-        dbPath: dbPath ?? ":memory:",
-        buildFingerprint,
-        startedAt: yield* Clock.currentTimeMillis,
-      })
-
-      // Build full service context
-      const depsServices = yield* Layer.buildWithScope(depsLive, scope).pipe(Effect.orDie)
-      const appServices = yield* Layer.buildWithScope(
-        AppServicesLive.pipe(Layer.provide(Layer.succeedContext(depsServices))),
-        scope,
-      ).pipe(Effect.orDie)
-      const coreServices = Context.merge(
-        Context.merge(depsServices, appServices),
-        connectionTrackerCtx,
-      )
-      const serverIdentityCtx = yield* Layer.buildWithScope(serverIdentityLive, scope).pipe(
-        Effect.orDie,
-      )
-      const allServices = Context.merge(coreServices, serverIdentityCtx)
-      const coreServicesLive = Layer.succeedContext(allServices)
-
-      // Build HTTP routes and start listener
-      const AllRoutes = buildServerRoutes(coreServicesLive, {
+      const serverRoot = yield* buildServerRoot({
+        dependencies: {
+          cwd: options.cwd,
+          home,
+          platform: osInfo.platform,
+          osVersion: osInfo.release,
+          dbPath,
+          ...(options.authDirectory !== undefined ? { authDirectory: options.authDirectory } : {}),
+          persistenceMode: stateSpec._tag === "memory" ? "memory" : "disk",
+          sharedServerUrl: url,
+          extensions: BuiltinExtensions,
+          ...(languageModelLayer !== undefined
+            ? { languageModelLayerOverride: languageModelLayer }
+            : {}),
+        },
         identity: {
           serverId,
           pid,
@@ -271,11 +224,15 @@ const buildOwnedServer = (
           dbPath: dbPath ?? ":memory:",
           buildFingerprint,
         },
-      })
+      }).pipe(
+        Effect.mapError(
+          (error) => new GentConnectionError({ message: `server root failed: ${String(error)}` }),
+        ),
+      )
 
-      const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(
+      const HttpServerLive = HttpRouter.serve(serverRoot.httpRoutes).pipe(
         Layer.provide(Layer.succeedContext(httpServerCtx)),
-        Layer.provide(coreServicesLive),
+        Layer.provide(serverRoot.coreServicesLive),
         Layer.provide(LocalPlatformLayer),
       )
 
@@ -285,23 +242,17 @@ const buildOwnedServer = (
       if (options.debug === true) {
         yield* seedDebugSession(options.cwd).pipe(
           // @effect-diagnostics-next-line strictEffectProvide:off
-          Effect.provide(coreServicesLive),
+          Effect.provide(serverRoot.coreServicesLive),
           Effect.catchEager(() => Effect.void),
         )
       }
-
-      // Build RPC handler context for direct in-process client
-      const handlersContext = yield* Layer.buildWithScope(
-        Layer.provide(RpcHandlersLive, coreServicesLive),
-        scope,
-      ).pipe(Effect.orDie)
 
       const server: GentServer = GentServer.Owned.make({
         url,
         workspaceId: workspaceHeaders["x-gent-workspace-id"],
       })
       ownedInternals.set(server, {
-        handlerContext: handlersContext,
+        handlerContext: serverRoot.rpcHandlersContext,
         port,
         serverId,
         headers: workspaceHeaders,
