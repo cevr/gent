@@ -9,7 +9,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { SessionToolsExtension } from "../src/index.js"
-import { getBuiltinAgent } from "../src/all-agents.js"
+import { getBuiltinAgent } from "./helpers/builtin-agents.js"
 import type { SystemPromptInput } from "@gent/core/extensions/api"
 import { testExtensionHostContext, testSetupCtx } from "@gent/core-internal/test-utils"
 

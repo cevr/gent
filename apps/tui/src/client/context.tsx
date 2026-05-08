@@ -16,15 +16,11 @@ import {
   AgentName as AgentNameSchema,
   type AgentDefinition,
   DEFAULT_AGENT_NAME,
+  DEFAULT_MODEL_ID,
   resolveAgentModel,
   type AgentName,
   type ReasoningEffort,
 } from "@gent/core-internal/domain/agent.js"
-import { AllBuiltinAgents } from "@gent/extensions"
-
-const AgentsByName: Record<string, AgentDefinition> = Object.fromEntries(
-  AllBuiltinAgents.map((a) => [a.name, a]),
-)
 import { type Model, type ModelId } from "@gent/core-internal/domain/model.js"
 import type { EventEnvelope } from "@gent/core-internal/domain/event.js"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
@@ -71,6 +67,7 @@ export type SteerCommandInput = Schema.Schema.Type<typeof SteerCommandInput>
 
 const resolveModelInfo = (
   models: Record<string, Model>,
+  agentsByName: Record<string, AgentDefinition>,
   agent: AgentName | undefined,
   lastModelId: ModelId | undefined,
 ): Model | undefined => {
@@ -79,7 +76,7 @@ const resolveModelInfo = (
     if (live !== undefined) return live
   }
   if (agent === undefined) return undefined
-  const agentDef = AgentsByName[agent]
+  const agentDef = agentsByName[agent]
   return agentDef !== undefined ? models[resolveAgentModel(agentDef)] : undefined
 }
 
@@ -335,12 +332,17 @@ export function ClientProvider(props: ClientProviderProps) {
 
   onMount(() => {
     cast(
-      client.model.list().pipe(
-        Effect.tap((models) =>
+      Effect.all({
+        models: client.model.list(),
+        drivers: client.driver.list(),
+      }).pipe(
+        Effect.tap(({ models, drivers }) =>
           Effect.sync(() => {
             const modelsById: Record<string, Model> = {}
             for (const model of models) modelsById[model.id] = model
-            setModelStore({ modelsById })
+            const agentsByName: Record<string, AgentDefinition> = {}
+            for (const agent of drivers.agents) agentsByName[agent.name] = agent
+            setModelStore({ modelsById, agentsByName })
           }),
         ),
         Effect.catchEager((err) =>
@@ -371,8 +373,10 @@ export function ClientProvider(props: ClientProviderProps) {
 
   const [modelStore, setModelStore] = createStore<{
     modelsById: Record<string, Model>
+    agentsByName: Record<string, AgentDefinition>
   }>({
     modelsById: {},
+    agentsByName: {},
   })
 
   createEffect(() => {
@@ -842,9 +846,11 @@ export function ClientProvider(props: ClientProviderProps) {
       // to a different driver mid-turn, so the local agent default would
       // disagree with what's actually running.
       if (agentStore.lastModelId !== undefined) return agentStore.lastModelId
-      const agentDef = agentStore.agent !== undefined ? AgentsByName[agentStore.agent] : undefined
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- DEFAULT_AGENT_NAME always registered
-      return resolveAgentModel(agentDef ?? AgentsByName[DEFAULT_AGENT_NAME]!)
+      const agentDef =
+        agentStore.agent !== undefined ? modelStore.agentsByName[agentStore.agent] : undefined
+      const defaultAgentDef = modelStore.agentsByName[DEFAULT_AGENT_NAME]
+      const resolved = agentDef ?? defaultAgentDef
+      return resolved !== undefined ? resolveAgentModel(resolved) : DEFAULT_MODEL_ID
     },
     // Derived accessors
     isStreaming: () => agentStore.status._tag === "streaming",
@@ -852,7 +858,12 @@ export function ClientProvider(props: ClientProviderProps) {
     error: () => (agentStore.status._tag === "error" ? agentStore.status.error : null),
     latestInputTokens,
     modelInfo: () =>
-      resolveModelInfo(modelStore.modelsById, agentStore.agent, agentStore.lastModelId),
+      resolveModelInfo(
+        modelStore.modelsById,
+        modelStore.agentsByName,
+        agentStore.agent,
+        agentStore.lastModelId,
+      ),
     setError: (error) =>
       setAgentStore({
         status: error !== null ? AgentStatus.Error.make({ error }) : AgentStatus.Idle.make({}),

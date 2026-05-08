@@ -29,6 +29,7 @@ describe("ExtensionRpcs", () => {
         // (and friends); the registered list should be non-empty even when no
         // overrides are set.
         expect(before.drivers.length).toBeGreaterThan(0)
+        expect(before.agents.map((agent) => agent.name)).toContain(AgentName.make("cowork"))
         expect(before.overrides).toEqual({})
       }).pipe(Effect.timeout("4 seconds")),
     ),

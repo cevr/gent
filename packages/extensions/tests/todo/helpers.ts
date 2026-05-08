@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 export { narrowR } from "../../../core/tests/helpers/effect"
-import { AllBuiltinAgents } from "../../src/all-agents.js"
+import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
 import { TodoExtension } from "../../src/todo/index.js"
 import { AgentRunResult, type AgentRunner } from "@gent/core-internal/domain/agent"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"

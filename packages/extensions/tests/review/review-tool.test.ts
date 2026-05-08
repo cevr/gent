@@ -9,7 +9,7 @@ import {
   SessionId,
   type ExtensionContextService,
 } from "@gent/core/extensions/api"
-import { AllBuiltinAgents } from "../../src/all-agents.js"
+import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"

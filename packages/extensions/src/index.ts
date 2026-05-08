@@ -121,8 +121,6 @@ export {
   ExecutorExtension,
 }
 
-export { AllBuiltinAgents, getBuiltinAgent } from "./all-agents.js"
-
 export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner>> = [
   HandoffExtension,
   FsToolsExtension,

@@ -21,6 +21,7 @@ import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { AgentName } from "@gent/core-internal/domain/agent"
 import { dateFromMillis } from "@gent/core-internal/domain/message"
 import type { ClientLog } from "../src/utils/client-logger"
+import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
 
 const noop = () => {}
 const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }
@@ -115,6 +116,9 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
     },
     model: {
       list: () => noRpcError([]),
+    },
+    driver: {
+      list: () => noRpcError({ drivers: [], overrides: {}, agents: AllBuiltinAgents }),
     },
     auth: {
       listProviders: () => noRpcError([]),

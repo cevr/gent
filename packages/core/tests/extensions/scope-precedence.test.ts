@@ -12,7 +12,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { narrowR } from "../helpers/effect"
-import { getBuiltinAgent } from "../../../extensions/src/all-agents.js"
+import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 

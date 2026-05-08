@@ -44,7 +44,7 @@ import { buildExtensionLayers } from "../../src/runtime/profile"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
-import { getBuiltinAgent } from "../../../extensions/src/all-agents.js"
+import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import { AgentName } from "@gent/core-internal/domain/agent"
 // Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide all needed services; narrow R so runPromise/it.live accept it.

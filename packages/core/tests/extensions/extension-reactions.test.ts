@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Cause, Context, Data, Effect, Exit, Ref } from "effect"
-import { getBuiltinAgent } from "../../../extensions/src/all-agents.js"
+import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type {
   ContextMessagesInput,
   ExtensionContributions,

@@ -86,7 +86,6 @@ export const defineAgent = (input: AgentDefinitionInput): AgentDefinition =>
 // - @gent/research (extensions/research/index.ts): architect
 // - @gent/audit (extensions/audit/index.ts): auditor
 // - @gent/librarian (extensions/librarian/index.ts): librarian
-// Agent collections are in extensions/all-agents.ts — import from there for test harnesses.
 
 // Default model — used when an agent has no model set
 export const DEFAULT_MODEL_ID = ModelId.make("openai/gpt-5.4-mini")

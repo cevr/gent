@@ -313,6 +313,7 @@ const buildConfigRpcHandlers = (deps: RpcHandlerDeps) => ({
       const config = yield* deps.configService.get()
       const models = yield* deps.driverRegistry.listModels()
       const externals = yield* deps.driverRegistry.listExternal()
+      const agents = yield* deps.extensionRegistry.listAgents()
       const drivers = [
         ...models.map((driver) =>
           DriverInfo.Model.make({
@@ -329,6 +330,7 @@ const buildConfigRpcHandlers = (deps: RpcHandlerDeps) => ({
       return new DriverListResult({
         drivers,
         overrides: config.driverOverrides ?? {},
+        agents,
       })
     }),
 

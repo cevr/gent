@@ -21,7 +21,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, Layer, Path, Schema as S } from "effect"
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
-import { getBuiltinAgent } from "../../../extensions/src/all-agents.js"
+import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import { defineExtension, defineResource, tool, AgentName } from "@gent/core/extensions/api"
 import { ConfigService } from "../../src/runtime/config-service"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"

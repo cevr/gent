@@ -282,6 +282,8 @@ a parameter.
 
 ## Commit 6: refactor(extensions): remove privileged builtin agent registry
 
+**Status**: Completed in `refactor(extensions): remove builtin agent registry`.
+
 **Justification**: Builtins are only the starting extension set. A parallel
 agent registry in `packages/extensions` lets app code bypass user/project
 extension resolution and creates drift.
@@ -294,18 +296,26 @@ extension resolution and creates drift.
 
 **Changes**
 
-| File                                                                                  | Change                                                                           | Lines |
-| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ----- |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/all-agents.ts`            | Delete or inline into real extension contributions.                              | ~1    |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/index.ts`                 | Remove privileged all-agent exports.                                             | ~103  |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx`                  | Stop importing builtin agent registry; read resolved agents from client/profile. | ~15   |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts` | Ensure registry projection is sufficient for TUI needs.                          | ~545  |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`   | Adjust agent projection if needed.                                               | ~312  |
+| File                                                                                     | Change                                                                                      | Lines |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----- |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/all-agents.ts`               | Deleted privileged production registry.                                                     | ~23   |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/index.ts`                    | Removed public all-agent exports; builtins remain extension preset only.                    | ~2    |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/tests/helpers/builtin-agents.ts` | Added test-only fixture for assertions that need the shipped starting agents.               | ~16   |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx`                     | Reads agent catalogue from `driver.list`, not `@gent/extensions`.                           | ~37   |
+| `/Users/cvr/Developer/personal/gent/apps/tui/tests/render-harness-boundary.tsx`          | Mock client now exposes the same driver/agent projection expected by `ClientProvider`.      | ~4    |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts`            | Projects registry agents through `driver.list`.                                             | ~2    |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`      | Adds `agents` to `DriverListResult`.                                                        | ~9    |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/server/driver-rpc.test.ts`       | Locks `driver.list` returning a registry agent so TUI has no builtin registry escape hatch. | ~1    |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/**/*.ts`                         | Repointed builtin-agent test fixtures to the test-only helper.                              | ~22   |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/tests/**/*.ts`                   | Repointed builtin-agent test fixtures to the test-only helper.                              | ~23   |
+| `/Users/cvr/Developer/personal/gent/apps/tui/integration/*.test.tsx`                     | Repointed integration fixtures to the test-only helper.                                     | ~6    |
+| `/Users/cvr/Developer/personal/gent/packages/e2e/tests/transport-harness-boundary.ts`    | Repointed harness fixture to the test-only helper.                                          | ~2    |
 
 **Verification**
 
-- Focused TUI client tests.
-- Focused extension registry tests.
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/core/tests/server/driver-rpc.test.ts packages/core/tests/extensions/registry.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots apps/tui/tests/client-session-state.test.tsx apps/tui/tests/session-controller-state.test.ts apps/tui/tests/extension-integration.test.ts apps/tui/integration/app-bootstrap.test.tsx apps/tui/integration/session-lifecycle.test.tsx apps/tui/integration/session-feed-boundary.test.tsx`
+- `bun run typecheck`
 - `bun run smoke`
 - `bun run gate`
 

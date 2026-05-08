@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { getBuiltinAgent } from "../../../extensions/src/all-agents.js"
+import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type { ExtensionTurnContext, LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { ProjectionError, type ProjectionTurnContext } from "@gent/core/extensions/api"

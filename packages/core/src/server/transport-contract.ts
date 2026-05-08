@@ -1,6 +1,12 @@
 import { Schema } from "effect"
 import type { Effect } from "effect"
-import { AgentName, DriverRef, ReasoningEffort, RunSpecSchema } from "../domain/agent.js"
+import {
+  AgentDefinition,
+  AgentName,
+  DriverRef,
+  ReasoningEffort,
+  RunSpecSchema,
+} from "../domain/agent.js"
 import {
   AuthAuthorization,
   AuthMethod,
@@ -312,6 +318,7 @@ export type DriverInfo = typeof DriverInfo.Type
 export class DriverListResult extends Schema.Class<DriverListResult>("DriverListResult")({
   drivers: Schema.Array(DriverInfo),
   overrides: Schema.Record(AgentName, DriverRef),
+  agents: Schema.Array(AgentDefinition),
 }) {}
 
 export const SetDriverOverrideInput = Schema.Struct({
