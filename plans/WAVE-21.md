@@ -98,15 +98,18 @@ Commits landed in this wave so far:
 - `3c0843c2 fix(extensions): isolate resource startup failures`
 - `30cb8972 fix(extensions): serialize oauth credential refresh`
 - `079813b6 fix(tui): serialize child session tracking`
+- `f56553eb fix(core): route scheduler cron through platform`
+- `287869c1 docs(plan): record scheduler platform ownership`
+- `1a779f08 fix(runtime): publish queue after durable commit`
 
 Fresh five-lane audit at `b9334674` and follow-up correction at `6b19a08a`
 found no P0, but Wave 21 is not closeable. The initial commits removed broad
 classes of privilege and races, but the deeper P1s remain:
 
-- AgentLoop queue mutation is serialized around persistence, but
-  `TxSubscriptionRef.modify` still exposes the in-memory transition before the
-  durable write can fail, and queue persistence failures still do not flow
-  through actor persistence-failure handling.
+- AgentLoop queue mutation no longer publishes a queued transition before its
+  durable write succeeds; failed queue persistence is now recorded through the
+  actor persistence-failure path. The remaining AgentLoop work is mailbox/worker
+  ownership and stale FIFO commentary.
 - Resource lifecycle startup failures now belong to extension reconciliation:
   a failed process resource marks only its owning extension failed with
   `phase: "startup"`, while unaffected extensions remain active. Runtime
@@ -508,25 +511,32 @@ Goal: make queue mutation and durable persistence one actor-owned serialized
 transition.
 
 Status: partial. `89737196` added a queue persistence lane and concurrent
-follow-up regression, but fresh audit found the acceptance boundary is still
-not durable enough.
+follow-up regression. `1a779f08` closes the durable acceptance boundary: queue
+persistence failure now fails before `TxSubscriptionRef` publishes the queued
+state and wakes actor persistence-failure waiters.
 
 Work:
 
-- Add a queue-persistence-failure regression proving failed durable writes do
-  not appear accepted to observers.
-- Change AgentLoop actor handling so mutation commands are sequential or make
-  the mutation result visible only after the durable commit succeeds.
+- [x] Add a queue-persistence-failure regression proving failed durable writes
+      do not appear accepted to observers.
+- [x] Change AgentLoop actor handling so mutation commands are sequential or make
+      the mutation result visible only after the durable commit succeeds.
 - Move long-running turn execution behind an owned worker queue/fiber map so
   slow runs do not require unbounded mailbox mutation.
-- Persist queue snapshots only from the serialized mutation owner and route
-  persistence failures through the actor failure state.
+- [x] Persist queue snapshots only from the serialized mutation owner and route
+      persistence failures through the actor failure state.
 - Remove stale comments claiming FIFO serialization where the code does not
   enforce it.
 
 Validation:
 
-- Focused C21.1 queue regression.
+- Focused C21.1 queue regression:
+  `cd packages/core && bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests/runtime/agent-loop-queue.test.ts`
+- `bun run typecheck`
+- `bun run lint`
+- `bun run fmt`
+- `bun run gate` (first run hit a Bun 1.3.13 segmentation fault in a core test
+  shard after type/style/build had passed; rerun passed unchanged)
 - `bun run test -- tests/runtime/agent-loop-queue.test.ts`
 - `bun run test`
 - `bun run gate`
