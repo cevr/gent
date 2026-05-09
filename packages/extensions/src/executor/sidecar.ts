@@ -23,7 +23,11 @@ import {
   Scope,
   Semaphore,
 } from "effect"
-import { isRecord, type GentExtension } from "@gent/core/extensions/api"
+import {
+  isRecord,
+  type GentExtension,
+  type PublicExtensionSetupContext,
+} from "@gent/core/extensions/api"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import { fileURLToPath } from "node:url"
@@ -132,7 +136,14 @@ export interface ExecutorSidecarService {
 export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSidecarService>()(
   "@gent/extensions/src/executor/sidecar/ExecutorSidecar",
 ) {
-  static Live = (home: string, host: ExtensionHostPlatform) =>
+  private static makeLive = (
+    home: string,
+    platformLayer: Layer.Layer<ExecutorPlatform>,
+  ): Layer.Layer<
+    ExecutorSidecar,
+    never,
+    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  > =>
     Layer.effect(
       ExecutorSidecar,
       Effect.gen(function* () {
@@ -652,7 +663,20 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           resolveSettings: (cwd) => loadSettings(cwd),
         })
       }),
-    ).pipe(Layer.provide(Layer.merge(FetchHttpClient.layer, ExecutorPlatform.Live(host))))
+    ).pipe(Layer.provide(Layer.merge(FetchHttpClient.layer, platformLayer)))
+
+  static Live = (home: string, host: ExtensionHostPlatform) =>
+    ExecutorSidecar.makeLive(home, ExecutorPlatform.Live(host))
+
+  static LiveFromSetup = (
+    home: string,
+    input: {
+      readonly execPath: string
+      readonly pathListSeparator: string
+      readonly platform: string
+      readonly Process: PublicExtensionSetupContext["Process"]
+    },
+  ) => ExecutorSidecar.makeLive(home, ExecutorPlatform.LiveFromSetup(input))
 
   static Test = (mock: Partial<ExecutorSidecarService> = {}): Layer.Layer<ExecutorSidecar> =>
     Layer.succeed(

@@ -1,5 +1,5 @@
 import { Context, Layer, type Effect } from "effect"
-import type { GentExtension } from "@gent/core/extensions/api"
+import type { GentExtension, PublicExtensionSetupContext } from "@gent/core/extensions/api"
 
 type ExtensionHostPlatform = Parameters<GentExtension["setup"]>[0]["host"]
 
@@ -29,6 +29,26 @@ export class ExecutorPlatform extends Context.Service<ExecutorPlatform, Executor
         isPidAlive: host.isPidAlive,
         signalPid: host.signalPid,
         runProcess: host.runProcess,
+      }),
+    )
+
+  static LiveFromSetup = (input: {
+    readonly execPath: string
+    readonly pathListSeparator: string
+    readonly platform: string
+    readonly Process: PublicExtensionSetupContext["Process"]
+  }) =>
+    Layer.succeed(
+      ExecutorPlatform,
+      ExecutorPlatform.of({
+        execPath: input.execPath,
+        pathListSeparator: input.pathListSeparator,
+        binaryName: input.platform === "win32" ? "executor.exe" : "executor",
+        commandCandidates: input.Process.commandCandidates,
+        isPortFree: input.Process.isPortFree,
+        isPidAlive: input.Process.isPidAlive,
+        signalPid: input.Process.signalPid,
+        runProcess: input.Process.runProcess,
       }),
     )
 }

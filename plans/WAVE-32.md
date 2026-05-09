@@ -133,6 +133,8 @@ programs that yield `ExtensionContext`.
 
 ## Commit 2: refactor(extensions): make shipped setup use defineExtension
 
+**Status**: Completed in current batch.
+
 **Justification**: Builtins are only the starting extension set. They should not
 use raw `GentExtension`/`setup(ctx)` authoring paths unavailable to user/project
 extensions.
@@ -148,11 +150,18 @@ extensions.
 | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ----- |
 | `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/index.ts`             | Convert raw setup to `defineExtension` with setup facts from context. | ~222  |
 | `/Users/cvr/Developer/personal/gent/packages/extensions/src/executor/index.ts`               | Convert raw setup to `defineExtension`.                               | ~22   |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`                     | Add setup-time `Process` facade without exposing raw host methods.    | ~238  |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-services.ts`          | Share process-facade construction with runtime `ExtensionContext`.    | ~203  |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/anthropic/platform-adapter.ts`   | Build Anthropic process platform from setup facade.                   | ~27   |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/executor/platform-adapter.ts`    | Build executor process platform from setup facade.                    | ~36   |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/executor/sidecar.ts`             | Accept setup-facade platform layer for process resources.             | ~135  |
 | `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/define-extension.test.ts` | Lock no shipped raw setup escape hatch if feasible.                   | ~1    |
 
 **Verification**
 
 - `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/extensions/tests/acp-agents/acp-agents.test.ts packages/extensions/tests/executor/executor-rpc.test.ts packages/core/tests/extensions/define-extension.test.ts`
+- `bun test --preload ./packages/tooling/src/test-log-preload.ts --reporter=dots packages/extensions/tests/acp-agents packages/extensions/tests/executor packages/core/tests/extensions/define-extension.test.ts`
+- `bun run lint`
 - `bun run typecheck`
 - `bun run gate`
 

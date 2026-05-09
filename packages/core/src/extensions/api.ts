@@ -45,6 +45,7 @@ import { ExtensionId } from "../domain/ids.js"
 import { ExtensionLoadError } from "../domain/extension.js"
 import { sealRuntimeLoadedEffect } from "../domain/extension-load-boundary.js"
 import type {
+  ExtensionHostPlatform,
   GentExtension,
   ExtensionSetupContext as RuntimeExtensionSetupContext,
   ExtensionManifest,
@@ -246,6 +247,10 @@ export type PublicExtensionSetupContext = Omit<RuntimeExtensionSetupContext, "ho
     | "isPortFree"
     | "isPidAlive"
   >
+  readonly Process: Pick<
+    ExtensionHostPlatform,
+    "parentEnv" | "runProcess" | "signalPid" | "isPortFree" | "isPidAlive" | "commandCandidates"
+  >
 }
 
 const publicSetupContext = (ctx: RuntimeExtensionSetupContext): PublicExtensionSetupContext => ({
@@ -260,6 +265,14 @@ const publicSetupContext = (ctx: RuntimeExtensionSetupContext): PublicExtensionS
     commandCandidates: ctx.host.commandCandidates,
     isPortFree: ctx.host.isPortFree,
     isPidAlive: ctx.host.isPidAlive,
+  },
+  Process: {
+    parentEnv: ctx.host.parentEnv,
+    runProcess: ctx.host.runProcess,
+    signalPid: ctx.host.signalPid,
+    isPortFree: ctx.host.isPortFree,
+    isPidAlive: ctx.host.isPidAlive,
+    commandCandidates: ctx.host.commandCandidates,
   },
 })
 

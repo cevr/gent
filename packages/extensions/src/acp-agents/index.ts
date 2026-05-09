@@ -22,8 +22,9 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import {
   AgentName,
   defineAgent,
+  defineExtension,
   defineResource,
-  ExtensionId,
+  ExtensionSetupContext,
   ExternalDriverRef,
   resource,
   sectionPatternFor,
@@ -221,20 +222,38 @@ const buildAcpContributions = (
 
 export const makeAcpAgentsExtension = (
   deps: AcpAgentsManagerDeps = {},
-): GentExtension<ChildProcessSpawner> => ({
-  manifest: { id: ExtensionId.make("@gent/acp-agents") },
-  setup: (ctx) =>
-    Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner
-      const anthropicPlatform = AnthropicPlatform.fromHost(ctx.host)
-      const acpPlatform = {
-        parentEnv: anthropicPlatform.parentEnv,
-      } satisfies AcpAgentsPlatformShape
-      return buildAcpContributions(spawner, deps, {
-        acp: acpPlatform,
-        anthropic: anthropicPlatform,
-      })
-    }),
-})
+): GentExtension<ChildProcessSpawner> => {
+  const cachedBySetupContext = new WeakMap<object, ExtensionContributions>()
+  const setupContributions = Effect.gen(function* () {
+    const ctx = yield* ExtensionSetupContext
+    const cached = cachedBySetupContext.get(ctx)
+    if (cached !== undefined) return cached
+    const spawner = yield* ChildProcessSpawner
+    const anthropicPlatform = AnthropicPlatform.fromSetup({
+      platform: ctx.host.osInfo.platform,
+      home: ctx.home,
+      Process: ctx.Process,
+    })
+    const acpPlatform = {
+      parentEnv: anthropicPlatform.parentEnv,
+    } satisfies AcpAgentsPlatformShape
+    const contributions = buildAcpContributions(spawner, deps, {
+      acp: acpPlatform,
+      anthropic: anthropicPlatform,
+    })
+    cachedBySetupContext.set(ctx, contributions)
+    return contributions
+  })
+
+  return defineExtension({
+    id: "@gent/acp-agents",
+    agents: [claudeCodeAgent, ...protocolAgents],
+    reactions: {
+      systemPrompt: rewriteCodemodeSystemPrompt,
+    },
+    resources: () => setupContributions.pipe(Effect.map((c) => c.resources ?? [])),
+    externalDrivers: () => setupContributions.pipe(Effect.map((c) => c.externalDrivers ?? [])),
+  })
+}
 
 export const AcpAgentsExtension: GentExtension<ChildProcessSpawner> = makeAcpAgentsExtension()

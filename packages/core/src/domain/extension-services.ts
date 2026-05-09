@@ -196,6 +196,19 @@ export class ExtensionProcess extends Context.Service<ExtensionProcess, Extensio
   "@gent/core/src/domain/extension-services/ExtensionProcess",
 ) {}
 
+export const extensionProcessFromHostContext = (
+  host: ExtensionHostContext["host"],
+): ExtensionProcessService => ({
+  run: (command, args, options) =>
+    mapError("ExtensionProcess", "run", host.runProcess(command, args, options)),
+  signalPid: (pid, signal) =>
+    mapError("ExtensionProcess", "signalPid", host.signalPid(pid, signal)),
+  isPortFree: (port) => mapError("ExtensionProcess", "isPortFree", host.isPortFree(port)),
+  isPidAlive: (pid) => mapError("ExtensionProcess", "isPidAlive", host.isPidAlive(pid)),
+  commandCandidates: host.commandCandidates,
+  parentEnv: host.parentEnv,
+})
+
 export interface ExtensionContextService {
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -290,16 +303,7 @@ export const extensionServicesFromHostContext = (
     confirm: (params) => mapInteraction("confirm", ctx.interaction.confirm(params)),
     review: (params) => mapInteraction("review", ctx.interaction.review(params)),
   }
-  const Process: ExtensionProcessService = {
-    run: (command, args, options) =>
-      mapError("ExtensionProcess", "run", ctx.host.runProcess(command, args, options)),
-    signalPid: (pid, signal) =>
-      mapError("ExtensionProcess", "signalPid", ctx.host.signalPid(pid, signal)),
-    isPortFree: (port) => mapError("ExtensionProcess", "isPortFree", ctx.host.isPortFree(port)),
-    isPidAlive: (pid) => mapError("ExtensionProcess", "isPidAlive", ctx.host.isPidAlive(pid)),
-    commandCandidates: ctx.host.commandCandidates,
-    parentEnv: ctx.host.parentEnv,
-  }
+  const Process = extensionProcessFromHostContext(ctx.host)
 
   return Context.empty().pipe(
     Context.add(ExtensionContext, {
