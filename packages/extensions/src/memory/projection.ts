@@ -13,8 +13,8 @@
 
 import { Effect } from "effect"
 import {
+  ExtensionContext,
   ProjectionError,
-  type ProjectionTurnContext,
   type PromptSection,
   type TurnProjection,
 } from "@gent/core/extensions/api"
@@ -82,11 +82,14 @@ interface VaultProjectionValue {
  * `~/.gent/memory/project/`. Cheap O(N) where N = entries in the active
  * session's project + global, not all projects across the user's history.
  */
-const readVaultProjectionValue = (
-  ctx: ProjectionTurnContext,
-): Effect.Effect<VaultProjectionValue, ProjectionError, MemoryVaultReadOnly> =>
+const readVaultProjectionValue = (): Effect.Effect<
+  VaultProjectionValue,
+  ProjectionError,
+  ExtensionContext | MemoryVaultReadOnly
+> =>
   Effect.gen(function* () {
     const vault = yield* MemoryVaultReadOnly
+    const ctx = yield* ExtensionContext
     const key = projectKeyOf(ctx.cwd)
     const failed = (e: unknown): ProjectionError =>
       new ProjectionError({
@@ -102,10 +105,12 @@ const readVaultProjectionValue = (
     return { entries: [...globalEntries, ...projectEntries], projectKey: key }
   })
 
-export const projectMemoryVaultTurn = (
-  ctx: ProjectionTurnContext,
-): Effect.Effect<TurnProjection, ProjectionError, MemoryVaultReadOnly> =>
-  readVaultProjectionValue(ctx).pipe(
+export const projectMemoryVaultTurn = (): Effect.Effect<
+  TurnProjection,
+  ProjectionError,
+  ExtensionContext | MemoryVaultReadOnly
+> =>
+  readVaultProjectionValue().pipe(
     Effect.map((value) => {
       const section = buildVaultPromptSection(value.entries, value.projectKey)
       return section !== undefined ? { promptSections: [section] } : {}

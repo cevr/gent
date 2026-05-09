@@ -10,7 +10,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Context, Deferred, Effect, Layer } from "effect"
 import { narrowR } from "../helpers/effect"
 import { BunServices } from "@effect/platform-bun"
-import { testSetupCtx } from "@gent/core-internal/test-utils"
+import { testExtensionHostContext, testSetupCtx } from "@gent/core-internal/test-utils"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
@@ -650,18 +650,26 @@ describe("Executor runtime lifecycle", () => {
 
             const projection = yield* compiled
               .resolveTurnProjection({
-                sessionId: "executor-projection-session" as never,
-                branchId: "executor-projection-branch" as never,
-                cwd: "/test",
-                home: "/test-home",
-                capabilityContext: layerContext as Context.Context<never>,
-                turn: {
+                projection: {
                   sessionId: "executor-projection-session" as never,
                   branchId: "executor-projection-branch" as never,
-                  agent: getBuiltinAgent("cowork")!,
-                  allTools: [],
-                  agentName: AgentName.make("cowork"),
+                  cwd: "/test",
+                  home: "/test-home",
+                  turn: {
+                    sessionId: "executor-projection-session" as never,
+                    branchId: "executor-projection-branch" as never,
+                    agent: getBuiltinAgent("cowork")!,
+                    allTools: [],
+                    agentName: AgentName.make("cowork"),
+                  },
                 },
+                host: testExtensionHostContext({
+                  sessionId: "executor-projection-session" as never,
+                  branchId: "executor-projection-branch" as never,
+                  cwd: "/test",
+                  home: "/test-home",
+                  capabilityContext: layerContext as Context.Context<never>,
+                }),
               })
               .pipe(Effect.provideContext(layerContext))
 

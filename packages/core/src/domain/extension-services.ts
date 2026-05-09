@@ -5,6 +5,7 @@ import type {
   ExtensionHostRunProcessOptions,
   ExtensionHostProcessResult,
   ExtensionHostSignal,
+  ExtensionTurnContext,
 } from "./extension.js"
 import type { ApprovalDecision, ApprovalRequest } from "./interaction-request.js"
 import { InteractionPendingError } from "./interaction-request.js"
@@ -200,6 +201,7 @@ export interface ExtensionContextService {
   readonly branchId: BranchId
   readonly agentName?: AgentName
   readonly toolCallId?: ToolCallId
+  readonly turn?: ExtensionTurnContext
   readonly cwd: string
   readonly home: string
   readonly Session: ExtensionSessionService
@@ -213,7 +215,10 @@ export class ExtensionContext extends Context.Service<ExtensionContext, Extensio
 ) {}
 
 export const extensionServicesFromHostContext = (
-  ctx: ExtensionHostContext & { readonly toolCallId?: ToolCallId },
+  ctx: ExtensionHostContext & {
+    readonly toolCallId?: ToolCallId
+    readonly turn?: ExtensionTurnContext
+  },
 ): Context.Context<
   ExtensionContext | ExtensionSession | ExtensionAgent | ExtensionInteraction | ExtensionProcess
 > => {
@@ -302,6 +307,7 @@ export const extensionServicesFromHostContext = (
       branchId: ctx.branchId,
       ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
       ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
+      ...(ctx.turn !== undefined ? { turn: ctx.turn } : {}),
       cwd: ctx.cwd,
       home: ctx.home,
       Session,
@@ -329,7 +335,10 @@ const mapInteraction = <A>(
   )
 
 export const provideExtensionServices = <A, E, R>(
-  ctx: ExtensionHostContext,
+  ctx: ExtensionHostContext & {
+    readonly toolCallId?: ToolCallId
+    readonly turn?: ExtensionTurnContext
+  },
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> =>
   effect.pipe(Effect.provideContext(extensionServicesFromHostContext(ctx)))

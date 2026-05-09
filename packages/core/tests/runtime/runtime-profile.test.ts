@@ -23,6 +23,7 @@ import { Context, Effect, Layer, Path, Schema as S } from "effect"
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import { defineExtension, defineResource, tool, AgentName } from "@gent/core/extensions/api"
+import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 import { ConfigService } from "../../src/runtime/config-service"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
@@ -198,17 +199,25 @@ describe("resolveRuntimeProfile", () => {
 
         const result = yield* registryService.extensionReactions
           .resolveTurnProjection({
-            sessionId: "s" as never,
-            branchId: "b" as never,
-            cwd: "/tmp",
-            home: "/tmp",
-            turn: {
+            projection: {
               sessionId: "s" as never,
               branchId: "b" as never,
-              agent: getBuiltinAgent("cowork")!,
-              agentName: AgentName.make("cowork"),
-              allTools: [],
+              cwd: "/tmp",
+              home: "/tmp",
+              turn: {
+                sessionId: "s" as never,
+                branchId: "b" as never,
+                agent: getBuiltinAgent("cowork")!,
+                agentName: AgentName.make("cowork"),
+                allTools: [],
+              },
             },
+            host: testExtensionHostContext({
+              sessionId: "s" as never,
+              branchId: "b" as never,
+              cwd: "/tmp",
+              home: "/tmp",
+            }),
           })
           .pipe(Effect.provide(layer))
 

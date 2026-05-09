@@ -58,7 +58,7 @@ export interface CompiledExtensionReactions {
     ctx: ExtensionReactionContext,
   ) => Effect.Effect<string>
   readonly resolveTurnProjection: (
-    ctx: ProjectionTurnContext,
+    ctx: ExtensionReactionContext,
   ) => Effect.Effect<ExtensionTurnProjection>
   readonly executeTool: (
     input: ToolExecuteInput,
@@ -182,7 +182,7 @@ const runReaction = <Input>(
   })
 
 const provideLifecycleHostContext = <A, E, R>(
-  ctx: ExtensionHostContext,
+  ctx: ExtensionHostContext & { readonly turn?: ProjectionTurnContext["turn"] },
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> =>
   ctx.capabilityContext === undefined
@@ -190,12 +190,15 @@ const provideLifecycleHostContext = <A, E, R>(
     : provideExtensionServices(ctx, effect).pipe(Effect.provideContext(ctx.capabilityContext))
 
 const provideProjectionContext = <A, E, R>(
-  ctx: ProjectionTurnContext,
+  ctx: ExtensionReactionContext,
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> =>
-  ctx.capabilityContext === undefined
-    ? effect
-    : effect.pipe(Effect.provideContext(ctx.capabilityContext))
+): Effect.Effect<A, E, R> => {
+  const hostCtx: ExtensionHostContext & { readonly turn: ProjectionTurnContext["turn"] } = {
+    ...ctx.host,
+    turn: ctx.projection.turn,
+  }
+  return provideLifecycleHostContext(hostCtx, effect)
+}
 
 const collectTurnProjection = (
   projection: ExtensionTurnProjection | undefined,
@@ -207,13 +210,16 @@ const collectTurnProjection = (
   for (const fragment of projection.policyFragments) policyFragments.push(fragment)
 }
 
-const runTurnProjectionReaction = (slot: ReactionTurnProjectionSlot, ctx: ProjectionTurnContext) =>
+const runTurnProjectionReaction = (
+  slot: ReactionTurnProjectionSlot,
+  ctx: ExtensionReactionContext,
+) =>
   sealErasedEffect(
     () =>
       provideProjectionContext(
         ctx,
         // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-        slot.handler(ctx).pipe(
+        slot.handler().pipe(
           Effect.map((projection) => ({
             promptSections: projection.promptSections ?? [],
             policyFragments: projection.toolPolicy !== undefined ? [projection.toolPolicy] : [],

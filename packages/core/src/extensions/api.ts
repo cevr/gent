@@ -88,7 +88,6 @@ export {
 } from "../domain/agent.js"
 export {
   type GentExtension,
-  type ProjectionTurnContext,
   type TurnProjection,
   type ExtensionTurnContext,
   type SystemPromptInput,

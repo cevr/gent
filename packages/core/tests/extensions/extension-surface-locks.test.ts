@@ -401,6 +401,8 @@ describe("Effect-purity locks (compile-time)", () => {
   test("private host and storage shapes stay out of the public API", () => {
     // @ts-expect-error — raw host context is runtime plumbing; authors use typed handlers
     type _BadHostContext = PublicExtensionApi.ExtensionHostContext
+    // @ts-expect-error — projection runtime ctx is host plumbing; reactions yield ExtensionContext
+    type _BadProjectionTurnContext = PublicExtensionApi.ProjectionTurnContext
     // @ts-expect-error — storage-layer errors are not public extension authoring API
     type _BadStorageError = PublicExtensionApi.StorageError
     // @ts-expect-error — storage-layer search rows are not public extension authoring API

@@ -5,12 +5,9 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
-import { ref, type ProjectionTurnContext, type TurnProjection } from "@gent/core/extensions/api"
+import { ref, type TurnProjection } from "@gent/core/extensions/api"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { SessionId, BranchId } from "@gent/core-internal/domain/ids"
-import { AgentName } from "@gent/core-internal/domain/agent"
-import { getBuiltinAgent } from "../helpers/builtin-agents.js"
 import { SkillsExtension } from "../../src/skills/index.js"
 import { SkillsRpc } from "../../src/skills/protocol.js"
 import { Skill, Skills } from "../../src/skills/skills.js"
@@ -35,9 +32,6 @@ const testSkills = [
   }),
 ]
 
-const sessionId = SessionId.make("skills-test-session")
-const branchId = BranchId.make("skills-test-branch")
-
 const skillsLayerOverride = { "@gent/skills": () => Skills.Test(testSkills) }
 
 describe("SkillsExtension via RPC", () => {
@@ -46,26 +40,13 @@ describe("SkillsExtension via RPC", () => {
       Effect.gen(function* () {
         const contributions = yield* SkillsExtension.setup(testSetupCtx())
 
-        const turnProjection = contributions.reactions?.turnProjection
+        const reactions = contributions.reactions as
+          | { readonly turnProjection?: () => Effect.Effect<TurnProjection, never, Skills> }
+          | undefined
+        const turnProjection = reactions?.turnProjection
         if (turnProjection === undefined) throw new Error("expected skills turn projection")
-        const runTurnProjection = turnProjection as (
-          ctx: ProjectionTurnContext,
-        ) => Effect.Effect<TurnProjection, never, Skills>
-
         const result = yield* narrowR(
-          runTurnProjection({
-            sessionId,
-            branchId,
-            cwd: "/test/cwd",
-            home: "/test/home",
-            turn: {
-              sessionId,
-              branchId,
-              agent: getBuiltinAgent("cowork")!,
-              allTools: [],
-              agentName: AgentName.make("cowork"),
-            },
-          }).pipe(Effect.provide(Skills.Test(testSkills)), Effect.orDie),
+          turnProjection().pipe(Effect.provide(Skills.Test(testSkills)), Effect.orDie),
         )
 
         const section = (result.promptSections ?? []).find((s) => s.id === "skills")

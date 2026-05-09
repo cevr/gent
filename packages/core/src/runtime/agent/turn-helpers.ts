@@ -465,8 +465,10 @@ export const resolveTurnContext = (params: {
     // Filter out hidden messages — visible in transcript but excluded from LLM context
     const messages = interceptedMessages.filter((m) => m.metadata?.hidden !== true)
 
-    const projEval =
-      yield* params.extensionRegistry.extensionReactions.resolveTurnProjection(projectionCtx)
+    const projEval = yield* params.extensionRegistry.extensionReactions.resolveTurnProjection({
+      projection: projectionCtx,
+      host: params.hostCtx,
+    })
     const extensionProjections = [
       ...projEval.policyFragments.map((p) => ({ toolPolicy: p })),
       ...(projEval.promptSections.length > 0 ? [{ promptSections: projEval.promptSections }] : []),

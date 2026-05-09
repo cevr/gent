@@ -7,9 +7,10 @@ import {
   projectKey,
   type MemoryFrontmatter,
 } from "../../src/memory/vault.js"
-import type { ProjectionTurnContext } from "@gent/core/extensions/api"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
+import { ExtensionContext } from "@gent/core/extensions/api"
+import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 
 const projectionTest = it.scopedLive.layer(Layer.merge(BunFileSystem.layer, Path.layer))
 
@@ -47,22 +48,30 @@ const writeFile = (
   })
 const sid = SessionId.make("019d97c0-0000-7000-0000-000000000000")
 const bid = BranchId.make("019d97c0-0000-7001-0000-000000000000")
-const turnCtx = (cwd: string, home: string): ProjectionTurnContext =>
-  ({
-    sessionId: sid,
-    branchId: bid,
-    cwd,
-    home,
-    // turn is required by the type but unused by the memory turn projection
-    turn: {} as never,
-  }) as ProjectionTurnContext
+const withMemoryProjectionContext = (cwd: string, home: string) =>
+  projectMemoryVaultTurn().pipe(
+    Effect.provide(MemoryVaultTest(home)),
+    Effect.provideService(
+      ExtensionContext,
+      testToolContext({
+        sessionId: sid,
+        branchId: bid,
+        cwd,
+        home,
+        turn: {
+          sessionId: sid,
+          branchId: bid,
+          agent: {} as never,
+          allTools: [],
+        },
+      }),
+    ),
+  )
 describe("memory vault turn projection", () => {
   projectionTest("empty vault produces no prompt section", () =>
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
-      const result = yield* projectMemoryVaultTurn(turnCtx("/no/such/repo", tmpDir)).pipe(
-        Effect.provide(MemoryVaultTest(tmpDir)),
-      )
+      const result = yield* withMemoryProjectionContext("/no/such/repo", tmpDir)
       expect(result).toEqual({})
     }),
   )
@@ -75,9 +84,7 @@ describe("memory vault turn projection", () => {
       yield* writeFile(tmpDir, "global/pattern-b.md", "# Pattern B\n\nSecond pattern.").pipe(
         Effect.orDie,
       )
-      const result = yield* projectMemoryVaultTurn(turnCtx("/no/such/repo", tmpDir)).pipe(
-        Effect.provide(MemoryVaultTest(tmpDir)),
-      )
+      const result = yield* withMemoryProjectionContext("/no/such/repo", tmpDir)
       expect(result.promptSections?.length).toBe(1)
       expect(result.promptSections?.[0]!.content).toContain("Pattern A")
       expect(result.promptSections?.[0]!.content).toContain("Pattern B")
@@ -98,9 +105,7 @@ describe("memory vault turn projection", () => {
           "# SQLite Gotcha\n\nWatch out.",
           "project",
         ).pipe(Effect.orDie)
-        const result = yield* projectMemoryVaultTurn(turnCtx("/test-repo", tmpDir)).pipe(
-          Effect.provide(MemoryVaultTest(tmpDir)),
-        )
+        const result = yield* withMemoryProjectionContext("/test-repo", tmpDir)
         expect(result.promptSections?.length).toBe(1)
         expect(result.promptSections?.[0]!.content).toContain("Project:")
         expect(result.promptSections?.[0]!.content).toContain("SQLite Gotcha")
@@ -116,7 +121,7 @@ describe("memory vault turn projection — read-only and scoped", () => {
       // Vault with no global/ or project/ subdirs at all
       expect(yield* fs.exists(path.join(tmpDir, "global"))).toBe(false)
       expect(yield* fs.exists(path.join(tmpDir, "project"))).toBe(false)
-      yield* projectMemoryVaultTurn(turnCtx("/some/repo", tmpDir)).pipe(
+      yield* withMemoryProjectionContext("/some/repo", tmpDir).pipe(
         Effect.tap((value) =>
           Effect.sync(() => {
             expect(value).toEqual({})
@@ -149,9 +154,7 @@ describe("memory vault turn projection — read-only and scoped", () => {
           "project",
         ).pipe(Effect.orDie)
         yield* writeFile(tmpDir, "global/g.md", "# G\n\nGlobal entry.").pipe(Effect.orDie)
-        const value = yield* projectMemoryVaultTurn(turnCtx("/active-repo", tmpDir)).pipe(
-          Effect.provide(MemoryVaultTest(tmpDir)),
-        )
+        const value = yield* withMemoryProjectionContext("/active-repo", tmpDir)
         const content = value.promptSections?.[0]?.content ?? ""
         expect(content).toContain("Active")
         expect(content).toContain("G")

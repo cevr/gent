@@ -2,16 +2,21 @@
  * Explicit turn-projection reaction regression locks.
  *
  * Locks the explicit turn-projection contract:
- *  - `reactions.turnProjection(ctx)` contributes prompt sections + tool policy
+ *  - `reactions.turnProjection()` contributes prompt sections + tool policy
  *  - failures/defects are isolated so later extensions still run
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
-import type { ExtensionTurnContext, LoadedExtension } from "../../src/domain/extension.js"
+import type {
+  ExtensionTurnContext,
+  LoadedExtension,
+  ProjectionTurnContext,
+} from "../../src/domain/extension.js"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
-import { ProjectionError, type ProjectionTurnContext } from "@gent/core/extensions/api"
+import { ProjectionError } from "@gent/core/extensions/api"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
+import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 
 const turnCtx: ExtensionTurnContext = {
   sessionId: "s" as ExtensionTurnContext["sessionId"],
@@ -29,6 +34,15 @@ const turnEvalCtx: ProjectionTurnContext = {
   cwd: "/tmp",
   home: "/tmp",
   turn: turnCtx,
+}
+const reactionCtx = {
+  projection: turnEvalCtx,
+  host: testExtensionHostContext({
+    sessionId: turnCtx.sessionId,
+    branchId: turnCtx.branchId,
+    cwd: turnEvalCtx.cwd,
+    home: turnEvalCtx.home,
+  }),
 }
 
 const compile = (extensions: ReadonlyArray<LoadedExtension>) =>
@@ -70,7 +84,7 @@ describe("turn projection reactions", () => {
         ),
       ])
 
-      const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
+      const result = yield* compiled.resolveTurnProjection(reactionCtx)
       expect(result.promptSections).toEqual([
         { id: "shared", content: "project", priority: 50 },
         { id: "project-only", content: "project-only", priority: 60 },
@@ -96,7 +110,7 @@ describe("turn projection reactions", () => {
         ),
       ])
 
-      const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
+      const result = yield* compiled.resolveTurnProjection(reactionCtx)
       expect(result.promptSections).toEqual([{ id: "good", content: "still-runs", priority: 50 }])
       expect(result.policyFragments).toEqual([{ include: ["still-runs"] }])
     }),
@@ -117,7 +131,7 @@ describe("turn projection reactions", () => {
         ),
       ])
 
-      const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
+      const result = yield* compiled.resolveTurnProjection(reactionCtx)
       expect(result.promptSections).toEqual([{ id: "good", content: "after-defect", priority: 50 }])
       expect(result.policyFragments).toEqual([])
     }),
@@ -127,7 +141,7 @@ describe("turn projection reactions", () => {
     Effect.gen(function* () {
       const compiled = compile([reactionExt("empty-reaction", "builtin", () => Effect.succeed({}))])
 
-      const result = yield* compiled.resolveTurnProjection(turnEvalCtx)
+      const result = yield* compiled.resolveTurnProjection(reactionCtx)
       expect(result.promptSections).toEqual([])
       expect(result.policyFragments).toEqual([])
     }),

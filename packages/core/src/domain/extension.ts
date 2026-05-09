@@ -252,7 +252,7 @@ export interface ExtensionReactions<E = never, R = never> {
    * Turn-scoped prompt/tool-policy contribution. Use for read-only runtime
    * derivations that need current turn metadata plus services.
    */
-  readonly turnProjection?: (ctx: ProjectionTurnContext) => Effect.Effect<TurnProjection, E, R>
+  readonly turnProjection?: () => Effect.Effect<TurnProjection, E, R>
   readonly turnBefore?: ExtensionReaction<TurnBeforeInput, E, R>
   readonly turnAfter?: ExtensionReaction<TurnAfterInput, E, R>
   readonly messageOutput?: ExtensionReaction<MessageOutputInput, E, R>

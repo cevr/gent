@@ -41,7 +41,7 @@ export const MemoryExtension = defineExtension({
   tools: [...MemoryTools],
   agents: [...MemoryAgents],
   reactions: {
-    turnProjection: (ctx) => projectMemoryVaultTurn(ctx),
+    turnProjection: () => projectMemoryVaultTurn(),
   },
   scheduledJobs: MemoryDreamJobs(),
   resources: () =>

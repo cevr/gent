@@ -1,4 +1,5 @@
 import { Deferred, Effect, Layer, Stream } from "effect"
+import { ExtensionContext } from "@gent/core/extensions/api"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids"
@@ -327,18 +328,21 @@ export const parentToolCallProbeExtension: LoadedExtension = {
   sourcePath: "test",
   contributions: {
     reactions: {
-      turnProjection: (ctx) =>
-        Effect.succeed({
-          promptSections:
-            ctx.turn.parentToolCallId === undefined
-              ? []
-              : [
-                  {
-                    id: "parent-tool-call-probe",
-                    content: `parentToolCallId:${ctx.turn.parentToolCallId}`,
-                    priority: 45,
-                  },
-                ],
+      turnProjection: () =>
+        Effect.gen(function* () {
+          const ctx = yield* ExtensionContext
+          return {
+            promptSections:
+              ctx.turn?.parentToolCallId === undefined
+                ? []
+                : [
+                    {
+                      id: "parent-tool-call-probe",
+                      content: `parentToolCallId:${ctx.turn.parentToolCallId}`,
+                      priority: 45,
+                    },
+                  ],
+          }
         }),
     },
   },
