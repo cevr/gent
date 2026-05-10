@@ -100,7 +100,7 @@ const collectSpans = (
 // Pretty Logger (stderr)
 // =============================================================================
 
-const prettyLogger: Logger.Logger<unknown, void> = Logger.make(
+const formatPretty: Logger.Logger<unknown, string> = Logger.make(
   ({ logLevel, message, fiber, date, cause }) => {
     const msg = extractMessage(message)
     const annotations = fiber.getRef(CurrentLogAnnotations)
@@ -110,19 +110,16 @@ const prettyLogger: Logger.Logger<unknown, void> = Logger.make(
     const color = levelColor(logLevel)
     const label = levelLabel(logLevel)
 
-    // Header line: [HH:mm:ss.SSS] [traceId] LEVEL  message
     const tracePrefix =
       fiber.currentSpan !== undefined
         ? `${DIM}[${fiber.currentSpan.traceId.slice(0, 8)}]${RESET} `
         : ""
     let output = `${DIM}[${formatTime(date)}]${RESET} ${tracePrefix}${color}${label}${RESET}  ${BOLD}${msg}${RESET}`
 
-    // Cause
     if (cause.reasons.length > 0) {
       output += `\n  ${"\x1b[31m"}${Cause.pretty(cause).split("\n")[0] ?? "unknown error"}${RESET}`
     }
 
-    // Tree-formatted annotations
     if (entries.length > 0) {
       for (const [i, [key, value]] of entries.entries()) {
         const isLast = i === entries.length - 1
@@ -132,7 +129,6 @@ const prettyLogger: Logger.Logger<unknown, void> = Logger.make(
       }
     }
 
-    // Spans as timing
     const now = date.getTime()
     const spanEntries = Object.entries(collectSpans(spans, now))
     if (spanEntries.length > 0 && entries.length === 0) {
@@ -143,9 +139,11 @@ const prettyLogger: Logger.Logger<unknown, void> = Logger.make(
       }
     }
 
-    process.stderr.write(output + "\n")
+    return output
   },
 )
+
+const prettyLogger: Logger.Logger<unknown, void> = Logger.withConsoleError(formatPretty)
 
 // =============================================================================
 // JSON File Logger
@@ -202,7 +200,7 @@ const makeJsonFileLogger = (path: string) =>
 // Config
 // =============================================================================
 
-import { resolveLogPaths, ensureLogDir, getLogPaths } from "./log-paths.js"
+import { resolveLogPaths, ensureLogDir } from "./log-paths.js"
 
 const clearLogFile = (path: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
@@ -241,13 +239,15 @@ export const GentLogger = Layer.unwrap(
     const jsonLogger = yield* makeJsonFileLogger(logFile)
     return Logger.layer([jsonLogger])
   }).pipe(
-    Effect.catchEager(() => {
-      const fallback = getLogPaths().log
-      return makeJsonFileLogger(fallback).pipe(
-        Effect.map((jsonLogger) => Logger.layer([jsonLogger])),
-        Effect.orElseSucceed(() => Logger.layer([prettyLogger])),
-      )
-    }),
+    Effect.catchEager(() =>
+      Effect.gen(function* () {
+        const { log: fallback } = yield* resolveLogPaths
+        return yield* makeJsonFileLogger(fallback).pipe(
+          Effect.map((jsonLogger) => Logger.layer([jsonLogger])),
+          Effect.orElseSucceed(() => Logger.layer([prettyLogger])),
+        )
+      }),
+    ),
   ),
 )
 
@@ -262,13 +262,15 @@ export const GentLoggerJson = Layer.unwrap(
     const jsonLogger = yield* makeJsonFileLogger(logFile)
     return Logger.layer([jsonLogger])
   }).pipe(
-    Effect.catchEager(() => {
-      const fallback = getLogPaths().log
-      return makeJsonFileLogger(fallback).pipe(
-        Effect.map((jsonLogger) => Logger.layer([jsonLogger])),
-        Effect.orElseSucceed(() => Logger.layer([prettyLogger])),
-      )
-    }),
+    Effect.catchEager(() =>
+      Effect.gen(function* () {
+        const { log: fallback } = yield* resolveLogPaths
+        return yield* makeJsonFileLogger(fallback).pipe(
+          Effect.map((jsonLogger) => Logger.layer([jsonLogger])),
+          Effect.orElseSucceed(() => Logger.layer([prettyLogger])),
+        )
+      }),
+    ),
   ),
 )
 

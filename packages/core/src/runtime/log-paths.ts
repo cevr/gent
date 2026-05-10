@@ -10,10 +10,8 @@
  */
 
 import { Config, DateTime, Effect, FileSystem, Option } from "effect"
-// @effect-diagnostics-next-line nodeBuiltinImport:off
-import { mkdirSync } from "node:fs"
 
-const LOG_DIR = "/tmp/gent/logs"
+export const LOG_DIR = "/tmp/gent/logs"
 const FALLBACK_CWD_IDENTITY = "unknown-cwd"
 
 /** FNV-1a 32-bit hash → 8-char hex */
@@ -43,9 +41,12 @@ export interface LogPaths {
   readonly client: string
 }
 
-let cached: LogPaths | undefined
-
-const buildPaths = (cwd: string): LogPaths => {
+/**
+ * Build log paths for a given cwd identity. Pure — no I/O. App entrypoints
+ * (e.g. TUI) that need a stable path before Effect startup can call this
+ * directly; Effect-aware callers should use {@link resolveLogPaths}.
+ */
+export const buildLogPaths = (cwd: string = FALLBACK_CWD_IDENTITY): LogPaths => {
   const prefix = `${hashCwd(cwd)}-${PROCESS_START_TS}`
   return {
     dir: LOG_DIR,
@@ -55,37 +56,14 @@ const buildPaths = (cwd: string): LogPaths => {
   }
 }
 
-/**
- * Resolve and cache log paths via Effect Config.
- * Must be called once during startup before any sync access via {@link getLogPaths}.
- */
+/** Resolve log paths from `GENT_CWD`, falling back to a stable sentinel. */
 export const resolveLogPaths: Effect.Effect<LogPaths> = Effect.gen(function* () {
-  if (cached !== undefined) return cached
-
   const cwd = Option.getOrElse(
     yield* Config.option(Config.string("GENT_CWD")),
     () => FALLBACK_CWD_IDENTITY,
   )
-
-  cached = buildPaths(cwd)
-  return cached
-}).pipe(Effect.catchEager(() => Effect.succeed(getLogPaths())))
-
-/**
- * Get cached log paths. Returns the cached value if {@link resolveLogPaths} has run,
- * otherwise falls back to a stable sentinel identity for sync shutdown
- * callsites that may run before Effect startup completes. Creates the
- * directory if needed.
- */
-export const getLogPaths = (): LogPaths => {
-  if (cached !== undefined) return cached
-  // Fallback for sync callsites before Effect init — best effort.
-  cached = buildPaths(FALLBACK_CWD_IDENTITY)
-  try {
-    mkdirSync(LOG_DIR, { recursive: true })
-  } catch {}
-  return cached
-}
+  return buildLogPaths(cwd)
+}).pipe(Effect.catchEager(() => Effect.succeed(buildLogPaths())))
 
 /** Create the log directory if it doesn't exist. Call once at startup. */
 export const ensureLogDir: Effect.Effect<void, never, FileSystem.FileSystem> = Effect.gen(

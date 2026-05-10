@@ -11,11 +11,15 @@
 import { DateTime, Effect, Option } from "effect"
 import type { Context } from "effect"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import { appendFileSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
 
-import { getLogPaths } from "@gent/core-internal/runtime/log-paths"
+import { LOG_DIR, buildLogPaths } from "@gent/core-internal/runtime/log-paths"
 
-export const CLIENT_LOG_PATH = getLogPaths().client
+export const CLIENT_LOG_PATH = buildLogPaths(process.cwd()).client
+
+try {
+  mkdirSync(LOG_DIR, { recursive: true })
+} catch {}
 
 const isoNow = () =>
   DateTime.make(performance.timeOrigin + performance.now()).pipe(
