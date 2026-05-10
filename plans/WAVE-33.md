@@ -455,25 +455,33 @@ Gate green at `6f8f01f9` (typecheck cached, lint clean, build 0.13s,
 561 ext + 50 core + tui + sdk + tooling pass). Per
 `feedback_one_revision_per_commit`, no second counsel pass.
 
-## Commit 6: refactor(runtime): collapse duplicated PubSub coordination
+## Commit 6: refactor(runtime): collapse duplicated PubSub coordination — DONE (fdb22b87 + fixup 6f020a4e)
 
 **Justification**: `domain/event.ts` (`makeSerializedEventDelivery` +
 `makeMemoryEventStore`) and `runtime/event-store-live.ts` independently
 hand-roll the same per-session PubSub registry. Two implementations of one
 primitive drift independently.
 
-**Changes**
+**Changes** (final, post-fixup)
 
-| File                                                                                            | Change                                                          | Lines              |
-| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------ |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-pubsub-registry.ts` (new) | Extract `SessionPubSubRegistry` (PubSub + Ref<HashMap>) helper. | new                |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts`                          | Consume the shared registry; drop in-file duplicate.            | ~357-397, ~485-570 |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/event-store-live.ts`              | Consume the shared registry; drop in-file duplicate.            | ~20-131            |
+| File                                                                                           | Change                                                                                              | Lines              |
+| ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------ |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/session-pubsub-registry.ts` (new) | Extract `SessionPubSubRegistry` (`subscribe(sessionId)` / `broadcast` / `remove`); hide raw PubSub. | new                |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/event.ts`                         | Consume the shared registry via `subscribe(sessionId)`; drop in-file duplicate.                     | ~357-397, ~485-570 |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/event-store-live.ts`             | Consume the shared registry via `subscribe(sessionId)`; drop in-file duplicate.                     | ~20-131            |
+
+Counsel on fdb22b87 returned `revise` for: (1) cyclic boundary edge —
+`domain/event.ts` was importing from `runtime/session-pubsub-registry`,
+which imports back from `domain/event`; (2) leaky surface — `getOrCreate`
+exposed raw `PubSub<EventEnvelope>` and both callers immediately did
+`PubSub.subscribe` on it. Fixup commit (6f020a4e) moves the helper to
+`domain/` and replaces `getOrCreate` with scoped `subscribe(sessionId) →
+PubSub.Subscription<EventEnvelope>`. Per `feedback_one_revision_per_commit`,
+no second counsel pass.
 
 **Verification**
 
-- focused event-store + session-pubsub tests
-- `bun run gate`
+- `bun run gate` (lint+fmt 3.96s, typecheck 0.13s, build 0.13s, test 8.68s) — green
 
 ## Commit 7: refactor(runtime): one truth for ActiveStreamHandle cancellation
 
