@@ -1,4 +1,4 @@
-import { Deferred, Effect, Ref, Stream } from "effect"
+import { Deferred, Effect, Stream } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
 import { DEFAULT_AGENT_NAME, type AgentName as AgentNameType } from "../../../domain/agent.js"
@@ -24,11 +24,33 @@ import { summarizeOutput, stringifyOutput } from "../../../domain/tool-output.js
 
 export type PublishEvent = (event: AgentEvent) => Effect.Effect<void, never, never>
 
+/**
+ * Cancellation handle for an in-flight turn stream. `interrupted` is the
+ * single source of truth: succeeding it both unblocks
+ * `Stream.interruptWhen(...)` and (via the constructor-wired listener)
+ * aborts the underlying `AbortController` for AI SDK interop. Callers
+ * read `Deferred.isDone(interrupted)` instead of a parallel boolean Ref.
+ */
 export type ActiveStreamHandle = {
-  abortController: AbortController
-  interruptDeferred: Deferred.Deferred<void>
-  interruptedRef: Ref.Ref<boolean>
+  readonly interrupted: Deferred.Deferred<void>
+  readonly abortSignal: AbortSignal
 }
+
+export const makeActiveStreamHandle = (): Effect.Effect<ActiveStreamHandle> =>
+  Effect.gen(function* () {
+    const interrupted = yield* Deferred.make<void>()
+    const abortController = new AbortController()
+    yield* Effect.forkDetach(
+      Deferred.await(interrupted).pipe(Effect.andThen(Effect.sync(() => abortController.abort()))),
+    )
+    return { interrupted, abortSignal: abortController.signal }
+  })
+
+export const signalActiveStreamInterrupt = (handle: ActiveStreamHandle): Effect.Effect<void> =>
+  Deferred.succeed(handle.interrupted, undefined).pipe(Effect.asVoid)
+
+const wasInterrupted = (handle: ActiveStreamHandle): Effect.Effect<boolean> =>
+  Deferred.isDone(handle.interrupted)
 
 /** Mutable accumulator for per-turn wide event fields. */
 export type TurnMetrics = {
@@ -164,9 +186,7 @@ export const collectModelTurnResponse = (params: {
     let hasObservableOutput = false
 
     const streamFailed = yield* Stream.runForEach(
-      params.turnStream.pipe(
-        Stream.interruptWhen(Deferred.await(params.activeStream.interruptDeferred)),
-      ),
+      params.turnStream.pipe(Stream.interruptWhen(Deferred.await(params.activeStream.interrupted))),
       (part) =>
         Effect.gen(function* () {
           if (part.type === "error") {
@@ -194,7 +214,7 @@ export const collectModelTurnResponse = (params: {
       Effect.as(false),
       Effect.catchTag("ProviderError", (streamError) =>
         Effect.gen(function* () {
-          const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
+          const interrupted = yield* wasInterrupted(params.activeStream)
           if (interrupted) return false
           if (params.retryPreOutputFailures === true && !hasObservableOutput) {
             return yield* streamError
@@ -221,7 +241,7 @@ export const collectModelTurnResponse = (params: {
       ),
     )
 
-    const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
+    const interrupted = yield* wasInterrupted(params.activeStream)
     return collectNormalizedResponse({
       responseParts,
       streamFailed,
@@ -239,7 +259,7 @@ export const collectFailedModelTurnResponse = (params: {
   formatStreamError: (streamError: ProviderError) => string
 }) =>
   Effect.gen(function* () {
-    const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
+    const interrupted = yield* wasInterrupted(params.activeStream)
     if (!interrupted) {
       yield* Effect.logWarning("stream error before output, retries exhausted").pipe(
         Effect.annotateLogs({ error: String(params.streamError) }),
@@ -370,9 +390,7 @@ export const collectExternalTurnResponse = (params: {
     const publishedToolResultIds = new Set<string>()
 
     const streamFailed = yield* Stream.runForEach(
-      params.turnStream.pipe(
-        Stream.interruptWhen(Deferred.await(params.activeStream.interruptDeferred)),
-      ),
+      params.turnStream.pipe(Stream.interruptWhen(Deferred.await(params.activeStream.interrupted))),
       (part) =>
         Effect.gen(function* () {
           if (part.type === "error") {
@@ -395,7 +413,7 @@ export const collectExternalTurnResponse = (params: {
       Effect.as(false),
       Effect.catchTag("TurnError", (streamError) =>
         Effect.gen(function* () {
-          const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
+          const interrupted = yield* wasInterrupted(params.activeStream)
           if (interrupted) return false
           yield* Effect.logWarning("stream error, persisting partial output").pipe(
             Effect.annotateLogs({ error: String(streamError) }),
@@ -419,7 +437,7 @@ export const collectExternalTurnResponse = (params: {
       ),
     )
 
-    const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
+    const interrupted = yield* wasInterrupted(params.activeStream)
     return collectNormalizedResponse({
       responseParts,
       streamFailed,

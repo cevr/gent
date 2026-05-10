@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Ref, Stream } from "effect"
+import { Effect, Ref, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import {
   collectExternalTurnResponse,
@@ -7,6 +7,8 @@ import {
   collectModelTurnResponse,
   collectNormalizedResponse,
   formatStreamErrorMessage,
+  makeActiveStreamHandle,
+  signalActiveStreamInterrupt,
   toResponseFinishReason,
   type ActiveStreamHandle,
 } from "../../src/runtime/agent/turn-response/collectors"
@@ -21,11 +23,9 @@ const branchId = BranchId.make("collector-branch")
 
 const makeActiveStream = (interrupted: boolean): Effect.Effect<ActiveStreamHandle> =>
   Effect.gen(function* () {
-    return {
-      abortController: new AbortController(),
-      interruptDeferred: yield* Deferred.make<void>(),
-      interruptedRef: yield* Ref.make(interrupted),
-    }
+    const handle = yield* makeActiveStreamHandle()
+    if (interrupted) yield* signalActiveStreamInterrupt(handle)
+    return handle
   })
 
 const captureEvents = () =>

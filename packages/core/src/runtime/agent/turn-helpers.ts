@@ -586,7 +586,7 @@ export const resolveTurnSource = (params: {
           tools: resolved.tools,
           systemPrompt: resolved.systemPrompt,
           cwd: params.hostCtx.cwd,
-          abortSignal: params.activeStream.abortController.signal,
+          abortSignal: params.activeStream.abortSignal,
           hostCtx: params.hostCtx,
           runTool: (toolName, args) =>
             Effect.gen(function* () {

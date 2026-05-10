@@ -97,6 +97,8 @@ import {
   collectExternalTurnResponse,
   collectModelTurnResponse,
   emptyTurnMetrics,
+  makeActiveStreamHandle,
+  signalActiveStreamInterrupt,
   type ActiveStreamHandle,
 } from "./turn-response/collectors.js"
 import {
@@ -185,13 +187,13 @@ export type AgentLoopBehavior = {
   close: Effect.Effect<void>
 }
 
-export const interruptActiveStream = (activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>) =>
+export const interruptActiveStream = (
+  activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>,
+): Effect.Effect<void> =>
   Effect.gen(function* () {
     const activeStream = yield* Ref.get(activeStreamRef)
     if (activeStream === undefined) return
-    yield* Ref.set(activeStream.interruptedRef, true)
-    yield* Deferred.succeed(activeStream.interruptDeferred, undefined).pipe(Effect.ignore)
-    activeStream.abortController.abort()
+    yield* signalActiveStreamInterrupt(activeStream)
   })
 
 const publishPhaseFailure = (params: {
@@ -1047,11 +1049,7 @@ export const makeAgentLoopBehavior = (
           break
         }
 
-        const activeStream: ActiveStreamHandle = {
-          abortController: new AbortController(),
-          interruptDeferred: yield* Deferred.make<void>(),
-          interruptedRef: yield* Ref.make(false),
-        }
+        const activeStream = yield* makeActiveStreamHandle()
         yield* Ref.set(activeStreamRef, activeStream)
 
         const collected = yield* collectTurnStream({
