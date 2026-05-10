@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Schema, type Scope } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
-import { Auth, AuthOauth, type AuthService } from "../domain/auth.js"
+import { Auth, AuthOauth } from "../domain/auth.js"
 import {
   ProviderAuthError,
   type ProviderAuthInfo,
@@ -40,9 +40,7 @@ export interface ModelResolverService {
   ) => Effect.Effect<LanguageModel.Service, ProviderError | ProviderAuthError, Scope.Scope>
 }
 
-export const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(function* (
-  authStore: AuthService,
-  defaultRegistry: DriverRegistryService,
+const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(function* (
   request: ResolveModelRequest,
 ) {
   const parsed = parseModelId(request.modelId)
@@ -54,6 +52,8 @@ export const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderMode
   }
   const [parsedProviderName, modelName] = parsed
   const providerName = request.driverId ?? parsedProviderName
+  const authStore = yield* Auth
+  const defaultRegistry = yield* DriverRegistry
   const driverRegistry = request.driverRegistry ?? defaultRegistry
 
   const extensionProvider = yield* driverRegistry.getModel(providerName)
@@ -146,17 +146,15 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
   static Live: Layer.Layer<ModelResolver, never, Auth | DriverRegistry> = Layer.effect(
     ModelResolver,
     Effect.gen(function* () {
-      const authStore = yield* Auth
-      const registry = yield* DriverRegistry
-
+      const context = yield* Effect.context<Auth | DriverRegistry>()
       return {
         resolve: (request) =>
           Effect.gen(function* () {
-            const resolved = yield* resolveProviderModel(authStore, registry, request)
+            const resolved = yield* resolveProviderModel(request)
             const scope = yield* Effect.scope
-            const context = yield* Layer.buildWithScope(resolved, scope)
-            return Context.get(context, LanguageModel.LanguageModel)
-          }),
+            const built = yield* Layer.buildWithScope(resolved, scope)
+            return Context.get(built, LanguageModel.LanguageModel)
+          }).pipe(Effect.provideContext(context)),
       } satisfies ModelResolverService
     }),
   )
