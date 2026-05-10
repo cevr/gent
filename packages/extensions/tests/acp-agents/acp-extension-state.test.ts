@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer, Path } from "effect"
+import { Effect, Exit, Layer, Path, Scope } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { testSetupCtx } from "@gent/core-internal/test-utils"
 import { makeAcpAgentsExtension } from "../../src/acp-agents/index.js"
@@ -76,13 +76,26 @@ describe("AcpAgentsExtension state ownership", () => {
       yield* secondProtocolDriver.invalidate()
       yield* firstClaudeDriver.invalidate()
       yield* secondClaudeDriver.invalidate()
-      const firstStop = first.resources?.[0]?.stop as Effect.Effect<void> | undefined
-      const secondStop = second.resources?.[0]?.stop as Effect.Effect<void> | undefined
-      if (firstStop === undefined || secondStop === undefined) {
-        throw new Error("expected ACP resource stop finalizers")
+      // Disposal moved from `Resource.stop` to `Layer.effect(... acquireRelease ...)`
+      // finalizer. Build each layer in its own scope and close in order. The
+      // bucket layer type is `Layer<any, any, any>` — narrow at the test
+      // boundary so the Effect language-service guard doesn't flag the build
+      // call sites for `any` in error/requirements channels.
+      const firstLayer = first.resources?.[0]?.layer as
+        | Layer.Layer<unknown, never, Scope.Scope>
+        | undefined
+      const secondLayer = second.resources?.[0]?.layer as
+        | Layer.Layer<unknown, never, Scope.Scope>
+        | undefined
+      if (firstLayer === undefined || secondLayer === undefined) {
+        throw new Error("expected ACP resource layers")
       }
-      yield* firstStop
-      yield* secondStop
+      const firstScope = yield* Scope.make()
+      const secondScope = yield* Scope.make()
+      yield* Layer.build(firstLayer).pipe(Scope.provide(firstScope))
+      yield* Layer.build(secondLayer).pipe(Scope.provide(secondScope))
+      yield* Scope.close(firstScope, Exit.void)
+      yield* Scope.close(secondScope, Exit.void)
 
       expect(calls).toEqual([
         `acp-1:invalidate:${firstProtocolDriver.id}`,

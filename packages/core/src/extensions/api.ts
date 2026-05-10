@@ -166,7 +166,6 @@ export {
   // in is the discrimination (no `_kind` field).
   defineResource,
   defineScheduledJob,
-  resource,
 } from "../domain/contribution.js"
 
 // Typed capability factories. Extension registries dispatch by factory-origin

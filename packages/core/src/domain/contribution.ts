@@ -9,8 +9,9 @@
  * `request({...})` at `domain/capability/{tool,request}.ts`. Slash commands
  * are requests carrying a `slash:` presentation block.
  *
- * Resource keeps an identity smart constructor (`resource`) below; it exists
- * to widen variance at the bucket boundary.
+ * Resources are authored through `defineResource({...})` from
+ * `./resource.ts`; the leaf is widened by structural assignability at the
+ * bucket boundary.
  *
  * Drivers split into `modelDrivers` and `externalDrivers`; one untagged
  * `drivers: []` bucket would erase the correlated union.
@@ -21,7 +22,7 @@ import type { AgentDefinition } from "./agent.js"
 import type { RequestCapability } from "./capability/request.js"
 import type { ToolCapability } from "./capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
-import type { AnyResourceContribution, ResourceContribution, ResourceScope } from "./resource.js"
+import type { AnyResourceContribution } from "./resource.js"
 import type { ScheduledJobContribution } from "./scheduled-job.js"
 import type { ExtensionReactions as ExtensionReactionsType } from "./extension.js"
 
@@ -95,25 +96,12 @@ export const rpcCapabilities = (
 
 // ── Smart constructors ──
 //
-// `resource` widens the typed authoring shape to the bucket leaf. Capabilities
-// are authored through the typed factories in `domain/capability/{tool,request}.ts`.
-
-// `defineResource` is exported directly from `./resource.ts` — returns the
-// Resource leaf that goes straight into the `resources` bucket. After  it
-// no longer sets a `_kind: "resource"` field; the bucket IS the discrimination.
+// Capabilities are authored through the typed factories in
+// `domain/capability/{tool,request}.ts`. The Resource primitive is authored
+// through `defineResource({...})` directly — leaves widen to
+// `AnyResourceContribution` by structural assignability when the `layer`'s
+// `A` is concrete (not `never`). Lifecycle-only resources should encode
+// disposal as a `Layer.scoped` finalizer over a marker tag rather than
+// `{ layer: Layer.empty, stop: ... }`.
 export { defineResource } from "./resource.js"
 export { defineScheduledJob } from "./scheduled-job.js"
-
-/**
- * Identity smart constructor for the Resource primitive. Generic over
- * `<A, S, R, E>` so authors keep their typed Resource shape; the leaf is
- * widened to `AnyResourceContribution` at the bucket boundary. The same
- * variance hole that forces this widener exists because `Layer.Layer<A, E, R>` has a
- * contravariant `R` channel, so a narrowly-typed `Layer<never, never, ...>`
- * is not assignable to `Layer<any, any, any>` without an identity widener.
- */
-export const resource = <A, S extends ResourceScope, R, E>(
-  r: ResourceContribution<A, S, R, E>,
-): AnyResourceContribution =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
-  r as unknown as AnyResourceContribution

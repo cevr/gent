@@ -22,7 +22,6 @@ import {
   ExtensionSetupContext,
   makeRunSpec,
   request,
-  resource,
   tool,
   ToolCallId,
   type RequestInput,
@@ -596,14 +595,14 @@ describe("Effect-purity locks (compile-time)", () => {
         },
       },
       resources: [
-        resource(
-          defineResource({
-            scope: "process",
-            layer: Layer.empty,
-            start: Effect.void,
-            stop: Effect.void,
-          }),
-        ),
+        defineResource({
+          scope: "process",
+          layer: Layer.succeed(ReadOnlyService, {
+            read: () => Effect.succeed(""),
+          } satisfies ReadOnlyShape),
+          start: Effect.void,
+          stop: Effect.void,
+        }),
       ],
       scheduledJobs: [
         {

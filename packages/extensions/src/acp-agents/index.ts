@@ -17,8 +17,9 @@
  *
  * @module
  */
-import { Effect, Layer } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+
 import {
   AgentName,
   defineAgent,
@@ -26,7 +27,6 @@ import {
   defineResource,
   ExtensionSetupContext,
   ExternalDriverRef,
-  resource,
   sectionPatternFor,
   type ExtensionContributions,
   type GentExtension,
@@ -43,6 +43,20 @@ import { readClaudeCodeOAuthToken } from "./claude-code-auth.js"
 import { live as claudeSdkLive, type AcpAgentsPlatformShape } from "./claude-sdk.js"
 import { AnthropicPlatform } from "../anthropic/platform-adapter.js"
 import { generateToolDescription } from "./mcp-codemode.js"
+
+/**
+ * Marker service whose only purpose is to give the lifecycle-only Resource
+ * a concrete `A` channel. Effect v4 `Layer<in ROut, out E, out RIn>` makes
+ * `Layer.empty: Layer<never>` non-assignable to the heterogeneous bucket
+ * type `Layer<any, ...>` under contravariant `ROut`, so the prior
+ * `resource()` variance widener was the only way to land a `Layer.empty`
+ * leaf. Anchoring `A = AcpAgentsDisposer` keeps the leaf type structural
+ * and lets `defineResource(...)` flow straight into `resources: []`.
+ */
+class AcpAgentsDisposer extends Context.Service<
+  AcpAgentsDisposer,
+  { readonly _tag: "AcpAgentsDisposer" }
+>()("@gent/extensions/src/acp-agents/AcpAgentsDisposer") {}
 
 const claudeCodeAgent = defineAgent({
   name: AgentName.make(CLAUDE_CODE_AGENT_NAME),
@@ -206,16 +220,20 @@ const buildAcpContributions = (
     },
     externalDrivers: [claudeCode, ...protocolDrivers],
     resources: [
-      resource(
-        defineResource({
-          scope: "process",
-          layer: Layer.empty,
-          stop: Effect.gen(function* () {
-            yield* acpManager.disposeAll()
-            yield* claudeCodeManager.disposeAll
-          }),
-        }),
-      ),
+      defineResource({
+        scope: "process",
+        layer: Layer.effect(
+          AcpAgentsDisposer,
+          Effect.acquireRelease(
+            Effect.succeed(AcpAgentsDisposer.of({ _tag: "AcpAgentsDisposer" })),
+            () =>
+              Effect.gen(function* () {
+                yield* acpManager.disposeAll()
+                yield* claudeCodeManager.disposeAll
+              }),
+          ),
+        ),
+      }),
     ],
   }
 }
