@@ -384,6 +384,23 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
+  test("removed reaction slots are not part of the public reactions bag", () => {
+    type Reactions = NonNullable<Parameters<typeof defineExtension>[0]["reactions"]>
+    // @ts-expect-error — messageInput reaction was removed; mutations belong in tools/actions
+    type _MessageInput = Reactions["messageInput"]
+    // @ts-expect-error — contextMessages reaction was removed; turnProjection composes prompt context
+    type _ContextMessages = Reactions["contextMessages"]
+    // @ts-expect-error — permissionCheck reaction was removed; permission policy is host-owned
+    type _PermissionCheck = Reactions["permissionCheck"]
+    // @ts-expect-error — toolExecute reaction was removed; tools own their effect
+    type _ToolExecute = Reactions["toolExecute"]
+    // @ts-expect-error — turnBefore reaction was removed; turnProjection runs at turn start
+    type _TurnBefore = Reactions["turnBefore"]
+    // @ts-expect-error — messageOutput reaction was removed; assistant parts persist directly
+    type _MessageOutput = Reactions["messageOutput"]
+    expect(true).toBe(true)
+  })
+
   test("reaction handlers receive event input only", () => {
     defineExtension({
       id: "reaction-handler-params-lock",
@@ -433,6 +450,12 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadExtensionInteraction = typeof PublicExtensionApi.ExtensionInteraction
     // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
     type _BadExtensionProcess = typeof PublicExtensionApi.ExtensionProcess
+    // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
+    type _BadExtensionFiles = typeof PublicExtensionApi.ExtensionFiles
+    // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
+    type _BadExtensionFileLock = typeof PublicExtensionApi.ExtensionFileLock
+    // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
+    type _BadExtensionState = typeof PublicExtensionApi.ExtensionState
     // @ts-expect-error — raw tool metadata is internal lowering detail
     type _BadGetToolMetadata = typeof PublicExtensionApi.getToolMetadata
     // @ts-expect-error — raw tool metadata is internal lowering detail

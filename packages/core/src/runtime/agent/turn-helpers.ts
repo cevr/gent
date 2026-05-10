@@ -28,7 +28,7 @@ import {
 } from "../../domain/event.js"
 import type { EventPublisherService } from "../../domain/event-publisher.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
-import type { PermissionService } from "../../domain/permission.js"
+import { Permission, type PermissionService } from "../../domain/permission.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import type { ProviderAuthError, TurnError } from "../../domain/driver.js"
 import type { StorageError } from "../../domain/storage-error.js"
@@ -44,8 +44,7 @@ import type * as Response from "effect/unstable/ai/Response"
 import { withRetry } from "../retry"
 import { withWideEvent, WideEvent, providerStreamBoundary } from "../wide-event-boundary"
 import type { DriverRegistryService } from "../extensions/driver-registry.js"
-import type { ExtensionRegistryService } from "../extensions/registry.js"
-import type { ResourceManagerService } from "../resource-manager.js"
+import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { convertTools, type ToolRunnerService } from "./tool-runner"
 import { buildTurnPromptSections, resolveReasoning } from "./agent-loop.utils.js"
 import type { ResolvedTurn } from "./agent-loop.state.js"
@@ -523,7 +522,6 @@ export const executeToolCalls = (params: {
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
   permission?: PermissionService
-  resourceManager: ResourceManagerService
 }) =>
   Effect.forEach(
     params.toolCalls,
@@ -534,7 +532,7 @@ export const executeToolCalls = (params: {
           agentName: params.currentTurnAgent,
           toolCallId: ToolCallId.make(toolCall.id),
         }
-        const run = params.toolRunner
+        let run = params.toolRunner
           .run(
             {
               toolCallId: ToolCallId.make(toolCall.id),
@@ -542,14 +540,15 @@ export const executeToolCalls = (params: {
               input: toolCall.params,
             },
             ctx,
-            {
-              registry: params.extensionRegistry,
-              ...(params.permission !== undefined ? { permission: params.permission } : {}),
-              resourceManager: params.resourceManager,
-              publishEvent: params.publishEvent,
-            },
+            { publishEvent: params.publishEvent },
           )
-          .pipe(Effect.mapError((e) => new ToolInteractionPending(e, ToolCallId.make(toolCall.id))))
+          .pipe(
+            Effect.provideService(ExtensionRegistry, params.extensionRegistry),
+            Effect.mapError((e) => new ToolInteractionPending(e, ToolCallId.make(toolCall.id))),
+          )
+        if (params.permission !== undefined) {
+          run = run.pipe(Effect.provideService(Permission, params.permission))
+        }
         return yield* run
       }),
     { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
@@ -583,6 +582,8 @@ export const resolveTurnSource = (params: {
   activeStream: ActiveStreamHandle
   hostCtx: ExtensionHostContext
   toolRunner: ToolRunnerService
+  extensionRegistry: ExtensionRegistryService
+  permission?: PermissionService
 }) =>
   Effect.gen(function* () {
     const { resolved } = params
@@ -617,9 +618,13 @@ export const resolveTurnSource = (params: {
           runTool: (toolName, args) =>
             Effect.gen(function* () {
               const toolCallId = ToolCallId.make(yield* Random.nextUUIDv4)
-              return yield* params.toolRunner
+              let run = params.toolRunner
                 .run({ toolCallId, toolName, input: args }, { ...params.hostCtx, toolCallId })
-                .pipe(Effect.orDie)
+                .pipe(Effect.provideService(ExtensionRegistry, params.extensionRegistry))
+              if (params.permission !== undefined) {
+                run = run.pipe(Effect.provideService(Permission, params.permission))
+              }
+              return yield* run.pipe(Effect.orDie)
             }),
         }),
         formatStreamError: (streamError: unknown) =>
@@ -754,7 +759,6 @@ export const invokeTool = (params: {
   extensionRegistry: ExtensionRegistryService
   permission?: PermissionService
   hostCtx: ExtensionHostContext
-  resourceManager: ResourceManagerService
   storage: TurnStorage
 }) =>
   Effect.gen(function* () {
@@ -790,7 +794,6 @@ export const invokeTool = (params: {
       toolRunner: params.toolRunner,
       extensionRegistry: params.extensionRegistry,
       permission: params.permission,
-      resourceManager: params.resourceManager,
     })
     yield* persistToolParts({
       storage: params.storage,

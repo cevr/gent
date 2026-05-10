@@ -11,12 +11,10 @@ import { Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../../domain/event.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
-import type { ResourceManagerService } from "../resource-manager.js"
 import { withWideEvent, WideEvent, toolBoundary, ToolError } from "../wide-event-boundary"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { extensionHostFacts } from "../make-extension-host-context.js"
 import { ToolCallId } from "../../domain/ids.js"
-import type { Option } from "effect"
 import type * as AiTool from "effect/unstable/ai/Tool"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
@@ -36,10 +34,7 @@ type ToolLifecycleEvent = ToolCallStarted | ToolCallSucceeded | ToolCallFailed
 
 type PublishToolEvent = (event: ToolLifecycleEvent) => Effect.Effect<unknown>
 
-interface ToolExecutionProfile {
-  readonly registry: ExtensionRegistryService
-  readonly permission?: PermissionService
-  readonly resourceManager?: ResourceManagerService
+export interface ToolRunOptions {
   readonly publishEvent?: PublishToolEvent
 }
 
@@ -64,34 +59,9 @@ export interface ToolRunnerService {
   readonly run: (
     toolCall: ToolCall,
     ctx: ToolCapabilityContext,
-    profileOverride?: ToolExecutionProfile,
-  ) => Effect.Effect<Prompt.ToolResultPart, InteractionPendingError>
+    options?: ToolRunOptions,
+  ) => Effect.Effect<Prompt.ToolResultPart, InteractionPendingError, ExtensionRegistry>
 }
-
-const allowAllPermission: PermissionService = {
-  check: () => Effect.succeed("allowed"),
-  addRule: () => Effect.void,
-  removeRule: () => Effect.void,
-  getRules: () => Effect.succeed([]),
-}
-
-const resolveActivePermission = (
-  basePermissionOpt: Option.Option<PermissionService>,
-  profileOverride:
-    | {
-        readonly registry: ExtensionRegistryService
-        readonly permission?: PermissionService
-      }
-    | undefined,
-): PermissionService =>
-  profileOverride?.permission ??
-  (basePermissionOpt._tag === "Some" ? basePermissionOpt.value : allowAllPermission)
-
-const runPermissionCheck = (params: {
-  toolCall: { toolName: string; input: unknown }
-  permission: PermissionService
-}): Effect.Effect<"allowed" | "denied"> =>
-  params.permission.check(params.toolCall.toolName, params.toolCall.input)
 
 const deriveToolContext = (ctx: ToolCapabilityContext): ToolRuntimeContext => ({
   sessionId: ctx.sessionId,
@@ -252,60 +222,64 @@ const normalizeToolExecutionError = (failure: unknown): InteractionPendingError 
   return new Error(String(failure))
 }
 
+const allowAllPermission: PermissionService = {
+  check: () => Effect.succeed("allowed"),
+  addRule: () => Effect.void,
+  removeRule: () => Effect.void,
+  getRules: () => Effect.succeed([]),
+}
+
 export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()(
   "@gent/core/src/runtime/agent/tool-runner/ToolRunner",
 ) {
-  static Live: Layer.Layer<ToolRunner, never, ExtensionRegistry> = Layer.effect(
+  static Live: Layer.Layer<ToolRunner> = Layer.succeed(
     ToolRunner,
-    Effect.gen(function* () {
-      const extensionRegistry = yield* ExtensionRegistry
-      const basePermissionOpt = yield* Effect.serviceOption(Permission)
+    ToolRunner.of({
+      run: Effect.fn("ToolRunner.run")(function* (toolCall, ctx, options) {
+        const activeRegistry = yield* ExtensionRegistry
+        const basePermissionOpt = yield* Effect.serviceOption(Permission)
+        const activePermission: PermissionService =
+          basePermissionOpt._tag === "Some" ? basePermissionOpt.value : allowAllPermission
 
-      const run: ToolRunnerService["run"] = Effect.fn("ToolRunner.run")(
-        function* (toolCall, ctx, profileOverride) {
-          return yield* Effect.gen(function* () {
-            yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })
-            yield* publishStarted({ publishEvent: profileOverride?.publishEvent, ctx, toolCall })
+        return yield* Effect.gen(function* () {
+          yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })
+          yield* publishStarted({ publishEvent: options?.publishEvent, ctx, toolCall })
 
-            // Use per-session profile when provided, falling back to server-wide
-            const activeRegistry = profileOverride?.registry ?? extensionRegistry
-            const activePermission = resolveActivePermission(basePermissionOpt, profileOverride)
-            const tool: ToolCapability | undefined = yield* activeRegistry.getModelCapability(
-              toolCall.toolName,
-            )
+          const tool: ToolCapability | undefined = yield* activeRegistry.getModelCapability(
+            toolCall.toolName,
+          )
 
-            const finish = (result: Prompt.ToolResultPart) =>
-              Effect.gen(function* () {
-                yield* publishCompleted({
-                  publishEvent: profileOverride?.publishEvent,
-                  ctx,
-                  result,
-                })
-                yield* Effect.logInfo("tool.completed").pipe(
-                  Effect.annotateLogs({
-                    toolName: toolCall.toolName,
-                    toolCallId: toolCall.toolCallId,
-                    isError: result.isFailure,
-                  }),
-                )
-                return result
+          const finish = (result: Prompt.ToolResultPart) =>
+            Effect.gen(function* () {
+              yield* publishCompleted({
+                publishEvent: options?.publishEvent,
+                ctx,
+                result,
               })
-
-            if (tool === undefined) {
-              yield* WideEvent.set({ toolError: ToolError.Unknown })
-              yield* Effect.logInfo("tool.unknown").pipe(
+              yield* Effect.logInfo("tool.completed").pipe(
                 Effect.annotateLogs({
                   toolName: toolCall.toolName,
                   toolCallId: toolCall.toolCallId,
+                  isError: result.isFailure,
                 }),
               )
-              return yield* finish(errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`))
-            }
-            const executeKnownTool = Effect.gen(function* () {
-              const permCheckResult = yield* runPermissionCheck({
-                toolCall,
-                permission: activePermission,
-              }).pipe(
+              return result
+            })
+
+          if (tool === undefined) {
+            yield* WideEvent.set({ toolError: ToolError.Unknown })
+            yield* Effect.logInfo("tool.unknown").pipe(
+              Effect.annotateLogs({
+                toolName: toolCall.toolName,
+                toolCallId: toolCall.toolCallId,
+              }),
+            )
+            return yield* finish(errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`))
+          }
+          const executeKnownTool = Effect.gen(function* () {
+            const permCheckResult = yield* activePermission
+              .check(toolCall.toolName, toolCall.input)
+              .pipe(
                 Effect.catchEager((e) =>
                   WideEvent.set({
                     toolError: ToolError.PermissionCheckFailed,
@@ -314,87 +288,83 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                 ),
               )
 
-              if (permCheckResult === "interceptor_failed") {
-                yield* Effect.logWarning("tool.permission.check.failed").pipe(
-                  Effect.annotateLogs({
-                    toolName: toolCall.toolName,
-                    toolCallId: toolCall.toolCallId,
-                  }),
-                )
-                return errorResult(toolCall, "Permission check failed")
-              }
-
-              if (permCheckResult === "denied") {
-                yield* WideEvent.set({ toolError: ToolError.PermissionDenied })
-                yield* Effect.logInfo("tool.permission.denied").pipe(
-                  Effect.annotateLogs({
-                    toolName: toolCall.toolName,
-                    toolCallId: toolCall.toolCallId,
-                  }),
-                )
-                return errorResult(toolCall, "Permission denied")
-              }
-
-              const executionToolkit = yield* makeExecutionToolkit({
-                tool,
-                toolCall,
-                ctx,
-                registry: activeRegistry,
-              })
-              return yield* terminalToolResult(executionToolkit, toolCall)
-            })
-
-            const executeResult = yield* executeKnownTool.pipe(Effect.result)
-
-            if (executeResult._tag === "Failure") {
-              const failure: unknown = executeResult.failure
-              if (Schema.is(InteractionPendingError)(failure)) {
-                return yield* failure
-              }
-
-              const message = errorMessageFromAiError(toolCall.toolName, failure)
-              yield* WideEvent.set({
-                toolError:
-                  AiError.isAiError(failure) &&
-                  failure.reason._tag === "ToolParameterValidationError"
-                    ? ToolError.SchemaDecode
-                    : ToolError.ExecutionFailed,
-                errorMessage: message,
-              })
-              yield* Effect.logWarning(
-                AiError.isAiError(failure) && failure.reason._tag === "ToolParameterValidationError"
-                  ? "tool.schema.failed"
-                  : "tool.execute.failed",
-              ).pipe(
+            if (permCheckResult === "interceptor_failed") {
+              yield* Effect.logWarning("tool.permission.check.failed").pipe(
                 Effect.annotateLogs({
                   toolName: toolCall.toolName,
                   toolCallId: toolCall.toolCallId,
                 }),
               )
-              return yield* finish(errorResult(toolCall, message))
+              return errorResult(toolCall, "Permission check failed")
             }
 
-            return yield* finish(executeResult.success)
-          }).pipe(withWideEvent(toolBoundary(toolCall.toolName, toolCall.toolCallId)))
-        },
-      )
+            if (permCheckResult === "denied") {
+              yield* WideEvent.set({ toolError: ToolError.PermissionDenied })
+              yield* Effect.logInfo("tool.permission.denied").pipe(
+                Effect.annotateLogs({
+                  toolName: toolCall.toolName,
+                  toolCallId: toolCall.toolCallId,
+                }),
+              )
+              return errorResult(toolCall, "Permission denied")
+            }
 
-      return ToolRunner.of({ run })
+            const executionToolkit = yield* makeExecutionToolkit({
+              tool,
+              toolCall,
+              ctx,
+              registry: activeRegistry,
+            })
+            return yield* terminalToolResult(executionToolkit, toolCall)
+          })
+
+          const executeResult = yield* executeKnownTool.pipe(Effect.result)
+
+          if (executeResult._tag === "Failure") {
+            const failure: unknown = executeResult.failure
+            if (Schema.is(InteractionPendingError)(failure)) {
+              return yield* failure
+            }
+
+            const message = errorMessageFromAiError(toolCall.toolName, failure)
+            yield* WideEvent.set({
+              toolError:
+                AiError.isAiError(failure) && failure.reason._tag === "ToolParameterValidationError"
+                  ? ToolError.SchemaDecode
+                  : ToolError.ExecutionFailed,
+              errorMessage: message,
+            })
+            yield* Effect.logWarning(
+              AiError.isAiError(failure) && failure.reason._tag === "ToolParameterValidationError"
+                ? "tool.schema.failed"
+                : "tool.execute.failed",
+            ).pipe(
+              Effect.annotateLogs({
+                toolName: toolCall.toolName,
+                toolCallId: toolCall.toolCallId,
+              }),
+            )
+            return yield* finish(errorResult(toolCall, message))
+          }
+
+          return yield* finish(executeResult.success)
+        }).pipe(withWideEvent(toolBoundary(toolCall.toolName, toolCall.toolCallId)))
+      }),
     }),
   )
 
   static Test = (): Layer.Layer<ToolRunner> =>
     Layer.succeed(ToolRunner, {
-      run: (toolCall, ctx, profileOverride) =>
+      run: (toolCall, ctx, options) =>
         Effect.gen(function* () {
-          yield* publishStarted({ publishEvent: profileOverride?.publishEvent, ctx, toolCall })
+          yield* publishStarted({ publishEvent: options?.publishEvent, ctx, toolCall })
           const result = Prompt.toolResultPart({
             id: toolCall.toolCallId,
             name: toolCall.toolName,
             isFailure: false,
             result: null,
           })
-          yield* publishCompleted({ publishEvent: profileOverride?.publishEvent, ctx, result })
+          yield* publishCompleted({ publishEvent: options?.publishEvent, ctx, result })
           return result
         }),
     })

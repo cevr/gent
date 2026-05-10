@@ -60,7 +60,6 @@ import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/
 import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
 import { makeExtensionHostPlatform } from "../extensions/host-platform.js"
 import { ToolRunner } from "./tool-runner.js"
-import { ResourceManager, type ResourceManagerService } from "../resource-manager.js"
 import { ModelRegistry } from "../model-registry.js"
 import type { GentPlatform } from "../gent-platform.js"
 import type { ExtensionHostPlatform } from "../../domain/extension.js"
@@ -241,7 +240,6 @@ export type AgentLoopBehaviorDeps = {
   readonly driverRegistry: typeof DriverRegistry.Service
   readonly eventPublisher: typeof EventPublisher.Service
   readonly toolRunner: typeof ToolRunner.Service
-  readonly resourceManager: ResourceManagerService
   readonly messageStorage: typeof MessageStorage.Service
   readonly queueStorage: typeof AgentLoopQueueStorage.Service
   readonly sessionStorage: typeof SessionStorage.Service
@@ -278,7 +276,6 @@ export const makeAgentLoopBehaviorDeps = (config: {
   | DriverRegistry
   | EventPublisher
   | ToolRunner
-  | ResourceManager
   | ConfigService
   | ModelRegistry
   | ChildProcessSpawner
@@ -297,7 +294,6 @@ export const makeAgentLoopBehaviorDeps = (config: {
     const driverRegistry = yield* DriverRegistry
     const eventPublisher = yield* EventPublisher
     const toolRunner = yield* ToolRunner
-    const resourceManager = yield* ResourceManager
     const configServiceForRun = yield* ConfigService
     const modelRegistryForRun = yield* ModelRegistry
     const host = yield* makeExtensionHostPlatform
@@ -323,7 +319,6 @@ export const makeAgentLoopBehaviorDeps = (config: {
       driverRegistry,
       eventPublisher,
       toolRunner,
-      resourceManager,
       messageStorage,
       queueStorage,
       sessionStorage,
@@ -354,7 +349,6 @@ export const makeAgentLoopBehavior = (
       driverRegistry,
       eventPublisher,
       toolRunner,
-      resourceManager,
       messageStorage,
       queueStorage,
       sessionStorage,
@@ -735,7 +729,6 @@ export const makeAgentLoopBehavior = (
         toolRunner,
         extensionRegistry: params.extensionRegistry,
         permission: params.permission,
-        resourceManager,
       })
       yield* persistToolParts({
         storage: turnStorage,
@@ -752,6 +745,7 @@ export const makeAgentLoopBehavior = (
       step: number
       resolved: ResolvedTurnContext
       extensionRegistry: ExtensionRegistryService
+      permission?: PermissionService
       driverRegistry: DriverRegistryService
       hostCtx: ExtensionHostContext
       activeStream: ActiveStreamHandle
@@ -792,6 +786,8 @@ export const makeAgentLoopBehavior = (
         activeStream: params.activeStream,
         hostCtx: params.hostCtx,
         toolRunner,
+        extensionRegistry: params.extensionRegistry,
+        ...(params.permission !== undefined ? { permission: params.permission } : {}),
       })
 
       if (source === undefined) {
@@ -1104,6 +1100,7 @@ export const makeAgentLoopBehavior = (
           step,
           resolved,
           extensionRegistry: turnExtensionRegistry,
+          permission: turnPermission,
           driverRegistry: turnDriverRegistry,
           hostCtx: turnHostCtx,
           activeStream,

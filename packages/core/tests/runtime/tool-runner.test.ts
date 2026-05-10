@@ -664,7 +664,6 @@ describe("ToolRunner", () => {
       const events: Array<ToolCallStarted> = []
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
-        const registry = yield* ExtensionRegistry
         return yield* Effect.flip(
           runner.run(
             { toolCallId: ToolCallId.make("tc-pending"), toolName: "pending", input: {} },
@@ -675,7 +674,6 @@ describe("ToolRunner", () => {
               agentName: AgentName.make("cowork"),
             }),
             {
-              registry,
               publishEvent: (event) =>
                 Effect.sync(() => {
                   eventTags.push(event._tag)

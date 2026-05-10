@@ -1023,7 +1023,6 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
                     extensionRegistry: environment.turnExtensionRegistry,
                     permission: environment.turnPermission,
                     hostCtx: environment.turnHostCtx,
-                    resourceManager: deps.resourceManager,
                     storage: deps.turnStorage,
                   })
                 }),
