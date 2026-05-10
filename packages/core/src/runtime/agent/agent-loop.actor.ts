@@ -1011,10 +1011,9 @@ const buildAgentLoopActorHandlers = (config: {
  * Layer-level services that the per-entity build effect needs from the
  * ephemeral layer-build context (NOT from Sharding's per-entity context).
  *
- * Excluded: services Sharding adds per-entity (`Actor.CurrentAddress`) or
- * provides via outer `Layer.provideMerge` (`ActorStateRegistry`,
- * `AgentLoopSessionGovernance`, `GentPlatform`) — those resolve from
- * Sharding's captured services context correctly.
+ * Excluded: services Sharding adds per-entity (`Actor.CurrentAddress`) and
+ * `ActorStateRegistry` provided via outer `Layer.provideMerge` — those resolve
+ * from Sharding's captured services context correctly.
  */
 type AgentLoopBuildContext =
   | SessionStorage
@@ -1024,7 +1023,7 @@ type AgentLoopBuildContext =
   | SqlClient.SqlClient
   | EventPublisher
   | ToolRunner
-  | (typeof AgentLoopSessionGovernance)["Identifier"]
+  | AgentLoopSessionGovernance
   | GentPlatform
 
 /**
