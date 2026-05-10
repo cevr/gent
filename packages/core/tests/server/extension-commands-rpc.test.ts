@@ -25,7 +25,7 @@ import { SessionProfileCache, type SessionProfile } from "../../src/runtime/sess
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { defineResource } from "@gent/core-internal/domain/resource"
-import { action, CapabilityError, ExtensionContext, request, tool } from "@gent/core/extensions/api"
+import { CapabilityError, ExtensionContext, request, tool } from "@gent/core/extensions/api"
 import * as ExtensionApi from "@gent/core/extensions/api"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { ConfigService } from "../../src/runtime/config-service"
@@ -47,8 +47,7 @@ describe("extension command RPCs", () => {
     sessionId: string
     cwd: string
   }> = []
-  // Server-visible slash commands are slash-decorated requests or actions.
-  // Palette-only actions stay local to the client surface.
+  // Server-visible slash commands are slash-decorated requests.
   const TestCommandsExtension: GentExtension = {
     manifest: { id: ExtensionId.make("@test/commands") },
     setup: () =>
@@ -67,13 +66,11 @@ describe("extension command RPCs", () => {
                 invoked.push({ args, sessionId: ctx.sessionId, cwd: ctx.cwd })
               }),
           }),
-        ],
-        actions: [
-          action({
+          request({
             id: "noop",
-            name: "noop",
+            extensionId: ExtensionId.make("@test/commands"),
+            slash: { name: "noop", description: "noop" },
             description: "noop",
-            surface: "slash",
             input: Schema.String,
             output: Schema.Void,
             execute: () => Effect.void,
@@ -158,7 +155,7 @@ describe("extension command RPCs", () => {
             createdSessionId = sessionId
             const commands = yield* client.extension.listSlashCommands({ sessionId })
             expect(commands[0]).toBeInstanceOf(SlashCommandInfo)
-            expect(commands.map((command) => command.name)).toEqual(["noop", "greet"])
+            expect(commands.map((command) => command.name)).toEqual(["greet", "noop"])
             const greet = commands.find((command) => command.name === "greet")
             expect(greet?.description).toBe("Say hello")
             expect(greet?.extensionId).toBe(ExtensionId.make("@test/commands"))
@@ -244,7 +241,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
-  it.live("RPC request runs slash action with ExtensionContext service", () =>
+  it.live("RPC request runs slash request with ExtensionContext service", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/queue-follow-up-action")
       const ext: LoadedExtension = {
@@ -252,13 +249,16 @@ describe("extension command RPCs", () => {
         scope: "builtin",
         sourcePath: "test",
         contributions: {
-          actions: [
-            action({
+          requests: [
+            request({
               id: "queue-follow-up-action",
-              name: "Queue Follow Up",
-              description: "Queue follow-up action",
-              surface: "slash",
-              slash: { trigger: "queue-follow-up" },
+              extensionId,
+              slash: {
+                trigger: "queue-follow-up",
+                name: "Queue Follow Up",
+                description: "Queue follow-up request",
+              },
+              description: "Queue follow-up request",
               input: Schema.String,
               output: Schema.Void,
               execute: (input: string) =>
@@ -820,7 +820,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
-  it.live("RPC listSlashCommands lists slash actions and omits palette actions", () =>
+  it.live("RPC listSlashCommands lists slash-decorated requests only", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/public-filter")
       const ext: LoadedExtension = {
@@ -838,26 +838,6 @@ describe("extension command RPCs", () => {
               execute: () => Effect.void,
             }),
           ],
-          actions: [
-            action({
-              id: "visible-action",
-              name: "visible action",
-              description: "visible action",
-              surface: "slash",
-              input: Schema.String,
-              output: Schema.Void,
-              execute: () => Effect.void,
-            }),
-            action({
-              id: "hidden",
-              name: "hidden",
-              description: "hidden",
-              surface: "palette",
-              input: Schema.String,
-              output: Schema.Void,
-              execute: () => Effect.void,
-            }),
-          ],
         },
       }
       yield* Effect.scoped(
@@ -870,7 +850,7 @@ describe("extension command RPCs", () => {
             cwd: "/tmp",
           })
           const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toEqual(["visible-action", "visible"])
+          expect(commands.map((command) => command.name)).toEqual(["visible"])
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
@@ -952,7 +932,7 @@ describe("extension command RPCs", () => {
       )
     }),
   )
-  it.live("RPC request invokes slash actions through the transport boundary", () =>
+  it.live("RPC request invokes slash-decorated requests through the transport boundary", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/public-shadow")
       const projectExt: LoadedExtension = {
@@ -960,15 +940,15 @@ describe("extension command RPCs", () => {
         scope: "project",
         sourcePath: "project",
         contributions: {
-          actions: [
-            action({
+          requests: [
+            request({
               id: "shadowed",
-              name: "shadowed private",
+              extensionId,
+              slash: { name: "shadowed private", description: "shadowed private" },
               description: "shadowed private",
-              surface: "slash",
               input: Schema.Struct({ value: Schema.String }),
               output: Schema.Struct({ value: Schema.String }),
-              execute: (input) => Effect.succeed({ value: input.value }),
+              execute: (input: { value: string }) => Effect.succeed({ value: input.value }),
             }),
           ],
         },

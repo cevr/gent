@@ -3,24 +3,27 @@ import {
   CapabilityError,
   defineExtension,
   defineResource,
-  action,
   ExtensionContext,
   type Message,
   type TurnAfterInput,
   messagePartsTextLines,
   ExtensionId,
+  request,
 } from "@gent/core/extensions/api"
 import { HandoffTool } from "./handoff-tool.js"
 import { AutoRead } from "./auto/controller.js"
 
 const EXTENSION_ID = ExtensionId.make("@gent/handoff")
 
-const HandoffAction = action({
+const HandoffCommand = request({
   id: "handoff-command",
-  name: "Handoff",
+  extensionId: EXTENSION_ID,
   description: "Distill context into new session",
-  surface: "slash",
-  slash: { trigger: "handoff" },
+  slash: {
+    trigger: "handoff",
+    name: "Handoff",
+    description: "Distill context into new session",
+  },
   input: Schema.String,
   output: Schema.Void,
   execute: (_input: string) =>
@@ -137,7 +140,7 @@ const autoHandoffImpl = (input: TurnAfterInput) =>
 
 export const HandoffExtension = defineExtension({
   id: EXTENSION_ID,
-  actions: [HandoffAction],
+  requests: [HandoffCommand],
   tools: [HandoffTool],
   resources: [
     defineResource({ tag: HandoffCooldown, scope: "process", layer: HandoffCooldown.Live }),

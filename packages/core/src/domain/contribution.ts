@@ -5,9 +5,9 @@
  * bucket name IS the discrimination — no `_kind` field on leaves, no wrapper
  * smart constructors, no `filterByKind`.
  *
- * Capabilities are authored through the typed factories `tool({...})`,
- * `request({...})`, and `action({...})` at
- * `domain/capability/{tool,request,action}.ts`.
+ * Capabilities are authored through the typed factories `tool({...})` and
+ * `request({...})` at `domain/capability/{tool,request}.ts`. Slash commands
+ * are requests carrying a `slash:` presentation block.
  *
  * Resource keeps an identity smart constructor (`resource`) below; it exists
  * to widen variance at the bucket boundary.
@@ -18,7 +18,6 @@
  * @module
  */
 import type { AgentDefinition } from "./agent.js"
-import type { ActionCapability } from "./capability/action.js"
 import type { RequestCapability } from "./capability/request.js"
 import type { ToolCapability } from "./capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
@@ -57,15 +56,10 @@ export interface ExtensionContributions {
    */
   readonly tools?: ReadonlyArray<ToolCapability>
   /**
-   * Human-driven UI commands authored via `action({...})`. Bucket name IS the
-   * dispatch surface: every entry is an `ActionCapability` — no runtime tag check
-   * needed downstream.
-   */
-  readonly actions?: ReadonlyArray<ActionCapability>
-  /**
    * Extension-to-extension RPC capabilities authored via `request({...})`.
    * Bucket name IS the dispatch surface: every entry is a `RequestCapability` — no
-   * runtime tag check needed downstream.
+   * runtime tag check needed downstream. Slash commands are requests carrying
+   * a `slash:` presentation block.
    */
   readonly requests?: ReadonlyArray<RequestCapability>
   readonly agents?: ReadonlyArray<AgentDefinition>
@@ -91,15 +85,6 @@ export const modelCapabilities = (
 ): ReadonlyArray<ToolCapability> => contribs.tools ?? []
 
 /**
- * Read all human-surface capabilities (slash / palette) from a contributions
- * bag. Bucket name IS the dispatch discrimination — every entry in
- * `actions:` is an action leaf by construction.
- */
-export const humanCapabilities = (
-  contribs: ExtensionContributions,
-): ReadonlyArray<ActionCapability> => contribs.actions ?? []
-
-/**
  * Read all extension-to-extension RPC capabilities from a contributions bag.
  * Bucket name IS the dispatch discrimination — every entry in `requests:` is a
  * request leaf by construction.
@@ -111,11 +96,7 @@ export const rpcCapabilities = (
 // ── Smart constructors ──
 //
 // `resource` widens the typed authoring shape to the bucket leaf. Capabilities
-// are authored through the typed factories in `domain/capability/{tool,request,action}.ts`.
-
-// The old query/mutation smart constructors are gone. Authors use the
-// unified `request({ intent: "read" | "write", ... })` factory at
-// `domain/capability/request.ts`.
+// are authored through the typed factories in `domain/capability/{tool,request}.ts`.
 
 // `defineResource` is exported directly from `./resource.ts` — returns the
 // Resource leaf that goes straight into the `resources` bucket. After  it

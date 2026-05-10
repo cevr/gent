@@ -18,7 +18,6 @@ import { makeExtensionHostPlatform } from "./host-platform.js"
 const collectCapabilityPrompts = (cs: ExtensionContributions): ReadonlyArray<PromptSection> =>
   [
     ...(cs.tools ?? []).map((tool) => getToolMetadata(tool).prompt),
-    ...(cs.actions ?? []).map((command) => command.prompt),
     ...(cs.requests ?? []).map((rpc) => rpc.prompt),
   ].filter((p): p is PromptSection => p !== undefined)
 

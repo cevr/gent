@@ -14,14 +14,12 @@ import { describe, expect, test } from "bun:test"
 import { Context, Effect, Layer, Schema } from "effect"
 import type * as PublicExtensionApi from "@gent/core/extensions/api"
 import {
-  action,
   CapabilityError,
   defineExtension,
   defineResource,
   ExtensionContext,
   ExtensionId,
   ExtensionSetupContext,
-  type ActionInput,
   makeRunSpec,
   request,
   resource,
@@ -71,13 +69,13 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("tool({...}) rejects `surface` field (action-only)", () => {
+  test("tool({...}) rejects `surface` field — slash presentation belongs on request()", () => {
     const badInput = {
       id: "bad-tool",
       description: "x",
       params: NoInput,
       output: StringOutput,
-      // @ts-expect-error — `surface` is an action-only field
+      // @ts-expect-error — `surface` is not part of the public tool authoring surface
       surface: "slash",
       execute: () => Effect.succeed("x"),
     } satisfies ToolInput
@@ -231,70 +229,15 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("action({...}) — happy path compiles", () => {
-    const ok = action({
-      id: "ok-action",
-      name: "Ok Action",
-      description: "ok",
-      surface: "slash",
-      slash: { trigger: "ok" },
-      input: NoInput,
-      output: StringOutput,
-      execute: () => Effect.succeed("done"),
-    })
-
-    void ok
-    expect(true).toBe(true)
-  })
-
-  test("action({...}) rejects public transport exposure", () => {
-    action({
-      id: "bad-public-action",
-      name: "x",
-      description: "x",
-      surface: "slash",
-      // @ts-expect-error — public transport exposure belongs on slash-decorated request()
-      public: true,
-      input: NoInput,
-      output: StringOutput,
-      execute: () => Effect.succeed("x"),
-    })
-    expect(true).toBe(true)
-  })
-
-  test("action({...}) rejects tool-only or request-only fields and unknown surfaces", () => {
-    action({
-      id: "bad-action",
-      name: "x",
-      description: "x",
-      surface: "slash",
-      // @ts-expect-error — `params` belongs to tool(), not action()
-      params: NoInput,
-      input: NoInput,
-      output: StringOutput,
-      execute: () => Effect.succeed("x"),
-    })
-    action({
-      id: "bad-action-intent",
-      name: "x",
-      description: "x",
-      surface: "slash",
-      // @ts-expect-error — action inputs do not carry request/tool authority markers
-      intent: "write",
-      input: NoInput,
-      output: StringOutput,
-      execute: () => Effect.succeed("x"),
-    })
-    action({
-      id: "bad-action-surface",
-      name: "x",
-      description: "x",
-      // @ts-expect-error — surface is `"slash" | "palette" | "both"` only
-      surface: "modal",
-      input: NoInput,
-      output: StringOutput,
-      execute: () => Effect.succeed("x"),
-    })
+  test("action factory and ActionCapability/ActionInput/ActionSurface are not part of the public API", () => {
+    // @ts-expect-error — `action(...)` factory was collapsed into `request({...slash: {...}})`
+    type _BadAction = typeof PublicExtensionApi.action
+    // @ts-expect-error — ActionCapability type was removed; slash-presented capabilities are RequestCapability
+    type _BadActionCapability = PublicExtensionApi.ActionCapability
+    // @ts-expect-error — ActionInput type was removed; authors use RequestInput
+    type _BadActionInput = PublicExtensionApi.ActionInput
+    // @ts-expect-error — ActionSurface was removed; slash presentation lives on `request({slash:...})`
+    type _BadActionSurface = PublicExtensionApi.ActionSurface
     expect(true).toBe(true)
   })
 })
@@ -326,15 +269,13 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("action handlers receive params only", () => {
-    const bad: ActionInput<{}, void> = {
-      id: "default-action-context",
-      name: "Default Action Context",
-      description: "ok",
-      surface: "slash",
+  test("request handlers receive decoded input only", () => {
+    const bad: RequestInput<{}, void, never> = {
+      id: "default-request-context",
+      extensionId: ExtensionId.make("default-request-context-ext"),
       input: Schema.Struct({}),
       output: Schema.Void,
-      // @ts-expect-error — action handlers receive decoded params only; host access comes from ExtensionContext
+      // @ts-expect-error — request handlers receive decoded input only; host access comes from ExtensionContext
       execute: (_input, _ctx) => Effect.void,
     }
     void bad
@@ -344,12 +285,11 @@ describe("Effect-purity locks (compile-time)", () => {
   test("session follow-up authority is imported through ExtensionContext", () => {
     defineExtension({
       id: "queue-follow-up-compile-lock",
-      actions: [
-        action({
+      requests: [
+        request({
           id: "queue-follow-up",
-          name: "Queue Follow Up",
-          description: "ok",
-          surface: "slash",
+          extensionId: ExtensionId.make("queue-follow-up-compile-lock"),
+          slash: { name: "Queue Follow Up", description: "ok" },
           input: Schema.Struct({}),
           output: Schema.Void,
           execute: () =>
@@ -386,7 +326,7 @@ describe("Effect-purity locks (compile-time)", () => {
 
   test("removed reaction slots are not part of the public reactions bag", () => {
     type Reactions = NonNullable<Parameters<typeof defineExtension>[0]["reactions"]>
-    // @ts-expect-error — messageInput reaction was removed; mutations belong in tools/actions
+    // @ts-expect-error — messageInput reaction was removed; mutations belong in tools/requests
     type _MessageInput = Reactions["messageInput"]
     // @ts-expect-error — contextMessages reaction was removed; turnProjection composes prompt context
     type _ContextMessages = Reactions["contextMessages"]

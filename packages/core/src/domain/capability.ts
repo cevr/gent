@@ -11,7 +11,6 @@ import type { ExtensionHostFacts } from "./extension.js"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 import {
   ExtensionId,
-  CommandId,
   RpcId,
   ToolId,
   type BranchId,
@@ -72,7 +71,7 @@ const CapabilityMetadataFields = {
 
 /**
  * Canonical callable leaf shape. Buckets still preserve the product surfaces
- * (`tools`, `actions`, `requests`), but every callable contribution now carries the
+ * (`tools`, `requests`), but every callable contribution now carries the
  * same discriminator and shared metadata fields.
  */
 export const Capability = TaggedEnumClass("Capability", {
@@ -89,19 +88,6 @@ export const Capability = TaggedEnumClass("Capability", {
     interactive: Schema.optional(Schema.Boolean),
     metadata: Schema.Unknown,
   }),
-  Action: TaggedEnumClass.variant("action", {
-    id: CommandId,
-    ...CapabilityMetadataFields,
-    input: Schema.Unknown,
-    output: Schema.Unknown,
-    effect: Schema.Unknown,
-    surface: Schema.Array(Schema.Union([Schema.Literal("slash"), Schema.Literal("palette")])),
-    description: Schema.String,
-    displayName: Schema.String,
-    category: Schema.optional(Schema.String),
-    keybind: Schema.optional(Schema.String),
-    slash: Schema.optional(Schema.Unknown),
-  }),
   Request: TaggedEnumClass.variant("request", {
     id: RpcId,
     ...CapabilityMetadataFields,
@@ -117,7 +103,6 @@ export const Capability = TaggedEnumClass("Capability", {
 
 export type Capability = Schema.Schema.Type<typeof Capability>
 export type ToolCapability = Extract<Capability, { readonly _tag: "tool" }>
-export type ActionCapability = Extract<Capability, { readonly _tag: "action" }>
 export type RequestCapability = Extract<Capability, { readonly _tag: "request" }>
 
 /**

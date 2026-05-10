@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import { resolveAgentModel, type AgentDefinition } from "../../domain/agent.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../../domain/driver.js"
-import type { CommandId, ExtensionId, RpcId } from "../../domain/ids.js"
+import type { ExtensionId, RpcId } from "../../domain/ids.js"
 import type { ModelId } from "../../domain/model.js"
 import type {
   CapabilityCoreContext,
@@ -24,7 +24,6 @@ import type {
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { type PromptSection } from "../../domain/prompt.js"
 import type { PermissionRule } from "../../domain/permission.js"
-import type { ActionCapability } from "../../domain/capability/action.js"
 import type { RequestCapability } from "../../domain/capability/request.js"
 import {
   getToolId,
@@ -39,13 +38,14 @@ import {
 import { SCOPE_PRECEDENCE } from "./disabled.js"
 import { sealErasedEffect } from "./extension-effect-membrane.js"
 
-// SlashCommand — public-facing slash entry. Built from `actions:` / `requests:`
-// bucket winners. The bucket is the load-bearing filter.
+// SlashCommand — public-facing slash entry. Built from `requests:` bucket
+// winners that carry a `slash:` presentation block. The slash block is the
+// load-bearing filter.
 export interface SlashCommand {
   /** Routing key (capability id, extension-local). */
   readonly name: string
-  /** Author-supplied display name for the slash menu / palette. Falls back to
-   *  `name` when absent (`tool()` / `request()` capabilities). */
+  /** Author-supplied display name for the slash menu. Falls back to `name`
+   *  when absent. */
   readonly displayName?: string
   readonly description?: string
   /** Author-supplied palette category. */
@@ -79,27 +79,18 @@ interface RegisteredToolEntry {
   readonly capability: ToolCapability
 }
 
-interface RegisteredCommandEntry {
-  readonly kind: "command"
-  readonly extensionId: ExtensionId
-  readonly capability: ActionCapability
-}
-
 interface RegisteredRpcEntry {
   readonly kind: "rpc"
   readonly extensionId: ExtensionId
   readonly capability: RequestCapability
 }
 
-type RegisteredCapabilityEntry = RegisteredToolEntry | RegisteredCommandEntry | RegisteredRpcEntry
-
-const isRequestCapability = (cap: ActionCapability | RequestCapability): cap is RequestCapability =>
-  "public" in cap
+type RegisteredCapabilityEntry = RegisteredToolEntry | RegisteredRpcEntry
 
 export interface CompiledRpcRegistry {
   readonly run: (
     extensionId: ExtensionId,
-    capabilityId: RpcId | CommandId | string,
+    capabilityId: RpcId | string,
     input: unknown,
     ctx: CapabilityCoreContext,
   ) => Effect.Effect<unknown, CapabilityError | CapabilityNotFoundError>
@@ -150,13 +141,6 @@ const compileCapabilityWinners = (
         capability: cap,
       })
     }
-    for (const cap of ext.contributions.actions ?? []) {
-      winners.set(String(cap.id), {
-        kind: "command",
-        extensionId: ext.manifest.id,
-        capability: cap,
-      })
-    }
     for (const cap of ext.contributions.requests ?? []) {
       winners.set(String(cap.id), { kind: "rpc", extensionId: ext.manifest.id, capability: cap })
     }
@@ -169,9 +153,8 @@ const compileSlashCommands = (
 ): ReadonlyArray<SlashCommand> => {
   const commands: SlashCommand[] = []
   for (const entry of winners.values()) {
-    if (entry.kind !== "command" && entry.kind !== "rpc") continue
-    if (entry.kind === "command" && !entry.capability.surface.includes("slash")) continue
-    if (entry.kind === "rpc" && entry.capability.slash === undefined) continue
+    if (entry.kind !== "rpc") continue
+    if (entry.capability.slash === undefined) continue
     commands.push(capabilityToCommand(entry.extensionId, entry.capability))
   }
   return commands
@@ -185,9 +168,6 @@ const compileCapabilityEntries = (
     for (const capability of ext.contributions.tools ?? []) {
       entries.push({ kind: "tool", extensionId: ext.manifest.id, capability })
     }
-    for (const capability of ext.contributions.actions ?? []) {
-      entries.push({ kind: "command", extensionId: ext.manifest.id, capability })
-    }
     for (const capability of ext.contributions.requests ?? []) {
       entries.push({ kind: "rpc", extensionId: ext.manifest.id, capability })
     }
@@ -198,7 +178,7 @@ const compileCapabilityEntries = (
 const resolveCapabilityEntry = (
   entries: ReadonlyArray<RegisteredCapabilityEntry>,
   extensionId: ExtensionId,
-  capabilityId: RpcId | CommandId | string,
+  capabilityId: RpcId | string,
 ): RegisteredCapabilityEntry | undefined => {
   for (let i = entries.length - 1; i >= 0; i--) {
     const candidate = entries[i]
@@ -217,8 +197,8 @@ const resolveCapabilityEntry = (
 
 const runExtensionCapability = (
   extensionId: ExtensionId,
-  capabilityId: RpcId | CommandId | string,
-  capability: RequestCapability | ActionCapability,
+  capabilityId: RpcId | string,
+  capability: RequestCapability,
   input: unknown,
 ) =>
   Effect.gen(function* () {
@@ -293,10 +273,7 @@ const compileRpcRegistry = (
   run: (extensionId, capabilityId, input, ctx) =>
     Effect.gen(function* () {
       const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)
-      if (entry === undefined || (entry.kind !== "rpc" && entry.kind !== "command")) {
-        return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
-      }
-      if (entry.kind === "command" && !entry.capability.surface.includes("slash")) {
+      if (entry === undefined || entry.kind !== "rpc") {
         return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
       }
       return yield* provideExtensionServicesIfAvailable(
@@ -315,19 +292,12 @@ const sortExtensionsByScope = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-const capabilityToCommand = (
-  extensionId: ExtensionId,
-  cap: ActionCapability | RequestCapability,
-): SlashCommand => {
-  // Prefer cap.description (author-supplied, human-readable) over
-  // cap.promptSnippet (LLM-prompt fragment) so action() callers don't have
-  // to duplicate the same string into both fields.
-  const isRequest = isRequestCapability(cap)
+const capabilityToCommand = (extensionId: ExtensionId, cap: RequestCapability): SlashCommand => {
   const slash = cap.slash
   const description = slash?.description ?? cap.description ?? cap.promptSnippet
-  const displayName = slash?.name ?? (isRequest ? undefined : cap.displayName)
-  const category = slash?.category ?? (isRequest ? undefined : cap.category)
-  const keybind = slash?.keybind ?? (isRequest ? undefined : cap.keybind)
+  const displayName = slash?.name
+  const category = slash?.category
+  const keybind = slash?.keybind
   return {
     name: slash?.trigger ?? String(cap.id),
     ...(displayName !== undefined ? { displayName } : {}),

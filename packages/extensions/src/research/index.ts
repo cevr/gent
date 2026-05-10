@@ -5,9 +5,9 @@ import {
   ExtensionContext,
   ExtensionId,
   ModelId,
-  action,
   defineAgent,
   defineExtension,
+  request,
 } from "@gent/core/extensions/api"
 import { ResearchTool } from "./research-tool.js"
 
@@ -35,14 +35,17 @@ export const architect = defineAgent({
 
 export const ResearchExtension = defineExtension({
   id: RESEARCH_EXTENSION_ID,
-  actions: [
-    action({
+  requests: [
+    request({
       id: "research-command",
-      name: "Research",
+      extensionId: RESEARCH_EXTENSION_ID,
       description: "Research external repositories",
-      surface: "slash",
-      slash: { trigger: "research" },
-      category: "Tools",
+      slash: {
+        trigger: "research",
+        name: "Research",
+        description: "Research external repositories",
+        category: "Tools",
+      },
       input: Schema.String,
       output: Schema.Void,
       execute: (input: string) =>

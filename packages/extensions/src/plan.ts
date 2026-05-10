@@ -7,11 +7,11 @@
 
 import { Effect, Schema } from "effect"
 import {
-  action,
   CapabilityError,
   defineExtension,
   ExtensionContext,
   ExtensionId,
+  request,
 } from "@gent/core/extensions/api"
 import { PlanTool } from "./plan-tool.js"
 
@@ -29,14 +29,17 @@ const auditPrompt = (input: string) =>
     ? `Use the audit tool to audit: ${input.trim()}`
     : "Use the audit tool to audit the current changes. Detects concerns, audits in parallel, synthesizes findings, and applies fixes."
 
-const PlanAction = action({
+const PlanCommand = request({
   id: "plan-command",
-  name: "Plan",
+  extensionId: PLAN_EXTENSION_ID,
   description: "Create an adversarial implementation plan",
-  surface: "slash",
-  slash: { trigger: "plan" },
-  category: "Workflow",
-  keybind: "ctrl+shift+p",
+  slash: {
+    trigger: "plan",
+    name: "Plan",
+    description: "Create an adversarial implementation plan",
+    category: "Workflow",
+    keybind: "ctrl+shift+p",
+  },
   input: Schema.String,
   output: Schema.Void,
   execute: (input: string) =>
@@ -55,13 +58,16 @@ const PlanAction = action({
     ),
 })
 
-const AuditAction = action({
+const AuditCommand = request({
   id: "audit-command",
-  name: "Audit",
+  extensionId: PLAN_EXTENSION_ID,
   description: "Detect, audit, fix code issues",
-  surface: "slash",
-  slash: { trigger: "audit" },
-  category: "Workflow",
+  slash: {
+    trigger: "audit",
+    name: "Audit",
+    description: "Detect, audit, fix code issues",
+    category: "Workflow",
+  },
   input: Schema.String,
   output: Schema.Void,
   execute: (input: string) =>
@@ -82,6 +88,6 @@ const AuditAction = action({
 
 export const PlanExtension = defineExtension({
   id: PLAN_EXTENSION_ID,
-  actions: [PlanAction, AuditAction],
+  requests: [PlanCommand, AuditCommand],
   tools: [PlanTool],
 })

@@ -10,7 +10,6 @@ import type {
 } from "../../domain/extension.js"
 import {
   type ExtensionContributions,
-  humanCapabilities,
   modelCapabilities,
   rpcCapabilities,
 } from "../../domain/contribution.js"
@@ -266,11 +265,6 @@ export const collectValidationFailures = (
     "tool",
   )
   collectScopedCollisions(
-    (cs) => humanCapabilities(cs),
-    (cap) => cap.id,
-    "command",
-  )
-  collectScopedCollisions(
     (cs) => rpcCapabilities(cs),
     (cap) => cap.id,
     "rpc",
@@ -298,7 +292,6 @@ export const collectValidationFailures = (
         ...(cs.tools ?? []).map((tool) =>
           isToolCapability(tool) ? getToolMetadata(tool).prompt : undefined,
         ),
-        ...(cs.actions ?? []).map((command) => command.prompt),
         ...(cs.requests ?? []).map((rpc) => rpc.prompt),
       ].filter((p): p is PromptSection => p !== undefined),
     (section) => section.id,

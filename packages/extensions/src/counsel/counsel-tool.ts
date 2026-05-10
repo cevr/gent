@@ -4,10 +4,10 @@ import {
   CapabilityError,
   ExtensionContext,
   ExtensionId,
-  action,
   defineAgent,
   defineExtension,
   makeRunSpec,
+  request,
   tool,
 } from "@gent/core/extensions/api"
 
@@ -117,14 +117,17 @@ export const CounselTool = tool({
 
 export const CounselExtension = defineExtension({
   id: COUNSEL_EXTENSION_ID,
-  actions: [
-    action({
+  requests: [
+    request({
       id: "counsel-command",
-      name: "Counsel",
+      extensionId: COUNSEL_EXTENSION_ID,
       description: "Get a cross-vendor second opinion",
-      surface: "slash",
-      slash: { trigger: "counsel" },
-      category: "Tools",
+      slash: {
+        trigger: "counsel",
+        name: "Counsel",
+        description: "Get a cross-vendor second opinion",
+        category: "Tools",
+      },
       input: Schema.String,
       output: Schema.Void,
       execute: (input: string) =>

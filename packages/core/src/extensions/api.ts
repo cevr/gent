@@ -1,7 +1,7 @@
 /**
  * Extension authoring API.
  *
- * Single entry point: `defineExtension({ id, resources?, tools?, actions?, requests?, ... })`.
+ * Single entry point: `defineExtension({ id, resources?, tools?, requests?, ... })`.
  * The factory accepts typed sub-arrays (literal arrays OR `() => array` OR
  * `() => Effect<array>` per bucket), validates them, and produces a
  * `GentExtension` whose `setup()` returns `ExtensionContributions` buckets.
@@ -52,7 +52,6 @@ import type {
 } from "../domain/extension.js"
 import type { ExtensionContributions, ExtensionReactions } from "../domain/contribution.js"
 import type { AgentDefinition } from "../domain/agent.js"
-import type { ActionCapability } from "../domain/capability/action.js"
 import type { RequestCapability } from "../domain/capability/request.js"
 import type { ToolCapability } from "../domain/capability/tool.js"
 import {
@@ -187,12 +186,6 @@ export {
   type RequestInput,
   type RequestCapability,
 } from "../domain/capability/request.js"
-export {
-  action,
-  type ActionInput,
-  type ActionSurface,
-  type ActionCapability,
-} from "../domain/capability/action.js"
 export type { CapabilityRef } from "../domain/capability.js"
 export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
 export type {
@@ -286,20 +279,14 @@ export interface DefineExtensionInput<R = never> {
   /**
    * LLM-callable tools authored via `tool({...})`. The bucket name is the
    * dispatch surface: every entry must be a `ToolCapability` — `request({...})`
-   * and `action({...})` outputs cannot be slotted here.
+   * outputs cannot be slotted here.
    */
   readonly tools?: FieldSpec<ToolCapability, R>
   /**
-   * Human-driven UI commands authored via `action({...})`. The bucket name is
-   * the dispatch surface: every entry must be an `ActionCapability` — `tool({...})`
-   * and `request({...})` outputs cannot be slotted here.
-   */
-  readonly actions?: FieldSpec<ActionCapability, R>
-  /**
    * Extension-to-extension RPC capabilities authored via `request({...})`.
    * The bucket name is the dispatch surface: every entry must be a
-   * `RequestCapability` — `tool({...})` and `action({...})` outputs cannot be
-   * slotted here.
+   * `RequestCapability` — `tool({...})` outputs cannot be slotted here.
+   * Slash commands are requests carrying a `slash:` presentation block.
    */
   readonly requests?: FieldSpec<RequestCapability, R>
   readonly agents?: FieldSpec<AgentDefinition, R>
@@ -415,7 +402,6 @@ export function defineExtension<R>(
           setupCtx,
         )
         const tools = yield* resolveField(manifest, "tools", params.tools, setupCtx)
-        const actions = yield* resolveField(manifest, "actions", params.actions, setupCtx)
         const requests = yield* resolveField(manifest, "requests", params.requests, setupCtx)
         const agents = yield* resolveField(manifest, "agents", params.agents, setupCtx)
         const modelDrivers = yield* resolveField(
@@ -434,7 +420,6 @@ export function defineExtension<R>(
           ...(resources.length > 0 ? { resources } : {}),
           ...(scheduledJobs.length > 0 ? { scheduledJobs } : {}),
           ...(tools.length > 0 ? { tools } : {}),
-          ...(actions.length > 0 ? { actions } : {}),
           ...(requests.length > 0 ? { requests } : {}),
           ...(agents.length > 0 ? { agents } : {}),
           ...(params.reactions !== undefined ? { reactions: params.reactions } : {}),

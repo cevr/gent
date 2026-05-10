@@ -44,16 +44,11 @@ const checkToolDescriptions = (tools: ReadonlyArray<ToolCapability>): string | u
 
 const validateCapabilities = (contribs: ExtensionContributions): string | undefined => {
   const tools = contribs.tools ?? []
-  const commands = contribs.actions ?? []
   const rpc = contribs.requests ?? []
   const toolErr = checkToolDescriptions(tools)
   if (toolErr !== undefined) return toolErr
   const capIds = new Map<string, string>()
-  return (
-    checkBucketIds("tools", tools, capIds) ??
-    checkBucketIds("commands", commands, capIds) ??
-    checkBucketIds("rpc", rpc, capIds)
-  )
+  return checkBucketIds("tools", tools, capIds) ?? checkBucketIds("rpc", rpc, capIds)
 }
 
 const validateAgents = (contribs: ExtensionContributions): string | undefined => {
@@ -88,7 +83,6 @@ const allowedContributionBuckets = new Set([
   "resources",
   "scheduledJobs",
   "tools",
-  "actions",
   "requests",
   "agents",
   "reactions",

@@ -2,8 +2,7 @@
  * Extension capability registry regression locks.
  *
  * Model tools are compiled through the model tool registry. Public command
- * dispatch accepts slash-capable requests and actions; palette-only actions
- * stay on local surfaces.
+ * dispatch accepts slash-capable requests.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Exit, Schema } from "effect"
@@ -14,7 +13,6 @@ import {
   CapabilityNotFoundError,
 } from "@gent/core-internal/domain/capability"
 import {
-  action,
   ExtensionContext,
   request,
   tool,
@@ -52,15 +50,14 @@ const echoRequest = (params?: { readonly id?: string; readonly value?: string })
     execute: (input) => Effect.succeed({ value: params?.value ?? input.value }),
   })
 
-const pingAction = (params?: { readonly id?: string; readonly value?: string }) =>
-  action({
+const pingRequest = (params?: { readonly id?: string; readonly value?: string }) =>
+  request({
     id: params?.id ?? "ping",
-    name: "Ping",
-    description: "Ping action",
-    surface: "slash",
+    extensionId,
+    slash: { name: "Ping", description: "Ping request" },
     input: Schema.Struct({ value: Schema.String }),
     output: Schema.Struct({ value: Schema.String }),
-    execute: (input) => Effect.succeed({ value: params?.value ?? input.value }),
+    execute: (input: { value: string }) => Effect.succeed({ value: params?.value ?? input.value }),
   })
 
 const shadowTool = (params?: { readonly id?: string }): ToolCapability =>
@@ -168,36 +165,12 @@ describe("extension capability registries", () => {
     }),
   )
 
-  it.live("dispatches slash action capabilities through the public command registry", () =>
+  it.live("provides ExtensionContext to request handlers carrying slash metadata", () =>
     Effect.gen(function* () {
-      const cap = action({
-        id: "private-ping",
-        name: "Private Ping",
-        description: "Private action",
-        surface: "slash",
-        input: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ value: Schema.String }),
-        execute: (input) => Effect.succeed({ value: input.value }),
-      })
-      const ext: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "builtin",
-        sourcePath: "/test/private-action",
-        contributions: { actions: [cap] },
-      }
-      const resolved = resolveExtensions([ext])
-      const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx)
-      expect(result).toEqual({ value: "hi" })
-    }),
-  )
-
-  it.live("provides ExtensionContext to action handlers", () =>
-    Effect.gen(function* () {
-      const cap = action({
-        id: "context-action",
-        name: "Context Action",
-        description: "Action with host context service",
-        surface: "slash",
+      const cap = request({
+        id: "context-request",
+        extensionId,
+        slash: { name: "Context Request", description: "Request with host context service" },
         input: Schema.Struct({}),
         output: Schema.Struct({ hasRunProcess: Schema.Boolean }),
         execute: () =>
@@ -209,8 +182,8 @@ describe("extension capability registries", () => {
       const ext: LoadedExtension = {
         manifest: { id: extensionId },
         scope: "builtin",
-        sourcePath: "/test/context-action",
-        contributions: { actions: [cap] },
+        sourcePath: "/test/context-request",
+        contributions: { requests: [cap] },
       }
       const resolved = resolveExtensions([ext])
       const result = yield* resolved.rpcRegistry.run(
@@ -218,40 +191,15 @@ describe("extension capability registries", () => {
         cap.id,
         {},
         testExtensionHostContext({
-          sessionId: SessionId.make("action-context-session"),
-          branchId: BranchId.make("action-context-branch"),
+          sessionId: SessionId.make("request-context-session"),
+          branchId: BranchId.make("request-context-branch"),
         }),
       )
       expect(result).toEqual({ hasRunProcess: true })
     }),
   )
 
-  it.live("public command registry rejects palette-only action capabilities", () =>
-    Effect.gen(function* () {
-      const cap = action({
-        id: "private-ping",
-        name: "Private Ping",
-        description: "Private action",
-        surface: "palette",
-        input: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ value: Schema.String }),
-        execute: (input) => Effect.succeed({ value: input.value }),
-      })
-      const ext: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "builtin",
-        sourcePath: "/test/private-action",
-        contributions: { actions: [cap] },
-      }
-      const resolved = resolveExtensions([ext])
-      const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx),
-      )
-      expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
-    }),
-  )
-
-  it.live("higher-scope action shadows lower-scope slash request", () =>
+  it.live("higher-scope slash request shadows lower-scope slash request", () =>
     Effect.gen(function* () {
       const builtin = request({
         id: "shadowed",
@@ -261,14 +209,13 @@ describe("extension capability registries", () => {
         output: Schema.Struct({ value: Schema.String }),
         execute: () => Effect.succeed({ value: "builtin" }),
       })
-      const project = action({
+      const project = request({
         id: "shadowed",
-        name: "Project Private",
-        description: "Project private action",
-        surface: "slash",
+        extensionId,
+        slash: { name: "Project Override", description: "Project override request" },
         input: Schema.Struct({ value: Schema.String }),
         output: Schema.Struct({ value: Schema.String }),
-        execute: (input) => Effect.succeed({ value: input.value }),
+        execute: (input: { value: string }) => Effect.succeed({ value: input.value }),
       })
       const resolved = resolveExtensions([
         {
@@ -280,8 +227,8 @@ describe("extension capability registries", () => {
         {
           manifest: { id: extensionId },
           scope: "project",
-          sourcePath: "/test/project-private-action",
-          contributions: { actions: [project] },
+          sourcePath: "/test/project-override-request",
+          contributions: { requests: [project] },
         },
       ])
       const result = yield* resolved.rpcRegistry.run(extensionId, project.id, { value: "hi" }, ctx)
@@ -289,10 +236,10 @@ describe("extension capability registries", () => {
     }),
   )
 
-  it.live("request dispatch follows higher-scope slash action shadowing lower request", () =>
+  it.live("request dispatch follows higher-scope slash request shadowing lower request", () =>
     Effect.gen(function* () {
       const builtin = echoRequest({ id: "same", value: "builtin-request" })
-      const project = pingAction({ id: "same", value: "project-action" })
+      const project = pingRequest({ id: "same", value: "project-request" })
       const resolved = resolveExtensions([
         {
           manifest: { id: extensionId },
@@ -303,12 +250,12 @@ describe("extension capability registries", () => {
         {
           manifest: { id: extensionId },
           scope: "project",
-          sourcePath: "/test/project-public-action",
-          contributions: { actions: [project] },
+          sourcePath: "/test/project-public-request",
+          contributions: { requests: [project] },
         },
       ])
       const result = yield* resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx)
-      expect(result).toEqual({ value: "project-action" })
+      expect(result).toEqual({ value: "project-request" })
     }),
   )
 

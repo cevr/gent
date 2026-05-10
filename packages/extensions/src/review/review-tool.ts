@@ -9,7 +9,7 @@ import {
   ExtensionContext,
   getDurableAgentRunSessionId,
   makeRunSpec,
-  action,
+  request,
   tool,
   type AgentDefinition,
   type ToolCallId,
@@ -376,14 +376,17 @@ export const ReviewTool = tool({
 
 export const ReviewExtension = defineExtension({
   id: REVIEW_EXTENSION_ID,
-  actions: [
-    action({
+  requests: [
+    request({
       id: "review-command",
-      name: "Review",
+      extensionId: REVIEW_EXTENSION_ID,
       description: "Run adversarial dual-model code review",
-      surface: "slash",
-      slash: { trigger: "review" },
-      category: "Tools",
+      slash: {
+        trigger: "review",
+        name: "Review",
+        description: "Run adversarial dual-model code review",
+        category: "Tools",
+      },
       input: Schema.String,
       output: Schema.Void,
       execute: (input: string) =>

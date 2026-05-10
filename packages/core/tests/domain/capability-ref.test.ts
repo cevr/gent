@@ -5,15 +5,15 @@
  *    symbol (private — only `ref(capability)` reads it).
  * 2. `ref(requestCapability)` returns the typed ref with the same id and
  *    schemas the author provided.
- * 3. `ref(toolCapability)` and `ref(actionCapability)` fail at compile time — only
- *    request capabilities carry a ref.
+ * 3. `ref(toolCapability)` fails at compile time — only request capabilities
+ *    carry a ref.
  */
 import { describe, expect, test } from "bun:test"
 import { Context, Effect, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
-import { action, getToolId, ref, request, tool } from "@gent/core/extensions/api"
+import { getToolId, ref, request, tool } from "@gent/core/extensions/api"
 import { getToolMetadata, isToolCapability } from "@gent/core-internal/domain/capability/tool"
-import type { CommandId, RpcId, ToolId } from "@gent/core-internal/domain/ids"
+import type { RpcId, ToolId } from "@gent/core-internal/domain/ids"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { PermissionRule } from "@gent/core-internal/domain/permission"
 
@@ -26,15 +26,6 @@ describe("ref(capability)", () => {
       output: Schema.String,
       execute: () => Effect.succeed("ok"),
     })
-    const actionCapability = action({
-      id: "test.action",
-      name: "Test Action",
-      description: "ephemeral",
-      surface: "palette",
-      input: Schema.Struct({}),
-      output: Schema.Struct({}),
-      execute: () => Effect.succeed({}),
-    })
     const requestCapability = request({
       id: "test.read",
       extensionId: ExtensionId.make("ext-test"),
@@ -44,13 +35,8 @@ describe("ref(capability)", () => {
     })
 
     const toolId: ToolId = getToolId(toolCapability)
-    const commandId: CommandId = actionCapability.id
     const rpcId: RpcId = requestCapability.id
-    expect([String(toolId), String(commandId), String(rpcId)]).toEqual([
-      "test.tool",
-      "test.action",
-      "test.read",
-    ])
+    expect([String(toolId), String(rpcId)]).toEqual(["test.tool", "test.read"])
   })
 
   test("tool lowers to a native Effect AI tool with Gent metadata annotations", () => {
@@ -130,19 +116,8 @@ describe("ref(capability)", () => {
       output: Schema.String,
       execute: () => Effect.succeed("ok"),
     })
-    const actionCapability = action({
-      id: "test.action",
-      name: "Test Action",
-      description: "ephemeral",
-      surface: "palette",
-      input: Schema.Struct({}),
-      output: Schema.Struct({}),
-      execute: () => Effect.succeed({}),
-    })
 
     // @ts-expect-error Tool capabilities are not request refs.
     ref(capability)
-    // @ts-expect-error Action capabilities are not request refs.
-    ref(actionCapability)
   })
 })

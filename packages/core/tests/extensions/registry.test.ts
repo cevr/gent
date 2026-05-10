@@ -6,12 +6,9 @@ import type { LoadedExtension, RunContext } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core-internal/domain/driver"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import {
-  action,
   getToolId,
   request,
   tool,
-  type ActionCapability,
-  type ActionInput,
   type RequestCapability,
   type ToolCapability,
 } from "@gent/core/extensions/api"
@@ -67,7 +64,6 @@ const makeExt = (
   scope: "builtin" | "user" | "project",
   opts?: {
     tools?: ToolCapability[]
-    actions?: ActionCapability[]
     requests?: RequestCapability[]
     agents?: AgentDefinition[]
     modelDrivers?: ModelDriverContribution[]
@@ -84,24 +80,30 @@ const makeExt = (
     sourcePath: `/test/${id}`,
     contributions: {
       ...(tools.length > 0 ? { tools } : {}),
-      ...(opts?.actions !== undefined ? { actions: opts.actions } : {}),
       ...(opts?.requests !== undefined ? { requests: opts.requests } : {}),
       agents: opts?.agents,
       modelDrivers: opts?.modelDrivers,
     },
   }
 }
-const makeCommand = (id: string, options?: Partial<ActionInput>): ActionCapability =>
-  action({
+const makeSlashRequest = (
+  id: string,
+  options?: {
+    readonly description?: string
+    readonly extensionId?: ExtensionId
+  },
+): RequestCapability => {
+  const extensionId = options?.extensionId ?? ExtensionId.make(`@test/${id}-slash`)
+  return request({
     id,
-    name: id,
-    description: options?.description ?? `${id} command`,
-    surface: options?.surface ?? "slash",
-    input: options?.input ?? Schema.String,
-    output: options?.output ?? Schema.Void,
+    extensionId,
+    slash: { name: id, description: options?.description ?? `${id} command` },
+    ...(options?.description !== undefined ? { description: options.description } : {}),
+    input: Schema.String,
+    output: Schema.Void,
     execute: () => Effect.void,
-    ...options,
   })
+}
 const makeRequest = (
   id: string,
   options?: {
@@ -595,12 +597,9 @@ describe("ExtensionRegistry", () => {
 // Slash-command discovery — identity-first scope shadowing followed by
 // bucket/surface authorization.
 describe("resolveExtensions — slash command discovery", () => {
-  test("slash action appears in commands", () => {
-    const cap = makeCommand("echo", {
-      description: "Echo the args back.",
-      promptSnippet: "Echo the args back.",
-    })
-    const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { actions: [cap] })])
+  test("slash-decorated request appears in commands", () => {
+    const cap = makeSlashRequest("echo", { description: "Echo the args back." })
+    const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { requests: [cap] })])
     const commands = listSlashCommands(resolved)
     expect(commands.map((c) => c.name)).toContain("echo")
     expect(commands.find((c) => c.name === "echo")?.description).toBe("Echo the args back.")
@@ -628,20 +627,20 @@ describe("resolveExtensions — slash command discovery", () => {
     expect(command?.category).toBe("Diagnostics")
     expect(command?.keybind).toBe("ctrl+i")
   })
-  test("project palette command shadows builtin slash command", () => {
-    const builtinCap = makeCommand("act")
-    const builtin = makeExt("@test/shadow", "builtin", { actions: [builtinCap] })
-    const projectCap = makeCommand("act", { surface: "palette" })
-    const project = makeExt("@test/shadow", "project", { actions: [projectCap] })
+  test("higher-scope plain request shadows lower-scope slash request from the command list", () => {
+    const builtinCap = makeSlashRequest("act")
+    const builtin = makeExt("@test/shadow", "builtin", { requests: [builtinCap] })
+    const projectCap = makeRequest("act", { extensionId: ExtensionId.make("@test/shadow") })
+    const project = makeExt("@test/shadow", "project", { requests: [projectCap] })
     const resolved = resolveExtensions([builtin, project])
     const commands = listSlashCommands(resolved)
     expect(commands.map((c) => c.name)).not.toContain("act")
   })
-  test("palette-only command does not appear in the slash-backed command list", () => {
-    const cap = makeCommand("palette-only", { surface: "palette" })
-    const resolved = resolveExtensions([makeExt("@test/palette", "builtin", { actions: [cap] })])
+  test("request without slash metadata does not appear in the slash-backed command list", () => {
+    const cap = makeRequest("rpc-only", { extensionId: ExtensionId.make("@test/rpc-only") })
+    const resolved = resolveExtensions([makeExt("@test/rpc-only", "builtin", { requests: [cap] })])
     const commands = listSlashCommands(resolved)
-    expect(commands.map((c) => c.name)).not.toContain("palette-only")
+    expect(commands.map((c) => c.name)).not.toContain("rpc-only")
   })
   // ── Model capability surface ────────────────────────────────────────
   test("tool appears as a model capability", () => {
@@ -663,10 +662,12 @@ describe("resolveExtensions — slash command discovery", () => {
     const resolved = resolveExtensions([builtin, project])
     expect(resolved.modelCapabilities.has("act")).toBe(false)
   })
-  test("project command shadows builtin tool", () => {
+  test("project slash request shadows builtin tool", () => {
     const builtin = makeExt("@test/shadow", "builtin", { tools: [makeTool("look")] })
-    const projectCap = makeCommand("look")
-    const project = makeExt("@test/shadow", "project", { actions: [projectCap] })
+    const projectCap = makeSlashRequest("look", {
+      extensionId: ExtensionId.make("@test/shadow"),
+    })
+    const project = makeExt("@test/shadow", "project", { requests: [projectCap] })
     const resolved = resolveExtensions([builtin, project])
     expect(resolved.modelCapabilities.has("look")).toBe(false)
   })

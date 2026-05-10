@@ -29,7 +29,7 @@ import type { PromptSection } from "../prompt.js"
 /**
  * `RequestCapability` — `request({...})` return type. The
  * `ExtensionContributions.requests` bucket is the discrimination; non-request
- * leaves (`tool`, `action`) cannot be slotted into `requests:`.
+ * leaves (`tool`) cannot be slotted into `requests:`.
  */
 const REQUEST_REF: unique symbol = Symbol("@gent/core/request/ref")
 const RequestCapabilityBrand: unique symbol = Symbol("@gent/core/RequestCapability")
