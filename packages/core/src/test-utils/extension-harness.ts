@@ -194,15 +194,6 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
     search: dieStub("session.search"),
     queueFollowUp: dieStub("session.queueFollowUp"),
     listBranches: dieStub("session.listBranches"),
-    createBranch: dieStub("session.createBranch"),
-    forkBranch: dieStub("session.forkBranch"),
-    switchBranch: dieStub("session.switchBranch"),
-    createChildSession: dieStub("session.createChildSession"),
-    getChildSessions: dieStub("session.getChildSessions"),
-    getSessionAncestors: dieStub("session.getSessionAncestors"),
-    deleteSession: dieStub("session.deleteSession"),
-    deleteBranch: dieStub("session.deleteBranch"),
-    deleteMessages: dieStub("session.deleteMessages"),
   }
   const interaction = {
     approve: dieStub("interaction.approve"),

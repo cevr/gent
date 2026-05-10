@@ -6,7 +6,7 @@ import {
   type GentExtension,
   type LoadedExtension,
 } from "../../src/domain/extension.js"
-import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
+import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import {
   ExtensionRegistry,
@@ -22,12 +22,11 @@ import { SlashCommandInfo } from "@gent/core-internal/server/transport-contract"
 import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-preset"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { defineResource } from "@gent/core-internal/domain/resource"
 import { CapabilityError, ExtensionContext, request, tool } from "@gent/core/extensions/api"
 import * as ExtensionApi from "@gent/core/extensions/api"
-import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
+import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import { ConfigService } from "../../src/runtime/config-service"
 import { TodoStorage } from "../../../extensions/src/todo-storage.js"
 class ProfileToken extends Context.Service<
@@ -580,246 +579,6 @@ describe("extension command RPCs", () => {
             ])
           }).pipe(Effect.timeout("4 seconds")),
         ),
-      )
-    }),
-  )
-  it.live("model tool execution receives live session mutation capabilities", () =>
-    Effect.gen(function* () {
-      const ext: LoadedExtension = {
-        manifest: { id: ExtensionId.make("@test/session-mutations") },
-        scope: "builtin",
-        sourcePath: "test",
-        contributions: {
-          tools: [
-            tool({
-              id: "create-branch",
-              description: "Create a branch through the extension host session API.",
-              params: Schema.Struct({}),
-              output: Schema.String,
-              execute: () =>
-                Effect.gen(function* () {
-                  const ctx = yield* ExtensionContext
-                  return yield* ctx.Session.createBranch({ name: "from extension rpc" }).pipe(
-                    Effect.map(({ branchId }) => branchId),
-                  )
-                }),
-            }),
-          ],
-        },
-      }
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("create-branch", {}),
-            textStep("done"),
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensions: [ext],
-            cwd: "/tmp",
-          })
-          yield* client.message.send({
-            sessionId,
-            branchId,
-            content: "create a branch",
-          })
-          const snapshot = yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) =>
-              current.messages.some((message) =>
-                message.parts.some(
-                  (part) =>
-                    part.type === "tool-result" && part.name === "create-branch" && !part.isFailure,
-                ),
-              ),
-            5000,
-            "create-branch tool result",
-          )
-          const createdBranchPart = snapshot.messages
-            .flatMap((message) => message.parts)
-            .find((part) => part.type === "tool-result" && part.name === "create-branch")
-          const createdBranchInteraction = snapshot.messages
-            .flatMap((message) => message.toolInteractions)
-            .find((interaction) => interaction.toolName === "create-branch")
-          const createdBranchId =
-            createdBranchPart && createdBranchPart.type === "tool-result"
-              ? createdBranchPart.result
-              : undefined
-          if (typeof createdBranchId !== "string") {
-            throw new Error("expected create-branch tool result to contain branch id")
-          }
-          expect(createdBranchId).not.toBe(branchId)
-          expect(createdBranchInteraction?.status).toBe("completed")
-          expect(createdBranchInteraction?.output).toBe(createdBranchId)
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-  it.live("RPC requests receive live fork/delete session mutation capabilities", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/session-mutation-requests")
-      const mapHostError = (capabilityId: string) => (cause: { readonly message: string }) =>
-        new CapabilityError({ extensionId, capabilityId, reason: cause.message })
-      const ext: LoadedExtension = {
-        manifest: { id: extensionId },
-        scope: "builtin",
-        sourcePath: "test",
-        contributions: {
-          requests: [
-            request({
-              id: "fork-current-branch",
-              extensionId,
-              input: Schema.String,
-              output: Schema.String,
-              execute: (messageId) =>
-                Effect.gen(function* () {
-                  const ctx = yield* ExtensionContext
-                  return yield* ctx.Session.forkBranch({
-                    atMessageId: MessageId.make(messageId),
-                    name: "forked through extension rpc",
-                  }).pipe(
-                    Effect.map(({ branchId }) => String(branchId)),
-                    Effect.mapError(mapHostError("fork-current-branch")),
-                  )
-                }),
-            }),
-            request({
-              id: "create-temporary-branch",
-              extensionId,
-              input: Schema.Void,
-              output: Schema.String,
-              execute: () =>
-                Effect.gen(function* () {
-                  const ctx = yield* ExtensionContext
-                  return yield* ctx.Session.createBranch({
-                    name: "temporary through extension rpc",
-                  }).pipe(
-                    Effect.map(({ branchId }) => String(branchId)),
-                    Effect.mapError(mapHostError("create-temporary-branch")),
-                  )
-                }),
-            }),
-            request({
-              id: "delete-branch",
-              extensionId,
-              input: Schema.String,
-              output: Schema.Void,
-              execute: (branchId) =>
-                Effect.gen(function* () {
-                  const ctx = yield* ExtensionContext
-                  yield* ctx.Session.deleteBranch(BranchId.make(branchId)).pipe(
-                    Effect.mapError(mapHostError("delete-branch")),
-                  )
-                }),
-            }),
-            request({
-              id: "delete-messages-after",
-              extensionId,
-              input: Schema.String,
-              output: Schema.Void,
-              execute: (messageId) =>
-                Effect.gen(function* () {
-                  const ctx = yield* ExtensionContext
-                  yield* ctx.Session.deleteMessages({
-                    afterMessageId: MessageId.make(messageId),
-                  }).pipe(Effect.mapError(mapHostError("delete-messages-after")))
-                }),
-            }),
-          ],
-        },
-      }
-
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            textStep("assistant reply before mutation"),
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensions: [ext],
-            cwd: "/tmp",
-          })
-
-          yield* client.message.send({
-            sessionId,
-            branchId,
-            content: "message copied by fork",
-          })
-          const originalSnapshot = yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) =>
-              current.messages.some((message) =>
-                message.parts.some(
-                  (part) => part.type === "text" && part.text === "assistant reply before mutation",
-                ),
-              ),
-            5000,
-            "seed messages before extension mutation request",
-          )
-          const userMessage = originalSnapshot.messages.find((message) =>
-            message.parts.some(
-              (part) => part.type === "text" && part.text === "message copied by fork",
-            ),
-          )
-          if (userMessage === undefined) throw new Error("expected seeded user message")
-
-          const decodeString = (value: unknown) =>
-            Schema.decodeUnknownEffect(Schema.String)(value).pipe(Effect.orDie)
-          const forkedBranchId = yield* decodeString(
-            yield* client.extension.request({
-              sessionId,
-              branchId,
-              extensionId,
-              capabilityId: "fork-current-branch",
-              input: userMessage.id,
-            }),
-          )
-          const forkedSnapshot = yield* client.session.getSnapshot({
-            sessionId,
-            branchId: BranchId.make(forkedBranchId),
-          })
-          expect(forkedSnapshot.messages.map((message) => message.role)).toEqual(["user"])
-          expect(
-            forkedSnapshot.messages[0]?.parts.some(
-              (part) => part.type === "text" && part.text === "message copied by fork",
-            ),
-          ).toBe(true)
-
-          const temporaryBranchId = yield* decodeString(
-            yield* client.extension.request({
-              sessionId,
-              branchId,
-              extensionId,
-              capabilityId: "create-temporary-branch",
-              input: undefined,
-            }),
-          )
-          expect((yield* client.branch.list({ sessionId })).map((branch) => branch.id)).toContain(
-            BranchId.make(temporaryBranchId),
-          )
-          yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId: "delete-branch",
-            input: temporaryBranchId,
-          })
-          expect(
-            (yield* client.branch.list({ sessionId })).map((branch) => branch.id),
-          ).not.toContain(BranchId.make(temporaryBranchId))
-
-          yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId: "delete-messages-after",
-            input: userMessage.id,
-          })
-          const truncatedSnapshot = yield* client.session.getSnapshot({ sessionId, branchId })
-          expect(truncatedSnapshot.messages.map((message) => message.id)).toEqual([userMessage.id])
-        }).pipe(Effect.timeout("4 seconds")),
       )
     }),
   )

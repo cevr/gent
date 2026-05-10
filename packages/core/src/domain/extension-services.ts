@@ -12,7 +12,7 @@ import { FileLockService } from "./file-lock.js"
 import { ExtensionStatePublisher } from "./event-publisher.js"
 import type { ApprovalDecision, ApprovalRequest } from "./interaction-request.js"
 import { InteractionPendingError } from "./interaction-request.js"
-import type { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "./ids.js"
+import type { BranchId, ExtensionId, SessionId, ToolCallId } from "./ids.js"
 import type { Branch, Message, MessageMetadata, Session } from "./message.js"
 import type { ModelId } from "./model.js"
 import type { ExtensionHostContext, ExtensionHostSearchResult } from "./extension-host-context.js"
@@ -96,35 +96,6 @@ export interface ExtensionSessionService {
     readonly branchId?: BranchId
   }) => Effect.Effect<void, ExtensionServiceError>
   readonly listBranches: () => Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
-  readonly createBranch: (params: {
-    readonly name?: string
-  }) => Effect.Effect<{ readonly branchId: BranchId }, ExtensionServiceError>
-  readonly forkBranch: (params: {
-    readonly atMessageId: MessageId
-    readonly name?: string
-  }) => Effect.Effect<{ readonly branchId: BranchId }, ExtensionServiceError>
-  readonly switchBranch: (params: {
-    readonly toBranchId: BranchId
-  }) => Effect.Effect<void, ExtensionServiceError>
-  readonly createChildSession: (params: {
-    readonly name?: string
-    readonly cwd?: string
-  }) => Effect.Effect<
-    {
-      readonly sessionId: SessionId
-      readonly branchId: BranchId
-    },
-    ExtensionServiceError
-  >
-  readonly getChildSessions: () => Effect.Effect<ReadonlyArray<Session>, ExtensionServiceError>
-  readonly getSessionAncestors: (
-    sessionId?: SessionId,
-  ) => Effect.Effect<ReadonlyArray<Session>, ExtensionServiceError>
-  readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, ExtensionServiceError>
-  readonly deleteBranch: (branchId: BranchId) => Effect.Effect<void, ExtensionServiceError>
-  readonly deleteMessages: (params: {
-    readonly afterMessageId?: MessageId
-  }) => Effect.Effect<void, ExtensionServiceError>
 }
 
 export interface ExtensionAgentService {
@@ -265,28 +236,6 @@ export const extensionServicesFromHostContext = (
       queueFollowUp: (params) =>
         mapError("ExtensionSession", "queueFollowUp", ctx.session.queueFollowUp(params)),
       listBranches: () => mapError("ExtensionSession", "listBranches", ctx.session.listBranches()),
-      createBranch: (params) =>
-        mapError("ExtensionSession", "createBranch", ctx.session.createBranch(params)),
-      forkBranch: (params) =>
-        mapError("ExtensionSession", "forkBranch", ctx.session.forkBranch(params)),
-      switchBranch: (params) =>
-        mapError("ExtensionSession", "switchBranch", ctx.session.switchBranch(params)),
-      createChildSession: (params) =>
-        mapError("ExtensionSession", "createChildSession", ctx.session.createChildSession(params)),
-      getChildSessions: () =>
-        mapError("ExtensionSession", "getChildSessions", ctx.session.getChildSessions()),
-      getSessionAncestors: (sessionId) =>
-        mapError(
-          "ExtensionSession",
-          "getSessionAncestors",
-          ctx.session.getSessionAncestors(sessionId),
-        ),
-      deleteSession: (sessionId) =>
-        mapError("ExtensionSession", "deleteSession", ctx.session.deleteSession(sessionId)),
-      deleteBranch: (branchId) =>
-        mapError("ExtensionSession", "deleteBranch", ctx.session.deleteBranch(branchId)),
-      deleteMessages: (params) =>
-        mapError("ExtensionSession", "deleteMessages", ctx.session.deleteMessages(params)),
     }
     const Agent: ExtensionAgentService = {
       get: (name) => mapError("ExtensionAgent", "get", ctx.agent.get(name)),

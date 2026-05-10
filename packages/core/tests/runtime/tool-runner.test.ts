@@ -95,7 +95,7 @@ describe("ToolRunner", () => {
         branchId: Schema.String,
         toolCallId: Schema.String,
         hasAgentRun: Schema.Boolean,
-        hasSessionDelete: Schema.Boolean,
+        hasSessionListMessages: Schema.Boolean,
         hasInteraction: Schema.Boolean,
         hasProcessRun: Schema.Boolean,
       })
@@ -112,7 +112,7 @@ describe("ToolRunner", () => {
               branchId: ctx.branchId,
               toolCallId: ctx.toolCallId ?? "",
               hasAgentRun: typeof ctx.Agent.run === "function",
-              hasSessionDelete: typeof ctx.Session.deleteSession === "function",
+              hasSessionListMessages: typeof ctx.Session.listMessages === "function",
               hasInteraction: typeof ctx.Interaction.approve === "function",
               hasProcessRun: typeof ctx.Process.run === "function",
             }
@@ -157,7 +157,7 @@ describe("ToolRunner", () => {
         branchId: "b",
         toolCallId: "tc-probe",
         hasAgentRun: true,
-        hasSessionDelete: true,
+        hasSessionListMessages: true,
         hasInteraction: true,
         hasProcessRun: true,
       })

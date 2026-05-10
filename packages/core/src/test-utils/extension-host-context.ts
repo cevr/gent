@@ -31,15 +31,6 @@ const defaultSession = (): ExtensionHostContext.SessionFacet => ({
   search: () => die("session.search"),
   queueFollowUp: () => die("session.queueFollowUp"),
   listBranches: () => die("session.listBranches"),
-  createBranch: () => die("session.createBranch"),
-  forkBranch: () => die("session.forkBranch"),
-  switchBranch: () => die("session.switchBranch"),
-  createChildSession: () => die("session.createChildSession"),
-  getChildSessions: () => die("session.getChildSessions"),
-  getSessionAncestors: () => die("session.getSessionAncestors"),
-  deleteSession: () => die("session.deleteSession"),
-  deleteBranch: () => die("session.deleteBranch"),
-  deleteMessages: () => die("session.deleteMessages"),
 })
 
 const defaultInteraction = (): ExtensionHostContext.Interaction => ({

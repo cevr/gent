@@ -357,6 +357,29 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
+  test("ExtensionContext.Session exposes queries only — no branch/session/message mutations", () => {
+    type SessionService = PublicExtensionApi.ExtensionContextService["Session"]
+    // @ts-expect-error — createBranch was removed; branch mutations route through the RPC client
+    type _CreateBranch = SessionService["createBranch"]
+    // @ts-expect-error — forkBranch was removed; branch mutations route through the RPC client
+    type _ForkBranch = SessionService["forkBranch"]
+    // @ts-expect-error — switchBranch was removed; branch mutations route through the RPC client
+    type _SwitchBranch = SessionService["switchBranch"]
+    // @ts-expect-error — createChildSession was removed; session-tree mutations route through the RPC client
+    type _CreateChildSession = SessionService["createChildSession"]
+    // @ts-expect-error — getChildSessions was removed; session-tree reads route through the RPC client
+    type _GetChildSessions = SessionService["getChildSessions"]
+    // @ts-expect-error — getSessionAncestors was removed; session-tree reads route through the RPC client
+    type _GetSessionAncestors = SessionService["getSessionAncestors"]
+    // @ts-expect-error — deleteSession was removed; deletion routes through the RPC client
+    type _DeleteSession = SessionService["deleteSession"]
+    // @ts-expect-error — deleteBranch was removed; deletion routes through the RPC client
+    type _DeleteBranch = SessionService["deleteBranch"]
+    // @ts-expect-error — deleteMessages was removed; message mutations route through the RPC client
+    type _DeleteMessages = SessionService["deleteMessages"]
+    expect(true).toBe(true)
+  })
+
   test("reaction handlers receive event input only", () => {
     defineExtension({
       id: "reaction-handler-params-lock",

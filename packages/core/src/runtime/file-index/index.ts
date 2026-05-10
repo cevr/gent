@@ -29,7 +29,7 @@ const withFallback = (primary: FileIndexService, fallback: FileIndexService): Fi
  * Native-first with per-method fallback. Always succeeds.
  *
  * - Native module unavailable → pure fallback
- * - Per-method native failure (create, scan timeout, search) → fallback for that call
+ * - Per-method native failure (create, scan timeout, listFiles) → fallback for that call
  * - Finder lifecycle cleanup on scope close
  */
 export const FileIndexLive: Layer.Layer<

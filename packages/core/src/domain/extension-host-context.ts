@@ -2,7 +2,7 @@ import { Schema, type Context, type Effect, type PlatformError } from "effect"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent"
 import type { ExtensionHostPlatform } from "./extension"
 import type { EventStoreError } from "./event"
-import { BranchId, SessionId, type MessageId } from "./ids"
+import { BranchId, SessionId } from "./ids"
 import type {
   ApprovalDecision,
   ApprovalRequest,
@@ -67,8 +67,6 @@ export declare namespace ExtensionHostContext {
     readonly estimateContextPercent: SessionFacet["estimateContextPercent"]
     readonly search: SessionFacet["search"]
     readonly listBranches: SessionFacet["listBranches"]
-    readonly getChildSessions: SessionFacet["getChildSessions"]
-    readonly getSessionAncestors: SessionFacet["getSessionAncestors"]
   }
 
   interface Agent {
@@ -135,47 +133,7 @@ export declare namespace ExtensionHostContext {
       readonly branchId?: BranchId
     }) => Effect.Effect<void, ExtensionHostError>
 
-    // Branch operations
-
     readonly listBranches: () => Effect.Effect<ReadonlyArray<Branch>, ExtensionHostError>
-
-    readonly createBranch: (params: {
-      name?: string
-    }) => Effect.Effect<{ branchId: BranchId }, ExtensionHostError>
-
-    readonly forkBranch: (params: {
-      atMessageId: MessageId
-      name?: string
-    }) => Effect.Effect<{ branchId: BranchId }, ExtensionHostError>
-
-    readonly switchBranch: (params: {
-      toBranchId: BranchId
-    }) => Effect.Effect<void, ExtensionHostError>
-
-    // Session tree
-
-    readonly createChildSession: (params: {
-      name?: string
-      cwd?: string
-    }) => Effect.Effect<{ sessionId: SessionId; branchId: BranchId }, ExtensionHostError>
-
-    readonly getChildSessions: () => Effect.Effect<ReadonlyArray<Session>, ExtensionHostError>
-
-    readonly getSessionAncestors: (
-      sessionId?: SessionId,
-    ) => Effect.Effect<ReadonlyArray<Session>, ExtensionHostError>
-
-    // Deletion
-
-    readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, ExtensionHostError>
-
-    readonly deleteBranch: (branchId: BranchId) => Effect.Effect<void, ExtensionHostError>
-
-    // Message mutation
-
-    readonly deleteMessages: (params: {
-      afterMessageId?: MessageId
-    }) => Effect.Effect<void, ExtensionHostError>
   }
 
   interface Interaction {
