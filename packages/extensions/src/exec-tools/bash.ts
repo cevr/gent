@@ -5,17 +5,17 @@ import {
   Duration,
   Effect,
   Exit,
+  FileSystem,
   Layer,
+  Path,
   Ref,
   Schema,
   Scope,
   Semaphore,
   Stream,
   type Fiber,
-  type FileSystem,
-  type Path,
 } from "effect"
-import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import {
   ExtensionContext,
   tool,
@@ -315,12 +315,23 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
           }
 
           const started = yield* Deferred.make<void>()
-          const jobContext = yield* Effect.context<
+          const fullContext = yield* Effect.context<
             | ChildProcessSpawner.ChildProcessSpawner
             | FileSystem.FileSystem
             | Path.Path
             | ExtensionContext
           >()
+          // forkIn inherits the parent fiber's full context, and provideContext
+          // would only merge on top — request-scoped tags carried by the caller
+          // (e.g., CurrentInteraction) would leak into the long-lived background
+          // fork. updateContext replaces the forked fiber's context outright,
+          // pinning it to the explicit slice the background helpers need.
+          const jobContext = Context.pick(
+            ChildProcessSpawner.ChildProcessSpawner,
+            FileSystem.FileSystem,
+            Path.Path,
+            ExtensionContext,
+          )(fullContext)
           const fiber = yield* Deferred.await(started).pipe(
             Effect.andThen(runBackgroundJob(job)),
             Effect.catchTag("BashError", (e) => queueFailure(job, e.message)),
@@ -330,7 +341,16 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
                 : queueFailure(job, `Internal error: ${Cause.pretty(cause)}`),
             ),
             Effect.ensuring(Ref.update(state, (s) => markJobCompleted(s, key))),
-            Effect.provideContext(jobContext),
+            Effect.updateContext(
+              (
+                _: Context.Context<
+                  | ChildProcessSpawner.ChildProcessSpawner
+                  | FileSystem.FileSystem
+                  | Path.Path
+                  | ExtensionContext
+                >,
+              ) => jobContext,
+            ),
             Effect.forkIn(scope),
           )
 
