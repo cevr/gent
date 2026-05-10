@@ -209,9 +209,13 @@ const RpcHandlers = GentRpcs.toLayer(
     const connectionTracker =
       connectionTrackerOpt._tag === "Some" ? connectionTrackerOpt.value : undefined
     const serverIdentity = yield* ServerIdentity
-    // Touching RuntimeEnvironment ensures the layer requirement is preserved
-    // for downstream callers that depend on the runtime being initialized.
+    // Touching these Tags at layer-build keeps their requirements visible on the
+    // RpcHandlers layer. RpcGroup.toLayer erases handler-residual R, so Tags only
+    // yielded inside returned handler Effects would otherwise become deferred
+    // request-time defects instead of layer-build failures.
     yield* RuntimeEnvironment
+    yield* DriverRegistry
+    yield* BranchStorage
 
     const loadSession = (sessionId: string) =>
       sessionStorage
