@@ -1,4 +1,4 @@
-import { Clock, Context, Deferred, Effect, Layer, PubSub, Queue, Ref, Schema, Stream } from "effect"
+import { Clock, Context, Deferred, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
 
 import { Message } from "./message"
 import {
@@ -14,7 +14,7 @@ import {
 import { AgentName, ReasoningEffort } from "./agent"
 import { ModelId } from "./model"
 import { TaggedEnumClass } from "./schema-tagged-enum-class"
-import { makeSessionPubSubRegistry } from "../runtime/session-pubsub-registry"
+import { makeSessionPubSubRegistry } from "./session-pubsub-registry"
 
 // ============================================================================
 // Shared sub-schemas
@@ -519,8 +519,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
         Stream.unwrap(
           Effect.gen(function* () {
             const afterId = after ?? EventId.make(0)
-            const ps = yield* registry.getOrCreate(sessionId)
-            const subscription = yield* PubSub.subscribe(ps)
+            const subscription = yield* registry.subscribe(sessionId)
             const latestId = yield* Ref.get(idRef)
             const buffered = (yield* Ref.get(eventsRef)).filter(
               (env) =>

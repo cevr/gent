@@ -1,4 +1,4 @@
-import { Effect, Layer, PubSub, Stream } from "effect"
+import { Effect, Layer, Stream } from "effect"
 import {
   EventStore,
   EventStoreError,
@@ -6,10 +6,10 @@ import {
   makeSerializedEventDelivery,
 } from "../domain/event.js"
 import type { EventStoreService } from "../domain/event.js"
+import { makeSessionPubSubRegistry } from "../domain/session-pubsub-registry.js"
 import type { StorageError } from "../domain/storage-error.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
-import { makeSessionPubSubRegistry } from "./session-pubsub-registry.js"
 
 const toEventStoreError =
   (message: string) =>
@@ -58,8 +58,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
                     message: `Session not found: ${sessionId}`,
                   })
                 }
-                const ps = yield* registry.getOrCreate(sessionId)
-                const subscription = yield* PubSub.subscribe(ps)
+                const subscription = yield* registry.subscribe(sessionId)
                 const initial = yield* eventStorage
                   .listEvents({ sessionId, branchId, afterId })
                   .pipe(Effect.mapError(toEventStoreError("Failed to load buffered events")))

@@ -1,7 +1,7 @@
-import { Effect, PubSub } from "effect"
-import type { EventEnvelope } from "../domain/event.js"
-import { getEventSessionId } from "../domain/event.js"
-import type { SessionId } from "../domain/ids.js"
+import { Effect, PubSub, type Scope } from "effect"
+import type { EventEnvelope } from "./event.js"
+import { getEventSessionId } from "./event.js"
+import type { SessionId } from "./ids.js"
 
 /**
  * Per-session PubSub registry. Both the in-memory and durable
@@ -11,9 +11,16 @@ import type { SessionId } from "../domain/ids.js"
  * PubSub down on removal. Hand-rolled in two places before this
  * extraction; drift between the copies is a latent correctness
  * hazard.
+ *
+ * `subscribe` returns a scoped subscription queue rather than
+ * exposing the raw PubSub. Callers open the subscription before
+ * loading the backlog so live events aren't dropped during the
+ * race between historical-load and live-tail.
  */
 export interface SessionPubSubRegistry {
-  readonly getOrCreate: (sessionId: SessionId) => Effect.Effect<PubSub.PubSub<EventEnvelope>>
+  readonly subscribe: (
+    sessionId: SessionId,
+  ) => Effect.Effect<PubSub.Subscription<EventEnvelope>, never, Scope.Scope>
   readonly broadcast: (envelope: EventEnvelope) => Effect.Effect<void>
   readonly remove: (sessionId: SessionId) => Effect.Effect<void>
 }
@@ -28,6 +35,14 @@ export const makeSessionPubSubRegistry = (): SessionPubSubRegistry => {
       const ps = yield* PubSub.unbounded<EventEnvelope>()
       sessions.set(sessionId, ps)
       return ps
+    })
+
+  const subscribe = (
+    sessionId: SessionId,
+  ): Effect.Effect<PubSub.Subscription<EventEnvelope>, never, Scope.Scope> =>
+    Effect.gen(function* () {
+      const ps = yield* getOrCreate(sessionId)
+      return yield* PubSub.subscribe(ps)
     })
 
   const broadcast = (envelope: EventEnvelope): Effect.Effect<void> => {
@@ -48,5 +63,5 @@ export const makeSessionPubSubRegistry = (): SessionPubSubRegistry => {
       }
     })
 
-  return { getOrCreate, broadcast, remove }
+  return { subscribe, broadcast, remove }
 }
