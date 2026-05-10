@@ -4,12 +4,12 @@ Minimal agent harness. Effect-first. Small seams. One owner per concern.
 
 ## Core Model
 
-`gent` is organized around six nouns:
+`gent` is organized around five nouns:
 
 - `Server` — process-wide services only: storage, auth stores, platform, transport wiring, connection tracking.
 - `Profile` — cwd-scoped policy and extension graph: permissions, drivers, reactions, resources, capability leaves.
 - `SessionRuntime` — the single public session engine: inbox, queue, checkpoint, watch state, turn orchestration.
-- `Tool` / `Request` / `Action` — independent callable leaves for model tools, extension RPC, and human UI actions.
+- `Tool` / `Request` — independent callable leaves for model tools and typed extension RPC. Requests with a `slash:` block also surface as human slash commands.
 - `Resource` — long-lived services, schedules, lifecycle, and extension-owned state.
 - `Reaction` — turn/message/tool-result hooks for prompt, policy, runtime, and client state derivation.
 
@@ -325,7 +325,7 @@ host-owned design. It should expose:
 
 - extension shape: `defineExtension`, `GentExtension`,
   `ExtensionSetupContext`, `DefineExtensionInput`;
-- typed leaves: `tool`, `request`, `ref`, `action`;
+- typed leaves: `tool`, `request`, `ref`;
 - scoped resources: `defineResource`, `resource`, resource scope/schedule
   types;
 - turn hooks: the public reaction input/output types needed to author
@@ -373,12 +373,12 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, resources?, tools?, actions?, requests?, agents?, reactions?, modelDrivers?, externalDrivers? })`. Each typed bucket is either a literal array, a `() => array` function, or a `() => Effect<array>` factory. Setup-time host facts come from `yield* ExtensionSetupContext`; runtime host authority comes from `yield* ExtensionContext`. The bucket name IS the discriminator — TypeScript catches the wrong leaf in `tools`, `actions`, or `requests` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
+One authoring shape: `defineExtension({ id, resources?, tools?, requests?, agents?, reactions?, modelDrivers?, externalDrivers? })`. Each typed bucket is either a literal array, a `() => array` function, or a `() => Effect<array>` factory. Setup-time host facts come from `yield* ExtensionSetupContext`; runtime host authority comes from `yield* ExtensionContext`. The bucket name IS the discriminator — TypeScript catches the wrong leaf in `tools` or `requests` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
 - **Resource** — `defineResource({ scope, layer?, schedule?, start?, stop? })`. Long-lived state with explicit `scope`. Today only `"process"` is public, because it is the only lifecycle with a host owner. `cwd`, `session`, and `branch` lifetimes stay out of the author API until their runtime owners exist. Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
-- **Callable leaves** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC; `action` = human-palette or human-slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Agent`, `Interaction`, `Process`, `Files`, `FileLock`, `State`); extension-private authority comes from extension-owned Effect service Tags. The `Files` / `FileLock` / `State` facets wrap the host-internal `FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so shipped and external extensions share the same surface. See `packages/core/src/domain/capability/{tool,request,action}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
+- **Callable leaves** — `tool(...)` / `request(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Agent`, `Interaction`, `Process`, `Files`, `FileLock`, `State`); extension-private authority comes from extension-owned Effect service Tags. The `Files` / `FileLock` / `State` facets wrap the host-internal `FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so shipped and external extensions share the same surface. See `packages/core/src/domain/capability/{tool,request}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
 - **Reactions** — `reactions.turnProjection`, `systemPrompt`, `turnBefore`, `turnAfter`, `messageOutput`, and `toolResult` are the explicit runtime hooks. Reaction handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-reactions.ts`.
 - **Driver** — `modelDrivers` and `externalDrivers` are split buckets of `ModelDriverContribution` and `ExternalDriverContribution`. Model drivers provide LLM provider layers + auth; external drivers stream Effect AI response parts from process-owned executors such as ACP. See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
 

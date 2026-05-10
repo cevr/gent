@@ -48,7 +48,7 @@ export interface SlashCommand {
    *  when absent. */
   readonly displayName?: string
   readonly description?: string
-  /** Author-supplied palette category. */
+  /** Author-supplied slash-menu category. */
   readonly category?: string
   /** Author-supplied keybind hint (display-only). */
   readonly keybind?: string

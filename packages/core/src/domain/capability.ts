@@ -1,4 +1,4 @@
-/** Shared extension callable primitives. Tool/action/request leaves are
+/** Shared extension callable primitives. Tool and request leaves are
  * independent; this file holds only errors, host contexts, and typed request
  * references used across those leaves.
  *

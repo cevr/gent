@@ -4,8 +4,7 @@
  * Authors call `tool({ id, description, params, execute, ... })` directly.
  * The factory enforces the LLM-tool shape at the type level: `params`
  * must be an LLM-JSON-schema-able `Schema.Schema`, `execute` returns an
- * `Effect`, and the action/request-only fields (`surface`, `input`)
- * are forbidden.
+ * `Effect`, and the request-only fields (`slash`, `input`) are forbidden.
  *
  * Replaces the previous two-step `tool(defineTool({...}))` pattern.
  *

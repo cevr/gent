@@ -228,11 +228,11 @@ export type ExtensionRpcRequestInput = typeof ExtensionRpcRequestInput.Type
 export class SlashCommandInfo extends Schema.Class<SlashCommandInfo>("SlashCommandInfo")({
   /** Routing key (capability id). */
   name: Schema.String,
-  /** Author-supplied display name (slash menu / palette). Falls back to
+  /** Author-supplied display name for the slash menu. Falls back to
    *  `name` when absent. */
   displayName: Schema.optional(Schema.String),
   description: Schema.optional(Schema.String),
-  /** Author-supplied palette category. */
+  /** Author-supplied slash-menu category. */
   category: Schema.optional(Schema.String),
   /** Author-supplied keybind hint (display-only). */
   keybind: Schema.optional(Schema.String),

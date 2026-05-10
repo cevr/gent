@@ -25,7 +25,7 @@ export interface LoadedExtension {
    * Typed contribution buckets produced by the extension's setup function.
    * Consumers (registries, workflow runtime, scheduler, turn reactions,
    * etc.) read each bucket directly — `contributions.tools`,
-   * `contributions.actions`, `contributions.resources`, etc. The bucket name IS the discrimination;
+   * `contributions.requests`, `contributions.resources`, etc. The bucket name IS the discrimination;
    * there is no `_kind` discriminator and no `filterByKind`.
    */
   readonly contributions: ExtensionContributions
@@ -235,9 +235,6 @@ export interface TurnProjection {
   readonly toolPolicy?: ToolPolicyFragment
   readonly promptSections?: ReadonlyArray<PromptSection>
 }
-
-// Human server surfaces come from `actions:` action leaves. The TUI's separate
-// client-facet `_kind: "command"` model is unrelated.
 
 // Turn executor types — owned by the driver primitive (external drivers wrap them).
 export type { TurnExecutor, TurnContext, TurnStreamPart, TurnError } from "./driver.js"

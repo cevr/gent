@@ -172,7 +172,7 @@ export {
 // Typed capability factories. Extension registries dispatch by factory-origin
 // metadata baked into the lowering.
 //
-// See `domain/capability/{tool,request,action}.ts` for the typed shapes.
+// See `domain/capability/{tool,request}.ts` for the typed shapes.
 export {
   getToolId,
   tool,

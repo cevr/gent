@@ -243,7 +243,7 @@ describe("extension command RPCs", () => {
   )
   it.live("RPC request runs slash request with ExtensionContext service", () =>
     Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/queue-follow-up-action")
+      const extensionId = ExtensionId.make("@test/queue-follow-up-slash")
       const ext: LoadedExtension = {
         manifest: { id: extensionId },
         scope: "builtin",
@@ -251,7 +251,7 @@ describe("extension command RPCs", () => {
         contributions: {
           requests: [
             request({
-              id: "queue-follow-up-action",
+              id: "queue-follow-up-slash",
               extensionId,
               slash: {
                 trigger: "queue-follow-up",
@@ -264,13 +264,16 @@ describe("extension command RPCs", () => {
               execute: (input: string) =>
                 Effect.gen(function* () {
                   const ctx = yield* ExtensionContext
-                  yield* ctx.Session.queueFollowUp({ sourceId: "test-action", content: input })
+                  yield* ctx.Session.queueFollowUp({
+                    sourceId: "test-slash-request",
+                    content: input,
+                  })
                 }).pipe(
                   Effect.mapError(
                     (cause) =>
                       new CapabilityError({
                         extensionId,
-                        capabilityId: "queue-follow-up-action",
+                        capabilityId: "queue-follow-up-slash",
                         reason: cause.message,
                       }),
                   ),
@@ -287,7 +290,7 @@ describe("extension command RPCs", () => {
               ...e2ePreset,
               providerLayer,
               extensions: [ext],
-              cwd: "/tmp/gent-extension-queue-follow-up-action",
+              cwd: "/tmp/gent-extension-queue-follow-up-slash",
             })
             const commands = yield* client.extension.listSlashCommands({ sessionId })
             expect(commands.map((command) => command.name)).toEqual(["queue-follow-up"])
@@ -295,14 +298,14 @@ describe("extension command RPCs", () => {
               sessionId,
               branchId,
               extensionId,
-              capabilityId: "queue-follow-up-action",
-              input: "queued through slash action",
+              capabilityId: "queue-follow-up-slash",
+              input: "queued through slash request",
             })
             const queue = yield* client.queue.get({ sessionId, branchId })
             expect(queue.followUp).toEqual([
               expect.objectContaining({
                 _tag: "follow-up",
-                content: "queued through slash action",
+                content: "queued through slash request",
               }),
             ])
           }).pipe(Effect.timeout("4 seconds")),
