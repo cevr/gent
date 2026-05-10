@@ -356,32 +356,42 @@ ceremony.
   resolves registry/event-store from `parentServices` snapshot.
 - **C3.5 — `rpc-handlers.ts`**: convert 4 `buildXxxRpcHandlers` factories +
   `watchRuntimeStream` to Effect.gen yielding their own Tags.
-- **C3.6 — remaining sites** (DONE, commit `a5f975d2`): audit across the
-  candidate list found only two unambiguous violations, both fixed:
-  - `provider-auth.ts`: `makeProviderAuth(driverRegistry)` collapsed into the
-    `Live` body; yields `DriverRegistry`, `Auth`, `GentPlatform` inside.
-  - `model-resolver.ts`: `resolveProviderModel(authStore, defaultRegistry,
+- **C3.6 — remaining sites** (DONE, commits `a5f975d2` + `f3520cf5`):
+  - Sub-batch 1 (`a5f975d2`) — `provider-auth.ts`:
+    `makeProviderAuth(driverRegistry)` collapsed into the `Live` body;
+    yields `DriverRegistry`, `Auth`, `GentPlatform` inside.
+    `model-resolver.ts`: `resolveProviderModel(authStore, defaultRegistry,
 request)` reduced to `(request)`; yields `Auth` + `DriverRegistry`
     inside. `Live` snapshots that pair via `Effect.context<...>()` and
     closes per-call resolve effects with `Effect.provideContext`.
+  - Sub-batch 2 (`f3520cf5`) — 11 receipt-listed helpers converted to
+    yield Tags inside:
+    `approval-service.ts` (yields `EventPublisher`),
+    `model-registry.ts` (`readCachedModels`/`writeCachedModels` yield
+    `FileSystem`+`Path`; layer snapshots `FileSystem | Path` for per-call
+    `provideContext`),
+    `repo-explorer.ts` (`getCachePath` yields `Path`; `ensureCached`
+    yields `FileSystem`),
+    `vault.ts` (`defaultVaultPath` yields `Path`),
+    `oauth.ts` (`credentialsFilePath` yields `Path`),
+    `native-adapter.ts` (`ensureDbDir` yields `FileSystem`+`Path`),
+    `session-commands.ts` (`cleanup`/`restore`/`forgetDeleted`
+    `SessionRuntimeState` yield `SessionRuntime`/`EventStore`; mutation
+    callers use snapshot+`provideContext`),
+    `session-runtime-context.ts` (`resolveExistingSessionBranch` yields
+    `SessionStorage`+`BranchStorage`),
+    `session-runtime.ts` (`requireSessionBranch` provides snapshot),
+    `interaction-commands.ts` (provides snapshot to call site).
 
-  Other candidates inspected and ruled CLEAN: `approval-service.ts`,
-  `model-registry.ts`, `native-adapter.ts`, `session-commands.ts`,
-  `session-profile.ts`. (`repo-explorer.ts`, `vault.ts`, `oauth.ts` do not
-  exist as standalone files.)
-
-  `make-extension-host-context.ts` + `session-runtime-context.ts`
-  intentionally retained. Counsel-validated (2026-05-10): the
-  `MakeExtensionHostContextDeps` 14-field struct carries already-resolved
-  service snapshots, not Tag-resolvable services. The factory is
-  intentionally synchronous — ambient services are yielded once via
-  `makeAmbientExtensionHostContextDeps` (Context.Reference defaults +
-  `Effect.serviceOption` discovery), then captured by
-  `ExtensionHostContext` closures so extension-facing methods keep stable
-  `Effect` signatures without leaking host service requirements through
-  their R-channels. Same boundary pattern as the `provideRuntime`
-  snapshot used by `agent-loop.behavior.ts:288-353`. This is not
-  context-param threading.
+  **Retained (counsel-validated resolved-snapshot boundaries)**:
+  `MakeExtensionHostContextDeps` in `make-extension-host-context.ts`,
+  `ResolveSessionEnvironmentParams` in `session-runtime-context.ts`,
+  `sessionProfileFromRuntime` in `session-profile.ts`,
+  `makeNativeServiceFromModule(dbDir, path)` in `native-adapter.ts`
+  (Path captured inside synchronous FFI-returning closures). These
+  carry already-resolved service snapshots, not Tag-resolvable services.
+  Same boundary pattern as the `provideRuntime` snapshot used by
+  `agent-loop.behavior.ts:288-353`. Counsel verdict at `f3520cf5`: PASS.
 
 **Verification per sub-commit**
 
