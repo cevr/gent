@@ -413,12 +413,14 @@ authoring contract.
 
 **Changes**
 
-| File                                                                                         | Change                                                                                                                                          | Lines    |
-| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/anthropic/index.ts`              | Convert to `defineExtension({ id, modelDrivers: () => Effect.gen(function*() { const setup = yield* ExtensionSetupContext; return [...] }) })`. | ~254-283 |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/anthropic/platform-adapter.ts`   | Use existing `AnthropicPlatform.fromSetup({...})` (already exists at line 24-34) instead of `fromHost(ctx.host)`.                               | ~24-34   |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/define-extension.test.ts` | Lock no shipped raw-setup escape hatch (already aspirational from W32 C2).                                                                      | ~1       |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/tests/anthropic/*.test.ts`           | Update setup-time fixtures to the public surface.                                                                                               | ~1       |
+| File                                                                                                        | Change                                                                                                                                                                                           | Lines    |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/anthropic/index.ts`                             | Convert to `defineExtension({ id, modelDrivers: () => Effect.gen(function*() { const ctx = yield* ExtensionSetupContext; const platform = AnthropicPlatform.fromSetup(ctx); return [...] }) })`. | ~254-283 |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/anthropic/platform-adapter.ts`                  | Collapse to a single `fromSetup(ctx: PublicExtensionSetupContext)` that reads `host.homeDirectory` internally; delete dead `fromHost`/`Live`. ACP call site also updated to `fromSetup(ctx)`.    | ~1-30    |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/tests/anthropic/anthropic-platform-adapter.test.ts` | New: regression lock that `fromSetup` sources `home` from `host.homeDirectory`, not `ctx.home` (the OS-vs-Gent-home distinction is what the credential-file path depends on).                    | ~1       |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/tests/anthropic/*.test.ts`                          | Update setup-time fixtures to the public surface (`AnthropicPlatform.of(...)` direct construction).                                                                                              | ~1       |
+
+**Sub-commits**: `f9d7c51b` (initial migration to `defineExtension`), `66ddbe7b` (delete dead `fromHost`/`Live`; restore OS-home semantics in index.ts), `3f41a12c` (close `fromSetup` over full setup-ctx; ACP call site fixed; counsel-driven structural fix). Counsel verdicts: revise → revise → pass-equivalent (process advisories only).
 
 **Verification**
 
