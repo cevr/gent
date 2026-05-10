@@ -1,5 +1,6 @@
 import { DateTime, Effect, Random, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
+import { SqlClient } from "effect/unstable/sql"
 import {
   AgentDefinition,
   DEFAULT_AGENT_NAME,
@@ -26,26 +27,26 @@ import {
   ToolCallSucceeded,
   type EventEnvelope,
 } from "../../domain/event.js"
-import type { EventPublisherService } from "../../domain/event-publisher.js"
+import { EventPublisher } from "../../domain/event-publisher.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
-import { Permission, type PermissionService } from "../../domain/permission.js"
+import { Permission } from "../../domain/permission.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import type { ProviderAuthError, TurnError } from "../../domain/driver.js"
-import type { StorageError } from "../../domain/storage-error.js"
-import type { EventStorageService } from "../../storage/event-storage.js"
-import type { MessageStorageService } from "../../storage/message-storage.js"
-import type { SessionStorageService } from "../../storage/session-storage.js"
-import type { StorageTransaction } from "../../storage/sqlite-storage.js"
+import { AllowAllPermission } from "../session-runtime-context.js"
+import { EventStorage } from "../../storage/event-storage.js"
+import { MessageStorage } from "../../storage/message-storage.js"
+import { SessionStorage } from "../../storage/session-storage.js"
+import { withStorageTransaction } from "../../storage/sqlite-storage.js"
 import { ProviderError } from "../../domain/provider-error.js"
-import type { ModelResolverService } from "../../providers/model-resolver.js"
+import { ModelResolver } from "../../providers/model-resolver.js"
 import { toPrompt } from "../../providers/ai-transcript.js"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
 import { withRetry } from "../retry"
 import { withWideEvent, WideEvent, providerStreamBoundary } from "../wide-event-boundary"
-import type { DriverRegistryService } from "../extensions/driver-registry.js"
-import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import { convertTools, type ToolRunnerService } from "./tool-runner"
+import { DriverRegistry } from "../extensions/driver-registry.js"
+import { ExtensionRegistry } from "../extensions/registry.js"
+import { convertTools, ToolRunner } from "./tool-runner"
 import { buildTurnPromptSections, resolveReasoning } from "./agent-loop.utils.js"
 import type { ResolvedTurn } from "./agent-loop.state.js"
 import {
@@ -61,74 +62,64 @@ interface CommittedMutation<A> {
   readonly envelope?: EventEnvelope
 }
 
-export interface TurnStorage {
-  readonly transaction: StorageTransaction
-  readonly events: EventStorageService
-  readonly messages: MessageStorageService
-  readonly sessions: SessionStorageService
-}
-
 export const findPersistedEvent = (params: {
-  storage: Pick<TurnStorage, "events">
   sessionId: SessionId
   branchId: BranchId
   match: (envelope: EventEnvelope) => boolean
 }) =>
-  params.storage.events
-    .listEvents({ sessionId: params.sessionId, branchId: params.branchId })
-    .pipe(Effect.map((events) => [...events].reverse().find(params.match)))
-
-export const commitWithEvent = <A, E, R>(params: {
-  storage: Pick<TurnStorage, "transaction">
-  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
-  mutation: Effect.Effect<CommittedMutation<A>, E, R>
-}) =>
   Effect.gen(function* () {
-    const committed = yield* params.storage.transaction(params.mutation)
+    const eventStorage = yield* EventStorage
+    const events = yield* eventStorage.listEvents({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+    })
+    return [...events].reverse().find(params.match)
+  })
+
+export const commitWithEvent = <A, E, R>(mutation: Effect.Effect<CommittedMutation<A>, E, R>) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const eventPublisher = yield* EventPublisher
+    const committed = yield* withStorageTransaction(sql, mutation)
     if (committed.envelope !== undefined) {
-      yield* params.eventPublisher.deliver(committed.envelope)
+      yield* eventPublisher.deliver(committed.envelope)
     }
     return committed.result
   })
 
-export const persistMessageReceived = (params: {
-  storage: TurnStorage
-  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
-  message: Message
-}) =>
-  commitWithEvent({
-    storage: params.storage,
-    eventPublisher: params.eventPublisher,
-    mutation: Effect.gen(function* () {
-      const existing = yield* params.storage.messages.getMessage(params.message.id)
-      if (existing !== undefined) {
-        const envelope = yield* findPersistedEvent({
-          storage: params.storage,
-          sessionId: params.message.sessionId,
-          branchId: params.message.branchId,
-          match: (candidate) =>
-            candidate.event._tag === "MessageReceived" &&
-            candidate.event.message.id === params.message.id,
-        })
-        return {
-          result: existing,
-          ...(envelope !== undefined ? { envelope } : {}),
+export const persistMessageReceived = (params: { message: Message }) =>
+  Effect.gen(function* () {
+    const messageStorage = yield* MessageStorage
+    const eventPublisher = yield* EventPublisher
+    return yield* commitWithEvent(
+      Effect.gen(function* () {
+        const existing = yield* messageStorage.getMessage(params.message.id)
+        if (existing !== undefined) {
+          const envelope = yield* findPersistedEvent({
+            sessionId: params.message.sessionId,
+            branchId: params.message.branchId,
+            match: (candidate) =>
+              candidate.event._tag === "MessageReceived" &&
+              candidate.event.message.id === params.message.id,
+          })
+          return {
+            result: existing,
+            ...(envelope !== undefined ? { envelope } : {}),
+          }
         }
-      }
 
-      yield* params.storage.messages.createMessageIfAbsent(params.message)
-      const envelope = yield* params.eventPublisher.append(
-        MessageReceived.make({
-          message: params.message,
-        }),
-      )
-      return { result: params.message, envelope }
-    }),
+        yield* messageStorage.createMessageIfAbsent(params.message)
+        const envelope = yield* eventPublisher.append(
+          MessageReceived.make({
+            message: params.message,
+          }),
+        )
+        return { result: params.message, envelope }
+      }),
+    )
   })
 
 export const recordToolResult = (params: {
-  storage: TurnStorage
-  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   toolResultMessageId: MessageId
   sessionId: SessionId
   branchId: BranchId
@@ -138,6 +129,8 @@ export const recordToolResult = (params: {
   isError?: boolean
 }) =>
   Effect.gen(function* () {
+    const messageStorage = yield* MessageStorage
+    const eventPublisher = yield* EventPublisher
     const part = Prompt.toolResultPart({
       id: params.toolCallId,
       name: params.toolName,
@@ -164,14 +157,11 @@ export const recordToolResult = (params: {
       output: stringifyOutput(part.result),
     }
 
-    yield* commitWithEvent({
-      storage: params.storage,
-      eventPublisher: params.eventPublisher,
-      mutation: Effect.gen(function* () {
-        const existing = yield* params.storage.messages.getMessage(message.id)
+    yield* commitWithEvent(
+      Effect.gen(function* () {
+        const existing = yield* messageStorage.getMessage(message.id)
         if (existing !== undefined) {
           const envelope = yield* findPersistedEvent({
-            storage: params.storage,
             sessionId: params.sessionId,
             branchId: params.branchId,
             match: (candidate) =>
@@ -185,13 +175,13 @@ export const recordToolResult = (params: {
           }
         }
 
-        const result = yield* params.storage.messages.createMessageIfAbsent(message)
-        const envelope = yield* params.eventPublisher.append(
+        const result = yield* messageStorage.createMessageIfAbsent(message)
+        const envelope = yield* eventPublisher.append(
           isError ? ToolCallFailed.make(toolCallFields) : ToolCallSucceeded.make(toolCallFields),
         )
         return { result, envelope }
       }),
-    })
+    )
   })
 
 export interface ResolvedTurnContext extends ResolvedTurn {
@@ -226,8 +216,6 @@ export const toolCallsFromResponseParts = (
   )
 
 export const persistMessageParts = (params: {
-  storage: TurnStorage
-  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
   messageId: MessageId
@@ -238,6 +226,7 @@ export const persistMessageParts = (params: {
   Effect.gen(function* () {
     if (params.parts.length === 0) return undefined
 
+    const messageStorage = yield* MessageStorage
     const message = Message.Regular.make({
       id: params.messageId,
       sessionId: params.sessionId,
@@ -247,19 +236,13 @@ export const persistMessageParts = (params: {
       createdAt: params.createdAt ?? (yield* DateTime.nowAsDate),
     })
 
-    const existing = yield* params.storage.messages.getMessage(message.id)
+    const existing = yield* messageStorage.getMessage(message.id)
     if (existing !== undefined) return existing
 
-    return yield* persistMessageReceived({
-      storage: params.storage,
-      eventPublisher: params.eventPublisher,
-      message,
-    })
+    return yield* persistMessageReceived({ message })
   })
 
 export const persistAssistantParts = (params: {
-  storage: TurnStorage
-  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
   messageId: MessageId
@@ -268,8 +251,6 @@ export const persistAssistantParts = (params: {
   agentName: AgentNameType
 }) =>
   persistMessageParts({
-    storage: params.storage,
-    eventPublisher: params.eventPublisher,
     sessionId: params.sessionId,
     branchId: params.branchId,
     messageId: params.messageId,
@@ -279,8 +260,6 @@ export const persistAssistantParts = (params: {
   })
 
 export const persistToolParts = (params: {
-  storage: TurnStorage
-  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
   messageId: MessageId
@@ -288,8 +267,6 @@ export const persistToolParts = (params: {
   createdAt?: Date
 }) =>
   persistMessageParts({
-    storage: params.storage,
-    eventPublisher: params.eventPublisher,
     sessionId: params.sessionId,
     branchId: params.branchId,
     messageId: params.messageId,
@@ -307,12 +284,12 @@ export const persistToolParts = (params: {
  */
 export const resolveDriverToolSurface = (
   agent: AgentDefinition,
-  driverRegistry: DriverRegistryService,
-): Effect.Effect<"native" | "codemode" | undefined> =>
+): Effect.Effect<"native" | "codemode" | undefined, never, DriverRegistry> =>
   Effect.gen(function* () {
     const driver = agent.driver
     if (driver === undefined) return undefined
     if (driver._tag === "model") return "native"
+    const driverRegistry = yield* DriverRegistry
     const ext = yield* driverRegistry.getExternal(driver.id)
     return ext?.toolSurface ?? "native"
   })
@@ -357,22 +334,22 @@ export const resolveTurnContext = (params: {
   agentOverride?: AgentNameType
   runSpec?: RunSpec
   currentAgent?: AgentNameType
-  storage: TurnStorage
   branchId: BranchId
-  extensionRegistry: ExtensionRegistryService
-  driverRegistry: DriverRegistryService
   sessionId: SessionId
   publishEvent: PublishEvent
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
   hostCtx: ExtensionHostContext
-}): Effect.Effect<ResolvedTurnContext | undefined, StorageError, ConfigService> =>
+}) =>
   Effect.gen(function* () {
+    const extensionRegistry = yield* ExtensionRegistry
+    const messageStorage = yield* MessageStorage
+    const sessionStorage = yield* SessionStorage
     const currentAgent = params.agentOverride ?? params.currentAgent ?? DEFAULT_AGENT_NAME
-    const rawMessages = yield* params.storage.messages
+    const rawMessages = yield* messageStorage
       .listMessages(params.branchId)
       .pipe(Effect.map((items) => [...items]))
-    const agent = yield* params.extensionRegistry.getAgent(currentAgent)
+    const agent = yield* extensionRegistry.getAgent(currentAgent)
     if (agent === undefined) {
       yield* params
         .publishEvent(
@@ -408,7 +385,7 @@ export const resolveTurnContext = (params: {
         : effectiveAgent
 
     // Derive extension projections from explicit prompt/message slots.
-    const allTools = yield* params.extensionRegistry.listModelCapabilities()
+    const allTools = yield* extensionRegistry.listModelCapabilities()
     const turnCtx = {
       sessionId: params.sessionId,
       branchId: params.branchId,
@@ -433,7 +410,7 @@ export const resolveTurnContext = (params: {
     // Filter out hidden messages — visible in transcript but excluded from LLM context
     const messages = rawMessages.filter((m) => m.metadata?.hidden !== true)
 
-    const projEval = yield* params.extensionRegistry.extensionReactions.resolveTurnProjection({
+    const projEval = yield* extensionRegistry.extensionReactions.resolveTurnProjection({
       projection: projectionCtx,
       host: params.hostCtx,
     })
@@ -443,19 +420,18 @@ export const resolveTurnContext = (params: {
     ]
 
     // Resolve tools + extension prompt sections via ToolPolicy compiler
-    const { tools, promptSections: extensionSections } =
-      yield* params.extensionRegistry.resolveToolPolicy(
-        effectiveAgent,
-        {
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          agentName: currentAgent,
-          interactive: params.interactive,
-          tags: params.runSpec?.tags,
-          parentToolCallId: params.runSpec?.parentToolCallId,
-        },
-        extensionProjections,
-      )
+    const { tools, promptSections: extensionSections } = yield* extensionRegistry.resolveToolPolicy(
+      effectiveAgent,
+      {
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        agentName: currentAgent,
+        interactive: params.interactive,
+        tags: params.runSpec?.tags,
+        parentToolCallId: params.runSpec?.parentToolCallId,
+      },
+      extensionProjections,
+    )
 
     // Build tool-aware prompt, then run through explicit prompt slots.
     // We hand the slot layer both the compiled `basePrompt` (for append-only
@@ -463,7 +439,7 @@ export const resolveTurnContext = (params: {
     // that need to swap or strip a section by id, e.g. codemode replacing
     // `tool-list` / `tool-guidelines` rather than appending a contradicting
     // surface).
-    const allAgents = yield* params.extensionRegistry.listAgents()
+    const allAgents = yield* extensionRegistry.listAgents()
     const sections = buildTurnPromptSections(
       params.baseSections,
       effectiveAgent,
@@ -472,8 +448,8 @@ export const resolveTurnContext = (params: {
       allAgents,
     )
     const turnPrompt = compileSystemPrompt(sections)
-    const driverToolSurface = yield* resolveDriverToolSurface(dispatchAgent, params.driverRegistry)
-    const systemPrompt = yield* params.extensionRegistry.extensionReactions.resolveSystemPrompt(
+    const driverToolSurface = yield* resolveDriverToolSurface(dispatchAgent)
+    const systemPrompt = yield* extensionRegistry.extensionReactions.resolveSystemPrompt(
       {
         basePrompt: turnPrompt,
         agent: dispatchAgent,
@@ -485,7 +461,7 @@ export const resolveTurnContext = (params: {
       },
       { projection: projectionCtx, host: params.hostCtx },
     )
-    const session = yield* params.storage.sessions
+    const session = yield* sessionStorage
       .getSession(params.sessionId)
       .pipe(Effect.catchEager(() => Effect.void))
 
@@ -519,40 +495,35 @@ export const executeToolCalls = (params: {
   branchId: BranchId
   currentTurnAgent: AgentNameType
   hostCtx: ExtensionHostContext
-  toolRunner: ToolRunnerService
-  extensionRegistry: ExtensionRegistryService
-  permission?: PermissionService
 }) =>
-  Effect.forEach(
-    params.toolCalls,
-    (toolCall) =>
-      Effect.gen(function* () {
-        const ctx = {
-          ...params.hostCtx,
-          agentName: params.currentTurnAgent,
-          toolCallId: ToolCallId.make(toolCall.id),
-        }
-        let run = params.toolRunner
-          .run(
-            {
-              toolCallId: ToolCallId.make(toolCall.id),
-              toolName: toolCall.name,
-              input: toolCall.params,
-            },
-            ctx,
-            { publishEvent: params.publishEvent },
-          )
-          .pipe(
-            Effect.provideService(ExtensionRegistry, params.extensionRegistry),
-            Effect.mapError((e) => new ToolInteractionPending(e, ToolCallId.make(toolCall.id))),
-          )
-        if (params.permission !== undefined) {
-          run = run.pipe(Effect.provideService(Permission, params.permission))
-        }
-        return yield* run
-      }),
-    { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
-  )
+  Effect.gen(function* () {
+    const toolRunner = yield* ToolRunner
+    return yield* Effect.forEach(
+      params.toolCalls,
+      (toolCall) =>
+        Effect.gen(function* () {
+          const ctx = {
+            ...params.hostCtx,
+            agentName: params.currentTurnAgent,
+            toolCallId: ToolCallId.make(toolCall.id),
+          }
+          return yield* toolRunner
+            .run(
+              {
+                toolCallId: ToolCallId.make(toolCall.id),
+                toolName: toolCall.name,
+                input: toolCall.params,
+              },
+              ctx,
+              { publishEvent: params.publishEvent },
+            )
+            .pipe(
+              Effect.mapError((e) => new ToolInteractionPending(e, ToolCallId.make(toolCall.id))),
+            )
+        }),
+      { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
+    )
+  })
 
 type ModelTurnSource = {
   readonly driverKind: "model"
@@ -574,21 +545,23 @@ type ExternalTurnSource = {
 
 export const resolveTurnSource = (params: {
   resolved: ResolvedTurnContext
-  modelResolver: ModelResolverService
-  driverRegistry: DriverRegistryService
   publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle
   hostCtx: ExtensionHostContext
-  toolRunner: ToolRunnerService
-  extensionRegistry: ExtensionRegistryService
-  permission?: PermissionService
 }) =>
   Effect.gen(function* () {
+    const driverRegistry = yield* DriverRegistry
+    const modelResolver = yield* ModelResolver
+    const toolRunner = yield* ToolRunner
+    const extensionRegistry = yield* ExtensionRegistry
+    const permissionOption = yield* Effect.serviceOption(Permission)
+    const permission =
+      permissionOption._tag === "Some" ? permissionOption.value : AllowAllPermission
     const { resolved } = params
     if (resolved.driver?._tag === "external") {
-      const executor = yield* params.driverRegistry.getExternalExecutor(resolved.driver.id)
+      const executor = yield* driverRegistry.getExternalExecutor(resolved.driver.id)
       if (executor === undefined) {
         yield* params
           .publishEvent(
@@ -618,13 +591,13 @@ export const resolveTurnSource = (params: {
           runTool: (toolName, args) =>
             Effect.gen(function* () {
               const toolCallId = ToolCallId.make(yield* Random.nextUUIDv4)
-              let run = params.toolRunner
+              return yield* toolRunner
                 .run({ toolCallId, toolName, input: args }, { ...params.hostCtx, toolCallId })
-                .pipe(Effect.provideService(ExtensionRegistry, params.extensionRegistry))
-              if (params.permission !== undefined) {
-                run = run.pipe(Effect.provideService(Permission, params.permission))
-              }
-              return yield* run.pipe(Effect.orDie)
+                .pipe(
+                  Effect.provideService(ExtensionRegistry, extensionRegistry),
+                  Effect.provideService(Permission, permission),
+                  Effect.orDie,
+                )
             }),
         }),
         formatStreamError: (streamError: unknown) =>
@@ -639,7 +612,7 @@ export const resolveTurnSource = (params: {
         ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
         ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
       },
-      driverRegistry: params.driverRegistry,
+      driverRegistry,
       ...(resolved.driver?._tag === "model" && resolved.driver.id !== undefined
         ? { driverId: resolved.driver.id }
         : {}),
@@ -647,7 +620,7 @@ export const resolveTurnSource = (params: {
     const prompt = toPrompt(resolved.messages, { systemPrompt: resolved.systemPrompt })
     const toolkit = convertTools([...resolved.tools])
     const rawStream = Stream.unwrap(
-      params.modelResolver.resolve(modelRequest).pipe(
+      modelResolver.resolve(modelRequest).pipe(
         Effect.map((model) =>
           resolved.tools.length > 0
             ? model.streamText({
@@ -751,17 +724,13 @@ export const invokeTool = (params: {
   toolName: string
   input: unknown
   publishEvent: PublishEvent
-  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
   currentTurnAgent: AgentNameType
-  toolRunner: ToolRunnerService
-  extensionRegistry: ExtensionRegistryService
-  permission?: PermissionService
   hostCtx: ExtensionHostContext
-  storage: TurnStorage
 }) =>
   Effect.gen(function* () {
+    const messageStorage = yield* MessageStorage
     const toolCalls = [
       Prompt.toolCallPart({
         id: params.toolCallId,
@@ -772,8 +741,6 @@ export const invokeTool = (params: {
     ] as const
 
     yield* persistAssistantParts({
-      storage: params.storage,
-      eventPublisher: params.eventPublisher,
       sessionId: params.sessionId,
       branchId: params.branchId,
       messageId: params.assistantMessageId,
@@ -781,7 +748,7 @@ export const invokeTool = (params: {
       agentName: params.currentTurnAgent,
     })
 
-    const existing = yield* params.storage.messages.getMessage(params.toolResultMessageId)
+    const existing = yield* messageStorage.getMessage(params.toolResultMessageId)
     if (existing !== undefined) return
 
     const toolResults = yield* executeToolCalls({
@@ -791,13 +758,8 @@ export const invokeTool = (params: {
       branchId: params.branchId,
       currentTurnAgent: params.currentTurnAgent,
       hostCtx: params.hostCtx,
-      toolRunner: params.toolRunner,
-      extensionRegistry: params.extensionRegistry,
-      permission: params.permission,
     })
     yield* persistToolParts({
-      storage: params.storage,
-      eventPublisher: params.eventPublisher,
       sessionId: params.sessionId,
       branchId: params.branchId,
       messageId: params.toolResultMessageId,

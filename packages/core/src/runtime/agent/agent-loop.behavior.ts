@@ -114,16 +114,15 @@ import {
   type PricingLookup,
   type ResolvedTurnContext,
   type ToolResponsePart,
-  type TurnStorage,
 } from "./turn-helpers.js"
 
 export const resolveStoredAgent = (params: {
-  storage: Pick<TurnStorage, "events">
   sessionId: SessionId
   branchId: BranchId
-}): Effect.Effect<AgentNameType, never> =>
+}): Effect.Effect<AgentNameType, never, EventStorage> =>
   Effect.gen(function* () {
-    const latestAgentEvent = yield* params.storage.events
+    const eventStorage = yield* EventStorage
+    const latestAgentEvent = yield* eventStorage
       .getLatestEvent({
         sessionId: params.sessionId,
         branchId: params.branchId,
@@ -277,24 +276,46 @@ export const makeAgentLoopBehavior = (
     const sessionStorage = yield* SessionStorage
     const messageStorage = yield* MessageStorage
     const queueStorage = yield* AgentLoopQueueStorage
-    const eventStorage = yield* EventStorage
     const sql = yield* SqlClient.SqlClient
-    const modelResolver = yield* ModelResolver
+    yield* ModelResolver
     const extensionRegistry = yield* ExtensionRegistry
     const driverRegistry = yield* DriverRegistry
     const eventPublisher = yield* EventPublisher
-    const toolRunner = yield* ToolRunner
+    yield* ToolRunner
     const configServiceForRun = yield* ConfigService
     const modelRegistryForRun = yield* ModelRegistry
     const host = yield* makeExtensionHostPlatform
-    const storageTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      withStorageTransaction(sql, effect)
-    const turnStorage: TurnStorage = {
-      transaction: storageTransaction,
-      events: eventStorage,
-      messages: messageStorage,
-      sessions: sessionStorage,
-    }
+    // Snapshot the layer-build context so behavior methods (declared as
+    // `Effect<A, E, never>` in `AgentLoopBehavior`) can resolve Tags that
+    // turn-helpers now yield inside (post-W33-C3.3). Without this, helper
+    // requirements like `MessageStorage`, `EventPublisher`, `SqlClient`,
+    // `ModelResolver`, `ToolRunner`, etc. leak into the method R-channels
+    // and break the interface.
+    const runtimeContext = yield* Effect.context<
+      | SessionStorage
+      | MessageStorage
+      | EventStorage
+      | SqlClient.SqlClient
+      | ModelResolver
+      | ToolRunner
+      | EventPublisher
+    >()
+    const provideRuntime = <A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+    ): Effect.Effect<
+      A,
+      E,
+      Exclude<
+        R,
+        | SessionStorage
+        | MessageStorage
+        | EventStorage
+        | SqlClient.SqlClient
+        | ModelResolver
+        | ToolRunner
+        | EventPublisher
+      >
+    > => Effect.provideContext(effect, runtimeContext)
     const getPricing: PricingLookup = (modelId) =>
       modelRegistryForRun.get(modelId).pipe(
         Effect.map((m) => m?.pricing),
@@ -362,7 +383,6 @@ export const makeAgentLoopBehavior = (
     const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
     const interruptedRef = yield* Ref.make(false)
     const currentAgent = yield* resolveStoredAgent({
-      storage: turnStorage,
       sessionId,
       branchId,
     })
@@ -673,13 +693,11 @@ export const makeAgentLoopBehavior = (
         branchId,
         currentTurnAgent: params.currentTurnAgent,
         hostCtx: params.hostCtx,
-        toolRunner,
-        extensionRegistry: params.extensionRegistry,
-        permission: params.permission,
-      })
+      }).pipe(
+        Effect.provideService(ExtensionRegistry, params.extensionRegistry),
+        Effect.provideService(Permission, params.permission),
+      )
       yield* persistToolParts({
-        storage: turnStorage,
-        eventPublisher,
         sessionId,
         branchId,
         messageId: toolResultMessageId,
@@ -702,8 +720,6 @@ export const makeAgentLoopBehavior = (
         createdAt?: Date,
       ) =>
         persistAssistantParts({
-          storage: turnStorage,
-          eventPublisher,
           sessionId,
           branchId,
           messageId: assistantMessageIdForTurn(params.messageId, params.step),
@@ -714,8 +730,6 @@ export const makeAgentLoopBehavior = (
 
       const persistToolPartsLocal = (parts: ReadonlyArray<ToolResponsePart>, createdAt?: Date) =>
         persistToolParts({
-          storage: turnStorage,
-          eventPublisher,
           sessionId,
           branchId,
           messageId: toolResultMessageIdForTurn(params.messageId, params.step),
@@ -723,19 +737,20 @@ export const makeAgentLoopBehavior = (
           createdAt,
         })
 
-      const source = yield* resolveTurnSource({
+      const sourceEffect = resolveTurnSource({
         resolved: params.resolved,
-        modelResolver,
-        driverRegistry: params.driverRegistry,
         publishEvent: publishEventOrDie,
         sessionId,
         branchId,
         activeStream: params.activeStream,
         hostCtx: params.hostCtx,
-        toolRunner,
-        extensionRegistry: params.extensionRegistry,
-        ...(params.permission !== undefined ? { permission: params.permission } : {}),
-      })
+      }).pipe(
+        Effect.provideService(ExtensionRegistry, params.extensionRegistry),
+        Effect.provideService(DriverRegistry, params.driverRegistry),
+      )
+      const source = yield* params.permission !== undefined
+        ? sourceEffect.pipe(Effect.provideService(Permission, params.permission))
+        : sourceEffect
 
       if (source === undefined) {
         return {
@@ -853,7 +868,6 @@ export const makeAgentLoopBehavior = (
       const existingMessage = yield* messageStorage.getMessage(params.messageId)
       if (existingMessage?.turnDurationMs !== undefined) {
         const envelope = yield* findPersistedEvent({
-          storage: turnStorage,
           sessionId,
           branchId,
           match: (candidate) =>
@@ -869,7 +883,8 @@ export const makeAgentLoopBehavior = (
       const turnEndTime = yield* DateTime.now
       const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
 
-      const envelope = yield* turnStorage.transaction(
+      const envelope = yield* withStorageTransaction(
+        sql,
         Effect.gen(function* () {
           yield* messageStorage.updateMessageTurnDuration(params.messageId, turnDurationMs)
           return yield* eventPublisher.append(
@@ -998,27 +1013,24 @@ export const makeAgentLoopBehavior = (
           break
         }
 
-        yield* persistMessageReceived({
-          storage: turnStorage,
-          eventPublisher,
-          message: state.message,
-        })
+        yield* persistMessageReceived({ message: state.message })
         yield* clearInFlightTurn(state.message.id)
 
         const resolved = yield* resolveTurnContext({
           agentOverride: state.agentOverride,
           runSpec: state.runSpec,
           currentAgent: state.currentAgent,
-          storage: turnStorage,
           branchId,
-          extensionRegistry: turnExtensionRegistry,
-          driverRegistry: turnDriverRegistry,
           sessionId,
           publishEvent: publishEventOrDie,
           baseSections: turnBaseSections,
           interactive: state.interactive,
           hostCtx: turnHostCtx,
-        }).pipe(Effect.provideService(ConfigService, configServiceForRun))
+        }).pipe(
+          Effect.provideService(ConfigService, configServiceForRun),
+          Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
+          Effect.provideService(DriverRegistry, turnDriverRegistry),
+        )
         if (resolved === undefined) break
 
         currentTurnAgent = resolved.currentTurnAgent
@@ -1178,7 +1190,7 @@ export const makeAgentLoopBehavior = (
         )
       })
 
-    const runTurnWorker = (startState: RunningState): Effect.Effect<void, never> =>
+    const runTurnWorker = (startState: RunningState) =>
       sideMutationSemaphore.withPermits(1)(
         runTurn(startState).pipe(
           Effect.annotateLogs({ sessionId, branchId }),
@@ -1203,7 +1215,7 @@ export const makeAgentLoopBehavior = (
       Effect.ignore,
     )
 
-    const startTurnWorker = Effect.forkIn(turnWorkerLoop, loopScope, {
+    const startTurnWorker = Effect.forkIn(provideRuntime(turnWorkerLoop), loopScope, {
       startImmediately: true,
     }).pipe(Effect.asVoid)
 

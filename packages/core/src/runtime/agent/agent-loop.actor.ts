@@ -76,16 +76,17 @@ import {
   makeAgentLoopBehavior,
 } from "./agent-loop.behavior.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
-import { ToolRunner } from "./tool-runner.js"
+import type { ToolRunner } from "./tool-runner.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
-import { SessionStorage } from "../../storage/session-storage.js"
-import { SqlClient } from "effect/unstable/sql"
-import { withStorageTransaction } from "../../storage/sqlite-storage.js"
+import type { SessionStorage } from "../../storage/session-storage.js"
+import type { SqlClient } from "effect/unstable/sql"
 import { entityIdOf, parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
-import { invokeTool, recordToolResult, type TurnStorage } from "./turn-helpers.js"
+import { ExtensionRegistry } from "../extensions/registry.js"
+import { Permission } from "../../domain/permission.js"
+import { invokeTool, recordToolResult } from "./turn-helpers.js"
 
 const WorkspaceFields = {
   workspaceId: Schema.String,
@@ -471,17 +472,8 @@ const buildAgentLoopActorHandlers = (config: {
       effect.pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
     const messageStorage = yield* MessageStorage
     const queueStorage = yield* AgentLoopQueueStorage
-    const sessionStorage = yield* SessionStorage
     const eventStorage = yield* EventStorage
     const eventPublisher = yield* EventPublisher
-    const toolRunner = yield* ToolRunner
-    const sql = yield* SqlClient.SqlClient
-    const turnStorage: TurnStorage = {
-      transaction: <A, E, R>(effect: Effect.Effect<A, E, R>) => withStorageTransaction(sql, effect),
-      events: eventStorage,
-      messages: messageStorage,
-      sessions: sessionStorage,
-    }
     const closed = yield* Ref.make(false)
     const operationSeen = yield* Ref.make(false)
 
@@ -507,7 +499,7 @@ const buildAgentLoopActorHandlers = (config: {
     })
 
     const latestIncompleteUserTurn = Effect.gen(function* () {
-      const envelopes = yield* turnStorage.events
+      const envelopes = yield* eventStorage
         .listEvents({ sessionId, branchId })
         .pipe(Effect.catchEager(() => Effect.succeed([])))
       const completed = new Set(
@@ -946,8 +938,6 @@ const buildAgentLoopActorHandlers = (config: {
             Effect.andThen(
               handle.withSideMutation(
                 recordToolResult({
-                  storage: turnStorage,
-                  eventPublisher,
                   toolResultMessageId:
                     operation.commandId !== undefined
                       ? toolResultMessageIdForCommand(operation.commandId)
@@ -981,16 +971,14 @@ const buildAgentLoopActorHandlers = (config: {
                     input: operation.input,
                     publishEvent: (event) =>
                       eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
-                    eventPublisher,
                     sessionId: operation.sessionId,
                     branchId: operation.branchId,
                     currentTurnAgent,
-                    toolRunner,
-                    extensionRegistry: environment.turnExtensionRegistry,
-                    permission: environment.turnPermission,
                     hostCtx: environment.turnHostCtx,
-                    storage: turnStorage,
-                  })
+                  }).pipe(
+                    Effect.provideService(ExtensionRegistry, environment.turnExtensionRegistry),
+                    Effect.provideService(Permission, environment.turnPermission),
+                  )
                 }),
               ),
             ),
