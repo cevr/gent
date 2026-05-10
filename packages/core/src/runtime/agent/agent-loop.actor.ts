@@ -692,25 +692,21 @@ const buildAgentLoopActorHandlers = (config: {
     yield* withWorkspace(openLoop)
     yield* Effect.addFinalizer(() => cleanupLoop(handle))
 
-    const ensureStarted = Effect.gen(function* () {
-      if (yield* Ref.get(closed)) {
-        // Double-checked: re-read `closed` under the semaphore so only one
-        // fiber rebuilds `handle`/`startupExit`; later arrivals see the
-        // already-opened loop. Without the semaphore, the actor's
-        // `concurrency: "unbounded"` mailbox lets two fibers both observe
-        // `closed=true` and both reassign `handle` — torn reads, leaked
-        // behavior scopes.
-        yield* startupSemaphore.withPermits(1)(
-          Effect.gen(function* () {
-            if (yield* Ref.get(closed)) {
-              yield* openLoop
-            }
-          }),
-        )
-      }
-      if (Exit.isSuccess(startupExit)) return
-      return yield* causeToAgentLoopError(startupExit.cause)
-    })
+    // Serialize the full read/rebuild/check path so concurrent ops cannot
+    // observe a partially-rebuilt loop. `openLoop` flips `closed=false`
+    // before it has reassigned `handle` and `startupExit`; without holding
+    // the permit across the post-check, a second fiber that arrives after
+    // that flip would skip the semaphore, read the previous `startupExit`,
+    // and proceed against the old (now-closed) `handle`.
+    const ensureStarted = startupSemaphore.withPermits(1)(
+      Effect.gen(function* () {
+        if (yield* Ref.get(closed)) {
+          yield* openLoop
+        }
+        if (Exit.isSuccess(startupExit)) return
+        return yield* causeToAgentLoopError(startupExit.cause)
+      }),
+    )
 
     const currentRegisteredState = Effect.gen(function* () {
       yield* rejectIfTerminated
@@ -889,6 +885,7 @@ const buildAgentLoopActorHandlers = (config: {
         withWorkspace(
           ensureTarget(operation).pipe(
             Effect.andThen(markWrite),
+            Effect.andThen(ensureStarted),
             Effect.andThen(
               Effect.gen(function* () {
                 const projectedState = yield* currentRuntimeState(handle)
@@ -952,6 +949,7 @@ const buildAgentLoopActorHandlers = (config: {
         withWorkspace(
           ensureTarget(operation).pipe(
             Effect.andThen(markWrite),
+            Effect.andThen(ensureStarted),
             Effect.andThen(
               handle.withSideMutation(
                 recordToolResult({
@@ -975,6 +973,7 @@ const buildAgentLoopActorHandlers = (config: {
         withWorkspace(
           ensureTarget(operation).pipe(
             Effect.andThen(markWrite),
+            Effect.andThen(ensureStarted),
             Effect.andThen(
               handle.withSideMutation(
                 Effect.gen(function* () {
