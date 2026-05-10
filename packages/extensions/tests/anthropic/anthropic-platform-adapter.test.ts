@@ -32,9 +32,6 @@ const makeCtxWithSplitHome = (gentHome: string, osHome: string): PublicExtension
     execPath: "/usr/bin/node",
     homeDirectory: osHome,
     pathListSeparator: ":",
-    commandCandidates: (command) => [command],
-    isPortFree: () => Effect.succeed(true),
-    isPidAlive: () => Effect.succeed(true),
   },
   Process: {
     parentEnv: {},

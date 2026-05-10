@@ -222,13 +222,7 @@ export type FieldSpec<A, R = never> =
 export type PublicExtensionSetupContext = Omit<RuntimeExtensionSetupContext, "host"> & {
   readonly host: Pick<
     RuntimeExtensionSetupContext["host"],
-    | "osInfo"
-    | "execPath"
-    | "homeDirectory"
-    | "pathListSeparator"
-    | "commandCandidates"
-    | "isPortFree"
-    | "isPidAlive"
+    "osInfo" | "execPath" | "homeDirectory" | "pathListSeparator"
   >
   readonly Process: Pick<
     ExtensionHostPlatform,
@@ -245,9 +239,6 @@ const publicSetupContext = (ctx: RuntimeExtensionSetupContext): PublicExtensionS
     execPath: ctx.host.execPath,
     homeDirectory: ctx.host.homeDirectory,
     pathListSeparator: ctx.host.pathListSeparator,
-    commandCandidates: ctx.host.commandCandidates,
-    isPortFree: ctx.host.isPortFree,
-    isPidAlive: ctx.host.isPidAlive,
   },
   Process: {
     parentEnv: ctx.host.parentEnv,

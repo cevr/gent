@@ -531,14 +531,20 @@ describe("Effect-purity locks (compile-time)", () => {
     const setup = Effect.gen(function* () {
       const ctx = yield* ExtensionSetupContext
       const platform = ctx.host.osInfo.platform
-      const candidates = ctx.host.commandCandidates("git")
+      const home = ctx.host.homeDirectory
       // @ts-expect-error — public setup sees host facts, not parent process env
       void ctx.host.parentEnv
       // @ts-expect-error — public setup cannot signal host processes
       ctx.host.signalPid(1, "SIGTERM")
       // @ts-expect-error — public setup cannot spawn host processes
       ctx.host.runProcess("git", ["status"])
-      return `${platform}:${candidates.length}`
+      // @ts-expect-error — commandCandidates moved to Process; host duplicate removed in C9.6
+      void ctx.host.commandCandidates
+      // @ts-expect-error — isPortFree moved to Process; host duplicate removed in C9.6
+      void ctx.host.isPortFree
+      // @ts-expect-error — isPidAlive moved to Process; host duplicate removed in C9.6
+      void ctx.host.isPidAlive
+      return `${platform}:${home.length}`
     })
     void setup
     expect(true).toBe(true)
