@@ -1,4 +1,4 @@
-import { Cause, Effect, Schema } from "effect"
+import { Cause, Effect } from "effect"
 import type {
   ExtensionReaction,
   ExtensionReactions,
@@ -15,15 +15,6 @@ import type { ExtensionHostContext } from "../../domain/extension-host-context.j
 import type { PromptSection } from "../../domain/prompt.js"
 import { provideExtensionServices } from "../../domain/extension-services.js"
 import { exitErasedEffect, sealErasedEffect } from "./extension-effect-membrane.js"
-
-export class ExtensionReactionHaltError extends Schema.TaggedErrorClass<ExtensionReactionHaltError>()(
-  "ExtensionReactionHaltError",
-  {
-    extensionId: Schema.String,
-    message: Schema.String,
-    cause: Schema.Defect,
-  },
-) {}
 
 export interface ExtensionReactionContext {
   readonly projection: ProjectionTurnContext
@@ -42,10 +33,7 @@ export interface CompiledExtensionReactions {
     input: ToolResultInput,
     ctx: ExtensionHostContext,
   ) => Effect.Effect<unknown>
-  readonly emitTurnAfter: (
-    input: TurnAfterInput,
-    ctx: ExtensionHostContext,
-  ) => Effect.Effect<void, ExtensionReactionHaltError>
+  readonly emitTurnAfter: (input: TurnAfterInput, ctx: ExtensionHostContext) => Effect.Effect<void>
 }
 
 export interface ExtensionTurnProjection {
@@ -93,37 +81,12 @@ const runReaction = <Input>(
       provideLifecycleHostContext(ctx, reaction.slot.handler(input)),
     )
     if (exit._tag === "Success") return
-    const cause = exit.cause
-    switch (reaction.slot.failureMode) {
-      case "continue":
-        yield* Effect.logDebug("extension.reaction.handler.failed").pipe(
-          Effect.annotateLogs({
-            extensionId: reaction.extensionId,
-            cause: Cause.pretty(cause),
-          }),
-        )
-        return
-      case "isolate":
-        yield* Effect.logWarning("extension.reaction.handler.failed").pipe(
-          Effect.annotateLogs({
-            extensionId: reaction.extensionId,
-            cause: Cause.pretty(cause),
-          }),
-        )
-        return
-      case "halt":
-        yield* Effect.logError("extension.reaction.handler.halt").pipe(
-          Effect.annotateLogs({
-            extensionId: reaction.extensionId,
-            cause: Cause.pretty(cause),
-          }),
-        )
-        return yield* new ExtensionReactionHaltError({
-          extensionId: String(reaction.extensionId),
-          message: String(Cause.squash(cause)),
-          cause: Cause.squash(cause),
-        })
-    }
+    yield* Effect.logWarning("extension.reaction.handler.failed").pipe(
+      Effect.annotateLogs({
+        extensionId: reaction.extensionId,
+        cause: Cause.pretty(exit.cause),
+      }),
+    )
   })
 
 const provideLifecycleHostContext = <A, E, R>(

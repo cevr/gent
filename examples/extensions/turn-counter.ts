@@ -16,7 +16,6 @@ export default defineExtension({
   id: "turn-counter",
   reactions: {
     turnAfter: {
-      failureMode: "continue",
       handler: () =>
         Effect.sync(() => {
           turns++

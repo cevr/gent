@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Data, Effect, Exit, Option, Schema } from "effect"
+import { Data, Effect, Exit } from "effect"
 import type {
   ExtensionContributions,
   ExtensionReactions,
@@ -8,10 +8,7 @@ import type {
 } from "../../src/domain/extension.js"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
-import {
-  compileExtensionReactions,
-  ExtensionReactionHaltError,
-} from "../../src/runtime/extensions/extension-reactions"
+import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { AgentName } from "@gent/core-internal/domain/agent"
 
 const stubCtx = testExtensionHostContext()
@@ -42,28 +39,26 @@ class BoomError extends Data.TaggedError(
 }> {}
 
 const turnAfterReactions = (
-  failureMode: "continue" | "isolate" | "halt",
   handler: () => Effect.Effect<void, BoomError>,
 ): ExtensionReactions<BoomError> => ({
   turnAfter: {
-    failureMode,
     handler: (_input: TurnAfterInput) => handler(),
   },
 })
 
 describe("runtime reactions", () => {
-  it.live('"continue": failure swallowed, later reactions still fire', () =>
+  it.live("failure is isolated; later reactions still fire", () =>
     Effect.gen(function* () {
       const calls: string[] = []
       const compiled = compileExtensionReactions([
         ext("a", "builtin", {
-          reactions: turnAfterReactions("continue", () => {
+          reactions: turnAfterReactions(() => {
             calls.push("failing")
             return Effect.fail(new BoomError({ reason: "intentional" }))
           }),
         }),
         ext("b", "builtin", {
-          reactions: turnAfterReactions("continue", () =>
+          reactions: turnAfterReactions(() =>
             Effect.sync(() => {
               calls.push("after")
             }),
@@ -74,63 +69,6 @@ describe("runtime reactions", () => {
       const exit = yield* Effect.exit(compiled.emitTurnAfter(stubEvent, stubCtx))
       expect(Exit.isSuccess(exit)).toBe(true)
       expect(calls).toEqual(["failing", "after"])
-    }),
-  )
-
-  it.live('"isolate": failure swallowed with warning, later reactions still fire', () =>
-    Effect.gen(function* () {
-      const calls: string[] = []
-      const compiled = compileExtensionReactions([
-        ext("a", "builtin", {
-          reactions: turnAfterReactions("isolate", () => {
-            calls.push("failing")
-            return Effect.fail(new BoomError({ reason: "intentional" }))
-          }),
-        }),
-        ext("b", "builtin", {
-          reactions: turnAfterReactions("isolate", () =>
-            Effect.sync(() => {
-              calls.push("after")
-            }),
-          ),
-        }),
-      ])
-
-      const exit = yield* Effect.exit(compiled.emitTurnAfter(stubEvent, stubCtx))
-      expect(Exit.isSuccess(exit)).toBe(true)
-      expect(calls).toEqual(["failing", "after"])
-    }),
-  )
-
-  it.live('"halt": failure surfaces as typed error; later reactions do not fire', () =>
-    Effect.gen(function* () {
-      const calls: string[] = []
-      const compiled = compileExtensionReactions([
-        ext("a", "builtin", {
-          reactions: turnAfterReactions("halt", () => {
-            calls.push("halting")
-            return Effect.fail(new BoomError({ reason: "critical" }))
-          }),
-        }),
-        ext("b", "builtin", {
-          reactions: turnAfterReactions("continue", () =>
-            Effect.sync(() => {
-              calls.push("after-halt")
-            }),
-          ),
-        }),
-      ])
-
-      const exit = yield* Effect.exit(compiled.emitTurnAfter(stubEvent, stubCtx))
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) {
-        const error = Cause.findErrorOption(exit.cause)
-        expect(Option.isSome(error)).toBe(true)
-        if (Option.isSome(error)) {
-          expect(Schema.is(ExtensionReactionHaltError)(error.value)).toBe(true)
-        }
-      }
-      expect(calls).toEqual(["halting"])
     }),
   )
 
@@ -138,7 +76,7 @@ describe("runtime reactions", () => {
     Effect.gen(function* () {
       const calls: string[] = []
       const make = (label: string) =>
-        turnAfterReactions("continue", () =>
+        turnAfterReactions(() =>
           Effect.sync(() => {
             calls.push(label)
           }),

@@ -147,7 +147,6 @@ export const HandoffExtension = defineExtension({
   ],
   reactions: {
     turnAfter: {
-      failureMode: "isolate",
       handler: autoHandoffImpl,
     },
   },

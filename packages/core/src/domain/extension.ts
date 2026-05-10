@@ -150,23 +150,11 @@ export interface ToolResultInput {
 //
 // Per-extension, per-session handlers run by the runtime at the
 // `turnAfter` / `toolResult` seams.  Authored on
-// `defineExtension({ reactions })`.
+// `defineExtension({ reactions })`. Failures are always isolated: the
+// runtime logs a warning and lets later reactions still fire.
 
-/**
- * Failure policy for a single reaction handler.
- *
- * - `continue` — log at debug; the failure is shrugged off (use for handlers
- *   whose absence is acceptable).
- * - `isolate` — log at warn; the failure is contained (use for best-effort
- *   side effects, e.g. context-fill handoff).
- * - `halt` — log at error and tear down the runtime (use only when a failed
- *   handler implies the session is unsafe to continue).
- */
-export type ExtensionReactionFailureMode = "continue" | "isolate" | "halt"
-
-/** Single reaction handler with explicit failure policy. */
+/** Single reaction handler. Failures are isolated (logged, then swallowed). */
 export type ExtensionReaction<Input, E = never, R = never> = {
-  readonly failureMode: ExtensionReactionFailureMode
   readonly handler: (input: Input) => Effect.Effect<void, E, R>
 }
 

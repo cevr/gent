@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Context, Data, Effect, Exit, Ref } from "effect"
+import { Context, Data, Effect, Exit, Ref } from "effect"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type {
   ExtensionContributions,
@@ -172,38 +172,35 @@ describe("runtime slots", () => {
       .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("base-builtin-explicit"))))
   })
 
-  it.live("turnAfter explicit reactions keep continue/isolate/halt semantics", () => {
+  it.live("turnAfter isolates failing reactions; all handlers still run", () => {
     const calls: string[] = []
     const extensions = [
-      makeExt("continue", "builtin", {
+      makeExt("first", "builtin", {
         reactions: {
           turnAfter: {
-            failureMode: "continue",
             handler: () => {
-              calls.push("continue")
-              return Effect.fail(new BoomError({ reason: "continue" }))
+              calls.push("first")
+              return Effect.fail(new BoomError({ reason: "first" }))
             },
           },
         },
       }),
-      makeExt("isolate", "user", {
+      makeExt("second", "user", {
         reactions: {
           turnAfter: {
-            failureMode: "isolate",
             handler: () => {
-              calls.push("isolate")
-              return Effect.fail(new BoomError({ reason: "isolate" }))
+              calls.push("second")
+              return Effect.fail(new BoomError({ reason: "second" }))
             },
           },
         },
       }),
-      makeExt("halt", "project", {
+      makeExt("third", "project", {
         reactions: {
           turnAfter: {
-            failureMode: "halt",
             handler: () => {
-              calls.push("halt")
-              return Effect.fail(new BoomError({ reason: "halt" }))
+              calls.push("third")
+              return Effect.fail(new BoomError({ reason: "third" }))
             },
           },
         },
@@ -225,9 +222,8 @@ describe("runtime slots", () => {
           stubHostCtx,
         ),
       )
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) expect(Cause.hasDies(exit.cause)).toBe(false)
-      expect(calls).toEqual(["continue", "isolate", "halt"])
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(calls).toEqual(["first", "second", "third"])
     })
   })
 
@@ -238,7 +234,6 @@ describe("runtime slots", () => {
         makeExt("readonly-lifecycle", "project", {
           reactions: {
             turnAfter: {
-              failureMode: "halt",
               handler: () =>
                 Effect.gen(function* () {
                   const ctx = yield* ExtensionContext
@@ -275,7 +270,6 @@ describe("runtime slots", () => {
         makeExt("resource-backed", "builtin", {
           reactions: {
             turnAfter: {
-              failureMode: "halt",
               handler: () =>
                 Effect.gen(function* () {
                   const service = yield* ReactionCounter

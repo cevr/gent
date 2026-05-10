@@ -309,7 +309,6 @@ describe("Effect-purity locks (compile-time)", () => {
       ],
       reactions: {
         turnAfter: {
-          failureMode: "continue",
           handler: (_input: PublicExtensionApi.TurnAfterInput) =>
             Effect.gen(function* () {
               const ctx = yield* ExtensionContext
@@ -340,12 +339,20 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
+  test("reaction handler field shape is locked to handler-only", () => {
+    type TurnAfterSlot = NonNullable<
+      NonNullable<Parameters<typeof defineExtension>[0]["reactions"]>["turnAfter"]
+    >
+    // @ts-expect-error — failureMode field was removed; runtime always isolates reaction failures
+    type _FailureMode = TurnAfterSlot["failureMode"]
+    expect(true).toBe(true)
+  })
+
   test("reaction handlers receive event input only", () => {
     defineExtension({
       id: "reaction-handler-params-lock",
       reactions: {
         turnAfter: {
-          failureMode: "continue",
           // @ts-expect-error — host authority comes from ExtensionContext, not a ctx parameter
           handler: (_input: PublicExtensionApi.TurnAfterInput, _ctx: unknown) => Effect.void,
         },
@@ -554,7 +561,6 @@ describe("Effect-purity locks (compile-time)", () => {
       id: "purity-reaction",
       reactions: {
         turnAfter: {
-          failureMode: "isolate",
           // @ts-expect-error — Promise handler must not be assignable to Effect-returning extension reaction
           handler: () => promiseVoid,
         },
@@ -590,7 +596,6 @@ describe("Effect-purity locks (compile-time)", () => {
       reactions: {
         systemPrompt: (input) => Effect.succeed(`${input.basePrompt}suffix`),
         turnAfter: {
-          failureMode: "continue",
           handler: () => Effect.void,
         },
       },
