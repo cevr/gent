@@ -48,7 +48,7 @@ import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { EventStorage } from "@gent/core-internal/storage/event-storage"
-import { RelationshipStorage } from "@gent/core-internal/storage/relationship-storage"
+import type { RelationshipStorage } from "@gent/core-internal/storage/relationship-storage"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { defineResource, ExtensionContext, tool } from "@gent/core/extensions/api"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
@@ -1021,10 +1021,9 @@ describe("session depth guard", () => {
       Effect.gen(function* () {
         const sessions = yield* SessionStorage
         const branches = yield* BranchStorage
-        const relationshipStorage = yield* RelationshipStorage
         yield* sessions.createSession(makeSession("root"))
         yield* branches.createBranch(makeBranch("root"))
-        expect(yield* getSessionDepth(SessionId.make("root"), relationshipStorage)).toBe(0)
+        expect(yield* getSessionDepth(SessionId.make("root"))).toBe(0)
       }),
     ),
   )
@@ -1033,12 +1032,11 @@ describe("session depth guard", () => {
       Effect.gen(function* () {
         const sessions = yield* SessionStorage
         const branches = yield* BranchStorage
-        const relationshipStorage = yield* RelationshipStorage
         yield* sessions.createSession(makeSession("root"))
         yield* branches.createBranch(makeBranch("root"))
         yield* sessions.createSession(makeSession("child", "root"))
         yield* branches.createBranch(makeBranch("child"))
-        expect(yield* getSessionDepth(SessionId.make("child"), relationshipStorage)).toBe(1)
+        expect(yield* getSessionDepth(SessionId.make("child"))).toBe(1)
       }),
     ),
   )
@@ -1047,36 +1045,31 @@ describe("session depth guard", () => {
       Effect.gen(function* () {
         const sessions = yield* SessionStorage
         const branches = yield* BranchStorage
-        const relationshipStorage = yield* RelationshipStorage
         yield* sessions.createSession(makeSession("root"))
         yield* branches.createBranch(makeBranch("root"))
         yield* sessions.createSession(makeSession("child", "root"))
         yield* branches.createBranch(makeBranch("child"))
         yield* sessions.createSession(makeSession("grandchild", "child"))
         yield* branches.createBranch(makeBranch("grandchild"))
-        expect(yield* getSessionDepth(SessionId.make("grandchild"), relationshipStorage)).toBe(2)
+        expect(yield* getSessionDepth(SessionId.make("grandchild"))).toBe(2)
       }),
     ),
   )
   it.live("chain at max depth reports correct depth", () =>
     run(
       Effect.gen(function* () {
-        const relationshipStorage = yield* RelationshipStorage
         yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH)
         const deepest = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`)
-        expect(yield* getSessionDepth(deepest, relationshipStorage)).toBe(
-          DEFAULT_MAX_AGENT_RUN_DEPTH,
-        )
+        expect(yield* getSessionDepth(deepest)).toBe(DEFAULT_MAX_AGENT_RUN_DEPTH)
       }),
     ),
   )
   it.live("parent at max depth blocks child spawn", () =>
     run(
       Effect.gen(function* () {
-        const relationshipStorage = yield* RelationshipStorage
         yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH)
         const parentId = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`)
-        const parentDepth = yield* getSessionDepth(parentId, relationshipStorage)
+        const parentDepth = yield* getSessionDepth(parentId)
         expect(parentDepth >= DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
       }),
     ),
@@ -1084,10 +1077,9 @@ describe("session depth guard", () => {
   it.live("parent below max depth allows child spawn", () =>
     run(
       Effect.gen(function* () {
-        const relationshipStorage = yield* RelationshipStorage
         yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH - 1)
         const parentId = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}`)
-        const parentDepth = yield* getSessionDepth(parentId, relationshipStorage)
+        const parentDepth = yield* getSessionDepth(parentId)
         expect(parentDepth < DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
       }),
     ),
@@ -1095,8 +1087,7 @@ describe("session depth guard", () => {
   it.live("nonexistent session returns depth 0", () =>
     run(
       Effect.gen(function* () {
-        const relationshipStorage = yield* RelationshipStorage
-        expect(yield* getSessionDepth(SessionId.make("nonexistent"), relationshipStorage)).toBe(0)
+        expect(yield* getSessionDepth(SessionId.make("nonexistent"))).toBe(0)
       }),
     ),
   )
