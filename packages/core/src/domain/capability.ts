@@ -78,7 +78,7 @@ const CapabilityMetadataFields = {
 export const Capability = TaggedEnumClass("Capability", {
   Tool: TaggedEnumClass.variant("tool", {
     id: ToolId,
-    intent: Schema.Union([Schema.Literal("read"), Schema.Literal("write")]),
+    readonly: Schema.Boolean,
     ...CapabilityMetadataFields,
     input: Schema.Unknown,
     output: Schema.Unknown,
@@ -91,7 +91,6 @@ export const Capability = TaggedEnumClass("Capability", {
   }),
   Action: TaggedEnumClass.variant("action", {
     id: CommandId,
-    intent: Schema.Literal("write"),
     ...CapabilityMetadataFields,
     input: Schema.Unknown,
     output: Schema.Unknown,

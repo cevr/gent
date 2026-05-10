@@ -105,21 +105,10 @@ const makeCommand = (id: string, options?: Partial<ActionInput>): ActionCapabili
 const makeRequest = (
   id: string,
   options?: {
-    readonly intent?: "read" | "write"
     readonly extensionId?: ExtensionId
   },
 ): RequestCapability => {
-  const intent = options?.intent ?? "read"
   const extensionId = options?.extensionId ?? ExtensionId.make("@test/rpc")
-  if (intent === "read") {
-    return request({
-      id,
-      extensionId,
-      input: Schema.Unknown,
-      output: Schema.Unknown,
-      execute: () => Effect.void,
-    })
-  }
   return request({
     id,
     extensionId,

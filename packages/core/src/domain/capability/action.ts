@@ -3,8 +3,7 @@
  *
  * Authors call `action({ id, name, description, surface, execute, ... })`.
  * Surface is `"slash" | "palette" | "both"` — presentation metadata
- * controlling where the action appears in the TUI. Actions always lower to
- * `intent: "write"` (UI affordances always express user intent).
+ * controlling where the action appears in the TUI.
  *
  * Host capabilities are imported through `ExtensionContext`; action handlers
  * receive decoded params only.
@@ -41,7 +40,6 @@ export type ActionCapability<Input = unknown, Output = unknown> = ActionCapabili
   }
   readonly id: CommandId
   readonly surface: ReadonlyArray<"slash" | "palette">
-  readonly intent: "write"
   readonly description: string
   readonly displayName: string
   readonly category?: string
@@ -110,8 +108,7 @@ const surfaceToSurfaces = (surface: ActionSurface): ReadonlyArray<"slash" | "pal
 }
 
 /**
- * Lower an `ActionInput` to an `ActionCapability` with the derived surfaces and
- * `intent: "write"`.
+ * Lower an `ActionInput` to an `ActionCapability` with the derived surfaces.
  */
 export function action<Input, Output, R>(
   input: ActionInput<Input, Output, R>,
@@ -121,7 +118,6 @@ export function action<Input, Output, R>(
     id: CommandId.make(input.id),
     description: input.description,
     surface,
-    intent: "write",
     displayName: input.name,
     input: input.input,
     output: input.output,

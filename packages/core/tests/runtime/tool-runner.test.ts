@@ -490,7 +490,7 @@ describe("ToolRunner", () => {
     Effect.gen(function* () {
       const ReadContextTool = tool({
         id: "read_context_tool",
-        intent: "read",
+        readonly: true,
         description: "Reads profile-scoped context",
         params: Schema.Struct({}),
         output: Schema.Struct({
@@ -550,11 +550,11 @@ describe("ToolRunner", () => {
       expect(result.result).toEqual({ readValue: "read-ok", writeUnavailable: false })
     }),
   )
-  it.live("read tools receive read-intent ExtensionContext authority", () =>
+  it.live("readonly tools receive ExtensionContext with denied write facets", () =>
     Effect.gen(function* () {
       const ReadContextTool = tool({
         id: "read_extension_context",
-        intent: "read",
+        readonly: true,
         description: "Reads the extension context facade",
         params: Schema.Struct({}),
         output: Schema.Struct({

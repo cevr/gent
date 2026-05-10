@@ -4,8 +4,8 @@
  * Authors call `tool({ id, description, params, execute, ... })` directly.
  * The factory enforces the LLM-tool shape at the type level: `params`
  * must be an LLM-JSON-schema-able `Schema.Schema`, `execute` returns an
- * `Effect`, and the action/request-only fields (`surface`, `intent`,
- * `input`) are forbidden.
+ * `Effect`, and the action/request-only fields (`surface`, `input`)
+ * are forbidden.
  *
  * Replaces the previous two-step `tool(defineTool({...}))` pattern.
  *
@@ -41,7 +41,7 @@ export interface ToolCoreContext extends CapabilityCoreContext {
 
 export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unknown> {
   readonly id: ToolId
-  readonly intent: "read" | "write"
+  readonly readonly: boolean
   readonly input: Schema.Decoder<Input, never>
   readonly output: Schema.Encoder<unknown, never>
   readonly promptSnippet?: string
@@ -145,9 +145,10 @@ export interface ToolInput<
   readonly id: string
   /** Sent to the LLM as part of the tool schema — describes what the tool does. */
   readonly description: string
-  /** Read vs write. Defaults to `"write"`. Read-only tools (e.g. `fs-tools/read`,
-   *  `grep`, `glob`) should pass `intent: "read"`. */
-  readonly intent?: "read" | "write"
+  /** Marks a tool as side-effect-free for Effect AI provider metadata.
+   *  Defaults to `false`. Read-only tools (e.g. `fs-tools/read`, `grep`,
+   *  `glob`) should pass `readonly: true`. */
+  readonly readonly?: boolean
   /** Marks a write tool as destructive for Effect AI provider metadata. */
   readonly destructive?: boolean
   /**
@@ -181,7 +182,8 @@ export interface ToolInput<
 }
 
 /**
- * Lower a `ToolInput` to a `ToolCapability` with `intent: "write"` by default.
+ * Lower a `ToolInput` to a `ToolCapability` (defaults to a write/destructive
+ * tool unless `readonly: true` is set).
  */
 export const tool = <
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
@@ -202,7 +204,7 @@ export const tool = <
     Error
   > = {
     id,
-    intent: input.intent ?? "write",
+    readonly: input.readonly === true,
     input: input.params,
     output: input.output,
     ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),
@@ -227,11 +229,11 @@ export const tool = <
     success: input.output,
   })
     .annotate(GentToolMetadataTag, metadata)
-    .annotate(AiTool.Readonly, metadata.intent === "read")
+    .annotate(AiTool.Readonly, metadata.readonly)
     .annotate(AiTool.Destructive, input.destructive === true)
   const capability = Capability.Tool.make({
     id,
-    intent: metadata.intent,
+    readonly: metadata.readonly,
     input: metadata.input,
     output: metadata.output,
     native,

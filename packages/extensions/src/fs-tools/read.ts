@@ -43,7 +43,7 @@ export const ReadResult = Schema.Struct({
 
 export const ReadTool = tool({
   id: "read",
-  intent: "read",
+  readonly: true,
   description: "Read file contents. Returns numbered lines. Use offset/limit for large files.",
   promptSnippet: "Read file contents with line numbers",
   promptGuidelines: ["Use read instead of bash cat/head/tail"],

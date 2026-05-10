@@ -177,11 +177,12 @@ export default defineExtension({
   returned to the model
 - `execute(params)` — returns `Effect`; host access comes from
   `yield* ExtensionContext`
-- Optional: `intent`, `interactive`, `permissionRules`, `prompt`,
-  `promptSnippet`, `promptGuidelines`
+- Optional: `readonly`, `destructive`, `interactive`, `permissionRules`,
+  `prompt`, `promptSnippet`, `promptGuidelines`
 
-`intent` is model/UI policy metadata for a model-callable tool. It is not an
-authority grant. Host authority still comes from `ExtensionContext` or an
+`readonly` and `destructive` are provider hints lowered to Effect AI's
+`AiTool.Readonly` / `AiTool.Destructive` annotations. They are not authority
+grants. Host authority still comes from `ExtensionContext` or an
 extension-owned service.
 
 ### request — extension-to-extension RPC

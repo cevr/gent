@@ -40,7 +40,7 @@ export const GlobResult = Schema.Struct({
 
 export const GlobTool = tool({
   id: "glob",
-  intent: "read",
+  readonly: true,
   description: "Find files matching glob pattern. Returns paths sorted by mtime.",
   promptSnippet: "Find files by glob pattern",
   promptGuidelines: ["Use instead of bash find/ls"],

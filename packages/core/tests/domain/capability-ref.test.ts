@@ -61,7 +61,7 @@ describe("ref(capability)", () => {
       id: "test.tool",
       description: "ephemeral",
       destructive: true,
-      intent: "read",
+      readonly: true,
       params,
       output: Schema.String,
       promptSnippet: "short",
@@ -78,7 +78,7 @@ describe("ref(capability)", () => {
 
     const metadata = getToolMetadata(capability)
     expect(metadata.id).toBe(getToolId(capability))
-    expect(metadata.intent).toBe("read")
+    expect(metadata.readonly).toBe(true)
     expect(metadata.input).toBe(params)
     expect(metadata.promptSnippet).toBe("short")
     expect(metadata.promptGuidelines).toEqual(["be precise"])
@@ -87,7 +87,7 @@ describe("ref(capability)", () => {
     expect(metadata.prompt).toEqual(prompt)
   })
 
-  test("write intent is not marked destructive unless requested", () => {
+  test("default tool is neither readonly nor destructive", () => {
     const capability = tool({
       id: "test.write",
       description: "write without destructive side effects",

@@ -216,7 +216,6 @@ describe("extension activation isolation", () => {
   const rawRpcLeaf = (id: string): never =>
     ({
       id,
-      intent: "read",
       public: true,
       input: Schema.Unknown,
       output: Schema.Unknown,
