@@ -43,11 +43,16 @@ const collectText = (content: ReadonlyArray<Record<string, unknown>>): string =>
 const readLogs = (value: unknown): ReadonlyArray<string> =>
   Array.isArray(value) && value.every((entry) => typeof entry === "string") ? value : EMPTY_LOGS
 
-const normalizeInteraction = (structured: unknown): ExecutorInteraction | undefined => {
-  if (!isRecord(structured)) return undefined
-  const taggedKind = structured["_tag"]
-  const wireKind = structured["kind"]
-  const kind = taggedKind === "form" || taggedKind === "url" ? taggedKind : wireKind
+/**
+ * Try each discriminator (`_tag`, then `kind`) independently. Falling
+ * through on a malformed tagged branch preserves the prior behavior
+ * where `{ _tag: "form", kind: "url", url, message: <missing> }`
+ * still normalized via the wire-kind path.
+ */
+const tryInteraction = (
+  kind: unknown,
+  structured: Record<string, unknown>,
+): ExecutorInteraction | undefined => {
   const message = structured["message"]
   if (kind === "form" && typeof message === "string") {
     return ExecutorInteractionForm.make({
@@ -62,6 +67,13 @@ const normalizeInteraction = (structured: unknown): ExecutorInteraction | undefi
     return ExecutorInteractionUrl.make({ message, url })
   }
   return undefined
+}
+
+const normalizeInteraction = (structured: unknown): ExecutorInteraction | undefined => {
+  if (!isRecord(structured)) return undefined
+  return (
+    tryInteraction(structured["_tag"], structured) ?? tryInteraction(structured["kind"], structured)
+  )
 }
 
 const normalizeStructuredContent = (structured: unknown): unknown => {
