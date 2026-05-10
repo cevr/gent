@@ -109,16 +109,17 @@ export const ExecutorFailed = Schema.TaggedStruct("error", {
   logs: Schema.Array(Schema.String),
 })
 
-export const ExecutorInteraction = Schema.Union([
-  Schema.TaggedStruct("form", {
-    message: Schema.String,
-    requestedSchema: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-  }),
-  Schema.TaggedStruct("url", {
-    message: Schema.String,
-    url: Schema.String,
-  }),
-])
+export const ExecutorInteractionForm = Schema.TaggedStruct("form", {
+  message: Schema.String,
+  requestedSchema: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+})
+
+export const ExecutorInteractionUrl = Schema.TaggedStruct("url", {
+  message: Schema.String,
+  url: Schema.String,
+})
+
+export const ExecutorInteraction = Schema.Union([ExecutorInteractionForm, ExecutorInteractionUrl])
 export type ExecutorInteraction = typeof ExecutorInteraction.Type
 
 export const ExecutorWaitingForInteraction = Schema.TaggedStruct("waiting_for_interaction", {

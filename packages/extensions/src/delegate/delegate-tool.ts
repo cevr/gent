@@ -3,12 +3,12 @@ import {
   tool,
   AgentName,
   ExtensionContext,
+  AgentRunResult,
   AgentRunResultSchema,
   AgentRunToolCallSchema,
   defineExtension,
   getDurableAgentRunSessionId,
   makeRunSpec,
-  type AgentRunResult,
   type SessionId,
 } from "@gent/core/extensions/api"
 import { TodoService } from "../todo-service.js"
@@ -283,10 +283,7 @@ export const DelegateTool = tool({
         resolveAgent(todo.agent).pipe(
           Effect.flatMap((resolved) => {
             if (!resolved.ok) {
-              return Effect.succeed<AgentRunResult>({
-                _tag: "error",
-                error: resolved.error,
-              })
+              return Effect.succeed(AgentRunResult.Failure.make({ error: resolved.error }))
             }
             return ctx.Agent.run({
               agent: resolved.agent,

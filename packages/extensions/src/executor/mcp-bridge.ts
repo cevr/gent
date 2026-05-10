@@ -17,7 +17,12 @@ import {
   type ExecutorStructuredContent,
   type ExecutorMcpToolResult,
   type ResumeAction,
+  ExecutorCompleted,
+  ExecutorFailed,
+  ExecutorInteractionForm,
+  ExecutorInteractionUrl,
   ExecutorMcpError,
+  ExecutorWaitingForInteraction,
 } from "./domain.js"
 
 // ── Result normalization ──
@@ -41,47 +46,20 @@ const readLogs = (value: unknown): ReadonlyArray<string> =>
 const normalizeInteraction = (structured: unknown): ExecutorInteraction | undefined => {
   if (!isRecord(structured)) return undefined
   const taggedKind = structured["_tag"]
-  if (taggedKind === "form" && typeof structured["message"] === "string") {
-    return {
-      _tag: "form",
-      message: structured["message"],
-      ...(isRecord(structured["requestedSchema"])
-        ? { requestedSchema: structured["requestedSchema"] }
-        : {}),
-    }
-  }
-  if (
-    taggedKind === "url" &&
-    typeof structured["message"] === "string" &&
-    typeof structured["url"] === "string"
-  ) {
-    return {
-      _tag: "url",
-      message: structured["message"],
-      url: structured["url"],
-    }
-  }
-
   const wireKind = structured["kind"]
-  if (wireKind === "form" && typeof structured["message"] === "string") {
-    return {
-      _tag: "form",
-      message: structured["message"],
+  const kind = taggedKind === "form" || taggedKind === "url" ? taggedKind : wireKind
+  const message = structured["message"]
+  if (kind === "form" && typeof message === "string") {
+    return ExecutorInteractionForm.make({
+      message,
       ...(isRecord(structured["requestedSchema"])
         ? { requestedSchema: structured["requestedSchema"] }
         : {}),
-    }
+    })
   }
-  if (
-    wireKind === "url" &&
-    typeof structured["message"] === "string" &&
-    typeof structured["url"] === "string"
-  ) {
-    return {
-      _tag: "url",
-      message: structured["message"],
-      url: structured["url"],
-    }
+  const url = structured["url"]
+  if (kind === "url" && typeof message === "string" && typeof url === "string") {
+    return ExecutorInteractionUrl.make({ message, url })
   }
   return undefined
 }
@@ -90,19 +68,17 @@ const normalizeStructuredContent = (structured: unknown): unknown => {
   if (!isRecord(structured)) return structured
 
   if (structured["_tag"] === "completed") {
-    return {
-      _tag: "completed",
+    return ExecutorCompleted.make({
       result: structured["result"],
       logs: [...readLogs(structured["logs"])],
-    } satisfies ExecutorStructuredContent
+    }) satisfies ExecutorStructuredContent
   }
 
   if (structured["_tag"] === "error" && typeof structured["error"] === "string") {
-    return {
-      _tag: "error",
+    return ExecutorFailed.make({
       error: structured["error"],
       logs: [...readLogs(structured["logs"])],
-    } satisfies ExecutorStructuredContent
+    }) satisfies ExecutorStructuredContent
   }
 
   if (
@@ -111,20 +87,18 @@ const normalizeStructuredContent = (structured: unknown): unknown => {
   ) {
     const interaction = normalizeInteraction(structured["interaction"])
     if (interaction !== undefined) {
-      return {
-        _tag: "waiting_for_interaction",
+      return ExecutorWaitingForInteraction.make({
         executionId: structured["executionId"],
         interaction,
-      } satisfies ExecutorStructuredContent
+      }) satisfies ExecutorStructuredContent
     }
   }
 
   if (structured["status"] === "completed") {
-    return {
-      _tag: "completed",
+    return ExecutorCompleted.make({
       result: structured["result"],
       logs: [...readLogs(structured["logs"])],
-    } satisfies ExecutorStructuredContent
+    }) satisfies ExecutorStructuredContent
   }
 
   if (structured["status"] === "error") {
@@ -134,11 +108,10 @@ const normalizeStructuredContent = (structured: unknown): unknown => {
     } else if (typeof structured["errorMessage"] === "string") {
       error = structured["errorMessage"]
     }
-    return {
-      _tag: "error",
+    return ExecutorFailed.make({
       error,
       logs: [...readLogs(structured["logs"])],
-    } satisfies ExecutorStructuredContent
+    }) satisfies ExecutorStructuredContent
   }
 
   if (
@@ -147,11 +120,10 @@ const normalizeStructuredContent = (structured: unknown): unknown => {
   ) {
     const interaction = normalizeInteraction(structured["interaction"])
     if (interaction !== undefined) {
-      return {
-        _tag: "waiting_for_interaction",
+      return ExecutorWaitingForInteraction.make({
         executionId: structured["executionId"],
         interaction,
-      } satisfies ExecutorStructuredContent
+      }) satisfies ExecutorStructuredContent
     }
   }
 
