@@ -1,5 +1,9 @@
 # Planify: Wave 32 - Extension Authoring Contract Closure
 
+> **Status: implementation complete (commits 1–6).** Final independent
+> recursive audit pending; if it surfaces P0/P1, the next wave consumes
+> this plan's outputs.
+
 ## Context
 
 Wave 31 landed the large extension-authority cleanup, but its independent final

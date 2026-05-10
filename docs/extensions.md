@@ -97,12 +97,16 @@ const program = Effect.gen(function* () {
 ```
 
 `ExtensionContext` is the host-owned facade. It exposes session, agent,
-interaction, and process accessors (`Session`, `Agent`, `Interaction`,
-`Process`) plus stable invocation facts such as `sessionId`, `branchId`, `cwd`,
-and `home`. If an extension needs private state, it should import its own
-service Tag from a `defineResource(...)` layer and yield that service directly.
-Do not add ctx parameters, private builtin APIs, capability labels, or read/write
-metadata when ordinary Effect service access already expresses the authority.
+interaction, process, file index, file lock, and state-pulse accessors
+(`Session`, `Agent`, `Interaction`, `Process`, `Files`, `FileLock`, `State`)
+plus stable invocation facts such as `sessionId`, `branchId`, `cwd`, and
+`home`. The `Files` / `FileLock` / `State` facets wrap the host-internal
+`FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so authors
+never reach into runtime Tags. If an extension needs private state, it
+should import its own service Tag from a `defineResource(...)` layer and
+yield that service directly. Do not add ctx parameters, private builtin APIs,
+capability labels, or read/write metadata when ordinary Effect service access
+already expresses the authority.
 
 `ExtensionSetupContext.host` is the only public host platform view. It exposes
 small, serializable facts and narrow host probes such as OS info, executable
