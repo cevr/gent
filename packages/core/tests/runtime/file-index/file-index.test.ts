@@ -90,15 +90,6 @@ describe("FileIndex.Fallback", () => {
       expect(files.length).toBe(50)
     }).pipe(Effect.provide(FallbackLayer)),
   )
-
-  it.live("searchFiles returns empty (no fuzzy in fallback)", () =>
-    Effect.gen(function* () {
-      const fileIndex = yield* FileIndex
-      const results = yield* fileIndex.searchFiles({ cwd: "/tmp", query: "anything" })
-
-      expect(results.length).toBe(0)
-    }).pipe(Effect.provide(FallbackLayer)),
-  )
 })
 
 // ---------------------------------------------------------------------------
@@ -111,8 +102,6 @@ describe("FileIndex.Live", () => {
       const fileIndex = yield* FileIndex
       expect(fileIndex).toBeDefined()
       expect(typeof fileIndex.listFiles).toBe("function")
-      expect(typeof fileIndex.searchFiles).toBe("function")
-      expect(typeof fileIndex.trackSelection).toBe("function")
     }).pipe(
       Effect.provide(
         Layer.merge(

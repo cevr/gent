@@ -140,12 +140,6 @@ export const makeFallbackService = (
         ),
       ),
     ),
-
-  searchFiles: () =>
-    // Fallback does not support fuzzy search — returns empty
-    Effect.succeed([]),
-
-  trackSelection: () => Effect.void,
 })
 
 // ---------------------------------------------------------------------------

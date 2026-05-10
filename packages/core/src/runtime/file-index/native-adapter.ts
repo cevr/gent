@@ -130,41 +130,6 @@ const makeNativeService = (
 
         return allFiles
       }),
-
-    searchFiles: (params) =>
-      Effect.gen(function* () {
-        const entry = getOrCreate(params.cwd)
-        if (entry === undefined) {
-          return yield* new FileIndexError({ message: "failed to create finder", cwd: params.cwd })
-        }
-
-        if (!entry.scanned) {
-          const completed = yield* waitForScan(entry.finder, 5000)
-          if (!completed) {
-            return yield* new FileIndexError({ message: "scan timed out", cwd: params.cwd })
-          }
-          entry.scanned = true
-        }
-
-        const result = entry.finder.fileSearch(params.query, {
-          pageSize: params.limit ?? 50,
-        })
-        if (!result.ok) {
-          return yield* new FileIndexError({
-            message: `fileSearch failed: ${result.error}`,
-            cwd: params.cwd,
-          })
-        }
-
-        return result.value.items.map((item) => toIndexedFile(path, params.cwd, item))
-      }),
-
-    trackSelection: (params) =>
-      Effect.sync(() => {
-        const entry = finders.get(params.cwd)
-        if (entry === undefined) return
-        entry.finder.trackQuery(params.query, params.path)
-      }),
   }
 }
 

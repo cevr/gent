@@ -200,16 +200,6 @@ export interface ExtensionFilesService {
     readonly cwd: string
     readonly waitForScanMs?: number
   }) => Effect.Effect<ReadonlyArray<IndexedFile>, ExtensionServiceError>
-  readonly searchFiles: (params: {
-    readonly cwd: string
-    readonly query: string
-    readonly limit?: number
-  }) => Effect.Effect<ReadonlyArray<IndexedFile>, ExtensionServiceError>
-  readonly trackSelection: (params: {
-    readonly cwd: string
-    readonly query: string
-    readonly path: string
-  }) => Effect.Effect<void>
 }
 
 export interface ExtensionFileLockServiceShape {
@@ -334,9 +324,6 @@ export const extensionServicesFromHostContext = (
         ? {
             listFiles: (params) =>
               mapError("ExtensionFiles", "listFiles", fileIndexOption.value.listFiles(params)),
-            searchFiles: (params) =>
-              mapError("ExtensionFiles", "searchFiles", fileIndexOption.value.searchFiles(params)),
-            trackSelection: (params) => fileIndexOption.value.trackSelection(params),
           }
         : {
             listFiles: () =>
@@ -346,14 +333,6 @@ export const extensionServicesFromHostContext = (
                   "listFiles",
                 )(new Error("File index service unavailable")),
               ),
-            searchFiles: () =>
-              Effect.fail(
-                serviceError(
-                  "ExtensionFiles",
-                  "searchFiles",
-                )(new Error("File index service unavailable")),
-              ),
-            trackSelection: () => Effect.void,
           }
 
     const FileLock: ExtensionFileLockServiceShape =

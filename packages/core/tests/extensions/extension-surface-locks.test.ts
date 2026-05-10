@@ -348,6 +348,15 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
+  test("ExtensionContext.Files exposes listFiles only", () => {
+    type FilesService = PublicExtensionApi.ExtensionContextService["Files"]
+    // @ts-expect-error — searchFiles was removed; fuzzy search lives in TUI utils, not ExtensionFiles
+    type _SearchFiles = FilesService["searchFiles"]
+    // @ts-expect-error — trackSelection was removed; frecency learning lives in TUI utils, not ExtensionFiles
+    type _TrackSelection = FilesService["trackSelection"]
+    expect(true).toBe(true)
+  })
+
   test("reaction handlers receive event input only", () => {
     defineExtension({
       id: "reaction-handler-params-lock",

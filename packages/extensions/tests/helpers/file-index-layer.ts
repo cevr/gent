@@ -35,8 +35,6 @@ export const TestFileIndexLive: Layer.Layer<FileIndex, never, FileSystem.FileSys
             }
             return files
           }),
-        searchFiles: () => Effect.succeed([]),
-        trackSelection: () => Effect.void,
       }
     }),
   )
@@ -58,9 +56,6 @@ export const makeTestCtxWithFileIndex: Effect.Effect<TestToolContext, never, Fil
       Files: {
         listFiles: (params) =>
           fileIndex.listFiles(params).pipe(Effect.mapError(wrapError("listFiles"))),
-        searchFiles: (params) =>
-          fileIndex.searchFiles(params).pipe(Effect.mapError(wrapError("searchFiles"))),
-        trackSelection: fileIndex.trackSelection,
       },
     }
   })

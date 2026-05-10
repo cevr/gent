@@ -23,12 +23,6 @@ const withFallback = (primary: FileIndexService, fallback: FileIndexService): Fi
     primary
       .listFiles(params)
       .pipe(Effect.catchTag("FileIndexError", () => fallback.listFiles(params))),
-  searchFiles: (params) =>
-    primary
-      .searchFiles(params)
-      .pipe(Effect.catchTag("FileIndexError", () => fallback.searchFiles(params))),
-  trackSelection: (params) =>
-    primary.trackSelection(params).pipe(Effect.catchCause(() => Effect.void)),
 })
 
 /**

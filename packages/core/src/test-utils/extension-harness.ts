@@ -249,15 +249,6 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
           message: "File index service unavailable",
         }),
       ),
-    searchFiles: () =>
-      Effect.fail(
-        new ExtensionServiceError({
-          service: "ExtensionFiles",
-          operation: "searchFiles",
-          message: "File index service unavailable",
-        }),
-      ),
-    trackSelection: () => Effect.void,
   }
   const fileLock: ExtensionContextService["FileLock"] = {
     withLock: (_path, effect) => effect,
