@@ -485,20 +485,35 @@ no second counsel pass.
 
 ## Commit 7: refactor(runtime): one truth for ActiveStreamHandle cancellation
 
-**Justification**: `ActiveStreamHandle` carries `AbortController` +
-`Deferred<void>` + `Ref<boolean>` for the same concept. Authors must keep
-all three in lockstep; divergence is a latent correctness bug.
+**Status**: shipped — `0326417e` (initial), `b1a5f660` (counsel revise → fixup).
 
-**Changes**
+**Justification**: `ActiveStreamHandle` carried `AbortController` +
+`Deferred<void>` + `Ref<boolean>` for the same concept. Authors had to keep
+all three in lockstep; divergence was a latent correctness bug.
 
-| File                                                                                             | Change                                                                                                          | Lines          |
-| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- | -------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-response/collectors.ts` | Reduce to `Deferred<void>`; derive a finalizer that aborts the underlying `AbortController` for AI SDK interop. | ~27-31, ~50-72 |
+**Final shape**: `{ interrupted: Deferred<void>, abortSignal: AbortSignal }`.
+A scoped listener fiber (forked via `Effect.forkScoped`) translates
+`Deferred.succeed(interrupted)` into `abortController.abort()`. The turn
+loop wraps handle creation in `Effect.scoped` so the listener fiber dies on
+clean completion alongside the existing `ensuring(...)` finalizer — no
+leak on the success path. `signalActiveStreamInterrupt(handle)` and
+`wasInterrupted(handle)` keep call sites name-driven.
 
-**Verification**
+**Counsel outcome**: initial commit forked the listener via
+`Effect.forkDetach`, which leaked the fiber + handle references on every
+clean turn (the never-succeeded Deferred kept the fiber alive). Fixup
+switches to `forkScoped` and adds an `Effect.scoped` boundary at the call
+site, ending the fiber's lifetime when the turn completes regardless of
+how it ends.
 
-- focused turn-response tests
-- `bun run gate`
+**Files**
+
+| File                                                                                                    | Change                                                                                                                               |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-response/collectors.ts`        | New `ActiveStreamHandle` shape; `makeActiveStreamHandle()` requires `Scope`; `signalActiveStreamInterrupt`/`wasInterrupted` helpers. |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts`             | Use `makeActiveStreamHandle` inside `Effect.scoped`; delegate `interruptActiveStream` helper to `signalActiveStreamInterrupt`.       |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-helpers.ts`                    | Replace `activeStream.abortController.signal` with `activeStream.abortSignal`.                                                       |
+| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-turn-response-collectors.test.ts` | Tests switched from `it.live` to `it.scopedLive`; helper updated for `Scope.Scope` requirement.                                      |
 
 ## Commit 8: refactor(actor): synchronize per-entity handle rebuild
 
