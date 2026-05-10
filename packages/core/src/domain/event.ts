@@ -14,6 +14,7 @@ import {
 import { AgentName, ReasoningEffort } from "./agent"
 import { ModelId } from "./model"
 import { TaggedEnumClass } from "./schema-tagged-enum-class"
+import { makeSessionPubSubRegistry } from "../runtime/session-pubsub-registry"
 
 // ============================================================================
 // Shared sub-schemas
@@ -474,7 +475,7 @@ export const matchesEventFilter = (
 }
 
 /** Branch-only filter — use when session is already known to match. */
-const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): boolean => {
+export const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): boolean => {
   if (branchId === undefined) return true
   const eventBranchId = getEventBranchId(env.event)
   return eventBranchId === branchId || eventBranchId === undefined
@@ -482,34 +483,12 @@ const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): boolean =
 
 // EventStore Service
 
-const getOrCreateSessionPubSub = (
-  sessions: Map<SessionId, PubSub.PubSub<EventEnvelope>>,
-  sessionId: SessionId,
-): Effect.Effect<PubSub.PubSub<EventEnvelope>> =>
-  Effect.gen(function* () {
-    const existing = sessions.get(sessionId)
-    if (existing !== undefined) return existing
-    const ps = yield* PubSub.unbounded<EventEnvelope>()
-    sessions.set(sessionId, ps)
-    return ps
-  })
-
 const makeMemoryEventStore = Effect.gen(function* () {
-  const sessions = new Map<SessionId, PubSub.PubSub<EventEnvelope>>()
+  const registry = makeSessionPubSubRegistry()
   const eventsRef = yield* Ref.make<EventEnvelope[]>([])
   const idRef = yield* Ref.make(0)
 
-  const broadcast = (envelope: EventEnvelope) => {
-    const eventSessionId = getEventSessionId(envelope.event)
-    if (eventSessionId !== undefined) {
-      return Effect.gen(function* () {
-        const ps = yield* getOrCreateSessionPubSub(sessions, eventSessionId)
-        yield* PubSub.publish(ps, envelope)
-      })
-    }
-    return Effect.void
-  }
-  const deliver = yield* makeSerializedEventDelivery(broadcast)
+  const deliver = yield* makeSerializedEventDelivery(registry.broadcast)
 
   const service: EventStoreService = {
     append: Effect.fn("EventStore.append")(function* (event) {
@@ -527,7 +506,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
       return envelope
     }),
 
-    broadcast,
+    broadcast: registry.broadcast,
     deliver,
 
     publish: Effect.fn("EventStore.publish")(function* (event) {
@@ -540,7 +519,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
         Stream.unwrap(
           Effect.gen(function* () {
             const afterId = after ?? EventId.make(0)
-            const ps = yield* getOrCreateSessionPubSub(sessions, sessionId)
+            const ps = yield* registry.getOrCreate(sessionId)
             const subscription = yield* PubSub.subscribe(ps)
             const latestId = yield* Ref.get(idRef)
             const buffered = (yield* Ref.get(eventsRef)).filter(
@@ -557,14 +536,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
         ),
       ),
 
-    removeSession: (sessionId) =>
-      Effect.gen(function* () {
-        const ps = sessions.get(sessionId)
-        if (ps !== undefined) {
-          sessions.delete(sessionId)
-          yield* PubSub.shutdown(ps)
-        }
-      }),
+    removeSession: registry.remove,
   }
   return service
 })

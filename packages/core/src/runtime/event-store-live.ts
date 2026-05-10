@@ -2,57 +2,28 @@ import { Effect, Layer, PubSub, Stream } from "effect"
 import {
   EventStore,
   EventStoreError,
-  getEventBranchId,
-  getEventSessionId,
+  matchesBranchFilter,
   makeSerializedEventDelivery,
 } from "../domain/event.js"
-import type { EventEnvelope, EventStoreService } from "../domain/event.js"
-import type { SessionId, BranchId } from "../domain/ids.js"
+import type { EventStoreService } from "../domain/event.js"
 import type { StorageError } from "../domain/storage-error.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
+import { makeSessionPubSubRegistry } from "./session-pubsub-registry.js"
 
 const toEventStoreError =
   (message: string) =>
   (error: StorageError): EventStoreError =>
     new EventStoreError({ message, cause: error })
 
-const getOrCreateSessionPubSub = (
-  sessions: Map<SessionId, PubSub.PubSub<EventEnvelope>>,
-  sessionId: SessionId,
-): Effect.Effect<PubSub.PubSub<EventEnvelope>> =>
-  Effect.gen(function* () {
-    const existing = sessions.get(sessionId)
-    if (existing !== undefined) return existing
-    const ps = yield* PubSub.unbounded<EventEnvelope>()
-    sessions.set(sessionId, ps)
-    return ps
-  })
-
-const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): boolean => {
-  if (branchId === undefined) return true
-  const eventBranchId = getEventBranchId(env.event)
-  return eventBranchId === branchId || eventBranchId === undefined
-}
-
 export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | SessionStorage> =
   Layer.unwrap(
     Effect.gen(function* () {
       const eventStorage = yield* EventStorage
       const sessionStorage = yield* SessionStorage
-      const sessions = new Map<SessionId, PubSub.PubSub<EventEnvelope>>()
+      const registry = makeSessionPubSubRegistry()
 
-      const broadcast = (envelope: EventEnvelope) => {
-        const eventSessionId = getEventSessionId(envelope.event)
-        if (eventSessionId !== undefined) {
-          return Effect.gen(function* () {
-            const ps = yield* getOrCreateSessionPubSub(sessions, eventSessionId)
-            yield* PubSub.publish(ps, envelope)
-          })
-        }
-        return Effect.void
-      }
-      const deliver = yield* makeSerializedEventDelivery(broadcast)
+      const deliver = yield* makeSerializedEventDelivery(registry.broadcast)
 
       const service: EventStoreService = {
         append: Effect.fn("EventStore.append")(function* (event) {
@@ -66,7 +37,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
           return envelope
         }),
 
-        broadcast,
+        broadcast: registry.broadcast,
         deliver,
 
         publish: Effect.fn("EventStore.publish")(function* (event) {
@@ -87,7 +58,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
                     message: `Session not found: ${sessionId}`,
                   })
                 }
-                const ps = yield* getOrCreateSessionPubSub(sessions, sessionId)
+                const ps = yield* registry.getOrCreate(sessionId)
                 const subscription = yield* PubSub.subscribe(ps)
                 const initial = yield* eventStorage
                   .listEvents({ sessionId, branchId, afterId })
@@ -116,14 +87,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
             ),
           ),
 
-        removeSession: (sessionId) =>
-          Effect.gen(function* () {
-            const ps = sessions.get(sessionId)
-            if (ps !== undefined) {
-              sessions.delete(sessionId)
-              yield* PubSub.shutdown(ps)
-            }
-          }),
+        removeSession: registry.remove,
       }
 
       return Layer.succeed(EventStore, service)
