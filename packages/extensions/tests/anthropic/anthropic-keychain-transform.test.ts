@@ -97,8 +97,18 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
 // and grabbing the service from context. The transform takes this
 // instance directly (closure-based, not yielded from R).
 const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServiceShape> => {
+  const host = testSetupCtx().host
+  const platformLayer = Layer.succeed(
+    AnthropicPlatform,
+    AnthropicPlatform.of({
+      platform: host.osInfo.platform,
+      home: host.homeDirectory,
+      parentEnv: host.parentEnv,
+      runProcess: host.runProcess,
+    }),
+  )
   const layer = AnthropicCredentialService.layerFromIO(io).pipe(
-    Layer.provide(Layer.merge(BunServices.layer, AnthropicPlatform.Live(testSetupCtx().host))),
+    Layer.provide(Layer.merge(BunServices.layer, platformLayer)),
   )
   return runEffectBoundary(
     Layer.build(layer).pipe(

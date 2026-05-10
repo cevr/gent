@@ -266,7 +266,7 @@ export const AnthropicExtension = defineExtension({
       const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
       const platform = AnthropicPlatform.fromSetup({
         platform: ctx.host.osInfo.platform,
-        home: ctx.home,
+        home: ctx.host.homeDirectory,
         Process: ctx.Process,
       })
 
