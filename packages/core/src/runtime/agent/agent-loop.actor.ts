@@ -458,6 +458,11 @@ const buildAgentLoopActorHandlers = (config: {
 }) =>
   Effect.gen(function* () {
     const sideMutationSemaphore = yield* Semaphore.make(1)
+    // Serializes per-entity `handle` rebuild. The actor mailbox is
+    // `concurrency: "unbounded"`, so concurrent ops can both observe a
+    // closed loop and race into `openLoop`, leaking the first behavior's
+    // fibers and producing torn reads of `handle`/`startupExit`.
+    const startupSemaphore = yield* Semaphore.make(1)
     const sessionGovernance = yield* AgentLoopSessionGovernance
     const platform = yield* GentPlatform
     const addr = yield* Actor.CurrentAddress
@@ -689,7 +694,19 @@ const buildAgentLoopActorHandlers = (config: {
 
     const ensureStarted = Effect.gen(function* () {
       if (yield* Ref.get(closed)) {
-        yield* openLoop
+        // Double-checked: re-read `closed` under the semaphore so only one
+        // fiber rebuilds `handle`/`startupExit`; later arrivals see the
+        // already-opened loop. Without the semaphore, the actor's
+        // `concurrency: "unbounded"` mailbox lets two fibers both observe
+        // `closed=true` and both reassign `handle` — torn reads, leaked
+        // behavior scopes.
+        yield* startupSemaphore.withPermits(1)(
+          Effect.gen(function* () {
+            if (yield* Ref.get(closed)) {
+              yield* openLoop
+            }
+          }),
+        )
       }
       if (Exit.isSuccess(startupExit)) return
       return yield* causeToAgentLoopError(startupExit.cause)
