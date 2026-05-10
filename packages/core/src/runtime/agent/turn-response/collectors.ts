@@ -1,4 +1,4 @@
-import { Deferred, Effect, Stream } from "effect"
+import { Deferred, Effect, Stream, type Scope } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
 import { DEFAULT_AGENT_NAME, type AgentName as AgentNameType } from "../../../domain/agent.js"
@@ -36,11 +36,17 @@ export type ActiveStreamHandle = {
   readonly abortSignal: AbortSignal
 }
 
-export const makeActiveStreamHandle = (): Effect.Effect<ActiveStreamHandle> =>
+/**
+ * Scoped: the forked listener that translates `Deferred.succeed(interrupted)`
+ * into `abortController.abort()` lives for the duration of the supplied
+ * scope. Clean turn completion closes the scope and interrupts the listener,
+ * preventing the per-turn fiber-leak that a detached fork would produce.
+ */
+export const makeActiveStreamHandle = (): Effect.Effect<ActiveStreamHandle, never, Scope.Scope> =>
   Effect.gen(function* () {
     const interrupted = yield* Deferred.make<void>()
     const abortController = new AbortController()
-    yield* Effect.forkDetach(
+    yield* Effect.forkScoped(
       Deferred.await(interrupted).pipe(Effect.andThen(Effect.sync(() => abortController.abort()))),
     )
     return { interrupted, abortSignal: abortController.signal }

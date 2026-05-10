@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Ref, Stream } from "effect"
+import { Effect, Ref, Stream, type Scope } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import {
   collectExternalTurnResponse,
@@ -21,7 +21,9 @@ import type { AgentEvent } from "@gent/core-internal/domain/event"
 const sessionId = SessionId.make("collector-session")
 const branchId = BranchId.make("collector-branch")
 
-const makeActiveStream = (interrupted: boolean): Effect.Effect<ActiveStreamHandle> =>
+const makeActiveStream = (
+  interrupted: boolean,
+): Effect.Effect<ActiveStreamHandle, never, Scope.Scope> =>
   Effect.gen(function* () {
     const handle = yield* makeActiveStreamHandle()
     if (interrupted) yield* signalActiveStreamInterrupt(handle)
@@ -62,7 +64,7 @@ describe("agent turn response collectors", () => {
     expect(toResponseFinishReason("made-up")).toBe("unknown")
   })
 
-  it.live("model collector retries pre-output provider failures by re-raising them", () =>
+  it.scopedLive("model collector retries pre-output provider failures by re-raising them", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(false)
       const { publish } = yield* captureEvents()
@@ -82,7 +84,7 @@ describe("agent turn response collectors", () => {
     }),
   )
 
-  it.live("failed model collector treats interrupted failures as non-stream failures", () =>
+  it.scopedLive("failed model collector treats interrupted failures as non-stream failures", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(true)
       const { events, publish } = yield* captureEvents()
@@ -101,7 +103,7 @@ describe("agent turn response collectors", () => {
     }),
   )
 
-  it.live("external collector preserves tool names and usage in projected parts", () =>
+  it.scopedLive("external collector preserves tool names and usage in projected parts", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(false)
       const { events, publish } = yield* captureEvents()
@@ -157,60 +159,64 @@ describe("agent turn response collectors", () => {
     }),
   )
 
-  it.live("external collector de-duplicates durable tool-start events by response part id", () =>
-    Effect.gen(function* () {
-      const activeStream = yield* makeActiveStream(false)
-      const { events, publish } = yield* captureEvents()
-      const toolCallId = ToolCallId.make("collector-dup")
-      const toolCallPart = Response.makePart("tool-call", {
-        id: toolCallId,
-        name: "probe",
-        params: {},
-        providerExecuted: false,
-      })
+  it.scopedLive(
+    "external collector de-duplicates durable tool-start events by response part id",
+    () =>
+      Effect.gen(function* () {
+        const activeStream = yield* makeActiveStream(false)
+        const { events, publish } = yield* captureEvents()
+        const toolCallId = ToolCallId.make("collector-dup")
+        const toolCallPart = Response.makePart("tool-call", {
+          id: toolCallId,
+          name: "probe",
+          params: {},
+          providerExecuted: false,
+        })
 
-      yield* collectExternalTurnResponse({
-        turnStream: Stream.fromIterable([toolCallPart, toolCallPart]),
-        publishEvent: publish,
-        sessionId,
-        branchId,
-        activeStream,
-        formatStreamError: (error: TurnError) => error.message,
-      })
+        yield* collectExternalTurnResponse({
+          turnStream: Stream.fromIterable([toolCallPart, toolCallPart]),
+          publishEvent: publish,
+          sessionId,
+          branchId,
+          activeStream,
+          formatStreamError: (error: TurnError) => error.message,
+        })
 
-      expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual(["ToolCallStarted"])
-    }),
+        expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual(["ToolCallStarted"])
+      }),
   )
 
-  it.live("external collector de-duplicates final tool-result events by response part id", () =>
-    Effect.gen(function* () {
-      const activeStream = yield* makeActiveStream(false)
-      const { events, publish } = yield* captureEvents()
-      const toolCallId = ToolCallId.make("collector-result-dup")
-      const toolResultPart = Response.makePart("tool-result", {
-        id: toolCallId,
-        name: "probe",
-        result: { ok: true },
-        encodedResult: { ok: true },
-        isFailure: false,
-        providerExecuted: false,
-        preliminary: false,
-      })
+  it.scopedLive(
+    "external collector de-duplicates final tool-result events by response part id",
+    () =>
+      Effect.gen(function* () {
+        const activeStream = yield* makeActiveStream(false)
+        const { events, publish } = yield* captureEvents()
+        const toolCallId = ToolCallId.make("collector-result-dup")
+        const toolResultPart = Response.makePart("tool-result", {
+          id: toolCallId,
+          name: "probe",
+          result: { ok: true },
+          encodedResult: { ok: true },
+          isFailure: false,
+          providerExecuted: false,
+          preliminary: false,
+        })
 
-      yield* collectExternalTurnResponse({
-        turnStream: Stream.fromIterable([toolResultPart, toolResultPart]),
-        publishEvent: publish,
-        sessionId,
-        branchId,
-        activeStream,
-        formatStreamError: (error: TurnError) => error.message,
-      })
+        yield* collectExternalTurnResponse({
+          turnStream: Stream.fromIterable([toolResultPart, toolResultPart]),
+          publishEvent: publish,
+          sessionId,
+          branchId,
+          activeStream,
+          formatStreamError: (error: TurnError) => error.message,
+        })
 
-      expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual(["ToolCallSucceeded"])
-    }),
+        expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual(["ToolCallSucceeded"])
+      }),
   )
 
-  it.live("model collector keeps partial output when post-output stream fails", () =>
+  it.scopedLive("model collector keeps partial output when post-output stream fails", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(false)
       const { events, publish } = yield* captureEvents()

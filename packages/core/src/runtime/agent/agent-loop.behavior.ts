@@ -1049,19 +1049,22 @@ export const makeAgentLoopBehavior = (
           break
         }
 
-        const activeStream = yield* makeActiveStreamHandle()
-        yield* Ref.set(activeStreamRef, activeStream)
-
-        const collected = yield* collectTurnStream({
-          messageId: state.message.id,
-          step,
-          resolved,
-          extensionRegistry: turnExtensionRegistry,
-          permission: turnPermission,
-          driverRegistry: turnDriverRegistry,
-          hostCtx: turnHostCtx,
-          activeStream,
-        }).pipe(Effect.ensuring(Ref.set(activeStreamRef, undefined)))
+        const collected = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const activeStream = yield* makeActiveStreamHandle()
+            yield* Ref.set(activeStreamRef, activeStream)
+            return yield* collectTurnStream({
+              messageId: state.message.id,
+              step,
+              resolved,
+              extensionRegistry: turnExtensionRegistry,
+              permission: turnPermission,
+              driverRegistry: turnDriverRegistry,
+              hostCtx: turnHostCtx,
+              activeStream,
+            })
+          }).pipe(Effect.ensuring(Ref.set(activeStreamRef, undefined))),
+        )
 
         if (collected.interrupted) {
           interrupted = true
