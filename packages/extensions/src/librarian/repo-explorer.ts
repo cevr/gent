@@ -1,7 +1,6 @@
 import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
-import { $ } from "bun"
 import * as esGit from "es-git"
 
 export class GitReaderError extends Schema.TaggedErrorClass<GitReaderError>()("GitReaderError", {
@@ -15,11 +14,12 @@ type Credential =
   | { type: "Plain"; username: string; password: string }
 
 const resolveCredential = (
-  fs: FileSystem.FileSystem,
-  home: string,
   url: string,
-): Effect.Effect<Credential | undefined> =>
+): Effect.Effect<Credential | undefined, never, ExtensionContext | FileSystem.FileSystem> =>
   Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const fs = yield* FileSystem.FileSystem
+    const home = ctx.home
     if (url.startsWith("git@") || url.includes("ssh://")) {
       const ed25519 = `${home}/.ssh/id_ed25519`
       if (yield* fs.exists(ed25519).pipe(Effect.orElseSucceed(() => false))) {
@@ -47,12 +47,12 @@ const resolveCredential = (
     }
 
     if (url.includes("github.com")) {
-      const token = yield* Effect.tryPromise({
-        try: () => $`gh auth token`.quiet().text(),
-        catch: () => undefined as string | undefined,
-      })
-      if (token !== undefined) {
-        const trimmed = token.trim()
+      const result = yield* ctx.Process.run("gh", ["auth", "token"], {
+        stdout: "pipe",
+        stderr: "pipe",
+      }).pipe(Effect.orElseSucceed(() => undefined))
+      if (result !== undefined && result.exitCode === 0) {
+        const trimmed = result.stdout.trim()
         if (trimmed.length > 0) {
           return {
             type: "Plain" as const,
@@ -70,8 +70,10 @@ export interface GitReaderService {
     url: string,
     dest: string,
     options?: { depth?: number; ref?: string },
-  ) => Effect.Effect<void, GitReaderError>
-  readonly fetch: (repoPath: string) => Effect.Effect<void, GitReaderError>
+  ) => Effect.Effect<void, GitReaderError, ExtensionContext | FileSystem.FileSystem>
+  readonly fetch: (
+    repoPath: string,
+  ) => Effect.Effect<void, GitReaderError, ExtensionContext | FileSystem.FileSystem>
   readonly listFiles: (
     repoPath: string,
     ref?: string,
@@ -86,126 +88,114 @@ export interface GitReaderService {
 export class GitReader extends Context.Service<GitReader, GitReaderService>()(
   "@gent/extensions/src/librarian/repo-explorer/GitReader",
 ) {
-  static Live = (home: string): Layer.Layer<GitReader, never, FileSystem.FileSystem> =>
-    Layer.effect(
-      GitReader,
+  static Live: Layer.Layer<GitReader> = Layer.succeed(GitReader, {
+    clone: (url, dest, options) =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const cred = (url: string) => resolveCredential(fs, home, url)
+        const credential = yield* resolveCredential(url)
+        yield* Effect.tryPromise({
+          try: () =>
+            esGit.cloneRepository(url, dest, {
+              fetch: { depth: options?.depth, credential },
+              branch: options?.ref,
+            }),
+          catch: (e) => new GitReaderError({ message: String(e), operation: "clone", cause: e }),
+        })
+      }),
 
+    fetch: (repoPath) =>
+      Effect.gen(function* () {
+        const repo = yield* Effect.tryPromise({
+          try: () => esGit.openRepository(repoPath),
+          catch: (e) =>
+            new GitReaderError({ message: String(e), operation: "fetch.open", cause: e }),
+        })
+        const remote = repo.getRemote("origin")
+        const credential = yield* resolveCredential(remote.url())
+        yield* Effect.tryPromise({
+          try: () =>
+            remote
+              .fetch(["refs/heads/*:refs/remotes/origin/*"], {
+                fetch: { credential },
+              })
+              .then(() => {
+                const headOid = repo.revparseSingle("origin/HEAD")
+                const headCommit = repo.getCommit(headOid)
+                repo.setHeadDetached(headCommit)
+                repo.checkoutHead({ force: true })
+              }),
+          catch: (e) => new GitReaderError({ message: String(e), operation: "fetch", cause: e }),
+        })
+      }),
+
+    listFiles: (repoPath, ref) =>
+      Effect.tryPromise({
+        try: () =>
+          esGit.openRepository(repoPath).then((repo) => {
+            const oid = repo.revparseSingle(ref ?? "HEAD")
+            const commit = repo.getCommit(oid)
+            const files: string[] = []
+            const walk = (tree: ReturnType<typeof commit.tree>, prefix: string) => {
+              for (const entry of tree.iter()) {
+                const fullPath = prefix ? `${prefix}/${entry.name()}` : entry.name()
+                if (entry.type() === "Blob") {
+                  files.push(fullPath)
+                } else if (entry.type() === "Tree") {
+                  const subtree = repo.findTree(entry.id())
+                  if (subtree !== null) walk(subtree, fullPath)
+                }
+              }
+            }
+            walk(commit.tree(), "")
+            return files
+          }),
+        catch: (e) => new GitReaderError({ message: String(e), operation: "listFiles", cause: e }),
+      }),
+
+    readFile: (repoPath, filePath, ref) =>
+      Effect.gen(function* () {
+        const repo = yield* Effect.tryPromise({
+          try: () => esGit.openRepository(repoPath),
+          catch: (e) =>
+            new GitReaderError({ message: String(e), operation: "readFile.open", cause: e }),
+        })
+        const entry = yield* Effect.try({
+          try: () => {
+            const oid = repo.revparseSingle(ref ?? "HEAD")
+            const commit = repo.getCommit(oid)
+            const tree = commit.tree()
+            return tree.getPath(filePath)
+          },
+          catch: (e) =>
+            new GitReaderError({
+              message: String(e),
+              operation: "readFile.lookup",
+              cause: e,
+            }),
+        })
+        if (entry === null || entry === undefined) {
+          return yield* new GitReaderError({
+            message: `File not found: ${filePath}`,
+            operation: "readFile",
+          })
+        }
+        const blob = yield* Effect.try({
+          try: () => entry.toObject(repo).peelToBlob(),
+          catch: (e) =>
+            new GitReaderError({ message: String(e), operation: "readFile.blob", cause: e }),
+        })
+        if (blob === null || blob === undefined) {
+          return yield* new GitReaderError({
+            message: `Not a blob: ${filePath}`,
+            operation: "readFile",
+          })
+        }
         return {
-          clone: (url, dest, options) =>
-            Effect.gen(function* () {
-              const credential = yield* cred(url)
-              yield* Effect.tryPromise({
-                try: () =>
-                  esGit.cloneRepository(url, dest, {
-                    fetch: { depth: options?.depth, credential },
-                    branch: options?.ref,
-                  }),
-                catch: (e) =>
-                  new GitReaderError({ message: String(e), operation: "clone", cause: e }),
-              })
-            }),
-
-          fetch: (repoPath) =>
-            Effect.gen(function* () {
-              const repo = yield* Effect.tryPromise({
-                try: () => esGit.openRepository(repoPath),
-                catch: (e) =>
-                  new GitReaderError({ message: String(e), operation: "fetch.open", cause: e }),
-              })
-              const remote = repo.getRemote("origin")
-              const credential = yield* cred(remote.url())
-              yield* Effect.tryPromise({
-                try: () =>
-                  remote
-                    .fetch(["refs/heads/*:refs/remotes/origin/*"], {
-                      fetch: { credential },
-                    })
-                    .then(() => {
-                      const headOid = repo.revparseSingle("origin/HEAD")
-                      const headCommit = repo.getCommit(headOid)
-                      repo.setHeadDetached(headCommit)
-                      repo.checkoutHead({ force: true })
-                    }),
-                catch: (e) =>
-                  new GitReaderError({ message: String(e), operation: "fetch", cause: e }),
-              })
-            }),
-
-          listFiles: (repoPath, ref) =>
-            Effect.tryPromise({
-              try: () =>
-                esGit.openRepository(repoPath).then((repo) => {
-                  const oid = repo.revparseSingle(ref ?? "HEAD")
-                  const commit = repo.getCommit(oid)
-                  const files: string[] = []
-                  const walk = (tree: ReturnType<typeof commit.tree>, prefix: string) => {
-                    for (const entry of tree.iter()) {
-                      const fullPath = prefix ? `${prefix}/${entry.name()}` : entry.name()
-                      if (entry.type() === "Blob") {
-                        files.push(fullPath)
-                      } else if (entry.type() === "Tree") {
-                        const subtree = repo.findTree(entry.id())
-                        if (subtree !== null) walk(subtree, fullPath)
-                      }
-                    }
-                  }
-                  walk(commit.tree(), "")
-                  return files
-                }),
-              catch: (e) =>
-                new GitReaderError({ message: String(e), operation: "listFiles", cause: e }),
-            }),
-
-          readFile: (repoPath, filePath, ref) =>
-            Effect.gen(function* () {
-              const repo = yield* Effect.tryPromise({
-                try: () => esGit.openRepository(repoPath),
-                catch: (e) =>
-                  new GitReaderError({ message: String(e), operation: "readFile.open", cause: e }),
-              })
-              const entry = yield* Effect.try({
-                try: () => {
-                  const oid = repo.revparseSingle(ref ?? "HEAD")
-                  const commit = repo.getCommit(oid)
-                  const tree = commit.tree()
-                  return tree.getPath(filePath)
-                },
-                catch: (e) =>
-                  new GitReaderError({
-                    message: String(e),
-                    operation: "readFile.lookup",
-                    cause: e,
-                  }),
-              })
-              if (entry === null || entry === undefined) {
-                return yield* new GitReaderError({
-                  message: `File not found: ${filePath}`,
-                  operation: "readFile",
-                })
-              }
-              const blob = yield* Effect.try({
-                try: () => entry.toObject(repo).peelToBlob(),
-                catch: (e) =>
-                  new GitReaderError({ message: String(e), operation: "readFile.blob", cause: e }),
-              })
-              if (blob === null || blob === undefined) {
-                return yield* new GitReaderError({
-                  message: `Not a blob: ${filePath}`,
-                  operation: "readFile",
-                })
-              }
-              return {
-                content: new Uint8Array(blob.content()),
-                size: Number(blob.size()),
-                isBinary: blob.isBinary(),
-              }
-            }),
+          content: new Uint8Array(blob.content()),
+          size: Number(blob.size()),
+          isBinary: blob.isBinary(),
         }
       }),
-    )
+  })
 
   static Test: Layer.Layer<GitReader> = Layer.succeed(GitReader, {
     clone: () => Effect.void,
@@ -450,16 +440,21 @@ export const RepoTool = tool({
             ),
           )
           const versionSuffix = parsed.version !== undefined ? `@${parsed.version}` : ""
-          yield* Effect.tryPromise({
-            try: () =>
-              $`npm pack ${parsed.name}${versionSuffix} --pack-destination ${cachePath}`.quiet(),
-            catch: (e) =>
-              new RepoExplorerError({
-                message: `Failed to fetch npm: ${e}`,
-                spec: params.spec,
-                cause: e,
-              }),
-          })
+          yield* ctx.Process.run("npm", [
+            "pack",
+            `${parsed.name}${versionSuffix}`,
+            "--pack-destination",
+            cachePath,
+          ]).pipe(
+            Effect.mapError(
+              (e) =>
+                new RepoExplorerError({
+                  message: `Failed to fetch npm: ${e.message}`,
+                  spec: params.spec,
+                  cause: e,
+                }),
+            ),
+          )
           const tarballs = yield* fs.readDirectory(cachePath).pipe(
             Effect.mapError(
               (e) =>
@@ -472,15 +467,21 @@ export const RepoTool = tool({
           )
           const tarball = tarballs.find((f) => f.endsWith(".tgz"))
           if (tarball !== undefined) {
-            yield* Effect.tryPromise({
-              try: () => $`tar -xzf ${path.join(cachePath, tarball)} -C ${cachePath}`.quiet(),
-              catch: (e) =>
-                new RepoExplorerError({
-                  message: `Failed to extract npm tarball: ${e}`,
-                  spec: params.spec,
-                  cause: e,
-                }),
-            })
+            yield* ctx.Process.run("tar", [
+              "-xzf",
+              path.join(cachePath, tarball),
+              "-C",
+              cachePath,
+            ]).pipe(
+              Effect.mapError(
+                (e) =>
+                  new RepoExplorerError({
+                    message: `Failed to extract npm tarball: ${e.message}`,
+                    spec: params.spec,
+                    cause: e,
+                  }),
+              ),
+            )
           }
         }
         // pypi/crates: simplified - would need pip download / cargo fetch
@@ -501,14 +502,17 @@ export const RepoTool = tool({
         }
         yield* ensureCached(fs, cachePath, params.spec)
 
-        const result = yield* Effect.tryPromise({
-          try: () =>
-            $`rg --files-with-matches ${params.query} ${cachePath}`
-              .text()
-              .then((output) => output.trim().split("\n").filter(Boolean)),
-          catch: () => [] as string[],
-        })
-        return { path: cachePath, matches: result }
+        const matches = yield* ctx.Process.run("rg", [
+          "--files-with-matches",
+          params.query,
+          cachePath,
+        ]).pipe(
+          Effect.map((res) =>
+            res.exitCode === 0 ? res.stdout.trim().split("\n").filter(Boolean) : [],
+          ),
+          Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+        )
+        return { path: cachePath, matches: [...matches] }
       }
 
       case "tree": {

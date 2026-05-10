@@ -2,9 +2,28 @@ import { describe, it, expect } from "effect-bun-test"
 import { beforeAll, afterAll } from "bun:test"
 import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
+import { ExtensionContext } from "@gent/core/extensions/api"
 import { GitReader, GitReaderError } from "../../src/librarian/index.js"
 import { $ } from "bun"
 import { runEffectBoundary } from "../run-effect-boundary.js"
+
+const StubExtensionContext = Layer.succeed(ExtensionContext, {
+  sessionId: "test-session" as never,
+  branchId: "test-branch" as never,
+  cwd: "/tmp",
+  home: "/tmp",
+  Session: {} as never,
+  Agent: {} as never,
+  Interaction: {} as never,
+  Process: {
+    run: () => Effect.die("Process.run not provided in git-reader test"),
+    signalPid: () => Effect.die("Process.signalPid not provided"),
+    isPortFree: () => Effect.die("Process.isPortFree not provided"),
+    isPidAlive: () => Effect.die("Process.isPidAlive not provided"),
+    commandCandidates: (cmd: string) => [cmd],
+    parentEnv: {},
+  },
+})
 // ---------------------------------------------------------------------------
 // Fixture: create a real git repo with nested files
 // ---------------------------------------------------------------------------
@@ -48,7 +67,7 @@ afterAll(() => runEffectBoundary(Effect.promise(() => $`rm -rf ${FIXTURE_DIR}`.q
 // ---------------------------------------------------------------------------
 // Layer
 // ---------------------------------------------------------------------------
-const TestLayer = Layer.provide(GitReader.Live(FIXTURE_DIR), BunFileSystem.layer)
+const TestLayer = Layer.mergeAll(GitReader.Live, BunFileSystem.layer, StubExtensionContext)
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

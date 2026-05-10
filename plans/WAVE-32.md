@@ -277,6 +277,7 @@ API after code catches up.
 5. we own effect-machine, effect-encore, effect-wide-event - can we improve these upstream so that DX is better? are there other libraries we can make to abstract certain concepts that better align with our north star (actor model).
 6. do files merit their existence? prefer bigger cohesive files when a split does not encode a real boundary, public entrypoint, platform boundary, independently testable domain, generated fixture, or meaningful multi-import reuse.
 7. does the extension authoring experience follow this spirit: it should be simple to author extensions by creating facades over private things through `yield* ExtensionContext`; no ctx parameters, no privileged builtin API, and no capability/read/write ceremony when access can be expressed in code by accessing what is needed from ctx.
+8. are any helpers, resource layers, or service factories accepting Effect-context-resolvable values (ExtensionContext, ExtensionContext.Process, ExtensionProcess, ExtensionSession, FileSystem, etc.) as **parameters** instead of yielding them from context? Threading context as parameters is a P1 — services and helpers must yield via `yield* Tag` and surface the requirement in their `R` channel.
 
 Close Wave 32 only after this independent audit reports no P0/P1. If it finds
 P1s, synthesize the next wave and continue.

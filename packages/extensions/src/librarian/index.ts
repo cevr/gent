@@ -3,10 +3,8 @@ import {
   defineAgent,
   defineExtension,
   defineResource,
-  ExtensionSetupContext,
   ModelId,
 } from "@gent/core/extensions/api"
-import { Effect } from "effect"
 import { GitReader, RepoTool } from "./repo-explorer.js"
 
 export { GitReader, GitReaderError } from "./repo-explorer.js"
@@ -32,9 +30,5 @@ export const LibrarianExtension = defineExtension({
   id: "@gent/librarian",
   tools: [RepoTool],
   agents: [librarian],
-  resources: () =>
-    Effect.gen(function* () {
-      const ctx = yield* ExtensionSetupContext
-      return [defineResource({ tag: GitReader, scope: "process", layer: GitReader.Live(ctx.home) })]
-    }),
+  resources: [defineResource({ tag: GitReader, scope: "process", layer: GitReader.Live })],
 })

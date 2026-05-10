@@ -585,6 +585,51 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
+  test("flags direct bun package imports in core/extensions sources", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/extensions/src/librarian/repo-explorer.ts",
+        'import { $ } from "bun"',
+      ),
+    ).toEqual([
+      {
+        file: "packages/extensions/src/librarian/repo-explorer.ts",
+        line: 1,
+        message:
+          "Direct `bun` package imports are adapter-only; use ExtensionContext.Process or Effect platform services",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        "import { something } from 'bun'",
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 1,
+        message:
+          "Direct `bun` package imports are adapter-only; use ExtensionContext.Process or Effect platform services",
+      },
+    ])
+
+    // bun:test, bun:sqlite, and other subpath imports must remain legal
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        ['import { describe } from "bun:test"', 'import { Database } from "bun:sqlite"'].join("\n"),
+      ),
+    ).toEqual([])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/gent-platform-bun.ts",
+        'import { $ } from "bun"',
+      ),
+    ).toEqual([])
+  })
+
   test("flags protected package working directory and OS module facts", () => {
     expect(
       findPlatformDuplicationViolations(

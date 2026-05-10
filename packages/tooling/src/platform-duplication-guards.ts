@@ -152,6 +152,11 @@ const bannedProtectedHostFactPatterns: ReadonlyArray<BannedPattern> = [
     pattern: /\bfrom\s+["'](?:node:)?os["']/,
     message: "Host OS module imports are adapter-only; use GentPlatform",
   },
+  {
+    pattern: /\bfrom\s+["']bun["']/,
+    message:
+      "Direct `bun` package imports are adapter-only; use ExtensionContext.Process or Effect platform services",
+  },
 ]
 
 const serverRootConsumerFiles = new Set(["apps/server/src/main.ts", "packages/sdk/src/server.ts"])
