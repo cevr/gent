@@ -2,10 +2,9 @@ import { BunServices } from "@effect/platform-bun"
 import { Clock, Config, Effect, Layer, Option, Redacted, Ref, SynchronizedRef } from "effect"
 import {
   AuthMethod,
-  ExtensionId,
+  defineExtension,
+  ExtensionSetupContext,
   ProviderAuthError,
-  type ExtensionContributions,
-  type GentExtension,
   type ModelDriverContribution,
   type ProviderAuthInfo,
   type ProviderHints,
@@ -251,10 +250,11 @@ export const buildAnthropicModelDriver = (
   },
 })
 
-export const AnthropicExtension: GentExtension = {
-  manifest: { id: ExtensionId.make("@gent/provider-anthropic") },
-  setup: (ctx) =>
+export const AnthropicExtension = defineExtension({
+  id: "@gent/provider-anthropic",
+  modelDrivers: () =>
     Effect.gen(function* () {
+      const ctx = yield* ExtensionSetupContext
       const env: AnthropicKeychainEnv = {
         betaFlags: yield* readOptionalEnv("ANTHROPIC_BETA_FLAGS"),
         cliVersion: yield* readOptionalEnv("ANTHROPIC_CLI_VERSION"),
@@ -264,7 +264,11 @@ export const AnthropicExtension: GentExtension = {
       initAnthropicKeychainEnv(env)
 
       const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
-      const platform = AnthropicPlatform.fromHost(ctx.host)
+      const platform = AnthropicPlatform.fromSetup({
+        platform: ctx.host.osInfo.platform,
+        home: ctx.home,
+        Process: ctx.Process,
+      })
 
       // Cache cells are hoisted to extension-closure scope so they
       // survive across `resolveModel` calls. Lifetime: one extension
@@ -274,10 +278,6 @@ export const AnthropicExtension: GentExtension = {
       const credentialCellRef = yield* SynchronizedRef.make(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
 
-      return {
-        modelDrivers: [
-          buildAnthropicModelDriver(credentialCellRef, betaCellRef, envApiKey, platform),
-        ],
-      } satisfies ExtensionContributions
+      return [buildAnthropicModelDriver(credentialCellRef, betaCellRef, envApiKey, platform)]
     }),
-}
+})
