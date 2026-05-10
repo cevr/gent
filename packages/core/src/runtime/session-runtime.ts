@@ -6,7 +6,6 @@ import type { SqlClient } from "effect/unstable/sql"
 import { ActorAddressResolver, ActorStateRegistry } from "effect-encore"
 import { AgentRunError, RunSpecSchema, type RunSpec, AgentName } from "../domain/agent.js"
 import type { QueueSnapshot } from "../domain/queue.js"
-import { Permission } from "../domain/permission.js"
 import { AgentRestarted, ErrorOccurred, EventStore } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import {
@@ -29,24 +28,17 @@ import { ModelId } from "../domain/model.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
 import { entityIdOf, parseEntityId } from "./agent/agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
-import { ExtensionRegistry } from "./extensions/registry.js"
-import { DriverRegistry } from "./extensions/driver-registry.js"
+import type { ExtensionRegistry } from "./extensions/registry.js"
+import type { DriverRegistry } from "./extensions/driver-registry.js"
 import type { ModelRegistry } from "./model-registry.js"
 import type { ModelResolver } from "../providers/model-resolver.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { ToolRunner } from "./agent/tool-runner.js"
 import type { ResourceManager } from "./resource-manager.js"
 import type { ConfigService } from "./config-service.js"
-import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-context.js"
-import { makeExtensionHostPlatform } from "./extensions/host-platform.js"
-import { SessionProfileCache } from "./session-profile.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 import type { SteerCommand as SteerCommandType } from "../domain/steer.js"
-import {
-  AllowAllPermission,
-  resolveExistingSessionBranch,
-  resolveSessionEnvironmentOrFail,
-} from "./session-runtime-context.js"
+import { resolveExistingSessionBranch } from "./session-runtime-context.js"
 import {
   AgentLoopError,
   SessionRuntimeStateSchema,
@@ -335,13 +327,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const eventStore = yield* EventStore
   const eventPublisher = yield* EventPublisher
   const agentLoopSessionGovernance = yield* AgentLoopSessionGovernance
-  const extensionRegistry = yield* ExtensionRegistry
-  const driverRegistry = yield* DriverRegistry
   const platform = yield* GentPlatform
-  const permissionOpt = yield* Effect.serviceOption(Permission)
-  const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
-  const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
-  const defaultPermission = permissionOpt._tag === "Some" ? permissionOpt.value : AllowAllPermission
   // Every public session-scoped boundary (writes + reads) MUST validate the
   // durable `(sessionId, branchId)` target before proceeding. In-memory
   // tombstones do not survive restart, and branch ids are globally addressable
@@ -526,17 +512,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     },
   )
 
-  const host = yield* makeExtensionHostPlatform
-  const hostDeps = yield* makeAmbientExtensionHostContextDeps({
-    extensionRegistry,
-    overrides: {
-      host,
-      sessionControl: {
-        queueFollowUp: queueFollowUpThroughActor,
-      },
-    },
-  })
-
   const redeliverPendingActorMessages = (target: SessionRuntimeTarget) =>
     Effect.gen(function* () {
       const workspaceId = yield* CurrentWorkspaceId
@@ -559,44 +534,12 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         : ActorCommandId.make(yield* platform.randomId))
     const shouldHoldCompletion = input.requestId !== undefined || input.commandId !== undefined
     const messageId = userMessageIdForCommand(commandId)
-    const resolved = yield* resolveSessionEnvironmentOrFail({
-      sessionId: input.sessionId,
-      branchId: input.branchId,
-      sessionStorage,
-      hostDeps,
-      profileCache,
-      defaults: {
-        driverRegistry,
-        permission: defaultPermission,
-        baseSections: [],
-      },
-    }).pipe(
-      Effect.flatMap(({ session, environment }) =>
-        session !== undefined
-          ? Effect.succeed({ session, environment })
-          : Effect.fail(
-              new SessionRuntimeError({
-                message: `Session not found: ${input.sessionId}`,
-              }),
-            ),
-      ),
-    )
-    const { environment } = resolved
-    const content = yield* environment.extensionRegistry.extensionReactions.normalizeMessageInput(
-      {
-        content: input.content,
-        sessionId: input.sessionId,
-        branchId: input.branchId,
-      },
-      environment.hostCtx,
-    )
-
     const message = Message.Regular.make({
       id: messageId,
       sessionId: input.sessionId,
       branchId: input.branchId,
       role: "user",
-      parts: [Prompt.textPart({ text: content })],
+      parts: [Prompt.textPart({ text: input.content })],
       createdAt: yield* DateTime.nowAsDate,
     })
 

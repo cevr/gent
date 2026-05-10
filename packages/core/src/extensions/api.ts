@@ -92,14 +92,8 @@ export {
   type TurnProjection,
   type ExtensionTurnContext,
   type SystemPromptInput,
-  type ToolExecuteInput,
-  type PermissionCheckInput,
-  type ContextMessagesInput,
-  type TurnBeforeInput,
   type TurnAfterInput,
   type ToolResultInput,
-  type MessageInputInput,
-  type MessageOutputInput,
 } from "../domain/extension.js"
 export type { PromptSection } from "../domain/prompt.js"
 export {
@@ -310,7 +304,7 @@ export interface DefineExtensionInput<R = never> {
   readonly requests?: FieldSpec<RequestCapability, R>
   readonly agents?: FieldSpec<AgentDefinition, R>
   /**
-   * Lifecycle reactions: `turnBefore` / `turnAfter` / `messageOutput` /
+   * Lifecycle reactions: `systemPrompt` / `turnProjection` / `turnAfter` /
    * `toolResult` handlers run by the runtime. Per-extension, per-session.
    * Compiled by `compileExtensionReactions`.
    */

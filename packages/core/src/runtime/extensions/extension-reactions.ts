@@ -1,27 +1,18 @@
 import { Cause, Effect, Schema } from "effect"
 import type {
-  ContextMessagesInput,
   ExtensionReaction,
   ExtensionReactions,
   ExtensionScope,
   LoadedExtension,
-  MessageInputInput,
-  MessageOutputInput,
-  PermissionCheckInput,
   SystemPromptInput,
-  ToolExecuteInput,
   ToolPolicyFragment,
   ToolResultInput,
   TurnAfterInput,
-  TurnBeforeInput,
   ProjectionTurnContext,
 } from "../../domain/extension.js"
 import type { ExtensionId } from "../../domain/ids.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
-import type { Message } from "../../domain/message.js"
-import type { PermissionResult } from "../../domain/permission.js"
 import type { PromptSection } from "../../domain/prompt.js"
-import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import { provideExtensionServices } from "../../domain/extension-services.js"
 import { exitErasedEffect, sealErasedEffect } from "./extension-effect-membrane.js"
 
@@ -40,19 +31,6 @@ export interface ExtensionReactionContext {
 }
 
 export interface CompiledExtensionReactions {
-  readonly normalizeMessageInput: (
-    input: MessageInputInput,
-    ctx: ExtensionHostContext,
-  ) => Effect.Effect<string>
-  readonly checkPermission: (
-    input: PermissionCheckInput,
-    base: (input: PermissionCheckInput) => Effect.Effect<PermissionResult>,
-    ctx: ExtensionHostContext,
-  ) => Effect.Effect<PermissionResult>
-  readonly resolveContextMessages: (
-    input: ContextMessagesInput,
-    ctx: ExtensionReactionContext,
-  ) => Effect.Effect<ReadonlyArray<Message>>
   readonly resolveSystemPrompt: (
     input: SystemPromptInput,
     ctx: ExtensionReactionContext,
@@ -60,25 +38,12 @@ export interface CompiledExtensionReactions {
   readonly resolveTurnProjection: (
     ctx: ExtensionReactionContext,
   ) => Effect.Effect<ExtensionTurnProjection>
-  readonly executeTool: (
-    input: ToolExecuteInput,
-    base: (input: ToolExecuteInput) => Effect.Effect<unknown, Error | InteractionPendingError>,
-    ctx: ExtensionHostContext,
-  ) => Effect.Effect<unknown, Error | InteractionPendingError>
   readonly transformToolResult: (
     input: ToolResultInput,
     ctx: ExtensionHostContext,
   ) => Effect.Effect<unknown>
-  readonly emitTurnBefore: (
-    input: TurnBeforeInput,
-    ctx: ExtensionHostContext,
-  ) => Effect.Effect<void, ExtensionReactionHaltError>
   readonly emitTurnAfter: (
     input: TurnAfterInput,
-    ctx: ExtensionHostContext,
-  ) => Effect.Effect<void, ExtensionReactionHaltError>
-  readonly emitMessageOutput: (
-    input: MessageOutputInput,
     ctx: ExtensionHostContext,
   ) => Effect.Effect<void, ExtensionReactionHaltError>
 }
@@ -91,26 +56,6 @@ export interface ExtensionTurnProjection {
 interface RegisteredSystemPromptRewrite {
   readonly extensionId: ExtensionId
   readonly handler: NonNullable<ExtensionReactions<unknown, unknown>["systemPrompt"]>
-}
-
-interface RegisteredMessageInputRewrite {
-  readonly extensionId: ExtensionId
-  readonly handler: NonNullable<ExtensionReactions<unknown, unknown>["messageInput"]>
-}
-
-interface RegisteredContextMessagesRewrite {
-  readonly extensionId: ExtensionId
-  readonly handler: NonNullable<ExtensionReactions<unknown, unknown>["contextMessages"]>
-}
-
-interface RegisteredPermissionCheckRewrite {
-  readonly extensionId: ExtensionId
-  readonly handler: NonNullable<ExtensionReactions<unknown, unknown>["permissionCheck"]>
-}
-
-interface RegisteredToolExecuteRewrite {
-  readonly extensionId: ExtensionId
-  readonly handler: NonNullable<ExtensionReactions<unknown, unknown>["toolExecute"]>
 }
 
 interface ReactionTurnProjectionSlot {
@@ -250,38 +195,14 @@ export const compileExtensionReactions = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): CompiledExtensionReactions => {
   const sorted = sortExtensions(extensions)
-  const messageInputSlots: RegisteredMessageInputRewrite[] = []
-  const contextMessagesSlots: RegisteredContextMessagesRewrite[] = []
-  const permissionCheckSlots: RegisteredPermissionCheckRewrite[] = []
   const systemPromptSlots: RegisteredSystemPromptRewrite[] = []
-  const toolExecuteSlots: RegisteredToolExecuteRewrite[] = []
   const turnProjectionSlots: ReactionTurnProjectionSlot[] = []
-  const turnBeforeSlots: RegisteredReaction<TurnBeforeInput>[] = []
   const turnAfterSlots: RegisteredReaction<TurnAfterInput>[] = []
-  const messageOutputSlots: RegisteredReaction<MessageOutputInput>[] = []
   const toolResultSlots: RegisteredToolResultTransform[] = []
 
   for (const ext of sorted) {
     const reactions = ext.contributions.reactions
     if (reactions === undefined) continue
-    if (reactions.messageInput !== undefined) {
-      messageInputSlots.push({
-        extensionId: ext.manifest.id,
-        handler: reactions.messageInput,
-      })
-    }
-    if (reactions.contextMessages !== undefined) {
-      contextMessagesSlots.push({
-        extensionId: ext.manifest.id,
-        handler: reactions.contextMessages,
-      })
-    }
-    if (reactions.permissionCheck !== undefined) {
-      permissionCheckSlots.push({
-        extensionId: ext.manifest.id,
-        handler: reactions.permissionCheck,
-      })
-    }
     if (reactions.systemPrompt !== undefined) {
       systemPromptSlots.push({
         extensionId: ext.manifest.id,
@@ -294,126 +215,15 @@ export const compileExtensionReactions = (
         handler: reactions.turnProjection,
       })
     }
-    if (reactions.turnBefore !== undefined) {
-      turnBeforeSlots.push({ extensionId: ext.manifest.id, slot: reactions.turnBefore })
-    }
     if (reactions.turnAfter !== undefined) {
       turnAfterSlots.push({ extensionId: ext.manifest.id, slot: reactions.turnAfter })
-    }
-    if (reactions.messageOutput !== undefined) {
-      messageOutputSlots.push({ extensionId: ext.manifest.id, slot: reactions.messageOutput })
     }
     if (reactions.toolResult !== undefined) {
       toolResultSlots.push({ extensionId: ext.manifest.id, handler: reactions.toolResult })
     }
-    if (reactions.toolExecute !== undefined) {
-      toolExecuteSlots.push({ extensionId: ext.manifest.id, handler: reactions.toolExecute })
-    }
   }
 
   return {
-    normalizeMessageInput: (input, ctx) =>
-      Effect.gen(function* () {
-        let current = input.content
-        for (const slot of messageInputSlots) {
-          current = yield* sealErasedEffect(
-            () =>
-              provideLifecycleHostContext(
-                ctx,
-                // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous message-input slot
-                slot.handler({ ...input, content: current }),
-              ),
-            {
-              onFailure: (error) =>
-                Effect.logWarning("extension.reaction.message-input.failed").pipe(
-                  Effect.annotateLogs({
-                    extensionId: slot.extensionId,
-                    error: String(error),
-                  }),
-                  Effect.as(current),
-                ),
-              onDefect: (defect) =>
-                Effect.logWarning("extension.reaction.message-input.defect").pipe(
-                  Effect.annotateLogs({
-                    extensionId: slot.extensionId,
-                    defect: String(defect),
-                  }),
-                  Effect.as(current),
-                ),
-            },
-          )
-        }
-        return current
-      }) as Effect.Effect<string>,
-
-    checkPermission: (input, base, ctx) =>
-      Effect.gen(function* () {
-        let current = yield* base(input)
-        for (const slot of permissionCheckSlots) {
-          current = yield* sealErasedEffect(
-            () =>
-              provideLifecycleHostContext(
-                ctx,
-                // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous permission-check slot
-                slot.handler({ ...input, current }),
-              ),
-            {
-              onFailure: (error) =>
-                Effect.logWarning("extension.reaction.permission-check.failed").pipe(
-                  Effect.annotateLogs({
-                    extensionId: slot.extensionId,
-                    error: String(error),
-                  }),
-                  Effect.as(current),
-                ),
-              onDefect: (defect) =>
-                Effect.logWarning("extension.reaction.permission-check.defect").pipe(
-                  Effect.annotateLogs({
-                    extensionId: slot.extensionId,
-                    defect: String(defect),
-                  }),
-                  Effect.as(current),
-                ),
-            },
-          )
-        }
-        return current
-      }) as Effect.Effect<PermissionResult>,
-
-    resolveContextMessages: (input, ctx) =>
-      Effect.gen(function* () {
-        let current = input.messages
-        for (const slot of contextMessagesSlots) {
-          current = yield* sealErasedEffect(
-            () =>
-              provideLifecycleHostContext(
-                ctx.host,
-                // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-                slot.handler({ ...input, messages: current }),
-              ),
-            {
-              onFailure: (error) =>
-                Effect.logWarning("extension.reaction.context-messages.failed").pipe(
-                  Effect.annotateLogs({
-                    extensionId: slot.extensionId,
-                    error: String(error),
-                  }),
-                  Effect.as(current),
-                ),
-              onDefect: (defect) =>
-                Effect.logWarning("extension.reaction.context-messages.defect").pipe(
-                  Effect.annotateLogs({
-                    extensionId: slot.extensionId,
-                    defect: String(defect),
-                  }),
-                  Effect.as(current),
-                ),
-            },
-          )
-        }
-        return current
-      }) as Effect.Effect<ReadonlyArray<Message>>,
-
     resolveSystemPrompt: (input, ctx) =>
       Effect.gen(function* () {
         let current = input.basePrompt
@@ -464,40 +274,6 @@ export const compileExtensionReactions = (
         return { promptSections: [...sectionsById.values()], policyFragments }
       }),
 
-    executeTool: (input, base, ctx) =>
-      Effect.gen(function* () {
-        let current = yield* base(input)
-        for (const slot of toolExecuteSlots) {
-          current = yield* sealErasedEffect(
-            () =>
-              provideLifecycleHostContext(
-                ctx,
-                // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous tool-execute slot
-                slot.handler({ ...input, current }),
-              ),
-            {
-              onFailure: (error) =>
-                Effect.logWarning("extension.reaction.tool-execute.failed").pipe(
-                  Effect.annotateLogs({
-                    extensionId: slot.extensionId,
-                    error: String(error),
-                  }),
-                  Effect.as(current),
-                ),
-              onDefect: (defect) =>
-                Effect.logWarning("extension.reaction.tool-execute.defect").pipe(
-                  Effect.annotateLogs({
-                    extensionId: slot.extensionId,
-                    defect: String(defect),
-                  }),
-                  Effect.as(current),
-                ),
-            },
-          )
-        }
-        return current
-      }),
-
     transformToolResult: (input, ctx) =>
       Effect.gen(function* () {
         let current: unknown = input.result
@@ -533,19 +309,9 @@ export const compileExtensionReactions = (
         return current
       }) as Effect.Effect<unknown>,
 
-    emitTurnBefore: (input, ctx) =>
-      Effect.gen(function* () {
-        for (const slot of turnBeforeSlots) yield* runReaction(input, ctx, slot)
-      }),
-
     emitTurnAfter: (input, ctx) =>
       Effect.gen(function* () {
         for (const slot of turnAfterSlots) yield* runReaction(input, ctx, slot)
-      }),
-
-    emitMessageOutput: (input, ctx) =>
-      Effect.gen(function* () {
-        for (const slot of messageOutputSlots) yield* runReaction(input, ctx, slot)
       }),
   }
 }

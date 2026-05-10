@@ -267,36 +267,16 @@ export const persistAssistantParts = (params: {
   parts: ReadonlyArray<AssistantResponsePart>
   createdAt?: Date
   agentName: AgentNameType
-  extensionRegistry?: ExtensionRegistryService
-  hostCtx?: ExtensionHostContext
 }) =>
-  Effect.gen(function* () {
-    if (
-      params.extensionRegistry !== undefined &&
-      params.hostCtx !== undefined &&
-      params.parts.length > 0
-    ) {
-      yield* params.extensionRegistry.extensionReactions.emitMessageOutput(
-        {
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          agentName: params.agentName,
-          parts: [...params.parts],
-        },
-        params.hostCtx,
-      )
-    }
-
-    return yield* persistMessageParts({
-      storage: params.storage,
-      eventPublisher: params.eventPublisher,
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      messageId: params.messageId,
-      role: "assistant",
-      parts: params.parts,
-      createdAt: params.createdAt,
-    })
+  persistMessageParts({
+    storage: params.storage,
+    eventPublisher: params.eventPublisher,
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    messageId: params.messageId,
+    role: "assistant",
+    parts: params.parts,
+    createdAt: params.createdAt,
   })
 
 export const persistToolParts = (params: {
@@ -451,19 +431,8 @@ export const resolveTurnContext = (params: {
         : {}),
       turn: turnCtx,
     }
-    const interceptedMessages =
-      yield* params.extensionRegistry.extensionReactions.resolveContextMessages(
-        {
-          messages: rawMessages,
-          agent: effectiveAgent,
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-        },
-        { projection: projectionCtx, host: params.hostCtx },
-      )
-
     // Filter out hidden messages — visible in transcript but excluded from LLM context
-    const messages = interceptedMessages.filter((m) => m.metadata?.hidden !== true)
+    const messages = rawMessages.filter((m) => m.metadata?.hidden !== true)
 
     const projEval = yield* params.extensionRegistry.extensionReactions.resolveTurnProjection({
       projection: projectionCtx,
@@ -584,24 +553,6 @@ export const executeToolCalls = (params: {
         return yield* run
       }),
     { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
-  )
-
-export const runTurnBeforeHook = (
-  extensionRegistry: ExtensionRegistryService,
-  resolved: ResolvedTurn,
-  sessionId: SessionId,
-  branchId: BranchId,
-  hostCtx: ExtensionHostContext,
-) =>
-  extensionRegistry.extensionReactions.emitTurnBefore(
-    {
-      sessionId,
-      branchId,
-      agentName: resolved.currentTurnAgent,
-      toolCount: resolved.tools?.length ?? 0,
-      systemPromptLength: resolved.systemPrompt.length,
-    },
-    hostCtx,
   )
 
 type ModelTurnSource = {
@@ -824,8 +775,6 @@ export const invokeTool = (params: {
       messageId: params.assistantMessageId,
       parts: toolCalls,
       agentName: params.currentTurnAgent,
-      extensionRegistry: params.extensionRegistry,
-      hostCtx: params.hostCtx,
     })
 
     const existing = yield* params.storage.messages.getMessage(params.toolResultMessageId)

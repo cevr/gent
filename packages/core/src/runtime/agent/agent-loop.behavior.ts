@@ -111,7 +111,6 @@ import {
   persistToolParts,
   resolveTurnContext,
   resolveTurnSource,
-  runTurnBeforeHook,
   toolCallsFromResponseParts,
   type AssistantResponsePart,
   type PricingLookup,
@@ -770,8 +769,6 @@ export const makeAgentLoopBehavior = (
           parts,
           createdAt,
           agentName: params.resolved.currentTurnAgent,
-          extensionRegistry: params.extensionRegistry,
-          hostCtx: params.hostCtx,
         })
 
       const persistToolPartsLocal = (parts: ReadonlyArray<ToolResponsePart>, createdAt?: Date) =>
@@ -1094,8 +1091,6 @@ export const makeAgentLoopBehavior = (
           interrupted = true
           break
         }
-
-        yield* runTurnBeforeHook(turnExtensionRegistry, resolved, sessionId, branchId, turnHostCtx)
 
         const activeStream: ActiveStreamHandle = {
           abortController: new AbortController(),

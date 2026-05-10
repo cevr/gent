@@ -4,11 +4,9 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 import type { AgentDefinition, AgentName, DriverSource } from "./agent"
 import type { ToolCapability } from "./capability/tool.js"
 import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids"
-import type { Message, MessagePart } from "./message"
 import type { ExtensionContributions } from "./contribution.js"
 export type { ExtensionContributions } from "./contribution.js"
 import type { PromptSection } from "./prompt.js"
-import type { PermissionResult } from "./permission.js"
 
 // Extension Manifest — authored by extension author
 
@@ -130,47 +128,12 @@ export interface SystemPromptInput {
   }>
 }
 
-export interface ToolExecuteInput {
-  readonly toolCallId: ToolCallId
-  readonly toolName: string
-  readonly input: unknown
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-}
-
-export interface PermissionCheckInput {
-  readonly toolName: string
-  readonly input: unknown
-}
-
-export interface ContextMessagesInput {
-  readonly messages: ReadonlyArray<Message>
-  readonly agent: AgentDefinition
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-}
-
-export interface TurnBeforeInput {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly agentName: AgentName
-  readonly toolCount: number
-  readonly systemPromptLength: number
-}
-
 export interface TurnAfterInput {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly durationMs: number
   readonly agentName: AgentName
   readonly interrupted: boolean
-}
-
-export interface MessageOutputInput {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly agentName: AgentName
-  readonly parts: ReadonlyArray<MessagePart>
 }
 
 export interface ToolResultInput {
@@ -183,17 +146,11 @@ export interface ToolResultInput {
   readonly branchId: BranchId
 }
 
-export interface MessageInputInput {
-  readonly content: string
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-}
-
 // ── Lifecycle reactions ──
 //
 // Per-extension, per-session handlers run by the runtime at the
-// `turnBefore` / `turnAfter` / `messageOutput` / `toolResult` seams.
-// Authored on `defineExtension({ reactions })`.
+// `turnAfter` / `toolResult` seams.  Authored on
+// `defineExtension({ reactions })`.
 
 /**
  * Failure policy for a single reaction handler.
@@ -230,32 +187,11 @@ export interface ExtensionReactions<E = never, R = never> {
    */
   readonly systemPrompt?: (input: SystemPromptInput) => Effect.Effect<string, E, R>
   /**
-   * User-message rewrite before the message is committed. Runs in scope order;
-   * failures are isolated and leave the current content unchanged.
-   */
-  readonly messageInput?: (input: MessageInputInput) => Effect.Effect<string, E, R>
-  /**
-   * Context-message rewrite before prompt assembly. Runs in scope order;
-   * failures are isolated and leave the current message list unchanged.
-   */
-  readonly contextMessages?: (
-    input: ContextMessagesInput,
-  ) => Effect.Effect<ReadonlyArray<Message>, E, R>
-  /**
-   * Permission decision interceptor. Receives the current decision and may
-   * narrow or widen it. Failures are isolated and preserve the current result.
-   */
-  readonly permissionCheck?: (
-    input: PermissionCheckInput & { readonly current: PermissionResult },
-  ) => Effect.Effect<PermissionResult, E, R>
-  /**
    * Turn-scoped prompt/tool-policy contribution. Use for read-only runtime
    * derivations that need current turn metadata plus services.
    */
   readonly turnProjection?: () => Effect.Effect<TurnProjection, E, R>
-  readonly turnBefore?: ExtensionReaction<TurnBeforeInput, E, R>
   readonly turnAfter?: ExtensionReaction<TurnAfterInput, E, R>
-  readonly messageOutput?: ExtensionReaction<MessageOutputInput, E, R>
   /**
    * Tool-result rewrite. The handler receives the current result and returns
    * the next result; runs after the tool produces output and before downstream
@@ -263,14 +199,6 @@ export interface ExtensionReactions<E = never, R = never> {
    * enrichment.
    */
   readonly toolResult?: (input: ToolResultInput) => Effect.Effect<unknown, E, R>
-  /**
-   * Tool execution wrapper. Receives the current result produced by the base
-   * tool or a lower-scope wrapper. Use sparingly for auditing and
-   * cross-cutting policies; ordinary behavior belongs in the tool implementation.
-   */
-  readonly toolExecute?: (
-    input: ToolExecuteInput & { readonly current: unknown },
-  ) => Effect.Effect<unknown, E, R>
 }
 
 export interface ExtensionTurnContext extends RunContext {

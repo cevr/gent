@@ -89,15 +89,9 @@ const resolveActivePermission = (
 
 const runPermissionCheck = (params: {
   toolCall: { toolName: string; input: unknown }
-  ctx: ExtensionHostContext
-  extensionReactions: ExtensionRegistryService["extensionReactions"]
   permission: PermissionService
 }): Effect.Effect<"allowed" | "denied"> =>
-  params.extensionReactions.checkPermission(
-    { toolName: params.toolCall.toolName, input: params.toolCall.input },
-    (input) => params.permission.check(input.toolName, input.input),
-    params.ctx,
-  )
+  params.permission.check(params.toolCall.toolName, params.toolCall.input)
 
 const deriveToolContext = (ctx: ToolCapabilityContext): ToolRuntimeContext => ({
   sessionId: ctx.sessionId,
@@ -168,26 +162,15 @@ const makeExecutionToolkit = (params: {
   const handlerMap: AiToolkit.HandlersFrom<ToolCapabilityMap> = {
     [toolName]: (decodedInput: unknown) =>
       Effect.gen(function* () {
-        const executeResult = yield* params.registry.extensionReactions.executeTool(
-          {
-            toolCallId: params.toolCall.toolCallId,
-            toolName: params.toolCall.toolName,
-            input: decodedInput,
-            sessionId: params.ctx.sessionId,
-            branchId: params.ctx.branchId,
-          },
-          () =>
-            provideExtensionServices(
-              params.ctx,
-              provideCapabilityContext(
-                toolCtx,
-                // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-                metadata
-                  .effect(decodedInput, toolCtx)
-                  .pipe(Effect.mapError(normalizeToolExecutionError)),
-              ),
-            ),
+        const executeResult = yield* provideExtensionServices(
           params.ctx,
+          provideCapabilityContext(
+            toolCtx,
+            // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+            metadata
+              .effect(decodedInput, toolCtx)
+              .pipe(Effect.mapError(normalizeToolExecutionError)),
+          ),
         )
 
         return yield* params.registry.extensionReactions
@@ -321,8 +304,6 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             const executeKnownTool = Effect.gen(function* () {
               const permCheckResult = yield* runPermissionCheck({
                 toolCall,
-                ctx,
-                extensionReactions: activeRegistry.extensionReactions,
                 permission: activePermission,
               }).pipe(
                 Effect.catchEager((e) =>

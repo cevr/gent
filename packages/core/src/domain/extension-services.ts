@@ -127,10 +127,6 @@ export interface ExtensionSessionService {
   }) => Effect.Effect<void, ExtensionServiceError>
 }
 
-export class ExtensionSession extends Context.Service<ExtensionSession, ExtensionSessionService>()(
-  "@gent/core/src/domain/extension-services/ExtensionSession",
-) {}
-
 export interface ExtensionAgentService {
   readonly get: (
     name: AgentName,
@@ -147,10 +143,6 @@ export interface ExtensionAgentService {
     ExtensionServiceError
   >
 }
-
-export class ExtensionAgent extends Context.Service<ExtensionAgent, ExtensionAgentService>()(
-  "@gent/core/src/domain/extension-services/ExtensionAgent",
-) {}
 
 export interface ExtensionInteractionService {
   readonly approve: (
@@ -174,11 +166,6 @@ export interface ExtensionInteractionService {
   >
 }
 
-export class ExtensionInteraction extends Context.Service<
-  ExtensionInteraction,
-  ExtensionInteractionService
->()("@gent/core/src/domain/extension-services/ExtensionInteraction") {}
-
 export interface ExtensionProcessService {
   readonly run: (
     command: string,
@@ -194,10 +181,6 @@ export interface ExtensionProcessService {
   readonly commandCandidates: (command: string) => ReadonlyArray<string>
   readonly parentEnv: Record<string, string | undefined>
 }
-
-export class ExtensionProcess extends Context.Service<ExtensionProcess, ExtensionProcessService>()(
-  "@gent/core/src/domain/extension-services/ExtensionProcess",
-) {}
 
 export const extensionProcessFromHostContext = (
   host: ExtensionHostContext["host"],
@@ -229,21 +212,12 @@ export interface ExtensionFilesService {
   }) => Effect.Effect<void>
 }
 
-export class ExtensionFiles extends Context.Service<ExtensionFiles, ExtensionFilesService>()(
-  "@gent/core/src/domain/extension-services/ExtensionFiles",
-) {}
-
 export interface ExtensionFileLockServiceShape {
   readonly withLock: <A, E, R>(
     path: string,
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>
 }
-
-export class ExtensionFileLock extends Context.Service<
-  ExtensionFileLock,
-  ExtensionFileLockServiceShape
->()("@gent/core/src/domain/extension-services/ExtensionFileLock") {}
 
 export interface ExtensionStateServiceShape {
   readonly changed: (params: {
@@ -252,10 +226,6 @@ export interface ExtensionStateServiceShape {
     readonly branchId?: BranchId
   }) => Effect.Effect<void, ExtensionServiceError>
 }
-
-export class ExtensionState extends Context.Service<ExtensionState, ExtensionStateServiceShape>()(
-  "@gent/core/src/domain/extension-services/ExtensionState",
-) {}
 
 export interface ExtensionContextService {
   readonly sessionId: SessionId
@@ -283,18 +253,7 @@ export const extensionServicesFromHostContext = (
     readonly toolCallId?: ToolCallId
     readonly turn?: ExtensionTurnContext
   },
-): Effect.Effect<
-  Context.Context<
-    | ExtensionContext
-    | ExtensionSession
-    | ExtensionAgent
-    | ExtensionInteraction
-    | ExtensionProcess
-    | ExtensionFiles
-    | ExtensionFileLock
-    | ExtensionState
-  >
-> =>
+): Effect.Effect<Context.Context<ExtensionContext>> =>
   Effect.gen(function* () {
     const Session: ExtensionSessionService = {
       listMessages: (branchId) =>
@@ -441,13 +400,6 @@ export const extensionServicesFromHostContext = (
         FileLock,
         State,
       }),
-      Context.add(ExtensionSession, Session),
-      Context.add(ExtensionAgent, Agent),
-      Context.add(ExtensionInteraction, Interaction),
-      Context.add(ExtensionProcess, Process),
-      Context.add(ExtensionFiles, Files),
-      Context.add(ExtensionFileLock, FileLock),
-      Context.add(ExtensionState, State),
     )
   })
 
