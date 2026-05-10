@@ -264,11 +264,7 @@ export const AnthropicExtension = defineExtension({
       initAnthropicKeychainEnv(env)
 
       const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
-      const platform = AnthropicPlatform.fromSetup({
-        platform: ctx.host.osInfo.platform,
-        home: ctx.host.homeDirectory,
-        Process: ctx.Process,
-      })
+      const platform = AnthropicPlatform.fromSetup(ctx)
 
       // Cache cells are hoisted to extension-closure scope so they
       // survive across `resolveModel` calls. Lifetime: one extension
