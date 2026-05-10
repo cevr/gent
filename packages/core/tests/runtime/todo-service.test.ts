@@ -13,10 +13,13 @@ import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensio
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
-import { ensureStorageParents } from "@gent/core-internal/test-utils"
+import { ensureStorageParents, testToolContext } from "@gent/core-internal/test-utils"
+import { ExtensionContext } from "@gent/core-internal/domain/extension-services"
 
 const sessionId = SessionId.make("todo-test-session")
 const branchId = BranchId.make("todo-test-branch")
+const testCtx = testToolContext({ sessionId, branchId })
+const TestExtensionContextLayer = Layer.succeed(ExtensionContext, testCtx)
 
 const makeLayer = () => {
   const storageLayer = SqliteStorage.MemoryWithSql()
@@ -29,7 +32,11 @@ const makeLayer = () => {
     GentPlatform.Test(),
   )
   const runtimeLayer = Layer.provideMerge(EventPublisherLive, baseDeps)
-  const todoExtensionLayer = Layer.mergeAll(TodoStorage.Live, TodoService.Live)
+  const todoExtensionLayer = Layer.mergeAll(
+    TodoStorage.Live,
+    TodoService.Live,
+    TestExtensionContextLayer,
+  )
   return Layer.provideMerge(todoExtensionLayer, runtimeLayer)
 }
 
@@ -50,7 +57,11 @@ describe("TodoService", () => {
       expect(reason !== undefined && Schema.is(TodoServiceUnavailableError)(reason.error)).toBe(
         true,
       )
-    }).pipe(Effect.provide(Layer.mergeAll(TodoService.Live, ExtensionStatePublisher.Test()))),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(TodoService.Live, ExtensionStatePublisher.Test(), TestExtensionContextLayer),
+      ),
+    ),
   )
 
   it.live("supports sibling layer composition used by extensions", () =>

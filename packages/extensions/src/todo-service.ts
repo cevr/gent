@@ -1,6 +1,6 @@
 import { Context, DateTime, Effect, Layer, Option, Random, Schema } from "effect"
 import {
-  ExtensionStatePublisher,
+  ExtensionContext,
   type AgentName,
   type BranchId,
   type SessionId,
@@ -60,7 +60,7 @@ export interface TodoServiceApi {
     prompt?: string
     cwd?: string
     metadata?: unknown
-  }) => Effect.Effect<Todo, TodoStorageError | TodoServiceUnavailableError, ExtensionStatePublisher>
+  }) => Effect.Effect<Todo, TodoStorageError | TodoServiceUnavailableError, ExtensionContext>
 
   readonly get: (id: TodoId) => Effect.Effect<Todo | undefined, TodoStorageError>
 
@@ -78,13 +78,9 @@ export interface TodoServiceApi {
       owner: string | null
       metadata: unknown | null
     }>,
-  ) => Effect.Effect<
-    Todo | undefined,
-    TodoStorageError | TodoTransitionError,
-    ExtensionStatePublisher
-  >
+  ) => Effect.Effect<Todo | undefined, TodoStorageError | TodoTransitionError, ExtensionContext>
 
-  readonly remove: (id: TodoId) => Effect.Effect<void, TodoStorageError, ExtensionStatePublisher>
+  readonly remove: (id: TodoId) => Effect.Effect<void, TodoStorageError, ExtensionContext>
 
   readonly addDep: (todoId: TodoId, blockedById: TodoId) => Effect.Effect<void, TodoStorageError>
   readonly removeDep: (todoId: TodoId, blockedById: TodoId) => Effect.Effect<void, TodoStorageError>
@@ -117,7 +113,7 @@ export class TodoService extends Context.Service<TodoService, TodoServiceApi>()(
         const storageOption = yield* Effect.serviceOption(TodoStorage)
         if (Option.isNone(storageOption)) return yield* TodoService.Noop.create(params)
         const storage = storageOption.value
-        const extensionState = yield* ExtensionStatePublisher
+        const ctx = yield* ExtensionContext
         const id = TodoId.make(yield* Random.nextUUIDv4)
         const now = yield* DateTime.nowAsDate
         const todo = Todo.make({
@@ -136,13 +132,11 @@ export class TodoService extends Context.Service<TodoService, TodoServiceApi>()(
           updatedAt: now,
         })
         yield* storage.createTodo(todo)
-        yield* extensionState
-          .changed({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            extensionId: TODO_EXTENSION_ID,
-          })
-          .pipe(Effect.catchEager(() => Effect.void))
+        yield* ctx.State.changed({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          extensionId: TODO_EXTENSION_ID,
+        }).pipe(Effect.catchEager(() => Effect.void))
         return todo
       }),
 
@@ -165,16 +159,14 @@ export class TodoService extends Context.Service<TodoService, TodoServiceApi>()(
         const storageOption = yield* Effect.serviceOption(TodoStorage)
         if (Option.isNone(storageOption)) return yield* TodoService.Noop.update(id, fields)
         const storage = storageOption.value
-        const extensionState = yield* ExtensionStatePublisher
+        const ctx = yield* ExtensionContext
         const updated = yield* storage.updateTodo(id, fields)
         if (updated !== undefined) {
-          yield* extensionState
-            .changed({
-              sessionId: updated.sessionId,
-              branchId: updated.branchId,
-              extensionId: TODO_EXTENSION_ID,
-            })
-            .pipe(Effect.catchEager(() => Effect.void))
+          yield* ctx.State.changed({
+            sessionId: updated.sessionId,
+            branchId: updated.branchId,
+            extensionId: TODO_EXTENSION_ID,
+          }).pipe(Effect.catchEager(() => Effect.void))
         }
         return updated
       }),
@@ -184,20 +176,18 @@ export class TodoService extends Context.Service<TodoService, TodoServiceApi>()(
         const storageOption = yield* Effect.serviceOption(TodoStorage)
         if (Option.isNone(storageOption)) return yield* TodoService.Noop.remove(id)
         const storage = storageOption.value
-        const extensionState = yield* ExtensionStatePublisher
+        const ctx = yield* ExtensionContext
         const existing = yield* storage.getTodo(id)
         if (existing === undefined) {
           yield* storage.deleteTodo(id)
           return
         }
         yield* storage.deleteTodo(id)
-        yield* extensionState
-          .changed({
-            sessionId: existing.sessionId,
-            branchId: existing.branchId,
-            extensionId: TODO_EXTENSION_ID,
-          })
-          .pipe(Effect.catchEager(() => Effect.void))
+        yield* ctx.State.changed({
+          sessionId: existing.sessionId,
+          branchId: existing.branchId,
+          extensionId: TODO_EXTENSION_ID,
+        }).pipe(Effect.catchEager(() => Effect.void))
       }),
 
     addDep: (todoId, blockedById) =>

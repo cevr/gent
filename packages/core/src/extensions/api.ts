@@ -215,10 +215,7 @@ export {
   ExtensionServiceError,
   type ExtensionContextService,
 } from "../domain/extension-services.js"
-export { ExtensionStatePublisher } from "../domain/event-publisher.js"
 export { isRecord, isRecordArray } from "../domain/guards.js"
-export { FileIndex, FileIndexError, type FileIndexService } from "../domain/file-index.js"
-export { FileLockService } from "../domain/file-lock.js"
 export { OutputBuffer, headTailChars, saveFullOutput } from "../domain/output-buffer.js"
 // ── Public API ──
 

@@ -499,9 +499,12 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadExtensionHostProcessError = typeof PublicExtensionApi.ExtensionHostProcessError
     // @ts-expect-error — schema helper is an internal core migration primitive
     type _BadTaggedEnumClass = typeof PublicExtensionApi.TaggedEnumClass
-    type _AllowedFileIndex = typeof PublicExtensionApi.FileIndex
-    type _AllowedFileLockService = typeof PublicExtensionApi.FileLockService
-    type _AllowedExtensionStatePublisher = typeof PublicExtensionApi.ExtensionStatePublisher
+    // @ts-expect-error — host file index Tag is private; extensions reach files through ExtensionContext.Files
+    type _BadFileIndex = typeof PublicExtensionApi.FileIndex
+    // @ts-expect-error — host file lock Tag is private; extensions reach file locks through ExtensionContext.FileLock
+    type _BadFileLockService = typeof PublicExtensionApi.FileLockService
+    // @ts-expect-error — extension state publisher is private; extensions publish through ExtensionContext.State
+    type _BadExtensionStatePublisher = typeof PublicExtensionApi.ExtensionStatePublisher
     // @ts-expect-error — capability access enforcement is runtime lowering, not author API
     type _BadRequireCapabilityWrite = typeof PublicExtensionApi.requireCapabilityWrite
     type _AllowedOutputBuffer = typeof PublicExtensionApi.OutputBuffer

@@ -1,5 +1,5 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
-import { FileLockService, tool } from "@gent/core/extensions/api"
+import { ExtensionContext, tool } from "@gent/core/extensions/api"
 
 // Edit Tool Error
 
@@ -147,7 +147,7 @@ export const EditTool = tool({
   execute: Effect.fn("EditTool.execute")(function* (params) {
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
-    const fileLock = yield* FileLockService
+    const ctx = yield* ExtensionContext
 
     const filePath = pathService.resolve(params.path)
 
@@ -157,7 +157,7 @@ export const EditTool = tool({
       return yield* new EditError({ message: redaction, path: filePath })
     }
 
-    return yield* fileLock.withLock(
+    return yield* ctx.FileLock.withLock(
       filePath,
       Effect.gen(function* () {
         const content = yield* fs.readFileString(filePath).pipe(

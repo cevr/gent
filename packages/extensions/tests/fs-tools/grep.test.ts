@@ -4,19 +4,15 @@ import { BunServices } from "@effect/platform-bun"
 import { GrepTool } from "../../src/fs-tools/grep.js"
 import { FsRead } from "../../src/fs-tools/read-service"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
-import { TestFileIndexLive } from "../helpers/file-index-layer.js"
+import {
+  makeTestCtxWithFileIndex,
+  TestExtensionContextWithFileIndex,
+  TestFileIndexLive,
+} from "../helpers/file-index-layer.js"
 
-const ctx = testToolContext({
-  sessionId: SessionId.make("test-session"),
-  branchId: BranchId.make("test-branch"),
-  toolCallId: ToolCallId.make("test-call"),
-  cwd: "/tmp",
-  home: "/tmp",
-})
-
+const FileIndexLayer = Layer.provide(TestFileIndexLive, BunServices.layer)
+const ExtensionContextLayer = Layer.provide(TestExtensionContextWithFileIndex, FileIndexLayer)
 const PlatformLayer = Layer.mergeAll(
   BunServices.layer,
   RuntimeEnvironment.Test({
@@ -24,7 +20,8 @@ const PlatformLayer = Layer.mergeAll(
     home: "/tmp/test-home",
     platform: "test",
   }),
-  Layer.provide(TestFileIndexLive, BunServices.layer),
+  FileIndexLayer,
+  ExtensionContextLayer,
 )
 const ToolLayer = Layer.merge(PlatformLayer, Layer.provide(FsRead.Live, PlatformLayer))
 
@@ -32,6 +29,7 @@ describe("GrepTool", () => {
   it.scopedLive("finds pattern in files", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
+      const ctx = yield* makeTestCtxWithFileIndex
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${tmpDir}/file1.ts`, "const foo = 1")
       yield* fs.writeFileString(`${tmpDir}/file2.ts`, "const bar = 2")
@@ -45,6 +43,7 @@ describe("GrepTool", () => {
   it.scopedLive("respects glob filter", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
+      const ctx = yield* makeTestCtxWithFileIndex
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${tmpDir}/file1.ts`, "const foo = 1")
       yield* fs.writeFileString(`${tmpDir}/file2.js`, "const foo = 2")
@@ -61,6 +60,7 @@ describe("GrepTool", () => {
   it.scopedLive("searches single file directly", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
+      const ctx = yield* makeTestCtxWithFileIndex
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${tmpDir}/target.ts`, "hello\nworld\nhello again")
 

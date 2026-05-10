@@ -240,10 +240,38 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
     commandCandidates: host.commandCandidates,
     parentEnv: host.parentEnv,
   }
+  const files: ExtensionContextService["Files"] = {
+    listFiles: () =>
+      Effect.fail(
+        new ExtensionServiceError({
+          service: "ExtensionFiles",
+          operation: "listFiles",
+          message: "File index service unavailable",
+        }),
+      ),
+    searchFiles: () =>
+      Effect.fail(
+        new ExtensionServiceError({
+          service: "ExtensionFiles",
+          operation: "searchFiles",
+          message: "File index service unavailable",
+        }),
+      ),
+    trackSelection: () => Effect.void,
+  }
+  const fileLock: ExtensionContextService["FileLock"] = {
+    withLock: (_path, effect) => effect,
+  }
+  const state: ExtensionContextService["State"] = {
+    changed: () => Effect.void,
+  }
   const resolvedAgent = overrides?.Agent ?? agent
   const resolvedSession = overrides?.Session ?? session
   const resolvedInteraction = overrides?.Interaction ?? interaction
   const resolvedProcess = overrides?.Process ?? process
+  const resolvedFiles = overrides?.Files ?? files
+  const resolvedFileLock = overrides?.FileLock ?? fileLock
+  const resolvedState = overrides?.State ?? state
 
   return {
     sessionId: SessionId.make("test-session"),
@@ -259,6 +287,9 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
     Session: resolvedSession,
     Interaction: resolvedInteraction,
     Process: resolvedProcess,
+    Files: resolvedFiles,
+    FileLock: resolvedFileLock,
+    State: resolvedState,
     ...overrides,
   }
 }

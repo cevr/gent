@@ -23,6 +23,9 @@ const StubExtensionContext = Layer.succeed(ExtensionContext, {
     commandCandidates: (cmd: string) => [cmd],
     parentEnv: {},
   },
+  Files: {} as never,
+  FileLock: {} as never,
+  State: {} as never,
 })
 // ---------------------------------------------------------------------------
 // Fixture: create a real git repo with nested files

@@ -7,9 +7,12 @@ import type {
   ExtensionHostSignal,
   ExtensionTurnContext,
 } from "./extension.js"
+import { FileIndex, type IndexedFile } from "./file-index.js"
+import { FileLockService } from "./file-lock.js"
+import { ExtensionStatePublisher } from "./event-publisher.js"
 import type { ApprovalDecision, ApprovalRequest } from "./interaction-request.js"
 import { InteractionPendingError } from "./interaction-request.js"
-import type { BranchId, MessageId, SessionId, ToolCallId } from "./ids.js"
+import type { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "./ids.js"
 import type { Branch, Message, MessageMetadata, Session } from "./message.js"
 import type { ModelId } from "./model.js"
 import type { ExtensionHostContext, ExtensionHostSearchResult } from "./extension-host-context.js"
@@ -209,6 +212,51 @@ export const extensionProcessFromHostContext = (
   parentEnv: host.parentEnv,
 })
 
+export interface ExtensionFilesService {
+  readonly listFiles: (params: {
+    readonly cwd: string
+    readonly waitForScanMs?: number
+  }) => Effect.Effect<ReadonlyArray<IndexedFile>, ExtensionServiceError>
+  readonly searchFiles: (params: {
+    readonly cwd: string
+    readonly query: string
+    readonly limit?: number
+  }) => Effect.Effect<ReadonlyArray<IndexedFile>, ExtensionServiceError>
+  readonly trackSelection: (params: {
+    readonly cwd: string
+    readonly query: string
+    readonly path: string
+  }) => Effect.Effect<void>
+}
+
+export class ExtensionFiles extends Context.Service<ExtensionFiles, ExtensionFilesService>()(
+  "@gent/core/src/domain/extension-services/ExtensionFiles",
+) {}
+
+export interface ExtensionFileLockServiceShape {
+  readonly withLock: <A, E, R>(
+    path: string,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R>
+}
+
+export class ExtensionFileLock extends Context.Service<
+  ExtensionFileLock,
+  ExtensionFileLockServiceShape
+>()("@gent/core/src/domain/extension-services/ExtensionFileLock") {}
+
+export interface ExtensionStateServiceShape {
+  readonly changed: (params: {
+    readonly extensionId: ExtensionId
+    readonly sessionId?: SessionId
+    readonly branchId?: BranchId
+  }) => Effect.Effect<void, ExtensionServiceError>
+}
+
+export class ExtensionState extends Context.Service<ExtensionState, ExtensionStateServiceShape>()(
+  "@gent/core/src/domain/extension-services/ExtensionState",
+) {}
+
 export interface ExtensionContextService {
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -221,6 +269,9 @@ export interface ExtensionContextService {
   readonly Agent: ExtensionAgentService
   readonly Interaction: ExtensionInteractionService
   readonly Process: ExtensionProcessService
+  readonly Files: ExtensionFilesService
+  readonly FileLock: ExtensionFileLockServiceShape
+  readonly State: ExtensionStateServiceShape
 }
 
 export class ExtensionContext extends Context.Service<ExtensionContext, ExtensionContextService>()(
@@ -232,99 +283,173 @@ export const extensionServicesFromHostContext = (
     readonly toolCallId?: ToolCallId
     readonly turn?: ExtensionTurnContext
   },
-): Context.Context<
-  ExtensionContext | ExtensionSession | ExtensionAgent | ExtensionInteraction | ExtensionProcess
-> => {
-  const Session: ExtensionSessionService = {
-    listMessages: (branchId) =>
-      mapError("ExtensionSession", "listMessages", ctx.session.listMessages(branchId)),
-    getSession: (sessionId) =>
-      mapError("ExtensionSession", "getSession", ctx.session.getSession(sessionId)),
-    getDetail: (sessionId) =>
-      mapError("ExtensionSession", "getDetail", ctx.session.getDetail(sessionId)),
-    renameCurrent: (name) =>
-      mapError("ExtensionSession", "renameCurrent", ctx.session.renameCurrent(name)),
-    estimateContextPercent: (options) =>
-      mapError(
-        "ExtensionSession",
-        "estimateContextPercent",
-        ctx.session.estimateContextPercent(options),
-      ),
-    search: (query, options) =>
-      mapError("ExtensionSession", "search", ctx.session.search(query, options)),
-    queueFollowUp: (params) =>
-      mapError("ExtensionSession", "queueFollowUp", ctx.session.queueFollowUp(params)),
-    listBranches: () => mapError("ExtensionSession", "listBranches", ctx.session.listBranches()),
-    createBranch: (params) =>
-      mapError("ExtensionSession", "createBranch", ctx.session.createBranch(params)),
-    forkBranch: (params) =>
-      mapError("ExtensionSession", "forkBranch", ctx.session.forkBranch(params)),
-    switchBranch: (params) =>
-      mapError("ExtensionSession", "switchBranch", ctx.session.switchBranch(params)),
-    createChildSession: (params) =>
-      mapError("ExtensionSession", "createChildSession", ctx.session.createChildSession(params)),
-    getChildSessions: () =>
-      mapError("ExtensionSession", "getChildSessions", ctx.session.getChildSessions()),
-    getSessionAncestors: (sessionId) =>
-      mapError(
-        "ExtensionSession",
-        "getSessionAncestors",
-        ctx.session.getSessionAncestors(sessionId),
-      ),
-    deleteSession: (sessionId) =>
-      mapError("ExtensionSession", "deleteSession", ctx.session.deleteSession(sessionId)),
-    deleteBranch: (branchId) =>
-      mapError("ExtensionSession", "deleteBranch", ctx.session.deleteBranch(branchId)),
-    deleteMessages: (params) =>
-      mapError("ExtensionSession", "deleteMessages", ctx.session.deleteMessages(params)),
-  }
-  const Agent: ExtensionAgentService = {
-    get: (name) => mapError("ExtensionAgent", "get", ctx.agent.get(name)),
-    require: (name) => mapError("ExtensionAgent", "require", ctx.agent.require(name)),
-    run: (params) =>
-      ctx.agent.run(params).pipe(
-        Effect.mapError((cause) =>
-          Schema.is(ExtensionServiceError)(cause)
-            ? cause
-            : new ExtensionServiceError({
-                service: "ExtensionAgent",
-                operation: "run",
-                message: errorMessage(cause),
-                cause,
-              }),
+): Effect.Effect<
+  Context.Context<
+    | ExtensionContext
+    | ExtensionSession
+    | ExtensionAgent
+    | ExtensionInteraction
+    | ExtensionProcess
+    | ExtensionFiles
+    | ExtensionFileLock
+    | ExtensionState
+  >
+> =>
+  Effect.gen(function* () {
+    const Session: ExtensionSessionService = {
+      listMessages: (branchId) =>
+        mapError("ExtensionSession", "listMessages", ctx.session.listMessages(branchId)),
+      getSession: (sessionId) =>
+        mapError("ExtensionSession", "getSession", ctx.session.getSession(sessionId)),
+      getDetail: (sessionId) =>
+        mapError("ExtensionSession", "getDetail", ctx.session.getDetail(sessionId)),
+      renameCurrent: (name) =>
+        mapError("ExtensionSession", "renameCurrent", ctx.session.renameCurrent(name)),
+      estimateContextPercent: (options) =>
+        mapError(
+          "ExtensionSession",
+          "estimateContextPercent",
+          ctx.session.estimateContextPercent(options),
         ),
-      ),
-    resolveDualModelPair: () =>
-      mapError("ExtensionAgent", "resolveDualModelPair", ctx.agent.resolveDualModelPair()),
-  }
-  const Interaction: ExtensionInteractionService = {
-    approve: (params) => mapInteraction("approve", ctx.interaction.approve(params)),
-    present: (params) => mapInteraction("present", ctx.interaction.present(params)),
-    confirm: (params) => mapInteraction("confirm", ctx.interaction.confirm(params)),
-    review: (params) => mapInteraction("review", ctx.interaction.review(params)),
-  }
-  const Process = extensionProcessFromHostContext(ctx.host)
+      search: (query, options) =>
+        mapError("ExtensionSession", "search", ctx.session.search(query, options)),
+      queueFollowUp: (params) =>
+        mapError("ExtensionSession", "queueFollowUp", ctx.session.queueFollowUp(params)),
+      listBranches: () => mapError("ExtensionSession", "listBranches", ctx.session.listBranches()),
+      createBranch: (params) =>
+        mapError("ExtensionSession", "createBranch", ctx.session.createBranch(params)),
+      forkBranch: (params) =>
+        mapError("ExtensionSession", "forkBranch", ctx.session.forkBranch(params)),
+      switchBranch: (params) =>
+        mapError("ExtensionSession", "switchBranch", ctx.session.switchBranch(params)),
+      createChildSession: (params) =>
+        mapError("ExtensionSession", "createChildSession", ctx.session.createChildSession(params)),
+      getChildSessions: () =>
+        mapError("ExtensionSession", "getChildSessions", ctx.session.getChildSessions()),
+      getSessionAncestors: (sessionId) =>
+        mapError(
+          "ExtensionSession",
+          "getSessionAncestors",
+          ctx.session.getSessionAncestors(sessionId),
+        ),
+      deleteSession: (sessionId) =>
+        mapError("ExtensionSession", "deleteSession", ctx.session.deleteSession(sessionId)),
+      deleteBranch: (branchId) =>
+        mapError("ExtensionSession", "deleteBranch", ctx.session.deleteBranch(branchId)),
+      deleteMessages: (params) =>
+        mapError("ExtensionSession", "deleteMessages", ctx.session.deleteMessages(params)),
+    }
+    const Agent: ExtensionAgentService = {
+      get: (name) => mapError("ExtensionAgent", "get", ctx.agent.get(name)),
+      require: (name) => mapError("ExtensionAgent", "require", ctx.agent.require(name)),
+      run: (params) =>
+        ctx.agent.run(params).pipe(
+          Effect.mapError((cause) =>
+            Schema.is(ExtensionServiceError)(cause)
+              ? cause
+              : new ExtensionServiceError({
+                  service: "ExtensionAgent",
+                  operation: "run",
+                  message: errorMessage(cause),
+                  cause,
+                }),
+          ),
+        ),
+      resolveDualModelPair: () =>
+        mapError("ExtensionAgent", "resolveDualModelPair", ctx.agent.resolveDualModelPair()),
+    }
+    const Interaction: ExtensionInteractionService = {
+      approve: (params) => mapInteraction("approve", ctx.interaction.approve(params)),
+      present: (params) => mapInteraction("present", ctx.interaction.present(params)),
+      confirm: (params) => mapInteraction("confirm", ctx.interaction.confirm(params)),
+      review: (params) => mapInteraction("review", ctx.interaction.review(params)),
+    }
+    const Process = extensionProcessFromHostContext(ctx.host)
 
-  return Context.empty().pipe(
-    Context.add(ExtensionContext, {
-      sessionId: ctx.sessionId,
-      branchId: ctx.branchId,
-      ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
-      ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
-      ...(ctx.turn !== undefined ? { turn: ctx.turn } : {}),
-      cwd: ctx.cwd,
-      home: ctx.home,
-      Session,
-      Agent,
-      Interaction,
-      Process,
-    }),
-    Context.add(ExtensionSession, Session),
-    Context.add(ExtensionAgent, Agent),
-    Context.add(ExtensionInteraction, Interaction),
-    Context.add(ExtensionProcess, Process),
-  )
-}
+    const fileIndexOption = yield* Effect.serviceOption(FileIndex)
+    const fileLockOption = yield* Effect.serviceOption(FileLockService)
+    const statePublisherOption = yield* Effect.serviceOption(ExtensionStatePublisher)
+
+    const Files: ExtensionFilesService =
+      fileIndexOption._tag === "Some"
+        ? {
+            listFiles: (params) =>
+              mapError("ExtensionFiles", "listFiles", fileIndexOption.value.listFiles(params)),
+            searchFiles: (params) =>
+              mapError("ExtensionFiles", "searchFiles", fileIndexOption.value.searchFiles(params)),
+            trackSelection: (params) => fileIndexOption.value.trackSelection(params),
+          }
+        : {
+            listFiles: () =>
+              Effect.fail(
+                serviceError(
+                  "ExtensionFiles",
+                  "listFiles",
+                )(new Error("File index service unavailable")),
+              ),
+            searchFiles: () =>
+              Effect.fail(
+                serviceError(
+                  "ExtensionFiles",
+                  "searchFiles",
+                )(new Error("File index service unavailable")),
+              ),
+            trackSelection: () => Effect.void,
+          }
+
+    const FileLock: ExtensionFileLockServiceShape =
+      fileLockOption._tag === "Some"
+        ? {
+            withLock: (path, effect) => fileLockOption.value.withLock(path, effect),
+          }
+        : {
+            withLock: (_path, effect) => effect,
+          }
+
+    const State: ExtensionStateServiceShape =
+      statePublisherOption._tag === "Some"
+        ? {
+            changed: (params) =>
+              mapError(
+                "ExtensionState",
+                "changed",
+                statePublisherOption.value.changed({
+                  extensionId: params.extensionId,
+                  sessionId: params.sessionId ?? ctx.sessionId,
+                  branchId: params.branchId ?? ctx.branchId,
+                }),
+              ),
+          }
+        : {
+            changed: () => Effect.void,
+          }
+
+    return Context.empty().pipe(
+      Context.add(ExtensionContext, {
+        sessionId: ctx.sessionId,
+        branchId: ctx.branchId,
+        ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
+        ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
+        ...(ctx.turn !== undefined ? { turn: ctx.turn } : {}),
+        cwd: ctx.cwd,
+        home: ctx.home,
+        Session,
+        Agent,
+        Interaction,
+        Process,
+        Files,
+        FileLock,
+        State,
+      }),
+      Context.add(ExtensionSession, Session),
+      Context.add(ExtensionAgent, Agent),
+      Context.add(ExtensionInteraction, Interaction),
+      Context.add(ExtensionProcess, Process),
+      Context.add(ExtensionFiles, Files),
+      Context.add(ExtensionFileLock, FileLock),
+      Context.add(ExtensionState, State),
+    )
+  })
 
 const mapInteraction = <A>(
   operation: string,
@@ -345,4 +470,6 @@ export const provideExtensionServices = <A, E, R>(
   },
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> =>
-  effect.pipe(Effect.provideContext(extensionServicesFromHostContext(ctx)))
+  Effect.flatMap(extensionServicesFromHostContext(ctx), (services) =>
+    effect.pipe(Effect.provideContext(services)),
+  )

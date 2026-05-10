@@ -1,9 +1,14 @@
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 export { narrowR } from "../../../core/tests/helpers/effect"
 import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
 import { TodoExtension } from "../../src/todo/index.js"
 import { AgentRunResult, type AgentRunner } from "@gent/core-internal/domain/agent"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { ExtensionStatePublisher } from "@gent/core-internal/domain/event-publisher"
+import {
+  ExtensionContext,
+  ExtensionServiceError,
+} from "@gent/core-internal/domain/extension-services"
+import { BranchId, type ExtensionId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
@@ -29,8 +34,9 @@ const mockRunnerSuccess: AgentRunner = {
     ),
 }
 
-export const makeCtx = Effect.succeed(
-  testToolContext({
+export const makeCtx = Effect.gen(function* () {
+  const publisher = yield* ExtensionStatePublisher
+  const base = testToolContext({
     sessionId: SessionId.make("s1"),
     branchId: BranchId.make("b1"),
     toolCallId: ToolCallId.make("tc1"),
@@ -51,14 +57,79 @@ export const makeCtx = Effect.succeed(
         ),
       resolveDualModelPair: dieStub("agent.resolveDualModelPair"),
     },
-  }),
-)
+  })
+  return {
+    ...base,
+    State: {
+      changed: (params: {
+        readonly extensionId: ExtensionId
+        readonly sessionId?: SessionId
+        readonly branchId?: BranchId
+      }) =>
+        publisher
+          .changed({
+            extensionId: params.extensionId,
+            sessionId: params.sessionId ?? base.sessionId,
+            branchId: params.branchId ?? base.branchId,
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ExtensionServiceError({
+                  service: "ExtensionState",
+                  operation: "changed",
+                  message: cause instanceof Error ? cause.message : String(cause),
+                  cause,
+                }),
+            ),
+          ),
+    },
+  }
+})
 
-export const layer = createToolTestLayer({
+const ExtensionContextLayer: Layer.Layer<ExtensionContext, never, ExtensionStatePublisher> =
+  Layer.effect(
+    ExtensionContext,
+    Effect.gen(function* () {
+      const publisher = yield* ExtensionStatePublisher
+      const base = testToolContext({
+        sessionId: SessionId.make("s1"),
+        branchId: BranchId.make("b1"),
+        toolCallId: ToolCallId.make("tc1"),
+      })
+      return {
+        ...base,
+        State: {
+          changed: (params) =>
+            publisher
+              .changed({
+                extensionId: params.extensionId,
+                sessionId: params.sessionId ?? base.sessionId,
+                branchId: params.branchId ?? base.branchId,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ExtensionServiceError({
+                      service: "ExtensionState",
+                      operation: "changed",
+                      message: cause instanceof Error ? cause.message : String(cause),
+                      cause,
+                    }),
+                ),
+              ),
+        },
+      }
+    }),
+  )
+
+const baseLayer = createToolTestLayer({
   ...toolPreset,
   extensions: [TodoExtension],
   subagentRunner: mockRunnerSuccess,
 })
+
+export const layer = Layer.merge(baseLayer, Layer.provide(ExtensionContextLayer, baseLayer))
 
 export const setup = Effect.gen(function* () {
   const sessionStorage = yield* SessionStorage

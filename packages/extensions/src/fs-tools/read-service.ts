@@ -1,11 +1,24 @@
 import { Context, Effect, FileSystem, Layer, Path } from "effect"
-import { FileIndex, FileIndexError, type FileIndexService } from "@gent/core/extensions/api"
+import {
+  ExtensionContext,
+  type ExtensionServiceError,
+  type ExtensionContextService,
+} from "@gent/core/extensions/api"
+
+type ListFilesEffect = ReturnType<ExtensionContextService["Files"]["listFiles"]>
 
 interface FsReadShape {
   readonly resolve: Path.Path["resolve"]
   readonly stat: FileSystem.FileSystem["stat"]
   readonly readFileString: FileSystem.FileSystem["readFileString"]
-  readonly listFiles: FileIndexService["listFiles"]
+  readonly listFiles: (params: {
+    readonly cwd: string
+    readonly waitForScanMs?: number
+  }) => Effect.Effect<
+    ListFilesEffect extends Effect.Effect<infer A, unknown, unknown> ? A : never,
+    ExtensionServiceError,
+    ExtensionContext
+  >
 }
 
 export class FsRead extends Context.Service<FsRead, FsReadShape>()(
@@ -16,20 +29,15 @@ export class FsRead extends Context.Service<FsRead, FsReadShape>()(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const fileIndex = yield* Effect.serviceOption(FileIndex)
       return {
         resolve: path.resolve,
         stat: fs.stat,
         readFileString: fs.readFileString,
         listFiles: (params) =>
-          fileIndex._tag === "Some"
-            ? fileIndex.value.listFiles(params)
-            : Effect.fail(
-                new FileIndexError({
-                  message: "File index service unavailable",
-                  cwd: params.cwd,
-                }),
-              ),
+          Effect.gen(function* () {
+            const ctx = yield* ExtensionContext
+            return yield* ctx.Files.listFiles(params)
+          }),
       } satisfies FsReadShape
     }),
   )

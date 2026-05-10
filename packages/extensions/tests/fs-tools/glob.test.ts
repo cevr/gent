@@ -4,19 +4,15 @@ import { BunServices } from "@effect/platform-bun"
 import { GlobTool } from "../../src/fs-tools/glob.js"
 import { FsRead } from "../../src/fs-tools/read-service"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
-import { TestFileIndexLive } from "../helpers/file-index-layer.js"
+import {
+  makeTestCtxWithFileIndex,
+  TestExtensionContextWithFileIndex,
+  TestFileIndexLive,
+} from "../helpers/file-index-layer.js"
 
-const ctx = testToolContext({
-  sessionId: SessionId.make("test-session"),
-  branchId: BranchId.make("test-branch"),
-  toolCallId: ToolCallId.make("test-call"),
-  cwd: "/tmp",
-  home: "/tmp",
-})
-
+const FileIndexLayer = Layer.provide(TestFileIndexLive, BunServices.layer)
+const ExtensionContextLayer = Layer.provide(TestExtensionContextWithFileIndex, FileIndexLayer)
 const PlatformLayer = Layer.mergeAll(
   BunServices.layer,
   RuntimeEnvironment.Test({
@@ -24,7 +20,8 @@ const PlatformLayer = Layer.mergeAll(
     home: "/tmp/test-home",
     platform: "test",
   }),
-  Layer.provide(TestFileIndexLive, BunServices.layer),
+  FileIndexLayer,
+  ExtensionContextLayer,
 )
 const ToolLayer = Layer.merge(PlatformLayer, Layer.provide(FsRead.Live, PlatformLayer))
 
@@ -32,6 +29,7 @@ describe("GlobTool", () => {
   it.scopedLive("finds files matching pattern", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
+      const ctx = yield* makeTestCtxWithFileIndex
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${tmpDir}/a.ts`, "")
       yield* fs.writeFileString(`${tmpDir}/b.ts`, "")
@@ -46,6 +44,7 @@ describe("GlobTool", () => {
   it.scopedLive("respects limit", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
+      const ctx = yield* makeTestCtxWithFileIndex
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       for (let i = 0; i < 5; i++) {
         yield* fs.writeFileString(`${tmpDir}/file${i}.ts`, "")
@@ -63,6 +62,7 @@ describe("GlobTool", () => {
   it.scopedLive("sorts by mtime descending", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
+      const ctx = yield* makeTestCtxWithFileIndex
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${tmpDir}/old.ts`, "old")
       yield* fs.writeFileString(`${tmpDir}/new.ts`, "new")
@@ -71,7 +71,6 @@ describe("GlobTool", () => {
 
       const result = yield* getToolEffect(GlobTool)({ pattern: "*.ts", path: tmpDir }, ctx)
       expect(result.files.length).toBe(2)
-      // Newest first
       expect(result.files[0]).toContain("new.ts")
       expect(result.files[1]).toContain("old.ts")
     }).pipe(Effect.provide(ToolLayer)),

@@ -1,5 +1,5 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
-import { FileLockService, tool } from "@gent/core/extensions/api"
+import { ExtensionContext, tool } from "@gent/core/extensions/api"
 
 // Write Tool Error
 
@@ -40,11 +40,11 @@ export const WriteTool = tool({
   execute: Effect.fn("WriteTool.execute")(function* (params) {
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
-    const fileLock = yield* FileLockService
+    const ctx = yield* ExtensionContext
 
     const filePath = pathService.resolve(params.path)
 
-    return yield* fileLock.withLock(
+    return yield* ctx.FileLock.withLock(
       filePath,
       Effect.gen(function* () {
         const dir = pathService.dirname(filePath)
