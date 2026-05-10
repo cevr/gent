@@ -185,8 +185,9 @@ export type SessionCommandError = StorageError | EventStoreError | NotFoundError
 // SessionCommands is the RPC-facing surface: dedup-wrapped session creates,
 // branch operations with summarization, and session runtime commands. Bodies
 // that mutate purely-durable state (rename, child-session create,
-// branch/message delete) live on `SessionMutations` (extension surface), so
-// there is exactly one implementation of each durable mutation.
+// branch/message delete) live on `SessionMutations`, an internal RPC-facing
+// service shared with this module so there is exactly one implementation of
+// each durable mutation. Extensions do not see this surface.
 export interface SessionCommandsService {
   readonly createSession: (
     input: CreateSessionInput,
