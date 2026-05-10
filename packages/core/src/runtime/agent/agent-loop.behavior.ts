@@ -62,7 +62,6 @@ import { makeExtensionHostPlatform } from "../extensions/host-platform.js"
 import { ToolRunner } from "./tool-runner.js"
 import { ModelRegistry } from "../model-registry.js"
 import type { GentPlatform } from "../gent-platform.js"
-import type { ExtensionHostPlatform } from "../../domain/extension.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { AllowAllPermission, resolveSessionEnvironment } from "../session-runtime-context.js"
 import {
@@ -230,41 +229,34 @@ export const causeToAgentLoopError = (cause: Cause.Cause<unknown>) => {
 }
 
 /**
- * Dependencies for `makeAgentLoopBehavior`. Captures the layer-level services
- * needed by the per-entity actor factory.
+ * Closure-local follow-up enqueue. Stand-in for the legacy
+ * `service.queueFollowUp` recursive reference; routes back through the actor
+ * via mutual recursion with `Message` as the authoritative payload.
  */
-export type AgentLoopBehaviorDeps = {
-  readonly turnStorage: TurnStorage
-  readonly modelResolver: typeof ModelResolver.Service
-  readonly extensionRegistry: ExtensionRegistryService
-  readonly driverRegistry: typeof DriverRegistry.Service
-  readonly eventPublisher: typeof EventPublisher.Service
-  readonly toolRunner: typeof ToolRunner.Service
-  readonly messageStorage: typeof MessageStorage.Service
-  readonly queueStorage: typeof AgentLoopQueueStorage.Service
-  readonly sessionStorage: typeof SessionStorage.Service
-  readonly configServiceForRun: typeof ConfigService.Service
-  readonly getPricing: PricingLookup
-  readonly baseSections: ReadonlyArray<PromptSection>
-  readonly host: ExtensionHostPlatform
-  /**
-   * Closure-local follow-up enqueue. Stand-in for the legacy
-   * `service.queueFollowUp` recursive reference; in c.1.a it still routes
-   * back through the service via mutual recursion. c.1.b makes this a
-   * closure-local enqueue with `Message` as the authoritative payload.
-   */
-  readonly enqueueFollowUp: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-    content: string
-    metadata?: MessageMetadata
-  }) => Effect.Effect<void, AgentLoopError | StorageError>
-}
+export type EnqueueFollowUp = (input: {
+  sessionId: SessionId
+  branchId: BranchId
+  content: string
+  metadata?: MessageMetadata
+}) => Effect.Effect<void, AgentLoopError | StorageError>
 
-export const makeAgentLoopBehaviorDeps = (config: {
-  readonly baseSections: ReadonlyArray<PromptSection>
-}): Effect.Effect<
-  Omit<AgentLoopBehaviorDeps, "enqueueFollowUp">,
+/**
+ * Per-(sessionId, branchId) loop behavior factory.
+ *
+ * Yields layer-level services directly inside its Effect body — the actor
+ * does not pre-bundle them into a deps record. The factory returns
+ * `Effect<AgentLoopBehavior, never, R>` whose R-channel is the full union of
+ * services consumed by the loop, propagating cleanly to the actor layer.
+ */
+export const makeAgentLoopBehavior = (
+  sessionId: SessionId,
+  branchId: BranchId,
+  sideMutationSemaphore: Semaphore.Semaphore,
+  baseSections: ReadonlyArray<PromptSection>,
+  enqueueFollowUp: EnqueueFollowUp,
+  initialQueue: LoopQueueState = emptyLoopQueueState(),
+): Effect.Effect<
+  AgentLoopBehavior,
   never,
   | SessionStorage
   | MessageStorage
@@ -287,8 +279,6 @@ export const makeAgentLoopBehaviorDeps = (config: {
     const queueStorage = yield* AgentLoopQueueStorage
     const eventStorage = yield* EventStorage
     const sql = yield* SqlClient.SqlClient
-    const storageTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      withStorageTransaction(sql, effect)
     const modelResolver = yield* ModelResolver
     const extensionRegistry = yield* ExtensionRegistry
     const driverRegistry = yield* DriverRegistry
@@ -297,6 +287,14 @@ export const makeAgentLoopBehaviorDeps = (config: {
     const configServiceForRun = yield* ConfigService
     const modelRegistryForRun = yield* ModelRegistry
     const host = yield* makeExtensionHostPlatform
+    const storageTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      withStorageTransaction(sql, effect)
+    const turnStorage: TurnStorage = {
+      transaction: storageTransaction,
+      events: eventStorage,
+      messages: messageStorage,
+      sessions: sessionStorage,
+    }
     const getPricing: PricingLookup = (modelId) =>
       modelRegistryForRun.get(modelId).pipe(
         Effect.map((m) => m?.pricing),
@@ -306,57 +304,6 @@ export const makeAgentLoopBehaviorDeps = (config: {
           ),
         ),
       )
-
-    return {
-      turnStorage: {
-        transaction: storageTransaction,
-        events: eventStorage,
-        messages: messageStorage,
-        sessions: sessionStorage,
-      },
-      modelResolver,
-      extensionRegistry,
-      driverRegistry,
-      eventPublisher,
-      toolRunner,
-      messageStorage,
-      queueStorage,
-      sessionStorage,
-      configServiceForRun,
-      getPricing,
-      baseSections: config.baseSections,
-      host,
-    }
-  })
-
-/**
- * Per-(sessionId, branchId) loop behavior factory.
- *
- * Returns the per-entity behavior primitives used by the actor handlers.
- */
-export const makeAgentLoopBehavior = (
-  deps: AgentLoopBehaviorDeps,
-  sessionId: SessionId,
-  branchId: BranchId,
-  sideMutationSemaphore: Semaphore.Semaphore,
-  initialQueue: LoopQueueState = emptyLoopQueueState(),
-): Effect.Effect<AgentLoopBehavior, never, never> =>
-  Effect.gen(function* () {
-    const {
-      turnStorage,
-      modelResolver,
-      extensionRegistry,
-      driverRegistry,
-      eventPublisher,
-      toolRunner,
-      messageStorage,
-      queueStorage,
-      sessionStorage,
-      configServiceForRun,
-      getPricing,
-      baseSections,
-      enqueueFollowUp,
-    } = deps
 
     const publishEvent = (event: AgentEvent) =>
       eventPublisher.publish(event).pipe(
@@ -376,7 +323,7 @@ export const makeAgentLoopBehavior = (
     const hostDeps = yield* makeAmbientExtensionHostContextDeps({
       extensionRegistry,
       overrides: {
-        host: deps.host,
+        host,
         sessionControl: {
           queueFollowUp: (input): Effect.Effect<void, AgentLoopError | StorageError> =>
             enqueueFollowUp(input),

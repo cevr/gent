@@ -72,14 +72,20 @@ import {
 } from "./agent-loop.state.js"
 import {
   type AgentLoopBehavior,
-  type AgentLoopBehaviorDeps,
   causeToAgentLoopError,
-  makeAgentLoopBehaviorDeps,
   makeAgentLoopBehavior,
 } from "./agent-loop.behavior.js"
+import { EventPublisher } from "../../domain/event-publisher.js"
+import { ToolRunner } from "./tool-runner.js"
+import { MessageStorage } from "../../storage/message-storage.js"
+import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
+import { EventStorage } from "../../storage/event-storage.js"
+import { SessionStorage } from "../../storage/session-storage.js"
+import { SqlClient } from "effect/unstable/sql"
+import { withStorageTransaction } from "../../storage/sqlite-storage.js"
 import { entityIdOf, parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
-import { invokeTool, recordToolResult } from "./turn-helpers.js"
+import { invokeTool, recordToolResult, type TurnStorage } from "./turn-helpers.js"
 
 const WorkspaceFields = {
   workspaceId: Schema.String,
@@ -446,7 +452,9 @@ const failIfTurnFailedAfterEpoch = (
  * Encore exposes `CurrentAddress` while keeping that entity-provided service
  * out of the resulting layer requirements.
  */
-const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enqueueFollowUp">) =>
+const buildAgentLoopActorHandlers = (config: {
+  readonly baseSections: ReadonlyArray<PromptSection>
+}) =>
   Effect.gen(function* () {
     const sideMutationSemaphore = yield* Semaphore.make(1)
     const sessionGovernance = yield* AgentLoopSessionGovernance
@@ -455,65 +463,25 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
     const { workspaceId, sessionId, branchId } = yield* parseEntityId(addr.entityId).pipe(
       Effect.orDie,
     )
+    // Storage Tags yield CurrentWorkspaceId internally — every reachable
+    // call path is bracketed by `withWorkspace(...)` below, so the storage
+    // operations see the correct workspace from fiber context without any
+    // per-method wrapping layer.
     const withWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
-    const workspaceEventStorage = {
-      appendEvent: (event, options) =>
-        withWorkspace(rawDeps.turnStorage.events.appendEvent(event, options)),
-      listEvents: (input) => withWorkspace(rawDeps.turnStorage.events.listEvents(input)),
-      getLatestEventId: (input) =>
-        withWorkspace(rawDeps.turnStorage.events.getLatestEventId(input)),
-      getLatestEvent: (input) => withWorkspace(rawDeps.turnStorage.events.getLatestEvent(input)),
-    } satisfies typeof rawDeps.turnStorage.events
-    const workspaceMessageStorage = {
-      createMessage: (message) => withWorkspace(rawDeps.messageStorage.createMessage(message)),
-      createMessageIfAbsent: (message) =>
-        withWorkspace(rawDeps.messageStorage.createMessageIfAbsent(message)),
-      getMessage: (id) => withWorkspace(rawDeps.messageStorage.getMessage(id)),
-      listMessages: (id) => withWorkspace(rawDeps.messageStorage.listMessages(id)),
-      deleteMessages: (id, after) =>
-        withWorkspace(rawDeps.messageStorage.deleteMessages(id, after)),
-      updateMessageTurnDuration: (id, duration) =>
-        withWorkspace(rawDeps.messageStorage.updateMessageTurnDuration(id, duration)),
-    } satisfies typeof rawDeps.messageStorage
-    const workspaceQueueStorage = {
-      getQueueState: (sessionId, branchId) =>
-        withWorkspace(rawDeps.queueStorage.getQueueState(sessionId, branchId)),
-      putQueueState: (sessionId, branchId, queue) =>
-        withWorkspace(rawDeps.queueStorage.putQueueState(sessionId, branchId, queue)),
-      clearQueueState: (sessionId, branchId) =>
-        withWorkspace(rawDeps.queueStorage.clearQueueState(sessionId, branchId)),
-    } satisfies typeof rawDeps.queueStorage
-    const workspaceSessionStorage = {
-      createSession: (session) => withWorkspace(rawDeps.sessionStorage.createSession(session)),
-      getSession: (id) => withWorkspace(rawDeps.sessionStorage.getSession(id)),
-      getLastSessionByCwd: (cwd) => withWorkspace(rawDeps.sessionStorage.getLastSessionByCwd(cwd)),
-      listSessions: () => withWorkspace(rawDeps.sessionStorage.listSessions()),
-      updateSession: (session) => withWorkspace(rawDeps.sessionStorage.updateSession(session)),
-      deleteSession: (id) => withWorkspace(rawDeps.sessionStorage.deleteSession(id)),
-    } satisfies typeof rawDeps.sessionStorage
-    const workspaceEventPublisher = {
-      append: (event) => withWorkspace(rawDeps.eventPublisher.append(event)),
-      deliver: (envelope) => rawDeps.eventPublisher.deliver(envelope),
-      publish: (event) => withWorkspace(rawDeps.eventPublisher.publish(event)),
-    } satisfies typeof rawDeps.eventPublisher
-    const workspaceTransaction = ((effect) =>
-      rawDeps.turnStorage.transaction(
-        withWorkspace(effect),
-      )) satisfies typeof rawDeps.turnStorage.transaction
-    const deps = {
-      ...rawDeps,
-      turnStorage: {
-        transaction: workspaceTransaction,
-        events: workspaceEventStorage,
-        messages: workspaceMessageStorage,
-        sessions: workspaceSessionStorage,
-      },
-      eventPublisher: workspaceEventPublisher,
-      messageStorage: workspaceMessageStorage,
-      queueStorage: workspaceQueueStorage,
-      sessionStorage: workspaceSessionStorage,
-    } satisfies typeof rawDeps
+    const messageStorage = yield* MessageStorage
+    const queueStorage = yield* AgentLoopQueueStorage
+    const sessionStorage = yield* SessionStorage
+    const eventStorage = yield* EventStorage
+    const eventPublisher = yield* EventPublisher
+    const toolRunner = yield* ToolRunner
+    const sql = yield* SqlClient.SqlClient
+    const turnStorage: TurnStorage = {
+      transaction: <A, E, R>(effect: Effect.Effect<A, E, R>) => withStorageTransaction(sql, effect),
+      events: eventStorage,
+      messages: messageStorage,
+      sessions: sessionStorage,
+    }
     const closed = yield* Ref.make(false)
     const operationSeen = yield* Ref.make(false)
 
@@ -532,14 +500,14 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
     const currentRuntimeState = (loop: AgentLoopBehavior) => loop.runtimeState
 
     const hasPriorMessageHistory = Effect.gen(function* () {
-      const messages = yield* deps.messageStorage
+      const messages = yield* messageStorage
         .listMessages(branchId)
         .pipe(Effect.catchEager(() => Effect.succeed([])))
       return messages.some((message) => message.sessionId === sessionId)
     })
 
     const latestIncompleteUserTurn = Effect.gen(function* () {
-      const envelopes = yield* deps.turnStorage.events
+      const envelopes = yield* turnStorage.events
         .listEvents({ sessionId, branchId })
         .pipe(Effect.catchEager(() => Effect.succeed([])))
       const completed = new Set(
@@ -653,7 +621,7 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
     const openLoop = Effect.gen(function* () {
       yield* Ref.set(closed, false)
       const initialQueueExit = yield* Effect.exit(
-        deps.queueStorage.getQueueState(sessionId, branchId).pipe(
+        queueStorage.getQueueState(sessionId, branchId).pipe(
           Effect.mapError(
             (cause) =>
               new AgentLoopError({
@@ -682,13 +650,11 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
         )
       }
       handle = yield* makeAgentLoopBehavior(
-        {
-          ...deps,
-          enqueueFollowUp: (input) => enqueueMessage(input),
-        },
         sessionId,
         branchId,
         sideMutationSemaphore,
+        config.baseSections,
+        (input) => enqueueMessage(input),
         initialQueue,
       )
       if (initialQueueFailure !== undefined) {
@@ -980,8 +946,8 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
             Effect.andThen(
               handle.withSideMutation(
                 recordToolResult({
-                  storage: deps.turnStorage,
-                  eventPublisher: deps.eventPublisher,
+                  storage: turnStorage,
+                  eventPublisher,
                   toolResultMessageId:
                     operation.commandId !== undefined
                       ? toolResultMessageIdForCommand(operation.commandId)
@@ -1014,16 +980,16 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
                     toolName: operation.toolName,
                     input: operation.input,
                     publishEvent: (event) =>
-                      deps.eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
-                    eventPublisher: deps.eventPublisher,
+                      eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
+                    eventPublisher,
                     sessionId: operation.sessionId,
                     branchId: operation.branchId,
                     currentTurnAgent,
-                    toolRunner: deps.toolRunner,
+                    toolRunner,
                     extensionRegistry: environment.turnExtensionRegistry,
                     permission: environment.turnPermission,
                     hostCtx: environment.turnHostCtx,
-                    storage: deps.turnStorage,
+                    storage: turnStorage,
                   })
                 }),
               ),
@@ -1041,13 +1007,64 @@ const buildAgentLoopActorHandlers = (rawDeps: Omit<AgentLoopBehaviorDeps, "enque
     }
   })
 
+/**
+ * Layer-level services that the per-entity build effect needs from the
+ * ephemeral layer-build context (NOT from Sharding's per-entity context).
+ *
+ * Excluded: services Sharding adds per-entity (`Actor.CurrentAddress`) or
+ * provides via outer `Layer.provideMerge` (`ActorStateRegistry`,
+ * `AgentLoopSessionGovernance`, `GentPlatform`) — those resolve from
+ * Sharding's captured services context correctly.
+ */
+type AgentLoopBuildContext =
+  | SessionStorage
+  | MessageStorage
+  | AgentLoopQueueStorage
+  | EventStorage
+  | SqlClient.SqlClient
+  | EventPublisher
+  | ToolRunner
+  | (typeof AgentLoopSessionGovernance)["Identifier"]
+  | GentPlatform
+
+/**
+ * Snapshots the layer-build-time `AgentLoopBuildContext` slice and provides
+ * it into the per-entity build effect.
+ *
+ * Why: `Actor.toLayer(actor, build, opts)` does NOT propagate `build`'s
+ * R-channel to the resulting layer. Sharding captures its `services` context
+ * at registerEntity time and provides it into `build` per-entity. In an
+ * ephemeral runtime composed with `Layer.provideMerge(child, parent)`, the
+ * Sharding-captured context may resolve services from the parent layer
+ * (closure-bound at Sharding-build time), bypassing the child layer's
+ * overrides (e.g. ephemeral SQLite). Snapshotting the *current* layer-build
+ * context for the storage/event-publisher/etc. slice and providing it into
+ * the build via `Effect.provideContext` (which merges) makes every
+ * `yield* Tag` for those slices resolve against this ephemeral context,
+ * while per-entity services (`CurrentAddress`, `ActorStateRegistry`) still
+ * come from Sharding's per-entity context.
+ */
+const provideLayerBuildContext = <A, E, R>(
+  build: Effect.Effect<A, E, R>,
+): Effect.Effect<
+  Effect.Effect<A, E, Exclude<R, AgentLoopBuildContext>>,
+  never,
+  AgentLoopBuildContext
+> =>
+  Effect.context<AgentLoopBuildContext>().pipe(
+    Effect.map(
+      (ctx) =>
+        Effect.provideContext(build, ctx) as Effect.Effect<A, E, Exclude<R, AgentLoopBuildContext>>,
+    ),
+  )
+
 export const AgentLoopLiveActor = (config: {
   readonly baseSections: ReadonlyArray<PromptSection>
 }) =>
   Layer.unwrap(
-    makeAgentLoopBehaviorDeps(config).pipe(
-      Effect.map((rawDeps) =>
-        Actor.toLayer(AgentLoop, buildAgentLoopActorHandlers(rawDeps), {
+    provideLayerBuildContext(buildAgentLoopActorHandlers(config)).pipe(
+      Effect.map((build) =>
+        Actor.toLayer(AgentLoop, build, {
           // Long-lived turn execution is owned by AgentLoopBehavior's worker queue.
           // `concurrency: "unbounded"` keeps short ops (RecordToolResult,
           // RespondInteraction, Steer) from waiting on unrelated mailbox handlers.
@@ -1061,9 +1078,9 @@ export const AgentLoopTestActor = (config: {
   readonly baseSections: ReadonlyArray<PromptSection>
 }) =>
   Layer.unwrap(
-    makeAgentLoopBehaviorDeps(config).pipe(
-      Effect.map((rawDeps) =>
-        Actor.toTestLayer(AgentLoop, buildAgentLoopActorHandlers(rawDeps), {
+    provideLayerBuildContext(buildAgentLoopActorHandlers(config)).pipe(
+      Effect.map((build) =>
+        Actor.toTestLayer(AgentLoop, build, {
           // Match the production mailbox behavior used by AgentLoopLiveActor.
           concurrency: "unbounded",
         }).pipe(
