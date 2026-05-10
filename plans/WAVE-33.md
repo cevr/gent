@@ -446,6 +446,15 @@ of via the schema constructors. CLAUDE.md rule: construct via
 - focused executor + delegate tests
 - `bun run gate`
 
+**Status (2026-05-10)**: `f1e7d2b8` + fixup `6f8f01f9`. Counsel verdict
+`revise` flagged a behavioral regression in the collapsed
+`normalizeInteraction` (single computed-kind selector no longer
+fell through `_tag` → `kind` for malformed tagged branches);
+fixup restored the two-pass form via a `tryInteraction` helper.
+Gate green at `6f8f01f9` (typecheck cached, lint clean, build 0.13s,
+561 ext + 50 core + tui + sdk + tooling pass). Per
+`feedback_one_revision_per_commit`, no second counsel pass.
+
 ## Commit 6: refactor(runtime): collapse duplicated PubSub coordination
 
 **Justification**: `domain/event.ts` (`makeSerializedEventDelivery` +
