@@ -356,11 +356,32 @@ ceremony.
   resolves registry/event-store from `parentServices` snapshot.
 - **C3.5 — `rpc-handlers.ts`**: convert 4 `buildXxxRpcHandlers` factories +
   `watchRuntimeStream` to Effect.gen yielding their own Tags.
-- **C3.6 — remaining sites**: `make-extension-host-context.ts`,
-  `approval-service.ts`, `model-resolver.ts`, `provider-auth.ts`,
-  `model-registry.ts`, `repo-explorer.ts`, `vault.ts`, `oauth.ts`,
-  `native-adapter.ts`, `session-commands.ts`, `session-runtime-context.ts`,
-  `session-profile.ts`.
+- **C3.6 — remaining sites** (DONE, commit `a5f975d2`): audit across the
+  candidate list found only two unambiguous violations, both fixed:
+  - `provider-auth.ts`: `makeProviderAuth(driverRegistry)` collapsed into the
+    `Live` body; yields `DriverRegistry`, `Auth`, `GentPlatform` inside.
+  - `model-resolver.ts`: `resolveProviderModel(authStore, defaultRegistry,
+request)` reduced to `(request)`; yields `Auth` + `DriverRegistry`
+    inside. `Live` snapshots that pair via `Effect.context<...>()` and
+    closes per-call resolve effects with `Effect.provideContext`.
+
+  Other candidates inspected and ruled CLEAN: `approval-service.ts`,
+  `model-registry.ts`, `native-adapter.ts`, `session-commands.ts`,
+  `session-profile.ts`. (`repo-explorer.ts`, `vault.ts`, `oauth.ts` do not
+  exist as standalone files.)
+
+  `make-extension-host-context.ts` + `session-runtime-context.ts`
+  intentionally retained. Counsel-validated (2026-05-10): the
+  `MakeExtensionHostContextDeps` 14-field struct carries already-resolved
+  service snapshots, not Tag-resolvable services. The factory is
+  intentionally synchronous — ambient services are yielded once via
+  `makeAmbientExtensionHostContextDeps` (Context.Reference defaults +
+  `Effect.serviceOption` discovery), then captured by
+  `ExtensionHostContext` closures so extension-facing methods keep stable
+  `Effect` signatures without leaking host service requirements through
+  their R-channels. Same boundary pattern as the `provideRuntime`
+  snapshot used by `agent-loop.behavior.ts:288-353`. This is not
+  context-param threading.
 
 **Verification per sub-commit**
 
