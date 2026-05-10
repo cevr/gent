@@ -788,6 +788,7 @@ export const InProcessRunner = (
         | SqlClient.SqlClient
         | EventPublisher
         | GentPlatform
+        | FileSystem.FileSystem
       >()
       const parentServices = yield* Effect.context<never>()
 
@@ -992,6 +993,7 @@ export const SubprocessRunner = (
         | SqlClient.SqlClient
         | EventPublisher
         | GentPlatform
+        | FileSystem.FileSystem
       >()
       const parentServices = yield* Effect.context<never>()
 
