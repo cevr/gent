@@ -6,8 +6,8 @@ import { InteractionRequestMismatchError } from "../domain/interaction-request.j
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import type { BranchId, InteractionRequestId, SessionId } from "../domain/ids.js"
 import type { AppServiceError } from "./errors.js"
-import { BranchStorage } from "../storage/branch-storage.js"
-import { SessionStorage } from "../storage/session-storage.js"
+import type { BranchStorage } from "../storage/branch-storage.js"
+import type { SessionStorage } from "../storage/session-storage.js"
 import { resolveExistingSessionBranch } from "../runtime/session-runtime-context.js"
 
 export interface RespondInteractionInput {
@@ -32,19 +32,16 @@ export class InteractionCommands extends Context.Service<
       const approvalService = yield* ApprovalService
       const sessionRuntime = yield* SessionRuntime
       const eventPublisher = yield* EventPublisher
-      const sessionStorage = yield* SessionStorage
-      const branchStorage = yield* BranchStorage
+      const storageContext = yield* Effect.context<SessionStorage | BranchStorage>()
 
       return {
         respond: Effect.fn("InteractionCommands.respond")(function* (
           input: RespondInteractionInput,
         ) {
           yield* resolveExistingSessionBranch({
-            sessionStorage,
-            branchStorage,
             sessionId: input.sessionId,
             branchId: input.branchId,
-          })
+          }).pipe(Effect.provideContext(storageContext))
 
           const pendingRequestId = yield* approvalService.pendingRequestId(input)
           if (pendingRequestId !== input.requestId) {

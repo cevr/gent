@@ -18,7 +18,6 @@ import {
   SessionSettingsUpdated,
   type AgentEvent,
   type EventStoreError,
-  type EventStoreService,
 } from "../domain/event.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
@@ -36,7 +35,7 @@ import { toPrompt } from "../providers/ai-transcript.js"
 import * as AiError from "effect/unstable/ai/AiError"
 import { ProviderError } from "../domain/provider-error.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
-import { SessionRuntime, type SessionRuntimeService } from "../runtime/session-runtime.js"
+import { SessionRuntime } from "../runtime/session-runtime.js"
 import { InvalidStateError, NotFoundError, type AppServiceError } from "./errors.js"
 import type {
   CreateBranchInput,
@@ -159,27 +158,24 @@ const makeRequestDeduper = <A, E>(): Effect.Effect<
   })
 
 const cleanupSessionRuntimeState = Effect.fn("SessionCommands.cleanupSessionRuntimeState")(
-  function* (input: {
-    readonly sessionId: SessionId
-    readonly sessionRuntime: SessionRuntimeService
-  }) {
-    yield* input.sessionRuntime.terminateSession(input.sessionId).pipe(Effect.orDie)
+  function* (sessionId: SessionId) {
+    const sessionRuntime = yield* SessionRuntime
+    yield* sessionRuntime.terminateSession(sessionId).pipe(Effect.orDie)
   },
 )
 
 const restoreSessionRuntimeState = Effect.fn("SessionCommands.restoreSessionRuntimeState")(
-  function* (input: {
-    readonly sessionId: SessionId
-    readonly sessionRuntime: SessionRuntimeService
-  }) {
-    yield* input.sessionRuntime.restoreSession(input.sessionId).pipe(Effect.orDie)
+  function* (sessionId: SessionId) {
+    const sessionRuntime = yield* SessionRuntime
+    yield* sessionRuntime.restoreSession(sessionId).pipe(Effect.orDie)
   },
 )
 
 const forgetDeletedSessionRuntimeState = Effect.fn(
   "SessionCommands.forgetDeletedSessionRuntimeState",
-)(function* (input: { readonly sessionId: SessionId; readonly eventStore: EventStoreService }) {
-  yield* input.eventStore.removeSession(input.sessionId)
+)(function* (sessionId: SessionId) {
+  const eventStore = yield* EventStore
+  yield* eventStore.removeSession(sessionId)
 })
 
 // Common error union for SessionCommands mutations: storage/event errors plus
@@ -237,10 +233,9 @@ const makeSessionMutationsService: Effect.Effect<
   const messageStorage = yield* MessageStorage
   const relationshipStorage = yield* RelationshipStorage
   const sessionOperationStorage = yield* SessionOperationStorage
-  const eventStore = yield* EventStore
   const eventPublisher = yield* EventPublisher
-  const sessionRuntime = yield* SessionRuntime
   const platform = yield* GentPlatform
+  const sessionRuntimeContext = yield* Effect.context<SessionRuntime | EventStore>()
 
   const transactWithEvent = <A, E, R>(
     mutation: Effect.Effect<A, E, R>,
@@ -324,19 +319,21 @@ const makeSessionMutationsService: Effect.Effect<
   const cleanupSessionRuntimeStateForMutation = Effect.fn(
     "SessionMutations.cleanupSessionRuntimeState",
   )(function* (sessionId: SessionId) {
-    yield* cleanupSessionRuntimeState({ sessionId, sessionRuntime })
+    yield* cleanupSessionRuntimeState(sessionId).pipe(Effect.provideContext(sessionRuntimeContext))
   })
 
   const restoreSessionRuntimeStateForMutation = Effect.fn(
     "SessionMutations.restoreSessionRuntimeState",
   )(function* (sessionId: SessionId) {
-    yield* restoreSessionRuntimeState({ sessionId, sessionRuntime })
+    yield* restoreSessionRuntimeState(sessionId).pipe(Effect.provideContext(sessionRuntimeContext))
   })
 
   const forgetDeletedSessionRuntimeStateForMutation = Effect.fn(
     "SessionMutations.forgetDeletedSessionRuntimeState",
   )(function* (sessionId: SessionId) {
-    yield* forgetDeletedSessionRuntimeState({ sessionId, eventStore })
+    yield* forgetDeletedSessionRuntimeState(sessionId).pipe(
+      Effect.provideContext(sessionRuntimeContext),
+    )
   })
 
   const deleteSessionCascade = Effect.fn("SessionMutations.deleteSessionCascade")(function* (

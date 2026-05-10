@@ -23,10 +23,10 @@ interface FinderEntry {
 
 export const ensureDbDir = (
   home: string,
-  path: Path.Path,
-  fs: FileSystem.FileSystem,
-): Effect.Effect<string> =>
+): Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
+    const path = yield* Path.Path
+    const fs = yield* FileSystem.FileSystem
     const dir = path.join(home, ".gent", "fff")
     yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore)
     return dir
@@ -208,9 +208,8 @@ export const NativeFileIndexLive: Layer.Layer<
     }
 
     const path = yield* Path.Path
-    const fs = yield* FileSystem.FileSystem
     const { home } = yield* RuntimeEnvironment
-    const dbDir = yield* ensureDbDir(home, path, fs)
+    const dbDir = yield* ensureDbDir(home)
 
     const { service, finalize } = makeNativeServiceFromModule(dbDir, path)
     yield* Effect.addFinalizer(() => finalize)

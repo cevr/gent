@@ -80,7 +80,8 @@ const parseModelsDev = (data: unknown): readonly Model[] => {
 }
 
 const readCachedModels = Effect.fn("ModelRegistry.loadFromDisk")(
-  function* (fs: FileSystem.FileSystem, cachePath: string) {
+  function* (cachePath: string) {
+    const fs = yield* FileSystem.FileSystem
     const exists = yield* fs.exists(cachePath)
     if (!exists) return CacheLoad.Missing.make({})
     const content = yield* fs
@@ -99,12 +100,9 @@ const readCachedModels = Effect.fn("ModelRegistry.loadFromDisk")(
 )
 
 const writeCachedModels = Effect.fn("ModelRegistry.writeCache")(
-  function* (
-    fs: FileSystem.FileSystem,
-    path: Path.Path,
-    cachePath: string,
-    models: readonly Model[],
-  ) {
+  function* (cachePath: string, models: readonly Model[]) {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
     const text = yield* Effect.try({
       try: () => encodeCachedModels(models),
       catch: () => "",
@@ -145,17 +143,17 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
   > = Layer.effect(
     ModelRegistry,
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const http = yield* HttpClient.HttpClient
       const runtimeEnvironment = yield* RuntimeEnvironment
       const driverRegistry = yield* DriverRegistry
       const authStore = yield* Auth
+      const fsAndPathContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
       const cachePath = path.join(runtimeEnvironment.home, CACHE_RELATIVE)
       const cacheRef = yield* Ref.make<readonly Model[] | null>(null)
 
       const loadFromDisk = Effect.gen(function* () {
-        const cache = yield* readCachedModels(fs, cachePath)
+        const cache = yield* readCachedModels(cachePath)
         if (cache._tag === "Canonical") {
           return cache.models
         }
@@ -173,7 +171,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
         if (decoded._tag === "None") return [] as readonly Model[]
         const parsed = parseModelsDev(decoded.value)
         if (parsed.length > 0) {
-          yield* writeCachedModels(fs, path, cachePath, parsed)
+          yield* writeCachedModels(cachePath, parsed)
         }
         return parsed
       }).pipe(
@@ -242,9 +240,13 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       yield* Effect.forkScoped(refresh)
 
       return ModelRegistry.of({
-        list: () => load,
-        get: (modelId) => load.pipe(Effect.map((models) => models.find((m) => m.id === modelId))),
-        refresh: () => refresh,
+        list: () => load.pipe(Effect.provideContext(fsAndPathContext)),
+        get: (modelId) =>
+          load.pipe(
+            Effect.map((models) => models.find((m) => m.id === modelId)),
+            Effect.provideContext(fsAndPathContext),
+          ),
+        refresh: () => refresh.pipe(Effect.provideContext(fsAndPathContext)),
       })
     }),
   )

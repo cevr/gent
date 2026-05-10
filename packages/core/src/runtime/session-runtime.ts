@@ -20,10 +20,10 @@ import {
 import { Message, MessageMetadata } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
 import type { AgentLoopQueueStorage } from "../storage/agent-loop-queue-storage.js"
-import { BranchStorage } from "../storage/branch-storage.js"
+import type { BranchStorage } from "../storage/branch-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import type { MessageStorage } from "../storage/message-storage.js"
-import { SessionStorage } from "../storage/session-storage.js"
+import type { SessionStorage } from "../storage/session-storage.js"
 import { ModelId } from "../domain/model.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
 import { entityIdOf, parseEntityId } from "./agent/agent-loop.entity-id.js"
@@ -321,19 +321,18 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     })
   const sharding = yield* Sharding.Sharding
   const clusterMessageStorage = yield* ClusterMessageStorage.MessageStorage
-  const sessionStorage = yield* SessionStorage
-  const branchStorage = yield* BranchStorage
   const eventStorage = yield* EventStorage
   const eventStore = yield* EventStore
   const eventPublisher = yield* EventPublisher
   const agentLoopSessionGovernance = yield* AgentLoopSessionGovernance
   const platform = yield* GentPlatform
+  const storageContext = yield* Effect.context<SessionStorage | BranchStorage>()
   // Every public session-scoped boundary (writes + reads) MUST validate the
   // durable `(sessionId, branchId)` target before proceeding. In-memory
   // tombstones do not survive restart, and branch ids are globally addressable
   // enough that session-only checks hide cross-session mistakes.
   const requireSessionBranch = (target: SessionRuntimeTarget) =>
-    resolveExistingSessionBranch({ sessionStorage, branchStorage, ...target }).pipe(
+    resolveExistingSessionBranch(target).pipe(
       Effect.mapError(
         (cause) =>
           new SessionRuntimeError({
@@ -341,6 +340,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
             cause,
           }),
       ),
+      Effect.provideContext(storageContext),
     )
 
   const provideActorStateServices = <A, E, R>(effect: Effect.Effect<A, E, R>) =>

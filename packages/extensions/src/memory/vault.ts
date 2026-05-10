@@ -460,8 +460,11 @@ export const makeMemoryVault = (
 
 // ── Layers ──
 
-const defaultVaultPath = (path: Path.Path, home: string): string =>
-  path.join(home, ".gent", "memory")
+const defaultVaultPath = (home: string) =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path
+    return path.join(home, ".gent", "memory")
+  })
 
 /**
  * Provide BOTH `MemoryVault` (write surface) and `MemoryVaultReadOnly` from
@@ -492,8 +495,7 @@ export const Live = (
 ): Layer.Layer<MemoryVault | MemoryVaultReadOnly, never, FileSystem.FileSystem | Path.Path> =>
   layerFor(
     Effect.gen(function* () {
-      const path = yield* Path.Path
-      const vaultPath = pathOverride ?? defaultVaultPath(path, home)
+      const vaultPath = pathOverride ?? (yield* defaultVaultPath(home))
       return yield* makeMemoryVault(vaultPath)
     }),
   )

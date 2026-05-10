@@ -10,7 +10,7 @@
 
 import { Context, Effect, Layer } from "effect"
 import { isRecord } from "../domain/guards.js"
-import { EventPublisher, type EventPublisherService } from "../domain/event-publisher.js"
+import { EventPublisher } from "../domain/event-publisher.js"
 import { InteractionPresented, type EventStoreError } from "../domain/event.js"
 import type { BranchId, InteractionRequestId, SessionId } from "../domain/ids.js"
 import {
@@ -55,8 +55,7 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
   static Live: Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform> = Layer.effect(
     ApprovalService,
     Effect.gen(function* () {
-      const eventPublisher = yield* EventPublisher
-      const interaction = yield* makeApprovalInteractionService(eventPublisher)
+      const interaction = yield* makeApprovalInteractionService()
       return {
         present: interaction.present,
         pendingRequestId: interaction.pendingRequestId,
@@ -73,8 +72,7 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
     Layer.effect(
       ApprovalService,
       Effect.gen(function* () {
-        const eventPublisher = yield* EventPublisher
-        const interaction = yield* makeApprovalInteractionService(eventPublisher, storage)
+        const interaction = yield* makeApprovalInteractionService(storage)
         return {
           present: interaction.present,
           pendingRequestId: interaction.pendingRequestId,
@@ -116,19 +114,21 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
 }
 
 const makeApprovalInteractionService = (
-  eventPublisher: EventPublisherService,
   storage?: InteractionStorageConfig,
-): Effect.Effect<InteractionService, never, GentPlatform> =>
-  makeInteractionService({
-    onPresent: (requestId, params, ctx) =>
-      eventPublisher.publish(
-        InteractionPresented.make({
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          requestId,
-          text: params.text,
-          metadata: params.metadata,
-        }),
-      ),
-    storage,
+): Effect.Effect<InteractionService, never, EventPublisher | GentPlatform> =>
+  Effect.gen(function* () {
+    const eventPublisher = yield* EventPublisher
+    return yield* makeInteractionService({
+      onPresent: (requestId, params, ctx) =>
+        eventPublisher.publish(
+          InteractionPresented.make({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            requestId,
+            text: params.text,
+            metadata: params.metadata,
+          }),
+        ),
+      storage,
+    })
   })

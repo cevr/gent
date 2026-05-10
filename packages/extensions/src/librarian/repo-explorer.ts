@@ -305,19 +305,21 @@ export function parseSpec(spec: string): ParsedSpec {
   return { type: "github", name: spec, version: undefined }
 }
 
-export function getCachePath(path: Path.Path, cacheDir: string, spec: string): string {
-  const parsed = parseSpec(spec)
-  switch (parsed.type) {
-    case "github":
-      return path.join(cacheDir, ...parsed.name.split("/"))
-    case "npm":
-      return path.join(cacheDir, "npm", parsed.name, parsed.version ?? "latest")
-    case "pypi":
-      return path.join(cacheDir, "pypi", parsed.name, parsed.version ?? "latest")
-    case "crates":
-      return path.join(cacheDir, "crates", parsed.name, parsed.version ?? "latest")
-  }
-}
+const getCachePath = (cacheDir: string, spec: string) =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path
+    const parsed = parseSpec(spec)
+    switch (parsed.type) {
+      case "github":
+        return path.join(cacheDir, ...parsed.name.split("/"))
+      case "npm":
+        return path.join(cacheDir, "npm", parsed.name, parsed.version ?? "latest")
+      case "pypi":
+        return path.join(cacheDir, "pypi", parsed.name, parsed.version ?? "latest")
+      case "crates":
+        return path.join(cacheDir, "crates", parsed.name, parsed.version ?? "latest")
+    }
+  })
 
 /** Resolve cache path for a spec without needing the Path service */
 export const getRepoCachePath = (home: string, spec: string): string => {
@@ -367,15 +369,18 @@ export const fetchRepo = (spec: string, home: string) =>
     return cachePath
   })
 
-const ensureCached = (fs: FileSystem.FileSystem, cachePath: string, spec: string) =>
-  fs.exists(cachePath).pipe(
-    Effect.mapError(() => new RepoExplorerError({ message: "Failed to check path", spec })),
-    Effect.flatMap((exists) =>
-      exists
-        ? Effect.void
-        : Effect.fail(new RepoExplorerError({ message: "Not cached. Use fetch first.", spec })),
-    ),
-  )
+const ensureCached = (cachePath: string, spec: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    yield* fs.exists(cachePath).pipe(
+      Effect.mapError(() => new RepoExplorerError({ message: "Failed to check path", spec })),
+      Effect.flatMap((exists) =>
+        exists
+          ? Effect.void
+          : Effect.fail(new RepoExplorerError({ message: "Not cached. Use fetch first.", spec })),
+      ),
+    )
+  })
 
 // RepoExplorer Tool
 
@@ -393,7 +398,7 @@ export const RepoTool = tool({
     const path = yield* Path.Path
     const gitReader = yield* GitReader
     const cacheDir = path.join(ctx.home, ".cache", "repo")
-    const cachePath = getCachePath(path, cacheDir, params.spec)
+    const cachePath = yield* getCachePath(cacheDir, params.spec)
     const parsed = parseSpec(params.spec)
 
     switch (params.action) {
@@ -489,7 +494,7 @@ export const RepoTool = tool({
       }
 
       case "path": {
-        yield* ensureCached(fs, cachePath, params.spec)
+        yield* ensureCached(cachePath, params.spec)
         return { path: cachePath }
       }
 
@@ -500,7 +505,7 @@ export const RepoTool = tool({
             spec: params.spec,
           })
         }
-        yield* ensureCached(fs, cachePath, params.spec)
+        yield* ensureCached(cachePath, params.spec)
 
         const matches = yield* ctx.Process.run("rg", [
           "--files-with-matches",
@@ -516,7 +521,7 @@ export const RepoTool = tool({
       }
 
       case "tree": {
-        yield* ensureCached(fs, cachePath, params.spec)
+        yield* ensureCached(cachePath, params.spec)
 
         const fileList = yield* gitReader.listFiles(cachePath, params.ref).pipe(
           Effect.mapError(
@@ -538,7 +543,7 @@ export const RepoTool = tool({
             spec: params.spec,
           })
         }
-        yield* ensureCached(fs, cachePath, params.spec)
+        yield* ensureCached(cachePath, params.spec)
 
         const blob = yield* gitReader.readFile(cachePath, params.filePath, params.ref).pipe(
           Effect.mapError(

@@ -53,7 +53,7 @@ export const FileIndexLive: Layer.Layer<
       return Layer.succeed(FileIndex, fallback)
     }
 
-    const dbDir = yield* ensureDbDir(home, path, fs)
+    const dbDir = yield* ensureDbDir(home)
 
     const { service, finalize } = makeNativeServiceFromModule(dbDir, path)
 

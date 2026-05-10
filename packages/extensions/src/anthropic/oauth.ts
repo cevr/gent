@@ -14,8 +14,11 @@ import { AnthropicPlatform } from "./platform-adapter.js"
  */
 export const PRIMARY_CLAUDE_SERVICE = "Claude Code-credentials"
 
-const credentialsFilePath = (path: Path.Path, home: string): string =>
-  path.join(home, ".claude", ".credentials.json")
+const credentialsFilePath = (home: string) =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path
+    return path.join(home, ".claude", ".credentials.json")
+  })
 
 const ClaudeCredentials = Schema.Struct({
   accessToken: Schema.String,
@@ -76,8 +79,7 @@ const readCredentialsFile = (): Effect.Effect<
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const credentialsFile = credentialsFilePath(path, platform.home)
+    const credentialsFile = yield* credentialsFilePath(platform.home)
     const exists = yield* fs.exists(credentialsFile).pipe(
       Effect.mapError(
         (e) =>
@@ -426,8 +428,7 @@ export const writeBackCredentials = (
     const platform = yield* AnthropicPlatform
     if (platform.platform !== "darwin") {
       const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const credentialsFile = credentialsFilePath(path, platform.home)
+      const credentialsFile = yield* credentialsFilePath(platform.home)
       const mapFsError = (e: { readonly message: string }) =>
         new ProviderAuthError({
           message: `Failed to write Claude credentials file: ${e.message}`,
