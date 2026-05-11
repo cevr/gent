@@ -229,7 +229,7 @@ const protectedHostFactFile = (file: string): boolean =>
 const bannedServerRootConsumerPatterns: ReadonlyArray<BannedPattern> = [
   {
     pattern:
-      /@gent\/core-internal\/server\/(?:dependencies|index|connection-tracker|server-identity|server-routes)\.js/,
+      /@gent\/core-internal\/server\/(?:dependencies|connection-tracker|server-identity|server-routes)\.js/,
     message: "Server entrypoints must use server-root instead of hand-composing app services",
   },
 ]

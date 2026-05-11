@@ -893,7 +893,6 @@ describe("platform duplication guards", () => {
         "apps/server/src/main.ts",
         [
           'import { createDependencies } from "@gent/core-internal/server/dependencies.js"',
-          'import { AppServicesLive } from "@gent/core-internal/server/index.js"',
           'import { buildServerRoutes } from "@gent/core-internal/server/server-routes.js"',
         ].join("\n"),
       ),
@@ -906,11 +905,6 @@ describe("platform duplication guards", () => {
       {
         file: "apps/server/src/main.ts",
         line: 2,
-        message: "Server entrypoints must use server-root instead of hand-composing app services",
-      },
-      {
-        file: "apps/server/src/main.ts",
-        line: 3,
         message: "Server entrypoints must use server-root instead of hand-composing app services",
       },
     ])
