@@ -1,7 +1,7 @@
 import { Context, type Effect } from "effect"
 import type { ReasoningEffort } from "./agent.js"
 import type { EventStoreError } from "./event.js"
-import type { BranchId, MessageId, SessionId } from "./ids.js"
+import type { BranchId, MessageId, RequestId, SessionId } from "./ids.js"
 import type { InvalidStateError, NotFoundError } from "./business-errors.js"
 import type { StorageError } from "./storage-error.js"
 
@@ -20,20 +20,20 @@ export interface SessionMutationsService {
     readonly sessionId: SessionId
     readonly parentBranchId?: BranchId
     readonly name?: string
-    readonly requestId?: string
+    readonly requestId?: RequestId
   }) => Effect.Effect<{ branchId: BranchId }, SessionMutationError>
   readonly forkSessionBranch: (input: {
     readonly sessionId: SessionId
     readonly fromBranchId: BranchId
     readonly atMessageId: MessageId
     readonly name?: string
-    readonly requestId?: string
+    readonly requestId?: RequestId
   }) => Effect.Effect<{ branchId: BranchId }, SessionMutationError>
   readonly switchActiveBranch: (input: {
     readonly sessionId: SessionId
     readonly fromBranchId: BranchId
     readonly toBranchId: BranchId
-    readonly requestId?: string
+    readonly requestId?: RequestId
   }) => Effect.Effect<void, SessionMutationError>
   readonly createChildSession: (input: {
     readonly parentSessionId: SessionId
