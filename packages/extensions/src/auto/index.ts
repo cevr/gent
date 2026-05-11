@@ -140,13 +140,8 @@ const tellAutoFromTool = Effect.fn("Auto.tellFromTool")(function* (input: ToolRe
   }
 })
 
-const journalInterceptorImpl = (
-  input: ToolResultInput,
-  next: (input: ToolResultInput) => Effect.Effect<unknown>,
-) =>
+const onToolResult = (input: ToolResultInput) =>
   Effect.gen(function* () {
-    const result = yield* next(input)
-
     yield* tellAutoFromTool(input).pipe(Effect.catchEager(() => Effect.void))
 
     yield* Effect.gen(function* () {
@@ -183,7 +178,7 @@ const journalInterceptorImpl = (
       }
     }).pipe(Effect.catchEager(() => Effect.void))
 
-    return result
+    return input.result
   })
 
 const autoHandoffImpl = (input: TurnAfterInput) =>
@@ -290,7 +285,7 @@ export const AutoExtension = defineExtension({
   ],
   reactions: {
     turnProjection,
-    toolResult: (input) => journalInterceptorImpl(input, (next) => Effect.succeed(next.result)),
+    toolResult: onToolResult,
     turnAfter: {
       handler: autoHandoffImpl,
     },
