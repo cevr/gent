@@ -242,7 +242,7 @@ export const makeAcpAgentsExtension = (
       parentEnv: anthropicPlatform.parentEnv,
     } satisfies AcpAgentsPlatformShape
 
-    const acpManager = (deps.makeAcpSessionManager ?? createAcpSessionManager)(spawner)
+    const acpManager = yield* (deps.makeAcpSessionManager ?? createAcpSessionManager)(spawner)
     const claudeCodeManager = (
       deps.makeClaudeCodeSessionManager ??
       (() =>
