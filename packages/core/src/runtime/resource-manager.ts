@@ -18,7 +18,7 @@
  *
  * @module
  */
-import { Context, Effect, Layer, Ref, TxReentrantLock } from "effect"
+import { Context, Effect, HashMap, Layer, TxReentrantLock, TxRef } from "effect"
 
 type ResourceNeed = {
   readonly tag: string
@@ -39,20 +39,18 @@ export class ResourceManager extends Context.Service<ResourceManager, ResourceMa
 
 /** Build a fresh resource manager — one per session/loop. */
 export const makeResourceManager: Effect.Effect<ResourceManagerService> = Effect.gen(function* () {
-  const locksRef = yield* Ref.make<ReadonlyMap<string, TxReentrantLock.TxReentrantLock>>(new Map())
+  const locksRef = yield* TxRef.make(HashMap.empty<string, TxReentrantLock.TxReentrantLock>())
 
   const acquire = (tag: string): Effect.Effect<TxReentrantLock.TxReentrantLock> =>
     Effect.gen(function* () {
-      const existing = (yield* Ref.get(locksRef)).get(tag)
-      if (existing !== undefined) return existing
+      const existing = HashMap.get(yield* TxRef.get(locksRef), tag)
+      if (existing._tag === "Some") return existing.value
       const fresh = yield* TxReentrantLock.make()
       // Race-safe install: re-check, install only if still missing.
-      const installed = yield* Ref.modify(locksRef, (current) => {
-        const found = current.get(tag)
-        if (found !== undefined) return [found, current]
-        const next = new Map(current)
-        next.set(tag, fresh)
-        return [fresh, next]
+      const installed = yield* TxRef.modify(locksRef, (current) => {
+        const found = HashMap.get(current, tag)
+        if (found._tag === "Some") return [found.value, current]
+        return [fresh, HashMap.set(current, tag, fresh)]
       })
       return installed
     })
