@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
+import { Context, Duration, Effect, Layer, Schema, FileSystem, Path } from "effect"
 import { HttpClient, type HttpClient as HttpClientService } from "effect/unstable/http"
 import { Auth } from "../domain/auth.js"
 import { ProviderAuthError, type DriverError } from "../domain/driver.js"
@@ -150,7 +150,6 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       const authStore = yield* Auth
       const fsAndPathContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
       const cachePath = path.join(runtimeEnvironment.home, CACHE_RELATIVE)
-      const cacheRef = yield* Ref.make<readonly Model[] | null>(null)
 
       const loadFromDisk = Effect.gen(function* () {
         const cache = yield* readCachedModels(cachePath)
@@ -180,19 +179,19 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
         Effect.withSpan("ModelRegistry.fetchRemote"),
       )
 
-      /** Load raw models (disk → remote fallback), cache unfiltered */
-      const loadRaw = Effect.gen(function* () {
-        const cached = yield* Ref.get(cacheRef)
-        if (cached !== null) return cached
-        const disk = yield* loadFromDisk
-        if (disk.length > 0) {
-          yield* Ref.set(cacheRef, disk)
-          return disk
-        }
-        const remote = yield* fetchRemote
-        yield* Ref.set(cacheRef, remote)
-        return remote
-      })
+      /**
+       * Load raw models (disk → remote fallback). Cached for process lifetime;
+       * `refresh` writes new remote payload to disk then `invalidate`s so the
+       * next read re-runs `loadFromDisk` and picks up the fresh data.
+       */
+      const [loadRaw, invalidate] = yield* Effect.cachedInvalidateWithTTL(
+        Effect.gen(function* () {
+          const disk = yield* loadFromDisk
+          if (disk.length > 0) return disk
+          return yield* fetchRemote
+        }),
+        Duration.infinity,
+      )
 
       /** Load + apply auth-sensitive provider filters (not cached — re-evaluated per call) */
       const load = Effect.gen(function* () {
@@ -233,7 +232,9 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       const refresh = Effect.gen(function* () {
         const remote = yield* fetchRemote
         if (remote.length > 0) {
-          yield* Ref.set(cacheRef, remote)
+          // fetchRemote already wrote canonical models to disk; invalidate the
+          // memoized loadRaw so the next read pulls the fresh disk payload.
+          yield* invalidate
         }
       }).pipe(Effect.withSpan("ModelRegistry.refresh"))
 
