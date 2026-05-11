@@ -16,19 +16,26 @@
  * (no real subprocess) — the agent-loop wiring is covered separately.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Exit, Fiber, Scope, Sink, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Scope, Sink, Stream } from "effect"
 import { BadArgument, PlatformError } from "effect/PlatformError"
 import { makeAcpConnection } from "../../src/acp-agents/protocol.js"
 /**
  * Build a never-closing stdout stream and a write-spy stdin sink so
  * `makeAcpConnection` can be exercised without a child process.
  * The remote never replies — every RPC parks on its Deferred.
+ * Exposes `firstWrite` so tests can deterministically wait for the
+ * RPC helper to register its pending Deferred without sleeping.
  */
-const makeFakeProc = () => {
+const makeFakeProc = (firstWrite?: Deferred.Deferred<void>) => {
   const writes: string[] = []
   const decoder = new TextDecoder()
   const stdin = Sink.forEach((chunk: Uint8Array) =>
-    Effect.sync(() => writes.push(decoder.decode(chunk))),
+    Effect.gen(function* () {
+      writes.push(decoder.decode(chunk))
+      if (firstWrite !== undefined) {
+        yield* Deferred.succeed(firstWrite, void 0).pipe(Effect.ignore)
+      }
+    }),
   )
   // Never-ending stream — reader fiber stays alive so `close` must
   // fail pending Deferreds through the Deferred path, not via stream end.
@@ -90,7 +97,8 @@ describe("AcpConnection.close", () => {
     Effect.gen(function* () {
       const program = Effect.gen(function* () {
         const scope = yield* Scope.make()
-        const { proc } = makeFakeProc()
+        const firstWrite = yield* Deferred.make<void>()
+        const { proc } = makeFakeProc(firstWrite)
         const conn = yield* makeAcpConnection(proc).pipe(Effect.provideService(Scope.Scope, scope))
         // Fork an RPC into the connection scope — parks because the remote
         // never replies. `Effect.forkIn` keeps the fiber's lifetime tied to
@@ -106,8 +114,9 @@ describe("AcpConnection.close", () => {
           }),
           scope,
         )
-        // Yield once so the rpc helper writes its request and parks.
-        yield* Effect.sleep("10 millis")
+        // Wait for the rpc helper to write its request and register its
+        // pending Deferred — deterministic, no Effect.sleep guess.
+        yield* Deferred.await(firstWrite)
         // Close the connection — should fail the pending Deferred.
         yield* conn.close("driver invalidated")
         // Await the forked RPC's exit. Bound by Effect.timeout so a hang
