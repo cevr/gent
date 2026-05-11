@@ -88,11 +88,11 @@ follow-ups"` (`tests/runtime/session-runtime.test.ts:848`)
     `SessionRuntime.steer` surface, not a blind switch to
     `waitFor`.
 
-                    Steer/Queue invariants verified:
-                    `agent-loop.state.ts:194-220` (steering drains before followUp) +
-                    `agent-loop.actor.ts:861-925` (only `applySteer` calls
-                    `interruptActiveStream`; `enqueueMessage` only appends to
-                    `queue.followUp`).
+                            Steer/Queue invariants verified:
+                            `agent-loop.state.ts:194-220` (steering drains before followUp) +
+                            `agent-loop.actor.ts:861-925` (only `applySteer` calls
+                            `interruptActiveStream`; `enqueueMessage` only appends to
+                            `queue.followUp`).
 
 - **C8**: Convert STM-unsafe concurrent state to transactional primitives
   (L1-P1-2, P1-5, P1-6, P1-7):
@@ -269,3 +269,22 @@ close them. Both jobs run to completion before "closed" applies.
 
 Receipt at `plans/WAVE-34-audit-receipt.md`. All P0/P1 findings folded into
 the sub-commit list above; remaining P2s deferred.
+
+## Rejected Findings
+
+- **L4-P0-3 (WAVE-35 audit) — scoped `request` factory in `defineExtension`.**
+  Audit claimed 45 boilerplate sites of `extensionId:` could be removed by a
+  closure-bound `request` factory injected via the `requests:` bucket
+  callback. Investigation showed the 45 sites split across five distinct
+  shapes: ~11 actual `request({...})` factory calls (some exported from
+  sibling modules — `todo/requests.ts`), ~14 `new CapabilityError({...})`
+  throws at execute-handler error membranes (not factory boilerplate), ~15
+  hand-rolled `CapabilityRef` builder objects in protocol modules
+  (`auto/protocol.ts`, `executor/protocol.ts`, `skills/protocol.ts`,
+  `artifacts-protocol.ts` — typed RPC ref surfaces, not factory output), 2
+  driver bucket config entries, and 3 internal service payloads. Only
+  shape #1 is addressable, and even there the exported-request pattern
+  preserves a real module boundary. The proposed fix would also make the
+  `requests:` bucket asymmetric vs every other `FieldSpec<A, R>` bucket,
+  trading a uniform authoring API for ~11 lines of save. Counsel-validated
+  rejection. See `/tmp/counsel/personal-gent-860892a9/20260511-203548-claude-to-codex-80bf11/codex.md`.
