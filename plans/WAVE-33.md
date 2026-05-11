@@ -703,21 +703,33 @@ P1s, synthesize the next wave and continue.
 
 Eight focused sub-commits driven by the final audit. Each must compile + pass full gate (lint/fmt/typecheck/build/test). Counsel after the last sub-commit only — these are surgical fixes with clear bounded scope per Wave 33 rules.
 
-| Sub   | Subject                                                                                   | Files                                                                                                                                                                   |
-| ----- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| C13.1 | actor handle + start guard race fixes                                                     | `agent-loop.actor.ts`, `agent-loop.behavior.ts`                                                                                                                         |
-| C13.2 | anthropic oauth env: move off module-level mutable                                        | `anthropic/oauth.ts`, `anthropic/platform-adapter.ts`                                                                                                                   |
-| C13.3 | openai oauth: drop `node:buffer`                                                          | `openai/oauth.ts`                                                                                                                                                       |
-| C13.4 | build-fingerprint: route bare new URL through GentPlatform                                | `server/build-fingerprint.ts`                                                                                                                                           |
-| C13.5 | fallback-adapter: drop module-level gitignore cache                                       | `runtime/file-index/fallback-adapter.ts`                                                                                                                                |
-| C13.6 | claude-sdk: replace Pushable with Queue → AsyncIterable                                   | `acp-agents/claude-sdk.ts`                                                                                                                                              |
-| C13.7 | auto journalInterceptorImpl: drop dead `next` indirection                                 | `auto/index.ts`                                                                                                                                                         |
-| C13.8 | ExtensionFilesService: add read/write/exists/stat/resolve facet ops; migrate 4 tool sites | `domain/extension-services.ts`, `runtime/extensions/host/context.ts`, `fs-tools/write.ts`, `fs-tools/edit.ts`, `fs-tools/read-service.ts`, `librarian/repo-explorer.ts` |
+| Sub     | Subject                                                                                           | Files                                                                                                                                                                   |
+| ------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C13.1   | actor handle + start guard race fixes                                                             | `agent-loop.actor.ts`, `agent-loop.behavior.ts`                                                                                                                         |
+| C13.2   | anthropic oauth env: move off module-level mutable                                                | `anthropic/oauth.ts`, `anthropic/platform-adapter.ts`                                                                                                                   |
+| C13.3   | openai oauth: drop `node:buffer`                                                                  | `openai/oauth.ts`                                                                                                                                                       |
+| C13.4   | build-fingerprint: route bare new URL through GentPlatform                                        | `server/build-fingerprint.ts`                                                                                                                                           |
+| C13.5   | fallback-adapter: drop module-level gitignore cache                                               | `runtime/file-index/fallback-adapter.ts`                                                                                                                                |
+| C13.6   | claude-sdk: replace Pushable with Queue → AsyncIterable                                           | `acp-agents/claude-sdk.ts`                                                                                                                                              |
+| C13.7   | auto journalInterceptorImpl: drop dead `next` indirection                                         | `auto/index.ts`                                                                                                                                                         |
+| C13.8   | ExtensionFilesService: add read/write/exists/stat/resolve facet ops; migrate 4 tool sites         | `domain/extension-services.ts`, `runtime/extensions/host/context.ts`, `fs-tools/write.ts`, `fs-tools/edit.ts`, `fs-tools/read-service.ts`, `librarian/repo-explorer.ts` |
+| C13.8.1 | counsel-revise fixup: write production-path regression test (model-turn through createRpcHarness) | `extensions/tests/fs-tools/fs-tools-model-turn.test.ts`                                                                                                                 |
 
 **Verification**
 
 - Per sub-commit: `bun run gate`
-- After C13.8: counsel review on full C13 series
+- After C13.8: counsel review on full C13 series → verdict **revise** (one finding: write tests bypassed production facet) → addressed in C13.8.1
 - After counsel pass: spot-check audit lanes 2 (actor races), 3 (platform leaks), 7 (facet coverage) to confirm fixes
 
-After C13 closes clean, Wave 33 closes. Wave 34 plan synthesizes deferred C12 + the audit P1s above.
+**Closure (2026-05-11)**
+
+- C13 series landed at HEAD `b01ca9e1` (C13.1–C13.8.1)
+- Counsel verdict: revise → addressed in C13.8.1
+- Spot-check confirmed:
+  - Lane 2 actor races: `Ref<boolean>` startedRef with `getAndSet` atomicity in `agent-loop.behavior.ts`
+  - Lane 3 build-fingerprint: routes `import.meta.url` through `GentPlatform.fileURLToPath`
+  - Lane 3 openai oauth: zero `node:buffer` matches
+  - Lane 7 facet coverage: production `ctx.Files.write` empirically validated via sabotaged model-turn test
+- Wave 33 closed.
+
+Wave 34 plan synthesizes deferred C12 + the audit P1s above.
