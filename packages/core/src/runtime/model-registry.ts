@@ -5,7 +5,6 @@ import { ProviderAuthError, type DriverError } from "../domain/driver.js"
 import type { ProviderAuthInfo } from "../domain/extension.js"
 import { Model, ModelId, ProviderId } from "../domain/model.js"
 import type { ModelPricing } from "../domain/model.js"
-import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import { RuntimeEnvironment } from "./runtime-environment.js"
 
@@ -32,7 +31,7 @@ type ModelsDevModel = typeof ModelsDevModel.Type
 const decodeModelsDevModel = Schema.decodeUnknownOption(ModelsDevModel)
 
 type JsonRecord = Record<string, unknown>
-const CacheLoad = TaggedEnumClass("ModelRegistry/CacheLoad", {
+const CacheLoad = Schema.TaggedUnion({
   Missing: {},
   Canonical: { models: Schema.Array(Model) },
 })
@@ -83,20 +82,20 @@ const readCachedModels = Effect.fn("ModelRegistry.loadFromDisk")(
   function* (cachePath: string) {
     const fs = yield* FileSystem.FileSystem
     const exists = yield* fs.exists(cachePath)
-    if (!exists) return CacheLoad.Missing.make({})
+    if (!exists) return CacheLoad.cases.Missing.make({})
     const content = yield* fs
       .readFileString(cachePath)
       .pipe(Effect.catchEager(() => Effect.succeed("")))
-    if (content.trim().length === 0) return CacheLoad.Missing.make({})
+    if (content.trim().length === 0) return CacheLoad.cases.Missing.make({})
 
     const canonical = decodeCachedModels(content)
     if (canonical._tag === "Some") {
-      return CacheLoad.Canonical.make({ models: canonical.value })
+      return CacheLoad.cases.Canonical.make({ models: canonical.value })
     }
 
-    return CacheLoad.Missing.make({})
+    return CacheLoad.cases.Missing.make({})
   },
-  Effect.catchEager(() => Effect.succeed(CacheLoad.Missing.make({}))),
+  Effect.catchEager(() => Effect.succeed(CacheLoad.cases.Missing.make({}))),
 )
 
 const writeCachedModels = Effect.fn("ModelRegistry.writeCache")(
