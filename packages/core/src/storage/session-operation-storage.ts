@@ -1,7 +1,7 @@
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { AgentName } from "../domain/agent.js"
-import { BranchId, SessionId } from "../domain/ids.js"
+import { BranchId, type RequestId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
@@ -45,31 +45,31 @@ const decodeStoredSwitchBranchResult = Schema.decodeUnknownEffect(StoredSwitchBr
 
 export interface SessionOperationStorageService {
   readonly getCreateSession: (
-    requestId: string,
+    requestId: RequestId,
   ) => Effect.Effect<StoredCreateSessionResult | undefined, StorageError>
   readonly saveCreateSession: (
-    requestId: string,
+    requestId: RequestId,
     result: StoredCreateSessionResult,
   ) => Effect.Effect<void, StorageError>
   readonly getCreateBranch: (
-    requestId: string,
+    requestId: RequestId,
   ) => Effect.Effect<StoredBranchResult | undefined, StorageError>
   readonly saveCreateBranch: (
-    requestId: string,
+    requestId: RequestId,
     result: StoredBranchResult,
   ) => Effect.Effect<void, StorageError>
   readonly getForkBranch: (
-    requestId: string,
+    requestId: RequestId,
   ) => Effect.Effect<StoredBranchResult | undefined, StorageError>
   readonly saveForkBranch: (
-    requestId: string,
+    requestId: RequestId,
     result: StoredBranchResult,
   ) => Effect.Effect<void, StorageError>
   readonly getSwitchBranch: (
-    requestId: string,
+    requestId: RequestId,
   ) => Effect.Effect<StoredSwitchBranchResult | undefined, StorageError>
   readonly saveSwitchBranch: (
-    requestId: string,
+    requestId: RequestId,
     result: StoredSwitchBranchResult,
   ) => Effect.Effect<void, StorageError>
 }
