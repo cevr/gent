@@ -74,16 +74,20 @@ const DEDUP_MAX_ENTRIES = 1024
 
 /**
  * Atomic-claim dedup helper backed by `Cache.makeWith`. Concurrent callers
- * with the same `requestId` collapse onto the first caller's outcome.
+ * with the same `requestId` collapse onto a single body execution via the
+ * Cache's internal `Deferred`.
  *
  * Eviction:
  * - On failure: `timeToLive: Duration.zero` removes the entry immediately so
- *   retries can re-attempt the same `requestId` under fresh state.
- * - On success: TTL window keeps the result available for retries.
- * - Hard cap: `Cache` evicts oldest-inserted entry past `capacity`.
- *
- * `Cache` collapses concurrent lookups for the same key via an internal
- * `Deferred`, so two same-`requestId` fibers see one body execution.
+ *   retries can re-attempt the same `requestId` under fresh state
+ *   (Cache.ts:707-710).
+ * - On success: TTL window keeps the result available for retries
+ *   (Cache.ts:705-708).
+ * - Hard cap (LRU): `Cache` re-inserts on read (Cache.ts:524-526) and evicts
+ *   the oldest-touched entry past `capacity` (Cache.ts:724-733). Under the
+ *   retry-heavy workload this dedup serves, LRU is safe: a fresh same-key
+ *   retry observes a still-fresh cache entry; an unrelated stale entry is the
+ *   one evicted to make room.
  */
 export const makeRequestDeduper = <In, A, E>(opts: {
   readonly body: (input: In) => Effect.Effect<A, E>
@@ -93,21 +97,16 @@ export const makeRequestDeduper = <In, A, E>(opts: {
 }): Effect.Effect<(input: In) => Effect.Effect<A, E>> =>
   Effect.gen(function* () {
     // Body bridge: `Cache.lookup` takes only the key, but each call has a
-    // distinct input. Pending stores the body keyed by `requestId`; the
-    // running lookup pulls it out the first time the key is missed.
+    // distinct body Effect. Pending stores the body keyed by `requestId`; the
+    // running lookup pulls it out on miss. Every caller registers its body
+    // and removes it on exit via `Effect.ensuring`, which keeps `pending`
+    // free of stale-body leaks under interruption and same-key races.
     const pending = yield* Ref.make(new Map<string, Effect.Effect<A, E>>())
     const successTtl = Duration.fromInputUnsafe(opts.successTtl ?? DEDUP_SUCCESS_TTL)
     const cache = yield* Cache.makeWith<string, A, E>(
       (key) =>
         Effect.gen(function* () {
           const body = (yield* Ref.get(pending)).get(key)
-          yield* Ref.update(pending, (m) => {
-            const next = new Map(m)
-            next.delete(key)
-            return next
-          })
-          // `pending` is populated before every `Cache.get` call below, so a
-          // miss reaching this lookup must find a body.
           return yield* body ?? Effect.die("makeRequestDeduper: missing pending body")
         }),
       {
@@ -118,19 +117,28 @@ export const makeRequestDeduper = <In, A, E>(opts: {
     return (input) => {
       const key = opts.keyOf(input)
       if (key === undefined) return opts.body(input)
+      const body = opts.body(input)
+      const remove = Ref.update(pending, (m) => {
+        // Only delete if we are still the registered body — a later caller
+        // may have already overwritten us, in which case our entry is gone
+        // (or about to be removed by that caller's `ensuring`).
+        if (m.get(key) !== body) return m
+        const next = new Map(m)
+        next.delete(key)
+        return next
+      })
       return Effect.gen(function* () {
-        // Race window: two concurrent calls with the same key both write
-        // pending; only one triggers lookup. The Cache's internal Deferred
-        // ensures the second's body is ignored — its entry is dropped from
-        // pending by the running lookup.
+        // Always overwrite: same-key concurrent fibers all register their
+        // bodies; whichever wins the lookup race determines the outcome that
+        // every caller awaits via `Cache.get`. The `requestId` dedup contract
+        // assumes idempotency, so any caller's body produces the same result.
         yield* Ref.update(pending, (m) => {
-          if (m.has(key)) return m
           const next = new Map(m)
-          next.set(key, opts.body(input))
+          next.set(key, body)
           return next
         })
         return yield* Cache.get(cache, key)
-      })
+      }).pipe(Effect.ensuring(remove))
     }
   })
 

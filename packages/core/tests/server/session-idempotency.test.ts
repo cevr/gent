@@ -619,6 +619,46 @@ describe("requestId idempotency", () => {
     }),
   )
 
+  // Regression: a same-key retry inside the TTL window must collapse onto
+  // the cached outcome AND must not let a stale body leak into pending such
+  // that a post-eviction retry runs the wrong body.
+  it.effect("dedup cache post-eviction retry runs the fresh body, not a stale one", () =>
+    Effect.gen(function* () {
+      // The body's identity is captured in `lastSeen` so we can prove which
+      // input arg triggered the lookup. If the post-eviction call ran a
+      // stale closure, `lastSeen` would show input1's marker, not input3's.
+      let lastSeen = ""
+      const run = yield* makeRequestDeduper<{ requestId: string; marker: string }, string, never>({
+        body: (input) =>
+          Effect.sync(() => {
+            lastSeen = input.marker
+            return input.marker
+          }),
+        keyOf: (input) => input.requestId,
+        successTtl: "60 seconds",
+      })
+
+      // F1 populates the cache with key="K", body uses marker="m1".
+      const first = yield* run({ requestId: "K", marker: "m1" })
+      expect(first).toBe("m1")
+      expect(lastSeen).toBe("m1")
+
+      // F2 retries the same key inside the TTL window — must hit the cache
+      // and observe F1's outcome. F2's body (marker="m2") must NOT run.
+      const second = yield* run({ requestId: "K", marker: "m2" })
+      expect(second).toBe("m1")
+      expect(lastSeen).toBe("m1")
+
+      // Advance past the TTL so F1's cache entry is gone. F3 must run a
+      // fresh lookup with ITS OWN body (marker="m3"). If F2's body leaked
+      // into pending, this would observe "m2" instead of "m3".
+      yield* TestClock.adjust("61 seconds")
+      const third = yield* run({ requestId: "K", marker: "m3" })
+      expect(third).toBe("m3")
+      expect(lastSeen).toBe("m3")
+    }),
+  )
+
   it.scoped("createSession requestId replays durable result after command layer restart", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
