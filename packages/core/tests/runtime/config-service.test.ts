@@ -48,7 +48,9 @@ describe("ConfigService", () => {
           new PermissionRule({ tool: "Read", action: "allow" }),
         ],
       })
-      return ConfigService.use((cfg) => cfg.getPermissionRules()).pipe(
+      return ConfigService.use((cfg) =>
+        cfg.get().pipe(Effect.map((c) => c.permissions ?? [])),
+      ).pipe(
         Effect.tap((result) => Effect.sync(() => expect(result.length).toBe(2))),
         Effect.provide(ConfigService.Test(initial)),
       )
@@ -62,7 +64,7 @@ describe("ConfigService", () => {
         yield* cfg.addPermissionRule(new PermissionRule({ tool: "Bash", action: "deny" }))
 
         // Verify
-        const result = yield* cfg.getPermissionRules()
+        const result = (yield* cfg.get()).permissions ?? []
         expect(result.length).toBe(1)
         expect(result[0]?.tool).toBe("Bash")
         expect(result[0]?.action).toBe("deny")
@@ -79,7 +81,7 @@ describe("ConfigService", () => {
           new PermissionRule({ tool: "Write", pattern: "/etc", action: "deny" }),
         )
 
-        const result = yield* cfg.getPermissionRules()
+        const result = (yield* cfg.get()).permissions ?? []
         expect(result.length).toBe(3)
       }).pipe(Effect.provide(ConfigService.Test())),
     )
@@ -137,7 +139,7 @@ describe("ConfigService", () => {
             ),
             { concurrency: "unbounded" },
           )
-          const result = yield* cfg.getPermissionRules()
+          const result = (yield* cfg.get()).permissions ?? []
           expect(result.map((rule) => rule.tool).sort()).toEqual([...tools].sort())
           expect(yield* Ref.get(observedConfigWrites)).toBeGreaterThan(0)
           const persistedText = yield* fs.readFileString(
@@ -164,7 +166,7 @@ describe("ConfigService", () => {
         // Remove Bash rule
         yield* cfg.removePermissionRule("Bash", undefined)
 
-        const result = yield* cfg.getPermissionRules()
+        const result = (yield* cfg.get()).permissions ?? []
         expect(result.length).toBe(1)
         expect(result[0]?.tool).toBe("Read")
       }).pipe(Effect.provide(ConfigService.Test(initial)))
@@ -183,7 +185,7 @@ describe("ConfigService", () => {
         // Remove only the pattern-specific rule
         yield* cfg.removePermissionRule("Bash", "rm")
 
-        const result = yield* cfg.getPermissionRules()
+        const result = (yield* cfg.get()).permissions ?? []
         expect(result.length).toBe(1)
         expect(result[0]?.pattern).toBeUndefined()
       }).pipe(Effect.provide(ConfigService.Test(initial)))

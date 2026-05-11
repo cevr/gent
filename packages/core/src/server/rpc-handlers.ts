@@ -395,7 +395,8 @@ const RpcHandlers = GentRpcs.toLayer(
       // ----------------------------------------------------------------------
       // Config / driver / model / auth / permission
       // ----------------------------------------------------------------------
-      "permission.listRules": () => configService.getPermissionRules(),
+      "permission.listRules": () =>
+        configService.get().pipe(Effect.map((c) => c.permissions ?? [])),
 
       "permission.deleteRule": ({ tool, pattern }: DeletePermissionRuleInput) =>
         configService.removePermissionRule(tool, pattern),

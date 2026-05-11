@@ -62,7 +62,6 @@ export interface ConfigServiceService {
    */
   readonly get: (cwd?: string) => Effect.Effect<UserConfig>
   readonly set: (config: Partial<UserConfig>) => Effect.Effect<void>
-  readonly getPermissionRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
   readonly addPermissionRule: (rule: PermissionRule) => Effect.Effect<void>
   readonly removePermissionRule: (tool: string, pattern?: string) => Effect.Effect<void>
   /** Set a per-agent driver override. Replaces any existing entry for `agent`.
@@ -217,12 +216,6 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           })
         }),
 
-        getPermissionRules: Effect.fn("ConfigService.getPermissionRules")(function* () {
-          const user = yield* SynchronizedRef.get(userConfigRef)
-          const project = yield* Ref.get(projectConfigRef)
-          return [...(project.permissions ?? []), ...(user.permissions ?? [])]
-        }),
-
         addPermissionRule: Effect.fn("ConfigService.addPermissionRule")(function* (rule) {
           yield* mutateUserConfig((current) => {
             const permissions = [...(current.permissions ?? []), rule]
@@ -356,12 +349,6 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
                   driverOverrides: partial.driverOverrides ?? current.driverOverrides,
                 }),
             ),
-          getPermissionRules: () =>
-            Effect.gen(function* () {
-              const user = yield* Ref.get(userConfigRef)
-              const project = yield* Ref.get(projectConfigRef)
-              return [...(project.permissions ?? []), ...(user.permissions ?? [])]
-            }),
           addPermissionRule: (rule) =>
             Ref.update(userConfigRef, (current) => {
               const permissions = [...(current.permissions ?? []), rule]
