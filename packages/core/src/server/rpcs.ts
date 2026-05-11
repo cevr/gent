@@ -1,26 +1,139 @@
+import { Schema } from "effect"
 import {
+  Rpc,
   RpcGroup,
   type RpcClient,
   type RpcClientError,
   type RpcGroup as RpcGroupNs,
-  type Rpc,
 } from "effect/unstable/rpc"
+import { SessionId } from "../domain/ids.js"
+import { Model } from "../domain/model.js"
+import { PermissionRule } from "../domain/permission.js"
+import { GentRpcError } from "./errors.js"
 import { SessionRpcs } from "./rpcs/session.js"
-import { AuthRpcs } from "./rpcs/auth.js"
-import { ExtensionRpcs } from "./rpcs/extension.js"
-import { RuntimeRpcs } from "./rpcs/runtime.js"
-import type { GentConnectionError } from "./transport-contract.js"
-import { WorkspaceRpcMiddleware, WorkspaceHeaderError } from "./workspace-rpc.js"
+import {
+  AuthProviderInfo,
+  AuthorizeAuthInput,
+  AuthorizeAuthSuccess,
+  CallbackAuthInput,
+  ClearDriverOverrideInput,
+  DeleteAuthKeyInput,
+  DeletePermissionRuleInput,
+  DriverListResult,
+  ExtensionHealthSnapshot,
+  ExtensionRpcRequestInput,
+  type GentConnectionError,
+  ListAuthMethodsSuccess,
+  ListAuthProvidersInput,
+  SetAuthKeyInput,
+  SetDriverOverrideInput,
+  SlashCommandInfo,
+} from "./transport-contract.js"
+import { WorkspaceHeaderError, WorkspaceRpcMiddleware } from "./workspace-rpc.js"
+
+// ============================================================================
+// Runtime status
+// ============================================================================
+
+export const RuntimeStatusResult = Schema.Struct({
+  serverId: Schema.String,
+  pid: Schema.Number,
+  hostname: Schema.String,
+  uptime: Schema.Number,
+  connectionCount: Schema.Number,
+  dbPath: Schema.String,
+  buildFingerprint: Schema.String,
+})
+export type RuntimeStatusResult = typeof RuntimeStatusResult.Type
+
+export class RuntimeRpcs extends RpcGroup.make(
+  Rpc.make("runtime.status", {
+    success: RuntimeStatusResult,
+    error: GentRpcError,
+  }),
+) {}
+
+// ============================================================================
+// Auth
+// ============================================================================
+
+export class AuthRpcs extends RpcGroup.make(
+  Rpc.make("listProviders", {
+    payload: ListAuthProvidersInput.fields,
+    success: Schema.Array(AuthProviderInfo),
+    error: GentRpcError,
+  }),
+  Rpc.make("setKey", {
+    payload: SetAuthKeyInput.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("deleteKey", {
+    payload: DeleteAuthKeyInput.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("listMethods", {
+    success: ListAuthMethodsSuccess,
+    error: GentRpcError,
+  }),
+  Rpc.make("authorize", {
+    payload: AuthorizeAuthInput.fields,
+    success: AuthorizeAuthSuccess,
+    error: GentRpcError,
+  }),
+  Rpc.make("callback", {
+    payload: CallbackAuthInput.fields,
+    error: GentRpcError,
+  }),
+).prefix("auth.") {}
+
+// ============================================================================
+// Extension + driver + model + permission
+// ============================================================================
+
+export class ExtensionRpcs extends RpcGroup.make(
+  Rpc.make("extension.request", {
+    payload: ExtensionRpcRequestInput.fields,
+    success: Schema.Unknown,
+    error: GentRpcError,
+  }),
+  Rpc.make("extension.listStatus", {
+    payload: { sessionId: Schema.optional(SessionId) },
+    success: ExtensionHealthSnapshot,
+    error: GentRpcError,
+  }),
+  Rpc.make("extension.listSlashCommands", {
+    payload: { sessionId: SessionId },
+    success: Schema.Array(SlashCommandInfo),
+    error: GentRpcError,
+  }),
+  Rpc.make("driver.list", {
+    success: DriverListResult,
+    error: GentRpcError,
+  }),
+  Rpc.make("driver.set", {
+    payload: SetDriverOverrideInput.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("driver.clear", {
+    payload: ClearDriverOverrideInput.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("model.list", {
+    success: Schema.Array(Model),
+    error: GentRpcError,
+  }),
+  Rpc.make("permission.listRules", {
+    success: Schema.Array(PermissionRule),
+    error: GentRpcError,
+  }),
+  Rpc.make("permission.deleteRule", {
+    payload: DeletePermissionRuleInput.fields,
+    error: GentRpcError,
+  }),
+) {}
 
 // Re-export sub-groups for handler wiring
-export {
-  SessionRpcs,
-  AuthRpcs,
-  ExtensionRpcs,
-  RuntimeRpcs,
-  WorkspaceHeaderError,
-  WorkspaceRpcMiddleware,
-}
+export { SessionRpcs, WorkspaceHeaderError, WorkspaceRpcMiddleware }
 
 // Re-export transport contract schemas (consumed by SDK + tests)
 export {
