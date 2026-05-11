@@ -507,9 +507,6 @@ export interface ExtensionRegistryService {
   // Agent resolution
   readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
 
-  // Permission rules
-  readonly listPermissionRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
-
   // Prompt sections
   readonly listPromptSections: () => Effect.Effect<ReadonlyArray<PromptSection>>
 
@@ -539,7 +536,6 @@ export class ExtensionRegistry extends Context.Service<
             extensionProjections,
           ),
         ),
-      listPermissionRules: () => Effect.succeed(resolved.permissionRules),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
       // Dynamic prompt sections are assembled per-turn by ExtensionReactions.
       // The sections here come from capability leaf `prompt`, all static. No more
