@@ -53,19 +53,6 @@ export interface ExtensionHostContext {
 }
 
 export declare namespace ExtensionHostContext {
-  interface ReadOnlyAgent {
-    readonly get: Agent["get"]
-    readonly listAgents: Agent["listAgents"]
-  }
-
-  interface ReadOnlySessionFacet {
-    readonly listMessages: SessionFacet["listMessages"]
-    readonly getSession: SessionFacet["getSession"]
-    readonly getDetail: SessionFacet["getDetail"]
-    readonly search: SessionFacet["search"]
-    readonly listBranches: SessionFacet["listBranches"]
-  }
-
   interface Agent {
     readonly get: (name: AgentName) => Effect.Effect<AgentDefinition | undefined>
     readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
