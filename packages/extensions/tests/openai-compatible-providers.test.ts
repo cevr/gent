@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import type { ModelDriverContribution, ProviderAuthInfo } from "@gent/core/extensions/api"
-import { testSetupCtx } from "@gent/core-internal/test-utils"
+import { provideTestSetupContext } from "@gent/core-internal/test-utils"
 import {
   makeFakeFetchState,
   oneGenerate,
@@ -43,7 +43,7 @@ const runOne = (model: Parameters<typeof oneGenerate>[0], state: FakeFetchState)
 describe("OpenAI-compatible provider drivers", () => {
   it.live("Google uses the Gemini OpenAI-compatible endpoint", () =>
     Effect.gen(function* () {
-      const contributions = yield* GoogleExtension.setup(testSetupCtx())
+      const contributions = yield* GoogleExtension.setup.pipe(provideTestSetupContext())
       const driver = onlyDriver(contributions.modelDrivers ?? [])
       const model = driver.resolveModel("gemini-2.5-pro", makeApiAuthInfo("google-key"))
       const fetchState = makeFakeFetchState()
@@ -58,7 +58,7 @@ describe("OpenAI-compatible provider drivers", () => {
 
   it.live("Mistral uses the Mistral OpenAI-compatible endpoint", () =>
     Effect.gen(function* () {
-      const contributions = yield* MistralExtension.setup(testSetupCtx())
+      const contributions = yield* MistralExtension.setup.pipe(provideTestSetupContext())
       const driver = onlyDriver(contributions.modelDrivers ?? [])
       const model = driver.resolveModel("mistral-large-latest", makeApiAuthInfo("mistral-key"))
       const fetchState = makeFakeFetchState()

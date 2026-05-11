@@ -23,12 +23,7 @@ import {
   Scope,
   Semaphore,
 } from "effect"
-import {
-  GentPlatform,
-  isRecord,
-  type GentExtension,
-  type PublicExtensionSetupContext,
-} from "@gent/core/extensions/api"
+import { GentPlatform, isRecord, type PublicExtensionSetupContext } from "@gent/core/extensions/api"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import { ExecutorPlatform } from "./platform-adapter.js"
@@ -46,8 +41,6 @@ import {
   STARTUP_TIMEOUT_MS,
   SHUTDOWN_TIMEOUT_MS,
 } from "./domain.js"
-
-type ExtensionHostPlatform = Parameters<GentExtension["setup"]>[0]["host"]
 
 // ── Internal types ──
 
@@ -665,9 +658,6 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         })
       }),
     ).pipe(Layer.provide(Layer.merge(FetchHttpClient.layer, platformLayer)))
-
-  static Live = (home: string, host: ExtensionHostPlatform) =>
-    ExecutorSidecar.makeLive(home, ExecutorPlatform.Live(host))
 
   static LiveFromSetup = (
     home: string,

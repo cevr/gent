@@ -16,6 +16,7 @@ import {
   defineResource,
   ExtensionSetupContext,
   getToolId,
+  publicSetupContext,
   type PublicExtensionSetupContext,
   request,
   tool,
@@ -47,7 +48,10 @@ const stubProjectionCtx = {
   },
 }
 
-const setupOf = (ext: GentExtension<never>) => ext.setup(testSetupCtx())
+const setupOf = (ext: GentExtension<never>) => {
+  const raw = testSetupCtx()
+  return ext.setup.pipe(Effect.provideService(ExtensionSetupContext, publicSetupContext(raw)))
+}
 
 describe("defineExtension", () => {
   const test = it.live.layer(BunServices.layer)

@@ -24,7 +24,13 @@ import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { defineResource } from "@gent/core-internal/domain/resource"
-import { CapabilityError, ExtensionContext, request, tool } from "@gent/core/extensions/api"
+import {
+  CapabilityError,
+  ExtensionContext,
+  ExtensionSetupContext,
+  request,
+  tool,
+} from "@gent/core/extensions/api"
 import * as ExtensionApi from "@gent/core/extensions/api"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import { ConfigService } from "../../src/runtime/config-service"
@@ -49,33 +55,32 @@ describe("extension command RPCs", () => {
   // Server-visible slash commands are slash-decorated requests.
   const TestCommandsExtension: GentExtension = {
     manifest: { id: ExtensionId.make("@test/commands") },
-    setup: () =>
-      Effect.succeed({
-        requests: [
-          request({
-            id: "greet",
-            extensionId: ExtensionId.make("@test/commands"),
-            slash: { name: "greet", description: "Say hello" },
-            description: "Say hello",
-            input: Schema.String,
-            output: Schema.Void,
-            execute: (args) =>
-              Effect.gen(function* () {
-                const ctx = yield* ExtensionContext
-                invoked.push({ args, sessionId: ctx.sessionId, cwd: ctx.cwd })
-              }),
-          }),
-          request({
-            id: "noop",
-            extensionId: ExtensionId.make("@test/commands"),
-            slash: { name: "noop", description: "noop" },
-            description: "noop",
-            input: Schema.String,
-            output: Schema.Void,
-            execute: () => Effect.void,
-          }),
-        ],
-      }),
+    setup: Effect.succeed({
+      requests: [
+        request({
+          id: "greet",
+          extensionId: ExtensionId.make("@test/commands"),
+          slash: { name: "greet", description: "Say hello" },
+          description: "Say hello",
+          input: Schema.String,
+          output: Schema.Void,
+          execute: (args) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              invoked.push({ args, sessionId: ctx.sessionId, cwd: ctx.cwd })
+            }),
+        }),
+        request({
+          id: "noop",
+          extensionId: ExtensionId.make("@test/commands"),
+          slash: { name: "noop", description: "noop" },
+          description: "noop",
+          input: Schema.String,
+          output: Schema.Void,
+          execute: () => Effect.void,
+        }),
+      ],
+    }),
   }
   const layer = createToolTestLayer({ ...toolPreset, extensions: [TestCommandsExtension] }).pipe(
     Layer.provideMerge(ApprovalService.Test()),
@@ -485,8 +490,9 @@ describe("extension command RPCs", () => {
       const profileCwd = yield* fs.makeTempDirectoryScoped()
       const ext: GentExtension = {
         manifest: { id: ExtensionId.make("@test/live-profile-service-request") },
-        setup: (ctx) =>
-          Effect.succeed({
+        setup: Effect.gen(function* () {
+          const ctx = yield* ExtensionSetupContext
+          return {
             resources: [
               defineResource({
                 tag: ProfileToken,
@@ -509,7 +515,8 @@ describe("extension command RPCs", () => {
                   }),
               }),
             ],
-          }),
+          }
+        }),
       }
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -550,13 +557,12 @@ describe("extension command RPCs", () => {
     Effect.gen(function* () {
       const failingExtension: GentExtension = {
         manifest: { id: ExtensionId.make("@test/failing-status") },
-        setup: () =>
-          Effect.fail(
-            new ExtensionLoadError({
-              extensionId: ExtensionId.make("@test/failing-status"),
-              message: "setup boom",
-            }),
-          ),
+        setup: Effect.fail(
+          new ExtensionLoadError({
+            extensionId: ExtensionId.make("@test/failing-status"),
+            message: "setup boom",
+          }),
+        ),
       }
       yield* narrowR(
         Effect.scoped(
@@ -626,49 +632,46 @@ describe("extension command RPCs", () => {
       const extensionId = ExtensionId.make("@test/read-context")
       const ext: GentExtension = {
         manifest: { id: extensionId },
-        setup: () =>
-          Effect.succeed({
-            requests: [
-              request({
-                id: "inspect",
-                extensionId,
-                input: Schema.Void,
-                output: Schema.Struct({
-                  hasSessionMutations: Schema.Boolean,
-                  hasAgentRun: Schema.Boolean,
-                  profileStorageAvailable: Schema.Boolean,
-                  extensionContextProcessAvailable: Schema.Boolean,
-                  extensionContextFollowUpQueued: Schema.Boolean,
-                  extensionContextParentEnvIsObject: Schema.Boolean,
-                }),
-                execute: () =>
-                  narrowR(
-                    Effect.gen(function* () {
-                      const todoStorage = yield* Effect.serviceOption(TodoStorage)
-                      const extensionCtx = yield* ExtensionContext
-                      const processExit = yield* Effect.exit(
-                        extensionCtx.Process.run("echo", ["hi"]),
-                      )
-                      const followUpExit = yield* Effect.exit(
-                        extensionCtx.Session.queueFollowUp({
-                          sourceId: "rpc",
-                          content: "queued",
-                        }),
-                      )
-                      return {
-                        hasSessionMutations: false,
-                        hasAgentRun: false,
-                        profileStorageAvailable: Option.isSome(todoStorage),
-                        extensionContextProcessAvailable: Exit.isSuccess(processExit),
-                        extensionContextFollowUpQueued: Exit.isSuccess(followUpExit),
-                        extensionContextParentEnvIsObject:
-                          typeof extensionCtx.Process.parentEnv === "object",
-                      }
-                    }),
-                  ),
+        setup: Effect.succeed({
+          requests: [
+            request({
+              id: "inspect",
+              extensionId,
+              input: Schema.Void,
+              output: Schema.Struct({
+                hasSessionMutations: Schema.Boolean,
+                hasAgentRun: Schema.Boolean,
+                profileStorageAvailable: Schema.Boolean,
+                extensionContextProcessAvailable: Schema.Boolean,
+                extensionContextFollowUpQueued: Schema.Boolean,
+                extensionContextParentEnvIsObject: Schema.Boolean,
               }),
-            ],
-          }),
+              execute: () =>
+                narrowR(
+                  Effect.gen(function* () {
+                    const todoStorage = yield* Effect.serviceOption(TodoStorage)
+                    const extensionCtx = yield* ExtensionContext
+                    const processExit = yield* Effect.exit(extensionCtx.Process.run("echo", ["hi"]))
+                    const followUpExit = yield* Effect.exit(
+                      extensionCtx.Session.queueFollowUp({
+                        sourceId: "rpc",
+                        content: "queued",
+                      }),
+                    )
+                    return {
+                      hasSessionMutations: false,
+                      hasAgentRun: false,
+                      profileStorageAvailable: Option.isSome(todoStorage),
+                      extensionContextProcessAvailable: Exit.isSuccess(processExit),
+                      extensionContextFollowUpQueued: Exit.isSuccess(followUpExit),
+                      extensionContextParentEnvIsObject:
+                        typeof extensionCtx.Process.parentEnv === "object",
+                    }
+                  }),
+                ),
+            }),
+          ],
+        }),
       }
       yield* Effect.scoped(
         Effect.gen(function* () {

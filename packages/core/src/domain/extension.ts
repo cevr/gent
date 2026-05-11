@@ -7,6 +7,7 @@ import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./i
 import type { ExtensionContributions } from "./contribution.js"
 export type { ExtensionContributions } from "./contribution.js"
 import type { PromptSection } from "./prompt.js"
+import type { ExtensionSetupContext } from "./extension-setup-context.js"
 
 // Extension Manifest — authored by extension author
 
@@ -252,15 +253,6 @@ export type {
 
 // Extension — the core primitive
 
-/** Context provided to extension setup functions. */
-export interface ExtensionSetupContext {
-  readonly cwd: string
-  readonly source: string
-  /** User home directory (e.g. ~/.gent lives here). Defaults to the platform home directory. */
-  readonly home: string
-  readonly host: ExtensionHostPlatform
-}
-
 export interface ExtensionHostOsInfo {
   readonly platform: string
   readonly arch: string
@@ -319,14 +311,22 @@ export interface ExtensionHostPlatform extends ExtensionHostFacts {
 export interface GentExtension<R = ChildProcessSpawner> {
   readonly manifest: ExtensionManifest
   /**
-   * Returns the typed `ExtensionContributions` buckets for this extension.
-   * The runtime stores this directly on `LoadedExtension.contributions`;
-   * consumers read each bucket as a typed array. There is no flat
-   * `Contribution[]` and no core `_kind` discriminator.
+   * Effect that resolves to the typed `ExtensionContributions` buckets for
+   * this extension. The runtime stores the resolved contributions on
+   * `LoadedExtension.contributions`; consumers read each bucket as a typed
+   * array. There is no flat `Contribution[]` and no core `_kind`
+   * discriminator.
+   *
+   * Setup-time facts are imported via `yield* ExtensionSetupContext` — the
+   * loader provides the service around this Effect. There is no ctx
+   * parameter; threading the platform through arguments is forbidden by
+   * the no-context-params rule.
    */
-  readonly setup: (
-    ctx: ExtensionSetupContext,
-  ) => Effect.Effect<ExtensionContributions, ExtensionLoadError, R>
+  readonly setup: Effect.Effect<
+    ExtensionContributions,
+    ExtensionLoadError,
+    R | ExtensionSetupContext
+  >
 }
 
 // Legacy keyed middleware primitives are gone. Prompt/context shaping,

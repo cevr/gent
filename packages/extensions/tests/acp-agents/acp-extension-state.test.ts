@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Path } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
-import { testSetupCtx } from "@gent/core-internal/test-utils"
+import { provideTestSetupContext } from "@gent/core-internal/test-utils"
 import { buildResourceLayer } from "@gent/core-internal/runtime/extensions/resource-host"
 import type { LoadedExtension } from "@gent/core-internal/domain/extension"
 import { makeAcpAgentsExtension } from "../../src/acp-agents/index.js"
@@ -50,8 +50,12 @@ describe("AcpAgentsExtension state ownership", () => {
         },
       })
 
-      const first = yield* ext.setup(testSetupCtx()).pipe(Effect.provide(spawnerLayer))
-      const second = yield* ext.setup(testSetupCtx()).pipe(Effect.provide(spawnerLayer))
+      const first = yield* ext.setup
+        .pipe(provideTestSetupContext())
+        .pipe(Effect.provide(spawnerLayer))
+      const second = yield* ext.setup
+        .pipe(provideTestSetupContext())
+        .pipe(Effect.provide(spawnerLayer))
       const firstProtocolDriver = first.externalDrivers?.find(
         (driver) => driver.id !== "acp-claude-code",
       )

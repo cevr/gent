@@ -40,16 +40,12 @@
  *
  * @module
  */
-import { Context, Effect } from "effect"
+import { Effect } from "effect"
 import { ExtensionId } from "../domain/ids.js"
 import { ExtensionLoadError } from "../domain/extension.js"
 import { sealRuntimeLoadedEffect } from "../domain/extension-load-boundary.js"
-import type {
-  ExtensionHostPlatform,
-  GentExtension,
-  ExtensionSetupContext as RuntimeExtensionSetupContext,
-  ExtensionManifest,
-} from "../domain/extension.js"
+import type { GentExtension, ExtensionManifest } from "../domain/extension.js"
+import type { ExtensionSetupContext } from "../domain/extension-setup-context.js"
 import type { ExtensionContributions, ExtensionReactions } from "../domain/contribution.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import type { RequestCapability } from "../domain/capability/request.js"
@@ -233,46 +229,11 @@ export type FieldSpec<A, R = never> =
   | ReadonlyArray<A>
   | (() => ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R>)
 
-export type PublicExtensionSetupContext = Omit<RuntimeExtensionSetupContext, "host"> & {
-  readonly host: Pick<
-    RuntimeExtensionSetupContext["host"],
-    "osInfo" | "execPath" | "homeDirectory" | "pathListSeparator"
-  >
-  readonly Process: Pick<
-    ExtensionHostPlatform,
-    "parentEnv" | "runProcess" | "signalPid" | "isPortFree" | "isPidAlive" | "commandCandidates"
-  >
-}
-
-const publicSetupContext = (ctx: RuntimeExtensionSetupContext): PublicExtensionSetupContext => ({
-  cwd: ctx.cwd,
-  source: ctx.source,
-  home: ctx.home,
-  host: {
-    osInfo: ctx.host.osInfo,
-    execPath: ctx.host.execPath,
-    homeDirectory: ctx.host.homeDirectory,
-    pathListSeparator: ctx.host.pathListSeparator,
-  },
-  Process: {
-    parentEnv: ctx.host.parentEnv,
-    runProcess: ctx.host.runProcess,
-    signalPid: ctx.host.signalPid,
-    isPortFree: ctx.host.isPortFree,
-    isPidAlive: ctx.host.isPidAlive,
-    commandCandidates: ctx.host.commandCandidates,
-  },
-})
-
-/**
- * Public setup context exposed to extension authors. Runtime loading still uses
- * the wider domain setup context internally; `defineExtension` bucket factories
- * access this facts-only surface with `yield* ExtensionSetupContext`.
- */
-export class ExtensionSetupContext extends Context.Service<
+export {
   ExtensionSetupContext,
-  PublicExtensionSetupContext
->()("@gent/core/src/extensions/api/ExtensionSetupContext") {}
+  publicSetupContext,
+  type PublicExtensionSetupContext,
+} from "../domain/extension-setup-context.js"
 
 type RemainingSetupRequirements<R> = Exclude<R, ExtensionSetupContext>
 
@@ -314,8 +275,11 @@ const resolveField = <A, R>(
   manifest: ExtensionManifest,
   field: string,
   spec: FieldSpec<A, R> | undefined,
-  ctx: PublicExtensionSetupContext,
-): Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, RemainingSetupRequirements<R>> =>
+): Effect.Effect<
+  ReadonlyArray<A>,
+  ExtensionLoadError,
+  RemainingSetupRequirements<R> | ExtensionSetupContext
+> =>
   Effect.gen(function* () {
     if (spec === undefined) return []
     if (typeof spec !== "function") return spec
@@ -332,14 +296,26 @@ const resolveField = <A, R>(
     // Effect-typed factory: yield it AND seal its failure channel into
     // ExtensionLoadError. Without this, an Effect-factory could escape its
     // declared error channel (e.g. `Effect.fail("bad")` on `unknown` would
-    // be propagated raw — loader.ts only catches defects). Codex  BLOCK 1.
+    // be propagated raw — loader.ts only catches defects). The
+    // `ExtensionSetupContext` Tag stays in the R channel — the loader
+    // provides it at the outer setup boundary.
     if (Effect.isEffect(result)) {
-      const value = yield* sealRuntimeLoadedEffect({
+      const sealed: Effect.Effect<
+        ReadonlyArray<unknown>,
+        ExtensionLoadError,
+        RemainingSetupRequirements<R> | ExtensionSetupContext
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- seal returns Effect<A,_,R> from inferred R; widen to surface the loader-provided ExtensionSetupContext requirement at the bucket boundary
+      > = sealRuntimeLoadedEffect({
         extensionId: manifest.id,
-        effect: () => result.pipe(Effect.provideService(ExtensionSetupContext, ctx)),
+        effect: () => result,
         failureMessage: (cause) => `${field} factory failed: ${String(cause)}`,
         defectMessage: (cause) => `${field} factory defect: ${String(cause)}`,
-      }) as Effect.Effect<ReadonlyArray<unknown>, ExtensionLoadError, RemainingSetupRequirements<R>>
+      }) as Effect.Effect<
+        ReadonlyArray<unknown>,
+        ExtensionLoadError,
+        RemainingSetupRequirements<R> | ExtensionSetupContext
+      >
+      const value = yield* sealed
       if (!Array.isArray(value)) {
         return yield* new ExtensionLoadError({
           extensionId: manifest.id,
@@ -391,47 +367,34 @@ export function defineExtension<R>(
   const manifest: ExtensionManifest = { id: ExtensionId.make(params.id) }
   return {
     manifest,
-    setup: (ctx) =>
-      Effect.gen(function* () {
-        const inputMessage = validateKnownExtensionInputBuckets(params)
-        if (inputMessage !== undefined) {
-          return yield* new ExtensionLoadError({ extensionId: manifest.id, message: inputMessage })
-        }
-        const setupCtx = publicSetupContext(ctx)
-        const resources = yield* resolveField(manifest, "resources", params.resources, setupCtx)
-        const scheduledJobs = yield* resolveField(
-          manifest,
-          "scheduledJobs",
-          params.scheduledJobs,
-          setupCtx,
-        )
-        const tools = yield* resolveField(manifest, "tools", params.tools, setupCtx)
-        const requests = yield* resolveField(manifest, "requests", params.requests, setupCtx)
-        const agents = yield* resolveField(manifest, "agents", params.agents, setupCtx)
-        const modelDrivers = yield* resolveField(
-          manifest,
-          "modelDrivers",
-          params.modelDrivers,
-          setupCtx,
-        )
-        const externalDrivers = yield* resolveField(
-          manifest,
-          "externalDrivers",
-          params.externalDrivers,
-          setupCtx,
-        )
-        const contribs: ExtensionContributions = {
-          ...(resources.length > 0 ? { resources } : {}),
-          ...(scheduledJobs.length > 0 ? { scheduledJobs } : {}),
-          ...(tools.length > 0 ? { tools } : {}),
-          ...(requests.length > 0 ? { requests } : {}),
-          ...(agents.length > 0 ? { agents } : {}),
-          ...(params.reactions !== undefined ? { reactions: params.reactions } : {}),
-          ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
-          ...(externalDrivers.length > 0 ? { externalDrivers } : {}),
-        }
-        yield* validateExtensionPackageShape(manifest, contribs)
-        return contribs
-      }),
+    setup: Effect.gen(function* () {
+      const inputMessage = validateKnownExtensionInputBuckets(params)
+      if (inputMessage !== undefined) {
+        return yield* new ExtensionLoadError({ extensionId: manifest.id, message: inputMessage })
+      }
+      const resources = yield* resolveField(manifest, "resources", params.resources)
+      const scheduledJobs = yield* resolveField(manifest, "scheduledJobs", params.scheduledJobs)
+      const tools = yield* resolveField(manifest, "tools", params.tools)
+      const requests = yield* resolveField(manifest, "requests", params.requests)
+      const agents = yield* resolveField(manifest, "agents", params.agents)
+      const modelDrivers = yield* resolveField(manifest, "modelDrivers", params.modelDrivers)
+      const externalDrivers = yield* resolveField(
+        manifest,
+        "externalDrivers",
+        params.externalDrivers,
+      )
+      const contribs: ExtensionContributions = {
+        ...(resources.length > 0 ? { resources } : {}),
+        ...(scheduledJobs.length > 0 ? { scheduledJobs } : {}),
+        ...(tools.length > 0 ? { tools } : {}),
+        ...(requests.length > 0 ? { requests } : {}),
+        ...(agents.length > 0 ? { agents } : {}),
+        ...(params.reactions !== undefined ? { reactions: params.reactions } : {}),
+        ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
+        ...(externalDrivers.length > 0 ? { externalDrivers } : {}),
+      }
+      yield* validateExtensionPackageShape(manifest, contribs)
+      return contribs
+    }),
   }
 }

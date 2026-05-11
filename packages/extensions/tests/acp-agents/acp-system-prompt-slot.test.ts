@@ -16,7 +16,7 @@ import {
 } from "@gent/core-internal/domain/agent"
 import { tool, type SystemPromptInput, type ToolCapability } from "@gent/core/extensions/api"
 import { withSectionMarkers } from "@gent/core-internal/domain/prompt"
-import { testExtensionHostContext, testSetupCtx } from "@gent/core-internal/test-utils"
+import { testExtensionHostContext, provideTestSetupContext } from "@gent/core-internal/test-utils"
 const baseAgent = AgentDefinition.make({
   name: "cowork" as never,
 })
@@ -32,13 +32,15 @@ const spawnerLayer = BunChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
 )
 const getSystemPrompt = Effect.gen(function* () {
-  const contributions = yield* AcpAgentsExtension.setup(
-    testSetupCtx({
-      cwd: "/tmp",
-      source: "builtin",
-      home: "/home/x",
-    }),
-  ).pipe(Effect.provide(spawnerLayer))
+  const contributions = yield* AcpAgentsExtension.setup
+    .pipe(
+      provideTestSetupContext({
+        cwd: "/tmp",
+        source: "builtin",
+        home: "/home/x",
+      }),
+    )
+    .pipe(Effect.provide(spawnerLayer))
   const systemPrompt = contributions.reactions?.systemPrompt
   if (systemPrompt === undefined) throw new Error("expected ACP systemPrompt reaction")
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test owns this concrete extension handler

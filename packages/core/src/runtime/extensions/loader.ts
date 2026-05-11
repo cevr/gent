@@ -4,6 +4,7 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 import type { GentPlatform } from "../gent-platform.js"
 import type { ExtensionScope, GentExtension, LoadedExtension } from "../../domain/extension.js"
 import { ExtensionLoadError } from "../../domain/extension.js"
+import { ExtensionSetupContext, publicSetupContext } from "../../domain/extension-setup-context.js"
 import { ExtensionId } from "../../domain/ids.js"
 import type { ExtensionContributions } from "../../domain/contribution.js"
 import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js"
@@ -157,7 +158,7 @@ const isGentExtension = (value: unknown): value is LoadedUserExtension => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
   const manifest = obj["manifest"] as Record<string, unknown>
   if (!("id" in manifest) || typeof manifest["id"] !== "string") return false
-  if (!("setup" in obj) || typeof obj["setup"] !== "function") return false
+  if (!("setup" in obj) || !Effect.isEffect(obj["setup"])) return false
   return true
 }
 
@@ -250,12 +251,15 @@ export const setupExtension = (
 ): Effect.Effect<LoadedExtension, ExtensionLoadError, ExtensionSetupServices> =>
   Effect.gen(function* () {
     const host = yield* makeExtensionHostPlatform
-    const setupEffect = discovered.extension.setup({
+    const publicCtx = publicSetupContext({
       cwd,
       source: discovered.sourcePath,
       home,
       host,
     })
+    const setupEffect = discovered.extension.setup.pipe(
+      Effect.provideService(ExtensionSetupContext, publicCtx),
+    )
     const contributions: ExtensionContributions = yield* sealRuntimeLoadedEffect({
       extensionId: discovered.extension.manifest.id,
       effect: () => setupEffect,

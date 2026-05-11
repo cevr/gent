@@ -11,12 +11,12 @@ import { Effect } from "effect"
 import { SessionToolsExtension } from "../src/index.js"
 import { getBuiltinAgent } from "./helpers/builtin-agents.js"
 import type { SystemPromptInput } from "@gent/core/extensions/api"
-import { testExtensionHostContext, testSetupCtx } from "@gent/core-internal/test-utils"
+import { testExtensionHostContext, provideTestSetupContext } from "@gent/core-internal/test-utils"
 
 const stubHostCtx = testExtensionHostContext()
 
 const getSystemPrompt = Effect.gen(function* () {
-  const contributions = yield* SessionToolsExtension.setup(testSetupCtx())
+  const contributions = yield* SessionToolsExtension.setup.pipe(provideTestSetupContext())
   const systemPrompt = contributions.reactions?.systemPrompt
   if (systemPrompt === undefined) throw new Error("expected session tools systemPrompt reaction")
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test owns this concrete extension handler

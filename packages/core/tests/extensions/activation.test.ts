@@ -31,10 +31,10 @@ const fsLayer = Layer.mergeAll(
 
 const makeBuiltin = (
   id: string,
-  setup: () => Effect.Effect<ExtensionContributions, ExtensionLoadError>,
+  setup: Effect.Effect<ExtensionContributions, ExtensionLoadError>,
 ): GentExtension => ({
   manifest: { id: ExtensionId.make(id) },
-  setup: () => setup(),
+  setup,
 })
 
 const makeLoaded = (id: string, contributions: ExtensionContributions): LoadedExtension => ({
@@ -47,7 +47,8 @@ const makeLoaded = (id: string, contributions: ExtensionContributions): LoadedEx
 describe("extension activation isolation", () => {
   it.live("builtin setup failure is isolated instead of crashing activation", () =>
     Effect.gen(function* () {
-      const good = makeBuiltin("good-ext", () =>
+      const good = makeBuiltin(
+        "good-ext",
         Effect.succeed({
           tools: [
             tool({
@@ -60,7 +61,8 @@ describe("extension activation isolation", () => {
           ],
         }),
       )
-      const bad = makeBuiltin("bad-ext", () =>
+      const bad = makeBuiltin(
+        "bad-ext",
         Effect.sync(() => {
           throw new Error("setup boom")
         }),
@@ -86,12 +88,13 @@ describe("extension activation isolation", () => {
       const result = yield* setupDiscoveredExtensions({
         extensions: [
           {
-            extension: makeBuiltin("good-ext", () => Effect.succeed({})),
+            extension: makeBuiltin("good-ext", Effect.succeed({})),
             scope: "user",
             sourcePath: "/tmp/good.ts",
           },
           {
-            extension: makeBuiltin("bad-ext", () =>
+            extension: makeBuiltin(
+              "bad-ext",
               Effect.sync(() => {
                 throw new Error("setup boom")
               }),

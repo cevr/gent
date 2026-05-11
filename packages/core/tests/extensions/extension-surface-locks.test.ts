@@ -527,6 +527,20 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
+  test("GentExtension.setup is an Effect value, not a thunk receiving ctx", () => {
+    type SetupField = PublicExtensionApi.GentExtension["setup"]
+    // Setup must be assignable from a value (an Effect), not from a `() => Effect`.
+    const okValue: SetupField = Effect.succeed({})
+    void okValue
+    // @ts-expect-error — `setup` is no longer a thunk; ctx-as-param escape was removed
+    const badThunk: SetupField = (_ctx: unknown) => Effect.succeed({})
+    void badThunk
+    // @ts-expect-error — `setup` is no longer a thunk; zero-arg thunks are also rejected
+    const badZeroArg: SetupField = () => Effect.succeed({})
+    void badZeroArg
+    expect(true).toBe(true)
+  })
+
   test("public setup context exposes host facts but not process authority", () => {
     const setup = Effect.gen(function* () {
       const ctx = yield* ExtensionSetupContext

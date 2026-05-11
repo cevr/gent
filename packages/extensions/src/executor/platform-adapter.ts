@@ -1,7 +1,8 @@
 import { Context, Layer, type Effect } from "effect"
-import type { GentExtension, PublicExtensionSetupContext } from "@gent/core/extensions/api"
+import type { PublicExtensionSetupContext } from "@gent/core/extensions/api"
 
-type ExtensionHostPlatform = Parameters<GentExtension["setup"]>[0]["host"]
+type PublicHost = PublicExtensionSetupContext["host"]
+type PublicProcess = PublicExtensionSetupContext["Process"]
 
 export interface ExecutorPlatformShape {
   readonly execPath: string
@@ -11,24 +12,24 @@ export interface ExecutorPlatformShape {
   readonly isPortFree: (port: number) => Effect.Effect<boolean>
   readonly isPidAlive: (pid: number) => Effect.Effect<boolean>
   readonly signalPid: (pid: number, signal: NodeJS.Signals) => Effect.Effect<void>
-  readonly runProcess: ExtensionHostPlatform["runProcess"]
+  readonly runProcess: PublicProcess["runProcess"]
 }
 
 export class ExecutorPlatform extends Context.Service<ExecutorPlatform, ExecutorPlatformShape>()(
   "@gent/extensions/src/executor/platform-adapter/ExecutorPlatform",
 ) {
-  static Live = (host: ExtensionHostPlatform) =>
+  static Live = (input: { readonly host: PublicHost; readonly Process: PublicProcess }) =>
     Layer.succeed(
       ExecutorPlatform,
       ExecutorPlatform.of({
-        execPath: host.execPath,
-        pathListSeparator: host.pathListSeparator,
-        binaryName: host.osInfo.platform === "win32" ? "executor.exe" : "executor",
-        commandCandidates: host.commandCandidates,
-        isPortFree: host.isPortFree,
-        isPidAlive: host.isPidAlive,
-        signalPid: host.signalPid,
-        runProcess: host.runProcess,
+        execPath: input.host.execPath,
+        pathListSeparator: input.host.pathListSeparator,
+        binaryName: input.host.osInfo.platform === "win32" ? "executor.exe" : "executor",
+        commandCandidates: input.Process.commandCandidates,
+        isPortFree: input.Process.isPortFree,
+        isPidAlive: input.Process.isPidAlive,
+        signalPid: input.Process.signalPid,
+        runProcess: input.Process.runProcess,
       }),
     )
 
@@ -36,7 +37,7 @@ export class ExecutorPlatform extends Context.Service<ExecutorPlatform, Executor
     readonly execPath: string
     readonly pathListSeparator: string
     readonly platform: string
-    readonly Process: PublicExtensionSetupContext["Process"]
+    readonly Process: PublicProcess
   }) =>
     Layer.succeed(
       ExecutorPlatform,

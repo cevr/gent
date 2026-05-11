@@ -1,13 +1,13 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { MemoryExtension } from "../../src/memory/index.js"
-import { testSetupCtx } from "@gent/core-internal/test-utils"
+import { provideTestSetupContext } from "@gent/core-internal/test-utils"
 
 describe("memory scheduled jobs", () => {
   it.live("declares durable scheduled jobs separately from Resources", () =>
     Effect.gen(function* () {
-      const contributions = yield* MemoryExtension.setup(
-        testSetupCtx({ cwd: "/repo", home: "/home/test", source: "builtin" }),
+      const contributions = yield* MemoryExtension.setup.pipe(
+        provideTestSetupContext({ cwd: "/repo", home: "/home/test", source: "builtin" }),
       )
 
       const resources = contributions.resources ?? []

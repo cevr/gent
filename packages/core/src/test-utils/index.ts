@@ -1,9 +1,6 @@
 import { Clock, Context, DateTime, Effect, Layer, PubSub, Ref, Stream } from "effect"
-import {
-  ExtensionHostProcessError,
-  type ExtensionHostPlatform,
-  type ExtensionSetupContext,
-} from "../domain/extension.js"
+import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../domain/extension.js"
+import { ExtensionSetupContext, publicSetupContext } from "../domain/extension-setup-context.js"
 import { BranchId, SessionId, type ToolCallId } from "../domain/ids.js"
 import { Branch, Session } from "../domain/message.js"
 import type { StorageError } from "../domain/storage-error.js"
@@ -200,13 +197,21 @@ export const assertSequence = (
 
 // ── Test Extension Setup Context ──
 
-/** Pre-built ExtensionSetupContext for tests. */
-export type TestExtensionSetupContext = Omit<ExtensionSetupContext, "host"> & {
+/**
+ * Pre-built wide setup-context shape for tests that need to drive the loader's
+ * narrowing boundary (`publicSetupContext`). The public/yieldable
+ * `PublicExtensionSetupContext` lives in `domain/extension-setup-context.ts`;
+ * this is the loader-input shape.
+ */
+export interface TestExtensionSetupContext {
+  readonly cwd: string
+  readonly source: string
+  readonly home: string
   readonly host: ExtensionHostPlatform
 }
 
 export const testSetupCtx = (
-  overrides?: Partial<Pick<ExtensionSetupContext, "cwd" | "source" | "home">>,
+  overrides?: Partial<Pick<TestExtensionSetupContext, "cwd" | "source" | "home">>,
 ): TestExtensionSetupContext => ({
   cwd: overrides?.cwd ?? "/tmp",
   source: overrides?.source ?? "test",
@@ -236,6 +241,21 @@ export const testSetupCtx = (
       ),
   },
 })
+
+/**
+ * Provide a test-built `ExtensionSetupContext` over a `GentExtension.setup`
+ * Effect, mirroring the production loader's narrowing boundary. Returns the
+ * setup Effect with the `ExtensionSetupContext` requirement discharged so
+ * test bodies can `yield*` it directly.
+ */
+export const provideTestSetupContext =
+  (overrides?: Parameters<typeof testSetupCtx>[0]) =>
+  <A, E, R>(
+    setup: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, Exclude<R, ExtensionSetupContext>> =>
+    setup.pipe(
+      Effect.provideService(ExtensionSetupContext, publicSetupContext(testSetupCtx(overrides))),
+    )
 
 // Mock Helpers
 

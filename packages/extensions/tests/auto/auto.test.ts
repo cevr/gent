@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, Layer } from "effect"
 import { AutoExtension, AutoState, viewForState } from "../../src/auto/index.js"
 import { AutoControllerLive, AutoRead, AutoWrite } from "../../src/auto/controller.js"
-import { testSetupCtx } from "@gent/core-internal/test-utils"
+import { provideTestSetupContext } from "@gent/core-internal/test-utils"
 
 const makeLayer = () => AutoControllerLive
 
@@ -42,7 +42,7 @@ const turnCompleted = Effect.gen(function* () {
 describe("Auto runtime", () => {
   it.live("declares process resources", () =>
     Effect.sync(() => {
-      const contributions = Effect.runSync(AutoExtension.setup(testSetupCtx()))
+      const contributions = Effect.runSync(AutoExtension.setup.pipe(provideTestSetupContext()))
       expect(contributions.resources?.length).toBe(2)
     }),
   )

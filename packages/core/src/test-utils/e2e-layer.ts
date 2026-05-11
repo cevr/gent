@@ -21,7 +21,7 @@ import {
   type AgentRunner,
 } from "../domain/agent.js"
 import { Auth } from "../domain/auth.js"
-import type { ExtensionSetupContext, GentExtension, LoadedExtension } from "../domain/extension.js"
+import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
 import type { EventPublisher } from "../domain/event-publisher.js"
 import { SessionId, type ExtensionId, type InteractionRequestId } from "../domain/ids.js"
@@ -116,7 +116,7 @@ const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
 
 const fromLoadedExtension = (extension: LoadedExtension): GentExtension<never> => ({
   manifest: extension.manifest,
-  setup: () => Effect.succeed(extension.contributions),
+  setup: Effect.succeed(extension.contributions),
 })
 
 const wrapExtensionInput = (
@@ -124,18 +124,15 @@ const wrapExtensionInput = (
   layerOverrides: E2ELayerConfig["layerOverrides"],
 ): GentExtension<ChildProcessSpawner | GentPlatform> => ({
   manifest: extension.manifest,
-  setup: (ctx: ExtensionSetupContext) =>
-    extension
-      .setup(ctx)
-      .pipe(
-        Effect.map((contributions) =>
-          applyLayerOverride(
-            contributions,
-            extension.manifest.id,
-            layerOverrides?.[extension.manifest.id],
-          ),
-        ),
+  setup: extension.setup.pipe(
+    Effect.map((contributions) =>
+      applyLayerOverride(
+        contributions,
+        extension.manifest.id,
+        layerOverrides?.[extension.manifest.id],
       ),
+    ),
+  ),
 })
 
 const extensionInputsForConfig = (

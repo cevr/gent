@@ -22,6 +22,10 @@ import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-mod
 import { Gent } from "@gent/sdk"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import {
+  ExtensionSetupContext,
+  publicSetupContext,
+} from "../../src/domain/extension-setup-context.js"
+import {
   type ExecutorMcpToolResult,
   type ResolvedExecutorSettings,
   ExecutorSettingsDefaults,
@@ -625,8 +629,9 @@ describe("Executor runtime lifecycle", () => {
       narrowR(
         Effect.scoped(
           Effect.gen(function* () {
-            const contributions = yield* ExecutorExtension.setup(
-              testSetupCtx({ cwd: "/test", home: "/test-home" }),
+            const rawCtx = testSetupCtx({ cwd: "/test", home: "/test-home" })
+            const contributions = yield* ExecutorExtension.setup.pipe(
+              Effect.provideService(ExtensionSetupContext, publicSetupContext(rawCtx)),
             )
             const { extension: runtimeExtension } = makeExecutorExtension({
               settings: { autoStart: true },
