@@ -1,8 +1,8 @@
 /**
  * ExternalDriver primitive — unit tests.
  *
- * Covers: registry compilation, getExternalExecutor resolution,
- * duplicate ID handling.
+ * Covers: registry compilation, getExternal resolution, duplicate ID
+ * handling.
  */
 import { describe, test, expect, it } from "effect-bun-test"
 import { Effect, Stream } from "effect"
