@@ -207,7 +207,7 @@ export const collectModelTurnResponse = (params: {
           if (part.type === "text-delta") {
             yield* params
               .publishEvent(
-                new EventStreamChunk({
+                EventStreamChunk.make({
                   sessionId: params.sessionId,
                   branchId: params.branchId,
                   chunk: part.delta,
@@ -307,7 +307,7 @@ const publishExternalStreamChunk = (params: {
 }) =>
   params
     .publishEvent(
-      new EventStreamChunk({
+      EventStreamChunk.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         chunk: params.chunk,

@@ -15,6 +15,7 @@ import {
   TurnCompleted,
 } from "@gent/core-internal/domain/event.js"
 import { dateFromMillis, Branch, Message, Session } from "@gent/core-internal/domain/message.js"
+import { AgentName } from "@gent/core-internal/domain/agent.js"
 import {
   BranchId,
   ExtensionId,
@@ -260,7 +261,7 @@ const runDelegateScenario = (
       AgentRunSpawned.make({
         parentSessionId: params.sessionId,
         childSessionId: child.sessionId,
-        agentName: "explore",
+        agentName: AgentName.make("explore"),
         prompt: "Inspect the TUI tool chrome",
         toolCallId,
         branchId: params.branchId,
@@ -329,7 +330,7 @@ const runDelegateScenario = (
       AgentRunSucceeded.make({
         parentSessionId: params.sessionId,
         childSessionId: child.sessionId,
-        agentName: "explore",
+        agentName: AgentName.make("explore"),
         toolCallId,
         branchId: params.branchId,
       }),
@@ -379,8 +380,8 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     const reviewToolCallId = asToolCallId(`dbg-live-review-${iteration}`)
     const searchSessionsToolCallId = asToolCallId(`dbg-live-search-sessions-${iteration}`)
     const readSessionToolCallId = asToolCallId(`dbg-live-read-session-${iteration}`)
-    const agent = "cowork"
-    const previousAgent = "cowork"
+    const agent = AgentName.make("cowork")
+    const previousAgent = AgentName.make("cowork")
     const startedAt = yield* Clock.currentTimeMillis
 
     yield* eventStore.publish(

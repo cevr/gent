@@ -108,15 +108,15 @@ describe("useSessionFeed", () => {
       const toolCallId = ToolCallId.make("tool-call-feed-duplicates")
       const messageEnvelope = makeEnvelope(
         1,
-        AgentEvent.MessageReceived.make({ message: makeUserMessage(sessionId, branchId) }),
+        AgentEvent.cases.MessageReceived.make({ message: makeUserMessage(sessionId, branchId) }),
       )
       const streamStartedEnvelope = makeEnvelope(
         2,
-        AgentEvent.StreamStarted.make({ sessionId, branchId }),
+        AgentEvent.cases.StreamStarted.make({ sessionId, branchId }),
       )
       const streamChunkEnvelope = makeEnvelope(
         3,
-        AgentEvent.StreamChunk.make({
+        AgentEvent.cases.StreamChunk.make({
           sessionId,
           branchId,
           chunk: "assistant text",
@@ -124,7 +124,7 @@ describe("useSessionFeed", () => {
       )
       const toolStartedEnvelope = makeEnvelope(
         4,
-        AgentEvent.ToolCallStarted.make({
+        AgentEvent.cases.ToolCallStarted.make({
           sessionId,
           branchId,
           toolCallId,
@@ -134,7 +134,7 @@ describe("useSessionFeed", () => {
       )
       const toolSucceededEnvelope = makeEnvelope(
         5,
-        AgentEvent.ToolCallSucceeded.make({
+        AgentEvent.cases.ToolCallSucceeded.make({
           sessionId,
           branchId,
           toolCallId,
@@ -145,7 +145,7 @@ describe("useSessionFeed", () => {
       )
       const turnCompletedEnvelope = makeEnvelope(
         6,
-        AgentEvent.TurnCompleted.make({
+        AgentEvent.cases.TurnCompleted.make({
           sessionId,
           branchId,
           durationMs: 1_000,
@@ -153,7 +153,7 @@ describe("useSessionFeed", () => {
       )
       const retryEnvelope = makeEnvelope(
         7,
-        AgentEvent.ProviderRetrying.make({
+        AgentEvent.cases.ProviderRetrying.make({
           sessionId,
           branchId,
           attempt: 1,
@@ -164,7 +164,7 @@ describe("useSessionFeed", () => {
       )
       const errorEnvelope = makeEnvelope(
         8,
-        AgentEvent.ErrorOccurred.make({
+        AgentEvent.cases.ErrorOccurred.make({
           sessionId,
           branchId,
           error: "provider failed",
@@ -267,11 +267,11 @@ describe("useSessionFeed", () => {
       const extensionId = ExtensionId.make("buffered-extension")
       const bufferedPulse = makeEnvelope(
         1,
-        AgentEvent.ExtensionStateChanged.make({ sessionId, branchId, extensionId }),
+        AgentEvent.cases.ExtensionStateChanged.make({ sessionId, branchId, extensionId }),
       )
       const bufferedInteraction = makeEnvelope(
         2,
-        AgentEvent.InteractionPresented.make({
+        AgentEvent.cases.InteractionPresented.make({
           sessionId,
           branchId,
           requestId: InteractionRequestId.make("interaction-buffered"),
@@ -281,7 +281,7 @@ describe("useSessionFeed", () => {
       )
       const bufferedBranchSwitch = makeEnvelope(
         3,
-        AgentEvent.BranchSwitched.make({
+        AgentEvent.cases.BranchSwitched.make({
           sessionId,
           fromBranchId: branchId,
           toBranchId: branchId,
@@ -289,7 +289,7 @@ describe("useSessionFeed", () => {
       )
       const liveEvent = makeEnvelope(
         4,
-        AgentEvent.TurnCompleted.make({ sessionId, branchId, durationMs: 1 }),
+        AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 }),
       )
       const interactionSeen = yield* Deferred.make<ActiveInteraction>()
       const liveSeen = yield* Deferred.make<void>()

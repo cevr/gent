@@ -1138,7 +1138,7 @@ describe("ephemeral service propagation", () => {
         )
         yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
         const envelope = yield* publisher.append(
-          AgentEvent.ToolCallStarted.make({
+          AgentEvent.cases.ToolCallStarted.make({
             sessionId,
             branchId,
             toolCallId: ToolCallId.make("ephemeral-duplicate-tool-call"),

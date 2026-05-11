@@ -12,6 +12,7 @@ import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { Branch, dateFromMillis, Message, Session } from "@gent/core-internal/domain/message"
 import { AgentSwitched } from "@gent/core-internal/domain/event"
+import { AgentName } from "@gent/core-internal/domain/agent"
 import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 
 const FIXED_NOW_MILLIS = 1_767_225_600_000
@@ -514,8 +515,8 @@ describe("Sessions", () => {
         AgentSwitched.make({
           sessionId,
           branchId,
-          fromAgent: "cowork",
-          toAgent: "deepwork",
+          fromAgent: AgentName.make("cowork"),
+          toAgent: AgentName.make("deepwork"),
         }),
       )
       const cascadedIds = yield* sessions.deleteSession(sessionId)

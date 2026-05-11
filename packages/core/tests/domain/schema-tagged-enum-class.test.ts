@@ -222,11 +222,11 @@ describe("Schema.TaggedUnion — AgentEvent JSON wire shape", () => {
   const sessionId = SessionId.make("session_tagged_enum_wire_shape")
   const branchId = BranchId.make("branch_tagged_enum_wire_shape")
   test("AgentEvent.SessionStarted JSON wire shape unchanged", () => {
-    const evt = AgentEvent.SessionStarted.make({ sessionId, branchId })
+    const evt = AgentEvent.cases.SessionStarted.make({ sessionId, branchId })
     const encoded = Schema.encodeUnknownSync(AgentEvent)(evt)
     expect(encoded).toEqual({ _tag: "SessionStarted", sessionId, branchId })
     const decoded = Schema.decodeUnknownSync(AgentEvent)(encoded)
-    expect(Schema.is(AgentEvent.SessionStarted)(decoded)).toBe(true)
+    expect(Schema.is(AgentEvent.cases.SessionStarted)(decoded)).toBe(true)
   })
 })
 

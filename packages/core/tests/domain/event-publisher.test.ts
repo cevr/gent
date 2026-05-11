@@ -44,7 +44,6 @@ const makeEvent = (
   const sid = typeof sessionId === "string" ? SessionId.make(sessionId) : sessionId
   const bid = toBranchId(branchId)
   const base = {
-    _tag: realTag,
     sessionId: sid,
     branchId: bid,
     toolCallId: ToolCallId.make(`${tag}-${sid}`),
@@ -52,11 +51,11 @@ const makeEvent = (
   }
   switch (realTag) {
     case "ToolCallStarted":
-      return AgentEvent.ToolCallStarted.make(base)
+      return AgentEvent.cases.ToolCallStarted.make(base)
     case "ToolCallSucceeded":
-      return AgentEvent.ToolCallSucceeded.make(base)
+      return AgentEvent.cases.ToolCallSucceeded.make(base)
     case "ToolCallFailed":
-      return AgentEvent.ToolCallFailed.make(base)
+      return AgentEvent.cases.ToolCallFailed.make(base)
   }
 }
 // Tests reference these by their real tag names in expectations.

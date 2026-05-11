@@ -215,7 +215,7 @@ describe("transport-only extension widgets", () => {
       const sessionId = SessionId.make("session-A")
       const branchId = BranchId.make("branch-A")
       const makeEnvelope = (): EventEnvelope => {
-        const event = AgentEvent.ExtensionStateChanged.make({
+        const event = AgentEvent.cases.ExtensionStateChanged.make({
           sessionId,
           branchId,
           extensionId: TODO_EXTENSION_ID,

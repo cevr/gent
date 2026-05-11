@@ -61,7 +61,7 @@ describe("ChildSessionTracker", () => {
         yield* Effect.yieldNow
 
         yield* eventStore.publish(
-          AgentEvent.AgentRunSpawned.make({
+          AgentEvent.cases.AgentRunSpawned.make({
             parentSessionId,
             childSessionId,
             childBranchId,
@@ -97,7 +97,7 @@ describe("ChildSessionTracker", () => {
         yield* Effect.yieldNow
 
         yield* eventStore.publish(
-          AgentEvent.AgentRunSpawned.make({
+          AgentEvent.cases.AgentRunSpawned.make({
             parentSessionId,
             childSessionId,
             childBranchId,
@@ -114,7 +114,7 @@ describe("ChildSessionTracker", () => {
         yield* Effect.all(
           [
             eventStore.publish(
-              AgentEvent.ToolCallStarted.make({
+              AgentEvent.cases.ToolCallStarted.make({
                 sessionId: childSessionId,
                 branchId: childBranchId,
                 toolCallId: childToolCallId,
@@ -123,11 +123,10 @@ describe("ChildSessionTracker", () => {
               }),
             ),
             eventStore.publish(
-              AgentEvent.AgentRunSucceeded.make({
+              AgentEvent.cases.AgentRunSucceeded.make({
                 parentSessionId,
                 childSessionId,
                 branchId: parentBranchId,
-                childBranchId,
                 agentName: AgentName.make("review"),
                 toolCallId: parentToolCallId,
                 usage: { input: 10, output: 20, cost: 0.01 },

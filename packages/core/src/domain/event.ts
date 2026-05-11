@@ -13,7 +13,6 @@ import {
 } from "./ids"
 import { AgentName, ReasoningEffort } from "./agent"
 import { ModelId } from "./model"
-import { TaggedEnumClass } from "./schema-tagged-enum-class"
 import { makeSessionPubSubRegistry } from "./session-pubsub-registry"
 
 // ============================================================================
@@ -44,15 +43,16 @@ export type Question = typeof QuestionSchema.Type
 // ============================================================================
 // AgentEvent — the discriminated union of every event the runtime emits.
 //
-// Authored via `TaggedEnumClass` (see `./schema-tagged-enum-class.ts`) — one
-// call replaces 34 hand-written `Schema.TaggedClass` declarations + a
-// hand-assembled `Schema.Union(...)`. Per-variant classes are exposed as own
-// properties (`AgentEvent.SessionStarted`) so construction reads
-// `SessionStarted.make({...})`. Pattern-match via `Match.tag` or
-// `_tag === "X"` works unchanged — the wire shape is identical.
+// Authored via upstream `Schema.TaggedUnion({...})` shorthand. Variant names
+// are also the wire `_tag` values, so the shorthand covers the full surface
+// (decode/encode, `cases.X.make`, `match`, `guards`, `isAnyOf`) without a
+// bespoke factory. Construction reads `AgentEvent.cases.SessionStarted.make`
+// or — via the per-variant re-exports below — `SessionStarted.make`. Pattern
+// matching uses `AgentEvent.match({...})`; `_tag === "X"` narrowing works
+// unchanged. Wire shape: `{ _tag: "VariantName", ...fields }`.
 // ============================================================================
 
-export const AgentEvent = TaggedEnumClass("AgentEvent", {
+export const AgentEvent = Schema.TaggedUnion({
   SessionStarted: {
     sessionId: SessionId,
     branchId: BranchId,
@@ -245,66 +245,65 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
 export type AgentEvent = Schema.Schema.Type<typeof AgentEvent>
 
 // ============================================================================
-// Per-variant re-exports — same class identity as `AgentEvent.X`, exposed at
-// module scope so consumers may import variants directly without going
-// through the enum object. `SessionStarted.make(...)` and
-// `AgentEvent.SessionStarted.make(...)` produce instances of the SAME class;
-// these are aliases, not parallel implementations. Use whichever reads better
-// at the call site — both communicate "variant of AgentEvent."
+// Per-variant re-exports — same TaggedStruct identity as `AgentEvent.cases.X`,
+// exposed at module scope so consumers may import variants directly without
+// going through the union object. `SessionStarted.make(...)` and
+// `AgentEvent.cases.SessionStarted.make(...)` produce structurally identical
+// values; these are aliases, not parallel implementations.
 // ============================================================================
 
-export const SessionStarted = AgentEvent.SessionStarted
-export type SessionStarted = typeof AgentEvent.SessionStarted.Type
-export const MessageReceived = AgentEvent.MessageReceived
-export type MessageReceived = typeof AgentEvent.MessageReceived.Type
-export const StreamStarted = AgentEvent.StreamStarted
-export type StreamStarted = typeof AgentEvent.StreamStarted.Type
-export const StreamChunk = AgentEvent.StreamChunk
-export type StreamChunk = typeof AgentEvent.StreamChunk.Type
-export const StreamEnded = AgentEvent.StreamEnded
-export type StreamEnded = typeof AgentEvent.StreamEnded.Type
-export const TurnCompleted = AgentEvent.TurnCompleted
-export type TurnCompleted = typeof AgentEvent.TurnCompleted.Type
-export const ToolCallStarted = AgentEvent.ToolCallStarted
-export type ToolCallStarted = typeof AgentEvent.ToolCallStarted.Type
-export const ToolCallSucceeded = AgentEvent.ToolCallSucceeded
-export type ToolCallSucceeded = typeof AgentEvent.ToolCallSucceeded.Type
-export const ToolCallFailed = AgentEvent.ToolCallFailed
-export type ToolCallFailed = typeof AgentEvent.ToolCallFailed.Type
-export const InteractionPresented = AgentEvent.InteractionPresented
-export type InteractionPresented = typeof AgentEvent.InteractionPresented.Type
-export const InteractionResolved = AgentEvent.InteractionResolved
-export type InteractionResolved = typeof AgentEvent.InteractionResolved.Type
-export const ErrorOccurred = AgentEvent.ErrorOccurred
-export type ErrorOccurred = typeof AgentEvent.ErrorOccurred.Type
-export const ProviderRetrying = AgentEvent.ProviderRetrying
-export type ProviderRetrying = typeof AgentEvent.ProviderRetrying.Type
-export const MachineTaskSucceeded = AgentEvent.MachineTaskSucceeded
-export type MachineTaskSucceeded = typeof AgentEvent.MachineTaskSucceeded.Type
-export const MachineTaskFailed = AgentEvent.MachineTaskFailed
-export type MachineTaskFailed = typeof AgentEvent.MachineTaskFailed.Type
-export const SessionNameUpdated = AgentEvent.SessionNameUpdated
-export type SessionNameUpdated = typeof AgentEvent.SessionNameUpdated.Type
-export const SessionSettingsUpdated = AgentEvent.SessionSettingsUpdated
-export type SessionSettingsUpdated = typeof AgentEvent.SessionSettingsUpdated.Type
-export const BranchCreated = AgentEvent.BranchCreated
-export type BranchCreated = typeof AgentEvent.BranchCreated.Type
-export const BranchSwitched = AgentEvent.BranchSwitched
-export type BranchSwitched = typeof AgentEvent.BranchSwitched.Type
-export const BranchSummarized = AgentEvent.BranchSummarized
-export type BranchSummarized = typeof AgentEvent.BranchSummarized.Type
-export const AgentSwitched = AgentEvent.AgentSwitched
-export type AgentSwitched = typeof AgentEvent.AgentSwitched.Type
-export const AgentRunSpawned = AgentEvent.AgentRunSpawned
-export type AgentRunSpawned = typeof AgentEvent.AgentRunSpawned.Type
-export const AgentRunSucceeded = AgentEvent.AgentRunSucceeded
-export type AgentRunSucceeded = typeof AgentEvent.AgentRunSucceeded.Type
-export const AgentRunFailed = AgentEvent.AgentRunFailed
-export type AgentRunFailed = typeof AgentEvent.AgentRunFailed.Type
-export const AgentRestarted = AgentEvent.AgentRestarted
-export type AgentRestarted = typeof AgentEvent.AgentRestarted.Type
-export const ExtensionStateChanged = AgentEvent.ExtensionStateChanged
-export type ExtensionStateChanged = typeof AgentEvent.ExtensionStateChanged.Type
+export const SessionStarted = AgentEvent.cases.SessionStarted
+export type SessionStarted = typeof AgentEvent.cases.SessionStarted.Type
+export const MessageReceived = AgentEvent.cases.MessageReceived
+export type MessageReceived = typeof AgentEvent.cases.MessageReceived.Type
+export const StreamStarted = AgentEvent.cases.StreamStarted
+export type StreamStarted = typeof AgentEvent.cases.StreamStarted.Type
+export const StreamChunk = AgentEvent.cases.StreamChunk
+export type StreamChunk = typeof AgentEvent.cases.StreamChunk.Type
+export const StreamEnded = AgentEvent.cases.StreamEnded
+export type StreamEnded = typeof AgentEvent.cases.StreamEnded.Type
+export const TurnCompleted = AgentEvent.cases.TurnCompleted
+export type TurnCompleted = typeof AgentEvent.cases.TurnCompleted.Type
+export const ToolCallStarted = AgentEvent.cases.ToolCallStarted
+export type ToolCallStarted = typeof AgentEvent.cases.ToolCallStarted.Type
+export const ToolCallSucceeded = AgentEvent.cases.ToolCallSucceeded
+export type ToolCallSucceeded = typeof AgentEvent.cases.ToolCallSucceeded.Type
+export const ToolCallFailed = AgentEvent.cases.ToolCallFailed
+export type ToolCallFailed = typeof AgentEvent.cases.ToolCallFailed.Type
+export const InteractionPresented = AgentEvent.cases.InteractionPresented
+export type InteractionPresented = typeof AgentEvent.cases.InteractionPresented.Type
+export const InteractionResolved = AgentEvent.cases.InteractionResolved
+export type InteractionResolved = typeof AgentEvent.cases.InteractionResolved.Type
+export const ErrorOccurred = AgentEvent.cases.ErrorOccurred
+export type ErrorOccurred = typeof AgentEvent.cases.ErrorOccurred.Type
+export const ProviderRetrying = AgentEvent.cases.ProviderRetrying
+export type ProviderRetrying = typeof AgentEvent.cases.ProviderRetrying.Type
+export const MachineTaskSucceeded = AgentEvent.cases.MachineTaskSucceeded
+export type MachineTaskSucceeded = typeof AgentEvent.cases.MachineTaskSucceeded.Type
+export const MachineTaskFailed = AgentEvent.cases.MachineTaskFailed
+export type MachineTaskFailed = typeof AgentEvent.cases.MachineTaskFailed.Type
+export const SessionNameUpdated = AgentEvent.cases.SessionNameUpdated
+export type SessionNameUpdated = typeof AgentEvent.cases.SessionNameUpdated.Type
+export const SessionSettingsUpdated = AgentEvent.cases.SessionSettingsUpdated
+export type SessionSettingsUpdated = typeof AgentEvent.cases.SessionSettingsUpdated.Type
+export const BranchCreated = AgentEvent.cases.BranchCreated
+export type BranchCreated = typeof AgentEvent.cases.BranchCreated.Type
+export const BranchSwitched = AgentEvent.cases.BranchSwitched
+export type BranchSwitched = typeof AgentEvent.cases.BranchSwitched.Type
+export const BranchSummarized = AgentEvent.cases.BranchSummarized
+export type BranchSummarized = typeof AgentEvent.cases.BranchSummarized.Type
+export const AgentSwitched = AgentEvent.cases.AgentSwitched
+export type AgentSwitched = typeof AgentEvent.cases.AgentSwitched.Type
+export const AgentRunSpawned = AgentEvent.cases.AgentRunSpawned
+export type AgentRunSpawned = typeof AgentEvent.cases.AgentRunSpawned.Type
+export const AgentRunSucceeded = AgentEvent.cases.AgentRunSucceeded
+export type AgentRunSucceeded = typeof AgentEvent.cases.AgentRunSucceeded.Type
+export const AgentRunFailed = AgentEvent.cases.AgentRunFailed
+export type AgentRunFailed = typeof AgentEvent.cases.AgentRunFailed.Type
+export const AgentRestarted = AgentEvent.cases.AgentRestarted
+export type AgentRestarted = typeof AgentEvent.cases.AgentRestarted.Type
+export const ExtensionStateChanged = AgentEvent.cases.ExtensionStateChanged
+export type ExtensionStateChanged = typeof AgentEvent.cases.ExtensionStateChanged.Type
 
 /** Union of all `_tag` literal strings across `AgentEvent` variants. */
 export type AgentEventTag = Schema.Schema.Type<typeof AgentEvent>["_tag"]

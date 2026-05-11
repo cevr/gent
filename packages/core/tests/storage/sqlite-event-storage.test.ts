@@ -35,16 +35,16 @@ describe("Events", () => {
         AgentSwitched.make({
           sessionId: session.id,
           branchId: branch.id,
-          fromAgent: "cowork",
-          toAgent: "deepwork",
+          fromAgent: AgentName.make("cowork"),
+          toAgent: AgentName.make("deepwork"),
         }),
       )
       yield* events.appendEvent(
         AgentSwitched.make({
           sessionId: session.id,
           branchId: branch.id,
-          fromAgent: "deepwork",
-          toAgent: "cowork",
+          fromAgent: AgentName.make("deepwork"),
+          toAgent: AgentName.make("cowork"),
         }),
       )
       const latest = yield* events.getLatestEvent({
