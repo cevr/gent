@@ -369,10 +369,12 @@ const RpcHandlers = GentRpcs.toLayer(
       "message.list": ({ branchId }: BranchPayload) => messageStorage.listMessages(branchId),
 
       "steer.command": ({ command }: { readonly command: TransportSteerCommand }) =>
-        commands.steer(command),
+        sessionRuntime.steer(command),
 
       "queue.drain": ({ sessionId, branchId, requestId }: QueueDrainInput) =>
-        commands.drainQueuedMessages({ sessionId, branchId, requestId }),
+        sessionRuntime
+          .drainQueuedMessages({ sessionId, branchId, requestId })
+          .pipe(Effect.withSpan("SessionCommands.drainQueuedMessages")),
 
       "queue.get": ({ sessionId, branchId }: QueueTarget) =>
         queries.getQueuedMessages({ sessionId, branchId }),

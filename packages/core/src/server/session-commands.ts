@@ -6,8 +6,6 @@ import { SessionMutations, type SessionMutationsService } from "../domain/sessio
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { Branch, Message, Session, copyMessageToBranch } from "../domain/message.js"
 import { messagePartsTextLines } from "../domain/message-part-projection.js"
-import type { QueueSnapshot } from "../domain/queue.js"
-import type { SteerCommand } from "../domain/steer.js"
 import {
   EventStore,
   BranchSwitched,
@@ -186,12 +184,6 @@ export interface SessionCommandsService {
     input: ForkBranchInput,
   ) => Effect.Effect<CreateBranchResult, AppServiceError>
   readonly sendMessage: (input: SendMessageInput) => Effect.Effect<void, AppServiceError>
-  readonly steer: (command: SteerCommand) => Effect.Effect<void, AppServiceError>
-  readonly drainQueuedMessages: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-    requestId: string
-  }) => Effect.Effect<QueueSnapshot, AppServiceError>
   readonly updateSessionReasoningLevel: (
     input: UpdateSessionReasoningLevelInput,
   ) => Effect.Effect<UpdateSessionReasoningLevelResult, AppServiceError>
@@ -999,11 +991,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         switchBranch,
         forkBranch,
         sendMessage,
-        steer: (command) => sessionRuntime.steer(command),
-        drainQueuedMessages: ({ sessionId, branchId, requestId }) =>
-          sessionRuntime
-            .drainQueuedMessages({ sessionId, branchId, requestId })
-            .pipe(Effect.withSpan("SessionCommands.drainQueuedMessages")),
         updateSessionReasoningLevel: mutations.updateReasoningLevel,
       } satisfies SessionCommandsService
     }),
