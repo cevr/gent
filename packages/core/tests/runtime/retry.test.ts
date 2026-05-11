@@ -1,6 +1,7 @@
 import { describe, test, expect, it } from "effect-bun-test"
 import { dateFromMillis } from "@gent/core-internal/domain/message"
-import { Clock, Effect } from "effect"
+import { Clock, Effect, Fiber } from "effect"
+import { TestClock } from "effect/testing"
 import {
   isRetryable,
   getRetryAfter,
@@ -62,6 +63,49 @@ describe("Retry Logic", () => {
     })
     expect(isRetryable(authError)).toBe(false)
   })
+  it.effect("withRetry computes HTTP-date retry-after delay from TestClock", () =>
+    Effect.gen(function* () {
+      // Plant a retry-after HTTP-date 30s past TestClock's current time.
+      // The schedule's new Clock.currentTimeMillis read must observe the
+      // test clock, otherwise the delay would equal (httpDate - wallNow)
+      // and the assertion below would fail by minutes-or-hours.
+      const nowMs = yield* Clock.currentTimeMillis
+      const future = dateFromMillis(nowMs + 30_000)
+      const headers = new Headers({ "retry-after": future.toUTCString() })
+      const attempts: Array<number> = []
+      let callCount = 0
+      const fiber = yield* Effect.forkChild(
+        withRetry(
+          Effect.gen(function* () {
+            callCount += 1
+            if (callCount < 2) {
+              return yield* new ProviderError({
+                message: "Rate limit",
+                model: "test",
+                cause: { headers },
+              })
+            }
+            return "ok"
+          }),
+          { ...DEFAULT_RETRY_CONFIG, initialDelay: 1, maxDelay: 60_000, maxAttempts: 3 },
+          {
+            onRetry: ({ delayMs }) =>
+              Effect.sync(() => {
+                attempts.push(delayMs)
+              }),
+          },
+        ),
+      )
+      // Drive the schedule's sleep deterministically.
+      yield* TestClock.adjust("31 seconds")
+      const exit = yield* Fiber.await(fiber)
+      expect(exit._tag).toBe("Success")
+      // Tolerance accounts for HTTP-date second-precision truncation.
+      expect(attempts.length).toBe(1)
+      expect(Math.abs(attempts[0]! - 30_000)).toBeLessThan(2_000)
+    }),
+  )
+
   it.live("withRetry reports retry progress", () =>
     Effect.gen(function* () {
       const attempts: Array<{
