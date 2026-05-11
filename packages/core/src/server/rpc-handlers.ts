@@ -33,6 +33,7 @@ import { InteractionCommands } from "./interaction-commands.js"
 import { ServerIdentity } from "./server-identity.js"
 import { SessionCommands } from "./session-commands.js"
 import { SessionQueries } from "./session-queries.js"
+import { getBranchTree } from "./session-utils.js"
 import { WorkspaceRpcMiddleware } from "./workspace-rpc.js"
 import {
   DriverInfo,
@@ -312,7 +313,7 @@ const RpcHandlers = GentRpcs.toLayer(
           ...(requestId !== undefined ? { requestId } : {}),
         }),
 
-      "branch.getTree": ({ sessionId }: SessionIdPayload) => queries.getBranchTree(sessionId),
+      "branch.getTree": ({ sessionId }: SessionIdPayload) => getBranchTree(sessionId),
 
       "branch.switch": ({
         sessionId,

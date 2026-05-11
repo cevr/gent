@@ -1,5 +1,8 @@
-import type { BranchId } from "../domain/ids.js"
+import { Effect } from "effect"
+import type { BranchId, SessionId } from "../domain/ids.js"
 import type { Branch, BranchTreeNode } from "../domain/message.js"
+import { BranchStorage } from "../storage/branch-storage.js"
+import type { StorageError } from "../domain/storage-error.js"
 
 type MutableBranchTreeNode = Omit<BranchTreeNode, "children"> & {
   children: MutableBranchTreeNode[]
@@ -45,3 +48,15 @@ export const buildBranchTree = (
   sortNodes(roots)
   return roots
 }
+
+export const getBranchTree = (
+  sessionId: SessionId,
+): Effect.Effect<ReadonlyArray<BranchTreeNode>, StorageError, BranchStorage> =>
+  Effect.gen(function* () {
+    const branchStorage = yield* BranchStorage
+    const branches = yield* branchStorage.listBranches(sessionId)
+    const messageCounts = yield* branchStorage.countMessagesByBranches(
+      branches.map((branch) => branch.id),
+    )
+    return buildBranchTree(branches, messageCounts)
+  })

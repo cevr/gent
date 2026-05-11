@@ -2,13 +2,7 @@ import { Effect, Layer, Context } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { DEFAULT_AGENT_NAME } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
-import type {
-  Branch,
-  BranchTreeNode,
-  Message,
-  Session,
-  SessionTreeNode,
-} from "../domain/message.js"
+import type { Branch, Message, Session, SessionTreeNode } from "../domain/message.js"
 import { projectMessagesWithToolInteractions } from "../domain/message-part-projection.js"
 import { emptyQueueSnapshot, type QueueSnapshot } from "../domain/queue.js"
 import { SessionStorage } from "../storage/session-storage.js"
@@ -19,7 +13,6 @@ import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { withStorageTransaction } from "../storage/sqlite-storage.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import { SessionRuntime, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
-import { buildBranchTree } from "./session-utils.js"
 import { SessionSnapshot } from "./transport-contract.js"
 import type { GetSessionSnapshotInput } from "./transport-contract.js"
 
@@ -36,9 +29,6 @@ export interface SessionQueriesService {
   readonly listBranches: (
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Branch>, AppServiceError>
-  readonly getBranchTree: (
-    sessionId: SessionId,
-  ) => Effect.Effect<ReadonlyArray<BranchTreeNode>, AppServiceError>
   readonly listMessages: (
     branchId: BranchId,
   ) => Effect.Effect<ReadonlyArray<Message>, AppServiceError>
@@ -113,16 +103,6 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           })
         }
         return yield* buildSessionTreeNode(rootSession)
-      })
-
-      const getBranchTree = Effect.fn("SessionQueries.getBranchTree")(function* (
-        sessionId: SessionId,
-      ) {
-        const branches = yield* branchStorage.listBranches(sessionId)
-        const messageCounts = yield* branchStorage.countMessagesByBranches(
-          branches.map((branch) => branch.id),
-        )
-        return buildBranchTree(branches, messageCounts)
       })
 
       const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")(function* (
@@ -205,7 +185,6 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
         getChildSessions,
         getSessionTree,
         listBranches: (sessionId) => branchStorage.listBranches(sessionId),
-        getBranchTree,
         listMessages: (branchId) => messageStorage.listMessages(branchId),
         getQueuedMessages: ({ sessionId, branchId }) =>
           sessionRuntime
