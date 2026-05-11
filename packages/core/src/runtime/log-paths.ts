@@ -24,15 +24,27 @@ const hashCwd = (cwd: string): string => {
   return (h >>> 0).toString(16).padStart(8, "0")
 }
 
-const PROCESS_START_TS = DateTime.make(performance.timeOrigin).pipe(
-  Option.match({
-    onNone: () => "unknown",
-    onSome: (date) =>
-      DateTime.formatIso(date)
-        .replace(/[-:T.]/g, "")
-        .slice(0, 14),
-  }),
-) // YYYYMMDDHHMMSS
+const formatStartTs = (timeOrigin: number): string =>
+  DateTime.make(timeOrigin).pipe(
+    Option.match({
+      onNone: () => "unknown",
+      onSome: (date) =>
+        DateTime.formatIso(date)
+          .replace(/[-:T.]/g, "")
+          .slice(0, 14),
+    }),
+  ) // YYYYMMDDHHMMSS
+
+let cachedStartTs: string | undefined
+/**
+ * Read the process-start timestamp, formatted YYYYMMDDHHMMSS. Lazy and
+ * memoized so module import has no platform side effect, and so synchronous
+ * callers (TUI logger module init) share the same value as Effect callers.
+ */
+export const processStartTs = (): string => {
+  if (cachedStartTs === undefined) cachedStartTs = formatStartTs(performance.timeOrigin)
+  return cachedStartTs
+}
 
 export interface LogPaths {
   readonly dir: string
@@ -47,7 +59,7 @@ export interface LogPaths {
  * directly; Effect-aware callers should use {@link resolveLogPaths}.
  */
 export const buildLogPaths = (cwd: string = FALLBACK_CWD_IDENTITY): LogPaths => {
-  const prefix = `${hashCwd(cwd)}-${PROCESS_START_TS}`
+  const prefix = `${hashCwd(cwd)}-${processStartTs()}`
   return {
     dir: LOG_DIR,
     log: `${LOG_DIR}/${prefix}-server.log`,
