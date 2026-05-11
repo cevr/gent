@@ -17,13 +17,9 @@ import {
 import { BranchId, SessionId } from "../../src/domain/ids.js"
 import { AgentName } from "../../src/domain/agent.js"
 import { requireAgent } from "../../src/domain/extension-agent-helpers.js"
-import {
-  ExtensionContext,
-  ExtensionServiceError,
-  type ExtensionContextService,
-} from "../../src/domain/extension-services.js"
+import { ExtensionContext, ExtensionServiceError } from "../../src/domain/extension-services.js"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message.js"
-import { testExtensionHostContext } from "../../src/test-utils/index.js"
+import { testExtensionHostContext, testToolContext } from "../../src/test-utils/index.js"
 
 const SESSION_ID = SessionId.make("test-session")
 const BRANCH_ID = BranchId.make("test-branch")
@@ -112,10 +108,11 @@ const baseDeps = (overrides: {
 describe("host facet survivors after C9.5 prune", () => {
   it.live("requireAgent fails with typed ExtensionServiceError when the agent is missing", () =>
     Effect.gen(function* () {
-      const stubContext = {
-        Agent: { get: () => Effect.void },
-      } as unknown as ExtensionContextService
-      const ctxLayer = Layer.succeed(ExtensionContext, stubContext)
+      const base = testToolContext()
+      const ctxLayer = Layer.succeed(ExtensionContext, {
+        ...base,
+        Agent: { ...base.Agent, get: () => Effect.void.pipe(Effect.as(undefined)) },
+      })
       const exit = yield* Effect.exit(
         requireAgent(AgentName.make("missing-agent")).pipe(Effect.provide(ctxLayer)),
       )
