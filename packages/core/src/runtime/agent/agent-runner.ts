@@ -10,6 +10,7 @@ import {
   type Path,
   Ref,
   Schema,
+  Scope,
   Stream,
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
@@ -66,7 +67,6 @@ import type { ModelResolver } from "../../providers/model-resolver.js"
 import type { RuntimeEnvironment } from "../runtime-environment.js"
 import type { ConfigService } from "../config-service.js"
 import type { ModelRegistry } from "../model-registry.js"
-import { runWithBuiltLayer } from "../run-with-built-layer.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { makeEphemeralAgentRootLayer } from "./ephemeral-root.js"
 
@@ -691,9 +691,14 @@ const runEphemeralAgent = (params: {
     // `makeEphemeralAgentRootLayer()` wraps the merged layer in `Layer.fresh` so the
     // child gets its own memo map; otherwise the parent runtime's memo could
     // alias child-owned in-memory storage.
-    const { success, reasoning } = yield* runWithBuiltLayer(ephemeralLayer)(childRun).pipe(
-      Effect.scoped,
-    )
+    // Build the ephemeral layer into a fresh scope, then provide its context
+    // to childRun. Equivalent to Effect.provide(ephemeralLayer) + scoped, but
+    // built explicitly so layer lifetime stays visible at the call site.
+    const { success, reasoning } = yield* Effect.gen(function* () {
+      const scope = yield* Scope.Scope
+      const ephemeralContext = yield* Layer.buildWithScope(ephemeralLayer, scope)
+      return yield* childRun.pipe(Effect.provideContext(ephemeralContext))
+    }).pipe(Effect.scoped)
 
     // Save full output to disk (runs in parent context where FileSystem is available)
     const savedPath = yield* saveAgentRunOutput({

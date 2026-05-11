@@ -33,7 +33,6 @@ import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-
 import { ConfigService } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/resource-host/schedule-engine.js"
 import { resolveProfileRuntime, type RuntimeProfile } from "./profile.js"
-import { runWithBuiltLayer } from "./run-with-built-layer.js"
 
 const allowAllPermission: PermissionService = {
   check: () => Effect.succeed("allowed"),
@@ -120,8 +119,13 @@ export class SessionProfileCache extends Context.Service<
 
         const initProfile = (cwd: string) =>
           Effect.gen(function* () {
-            // Resolve and build the profile runtime in one place. Server startup
-            // uses the same helper; this cache only chooses the cwd and scope.
+            // Build the platform layer into serverScope so its services
+            // (FileSystem, Path, ChildProcessSpawner, ConfigService,
+            // GentPlatform) survive across all profile inits. Equivalent to
+            // Effect.provide(platformLayer), but built explicitly to keep
+            // scope lifetimes obvious here rather than at an entry point.
+            const platformContext = yield* Layer.buildWithScope(platformLayer, serverScope)
+
             const runtime = yield* resolveProfileRuntime({
               cwd,
               home: config.home,
@@ -138,7 +142,10 @@ export class SessionProfileCache extends Context.Service<
               ...(config.scheduledJobEnv !== undefined
                 ? { scheduledJobEnv: config.scheduledJobEnv }
                 : {}),
-            }).pipe(Effect.provideService(Scope.Scope, serverScope))
+            }).pipe(
+              Effect.provideService(Scope.Scope, serverScope),
+              Effect.provideContext(platformContext),
+            )
 
             const profile = sessionProfileFromRuntime(runtime)
 
@@ -151,11 +158,7 @@ export class SessionProfileCache extends Context.Service<
             )
 
             return profile
-          }).pipe(
-            runWithBuiltLayer(platformLayer),
-            Effect.provideService(Scope.Scope, serverScope),
-            Effect.orDie,
-          )
+          }).pipe(Effect.provideService(Scope.Scope, serverScope), Effect.orDie)
 
         const resolve: SessionProfileCacheService["resolve"] = (cwd) =>
           Effect.gen(function* () {
