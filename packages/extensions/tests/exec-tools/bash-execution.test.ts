@@ -13,6 +13,7 @@ import {
   testToolContext,
   type TestToolContext,
 } from "@gent/core-internal/test-utils/extension-harness"
+import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 
 const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) => {
@@ -52,7 +53,8 @@ const makeProcessLayerWithFailingMarkFailed = <A, E>(storageLayer: Layer.Layer<A
   )
 }
 
-const makePlatformLayer = () => makeProcessLayer(SqliteStorage.MemoryWithSql())
+const makePlatformLayer = () =>
+  makeProcessLayer(SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)))
 const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) =>
   Effect.provide(e, makePlatformLayer()) as Effect.Effect<A, E, never>
 
@@ -314,7 +316,7 @@ describe("BashTool execution", () => {
           const millis = yield* Clock.currentTimeMillis
           const storageLayer = SqliteStorage.LiveWithSql(
             `/tmp/gent-background-bash-terminal-${millis}.db`,
-          ).pipe(Layer.provide(BunServices.layer))
+          ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
 
           yield* Effect.gen(function* () {
             const storage = yield* BackgroundBashStorage
@@ -390,7 +392,7 @@ describe("BashTool execution", () => {
           const millis = yield* Clock.currentTimeMillis
           const storageLayer = SqliteStorage.LiveWithSql(
             `/tmp/gent-background-bash-failure-${millis}.db`,
-          ).pipe(Layer.provide(BunServices.layer))
+          ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
 
           const result = yield* getToolEffect(BashTool)(
             {
@@ -445,7 +447,7 @@ describe("BashTool execution", () => {
           const millis = yield* Clock.currentTimeMillis
           const storageLayer = SqliteStorage.LiveWithSql(
             `/tmp/gent-background-bash-${millis}.db`,
-          ).pipe(Layer.provide(BunServices.layer))
+          ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
           const processLayer = makeProcessLayer(storageLayer)
           const firstContext = yield* Layer.buildWithScope(processLayer, scope)
           const started = yield* getToolEffect(BashTool)(

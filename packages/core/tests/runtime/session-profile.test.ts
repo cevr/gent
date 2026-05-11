@@ -64,7 +64,11 @@ describe("SessionProfileCache", () => {
         initialProfiles: [initialProfile],
       }).pipe(
         Layer.provide(
-          Layer.mergeAll(BunServices.layer, configServiceLive, SqliteStorage.MemoryWithSql()),
+          Layer.mergeAll(
+            BunServices.layer,
+            configServiceLive,
+            SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
+          ),
         ),
       )
       const resolvedProfile = yield* Effect.gen(function* () {
@@ -114,7 +118,11 @@ describe("SessionProfileCache", () => {
         extensions: [],
       }).pipe(
         Layer.provide(
-          Layer.mergeAll(BunServices.layer, configServiceLive, SqliteStorage.MemoryWithSql()),
+          Layer.mergeAll(
+            BunServices.layer,
+            configServiceLive,
+            SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
+          ),
         ),
       )
 

@@ -519,7 +519,11 @@ describe("extension command RPCs", () => {
             extensions: [ext],
           }).pipe(
             Layer.provide(
-              Layer.mergeAll(BunPlatformLive, ConfigService.Test(), SqliteStorage.MemoryWithSql()),
+              Layer.mergeAll(
+                BunPlatformLive,
+                ConfigService.Test(),
+                SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
+              ),
             ),
           ) as Layer.Layer<SessionProfileCache>
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])

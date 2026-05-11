@@ -47,7 +47,10 @@ const decideInteraction = (
 // Interaction Request — cold interaction mechanics
 // ============================================================================
 describe("Interaction Request", () => {
-  const storageLive = Layer.merge(SqliteStorage.MemoryWithSql(), GentPlatform.Test())
+  const storageLive = Layer.mergeAll(
+    SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test())),
+    GentPlatform.Test(),
+  )
   const workspaceA = "a".repeat(64)
   const workspaceB = "b".repeat(64)
   it.live("present persists request to storage and throws InteractionPendingError", () =>

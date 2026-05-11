@@ -30,7 +30,10 @@ import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 
 describe("requestId idempotency", () => {
   const makePersistentSessionCommandsLayer = (dbPath: string) => {
-    const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(Layer.provide(BunServices.layer))
+    const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(
+      Layer.provide(BunServices.layer),
+      Layer.provide(GentPlatform.Test()),
+    )
     const deps = Layer.mergeAll(
       storageLayer,
       sessionRuntimeLayer(),
@@ -112,7 +115,7 @@ describe("requestId idempotency", () => {
             dispatchCount++
           }),
       })
-      const storageLayer = SqliteStorage.MemoryWithSql()
+      const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
       const deps = Layer.mergeAll(
         storageLayer,
         countingRuntime,
@@ -163,7 +166,7 @@ describe("requestId idempotency", () => {
             dispatchCount++
           }),
       })
-      const storageLayer = SqliteStorage.MemoryWithSql()
+      const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
       const deps = Layer.mergeAll(
         storageLayer,
         countingRuntime,
@@ -630,6 +633,7 @@ describe("requestId idempotency", () => {
       const makeLayer = (failPrompt: boolean) => {
         const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(
           Layer.provide(BunServices.layer),
+          Layer.provide(GentPlatform.Test()),
         )
         const runtimeLayer = sessionRuntimeLayer({
           sendUserMessage: (input) => {

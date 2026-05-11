@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto"
 import { Effect, Option, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Message, Branch, MessageMetadata, Session, dateFromMillis } from "../../domain/message.js"
@@ -6,6 +5,7 @@ import { messagePartsSearchText } from "../../domain/message-part-projection.js"
 import { AgentEvent } from "../../domain/event.js"
 import { BranchId, MessageId, SessionId } from "../../domain/ids.js"
 import { ReasoningEffort } from "../../domain/agent.js"
+import { GentPlatform } from "../../runtime/gent-platform.js"
 import { SqlClient } from "effect/unstable/sql"
 
 // Schema decoders - Effect-based (no sync throws)
@@ -152,9 +152,6 @@ export const encodeStoredMessage = (message: Message) =>
     }
   })
 
-export const contentChunkId = (partJson: string): string =>
-  createHash("sha256").update(partJson).digest("hex")
-
 export const messageSearchText = messagePartsSearchText
 
 export const groupMessageChunkRows = (rows: ReadonlyArray<MessageChunkRow>) => {
@@ -188,12 +185,13 @@ export const insertMessageContent = Effect.fn("Storage.insertMessageContent")(fu
   partJsons: ReadonlyArray<string>,
 ) {
   const sql = yield* SqlClient.SqlClient
+  const platform = yield* GentPlatform
   yield* sql`DELETE FROM message_chunks WHERE message_id = ${messageId}`
   yield* Effect.forEach(
     partJsons,
     (partJson, ordinal) =>
       Effect.gen(function* () {
-        const chunkId = contentChunkId(partJson)
+        const chunkId = platform.hash("sha256", partJson)
         const part = yield* decodeStoredPromptPart(partJson)
         yield* sql`INSERT OR IGNORE INTO content_chunks (id, part_type, part_json) VALUES (${chunkId}, ${part.type}, ${partJson})`
         yield* sql`INSERT INTO message_chunks (message_id, ordinal, chunk_id) VALUES (${messageId}, ${ordinal}, ${chunkId})`

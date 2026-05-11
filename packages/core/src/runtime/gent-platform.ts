@@ -30,8 +30,8 @@
  *                          NOT epoch-ish wall-clock comparisons.
  *   - `hash(alg, input)` — content-addressed hex digest. `sha256` for durable
  *                          ids and cache keys; `md5` for non-cryptographic
- *                          memoization. Sync because the SQLite write path
- *                          (`contentChunkId`) is sync.
+ *                          memoization. Sync because content-addressed
+ *                          SQLite chunking is sync.
  *   - `randomBytes(n)`   — cryptographically secure random bytes for OAuth
  *                          PKCE / state nonces.
  *   - `fileURLToPath(u)` — `file://` URL → absolute filesystem path. Used by

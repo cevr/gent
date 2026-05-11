@@ -22,7 +22,7 @@ const testCtx = testToolContext({ sessionId, branchId })
 const TestExtensionContextLayer = Layer.succeed(ExtensionContext, testCtx)
 
 const makeLayer = () => {
-  const storageLayer = SqliteStorage.MemoryWithSql()
+  const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
   const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
   const baseDeps = Layer.mergeAll(
     storageLayer,

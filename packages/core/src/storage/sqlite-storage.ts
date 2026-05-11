@@ -15,6 +15,7 @@ import { EventStorage } from "./event-storage.js"
 import { RelationshipStorage } from "./relationship-storage.js"
 import { SessionOperationStorage } from "./session-operation-storage.js"
 import { StorageError } from "../domain/storage-error.js"
+import { GentPlatform } from "../runtime/gent-platform.js"
 export { StorageError }
 
 import { StorageInitLive } from "./schema.js"
@@ -56,7 +57,7 @@ type FocusedStorage =
 
 const provideFocusedRepositories = <E, R>(
   base: Layer.Layer<SqlClient.SqlClient, E, R>,
-): Layer.Layer<FocusedStorage, E, R> => {
+): Layer.Layer<FocusedStorage, E, R | GentPlatform> => {
   const interactionStorage = Layer.provide(InteractionStorage.Live, base)
   return Layer.mergeAll(
     base,
@@ -110,12 +111,16 @@ export const SqliteStorage = {
   ): Layer.Layer<
     FocusedStorage,
     StorageError | PlatformError.PlatformError,
-    FileSystem.FileSystem | Path.Path
+    FileSystem.FileSystem | Path.Path | GentPlatform
   > => provideFocusedRepositories(makeLiveSqliteLayer(dbPath)),
 
-  MemoryWithSql: (): Layer.Layer<FocusedStorage, StorageError> =>
+  MemoryWithSql: (): Layer.Layer<FocusedStorage, StorageError, GentPlatform> =>
     provideFocusedRepositories(makeMemorySqliteLayer),
 
+  // `TestWithSql` is the closed-context variant: it self-provides
+  // `GentPlatform.Test()` so storage tests can yield it without wiring a
+  // platform layer themselves. Production callers use `LiveWithSql` /
+  // `MemoryWithSql` and supply the live `GentPlatform`.
   TestWithSql: (): Layer.Layer<FocusedStorage, StorageError> =>
-    provideFocusedRepositories(makeMemorySqliteLayer),
+    Layer.provide(provideFocusedRepositories(makeMemorySqliteLayer), GentPlatform.Test()),
 }

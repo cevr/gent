@@ -144,13 +144,6 @@ export const makeEphemeralAgentRootLayer = (params: {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime root owns erased generic boundary
     Context.get(params.parentServices as Context.Context<unknown>, tag)
 
-  const storageLayer = SqliteStorage.MemoryWithSql()
-  const clusterRunnerLayer = Layer.provide(
-    SingleRunner.layer({ runnerStorage: "memory" }),
-    storageLayer,
-  )
-  const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
-  const approvalLayer = ApprovalService.LiveAutoResolve
   const parentRuntimeEnvironmentLayer = Layer.succeed(
     RuntimeEnvironment,
     parentService(RuntimeEnvironment),
@@ -164,6 +157,13 @@ export const makeEphemeralAgentRootLayer = (params: {
   const parentConfigLayer = Layer.succeed(ConfigService, parentService(ConfigService))
   const parentModelRegistryLayer = Layer.succeed(ModelRegistry, parentService(ModelRegistry))
   const parentGentPlatformLayer = Layer.succeed(GentPlatform, parentService(GentPlatform))
+  const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(parentGentPlatformLayer))
+  const clusterRunnerLayer = Layer.provide(
+    SingleRunner.layer({ runnerStorage: "memory" }),
+    storageLayer,
+  )
+  const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
+  const approvalLayer = ApprovalService.LiveAutoResolve
   const promptPresenterLayer = Layer.provide(
     PromptPresenterLive,
     Layer.mergeAll(

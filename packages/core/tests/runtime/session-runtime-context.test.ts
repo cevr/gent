@@ -21,6 +21,7 @@ import {
   type SessionProfile,
   type SessionProfileCacheService,
 } from "../../src/runtime/session-profile"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
 import { SqliteStorage, StorageError } from "@gent/core-internal/storage/sqlite-storage"
 import {
   SessionStorage,
@@ -71,12 +72,16 @@ describe("resolveSessionEnvironment", () => {
           extensions: [],
         }).pipe(
           Layer.provide(
-            Layer.mergeAll(BunServices.layer, configServiceLive, SqliteStorage.MemoryWithSql()),
+            Layer.mergeAll(
+              BunServices.layer,
+              configServiceLive,
+              SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
+            ),
           ),
         )
         const testLayer = Layer.mergeAll(
           BunServices.layer,
-          SqliteStorage.MemoryWithSql(),
+          SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
           emptyRegistryLayer,
           emptyDriverRegistryLayer,
           runtimeEnvironmentLive,
@@ -151,7 +156,7 @@ describe("resolveSessionEnvironment", () => {
         baseSections: [{ id: "default", content: "Default", priority: 1 }],
       }
       const testLayer = Layer.mergeAll(
-        SqliteStorage.MemoryWithSql(),
+        SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test())),
         emptyRegistryLayer,
         runtimeEnvironmentLayer,
       )
@@ -189,7 +194,7 @@ describe("resolveSessionEnvironment", () => {
         platform: "test",
       })
       const testLayer = Layer.mergeAll(
-        SqliteStorage.MemoryWithSql(),
+        SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test())),
         emptyRegistryLayer,
         emptyDriverRegistryLayer,
         runtimeEnvironmentLayer,
@@ -279,7 +284,7 @@ describe("resolveSessionEnvironment", () => {
         platform: "test",
       })
       const testLayer = Layer.mergeAll(
-        SqliteStorage.MemoryWithSql(),
+        SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test())),
         emptyRegistryLayer,
         defaultDriverRegistryLayer,
         runtimeEnvironmentLayer,

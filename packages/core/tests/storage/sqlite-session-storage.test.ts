@@ -5,6 +5,7 @@ import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import { Effect, Exit, FileSystem, Layer, Path } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
 import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
@@ -137,6 +138,7 @@ describe("Sessions", () => {
       const layer = SqliteStorage.LiveWithSql(path.join(dir, "gent.db")).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
+        Layer.provide(GentPlatform.Test()),
       )
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient
@@ -172,6 +174,7 @@ describe("Sessions", () => {
       const layer = SqliteStorage.LiveWithSql(dbPath).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
+        Layer.provide(GentPlatform.Test()),
       )
       const sessionId = SessionId.make("migrator-session")
 
@@ -235,6 +238,7 @@ describe("Sessions", () => {
       const layer = SqliteStorage.LiveWithSql(dbPath).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
+        Layer.provide(GentPlatform.Test()),
       )
       const exit = yield* Effect.exit(Layer.buildWithScope(layer, yield* Effect.scope))
 
