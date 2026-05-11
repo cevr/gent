@@ -1,6 +1,6 @@
 import { Cache, DateTime, Duration, Effect, Exit, Layer, Context, Ref, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { SqlClient } from "effect/unstable/sql"
+import type { SqlClient } from "effect/unstable/sql"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
@@ -29,7 +29,7 @@ import {
   type StoredCreateSessionResult,
   type StoredSwitchBranchResult,
 } from "../storage/session-operation-storage.js"
-import { type StorageError, withStorageTransaction } from "../storage/sqlite-storage.js"
+import { type StorageError, makeStorageTransaction } from "../storage/sqlite-storage.js"
 import { ModelResolver } from "../providers/model-resolver.js"
 import { toPrompt } from "../providers/ai-transcript.js"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -211,9 +211,7 @@ const makeSessionMutationsService: Effect.Effect<
   | SessionRuntime
   | GentPlatform
 > = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  const storageTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    withStorageTransaction(sql, effect)
+  const storageTransaction = yield* makeStorageTransaction
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
   const messageStorage = yield* MessageStorage
@@ -661,9 +659,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const sessionStorage = yield* SessionStorage
       const branchStorage = yield* BranchStorage
       const messageStorage = yield* MessageStorage
-      const sql = yield* SqlClient.SqlClient
-      const storageTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        withStorageTransaction(sql, effect)
+      const storageTransaction = yield* makeStorageTransaction
       const sessionOperationStorage = yield* SessionOperationStorage
       const sessionRuntime = yield* SessionRuntime
       const eventPublisher = yield* EventPublisher

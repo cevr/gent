@@ -1,5 +1,4 @@
 import { Effect, Layer, Context } from "effect"
-import { SqlClient } from "effect/unstable/sql"
 import { DEFAULT_AGENT_NAME } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { Branch, Message, Session, SessionTreeNode } from "../domain/message.js"
@@ -10,7 +9,7 @@ import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
-import { withStorageTransaction } from "../storage/sqlite-storage.js"
+import { makeStorageTransaction } from "../storage/sqlite-storage.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import { SessionRuntime, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
 import { SessionSnapshot } from "./transport-contract.js"
@@ -50,9 +49,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       const messageStorage = yield* MessageStorage
       const eventStorage = yield* EventStorage
       const relationshipStorage = yield* RelationshipStorage
-      const sql = yield* SqlClient.SqlClient
-      const storageTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        withStorageTransaction(sql, effect)
+      const storageTransaction = yield* makeStorageTransaction
       const sessionRuntime = yield* SessionRuntime
 
       const listSessions = Effect.fn("SessionQueries.listSessions")(function* () {

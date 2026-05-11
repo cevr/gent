@@ -14,7 +14,7 @@ import {
   Stream,
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
-import { SqlClient } from "effect/unstable/sql"
+import type { SqlClient } from "effect/unstable/sql"
 import { runProcess } from "../../utils/run-process.js"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import {
@@ -59,7 +59,7 @@ import { BranchStorage } from "../../storage/branch-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { RelationshipStorage } from "../../storage/relationship-storage.js"
-import { withStorageTransaction } from "../../storage/sqlite-storage.js"
+import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { GentPlatform } from "../gent-platform.js"
 import { SessionRuntime } from "../session-runtime.js"
@@ -327,7 +327,7 @@ const createDurableAgentRunSession = (params: {
     const branchStorage = yield* BranchStorage
     const eventPublisher = yield* EventPublisher
     const platform = yield* GentPlatform
-    const sql = yield* SqlClient.SqlClient
+    const storageTransaction = yield* makeStorageTransaction
 
     const parentDepth = yield* getSessionDepth(params.parentSessionId)
     if (parentDepth >= DEFAULT_MAX_AGENT_RUN_DEPTH) {
@@ -340,8 +340,7 @@ const createDurableAgentRunSession = (params: {
     const branchId = BranchId.make(yield* platform.randomId)
     const now = yield* DateTime.nowAsDate
 
-    const committed = yield* withStorageTransaction(
-      sql,
+    const committed = yield* storageTransaction(
       Effect.gen(function* () {
         yield* sessionStorage.createSession(
           new Session({

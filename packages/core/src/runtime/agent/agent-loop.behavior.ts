@@ -23,7 +23,7 @@ import {
   TxSubscriptionRef,
   type Stream,
 } from "effect"
-import { SqlClient } from "effect/unstable/sql"
+import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
   AgentName,
@@ -51,7 +51,7 @@ import type { StorageError } from "../../domain/storage-error.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
-import { withStorageTransaction } from "../../storage/sqlite-storage.js"
+import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import { SessionProfileCache } from "../session-profile.js"
@@ -276,7 +276,6 @@ export const makeAgentLoopBehavior = (
   Effect.gen(function* () {
     const messageStorage = yield* MessageStorage
     const queueStorage = yield* AgentLoopQueueStorage
-    const sql = yield* SqlClient.SqlClient
     yield* ModelResolver
     const extensionRegistry = yield* ExtensionRegistry
     const driverRegistry = yield* DriverRegistry
@@ -285,6 +284,7 @@ export const makeAgentLoopBehavior = (
     const configServiceForRun = yield* ConfigService
     const modelRegistryForRun = yield* ModelRegistry
     const host = yield* makeExtensionHostPlatform
+    const storageTransaction = yield* makeStorageTransaction
     // Snapshot the layer-build context so behavior methods (declared as
     // `Effect<A, E, never>` in `AgentLoopBehavior`) can resolve Tags that
     // turn-helpers now yield inside (post-W33-C3.3). Without this, helper
@@ -887,8 +887,7 @@ export const makeAgentLoopBehavior = (
       const turnEndTime = yield* DateTime.now
       const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
 
-      const envelope = yield* withStorageTransaction(
-        sql,
+      const envelope = yield* storageTransaction(
         Effect.gen(function* () {
           yield* messageStorage.updateMessageTurnDuration(params.messageId, turnDurationMs)
           return yield* eventPublisher.append(

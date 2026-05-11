@@ -1,6 +1,5 @@
 import { DateTime, Effect, Random, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { SqlClient } from "effect/unstable/sql"
 import {
   AgentDefinition,
   DEFAULT_AGENT_NAME,
@@ -36,7 +35,7 @@ import { AllowAllPermission } from "../session-runtime-context.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"
-import { withStorageTransaction } from "../../storage/sqlite-storage.js"
+import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { ProviderError } from "../../domain/provider-error.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import { toPrompt } from "../../providers/ai-transcript.js"
@@ -78,9 +77,9 @@ export const findPersistedEvent = (params: {
 
 export const commitWithEvent = <A, E, R>(mutation: Effect.Effect<CommittedMutation<A>, E, R>) =>
   Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient
     const eventPublisher = yield* EventPublisher
-    const committed = yield* withStorageTransaction(sql, mutation)
+    const storageTransaction = yield* makeStorageTransaction
+    const committed = yield* storageTransaction(mutation)
     if (committed.envelope !== undefined) {
       yield* eventPublisher.deliver(committed.envelope)
     }

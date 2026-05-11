@@ -1,6 +1,6 @@
 import type { PlatformError } from "effect"
 import { Effect, Layer, FileSystem, Path } from "effect"
-import { SqlError, type SqlClient } from "effect/unstable/sql"
+import { SqlClient, SqlError } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import type { MessageStorage as ClusterMessageStorage } from "effect/unstable/cluster"
 import type { EncoreMessageStorage } from "effect-encore"
@@ -24,19 +24,27 @@ export type StorageTransaction = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ) => Effect.Effect<A, E | StorageError, R>
 
-export const withStorageTransaction = <A, E, R>(
-  sql: SqlClient.SqlClient,
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | StorageError, R> =>
-  sql
-    .withTransaction(effect)
-    .pipe(
-      Effect.catchIf(SqlError.isSqlError, (error) =>
-        Effect.fail(
-          new StorageError({ message: "Failed to run storage transaction", cause: error }),
-        ),
-      ),
-    )
+// `makeStorageTransaction` yields `SqlClient` once at layer-build time and
+// returns a closure that wraps each mutation in a transaction. Callers do not
+// thread `SqlClient` as a parameter and do not surface it on per-method
+// R-channels; the closure binds it through lexical scope (see project memory
+// "No context params — yield directly"). The factory shape lets the Live
+// layer construction yield sql at the top and produce a `storageTransaction`
+// helper bound to that sql for the lifetime of the layer.
+export const makeStorageTransaction: Effect.Effect<StorageTransaction, never, SqlClient.SqlClient> =
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    return <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E | StorageError, R> =>
+      sql
+        .withTransaction(effect)
+        .pipe(
+          Effect.catchIf(SqlError.isSqlError, (error) =>
+            Effect.fail(
+              new StorageError({ message: "Failed to run storage transaction", cause: error }),
+            ),
+          ),
+        )
+  })
 
 const memorySqliteClientLayer: Layer.Layer<SqliteClient.SqliteClient | SqlClient.SqlClient, never> =
   Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))
