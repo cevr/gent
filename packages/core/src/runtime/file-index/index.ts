@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Layer, Path } from "effect"
+import { Effect, type FileSystem, Layer, type Path } from "effect"
 import { FileIndex, type FileIndexService } from "../../domain/file-index.js"
 import {
   isNativeFileIndexAvailable,
@@ -38,19 +38,17 @@ export const FileIndexLive: Layer.Layer<
   FileSystem.FileSystem | Path.Path | RuntimeEnvironment
 > = Layer.unwrap(
   Effect.gen(function* () {
-    const path = yield* Path.Path
-    const fs = yield* FileSystem.FileSystem
     const cacheRef = yield* makeGitignoreCacheRef()
-    const fallback = makeFallbackService(fs, path, cacheRef)
-    const { home, platform } = yield* RuntimeEnvironment
+    const fallback = yield* makeFallbackService(cacheRef)
+    const { platform } = yield* RuntimeEnvironment
 
     if (platform === "test" || !isNativeFileIndexAvailable()) {
       return Layer.succeed(FileIndex, fallback)
     }
 
-    const dbDir = yield* ensureDbDir(home)
+    const dbDir = yield* ensureDbDir
 
-    const { service, finalize } = makeNativeServiceFromModule(dbDir, path)
+    const { service, finalize } = yield* makeNativeServiceFromModule(dbDir)
 
     yield* Effect.addFinalizer(() => finalize)
 

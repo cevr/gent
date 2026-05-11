@@ -21,16 +21,18 @@ interface FinderEntry {
   scanned: boolean
 }
 
-export const ensureDbDir = (
-  home: string,
-): Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function* () {
-    const path = yield* Path.Path
-    const fs = yield* FileSystem.FileSystem
-    const dir = path.join(home, ".gent", "fff")
-    yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore)
-    return dir
-  })
+export const ensureDbDir: Effect.Effect<
+  string,
+  never,
+  FileSystem.FileSystem | Path.Path | RuntimeEnvironment
+> = Effect.gen(function* () {
+  const path = yield* Path.Path
+  const fs = yield* FileSystem.FileSystem
+  const { home } = yield* RuntimeEnvironment
+  const dir = path.join(home, ".gent", "fff")
+  yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore)
+  return dir
+})
 
 // ---------------------------------------------------------------------------
 // Scan completion (delegated to native `waitForScan` FFI)
@@ -47,105 +49,95 @@ const waitForScan = (finder: FileFinder, timeoutMs: number): Effect.Effect<boole
   })
 
 // ---------------------------------------------------------------------------
-// Convert FFF FileItem to IndexedFile
-// ---------------------------------------------------------------------------
-
-const toIndexedFile = (path: Path.Path, basePath: string, item: FileItem): IndexedFile => ({
-  path: path.join(basePath, item.relativePath),
-  relativePath: item.relativePath,
-  fileName: item.fileName,
-  size: item.size,
-  modifiedMs: item.modified * 1000,
-})
-
-// ---------------------------------------------------------------------------
 // Native FileIndex implementation
 // ---------------------------------------------------------------------------
 
 const makeNativeService = (
-  finders: Map<string, FinderEntry>,
   dbDir: string,
-  path: Path.Path,
-): FileIndexService => {
-  const getOrCreate = (cwd: string): FinderEntry | undefined => {
-    const existing = finders.get(cwd)
-    if (existing !== undefined) return existing
+): Effect.Effect<{ service: FileIndexService; finalize: Effect.Effect<void> }, never, Path.Path> =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path
+    const finders = new Map<string, FinderEntry>()
+    const frecencyDbPath = path.join(dbDir, "frecency.mdb")
+    const historyDbPath = path.join(dbDir, "history.mdb")
 
-    const result = NativeFileFinder.create({
-      basePath: cwd,
-      frecencyDbPath: path.join(dbDir, "frecency.mdb"),
-      historyDbPath: path.join(dbDir, "history.mdb"),
-      aiMode: true,
+    const toIndexedFile = (basePath: string, item: FileItem): IndexedFile => ({
+      path: path.join(basePath, item.relativePath),
+      relativePath: item.relativePath,
+      fileName: item.fileName,
+      size: item.size,
+      modifiedMs: item.modified * 1000,
     })
 
-    if (!result.ok) return undefined
+    const getOrCreate = (cwd: string): FinderEntry | undefined => {
+      const existing = finders.get(cwd)
+      if (existing !== undefined) return existing
 
-    const entry: FinderEntry = { finder: result.value, scanned: false }
-    finders.set(cwd, entry)
-    return entry
-  }
+      const result = NativeFileFinder.create({
+        basePath: cwd,
+        frecencyDbPath,
+        historyDbPath,
+        aiMode: true,
+      })
 
-  return {
-    listFiles: (params) =>
-      Effect.gen(function* () {
-        const entry = getOrCreate(params.cwd)
-        if (entry === undefined) {
-          return yield* new FileIndexError({ message: "failed to create finder", cwd: params.cwd })
-        }
+      if (!result.ok) return undefined
 
-        if (!entry.scanned) {
-          const completed = yield* waitForScan(entry.finder, params.waitForScanMs ?? 5000)
-          if (!completed) {
+      const entry: FinderEntry = { finder: result.value, scanned: false }
+      finders.set(cwd, entry)
+      return entry
+    }
+
+    const service: FileIndexService = {
+      listFiles: (params) =>
+        Effect.gen(function* () {
+          const entry = getOrCreate(params.cwd)
+          if (entry === undefined) {
             return yield* new FileIndexError({
-              message: "scan timed out",
-              cwd: params.cwd,
-            })
-          }
-          entry.scanned = true
-        }
-
-        const pageSize = 200
-        const allFiles: IndexedFile[] = []
-        let pageIndex = 0
-        let totalFiles = 0
-
-        // eslint-disable-next-line no-constant-condition -- cursor loop exits on empty page or backend error
-        while (true) {
-          const result = entry.finder.fileSearch("", { pageSize, pageIndex })
-          if (!result.ok) {
-            return yield* new FileIndexError({
-              message: `fileSearch failed: ${result.error}`,
+              message: "failed to create finder",
               cwd: params.cwd,
             })
           }
 
-          totalFiles = result.value.totalFiles
-          for (const item of result.value.items) {
-            allFiles.push(toIndexedFile(path, params.cwd, item))
+          if (!entry.scanned) {
+            const completed = yield* waitForScan(entry.finder, params.waitForScanMs ?? 5000)
+            if (!completed) {
+              return yield* new FileIndexError({
+                message: "scan timed out",
+                cwd: params.cwd,
+              })
+            }
+            entry.scanned = true
           }
 
-          if (allFiles.length >= totalFiles || result.value.items.length < pageSize) break
-          pageIndex++
-        }
+          const pageSize = 200
+          const allFiles: IndexedFile[] = []
+          let pageIndex = 0
+          let totalFiles = 0
 
-        return allFiles
-      }),
-  }
-}
+          // eslint-disable-next-line no-constant-condition -- cursor loop exits on empty page or backend error
+          while (true) {
+            const result = entry.finder.fileSearch("", { pageSize, pageIndex })
+            if (!result.ok) {
+              return yield* new FileIndexError({
+                message: `fileSearch failed: ${result.error}`,
+                cwd: params.cwd,
+              })
+            }
 
-// ---------------------------------------------------------------------------
-// Factory for composite usage
-// ---------------------------------------------------------------------------
+            totalFiles = result.value.totalFiles
+            for (const item of result.value.items) {
+              allFiles.push(toIndexedFile(params.cwd, item))
+            }
 
-/** Create a native service + finalizer from a loaded module. */
-export const makeNativeServiceFromModule = (
-  dbDir: string,
-  path: Path.Path,
-): { service: FileIndexService; finalize: Effect.Effect<void> } => {
-  const finders = new Map<string, FinderEntry>()
-  return {
-    service: makeNativeService(finders, dbDir, path),
-    finalize: Effect.sync(() => {
+            if (allFiles.length >= totalFiles || result.value.items.length < pageSize) break
+            pageIndex++
+          }
+
+          return allFiles
+        }),
+    }
+
+    const finalize: Effect.Effect<void> = Effect.sync(() => {
       for (const [, entry] of finders) {
         try {
           entry.finder.destroy()
@@ -154,9 +146,20 @@ export const makeNativeServiceFromModule = (
         }
       }
       finders.clear()
-    }),
-  }
-}
+    })
+
+    return { service, finalize }
+  })
+
+// ---------------------------------------------------------------------------
+// Factory for composite usage
+// ---------------------------------------------------------------------------
+
+/** Create a native service + finalizer. Yields Path internally. */
+export const makeNativeServiceFromModule = (
+  dbDir: string,
+): Effect.Effect<{ service: FileIndexService; finalize: Effect.Effect<void> }, never, Path.Path> =>
+  makeNativeService(dbDir)
 
 // ---------------------------------------------------------------------------
 // Layer (standalone native, no fallback)
@@ -172,11 +175,9 @@ export const NativeFileIndexLive: Layer.Layer<
       return yield* new FileIndexError({ message: "native binary not available", cwd: "" })
     }
 
-    const path = yield* Path.Path
-    const { home } = yield* RuntimeEnvironment
-    const dbDir = yield* ensureDbDir(home)
+    const dbDir = yield* ensureDbDir
 
-    const { service, finalize } = makeNativeServiceFromModule(dbDir, path)
+    const { service, finalize } = yield* makeNativeServiceFromModule(dbDir)
     yield* Effect.addFinalizer(() => finalize)
 
     return Layer.succeed(FileIndex, service)
