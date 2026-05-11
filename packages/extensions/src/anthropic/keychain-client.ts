@@ -17,6 +17,7 @@ import * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 
 export { SYSTEM_IDENTITY_PREFIX } from "./oauth.js"
 import { SYSTEM_IDENTITY_PREFIX, getBillingHeaderInputs } from "./oauth.js"
+import { AnthropicPlatform } from "./platform-adapter.js"
 import { buildBillingHeaderValue } from "./signing.js"
 import { getModelOverride } from "./model-config.js"
 
@@ -238,9 +239,10 @@ const partitionSystemBlocks = (
  */
 const buildSystemArray = (
   finalMessages: ReadonlyArray<Record<string, unknown>>,
-): Effect.Effect<ReadonlyArray<Record<string, unknown>>, never, GentPlatform> =>
+): Effect.Effect<ReadonlyArray<Record<string, unknown>>, never, GentPlatform | AnthropicPlatform> =>
   Effect.gen(function* () {
-    const { version, entrypoint } = getBillingHeaderInputs()
+    const platform = yield* AnthropicPlatform
+    const { version, entrypoint } = getBillingHeaderInputs(platform.env)
     // Cast through unknown — the Message type in signing.ts is a tighter
     // shape than the wire-level Record we receive from the SDK. The
     // signature only reads `role` + `content` defensively.
@@ -393,7 +395,7 @@ const stripHaikuEffort = (payload: Record<string, unknown>): Record<string, unkn
  */
 export const transformPayload = (
   payload: Record<string, unknown>,
-): Effect.Effect<Record<string, unknown>, never, GentPlatform> =>
+): Effect.Effect<Record<string, unknown>, never, GentPlatform | AnthropicPlatform> =>
   Effect.gen(function* () {
     let result: Record<string, unknown> = { ...payload }
 
@@ -471,15 +473,19 @@ type CreateMessageStreamOptions = Parameters<AnthropicClient.Service["createMess
 export const keychainClient: Layer.Layer<
   AnthropicClient.AnthropicClient,
   never,
-  AnthropicClient.AnthropicClient | GentPlatform
+  AnthropicClient.AnthropicClient | GentPlatform | AnthropicPlatform
 > = Layer.effect(
   AnthropicClient.AnthropicClient,
   Effect.gen(function* () {
     const inner = yield* AnthropicClient.AnthropicClient
     const platform = yield* GentPlatform
+    const anthropicPlatform = yield* AnthropicPlatform
 
     const transformPayloadHere = (payload: Record<string, unknown>) =>
-      transformPayload(payload).pipe(Effect.provideService(GentPlatform, platform))
+      transformPayload(payload).pipe(
+        Effect.provideService(GentPlatform, platform),
+        Effect.provideService(AnthropicPlatform, anthropicPlatform),
+      )
 
     const service: AnthropicClient.Service = {
       client: inner.client,

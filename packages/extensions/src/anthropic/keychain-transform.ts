@@ -71,13 +71,13 @@ import { HttpClientError, TransportError } from "effect/unstable/http/HttpClient
 import type { AnthropicBetaCacheShape } from "./beta-cache.js"
 import type { AnthropicCredentialServiceShape } from "./credential-service.js"
 import {
-  getCurrentBetaFlagsEnv,
   getLongContextBetasForWith,
   getModelBetas,
   getUserAgent,
   isLongContextError,
   parseModelIdFromBody,
 } from "./oauth.js"
+import type { AnthropicKeychainEnv } from "./platform-adapter.js"
 
 // ── Typed errors ──
 
@@ -197,13 +197,14 @@ const buildOauthHeaders = (
   req: HttpClientRequest.HttpClientRequest,
   accessToken: string,
   modelId: string,
+  env: AnthropicKeychainEnv,
   excluded?: Set<string>,
 ): Headers.Headers => {
   // Start from the SDK's existing headers (preserve `anthropic-version`
   // etc.) but drop `x-api-key` since OAuth uses Bearer.
   let headers = Headers.remove(req.headers, "x-api-key")
 
-  const modelBetas = getModelBetas(modelId, excluded)
+  const modelBetas = getModelBetas(modelId, env.betaFlags, excluded)
   const incomingBeta = headers["anthropic-beta"] ?? ""
   const mergedBetas = Array.from(
     new Set([
@@ -218,7 +219,7 @@ const buildOauthHeaders = (
   headers = Headers.set(headers, "authorization", `Bearer ${accessToken}`)
   headers = Headers.set(headers, "anthropic-beta", mergedBetas.join(","))
   headers = Headers.set(headers, "x-app", "cli")
-  headers = Headers.set(headers, "user-agent", getUserAgent())
+  headers = Headers.set(headers, "user-agent", getUserAgent(env))
   // The billing header lives in `system[0]` (see keychain-client.ts +
   // signing.ts), NOT as an HTTP header. We do set this declarative
   // browser-access acknowledgement to match Claude Code's behavior.
@@ -248,6 +249,7 @@ export const buildKeychainTransformClient =
   (
     creds: AnthropicCredentialServiceShape,
     betaCache: AnthropicBetaCacheShape,
+    env: AnthropicKeychainEnv,
   ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
   (client) =>
     client.pipe(
@@ -270,13 +272,13 @@ export const buildKeychainTransformClient =
             ),
           )
           const modelId = parseModelIdFromBody(requestBodyText(req))
-          const betaFlags = getCurrentBetaFlagsEnv()
+          const betaFlags = env.betaFlags
           // Read the cross-request-learned exclusion set from the
           // betaCache. On retry, mapRequestEffect re-runs and reads the
           // updated set — the beta-retry transformResponse below records
           // the rejected beta into the cache before failing to retry.
           const excluded = yield* betaCache.getExcluded(modelId, betaFlags)
-          const headers = buildOauthHeaders(req, fresh.accessToken, modelId, new Set(excluded))
+          const headers = buildOauthHeaders(req, fresh.accessToken, modelId, env, new Set(excluded))
           return withHeaders(req, headers)
         }),
       ),
@@ -309,7 +311,7 @@ export const buildKeychainTransformClient =
                   if (!isLongContextError(body)) return Effect.succeed(response)
                   // Body matches: try to record the next beta + retry.
                   const modelId = parseModelIdFromBody(requestBodyText(response.request))
-                  const betaFlags = getCurrentBetaFlagsEnv()
+                  const betaFlags = env.betaFlags
                   return betaCache.getExcluded(modelId, betaFlags).pipe(
                     Effect.flatMap((excluded) => {
                       const beta = pickNextBetaToExclude(modelId, betaFlags, excluded)

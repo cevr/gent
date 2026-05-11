@@ -34,7 +34,7 @@ import {
   type CredentialCacheCell,
 } from "../../src/anthropic/credential-service.js"
 import { EMPTY_BETA_CELL, type BetaCacheCell } from "../../src/anthropic/beta-cache.js"
-import { initAnthropicKeychainEnv, SYSTEM_IDENTITY_PREFIX } from "../../src/anthropic/oauth.js"
+import { SYSTEM_IDENTITY_PREFIX } from "../../src/anthropic/oauth.js"
 import { type ProviderAuthInfo } from "@gent/core/extensions/api"
 import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
@@ -55,6 +55,7 @@ const testPlatform = AnthropicPlatform.of({
         message: "test runProcess unavailable",
       }),
     ),
+  env: {},
 })
 const buildAnthropicModelDriver = (
   ...args: Parameters<typeof buildAnthropicModelDriverLive> extends [
@@ -112,7 +113,6 @@ const parsePayload = (body: string | undefined): Record<string, unknown> => {
 describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", () => {
   it.live("OAuth resolveModel layer reads Bearer from credentialCellRef the test owns", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
@@ -144,7 +144,6 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
     "OAuth resolveModel layer applies keychainClient transforms (system identity prefix)",
     () =>
       Effect.gen(function* () {
-        initAnthropicKeychainEnv({})
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
         const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
@@ -168,7 +167,6 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
     "two OAuth resolveModel calls share the credentialCellRef — second sees first call's invalidation",
     () =>
       Effect.gen(function* () {
-        initAnthropicKeychainEnv({})
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
         const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
@@ -206,7 +204,6 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
   )
   it.live("OAuth resolveModel layer reads beta exclusions from betaCellRef the test owns", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
@@ -235,7 +232,6 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
 describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
   it.live("API-key resolveModel layer sends x-api-key (no Bearer)", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
@@ -252,7 +248,6 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
     "API-key resolveModel does NOT inject keychainClient transforms (no SYSTEM_IDENTITY_PREFIX)",
     () =>
       Effect.gen(function* () {
-        initAnthropicKeychainEnv({})
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
         const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
@@ -268,7 +263,6 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
   )
   it.live("API-key path does not touch the OAuth cache Refs", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)

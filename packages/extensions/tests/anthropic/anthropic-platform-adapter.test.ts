@@ -52,20 +52,42 @@ const makeCtxWithSplitHome = (gentHome: string, osHome: string): PublicExtension
 describe("AnthropicPlatform.fromSetup", () => {
   test("sources home from host.homeDirectory, not ctx.home", () => {
     const ctx = makeCtxWithSplitHome("/tmp/gent-home", "/Users/test-os-home")
-    const platform = AnthropicPlatform.fromSetup(ctx)
+    const platform = AnthropicPlatform.fromSetup(ctx, {})
     expect(platform.home).toBe("/Users/test-os-home")
   })
 
   test("forwards platform from host.osInfo", () => {
     const ctx = makeCtxWithSplitHome("/tmp/gent-home", "/Users/test-os-home")
-    const platform = AnthropicPlatform.fromSetup(ctx)
+    const platform = AnthropicPlatform.fromSetup(ctx, {})
     expect(platform.platform).toBe("darwin")
   })
 
   test("forwards parentEnv and runProcess from Process", () => {
     const ctx = makeCtxWithSplitHome("/tmp/gent-home", "/Users/test-os-home")
-    const platform = AnthropicPlatform.fromSetup(ctx)
+    const platform = AnthropicPlatform.fromSetup(ctx, {})
     expect(platform.parentEnv).toEqual({})
     expect(typeof platform.runProcess).toBe("function")
+  })
+
+  test("carries per-instance env snapshot", () => {
+    const ctx = makeCtxWithSplitHome("/tmp/gent-home", "/Users/test-os-home")
+    const platform = AnthropicPlatform.fromSetup(ctx, {
+      betaFlags: "context-1m-2025-08-07",
+      cliVersion: "1.2.3",
+      entrypoint: "tui",
+      userAgent: "custom/1.0",
+    })
+    expect(platform.env.betaFlags).toBe("context-1m-2025-08-07")
+    expect(platform.env.cliVersion).toBe("1.2.3")
+    expect(platform.env.entrypoint).toBe("tui")
+    expect(platform.env.userAgent).toBe("custom/1.0")
+  })
+
+  test("two fromSetup calls produce independent env snapshots", () => {
+    const ctx = makeCtxWithSplitHome("/tmp/gent-home", "/Users/test-os-home")
+    const a = AnthropicPlatform.fromSetup(ctx, { betaFlags: "flag-a" })
+    const b = AnthropicPlatform.fromSetup(ctx, { betaFlags: "flag-b" })
+    expect(a.env.betaFlags).toBe("flag-a")
+    expect(b.env.betaFlags).toBe("flag-b")
   })
 })

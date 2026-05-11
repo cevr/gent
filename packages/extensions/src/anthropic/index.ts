@@ -12,11 +12,9 @@ import {
 } from "@gent/core/extensions/api"
 import {
   freshEnoughForUse,
-  initAnthropicKeychainEnv,
   PRIMARY_CLAUDE_SERVICE,
   readClaudeCodeCredentials,
   refreshClaudeCodeCredentials,
-  type AnthropicKeychainEnv,
 } from "./oauth.js"
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 import { Model as AiModel } from "effect/unstable/ai"
@@ -29,7 +27,11 @@ import {
 } from "./credential-service.js"
 import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-cache.js"
 import { buildKeychainTransformClient } from "./keychain-transform.js"
-import { AnthropicPlatform, type AnthropicPlatformShape } from "./platform-adapter.js"
+import {
+  AnthropicPlatform,
+  type AnthropicKeychainEnv,
+  type AnthropicPlatformShape,
+} from "./platform-adapter.js"
 import { BunGentPlatformLive } from "@gent/core/extensions/api/bun"
 
 const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
@@ -128,7 +130,7 @@ const makeOauthAnthropicLayer = (
       const creds = yield* AnthropicCredentialService
       const cache = yield* AnthropicBetaCache
       return AnthropicClient.layer({
-        transformClient: buildKeychainTransformClient(creds, cache),
+        transformClient: buildKeychainTransformClient(creds, cache, platform.env),
       }).pipe(Layer.provide(FetchHttpClient.layer))
     }),
   ).pipe(Layer.provide(credentialLayer), Layer.provide(cacheLayer))
@@ -136,6 +138,7 @@ const makeOauthAnthropicLayer = (
   const wrappedClient = keychainClient.pipe(
     Layer.provide(clientLayer),
     Layer.provide(BunGentPlatformLive),
+    Layer.provide(Layer.succeed(AnthropicPlatform, platform)),
   )
   return AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
     Layer.provide(wrappedClient),
@@ -265,10 +268,9 @@ export const AnthropicExtension = defineExtension({
         entrypoint: yield* readOptionalEnv("CLAUDE_CODE_ENTRYPOINT"),
         userAgent: yield* readOptionalEnv("ANTHROPIC_USER_AGENT"),
       }
-      initAnthropicKeychainEnv(env)
 
       const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
-      const platform = AnthropicPlatform.fromSetup(ctx)
+      const platform = AnthropicPlatform.fromSetup(ctx, env)
 
       // Cache cells are hoisted to extension-closure scope so they
       // survive across `resolveModel` calls. Lifetime: one extension

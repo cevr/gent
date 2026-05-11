@@ -18,7 +18,9 @@ import { testSetupCtx } from "@gent/core-internal/test-utils"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import { buildKeychainTransformClient } from "../../src/anthropic/keychain-transform.js"
-import { initAnthropicKeychainEnv } from "../../src/anthropic/oauth.js"
+import type { AnthropicKeychainEnv } from "../../src/anthropic/platform-adapter.js"
+
+const TEST_ENV: AnthropicKeychainEnv = {}
 import type {
   AnthropicCredentialServiceShape,
   AnthropicCredentialIO,
@@ -105,6 +107,7 @@ const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServi
       home: host.homeDirectory,
       parentEnv: host.parentEnv,
       runProcess: host.runProcess,
+      env: {},
     }),
   )
   const layer = AnthropicCredentialService.layerFromIO(io).pipe(
@@ -157,19 +160,15 @@ const runWithTestClock = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> => 
 }
 // ── Tests ──
 describe("keychainTransformClient — auth headers (Commit 2a)", () => {
-  // Reset module env to defaults before each test that touches headers
-  // sensitive to env (UA, betas).
-  const resetEnv = () => initAnthropicKeychainEnv({})
   it.live("injects Authorization Bearer from credential service", () =>
     Effect.gen(function* () {
-      resetEnv()
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       yield* Effect.promise(() =>
         runOk(
@@ -184,14 +183,13 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   )
   it.live("removes x-api-key (would otherwise conflict with OAuth Bearer)", () =>
     Effect.gen(function* () {
-      resetEnv()
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       // Simulate the SDK's baseline by injecting x-api-key on the
       // outgoing request. The transform must strip it.
@@ -210,14 +208,13 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   )
   it.live("sets x-app, user-agent, anthropic-dangerous-direct-browser-access", () =>
     Effect.gen(function* () {
-      resetEnv()
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       yield* Effect.promise(() =>
         runOk(
@@ -234,14 +231,13 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   )
   it.live("merges anthropic-beta with model defaults", () =>
     Effect.gen(function* () {
-      resetEnv()
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       // Body declares claude-opus-4-6, which has model-default betas
       // (base set + 1M-context + effort-2025-11-24 from the override).
@@ -267,7 +263,6 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   )
   it.live("credential-service failure surfaces as HttpClientError (transport)", () =>
     Effect.gen(function* () {
-      resetEnv()
       const creds = yield* Effect.promise(() =>
         buildCreds({
           read: Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
@@ -279,7 +274,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       // The credential failure flows through the transient retry layer
       // (`Schedule.exponential("1 second")` + 2 retries = 3s real-clock).
@@ -307,7 +302,6 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
 describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
   it.live("429 once then 200 — retry succeeds, caller sees 200", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
@@ -317,7 +311,7 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
             ? new Response("rate limited", { status: 429 })
             : new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const response = yield* Effect.promise(() =>
         runWithTestClock(
@@ -334,7 +328,6 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
   )
   it.live("529 once then 200 — retry includes 529 (which retryTransient does not)", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
@@ -344,7 +337,7 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
             ? new Response("overloaded", { status: 529 })
             : new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const response = yield* Effect.promise(() =>
         runWithTestClock(
@@ -361,14 +354,13 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
   )
   it.live("3 consecutive 429 — budget exhausted, final 429 surfaces", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("rate limited", { status: 429 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const response = yield* Effect.promise(() =>
         runWithTestClock(
@@ -388,7 +380,6 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
     Effect.gen(function* () {
       // Middleware retries both TransientResponseError (429/529) and
       // HttpClientError from the wire, preserving the resilience contract.
-      initAnthropicKeychainEnv({})
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
@@ -396,7 +387,7 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
         responder: (call) =>
           call === 0 ? transportFailure("socket hang up") : new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const response = yield* Effect.promise(() =>
         runWithTestClock(
@@ -413,14 +404,13 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
   )
   it.live("3 consecutive transport failures — budget exhausted, error propagates", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => transportFailure("connection refused"),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const exit = yield* Effect.exit(
         Effect.scoped(
@@ -442,14 +432,13 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
   )
   it.live("non-transient 4xx (e.g. 400) does not trigger retry", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("bad request", { status: 400 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const response = yield* Effect.promise(() =>
         runWithTestClock(
@@ -473,7 +462,6 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
   const NON_LONG_CONTEXT_400 = '{"type":"error","error":{"message":"some other 400"}}'
   it.live("400 long-context once → drops one beta → retry succeeds", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
@@ -483,7 +471,7 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
             ? new Response(LONG_CONTEXT_BODY, { status: 400 })
             : new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const response = yield* Effect.promise(() =>
         runOk(
@@ -503,7 +491,6 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
   )
   it.live("learning persists into the cache — next request starts pre-narrowed", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
@@ -513,7 +500,7 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
             ? new Response(LONG_CONTEXT_BODY, { status: 400 })
             : new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       // First request: 400 → retry → 200. Two captures.
       yield* Effect.promise(() =>
@@ -552,7 +539,6 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
       // the long-context retry (which would have rebuilt headers; on a
       // 429 there's nothing useful to narrow because the rate limit isn't
       // beta-related).
-      initAnthropicKeychainEnv({})
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
@@ -562,7 +548,7 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
             ? new Response(LONG_CONTEXT_BODY, { status: 429 })
             : new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const response = yield* Effect.promise(() =>
         runWithTestClock(
@@ -584,14 +570,13 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
   )
   it.live("non-long-context 400 passes through without retry", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response(NON_LONG_CONTEXT_400, { status: 400 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const response = yield* Effect.promise(() =>
         runOk(
@@ -608,7 +593,6 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
   )
   it.live("exhausted candidates surface terminal 400 (every long-context beta tried)", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
@@ -617,7 +601,7 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
         // after exhausting candidates and hand back the 400.
         responder: () => new Response(LONG_CONTEXT_BODY, { status: 400 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const response = yield* Effect.promise(() =>
         runOk(
@@ -655,7 +639,6 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
   }
   it.live("401 once → invalidate creds → retry succeeds with fresh token", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const creds = yield* Effect.promise(() => buildCreds(togglingCredsIO("stale", "fresh")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
@@ -663,7 +646,7 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
         responder: (call) =>
           call === 0 ? new Response("auth", { status: 401 }) : new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const response = yield* Effect.promise(() =>
         runOk(
@@ -682,7 +665,6 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
   )
   it.live("two consecutive 401s — second surfaces (real auth failure, no infinite loop)", () =>
     Effect.gen(function* () {
-      initAnthropicKeychainEnv({})
       const creds = yield* Effect.promise(() => buildCreds(togglingCredsIO("stale", "still-bad")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
@@ -691,7 +673,7 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
         // (revoked session, missing scope) and must reach the caller.
         responder: () => new Response("auth", { status: 401 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const response = yield* Effect.promise(() =>
         runOk(
@@ -711,7 +693,6 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
       // service. If a non-401 mistakenly invalidated the cache, request
       // #2 would re-read and pick up the second token. Asserting both
       // requests use the first token proves the cache survived the 500.
-      initAnthropicKeychainEnv({})
       const creds = yield* Effect.promise(() => buildCreds(togglingCredsIO("first", "second")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
@@ -721,7 +702,7 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
             ? new Response("server error", { status: 500 })
             : new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache)
+      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const r1 = yield* Effect.promise(() =>
         runOk(

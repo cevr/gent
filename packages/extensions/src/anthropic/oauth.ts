@@ -675,31 +675,9 @@ export const refreshClaudeCodeCredentials = (
 // `getModelBetas` for the actual derivation.
 
 import { getModelBetas as deriveModelBetas, MODEL_CONFIG, getCcVersion } from "./model-config.js"
+import type { AnthropicKeychainEnv } from "./platform-adapter.js"
 
 export const LONG_CONTEXT_BETAS: ReadonlyArray<string> = MODEL_CONFIG.longContextBetas
-
-/** Env vars for Anthropic keychain, read once at init via Config */
-export interface AnthropicKeychainEnv {
-  betaFlags?: string
-  cliVersion?: string
-  entrypoint?: string
-  userAgent?: string
-}
-
-let _env: AnthropicKeychainEnv = {}
-
-/** Call once at layer construction with values from Config */
-export const initAnthropicKeychainEnv = (env: AnthropicKeychainEnv): void => {
-  _env = env
-}
-
-/**
- * Read the currently-active `betaFlags` env. The new middleware
- * (`keychain-transform`) reads this per-request to pass into the
- * `AnthropicBetaCache` — keeps env knowledge co-located with `_env`
- * instead of leaking the variable name across modules.
- */
-export const getCurrentBetaFlagsEnv = (): string | undefined => _env.betaFlags
 
 export const isLongContextError = (responseBody: string): boolean =>
   responseBody.includes("Extra usage is required for long context requests") ||
@@ -707,7 +685,7 @@ export const isLongContextError = (responseBody: string): boolean =>
 
 /**
  * Long-context backoff candidates — only the long-context betas that
- * actually appear in this model's effective header. Counsel  deep
+ * actually appear in this model's effective header. Counsel deep
  * surfaced two related defects in the prior shape:
  *   1. We walked `LONG_CONTEXT_BETAS` directly, ignoring per-model
  *      overrides — so a haiku request (which excludes
@@ -718,9 +696,6 @@ export const isLongContextError = (responseBody: string): boolean =>
  *      second exclusion attempt never went on the wire.
  * Both are fixed by deriving candidates from the model's actual
  * outgoing betas and giving each one a retry slot.
- *
- * Pure variant takes the betaFlags env explicitly. The wrapper below feeds in
- * `_env.betaFlags` for callers that share the module-global environment.
  */
 export const getLongContextBetasForWith = (
   modelId: string,
@@ -730,34 +705,35 @@ export const getLongContextBetasForWith = (
   return LONG_CONTEXT_BETAS.filter((beta) => modelBetas.has(beta))
 }
 
-export const getLongContextBetasFor = (modelId: string): ReadonlyArray<string> =>
-  getLongContextBetasForWith(modelId, _env.betaFlags)
-
-export const getModelBetas = (modelId: string, excluded?: Set<string>): ReadonlyArray<string> =>
-  deriveModelBetas(modelId, _env.betaFlags, excluded)
+export const getModelBetas = (
+  modelId: string,
+  betaFlags: string | undefined,
+  excluded?: Set<string>,
+): ReadonlyArray<string> => deriveModelBetas(modelId, betaFlags, excluded)
 
 // ── System Identity (exported for keychain-client.ts) ──
 
 export const SYSTEM_IDENTITY_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
 
-// Counsel  — single source of truth in `model-config.ts`
-// (`MODEL_CONFIG.ccVersion`). Env-var override still wins so users can
-// pin a specific CC version without editing source.
-export const getCliVersion = (): string => _env.cliVersion ?? getCcVersion()
+/**
+ * CLI version: the live env wins, otherwise the `MODEL_CONFIG.ccVersion`
+ * baseline. Pure function — env comes from the caller's `AnthropicPlatform`.
+ */
+export const getCliVersion = (env: AnthropicKeychainEnv): string => env.cliVersion ?? getCcVersion()
 
-export const getUserAgent = (): string =>
-  _env.userAgent ?? `claude-cli/${getCliVersion()} (external, cli)`
+export const getUserAgent = (env: AnthropicKeychainEnv): string =>
+  env.userAgent ?? `claude-cli/${getCliVersion(env)} (external, cli)`
 
 /**
  * Inputs the billing-header builder needs (CLI version + entrypoint).
- * Lives here because `_env` is the source of truth for the version
- * after `initAnthropicKeychainEnv` runs at extension setup. The actual
- * header text is built in `signing.ts` per request because both hashes
- * depend on the live first-user-message text.
+ * The actual header text is built in `signing.ts` per request because
+ * both hashes depend on the live first-user-message text.
  */
-export const getBillingHeaderInputs = (): { version: string; entrypoint: string } => ({
-  version: getCliVersion(),
-  entrypoint: _env.entrypoint ?? "cli",
+export const getBillingHeaderInputs = (
+  env: AnthropicKeychainEnv,
+): { version: string; entrypoint: string } => ({
+  version: getCliVersion(env),
+  entrypoint: env.entrypoint ?? "cli",
 })
 
 /**

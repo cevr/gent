@@ -28,6 +28,7 @@ const testPlatformLayer = (): Layer.Layer<AnthropicPlatform> => {
       home: host.homeDirectory,
       parentEnv: host.parentEnv,
       runProcess: host.runProcess,
+      env: {},
     }),
   )
 }

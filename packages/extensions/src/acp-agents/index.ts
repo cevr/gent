@@ -290,7 +290,7 @@ export const makeAcpAgentsExtension = (
     const cached = cachedBySetupContext.get(ctx)
     if (cached !== undefined) return cached
     const spawner = yield* ChildProcessSpawner
-    const anthropicPlatform = AnthropicPlatform.fromSetup(ctx)
+    const anthropicPlatform = AnthropicPlatform.fromSetup(ctx, {})
     const acpPlatform = {
       parentEnv: anthropicPlatform.parentEnv,
     } satisfies AcpAgentsPlatformShape

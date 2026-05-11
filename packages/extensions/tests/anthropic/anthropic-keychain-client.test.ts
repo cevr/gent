@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
+import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension"
 import {
   repairToolPairs,
   transformPayload as transformPayloadEffect,
@@ -8,12 +9,34 @@ import {
   transformStreamEvent,
   SYSTEM_IDENTITY_PREFIX,
 } from "../../src/anthropic/keychain-client.js"
+import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
+
+const testPlatformLayer = Layer.succeed(
+  AnthropicPlatform,
+  AnthropicPlatform.of({
+    platform: "darwin",
+    home: "/tmp/gent-test-home",
+    parentEnv: {},
+    runProcess: (command) =>
+      Effect.fail(
+        new ExtensionHostProcessError({
+          command,
+          message: "test runProcess unavailable",
+        }),
+      ),
+    env: {},
+  }),
+)
 
 // Synchronously run a transformPayload effect with the live Bun platform —
 // `BunGentPlatformLive` is `Layer.succeed`, so the underlying SHA256 hash is
 // computed eagerly without needing an async runtime.
 const transformPayload = (payload: Record<string, unknown>): Record<string, unknown> =>
-  Effect.runSync(transformPayloadEffect(payload).pipe(Effect.provide(BunGentPlatformLive)))
+  Effect.runSync(
+    transformPayloadEffect(payload).pipe(
+      Effect.provide(Layer.merge(BunGentPlatformLive, testPlatformLayer)),
+    ),
+  )
 
 // ── transformPayload ──
 
