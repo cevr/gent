@@ -183,7 +183,6 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
   const host = testExtensionHostContext().host
   const agent = {
     get: dieStub("agent.get"),
-    require: dieStub("agent.require"),
     listAgents: dieStub("agent.listAgents"),
     run: dieStub("agent.run"),
   }

@@ -2,21 +2,26 @@
  * Host facet survivor regression suite.
  *
  * After deleting 9 unused `ExtensionSession` CRUD methods in W33-C9.5,
- * `ctx.agent.require` and `ctx.session.listBranches` remain as the two
- * non-trivial host-wired behaviors with no other direct test coverage.
+ * `ctx.session.listBranches` and the `requireAgent` helper remain as the
+ * two non-trivial host-wired behaviors with no other direct test coverage.
  * The RPC suites exercise the durable mutation surface from the public
  * RPC angle; these tests pin the host-facet shape from the extension
  * angle.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, Option, Schema } from "effect"
+import { Cause, Effect, Layer, Option, Schema } from "effect"
 import {
   makeExtensionHostContext,
   type MakeExtensionHostContextDeps,
 } from "../../src/runtime/make-extension-host-context.js"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
 import { AgentName } from "../../src/domain/agent.js"
-import { ExtensionHostError } from "../../src/domain/extension-host-context.js"
+import { requireAgent } from "../../src/domain/extension-agent-helpers.js"
+import {
+  ExtensionContext,
+  ExtensionServiceError,
+  type ExtensionContextService,
+} from "../../src/domain/extension-services.js"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message.js"
 import { testExtensionHostContext } from "../../src/test-utils/index.js"
 
@@ -105,22 +110,24 @@ const baseDeps = (overrides: {
 })
 
 describe("host facet survivors after C9.5 prune", () => {
-  it.live("ctx.agent.require returns typed ExtensionHostError when the agent is missing", () =>
+  it.live("requireAgent fails with typed ExtensionServiceError when the agent is missing", () =>
     Effect.gen(function* () {
-      const deps = baseDeps({
-        getAgent: () => Effect.sync(() => undefined),
-        listBranches: die("listBranches"),
-      })
-      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-      const exit = yield* Effect.exit(ctx.agent.require(AgentName.make("missing-agent")))
+      const stubContext = {
+        Agent: { get: () => Effect.void },
+      } as unknown as ExtensionContextService
+      const ctxLayer = Layer.succeed(ExtensionContext, stubContext)
+      const exit = yield* Effect.exit(
+        requireAgent(AgentName.make("missing-agent")).pipe(Effect.provide(ctxLayer)),
+      )
       expect(exit._tag).toBe("Failure")
       if (exit._tag !== "Failure") return
       const error = Cause.findErrorOption(exit.cause)
       expect(Option.isSome(error)).toBe(true)
       if (!Option.isSome(error)) return
-      expect(Schema.is(ExtensionHostError)(error.value)).toBe(true)
-      if (!Schema.is(ExtensionHostError)(error.value)) return
-      expect(error.value.operation).toBe("agent.require")
+      expect(Schema.is(ExtensionServiceError)(error.value)).toBe(true)
+      if (!Schema.is(ExtensionServiceError)(error.value)) return
+      expect(error.value.service).toBe("ExtensionAgent")
+      expect(error.value.operation).toBe("require")
       expect(error.value.message).toBe('Agent "missing-agent" not found in registry')
     }),
   )

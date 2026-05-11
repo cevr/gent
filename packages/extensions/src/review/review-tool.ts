@@ -10,6 +10,7 @@ import {
   getDurableAgentRunSessionId,
   makeRunSpec,
   request,
+  requireAgent,
   resolveDualModelPair,
   tool,
   type AgentDefinition,
@@ -324,7 +325,7 @@ export const ReviewTool = tool({
     const mode = params.mode ?? "report"
 
     const callerAgentName = ctx.agentName ?? DEFAULT_AGENT_NAME
-    const executor = yield* ctx.Agent.require(callerAgentName)
+    const executor = yield* requireAgent(callerAgentName)
 
     const reviewInput = yield* resolveReviewInput({
       content: params.content,

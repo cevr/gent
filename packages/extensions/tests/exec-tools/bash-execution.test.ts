@@ -72,7 +72,6 @@ const stubCtx = testToolContext({
   home: "/tmp",
   Agent: {
     get: dieStub("get"),
-    require: dieStub("require"),
     run: dieStub("run"),
     listAgents: dieStub("listAgents"),
   },

@@ -27,10 +27,6 @@ const makeCtx = (overrides: {
   testToolContext({
     Agent: {
       get: (name) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
-      require: (name) => {
-        const agent = AllBuiltinAgents.find((a) => a.name === name)
-        return agent !== undefined ? Effect.succeed(agent) : Effect.die(`Agent "${name}" not found`)
-      },
       run: overrides.agentRun,
       listAgents: () => Effect.succeed(AllBuiltinAgents),
     },

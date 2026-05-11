@@ -4,6 +4,7 @@ import {
   DEFAULT_AGENT_NAME,
   ExtensionContext,
   makeRunSpec,
+  requireAgent,
   resolveDualModelPair,
   tool,
   type AgentDefinition,
@@ -199,9 +200,9 @@ export const PlanTool = tool({
     const ctx = yield* ExtensionContext
     const mode = params.mode ?? "plan-only"
 
-    const architect = yield* ctx.Agent.require(AgentName.make("architect"))
+    const architect = yield* requireAgent(AgentName.make("architect"))
     const callerAgentName = ctx.agentName ?? DEFAULT_AGENT_NAME
-    const executor = yield* ctx.Agent.require(callerAgentName)
+    const executor = yield* requireAgent(callerAgentName)
 
     // Adversarial planning cycle (always runs)
     const synthesizedPlan = yield* runPlanningCycle({

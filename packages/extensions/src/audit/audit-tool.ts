@@ -4,6 +4,7 @@ import {
   DEFAULT_AGENT_NAME,
   ExtensionContext,
   makeRunSpec,
+  requireAgent,
   resolveDualModelPair,
   tool,
   type AgentDefinition,
@@ -302,10 +303,10 @@ export const AuditTool = tool({
     const maxConcerns = params.maxConcerns ?? 5
     const paths = yield* resolveAuditPaths(params.paths)
 
-    const architect = yield* ctx.Agent.require(AgentName.make("architect"))
-    const auditor = yield* ctx.Agent.require(AgentName.make("auditor"))
+    const architect = yield* requireAgent(AgentName.make("architect"))
+    const auditor = yield* requireAgent(AgentName.make("auditor"))
     const callerAgentName = ctx.agentName ?? DEFAULT_AGENT_NAME
-    const executor = yield* ctx.Agent.require(callerAgentName)
+    const executor = yield* requireAgent(callerAgentName)
 
     // Detect → adversarial audit → synthesize (always runs)
     const report = yield* runAuditCycle({

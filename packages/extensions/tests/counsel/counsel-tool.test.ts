@@ -15,7 +15,6 @@ const makeCtx = (overrides: {
   testToolContext({
     Agent: {
       get: () => Effect.void.pipe(Effect.as(undefined)),
-      require: () => Effect.die("require not wired"),
       run: overrides.agentRun,
       listAgents: () => Effect.succeed(AllBuiltinAgents),
     },

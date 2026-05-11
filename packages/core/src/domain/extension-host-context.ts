@@ -55,7 +55,6 @@ export interface ExtensionHostContext {
 export declare namespace ExtensionHostContext {
   interface ReadOnlyAgent {
     readonly get: Agent["get"]
-    readonly require: Agent["require"]
     readonly listAgents: Agent["listAgents"]
   }
 
@@ -70,7 +69,6 @@ export declare namespace ExtensionHostContext {
 
   interface Agent {
     readonly get: (name: AgentName) => Effect.Effect<AgentDefinition | undefined>
-    readonly require: (name: AgentName) => Effect.Effect<AgentDefinition, ExtensionHostError>
     readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
 
     readonly run: (params: {

@@ -1,5 +1,11 @@
 import { Effect, Schema } from "effect"
-import { AgentName, ExtensionContext, makeRunSpec, tool } from "@gent/core/extensions/api"
+import {
+  AgentName,
+  ExtensionContext,
+  makeRunSpec,
+  requireAgent,
+  tool,
+} from "@gent/core/extensions/api"
 
 // Handoff Tool Error
 
@@ -50,7 +56,7 @@ export const HandoffTool = tool({
     let summary = params.context
     if (params.context.length > 2000) {
       const agent = ctx.Agent
-      const summarizer = yield* agent.require(AgentName.make("summarizer"))
+      const summarizer = yield* requireAgent(AgentName.make("summarizer"))
       const summarizeResult = yield* agent.run({
         agent: summarizer,
         prompt: `Distill this context for a handoff to a new session. Preserve: current task, key decisions, relevant files, open questions, state to carry over. Be concise.\n\n${params.context}`,

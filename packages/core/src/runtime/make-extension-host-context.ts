@@ -114,9 +114,6 @@ const toHostError =
       cause: error,
     })
 
-const hostFailure = (operation: string, message: string): ExtensionHostError =>
-  new ExtensionHostError({ operation, message })
-
 export const extensionHostFacts = (host: ExtensionHostPlatform): ExtensionHostFacts => ({
   osInfo: host.osInfo,
   execPath: host.execPath,
@@ -446,18 +443,6 @@ export const makeExtensionHostContext = (
 
     agent: {
       get: (name) => deps.extensionRegistry.getAgent(name),
-      require: (name) =>
-        deps.extensionRegistry
-          .getAgent(name)
-          .pipe(
-            Effect.flatMap((agent) =>
-              agent !== undefined
-                ? Effect.succeed(agent)
-                : Effect.fail(
-                    hostFailure("agent.require", `Agent "${name}" not found in registry`),
-                  ),
-            ),
-          ),
       listAgents: () => deps.extensionRegistry.listAgents(),
       run: (params) =>
         deps.agentRunner.run({

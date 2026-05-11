@@ -5,6 +5,7 @@ import {
   headTailChars,
   makeRunSpec,
   messagePartsDisplayText,
+  requireAgent,
   SessionId,
   tool,
   type Branch,
@@ -130,7 +131,7 @@ export const ReadSessionTool = tool({
     if (params.goal !== undefined) {
       const prompt = `Here is a coding agent session transcript:\n\n${markdown}\n\n---\n\nExtract the information relevant to this goal: ${params.goal}`
       const agent = ctx.Agent
-      const summarizer = yield* agent.require(AgentName.make("summarizer"))
+      const summarizer = yield* requireAgent(AgentName.make("summarizer"))
       const result = yield* agent.run({
         agent: summarizer,
         prompt,
