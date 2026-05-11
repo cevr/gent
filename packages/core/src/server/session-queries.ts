@@ -116,7 +116,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
         )
 
         // Fetch current runtime state — idle sessions return Idle runtime
-        const idleRuntime = SessionRuntimeStateSchema.Idle.make({
+        const idleRuntime = SessionRuntimeStateSchema.cases.Idle.make({
           agent: DEFAULT_AGENT_NAME,
           queue: emptyQueueSnapshot(),
         })

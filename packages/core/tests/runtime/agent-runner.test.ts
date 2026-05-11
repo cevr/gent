@@ -188,7 +188,7 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
     SessionRuntime,
     Effect.gen(function* () {
       const runtimeState = yield* SubscriptionRef.make<SessionRuntimeState>(
-        SessionRuntimeStateSchema.Idle.make({
+        SessionRuntimeStateSchema.cases.Idle.make({
           agent: AgentName.make("cowork"),
           queue: emptyQueueSnapshot(),
         }),
@@ -203,7 +203,7 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
           Effect.gen(function* () {
             yield* SubscriptionRef.set(
               runtimeState,
-              SessionRuntimeStateSchema.Running.make({
+              SessionRuntimeStateSchema.cases.Running.make({
                 agent: input.agentName,
                 queue: emptyQueueSnapshot(),
               }),
@@ -212,7 +212,7 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
               Effect.ensuring(
                 SubscriptionRef.set(
                   runtimeState,
-                  SessionRuntimeStateSchema.Idle.make({
+                  SessionRuntimeStateSchema.cases.Idle.make({
                     agent: input.agentName,
                     queue: emptyQueueSnapshot(),
                   }),

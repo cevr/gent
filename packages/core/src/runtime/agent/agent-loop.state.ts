@@ -25,7 +25,6 @@ import {
   type InteractionRequestId as InteractionRequestIdType,
 } from "../../domain/ids.js"
 import { messageText, getSingleText } from "./agent-loop.utils.js"
-import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
 
 export class AgentLoopError extends Schema.TaggedErrorClass<AgentLoopError>()("AgentLoopError", {
   message: Schema.String,
@@ -282,7 +281,7 @@ export type ResolvedTurn = {
 // the source of truth for "where is the loop?" while the actor entity is
 // materialized.
 
-export const LoopState = TaggedEnumClass("LoopState", {
+export const LoopState = Schema.TaggedUnion({
   /** No turn in progress. */
   Idle: LoopStateBaseFields,
   /** Agentic loop running: resolve → stream → tools → repeat. */
@@ -308,7 +307,7 @@ export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForI
 // matrix — the discriminator is the state. Owned here so the public projection
 // has a single canonical declaration; `session-runtime.ts` re-exports.
 
-export const SessionRuntimeStateSchema = TaggedEnumClass("SessionRuntimeState", {
+export const SessionRuntimeStateSchema = Schema.TaggedUnion({
   Idle: {
     agent: AgentName,
     queue: QueueSnapshot,
@@ -327,7 +326,7 @@ export type SessionRuntimeState = Schema.Schema.Type<typeof SessionRuntimeStateS
 // ── State builders ──
 
 export const buildIdleState = (params?: { currentAgent?: AgentNameType }): IdleState =>
-  LoopState.Idle.make({
+  LoopState.cases.Idle.make({
     currentAgent: params?.currentAgent,
   })
 
@@ -336,7 +335,7 @@ export const buildRunningState = (
   item: QueuedTurnItem,
   options: { startedAtMs: number },
 ): RunningState =>
-  LoopState.Running.make({
+  LoopState.cases.Running.make({
     currentAgent: base.currentAgent,
     message: item.message,
     startedAtMs: options.startedAtMs,
@@ -351,7 +350,7 @@ export const toWaitingForInteractionState = (params: {
   pendingRequestId: InteractionRequestIdType
   pendingToolCallId: string
 }): WaitingForInteractionState =>
-  LoopState.WaitingForInteraction.make({
+  LoopState.cases.WaitingForInteraction.make({
     currentAgent: params.state.currentAgent,
     message: params.state.message,
     startedAtMs: params.state.startedAtMs,
@@ -369,11 +368,11 @@ export const updateCurrentAgentOnState = (
 ): LoopState => {
   switch (state._tag) {
     case "Idle":
-      return LoopState.Idle.make({ ...state, currentAgent })
+      return LoopState.cases.Idle.make({ ...state, currentAgent })
     case "Running":
-      return LoopState.Running.make({ ...state, currentAgent })
+      return LoopState.cases.Running.make({ ...state, currentAgent })
     case "WaitingForInteraction":
-      return LoopState.WaitingForInteraction.make({ ...state, currentAgent })
+      return LoopState.cases.WaitingForInteraction.make({ ...state, currentAgent })
   }
 }
 
@@ -396,11 +395,11 @@ export const runtimeStateFromLoopState = (
 
   switch (state._tag) {
     case "Idle":
-      return SessionRuntimeStateSchema.Idle.make({ agent, queue: queueSnapshot })
+      return SessionRuntimeStateSchema.cases.Idle.make({ agent, queue: queueSnapshot })
     case "Running":
-      return SessionRuntimeStateSchema.Running.make({ agent, queue: queueSnapshot })
+      return SessionRuntimeStateSchema.cases.Running.make({ agent, queue: queueSnapshot })
     case "WaitingForInteraction":
-      return SessionRuntimeStateSchema.WaitingForInteraction.make({
+      return SessionRuntimeStateSchema.cases.WaitingForInteraction.make({
         agent,
         queue: queueSnapshot,
       })

@@ -78,7 +78,7 @@ export const sessionRuntimeLayer = (
     getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
     getState: () =>
       Effect.succeed(
-        SessionRuntimeStateSchema.Idle.make({
+        SessionRuntimeStateSchema.cases.Idle.make({
           agent: DEFAULT_AGENT_NAME,
           queue: emptyQueueSnapshot(),
         }),
