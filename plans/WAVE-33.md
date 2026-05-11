@@ -602,11 +602,26 @@ where a separate file pays for itself. Highest leverage: 3-place
 
 - `bun run gate`
 
-## Commit 12: chore(upstream): close encore DX gaps
+## Commit 12: chore(upstream): close encore DX gaps — DEFERRED TO WAVE-34
 
-**Justification**: Five DX paper-cuts that compound across every gent call
-site. Lift them upstream into `effect-encore` so gent and any future encore
-user benefits.
+**Status**: Deferred 2026-05-11 after counsel design review
+(`/tmp/counsel/personal-gent-860892a9/20260511-025200-claude-to-codex-5e1101/codex.md`).
+Counsel classification: 0 red / 3 yellow / 2 green. None blocked, but the
+five items are upstream library API design (typed actor state, sender
+requirement bundle, `Actor.toLayer({ withScope })`, entity-id codec,
+`waitForState`) plus gent migration commits — that is a new public-API design
+wave, not the closing commit of "Runtime Authority Closure". Hiding it inside
+Wave 33 would mask the design surface.
+
+WAVE-34 should sequence per counsel: Item 5 (`waitForState`) first, then
+Item 2 (sender requirement bundle as type alias, not Context.Tag-of-fields),
+Item 1 (typed state + registration contract), Item 4 (codec helper before
+deciding on `fromEntity({ key })`), Item 3 (`Actor.toLayer({ withScope })`)
+last because it changes `toLayer` semantics and gent's ephemeral wiring.
+
+**Justification (original)**: Five DX paper-cuts that compound across every
+gent call site. Lift them upstream into `effect-encore` so gent and any
+future encore user benefits.
 
 **Changes** (in `/Users/cvr/Developer/personal/effect-encore/`):
 
