@@ -15,6 +15,8 @@
 
 import * as os from "node:os"
 import { createServer } from "node:net"
+import { createHash, randomBytes as nodeRandomBytes } from "node:crypto"
+import { fileURLToPath as nodeFileURLToPath } from "node:url"
 import { Effect, Layer, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform, SignalError } from "./gent-platform.js"
@@ -151,6 +153,16 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
       ) as Effect.Effect<never>,
 
     now: Effect.sync(() => performance.now()),
+
+    hash: (algorithm, input) => createHash(algorithm).update(input).digest("hex"),
+
+    randomBytes: (length) =>
+      Effect.sync(() => {
+        const node = nodeRandomBytes(length)
+        return new Uint8Array(node.buffer, node.byteOffset, node.byteLength)
+      }),
+
+    fileURLToPath: (url) => nodeFileURLToPath(url),
   }),
 )
 

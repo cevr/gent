@@ -28,6 +28,15 @@
  *   - `now`              — monotonic timestamp in milliseconds. Use for
  *                          relative measurements (supervisor backoff math),
  *                          NOT epoch-ish wall-clock comparisons.
+ *   - `hash(alg, input)` — content-addressed hex digest. `sha256` for durable
+ *                          ids and cache keys; `md5` for non-cryptographic
+ *                          memoization. Sync because the SQLite write path
+ *                          (`contentChunkId`) is sync.
+ *   - `randomBytes(n)`   — cryptographically secure random bytes for OAuth
+ *                          PKCE / state nonces.
+ *   - `fileURLToPath(u)` — `file://` URL → absolute filesystem path. Used by
+ *                          extensions that need to resolve `import.meta.resolve(...)`
+ *                          to an on-disk path.
  *
  * The `GentPlatform.Test(prefix)` layer mints deterministic ids
  * (`${prefix}-00000001`, ...) and stubs the rest with safe defaults so
@@ -67,6 +76,8 @@ export class SignalError extends Schema.TaggedErrorClass<SignalError>()("SignalE
   reason: Schema.String,
 }) {}
 
+export type GentPlatformHashAlgorithm = "sha256" | "md5"
+
 export interface GentPlatformShape {
   readonly randomId: Effect.Effect<string>
   readonly osInfo: Effect.Effect<GentPlatformOsInfo>
@@ -80,6 +91,9 @@ export interface GentPlatformShape {
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
   readonly exit: (code: number) => Effect.Effect<never>
   readonly now: Effect.Effect<number>
+  readonly hash: (algorithm: GentPlatformHashAlgorithm, input: Uint8Array | string) => string
+  readonly randomBytes: (length: number) => Effect.Effect<Uint8Array>
+  readonly fileURLToPath: (url: string) => string
 }
 
 export class GentPlatform extends Context.Service<GentPlatform, GentPlatformShape>()(
@@ -127,6 +141,26 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformShap
               ),
             ),
           now: Ref.updateAndGet(clock, (n) => n + 1),
+          // Deterministic, content-derived stub: same input → same digest.
+          // Length matches the real `sha256`/`md5` hex output (64/32) so
+          // consumers that slice off a prefix observe the right shape.
+          hash: (algorithm, input) => {
+            const text = typeof input === "string" ? input : new TextDecoder().decode(input)
+            let h = 5381
+            for (let i = 0; i < text.length; i += 1) h = (h * 33) ^ text.charCodeAt(i)
+            const seed = (h >>> 0).toString(16).padStart(8, "0")
+            const width = algorithm === "sha256" ? 64 : 32
+            return seed.repeat(Math.ceil(width / 8)).slice(0, width)
+          },
+          randomBytes: (length) =>
+            Ref.updateAndGet(counter, (n) => n + 1).pipe(
+              Effect.map((n) => {
+                const bytes = new Uint8Array(length)
+                for (let i = 0; i < length; i += 1) bytes[i] = (n + i) & 0xff
+                return bytes
+              }),
+            ),
+          fileURLToPath: (url) => (url.startsWith("file://") ? url.slice("file://".length) : url),
         })
       }),
     )
