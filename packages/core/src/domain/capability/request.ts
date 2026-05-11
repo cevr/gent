@@ -16,13 +16,12 @@
 import { type Effect, type Schema } from "effect"
 import { RpcId, type ExtensionId } from "../ids.js"
 import {
-  type RequestCapability as RequestCapabilityVariant,
+  type RequestCapability as RequestCapabilityShape,
   type ErasedCapabilityEffect,
   type CapabilityEffect,
   type CapabilityRef,
   type CapabilityError,
 } from "../capability.js"
-import { Capability } from "../capability.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
 
@@ -34,7 +33,7 @@ import type { PromptSection } from "../prompt.js"
 const REQUEST_REF: unique symbol = Symbol("@gent/core/request/ref")
 const RequestCapabilityBrand: unique symbol = Symbol("@gent/core/RequestCapability")
 declare const RequestCapabilityType: unique symbol
-export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabilityVariant & {
+export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabilityShape & {
   readonly [RequestCapabilityBrand]: true
   readonly [RequestCapabilityType]?: {
     readonly input: Input
@@ -113,7 +112,8 @@ export function request(input: {
     input: input.input,
     output: input.output,
   } as unknown as CapabilityRef
-  const capability = Capability.Request.make({
+  const capability: RequestCapabilityShape = {
+    _tag: "request",
     id: rpcId,
     public: true,
     ...(input.slash !== undefined ? { slash: input.slash } : {}),
@@ -123,7 +123,7 @@ export function request(input: {
     ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
     effect: input.execute,
     ref: refValue,
-  })
+  }
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- RequestCapability brand applied at factory boundary
   return Object.assign(capability, {
     [RequestCapabilityBrand]: true as const,

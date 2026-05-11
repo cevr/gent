@@ -8,11 +8,12 @@
 import { type Effect, Schema } from "effect"
 import type { AgentName } from "./agent.js"
 import type { ExtensionHostFacts } from "./extension.js"
-import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
+import type { PermissionRule } from "./permission.js"
+import type { PromptSection } from "./prompt.js"
 import {
   ExtensionId,
-  RpcId,
-  ToolId,
+  type RpcId,
+  type ToolId,
   type BranchId,
   type SessionId,
   type ToolCallId,
@@ -63,47 +64,46 @@ export type ErasedCapabilityEffect<E = any> = (
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- existential runtime leaf boundary; factories keep author-facing input/output typed
 ) => Effect.Effect<any, E, any>
 
-const CapabilityMetadataFields = {
-  promptSnippet: Schema.optional(Schema.String),
-  prompt: Schema.optional(Schema.Unknown),
-  permissionRules: Schema.optional(Schema.Array(Schema.Unknown)),
-} as const
+/**
+ * Erased runtime shape of a `tool({...})` Capability. The author-facing branded
+ * type lives in `domain/capability/tool.ts`; runtime code reads Gent-only fields
+ * from the `GentToolMetadata` annotation, not this shape.
+ */
+export interface ToolCapability {
+  readonly _tag: "tool"
+  readonly id: ToolId
+  readonly readonly: boolean
+  readonly promptSnippet?: string
+  readonly prompt?: PromptSection
+  readonly permissionRules?: ReadonlyArray<PermissionRule>
+  readonly input: unknown
+  readonly output: unknown
+  readonly native: unknown
+  readonly effect: unknown
+  readonly description: string
+  readonly promptGuidelines?: ReadonlyArray<string>
+  readonly interactive?: boolean
+  readonly metadata: unknown
+}
 
 /**
- * Canonical callable leaf shape. Buckets still preserve the product surfaces
- * (`tools`, `requests`), but every callable contribution now carries the
- * same discriminator and shared metadata fields.
+ * Erased runtime shape of a `request({...})` Capability. The author-facing
+ * branded type lives in `domain/capability/request.ts`.
  */
-export const Capability = TaggedEnumClass("Capability", {
-  Tool: TaggedEnumClass.variant("tool", {
-    id: ToolId,
-    readonly: Schema.Boolean,
-    ...CapabilityMetadataFields,
-    input: Schema.Unknown,
-    output: Schema.Unknown,
-    native: Schema.Unknown,
-    effect: Schema.Unknown,
-    description: Schema.String,
-    promptGuidelines: Schema.optional(Schema.Array(Schema.String)),
-    interactive: Schema.optional(Schema.Boolean),
-    metadata: Schema.Unknown,
-  }),
-  Request: TaggedEnumClass.variant("request", {
-    id: RpcId,
-    ...CapabilityMetadataFields,
-    input: Schema.Unknown,
-    output: Schema.Unknown,
-    effect: Schema.Unknown,
-    public: Schema.Literal(true),
-    slash: Schema.optional(Schema.Unknown),
-    description: Schema.optional(Schema.String),
-    ref: Schema.Unknown,
-  }),
-})
-
-export type Capability = Schema.Schema.Type<typeof Capability>
-export type ToolCapability = Extract<Capability, { readonly _tag: "tool" }>
-export type RequestCapability = Extract<Capability, { readonly _tag: "request" }>
+export interface RequestCapability {
+  readonly _tag: "request"
+  readonly id: RpcId
+  readonly promptSnippet?: string
+  readonly prompt?: PromptSection
+  readonly permissionRules?: ReadonlyArray<PermissionRule>
+  readonly input: unknown
+  readonly output: unknown
+  readonly effect: unknown
+  readonly public: true
+  readonly slash?: unknown
+  readonly description?: string
+  readonly ref: unknown
+}
 
 /**
  * Reference object handed to transport callers so they can route + decode

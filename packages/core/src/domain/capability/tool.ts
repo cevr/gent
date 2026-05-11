@@ -18,9 +18,8 @@
 import { Context, Effect, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import {
-  Capability,
   type CapabilityCoreContext,
-  type ToolCapability as ToolCapabilityVariant,
+  type ToolCapability as ToolCapabilityShape,
 } from "../capability.js"
 import { ToolId, type ToolCallId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
@@ -73,7 +72,7 @@ export type ToolCapability<Input = unknown, Output = unknown, Error = unknown> =
     readonly output: Output
     readonly error: Error
   }
-} & ToolCapabilityVariant
+} & ToolCapabilityShape
 
 export const getToolMetadataOption = (tool: AiTool.Any): GentToolMetadata | undefined =>
   Context.get(tool.annotations, GentToolMetadataTag)
@@ -230,7 +229,8 @@ export const tool = <
     .annotate(GentToolMetadataTag, metadata)
     .annotate(AiTool.Readonly, metadata.readonly)
     .annotate(AiTool.Destructive, input.destructive === true)
-  const capability = Capability.Tool.make({
+  const capability: ToolCapabilityShape = {
+    _tag: "tool",
     id,
     readonly: metadata.readonly,
     input: metadata.input,
@@ -248,7 +248,7 @@ export const tool = <
       : {}),
     ...(metadata.prompt !== undefined ? { prompt: metadata.prompt } : {}),
     metadata,
-  })
+  }
   const branded = Object.assign(native, capability, { [ToolCapabilityBrand]: true as const })
 
   return branded
