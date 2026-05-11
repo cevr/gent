@@ -9,7 +9,7 @@
  *              `<hash>-<ts>-client.log`
  */
 
-import { Config, DateTime, Effect, FileSystem, Option } from "effect"
+import { DateTime, Effect, FileSystem, Option } from "effect"
 
 export const LOG_DIR = "/tmp/gent/logs"
 const FALLBACK_CWD_IDENTITY = "unknown-cwd"
@@ -68,20 +68,10 @@ export const buildLogPaths = (cwd: string = FALLBACK_CWD_IDENTITY): LogPaths => 
   }
 }
 
-/** Resolve log paths from `GENT_CWD`, falling back to a stable sentinel. */
-export const resolveLogPaths: Effect.Effect<LogPaths> = Effect.gen(function* () {
-  const cwd = Option.getOrElse(
-    yield* Config.option(Config.string("GENT_CWD")),
-    () => FALLBACK_CWD_IDENTITY,
-  )
-  return buildLogPaths(cwd)
-}).pipe(Effect.catchEager(() => Effect.succeed(buildLogPaths())))
-
 /** Create the log directory if it doesn't exist. Call once at startup. */
 export const ensureLogDir: Effect.Effect<void, never, FileSystem.FileSystem> = Effect.gen(
   function* () {
     const fs = yield* FileSystem.FileSystem
-    const { dir } = yield* resolveLogPaths
-    yield* Effect.ignore(fs.makeDirectory(dir, { recursive: true }))
+    yield* Effect.ignore(fs.makeDirectory(LOG_DIR, { recursive: true }))
   },
 )

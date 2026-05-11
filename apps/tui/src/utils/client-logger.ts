@@ -8,23 +8,18 @@
  *   shutdown paths only (after Effect runtime is torn down).
  */
 
-import { Config, DateTime, Effect, Option } from "effect"
+import { DateTime, Effect, Option } from "effect"
 import type { Context } from "effect"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
 
 import { LOG_DIR, buildLogPaths } from "@gent/core-internal/runtime/log-paths"
 
-// Read cwd via `GENT_CWD` so this module-init read stays aligned with the
-// server's `resolveLogPaths`. Falls back to `process.cwd()` only if the env
-// var is unset (e.g. early dev runs before the launcher exports it).
-const clientCwd = Effect.runSync(
-  Effect.gen(function* () {
-    const opt = yield* Config.option(Config.string("GENT_CWD"))
-    return Option.getOrElse(opt, () => process.cwd())
-  }).pipe(Effect.catchEager(() => Effect.sync(() => process.cwd()))),
-)
-export const CLIENT_LOG_PATH = buildLogPaths(clientCwd).client
+// Client log path derives from `process.cwd()` — same source the launcher
+// threads into `GentLogger(cwd)` for the server. Both ends hash the same
+// cwd, so a single gent instance writes client + server logs under one
+// filename prefix.
+export const CLIENT_LOG_PATH = buildLogPaths(process.cwd()).client
 
 try {
   mkdirSync(LOG_DIR, { recursive: true })

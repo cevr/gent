@@ -52,7 +52,7 @@ export const buildServerRoot = (
     const scope = yield* Effect.scope
     const depsLive = createDependencies(config.dependencies).pipe(
       Layer.provide(ServerRootPlatformLayer),
-      Layer.provide(GentLogger),
+      Layer.provide(GentLogger(config.dependencies.cwd)),
       Layer.provide(GentLogLevel),
       Layer.provide(GentTracerLive),
     )
