@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer"
 import { Clock, Deferred, Effect, Exit, Layer, Option, Schema, Scope } from "effect"
 import {
   FetchHttpClient,
@@ -92,6 +91,15 @@ const base64UrlEncode = (buffer: ArrayBuffer): string => {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
 }
 
+const base64UrlDecodeToString = (input: string): string => {
+  const padded = input.replace(/-/g, "+").replace(/_/g, "/")
+  const pad = padded.length % 4 === 0 ? "" : "=".repeat(4 - (padded.length % 4))
+  const binary = atob(padded + pad)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return new TextDecoder().decode(bytes)
+}
+
 const generatePKCE: Effect.Effect<PkceCodes, OAuthError> = Effect.gen(function* () {
   const verifier = generateRandomString(43)
   const encoder = new TextEncoder()
@@ -114,7 +122,7 @@ const generateState = (): string =>
 const parseJwtClaims = (token: string): Record<string, unknown> | undefined => {
   const parts = token.split(".")
   if (parts.length !== 3) return undefined
-  const json = Buffer.from(parts[1] ?? "", "base64url").toString()
+  const json = base64UrlDecodeToString(parts[1] ?? "")
   return Option.getOrUndefined(decodeJwtClaims(json))
 }
 
