@@ -1,4 +1,4 @@
-import { Cause, Effect, Schedule, Duration, Schema } from "effect"
+import { Cause, Clock, Effect, Schedule, Duration, Schema } from "effect"
 import { ProviderError } from "../domain/provider-error.js"
 import type { ProviderAuthError } from "../domain/driver.js"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -163,20 +163,20 @@ export const withRetry = <A, R, R2 = never>(
       if (!Schema.is(ProviderError)(meta.input)) {
         return Cause.done(meta.attempt)
       }
-      const nowMs = performance.timeOrigin + performance.now()
-      const delayMs = getRetryDelay(meta.attempt - 1, meta.input, nowMs, config)
-      const notify =
-        options?.onRetry !== undefined
-          ? options.onRetry({
-              attempt: meta.attempt,
-              maxAttempts: config.maxAttempts,
-              delayMs,
-              error: meta.input,
-            })
-          : Effect.void
-      return notify.pipe(
-        Effect.as<[number, Duration.Duration]>([meta.attempt, Duration.millis(delayMs)]),
-      )
+      const error = meta.input
+      return Effect.gen(function* () {
+        const nowMs = yield* Clock.currentTimeMillis
+        const delayMs = getRetryDelay(meta.attempt - 1, error, nowMs, config)
+        if (options?.onRetry !== undefined) {
+          yield* options.onRetry({
+            attempt: meta.attempt,
+            maxAttempts: config.maxAttempts,
+            delayMs,
+            error,
+          })
+        }
+        return [meta.attempt, Duration.millis(delayMs)] as [number, Duration.Duration]
+      })
     }),
   )
 
