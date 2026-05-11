@@ -92,7 +92,10 @@ export const createAcpSessionManager = (
         return HashMap.set(current, driverId, next)
       })
 
-    const tearDown = (k: string, entry: AcpProcess): Effect.Effect<void> =>
+    // Close all resources owned by an entry. State refs are NOT touched here
+    // so callers can compose the corresponding sessions/driver-index updates
+    // inside one Effect.tx transaction.
+    const closeEntry = (entry: AcpProcess): Effect.Effect<void> =>
       Effect.gen(function* () {
         yield* entry.conn.close("driver invalidated").pipe(Effect.ignore)
         yield* Scope.close(entry.scope, Exit.void).pipe(Effect.ignore)
@@ -101,6 +104,11 @@ export const createAcpSessionManager = (
         if (entry.codemodeScope !== undefined) {
           yield* Scope.close(entry.codemodeScope, Exit.void).pipe(Effect.ignore)
         }
+      })
+
+    const tearDown = (k: string, entry: AcpProcess): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        yield* closeEntry(entry)
         yield* TxRef.update(sessionsRef, (current) => HashMap.remove(current, k))
       })
 
@@ -124,8 +132,17 @@ export const createAcpSessionManager = (
               created: false,
             }
           }
-          yield* removeFromDriverIndex(key.driverId, k)
-          yield* tearDown(k, existing).pipe(Effect.ignore)
+          // Atomic eviction: drop from both refs in one transaction so a
+          // concurrent invalidateDriver cannot see the entry without the
+          // driver-index membership. Resource closes happen outside the tx
+          // because side effects on Scope cannot participate in STM retry.
+          yield* closeEntry(existing).pipe(Effect.ignore)
+          yield* Effect.tx(
+            Effect.gen(function* () {
+              yield* removeFromDriverIndex(key.driverId, k)
+              yield* TxRef.update(sessionsRef, (current) => HashMap.remove(current, k))
+            }),
+          )
         }
 
         // Spawn subprocess first — if the binary is missing, fail fast before
@@ -229,15 +246,21 @@ export const createAcpSessionManager = (
           ...(codemodeScope !== undefined ? { codemodeScope } : {}),
           fingerprint,
         }
-        // Install entry + driver-index update atomically so a concurrent
-        // invalidateDriver cannot observe the entry without its driver-index
-        // membership (or vice versa).
-        yield* TxRef.update(sessionsRef, (current) => HashMap.set(current, k, entry))
-        yield* TxRef.update(byDriverRef, (current) => {
-          const existing = HashMap.get(current, key.driverId)
-          const set = existing._tag === "Some" ? HashSet.add(existing.value, k) : HashSet.make(k)
-          return HashMap.set(current, key.driverId, set)
-        })
+        // Install entry + driver-index update inside a single transaction so
+        // a concurrent invalidateDriver cannot observe one ref's mutation
+        // without the other's. Without Effect.tx the two TxRef.update calls
+        // would commit independently, allowing a yield between them.
+        yield* Effect.tx(
+          Effect.gen(function* () {
+            yield* TxRef.update(sessionsRef, (current) => HashMap.set(current, k, entry))
+            yield* TxRef.update(byDriverRef, (current) => {
+              const existing = HashMap.get(current, key.driverId)
+              const set =
+                existing._tag === "Some" ? HashSet.add(existing.value, k) : HashSet.make(k)
+              return HashMap.set(current, key.driverId, set)
+            })
+          }),
+        )
 
         return { conn, acpSessionId: sessionResponse.sessionId, created: true }
       }).pipe(Effect.provide(spawnerContext))
@@ -247,8 +270,13 @@ export const createAcpSessionManager = (
         const k = cacheKey(key)
         const entryOpt = HashMap.get(yield* TxRef.get(sessionsRef), k)
         if (entryOpt._tag === "None") return
-        yield* removeFromDriverIndex(key.driverId, k)
-        yield* tearDown(k, entryOpt.value)
+        yield* closeEntry(entryOpt.value)
+        yield* Effect.tx(
+          Effect.gen(function* () {
+            yield* removeFromDriverIndex(key.driverId, k)
+            yield* TxRef.update(sessionsRef, (current) => HashMap.remove(current, k))
+          }),
+        )
       })
 
     const invalidateDriver = (driverId: string): Effect.Effect<void> =>
