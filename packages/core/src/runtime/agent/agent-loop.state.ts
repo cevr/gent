@@ -114,7 +114,7 @@ const toQueueEntry = (
   const content = messageText(item.message)
   if (content === "") return undefined
   const Entry = tag === "steering" ? SteeringQueueEntryInfo : FollowUpQueueEntryInfo
-  return new Entry({
+  return Entry.make({
     id: item.message.id,
     content,
     createdAt: item.message.createdAt.getTime(),

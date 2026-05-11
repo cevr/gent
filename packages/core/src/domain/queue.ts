@@ -1,7 +1,6 @@
 import { Schema } from "effect"
 import { AgentName } from "./agent.js"
 import { MessageId } from "./ids.js"
-import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 
 const QueueEntryFields = {
   id: MessageId,
@@ -10,16 +9,18 @@ const QueueEntryFields = {
   agentOverride: Schema.optional(AgentName),
 } as const
 
-export const QueueEntryInfo = TaggedEnumClass("QueueEntryInfo", {
-  Steering: TaggedEnumClass.variant("steering", QueueEntryFields),
-  FollowUp: TaggedEnumClass.variant("follow-up", QueueEntryFields),
-})
+const SteeringEntry = Schema.TaggedStruct("steering", QueueEntryFields)
+const FollowUpEntry = Schema.TaggedStruct("follow-up", QueueEntryFields)
+
+export const QueueEntryInfo = Schema.Union([SteeringEntry, FollowUpEntry]).pipe(
+  Schema.toTaggedUnion("_tag"),
+)
 export type QueueEntryInfo = typeof QueueEntryInfo.Type
 
-export const SteeringQueueEntryInfo = QueueEntryInfo.Steering
-export type SteeringQueueEntryInfo = typeof QueueEntryInfo.Steering.Type
-export const FollowUpQueueEntryInfo = QueueEntryInfo.FollowUp
-export type FollowUpQueueEntryInfo = typeof QueueEntryInfo.FollowUp.Type
+export const SteeringQueueEntryInfo = QueueEntryInfo.cases.steering
+export type SteeringQueueEntryInfo = typeof QueueEntryInfo.cases.steering.Type
+export const FollowUpQueueEntryInfo = QueueEntryInfo.cases["follow-up"]
+export type FollowUpQueueEntryInfo = (typeof QueueEntryInfo.cases)["follow-up"]["Type"]
 
 export class QueueSnapshot extends Schema.Class<QueueSnapshot>("QueueSnapshot")({
   steering: Schema.Array(QueueEntryInfo),
