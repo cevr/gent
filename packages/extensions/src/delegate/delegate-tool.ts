@@ -283,7 +283,7 @@ export const DelegateTool = tool({
         resolveAgent(todo.agent).pipe(
           Effect.flatMap((resolved) => {
             if (!resolved.ok) {
-              return Effect.succeed(AgentRunResult.Failure.make({ error: resolved.error }))
+              return Effect.succeed(AgentRunResult.cases.error.make({ error: resolved.error }))
             }
             return ctx.Agent.run({
               agent: resolved.agent,

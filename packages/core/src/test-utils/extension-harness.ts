@@ -72,7 +72,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
   const defaultRunner: AgentRunner = {
     run: () =>
       Effect.succeed(
-        AgentRunResult.Success.make({
+        AgentRunResult.cases.success.make({
           text: "",
           sessionId: SessionId.make("test-subagent-session"),
           agentName: AgentName.make("cowork"),

@@ -29,7 +29,7 @@ describe("CounselTool", () => {
         capturedOverrides = params.runSpec?.overrides as Record<string, unknown> | undefined
         capturedPrompt = params.prompt
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: "Looks good, minor concern about error handling.",
             sessionId: SessionId.make("counsel-session"),
             agentName: params.agent.name,
@@ -65,7 +65,7 @@ describe("CounselTool", () => {
       agentRun: (params) => {
         capturedOverrides = params.runSpec?.overrides as Record<string, unknown> | undefined
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: "After thorough analysis...",
             sessionId: SessionId.make("counsel-deep"),
             agentName: params.agent.name,
@@ -102,7 +102,7 @@ describe("CounselTool", () => {
       agentRun: (params) => {
         capturedPrompt = params.prompt
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: "Noted.",
             sessionId: SessionId.make("counsel-ctx"),
             agentName: params.agent.name,
@@ -130,7 +130,7 @@ describe("CounselTool", () => {
     const ctx = makeCtx({
       agentRun: () =>
         Effect.succeed(
-          AgentRunResult.Failure.make({
+          AgentRunResult.cases.error.make({
             error: "Model unavailable",
           }),
         ),
@@ -153,7 +153,7 @@ describe("CounselTool", () => {
         capturedAgent = { name: params.agent.name }
         capturedRunPersistence = params.runSpec?.persistence
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: "Opinion here.",
             sessionId: SessionId.make("ephemeral-session"),
             agentName: params.agent.name,

@@ -24,7 +24,7 @@ const makeCtx = (overrides: {
         overrides.agentRun ??
         (() =>
           Effect.succeed(
-            AgentRunResult.Success.make({
+            AgentRunResult.cases.success.make({
               text: "",
               sessionId: SessionId.make("s1"),
               agentName: AgentName.make("test"),
@@ -39,7 +39,7 @@ describe("Delegate Tool", () => {
     const ctx = makeCtx({
       agentRun: (params) =>
         Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: `${params.agent.name}:${params.prompt}`,
             sessionId: SessionId.make("child-session"),
             agentName: params.agent.name,
@@ -67,7 +67,7 @@ describe("Delegate Tool", () => {
     const ctx = makeCtx({
       agentRun: (params) =>
         Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: `${params.agent.name}:${params.prompt}`,
             sessionId: SessionId.make("child-session"),
             agentName: params.agent.name,
@@ -95,7 +95,7 @@ describe("Delegate Tool", () => {
       agentRun: (params) => {
         const idx = stepIdx++
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: `step-${idx}`,
             sessionId: SessionId.make(`session-${idx}`),
             agentName: params.agent.name,
@@ -131,7 +131,7 @@ describe("Delegate Tool", () => {
       agentRun: (params) => {
         const idx = callIdx++
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: `result-${idx}`,
             sessionId: SessionId.make(`session-${idx}`),
             agentName: params.agent.name,
@@ -169,7 +169,7 @@ describe("Delegate Tool", () => {
       agentRun: (params) => {
         capturedRunSpec = params.runSpec
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: "ok",
             sessionId: SessionId.make("s"),
             agentName: params.agent.name,
@@ -194,7 +194,7 @@ describe("Delegate Tool", () => {
       agentRun: (params) => {
         captured.push(params.runSpec ?? {})
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: "x",
             sessionId: SessionId.make("s"),
             agentName: params.agent.name,
@@ -228,7 +228,7 @@ describe("Delegate Tool", () => {
       agentRun: (params) => {
         captured.push(params.runSpec ?? {})
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: "x",
             sessionId: SessionId.make("s"),
             agentName: params.agent.name,

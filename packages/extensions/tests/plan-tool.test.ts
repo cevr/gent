@@ -39,7 +39,7 @@ const makeCtx = (overrides: {
     overrides.agentRun ??
     (() =>
       Effect.succeed(
-        AgentRunResult.Success.make({
+        AgentRunResult.cases.success.make({
           text: "output",
           sessionId: SessionId.make("s1"),
           agentName: AgentName.make("test"),
@@ -85,7 +85,7 @@ describe("Plan Tool", () => {
         parentToolCallIds.push(params.runSpec?.parentToolCallId)
         callIdx++
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: `phase-${callIdx}-output`,
             sessionId: SessionId.make(`session-${callIdx}`),
             agentName: params.agent.name,
@@ -130,7 +130,7 @@ describe("Plan Tool", () => {
       agentRun: (params) => {
         calls.push({ prompt: params.prompt })
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: "output",
             sessionId: SessionId.make("s1"),
             agentName: params.agent.name,
@@ -161,7 +161,7 @@ describe("Plan Tool", () => {
     const ctx = makeCtx({
       agentRun: (params) =>
         Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: "output",
             sessionId: SessionId.make("s1"),
             agentName: params.agent.name,
@@ -188,7 +188,7 @@ describe("Plan Tool", () => {
           models.push(params.runSpec.overrides.modelId)
         }
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: "output",
             sessionId: SessionId.make("s1"),
             agentName: params.agent.name,
@@ -220,20 +220,20 @@ describe("Plan Tool", () => {
               "Synthesize these two revised implementation plans into one execution plan organized into batches",
             )
           ) {
-            return AgentRunResult.Success.make({
+            return AgentRunResult.cases.success.make({
               text: "Batch 1: update auth\n- Files: src/auth.ts\n- Changes: add validation",
               sessionId: SessionId.make("synth-session"),
               agentName: params.agent.name,
             })
           }
           if (params.prompt.includes("Execute this implementation plan")) {
-            return AgentRunResult.Success.make({
+            return AgentRunResult.cases.success.make({
               text: "Executed batch 1 successfully.",
               sessionId: SessionId.make("exec-session"),
               agentName: params.agent.name,
             })
           }
-          return AgentRunResult.Success.make({
+          return AgentRunResult.cases.success.make({
             text: "ok",
             sessionId: SessionId.make("s1"),
             agentName: params.agent.name,

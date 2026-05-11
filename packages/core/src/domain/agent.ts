@@ -3,7 +3,6 @@ import type * as EffectNs from "effect/Effect"
 import { branded, SessionId, ToolCallId } from "./ids.js"
 import type { BranchId } from "./ids.js"
 import { ModelId } from "./model"
-import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 
 // Agent definitions
 
@@ -30,25 +29,27 @@ export type AgentPersistence = typeof AgentPersistence.Type
 // `{ _tag: "external", id }` to route through an `ExternalDriverContribution`
 // (e.g. ACP agents) instead of a model provider.
 
-export const DriverRef = TaggedEnumClass("DriverRef", {
-  Model: TaggedEnumClass.variant("model", {
-    /** Optional model-driver id override. When omitted, the loop derives it
-     *  from the agent's model id segment. */
-    id: Schema.optional(Schema.String),
-  }),
-  External: TaggedEnumClass.variant("external", {
-    /** External driver id — must match a registered
-     *  `ExternalDriverContribution.id`. */
-    id: Schema.String,
-  }),
+const ModelDriverRefStruct = Schema.TaggedStruct("model", {
+  /** Optional model-driver id override. When omitted, the loop derives it
+   *  from the agent's model id segment. */
+  id: Schema.optional(Schema.String),
 })
+const ExternalDriverRefStruct = Schema.TaggedStruct("external", {
+  /** External driver id — must match a registered
+   *  `ExternalDriverContribution.id`. */
+  id: Schema.String,
+})
+
+export const DriverRef = Schema.Union([ModelDriverRefStruct, ExternalDriverRefStruct]).pipe(
+  Schema.toTaggedUnion("_tag"),
+)
 export type DriverRef = Schema.Schema.Type<typeof DriverRef>
 
-// Per-variant aliases — same class identity, convenience names.
-export const ModelDriverRef = DriverRef.Model
-export type ModelDriverRef = typeof DriverRef.Model.Type
-export const ExternalDriverRef = DriverRef.External
-export type ExternalDriverRef = typeof DriverRef.External.Type
+// Per-variant aliases — same TaggedStruct identity, convenience names.
+export const ModelDriverRef = DriverRef.cases.model
+export type ModelDriverRef = typeof DriverRef.cases.model.Type
+export const ExternalDriverRef = DriverRef.cases.external
+export type ExternalDriverRef = typeof DriverRef.cases.external.Type
 
 /** Default agent name — used when no agent is explicitly specified. */
 export const DEFAULT_AGENT_NAME = AgentName.make("cowork")
@@ -210,23 +211,25 @@ const AgentRunUsageSchema = Schema.Struct({
   cost: Schema.optional(Schema.Number),
 })
 
-export const AgentRunResult = TaggedEnumClass("AgentRunResult", {
-  Success: TaggedEnumClass.variant("success", {
-    text: Schema.String,
-    sessionId: SessionId,
-    agentName: AgentName,
-    persistence: Schema.optional(AgentPersistence),
-    usage: Schema.optional(AgentRunUsageSchema),
-    toolCalls: Schema.optional(Schema.Array(AgentRunToolCallSchema)),
-    savedPath: Schema.optional(Schema.String),
-  }),
-  Failure: TaggedEnumClass.variant("error", {
-    error: Schema.String,
-    sessionId: Schema.optional(SessionId),
-    agentName: Schema.optional(AgentName),
-    persistence: Schema.optional(AgentPersistence),
-  }),
+const AgentRunSuccessStruct = Schema.TaggedStruct("success", {
+  text: Schema.String,
+  sessionId: SessionId,
+  agentName: AgentName,
+  persistence: Schema.optional(AgentPersistence),
+  usage: Schema.optional(AgentRunUsageSchema),
+  toolCalls: Schema.optional(Schema.Array(AgentRunToolCallSchema)),
+  savedPath: Schema.optional(Schema.String),
 })
+const AgentRunFailureStruct = Schema.TaggedStruct("error", {
+  error: Schema.String,
+  sessionId: Schema.optional(SessionId),
+  agentName: Schema.optional(AgentName),
+  persistence: Schema.optional(AgentPersistence),
+})
+
+export const AgentRunResult = Schema.Union([AgentRunSuccessStruct, AgentRunFailureStruct]).pipe(
+  Schema.toTaggedUnion("_tag"),
+)
 export type AgentRunResult = Schema.Schema.Type<typeof AgentRunResult>
 
 export const getDurableAgentRunSessionId = (result: AgentRunResult): SessionId | undefined =>

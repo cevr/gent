@@ -70,7 +70,7 @@ describe("getDurableAgentRunSessionId", () => {
   const agentName = AgentName.make("cowork")
 
   test("Success + durable explicit returns sessionId", () => {
-    const result = AgentRunResult.Success.make({
+    const result = AgentRunResult.cases.success.make({
       text: "ok",
       sessionId: sid,
       agentName,
@@ -80,7 +80,7 @@ describe("getDurableAgentRunSessionId", () => {
   })
 
   test("Success + persistence undefined defaults to durable, returns sessionId", () => {
-    const result = AgentRunResult.Success.make({
+    const result = AgentRunResult.cases.success.make({
       text: "ok",
       sessionId: sid,
       agentName,
@@ -89,7 +89,7 @@ describe("getDurableAgentRunSessionId", () => {
   })
 
   test("Success + ephemeral returns undefined (do not surface ephemeral child to parent)", () => {
-    const result = AgentRunResult.Success.make({
+    const result = AgentRunResult.cases.success.make({
       text: "ok",
       sessionId: sid,
       agentName,
@@ -99,7 +99,7 @@ describe("getDurableAgentRunSessionId", () => {
   })
 
   test("Failure with durable + sessionId returns it", () => {
-    const result = AgentRunResult.Failure.make({
+    const result = AgentRunResult.cases.error.make({
       error: "boom",
       sessionId: sid,
       agentName,
@@ -109,14 +109,14 @@ describe("getDurableAgentRunSessionId", () => {
   })
 
   test("Failure without sessionId returns undefined", () => {
-    const result = AgentRunResult.Failure.make({
+    const result = AgentRunResult.cases.error.make({
       error: "boom",
     })
     expect(getDurableAgentRunSessionId(result)).toBeUndefined()
   })
 
   test("Failure ephemeral with sessionId returns undefined", () => {
-    const result = AgentRunResult.Failure.make({
+    const result = AgentRunResult.cases.error.make({
       error: "boom",
       sessionId: sid,
       persistence: "ephemeral",

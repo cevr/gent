@@ -72,7 +72,7 @@ export interface E2ELayerConfig {
 const defaultSubagentRunner: AgentRunner = {
   run: () =>
     Effect.succeed(
-      AgentRunResult.Success.make({
+      AgentRunResult.cases.success.make({
         text: "",
         sessionId: SessionId.make("test-subagent-session"),
         agentName: AgentName.make("cowork"),

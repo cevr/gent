@@ -25,7 +25,7 @@ export const FIXTURE_DATE = dateFromMillis(0)
 const mockRunnerSuccess: AgentRunner = {
   run: (params) =>
     Effect.succeed(
-      AgentRunResult.Success.make({
+      AgentRunResult.cases.success.make({
         text: `done: ${params.prompt}`,
         sessionId: SessionId.make("child-session"),
         agentName: params.agent.name,
@@ -44,7 +44,7 @@ export const makeCtx = Effect.gen(function* () {
       get: (name) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
       run: (params) =>
         Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: `done: ${params.prompt}`,
             sessionId: SessionId.make("child-session"),
             agentName: params.agent.name,

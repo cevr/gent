@@ -26,7 +26,7 @@ describe("AgentName brand", () => {
 
 describe("AgentRunResult", () => {
   test("Success uses the stable wire tag 'success'", () => {
-    const result = AgentRunResult.Success.make({
+    const result = AgentRunResult.cases.success.make({
       text: "ok",
       sessionId: SessionId.make("s1"),
       agentName: AgentName.make("cowork"),
@@ -35,7 +35,7 @@ describe("AgentRunResult", () => {
   })
 
   test("Failure uses the stable wire tag 'error'", () => {
-    const result = AgentRunResult.Failure.make({ error: "boom" })
+    const result = AgentRunResult.cases.error.make({ error: "boom" })
     expect(result._tag).toBe("error")
   })
 

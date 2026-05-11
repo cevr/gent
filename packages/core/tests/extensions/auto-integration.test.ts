@@ -52,7 +52,7 @@ const runAgentMessage = (message: Message) =>
 const reviewCompatibleRunner = {
   run: (params: { prompt: string }) =>
     Effect.succeed(
-      AgentRunResult.Success.make({
+      AgentRunResult.cases.success.make({
         text: params.prompt.includes("Synthesize")
           ? JSON.stringify([
               { file: "test.ts", line: 1, severity: "low", type: "suggestion", text: "ok" },

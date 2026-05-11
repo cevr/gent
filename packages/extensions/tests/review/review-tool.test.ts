@@ -56,7 +56,7 @@ describe("ReviewTool", () => {
         capturedOverrides.push(params.runSpec?.overrides as Record<string, unknown> | undefined)
         capturedParentToolCallIds.push(params.runSpec?.parentToolCallId)
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: "[]",
             sessionId: SessionId.make("child"),
             agentName: params.agent.name,
@@ -103,7 +103,7 @@ describe("ReviewTool", () => {
     const ctx = makeCtx({
       agentRun: () =>
         Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: jsonOutput,
             sessionId: SessionId.make("child"),
             agentName: AgentName.make("review-worker"),
@@ -128,7 +128,7 @@ describe("ReviewTool", () => {
     const ctx = makeCtx({
       agentRun: () =>
         Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: "not valid json",
             sessionId: SessionId.make("child"),
             agentName: AgentName.make("review-worker"),
@@ -156,7 +156,7 @@ describe("ReviewTool", () => {
         Effect.sync(() => {
           prompts.push(params.prompt)
           if (params.prompt.includes("Synthesize these adversarial reviews")) {
-            return AgentRunResult.Success.make({
+            return AgentRunResult.cases.success.make({
               text: encodeJson([
                 {
                   file: "src/auth.ts",
@@ -171,14 +171,14 @@ describe("ReviewTool", () => {
             })
           }
           if (params.prompt.includes("Fix the issues identified")) {
-            return AgentRunResult.Success.make({
+            return AgentRunResult.cases.success.make({
               text: "Applied fixes.",
               sessionId: SessionId.make("exec"),
               agentName: params.agent.name,
               persistence: "durable",
             })
           }
-          return AgentRunResult.Success.make({
+          return AgentRunResult.cases.success.make({
             text: "[]",
             sessionId: SessionId.make("child"),
             agentName: params.agent.name,
@@ -216,7 +216,7 @@ describe("ReviewTool", () => {
     const ctx = makeCtx({
       agentRun: () =>
         Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: jsonOutput,
             sessionId: SessionId.make("child"),
             agentName: AgentName.make("review-worker"),

@@ -182,7 +182,7 @@ const withAgentRunFailureHandling = <E, R, R2>(
       return Effect.gen(function* () {
         const error = Cause.pretty(cause)
         yield* publishFailed(params)
-        return AgentRunResult.Failure.make({
+        return AgentRunResult.cases.error.make({
           error,
           sessionId: params.sessionId,
           agentName: params.agentName,
@@ -255,7 +255,7 @@ const loadAgentRunSuccessData = (params: {
     const messages = yield* messageStorage.listMessages(params.branchId)
     const { text, reasoning } = latestAssistantContent(messages)
     const meta = yield* collectChildMetadata(params.sessionId)
-    const success = AgentRunResult.Success.make({
+    const success = AgentRunResult.cases.success.make({
       text: text.length > 0 ? text : reasoning,
       sessionId: params.sessionId,
       agentName: params.agentName,
@@ -555,7 +555,7 @@ const runEphemeralAgent = (params: {
   const handleUnexpectedFailure = (cause: Cause.Cause<unknown>) => {
     if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
     return Effect.succeed(
-      AgentRunResult.Failure.make({
+      AgentRunResult.cases.error.make({
         error: Cause.pretty(cause),
         agentName: params.agentName,
         persistence: params.persistence,
@@ -726,7 +726,7 @@ const runEphemeralAgent = (params: {
       toolCallCount: success.toolCalls?.length ?? 0,
     })
 
-    return AgentRunResult.Success.make({
+    return AgentRunResult.cases.success.make({
       ...success,
       savedPath,
     })
@@ -837,7 +837,7 @@ export const InProcessRunner = (
           const handleUnexpectedFailure = (cause: Cause.Cause<unknown>) => {
             if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
             return Effect.succeed(
-              AgentRunResult.Failure.make({
+              AgentRunResult.cases.error.make({
                 error: Cause.pretty(cause),
                 agentName: params.agent.name,
                 persistence,
@@ -931,7 +931,7 @@ export const InProcessRunner = (
                     toolCallCount: success.toolCalls?.length ?? 0,
                   })
 
-                  return AgentRunResult.Success.make({ ...success, savedPath })
+                  return AgentRunResult.cases.success.make({ ...success, savedPath })
                 }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
 
                 return withAgentRunFailureHandling(
@@ -1111,7 +1111,7 @@ export const SubprocessRunner = (
                     agentName: params.agent.name,
                   })
 
-                  return AgentRunResult.Failure.make({
+                  return AgentRunResult.cases.error.make({
                     error:
                       stderrText.length > 0
                         ? stderrText.trim()
@@ -1152,7 +1152,7 @@ export const SubprocessRunner = (
                   toolCallCount: success.toolCalls?.length ?? 0,
                 })
 
-                return AgentRunResult.Success.make({ ...success, savedPath })
+                return AgentRunResult.cases.success.make({ ...success, savedPath })
               }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
 
               return withAgentRunFailureHandling(
@@ -1172,7 +1172,7 @@ export const SubprocessRunner = (
             Effect.catchCause((cause) => {
               if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
               return Effect.succeed(
-                AgentRunResult.Failure.make({
+                AgentRunResult.cases.error.make({
                   error: Cause.pretty(cause),
                   agentName: params.agent.name,
                   persistence,

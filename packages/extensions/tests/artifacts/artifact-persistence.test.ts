@@ -78,7 +78,7 @@ const stubAgentRun =
   (textFn?: (prompt: string) => string) =>
   (params: Parameters<ExtensionContextService["Agent"]["run"]>[0]) =>
     Effect.succeed(
-      AgentRunResult.Success.make({
+      AgentRunResult.cases.success.make({
         text: textFn?.(params.prompt) ?? "output",
         sessionId: SessionId.make("s1"),
         agentName: params.agent.name,

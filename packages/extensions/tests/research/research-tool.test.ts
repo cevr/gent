@@ -44,7 +44,7 @@ describe("ResearchTool", () => {
     const ctx = makeCtx({
       agentRun: (params) =>
         Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: "Effect uses fibers for concurrency. See src/Fiber.ts:42.",
             sessionId: SessionId.make("research-1"),
             agentName: params.agent.name,
@@ -80,7 +80,7 @@ describe("ResearchTool", () => {
         }
         if (params.prompt.includes("Synthesize")) {
           return Effect.succeed(
-            AgentRunResult.Success.make({
+            AgentRunResult.cases.success.make({
               text: "Comparative analysis: both use fiber-based concurrency.",
               sessionId: SessionId.make("synthesis"),
               agentName: params.agent.name,
@@ -89,7 +89,7 @@ describe("ResearchTool", () => {
           )
         }
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: `Findings for ${params.prompt.includes("effect-ts") ? "effect" : "zio"}.`,
             sessionId: SessionId.make("worker"),
             agentName: params.agent.name,
@@ -126,7 +126,7 @@ describe("ResearchTool", () => {
       agentRun: (params) => {
         capturedPrompt = params.prompt
         return Effect.succeed(
-          AgentRunResult.Success.make({
+          AgentRunResult.cases.success.make({
             text: "Found scheduler patterns.",
             sessionId: SessionId.make("focus"),
             agentName: params.agent.name,

@@ -26,7 +26,7 @@ const makeSuccess = (
   sessionId: string = "s1",
   agentName: string = "architect",
 ): AgentRunResult =>
-  AgentRunResult.Success.make({
+  AgentRunResult.cases.success.make({
     text,
     sessionId: SessionId.make(sessionId),
     agentName: AgentName.make(agentName),
