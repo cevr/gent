@@ -769,7 +769,7 @@ const buildAgentLoopActorHandlers = (config: {
     const ensureStarted = startupSemaphore.withPermits(1)(
       Effect.gen(function* () {
         if (yield* Ref.get(closed)) {
-          yield* openLoop
+          yield* withWorkspace(openLoop)
         }
         const exit = yield* Ref.get(startupExitRef)
         if (exit === undefined || Exit.isSuccess(exit)) {
