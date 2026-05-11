@@ -4,7 +4,6 @@ import {
   AgentName,
   ExtensionContext,
   AgentRunResult,
-  AgentRunResultSchema,
   AgentRunToolCallSchema,
   defineExtension,
   getDurableAgentRunSessionId,
@@ -47,7 +46,7 @@ export const DelegateResult = Schema.Struct({
   metadata: Schema.optional(
     Schema.Struct({
       mode: Schema.optional(Schema.Literals(["single", "parallel", "chain"])),
-      results: Schema.optional(Schema.Array(AgentRunResultSchema)),
+      results: Schema.optional(Schema.Array(AgentRunResult)),
       sessionId: Schema.optional(Schema.String),
       agentName: Schema.optional(AgentName),
       usage: Schema.optional(

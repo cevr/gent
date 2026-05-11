@@ -72,7 +72,6 @@ export {
   makeRunSpec,
   RunSpecSchema,
   AgentRunResult,
-  AgentRunResult as AgentRunResultSchema,
   AgentRunToolCallSchema,
   getDurableAgentRunSessionId,
   AgentRunError,
