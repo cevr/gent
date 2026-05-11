@@ -100,7 +100,7 @@ import {
   makeActiveStreamHandle,
   signalActiveStreamInterrupt,
   type ActiveStreamHandle,
-} from "./turn-response/collectors.js"
+} from "./turn-response.js"
 import {
   ToolInteractionPending,
   computeStreamEndedCost,

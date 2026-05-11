@@ -11,7 +11,7 @@ import {
   signalActiveStreamInterrupt,
   toResponseFinishReason,
   type ActiveStreamHandle,
-} from "../../src/runtime/agent/turn-response/collectors"
+} from "../../src/runtime/agent/turn-response"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import type { TurnError } from "@gent/core-internal/domain/driver"
 import { ProviderError } from "@gent/core-internal/domain/provider-error"

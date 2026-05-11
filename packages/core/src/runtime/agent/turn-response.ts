@@ -1,8 +1,8 @@
 import { Deferred, Effect, Stream, type Scope } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
-import { DEFAULT_AGENT_NAME, type AgentName as AgentNameType } from "../../../domain/agent.js"
-import { TurnError } from "../../../domain/driver.js"
+import { DEFAULT_AGENT_NAME, type AgentName as AgentNameType } from "../../domain/agent.js"
+import { TurnError } from "../../domain/driver.js"
 import {
   ErrorOccurred,
   StreamChunk as EventStreamChunk,
@@ -11,16 +11,16 @@ import {
   ToolCallStarted,
   ToolCallSucceeded,
   type AgentEvent,
-} from "../../../domain/event.js"
-import { ToolCallId, type BranchId, type SessionId } from "../../../domain/ids.js"
-import { hasMessage } from "../../../domain/guards.js"
-import type { AssistantDraft } from "../agent-loop.state.js"
+} from "../../domain/event.js"
+import { ToolCallId, type BranchId, type SessionId } from "../../domain/ids.js"
+import { hasMessage } from "../../domain/guards.js"
+import type { AssistantDraft } from "./agent-loop.state.js"
 import {
   normalizeResponseParts,
   projectResponsePartsToMessageParts,
-} from "../../../domain/message-part-projection.js"
-import { ProviderError } from "../../../domain/provider-error.js"
-import { summarizeOutput, stringifyOutput } from "../../../domain/tool-output.js"
+} from "../../domain/message-part-projection.js"
+import { ProviderError } from "../../domain/provider-error.js"
+import { summarizeOutput, stringifyOutput } from "../../domain/tool-output.js"
 
 export type PublishEvent = (event: AgentEvent) => Effect.Effect<void, never, never>
 

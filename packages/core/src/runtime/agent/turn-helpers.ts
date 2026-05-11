@@ -55,7 +55,7 @@ import {
   type ActiveStreamHandle,
   type CollectedTurnResponse,
   type PublishEvent,
-} from "./turn-response/collectors.js"
+} from "./turn-response.js"
 
 interface CommittedMutation<A> {
   readonly result: A
