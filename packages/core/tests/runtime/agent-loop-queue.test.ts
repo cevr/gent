@@ -28,6 +28,7 @@ import {
   makeAgentLoopService,
   makeExtRegistry,
   submitAgentLoop,
+  waitFor,
   waitForPhase,
 } from "./agent-loop/helpers"
 import {
@@ -139,10 +140,15 @@ describe("queue drain regression", () => {
             // to Running before model streaming starts, so we poll on
             // streamCallRef instead.
             yield* submitOne("msg-drain-0", "first")
-            for (let i = 0; i < 200; i++) {
-              if ((yield* Ref.get(streamCallRef)) >= 1) break
-              yield* Effect.sleep("1 millis")
-            }
+            yield* waitFor(
+              () =>
+                Effect.gen(function* () {
+                  const count = yield* Ref.get(streamCallRef)
+                  return count >= 1 ? count : undefined
+                }),
+              "model stream call #0 to start",
+              200,
+            )
             expect(yield* Ref.get(streamCallRef)).toBe(1)
             // Submit #1, #2, #3 while #0 is still parked. They MUST
             // enqueue (Running → Running re-enter) — they cannot start

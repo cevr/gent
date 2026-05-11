@@ -475,6 +475,20 @@ export const makeExternalLayerWithEvents = (
   )
 }
 /** Poll `getState` until the phase matches, with a short sleep between attempts. */
+export const waitFor = <A, E, R>(
+  check: () => Effect.Effect<A | undefined, E, R>,
+  description: string,
+  attempts = 50,
+) =>
+  Effect.gen(function* () {
+    for (let i = 0; i < attempts; i++) {
+      const result = yield* check()
+      if (result !== undefined) return result
+      yield* Effect.sleep("1 millis")
+    }
+    throw new Error(`Timed out waiting for ${description}`)
+  })
+
 export const waitForPhase = (
   agentLoop: AgentLoopService,
   params: {
@@ -484,12 +498,13 @@ export const waitForPhase = (
   runtimeTag: string,
   attempts = 50,
 ) =>
-  Effect.gen(function* () {
-    for (let i = 0; i < attempts; i++) {
-      const state = yield* agentLoop.getState(params)
-      if (state._tag === runtimeTag) return state
-      yield* Effect.sleep("1 millis")
-    }
-    throw new Error(`Timed out waiting for runtime state "${runtimeTag}"`)
-  })
+  waitFor(
+    () =>
+      Effect.gen(function* () {
+        const state = yield* agentLoop.getState(params)
+        return state._tag === runtimeTag ? state : undefined
+      }),
+    `runtime state "${runtimeTag}"`,
+    attempts,
+  )
 // ============================================================================
