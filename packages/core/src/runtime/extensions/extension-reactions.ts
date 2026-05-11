@@ -1,14 +1,14 @@
 import { Cause, Effect } from "effect"
-import type {
-  ExtensionReaction,
-  ExtensionReactions,
-  ExtensionScope,
-  LoadedExtension,
-  SystemPromptInput,
-  ToolPolicyFragment,
-  ToolResultInput,
-  TurnAfterInput,
-  ProjectionTurnContext,
+import {
+  SCOPE_PRECEDENCE,
+  type ExtensionReaction,
+  type ExtensionReactions,
+  type LoadedExtension,
+  type SystemPromptInput,
+  type ToolPolicyFragment,
+  type ToolResultInput,
+  type TurnAfterInput,
+  type ProjectionTurnContext,
 } from "../../domain/extension.js"
 import type { ExtensionId } from "../../domain/ids.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
@@ -61,11 +61,9 @@ interface RegisteredToolResultTransform {
   readonly handler: NonNullable<ExtensionReactions<unknown, unknown>["toolResult"]>
 }
 
-const SCOPE_ORDER: Record<ExtensionScope, number> = { builtin: 0, user: 1, project: 2 }
-
 const sortExtensions = (extensions: ReadonlyArray<LoadedExtension>) =>
   [...extensions].sort((a, b) => {
-    const scopeDiff = SCOPE_ORDER[a.scope] - SCOPE_ORDER[b.scope]
+    const scopeDiff = SCOPE_PRECEDENCE[a.scope] - SCOPE_PRECEDENCE[b.scope]
     if (scopeDiff !== 0) return scopeDiff
     return a.manifest.id.localeCompare(b.manifest.id)
   })

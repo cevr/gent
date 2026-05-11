@@ -62,7 +62,9 @@ export type ExtensionStatusInfo =
       readonly scheduledJobFailures?: ReadonlyArray<ScheduledJobFailureInfo>
     } & FailedExtension)
 
-export type ExtensionScope = "builtin" | "user" | "project"
+/** Scope precedence for extension resolution. Higher value = higher priority. */
+export const SCOPE_PRECEDENCE = { builtin: 0, user: 1, project: 2 } as const
+export type ExtensionScope = keyof typeof SCOPE_PRECEDENCE
 
 // Extension Load Error
 

@@ -13,13 +13,14 @@ import {
   CapabilityNotFoundError as CapabilityNotFoundErrorClass,
 } from "../../domain/capability.js"
 import { provideExtensionServices } from "../../domain/extension-services.js"
-import type {
-  ExtensionStatusInfo,
-  FailedExtension,
-  TurnProjection,
-  LoadedExtension,
-  RunContext,
-  ScheduledJobFailureInfo,
+import {
+  SCOPE_PRECEDENCE,
+  type ExtensionStatusInfo,
+  type FailedExtension,
+  type TurnProjection,
+  type LoadedExtension,
+  type RunContext,
+  type ScheduledJobFailureInfo,
 } from "../../domain/extension.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { type PromptSection } from "../../domain/prompt.js"
@@ -35,7 +36,6 @@ import {
   compileExtensionReactions,
   type CompiledExtensionReactions,
 } from "./extension-reactions.js"
-import { SCOPE_PRECEDENCE } from "./disabled.js"
 import { sealErasedEffect } from "./extension-effect-membrane.js"
 
 // SlashCommand — public-facing slash entry. Built from `requests:` bucket
