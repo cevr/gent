@@ -4,14 +4,18 @@
  * Wave 35 C14: this file used to exercise the bespoke `TaggedEnumClass`
  * factory. It now exercises upstream `Schema.TaggedUnion`/`Schema.TaggedStruct`
  * + `Schema.toTaggedUnion` directly — proving the upstream surface covers
- * every invariant we care about before production call sites migrate.
+ * the invariants we rely on before production call sites migrate.
  *
  * Covered invariants:
  * - per-variant TaggedStruct identity (`Schema.is` narrows to a single case)
  * - constructor surface (`Enum.cases.Member.make({...})`)
  * - decode/encode round-trip at the union level
- * - `guards`, `isAnyOf`, `match` utility semantics
- * - guards/isAnyOf/match validate payload (not just `_tag`)
+ * - `guards` validate the full payload (composed `Schema.is` per variant)
+ * - `isAnyOf` and `match` dispatch on `_tag` ONLY (no payload validation) —
+ *   regression-locked explicitly so future readers know not to feed untrusted
+ *   values through them. Production callers only invoke these on values that
+ *   already passed `Schema.decodeUnknownSync(...)` at the wire boundary, or
+ *   that were constructed in-process via `cases.X.make(...)`.
  * - explicit wire-tag preservation via `Schema.TaggedStruct("wire-tag", ...)`
  *   unioned with `Schema.toTaggedUnion("_tag")`
  * - single-variant edge case
@@ -113,6 +117,43 @@ describe("Schema.TaggedUnion — match / guards / isAnyOf", () => {
     expect(angular(r)).toBe(true)
     expect(angular(t)).toBe(true)
     expect(angular(c)).toBe(false)
+  })
+})
+
+describe("Schema.TaggedUnion — runtime-helper payload-validation semantics", () => {
+  const Shape = Schema.TaggedUnion({
+    Circle: { radius: Schema.Number },
+    Rectangle: { width: Schema.Number, height: Schema.Number },
+  })
+  type Shape = Schema.Schema.Type<typeof Shape>
+  // A spoof value: right `_tag`, wrong payload shape. Constructed via
+  // `as unknown as Shape` to bypass the type system — exactly the kind of
+  // value a wire-boundary failure or a hostile decode would produce.
+  const spoof = { _tag: "Circle", radius: "not a number" } as unknown as Shape
+  test("`guards.X` validates the full payload — spoofed payload is rejected", () => {
+    // `guards.X` is `Schema.is(case)` per variant in upstream, so the payload
+    // shape is checked, not just the discriminator.
+    expect(Shape.guards.Circle(spoof)).toBe(false)
+  })
+  test("`isAnyOf` is tag-only — spoofed payload is accepted", () => {
+    // Regression-lock: upstream `isAnyOf` matches against `_tag` only.
+    // Bespoke `TaggedEnumClass` composed `Schema.is(variant)` here, which
+    // would have rejected this value. Production callers do not feed
+    // untrusted values through `isAnyOf`, so the looser upstream semantics
+    // are accepted.
+    expect(Shape.isAnyOf(["Circle"])(spoof)).toBe(true)
+  })
+  test("`match` is tag-only — dispatches on spoofed payload", () => {
+    // Regression-lock: upstream `match` dispatches via the `_tag` key into
+    // the handler map without re-validating the payload. Bespoke validated
+    // before dispatch. Production callers (`AgentEvent.match` on events
+    // emitted in-process or decoded via `Schema.decodeUnknownSync`) never
+    // see spoofed values, so the looser upstream semantics are accepted.
+    const out = Shape.match({
+      Circle: (c) => `circle:${typeof c.radius}`,
+      Rectangle: (r) => `rect:${r.width * r.height}`,
+    })(spoof)
+    expect(out).toBe("circle:string")
   })
 })
 
