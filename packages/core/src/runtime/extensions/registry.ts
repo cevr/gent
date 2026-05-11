@@ -495,7 +495,6 @@ export const compileToolPolicy = (
 
 export interface ExtensionRegistryService {
   // Model capability resolution
-  readonly getModelCapability: (name: string) => Effect.Effect<ToolCapability | undefined>
   readonly listModelCapabilities: () => Effect.Effect<ReadonlyArray<ToolCapability>>
   /** Resolve tools + prompt sections for an agent turn, applying extension projections. */
   readonly resolveToolPolicy: (
@@ -505,7 +504,6 @@ export interface ExtensionRegistryService {
   ) => Effect.Effect<CompiledToolPolicy>
 
   // Agent resolution
-  readonly getAgent: (name: string) => Effect.Effect<AgentDefinition | undefined>
   readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
 
   // Permission rules
@@ -530,7 +528,6 @@ export class ExtensionRegistry extends Context.Service<
 >()("@gent/core/src/runtime/extensions/registry/ExtensionRegistry") {
   static fromResolved = (resolved: ResolvedExtensions): Layer.Layer<ExtensionRegistry> =>
     Layer.succeed(ExtensionRegistry, {
-      getModelCapability: (name) => Effect.succeed(resolved.modelCapabilities.get(name)),
       listModelCapabilities: () => Effect.succeed([...resolved.modelCapabilities.values()]),
       resolveToolPolicy: (agent, runContext, extensionProjections) =>
         Effect.succeed(
@@ -542,7 +539,6 @@ export class ExtensionRegistry extends Context.Service<
           ),
         ),
       listPermissionRules: () => Effect.succeed(resolved.permissionRules),
-      getAgent: (name) => Effect.succeed(resolved.agents.get(name)),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
       // Dynamic prompt sections are assembled per-turn by ExtensionReactions.
       // The sections here come from capability leaf `prompt`, all static. No more
@@ -561,11 +557,26 @@ export class ExtensionRegistry extends Context.Service<
 export const listSlashCommands = (resolved: ResolvedExtensions): ReadonlyArray<SlashCommand> =>
   resolved.slashCommands
 
+/** Find an agent by name. Returns undefined when not registered. */
+export const findAgent = (name: string) =>
+  Effect.gen(function* () {
+    const registry = yield* ExtensionRegistry
+    const agents = yield* registry.listAgents()
+    return agents.find((agent) => agent.name === name)
+  })
+
+/** Find a model capability by name. Returns undefined when not registered. */
+export const findModelCapability = (name: string) =>
+  Effect.gen(function* () {
+    const registry = yield* ExtensionRegistry
+    const capabilities = yield* registry.listModelCapabilities()
+    return capabilities.find((capability) => String(getToolId(capability)) === name)
+  })
+
 /** Resolve a required agent from the registry. Fails with a clear error if not found. */
 export const requireAgent = (name: string) =>
   Effect.gen(function* () {
-    const registry = yield* ExtensionRegistry
-    const agent = yield* registry.getAgent(name)
+    const agent = yield* findAgent(name)
     if (agent === undefined) {
       return yield* registryFailure(
         "requireAgent",

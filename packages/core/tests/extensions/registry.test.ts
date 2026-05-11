@@ -16,6 +16,8 @@ import { getToolMetadata } from "@gent/core-internal/domain/capability/tool"
 import {
   ExtensionRegistryError,
   ExtensionRegistry,
+  findAgent,
+  findModelCapability,
   listSlashCommands,
   requireAgent,
   resolveExtensions,
@@ -331,14 +333,16 @@ describe("ExtensionRegistry", () => {
       const registry = yield* buildRegistry([
         makeExt("a", "builtin", { tools: [makeTool("read")] }),
       ])
-      const tool = yield* registry.getModelCapability("read")
+      const tools = yield* registry.listModelCapabilities()
+      const tool = tools.find((capability) => String(getToolId(capability)) === "read")
       expect(String(tool === undefined ? undefined : getToolId(tool))).toBe("read")
     }),
   )
   it.live("unregistered model capability name returns undefined", () =>
     Effect.gen(function* () {
       const registry = yield* buildRegistry([])
-      const tool = yield* registry.getModelCapability("nonexistent")
+      const tools = yield* registry.listModelCapabilities()
+      const tool = tools.find((capability) => String(getToolId(capability)) === "nonexistent")
       expect(tool).toBeUndefined()
     }),
   )
@@ -401,7 +405,8 @@ describe("ExtensionRegistry", () => {
       const registry = yield* buildRegistry([
         makeExt("a", "builtin", { agents: [makeAgent("explore")] }),
       ])
-      const agent = yield* registry.getAgent(AgentName.make("explore"))
+      const agents = yield* registry.listAgents()
+      const agent = agents.find((entry) => entry.name === AgentName.make("explore"))
       expect(agent?.name).toBe(AgentName.make("explore"))
     }),
   )
@@ -420,6 +425,54 @@ describe("ExtensionRegistry", () => {
         'Required agent "missing" not found in ExtensionRegistry. Is @gent/agents disabled?',
       )
     }).pipe(Effect.provide(ExtensionRegistry.Test())),
+  )
+  it.live("findAgent returns the registered agent when present", () =>
+    findAgent("explore").pipe(
+      Effect.map((agent) => {
+        expect(agent?.name).toBe(AgentName.make("explore"))
+      }),
+      Effect.provide(
+        ExtensionRegistry.fromResolved(
+          resolveExtensions([makeExt("a", "builtin", { agents: [makeAgent("explore")] })]),
+        ),
+      ),
+    ),
+  )
+  it.live("findAgent returns undefined when the agent is not registered", () =>
+    findAgent("missing").pipe(
+      Effect.map((agent) => {
+        expect(agent).toBeUndefined()
+      }),
+      Effect.provide(
+        ExtensionRegistry.fromResolved(
+          resolveExtensions([makeExt("a", "builtin", { agents: [makeAgent("explore")] })]),
+        ),
+      ),
+    ),
+  )
+  it.live("findModelCapability returns the registered tool when present", () =>
+    findModelCapability("read").pipe(
+      Effect.map((tool) => {
+        expect(tool === undefined ? undefined : String(getToolId(tool))).toBe("read")
+      }),
+      Effect.provide(
+        ExtensionRegistry.fromResolved(
+          resolveExtensions([makeExt("a", "builtin", { tools: [makeTool("read")] })]),
+        ),
+      ),
+    ),
+  )
+  it.live("findModelCapability returns undefined when the tool is not registered", () =>
+    findModelCapability("nonexistent").pipe(
+      Effect.map((tool) => {
+        expect(tool).toBeUndefined()
+      }),
+      Effect.provide(
+        ExtensionRegistry.fromResolved(
+          resolveExtensions([makeExt("a", "builtin", { tools: [makeTool("read")] })]),
+        ),
+      ),
+    ),
   )
   it.live("lists all agents including override winners", () =>
     Effect.gen(function* () {

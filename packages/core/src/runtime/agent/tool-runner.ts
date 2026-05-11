@@ -245,8 +245,9 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
           yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })
           yield* publishStarted({ publishEvent: options?.publishEvent, ctx, toolCall })
 
-          const tool: ToolCapability | undefined = yield* activeRegistry.getModelCapability(
-            toolCall.toolName,
+          const capabilities = yield* activeRegistry.listModelCapabilities()
+          const tool: ToolCapability | undefined = capabilities.find(
+            (capability) => String(getToolId(capability)) === toolCall.toolName,
           )
 
           const finish = (result: Prompt.ToolResultPart) =>

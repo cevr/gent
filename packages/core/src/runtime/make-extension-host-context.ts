@@ -436,7 +436,10 @@ export const makeExtensionHostContext = (
     ...(deps.capabilityContext !== undefined ? { capabilityContext: deps.capabilityContext } : {}),
 
     agent: {
-      get: (name) => deps.extensionRegistry.getAgent(name),
+      get: (name) =>
+        deps.extensionRegistry
+          .listAgents()
+          .pipe(Effect.map((agents) => agents.find((agent) => agent.name === name))),
       listAgents: () => deps.extensionRegistry.listAgents(),
       run: (params) =>
         deps.agentRunner.run({

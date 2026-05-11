@@ -644,7 +644,8 @@ export const makeAgentLoopBehavior = (
         const previous = state.currentAgent ?? DEFAULT_AGENT_NAME
         if (previous === next) return state
         const { turnExtensionRegistry: switchRegistry } = yield* resolveTurnProfile
-        const resolved = yield* switchRegistry.getAgent(next)
+        const agents = yield* switchRegistry.listAgents()
+        const resolved = agents.find((agent) => agent.name === next)
         if (resolved === undefined) return state
 
         yield* publishEvent(

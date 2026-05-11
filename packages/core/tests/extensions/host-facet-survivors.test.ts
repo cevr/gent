@@ -28,7 +28,7 @@ const FIXTURE_DATE = dateFromMillis(0)
 const die = (label: string) => () => Effect.die(`${label} not wired in test`)
 
 const baseDeps = (overrides: {
-  getAgent: MakeExtensionHostContextDeps["extensionRegistry"]["getAgent"]
+  listAgents: MakeExtensionHostContextDeps["extensionRegistry"]["listAgents"]
   listBranches: MakeExtensionHostContextDeps["branchStorage"]["listBranches"]
 }): MakeExtensionHostContextDeps => ({
   platform: {
@@ -50,8 +50,7 @@ const baseDeps = (overrides: {
     review: die("PromptPresenter.review"),
   } as MakeExtensionHostContextDeps["promptPresenter"],
   extensionRegistry: {
-    getAgent: overrides.getAgent,
-    listAgents: die("listAgents"),
+    listAgents: overrides.listAgents,
   } as unknown as MakeExtensionHostContextDeps["extensionRegistry"],
   sessionStorage: {
     getSession: die("getSession"),
@@ -146,7 +145,7 @@ describe("host facet survivors after C9.5 prune", () => {
         createdAt: FIXTURE_DATE,
       })
       const deps = baseDeps({
-        getAgent: die("getAgent"),
+        listAgents: die("listAgents"),
         listBranches: (id) => (id === SESSION_ID ? Effect.succeed([branch]) : Effect.succeed([])),
       })
       const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)

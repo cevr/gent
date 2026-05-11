@@ -349,7 +349,8 @@ export const resolveTurnContext = (params: {
     const rawMessages = yield* messageStorage
       .listMessages(params.branchId)
       .pipe(Effect.map((items) => [...items]))
-    const agent = yield* extensionRegistry.getAgent(currentAgent)
+    const agents = yield* extensionRegistry.listAgents()
+    const agent = agents.find((entry) => entry.name === currentAgent)
     if (agent === undefined) {
       yield* params
         .publishEvent(

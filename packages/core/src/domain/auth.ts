@@ -265,7 +265,7 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
           const modelIds = Exit.isSuccess(modelPairExit) ? [...modelPairExit.value] : []
 
           if (query.agentName !== undefined) {
-            const selectedAgent = yield* extensionRegistry.getAgent(query.agentName)
+            const selectedAgent = agents.find((agent) => agent.name === query.agentName)
             if (selectedAgent !== undefined) {
               const resolved = resolveAgentDriver(selectedAgent, query.driverOverrides)
               if (resolved.driver?._tag === "external") {
