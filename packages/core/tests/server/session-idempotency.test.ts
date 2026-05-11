@@ -1,8 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BunServices } from "@effect/platform-bun"
-import type { Deferred } from "effect"
-import { Effect, FileSystem, Layer, Path, Ref } from "effect"
+import { Effect, FileSystem, Layer, Path } from "effect"
 import { TestClock } from "effect/testing"
 import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { Branch, Message } from "@gent/core-internal/domain/message"
@@ -14,7 +13,7 @@ import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SessionRuntimeError } from "../../src/runtime/session-runtime"
-import { dedupRequest, SessionCommands } from "../../src/server/session-commands"
+import { makeRequestDeduper, SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
@@ -596,28 +595,27 @@ describe("requestId idempotency", () => {
 
   it.effect("dedup cache hard cap evicts the oldest requestId", () =>
     Effect.gen(function* () {
-      const cache = yield* Ref.make(new Map<string, Deferred.Deferred<number, never>>())
       let value = 0
-      const run = (requestId: string) =>
-        dedupRequest({
-          cache,
-          requestId,
-          body: Effect.sync(() => {
+      const run = yield* makeRequestDeduper<{ requestId: string }, number, never>({
+        body: () =>
+          Effect.sync(() => {
             value += 1
             return value
           }),
-          maxEntries: 2,
-          successTtl: "60 seconds",
-        })
+        keyOf: (input) => input.requestId,
+        maxEntries: 2,
+        successTtl: "60 seconds",
+      })
 
-      const first = yield* run("req-cap-first")
-      expect(yield* run("req-cap-second")).toBe(2)
-      expect(yield* run("req-cap-third")).toBe(3)
+      const first = yield* run({ requestId: "req-cap-first" })
+      expect(yield* run({ requestId: "req-cap-second" })).toBe(2)
+      expect(yield* run({ requestId: "req-cap-third" })).toBe(3)
 
-      const retry = yield* run("req-cap-first")
+      // Past the 2-entry cap, "req-cap-first" was evicted to make room for
+      // "req-cap-third", so this call is a fresh lookup, not a cache hit.
+      const retry = yield* run({ requestId: "req-cap-first" })
       expect(retry).not.toBe(first)
       expect(retry).toBe(4)
-      expect(Array.from((yield* Ref.get(cache)).keys())).toEqual(["req-cap-third", "req-cap-first"])
     }),
   )
 

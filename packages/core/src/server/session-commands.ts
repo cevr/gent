@@ -1,4 +1,4 @@
-import { DateTime, Deferred, Duration, Effect, Layer, Context, Ref, Stream } from "effect"
+import { Cache, DateTime, Duration, Effect, Exit, Layer, Context, Ref, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SqlClient } from "effect/unstable/sql"
 import { EventPublisher } from "../domain/event-publisher.js"
@@ -67,94 +67,71 @@ type UpdateSessionReasoningLevelResult = {
 }
 
 // Dedup cache: bound success entries by both time and count so a
-// long-running shared server does not accumulate one Map entry per user
+// long-running shared server does not accumulate one entry per user
 // prompt + per session create indefinitely.
-const DEDUP_SUCCESS_TTL_MS = Duration.seconds(60)
+const DEDUP_SUCCESS_TTL: Duration.Input = Duration.seconds(60)
 const DEDUP_MAX_ENTRIES = 1024
 
-export const dedupRequest = <A, E>(input: {
-  readonly cache: Ref.Ref<Map<string, Deferred.Deferred<A, E>>>
-  readonly requestId: string | undefined
-  readonly body: Effect.Effect<A, E>
-  readonly maxEntries?: number
-  readonly successTtl?: Duration.Input
-}): Effect.Effect<A, E> =>
-  Effect.gen(function* () {
-    const requestId = input.requestId
-    if (requestId === undefined) return yield* input.body
-    const maxEntries = input.maxEntries ?? DEDUP_MAX_ENTRIES
-    const successTtl = input.successTtl ?? DEDUP_SUCCESS_TTL_MS
-    const fresh = yield* Deferred.make<A, E>()
-    const claimed = yield* Ref.modify(input.cache, (m) => {
-      const existing = m.get(requestId)
-      if (existing !== undefined) return [existing, m] as const
-      const next = new Map(m)
-      // Hard cap: evict oldest insertion-ordered entry once full.
-      if (next.size >= maxEntries) {
-        const oldest = next.keys().next().value
-        if (oldest !== undefined) next.delete(oldest)
-      }
-      next.set(requestId, fresh)
-      return [fresh, next] as const
-    })
-    if (claimed !== fresh) return yield* Deferred.await(claimed)
-    const evictAfterTtl = Effect.gen(function* () {
-      yield* Effect.sleep(successTtl)
-      yield* Ref.update(input.cache, (m) => {
-        if (m.get(requestId) !== fresh) return m
-        const next = new Map(m)
-        next.delete(requestId)
-        return next
-      })
-    })
-    return yield* input.body.pipe(
-      Effect.tap((result) =>
-        Effect.gen(function* () {
-          yield* Deferred.succeed(fresh, result)
-          // Detached so retries inside the window can still collapse onto the
-          // cached outcome after the request fiber completes.
-          yield* Effect.forkDetach(evictAfterTtl)
-        }),
-      ),
-      Effect.tapCause((cause) =>
-        Effect.gen(function* () {
-          yield* Ref.update(input.cache, (m) => {
-            const next = new Map(m)
-            next.delete(requestId)
-            return next
-          })
-          yield* Deferred.failCause(fresh, cause)
-        }),
-      ),
-    )
-  })
-
 /**
- * Atomic-claim dedup helper. Concurrent callers with the same `requestId`
- * collapse onto the first caller's outcome.
+ * Atomic-claim dedup helper backed by `Cache.makeWith`. Concurrent callers
+ * with the same `requestId` collapse onto the first caller's outcome.
  *
  * Eviction:
- * - On failure: evict immediately so retries can re-attempt the same
- *   `requestId` under fresh state.
- * - On success: schedule a delayed eviction after `DEDUP_SUCCESS_TTL_MS`.
- *   The window matches the transport retry window — long enough to collapse a
- *   retried RPC, short enough that a long-running server does not accumulate
- *   one entry per user prompt indefinitely.
- * - Hard cap: when the cache exceeds `DEDUP_MAX_ENTRIES`, the oldest-inserted
- *   entry is evicted before insert. JS `Map` preserves insertion order, so the
- *   first key returned by the iterator is the oldest.
+ * - On failure: `timeToLive: Duration.zero` removes the entry immediately so
+ *   retries can re-attempt the same `requestId` under fresh state.
+ * - On success: TTL window keeps the result available for retries.
+ * - Hard cap: `Cache` evicts oldest-inserted entry past `capacity`.
+ *
+ * `Cache` collapses concurrent lookups for the same key via an internal
+ * `Deferred`, so two same-`requestId` fibers see one body execution.
  */
-const makeRequestDeduper = <A, E>(): Effect.Effect<
-  (input: {
-    readonly requestId: string | undefined
-    readonly body: Effect.Effect<A, E>
-    readonly maxEntries?: number
-    readonly successTtl?: Duration.Input
-  }) => Effect.Effect<A, E>
-> =>
+export const makeRequestDeduper = <In, A, E>(opts: {
+  readonly body: (input: In) => Effect.Effect<A, E>
+  readonly keyOf: (input: In) => string | undefined
+  readonly maxEntries?: number
+  readonly successTtl?: Duration.Input
+}): Effect.Effect<(input: In) => Effect.Effect<A, E>> =>
   Effect.gen(function* () {
-    const cache = yield* Ref.make(new Map<string, Deferred.Deferred<A, E>>())
-    return (input) => dedupRequest({ cache, ...input })
+    // Body bridge: `Cache.lookup` takes only the key, but each call has a
+    // distinct input. Pending stores the body keyed by `requestId`; the
+    // running lookup pulls it out the first time the key is missed.
+    const pending = yield* Ref.make(new Map<string, Effect.Effect<A, E>>())
+    const successTtl = Duration.fromInputUnsafe(opts.successTtl ?? DEDUP_SUCCESS_TTL)
+    const cache = yield* Cache.makeWith<string, A, E>(
+      (key) =>
+        Effect.gen(function* () {
+          const body = (yield* Ref.get(pending)).get(key)
+          yield* Ref.update(pending, (m) => {
+            const next = new Map(m)
+            next.delete(key)
+            return next
+          })
+          // `pending` is populated before every `Cache.get` call below, so a
+          // miss reaching this lookup must find a body.
+          return yield* body ?? Effect.die("makeRequestDeduper: missing pending body")
+        }),
+      {
+        capacity: opts.maxEntries ?? DEDUP_MAX_ENTRIES,
+        timeToLive: (exit) => (Exit.isSuccess(exit) ? successTtl : Duration.zero),
+      },
+    )
+    return (input) => {
+      const key = opts.keyOf(input)
+      if (key === undefined) return opts.body(input)
+      return Effect.gen(function* () {
+        // Race window: two concurrent calls with the same key both write
+        // pending; only one triggers lookup. The Cache's internal Deferred
+        // ensures the second's body is ignored — its entry is dropped from
+        // pending by the running lookup.
+        yield* Ref.update(pending, (m) => {
+          if (m.has(key)) return m
+          const next = new Map(m)
+          next.set(key, opts.body(input))
+          return next
+        })
+        return yield* Cache.get(cache, key)
+      })
+    }
   })
 
 const cleanupSessionRuntimeState = Effect.fn("SessionCommands.cleanupSessionRuntimeState")(
@@ -701,15 +678,31 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       // Dedup is *concurrency-safe*: `RpcServer.layerHttp` runs with
       // `concurrency: "unbounded"` and the client has
       // `retryTransientErrors: true`, so the same requestId can land on two
-      // fibers in parallel. Storing in-flight Deferreds (not completed
-      // results) + atomic Ref.modify claim ensures the second fiber waits on
-      // the first's outcome instead of racing it.
+      // fibers in parallel. `Cache` collapses concurrent same-key lookups via
+      // an internal Deferred so the second fiber awaits the first's outcome.
       //
-      const dedupCreateSession = yield* makeRequestDeduper<CreateSessionResult, AppServiceError>()
-      const dedupSendMessage = yield* makeRequestDeduper<void, AppServiceError>()
-      const dedupCreateBranch = yield* makeRequestDeduper<CreateBranchResult, AppServiceError>()
-      const dedupForkBranch = yield* makeRequestDeduper<CreateBranchResult, AppServiceError>()
-      const dedupSwitchBranch = yield* makeRequestDeduper<void, AppServiceError>()
+      const dedupCreateSession = yield* makeRequestDeduper<
+        CreateSessionInput,
+        CreateSessionResult,
+        AppServiceError
+      >({ body: (input) => doCreateSession(input), keyOf: (input) => input.requestId })
+      const dedupSendMessage = yield* makeRequestDeduper<SendMessageInput, void, AppServiceError>({
+        body: (input) => doSendMessage(input),
+        keyOf: (input) => input.requestId,
+      })
+      const dedupCreateBranch = yield* makeRequestDeduper<
+        CreateBranchInput,
+        CreateBranchResult,
+        AppServiceError
+      >({ body: (input) => doCreateBranch(input), keyOf: (input) => input.requestId })
+      const dedupForkBranch = yield* makeRequestDeduper<
+        ForkBranchInput,
+        CreateBranchResult,
+        AppServiceError
+      >({ body: (input) => doForkBranch(input), keyOf: (input) => input.requestId })
+      const dedupSwitchBranch = yield* makeRequestDeduper<SwitchBranchInput, void, AppServiceError>(
+        { body: (input) => doSwitchBranch(input), keyOf: (input) => input.requestId },
+      )
 
       const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
         branchId: BranchId,
@@ -775,10 +768,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       ) => Effect.Effect<CreateSessionResult, AppServiceError> = Effect.fn(
         "SessionCommands.createSession",
       )(function* (input: CreateSessionInput) {
-        return yield* dedupCreateSession({
-          requestId: input.requestId,
-          body: doCreateSession(input),
-        })
+        return yield* dedupCreateSession(input)
       })
 
       const sendInitialPrompt = Effect.fn("SessionCommands.sendInitialPrompt")(function* (
@@ -901,10 +891,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const createBranch = Effect.fn("SessionCommands.createBranch")(function* (
         input: CreateBranchInput,
       ) {
-        return yield* dedupCreateBranch({
-          requestId: input.requestId,
-          body: doCreateBranch(input),
-        })
+        return yield* dedupCreateBranch(input)
       })
 
       const doCreateBranch = Effect.fn("SessionCommands.doCreateBranch")(function* (
@@ -919,10 +906,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
       const switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, AppServiceError> =
         Effect.fn("SessionCommands.switchBranch")(function* (input: SwitchBranchInput) {
-          yield* dedupSwitchBranch({
-            requestId: input.requestId,
-            body: doSwitchBranch(input),
-          })
+          yield* dedupSwitchBranch(input)
         })
 
       const doSwitchBranch = Effect.fn("SessionCommands.doSwitchBranch")(function* (
@@ -960,10 +944,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       ) => Effect.Effect<CreateBranchResult, AppServiceError> = Effect.fn(
         "SessionCommands.forkBranch",
       )(function* (input: ForkBranchInput) {
-        return yield* dedupForkBranch({
-          requestId: input.requestId,
-          body: doForkBranch(input),
-        })
+        return yield* dedupForkBranch(input)
       })
 
       const doForkBranch = Effect.fn("SessionCommands.doForkBranch")(function* (
@@ -980,10 +961,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
       const sendMessage: (input: SendMessageInput) => Effect.Effect<void, AppServiceError> =
         Effect.fn("SessionCommands.sendMessage")(function* (input: SendMessageInput) {
-          yield* dedupSendMessage({
-            requestId: input.requestId,
-            body: doSendMessage(input),
-          })
+          yield* dedupSendMessage(input)
         })
 
       const doSendMessage = Effect.fn("SessionCommands.doSendMessage")(function* (
