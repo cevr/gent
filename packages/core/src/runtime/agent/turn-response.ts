@@ -1,5 +1,4 @@
 import { Deferred, Effect, Stream, type Scope } from "effect"
-import type * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
 import { DEFAULT_AGENT_NAME, type AgentName as AgentNameType } from "../../domain/agent.js"
 import { TurnError } from "../../domain/driver.js"
@@ -21,6 +20,7 @@ import {
 } from "../../domain/message-part-projection.js"
 import { ProviderError } from "../../domain/provider-error.js"
 import { summarizeOutput, stringifyOutput } from "../../domain/tool-output.js"
+import type { AssistantResponsePart, ToolResponsePart } from "./turn-helpers.js"
 
 export type PublishEvent = (event: AgentEvent) => Effect.Effect<void, never, never>
 
@@ -74,15 +74,6 @@ export const emptyTurnMetrics = (): TurnMetrics => ({
   outputTokens: 0,
   toolCallCount: 0,
 })
-
-type AssistantResponsePart =
-  | Prompt.TextPart
-  | Prompt.ReasoningPart
-  | Prompt.FilePart
-  | Prompt.ToolCallPart
-  | Prompt.ToolApprovalRequestPart
-
-type ToolResponsePart = Prompt.ToolResultPart | Prompt.ToolApprovalResponsePart
 
 export interface TurnResponseMessages {
   readonly assistant: ReadonlyArray<AssistantResponsePart>
