@@ -19,7 +19,7 @@
  */
 import { BunServices } from "@effect/platform-bun"
 import { Clock, Context, Effect, Layer } from "effect"
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 
 import {
   AgentName,
@@ -217,9 +217,7 @@ const rewriteCodemodeSystemPrompt = (input: {
   })
 
 interface AcpAgentsManagerDeps {
-  readonly makeAcpSessionManager?: (
-    spawner: ChildProcessSpawner["Service"],
-  ) => ReturnType<typeof createAcpSessionManager>
+  readonly makeAcpSessionManager?: typeof createAcpSessionManager
   readonly makeClaudeCodeSessionManager?: () => ReturnType<typeof createClaudeCodeSessionManager>
 }
 
@@ -236,13 +234,12 @@ export const makeAcpAgentsExtension = (
     const ctx = yield* ExtensionSetupContext
     const cached = cachedBySetupContext.get(ctx)
     if (cached !== undefined) return cached
-    const spawner = yield* ChildProcessSpawner
     const anthropicPlatform = AnthropicPlatform.fromSetup(ctx, {})
     const acpPlatform = {
       parentEnv: anthropicPlatform.parentEnv,
     } satisfies AcpAgentsPlatformShape
 
-    const acpManager = yield* (deps.makeAcpSessionManager ?? createAcpSessionManager)(spawner)
+    const acpManager = yield* deps.makeAcpSessionManager ?? createAcpSessionManager
     const claudeCodeManager = (
       deps.makeClaudeCodeSessionManager ??
       (() =>

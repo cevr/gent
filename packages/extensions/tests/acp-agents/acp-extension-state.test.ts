@@ -19,9 +19,9 @@ describe("AcpAgentsExtension state ownership", () => {
       let acpSeq = 0
       let claudeSeq = 0
       const ext = makeAcpAgentsExtension({
-        makeAcpSessionManager: () => {
+        makeAcpSessionManager: Effect.sync(() => {
           const id = ++acpSeq
-          return Effect.succeed({
+          return {
             getOrCreate: () => Effect.die("not exercised"),
             invalidate: () => Effect.void,
             invalidateDriver: (driverId) =>
@@ -32,8 +32,8 @@ describe("AcpAgentsExtension state ownership", () => {
               Effect.sync(() => {
                 calls.push(`acp-${id}:dispose`)
               }),
-          } satisfies AcpSessionManager)
-        },
+          } satisfies AcpSessionManager
+        }),
         makeClaudeCodeSessionManager: () => {
           const id = ++claudeSeq
           return {

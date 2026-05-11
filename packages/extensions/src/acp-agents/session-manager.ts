@@ -68,17 +68,16 @@ const fingerprintSession = (
 }
 
 /**
- * Build a ChildProcessSpawner-providing context once, captured at
- * extension setup time. Per-turn `getOrCreate` then provides the
- * captured spawner to its inner spawn calls so its public Effect has
- * no service requirement. `TurnExecutor.executeTurn` returns a Stream
- * with no context channel, so pinning the spawner here keeps that
- * contract honest without re-providing `BunServices.layer` per turn.
+ * Yield `ChildProcessSpawner` once at construction and capture it as a
+ * one-tag context. Per-turn `getOrCreate` then provides the captured
+ * spawner to its inner spawn calls so its public Effect has no service
+ * requirement. `TurnExecutor.executeTurn` returns a Stream with no
+ * context channel, so pinning the spawner here keeps that contract
+ * honest without re-providing `BunServices.layer` per turn.
  */
-export const createAcpSessionManager = (
-  spawner: ChildProcessSpawner["Service"],
-): Effect.Effect<AcpSessionManager> =>
+export const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, ChildProcessSpawner> =
   Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner
     const spawnerContext = Context.make(ChildProcessSpawner, spawner)
     const sessionsRef = yield* TxRef.make(HashMap.empty<string, AcpProcess>())
     const byDriverRef = yield* TxRef.make(HashMap.empty<string, HashSet.HashSet<string>>())
