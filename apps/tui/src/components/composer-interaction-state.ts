@@ -1,5 +1,4 @@
 import { Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import type { AutocompleteContribution } from "../extensions/client-facets.js"
 
 export interface AutocompleteState {
@@ -22,7 +21,7 @@ export const ComposerInteractionState = {
   }),
 } as const
 
-export const ComposerInteractionEvent = TaggedEnumClass("ComposerInteractionEvent", {
+export const ComposerInteractionEvent = Schema.TaggedUnion({
   DraftChanged: { text: Schema.String },
   RestoreDraft: { text: Schema.String },
   ClearDraft: {},

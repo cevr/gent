@@ -34,7 +34,7 @@ describe("reduceAgentLifecycle", () => {
     expect(reduceAgentLifecycle(event)).toEqual({
       status: { _tag: "streaming" },
     })
-    expect(Schema.is(AgentStatus.Streaming)(reduceAgentLifecycle(event).status)).toBe(true)
+    expect(Schema.is(AgentStatus.cases["streaming"])(reduceAgentLifecycle(event).status)).toBe(true)
   })
 
   test("keeps streaming until TurnCompleted", () => {
@@ -56,7 +56,9 @@ describe("reduceAgentLifecycle", () => {
     expect(reduceAgentLifecycle(turnCompleted)).toEqual({
       status: { _tag: "idle" },
     })
-    expect(Schema.is(AgentStatus.Idle)(reduceAgentLifecycle(turnCompleted).status)).toBe(true)
+    expect(Schema.is(AgentStatus.cases["idle"])(reduceAgentLifecycle(turnCompleted).status)).toBe(
+      true,
+    )
   })
 
   test("uses user messages to enter streaming immediately", () => {
@@ -67,7 +69,9 @@ describe("reduceAgentLifecycle", () => {
     expect(reduceAgentLifecycle(userMessage)).toEqual({
       status: { _tag: "streaming" },
     })
-    expect(Schema.is(AgentStatus.Streaming)(reduceAgentLifecycle(userMessage).status)).toBe(true)
+    expect(
+      Schema.is(AgentStatus.cases["streaming"])(reduceAgentLifecycle(userMessage).status),
+    ).toBe(true)
   })
 
   test("surfaces agent switches and errors", () => {
@@ -89,6 +93,6 @@ describe("reduceAgentLifecycle", () => {
     expect(reduceAgentLifecycle(errored)).toEqual({
       status: { _tag: "error", error: "boom" },
     })
-    expect(Schema.is(AgentStatus.Error)(reduceAgentLifecycle(errored).status)).toBe(true)
+    expect(Schema.is(AgentStatus.cases["error"])(reduceAgentLifecycle(errored).status)).toBe(true)
   })
 })

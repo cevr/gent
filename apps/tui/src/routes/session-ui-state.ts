@@ -1,5 +1,4 @@
 import { Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import {
   Session as SessionSchema,
   SessionTreeNode,
@@ -46,7 +45,7 @@ export const SessionUiState = {
   }),
 } as const
 
-export const SessionUiEvent = TaggedEnumClass("SessionUiEvent", {
+export const SessionUiEvent = Schema.TaggedUnion({
   ToggleTools: {},
   OpenTree: {
     tree: SessionTreeNode,

@@ -84,7 +84,7 @@ export function Composer(props: ComposerProps) {
           Surface({
             draft: sc.interactionState().draft,
             setDraft: (text: string) =>
-              sc.onComposerInteraction(ComposerInteractionEvent.RestoreDraft.make({ text })),
+              sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text })),
             submit: () => controller.handleSubmitFromTextarea(),
             focused: controller.inputFocused(),
             // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape

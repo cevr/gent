@@ -1,5 +1,4 @@
 import { Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
 import { ReasoningEffort } from "@gent/core-internal/domain/agent.js"
 
@@ -22,7 +21,7 @@ export type SessionState =
   | { readonly status: "creating" }
   | { readonly status: "active"; readonly session: Session }
 
-export const SessionStateEvent = TaggedEnumClass("SessionStateEvent", {
+export const SessionStateEvent = Schema.TaggedUnion({
   CreateRequested: {},
   CreateSucceeded: { session: SessionSchema },
   CreateFailed: {},

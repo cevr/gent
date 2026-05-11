@@ -27,7 +27,7 @@
  * - no-make-unsafe: bans `.makeUnsafe(...)` constructors; model validation
  *   and allocation through Effectful/Option-returning APIs instead.
  * - no-hand-rolled-tagged-union: bans inline `{ _tag: "X"; ... } | { _tag: "Y"; ... }`
- *   type literals; require `TaggedEnumClass` / `Schema.TaggedStruct` /
+ *   type literals; require `Schema.TaggedUnion` / `Schema.TaggedStruct` /
  *   `Schema.TaggedErrorClass` instead.
  */
 
@@ -1241,10 +1241,10 @@ const plugin: Plugin = {
      * Flags hand-rolled `_tag` discriminated unions written as type
      * literals — a union of two-or-more `{ _tag: "X"; ... }` shapes.
      *
-     * Use `TaggedEnumClass` (`@gent/core/domain/schema-tagged-enum-class`),
-     * `Schema.TaggedStruct`, or `Schema.TaggedErrorClass` instead. Those
-     * give per-variant `.make({...})` constructors, structural
-     * `_tag` discrimination, and Schema-encode/decode for free.
+     * Use `Schema.TaggedUnion`, `Schema.TaggedStruct`, or
+     * `Schema.TaggedErrorClass` instead. Those give per-variant
+     * `.cases.<Name>.make({...})` constructors, structural `_tag`
+     * discrimination, and Schema-encode/decode for free.
      *
      * Detected: any `TSUnionType` with ≥2 `TSTypeLiteral` members each
      * having a `_tag: "Pascal"` property.
@@ -1254,6 +1254,10 @@ const plugin: Plugin = {
      * inline-type-literal form. Construction-site form
      * (`{ _tag: "X" } satisfies SomeUnion`) is not covered here; it's
      * already vanishingly rare in this codebase.
+     *
+     * Note: the `TaggedEnumClass` helper from
+     * `@gent/core/domain/schema-tagged-enum-class` is transitional and
+     * will be removed. Use `Schema.TaggedUnion` for new code.
      */
     "no-hand-rolled-tagged-union": {
       create(context) {
@@ -1304,7 +1308,7 @@ const plugin: Plugin = {
             if (tagged < 2) return
             context.report({
               message:
-                "Hand-rolled `_tag` discriminated union — use `TaggedEnumClass` from `@gent/core/domain/schema-tagged-enum-class` (or `Schema.TaggedStruct` / `Schema.TaggedErrorClass`). Construct via `Variant.make({...})`. See packages/core/CLAUDE.md.",
+                "Hand-rolled `_tag` discriminated union — use `Schema.TaggedUnion` (preferred) or `Schema.TaggedStruct` / `Schema.TaggedErrorClass`. Construct via `.cases.<Name>.make({...})`. See packages/core/CLAUDE.md.",
               node,
             })
           },

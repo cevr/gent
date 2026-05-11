@@ -9,7 +9,6 @@
 import { BunHttpServer, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { FetchHttpClient, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
 import { Clock, Effect, Layer, Context, Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class.js"
 import type { Scope } from "effect"
 // @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution
 import { resolve as pathResolve, join as pathJoin } from "node:path"
@@ -21,7 +20,11 @@ import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-mod
 import type { LanguageModel } from "effect/unstable/ai"
 import { BuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
 import { GentConnectionError } from "@gent/core-internal/server/transport-contract.js"
-import { workspaceHeadersForCwd, type WorkspaceHeaders } from "./transport-headers.js"
+import {
+  workspaceHeadersForCwd,
+  workspaceIdForCwd,
+  type WorkspaceHeaders,
+} from "./transport-headers.js"
 import {
   readServerLock,
   validateServerLockEntry,
@@ -40,23 +43,23 @@ import { buildServerRoot } from "@gent/core-internal/server/server-root.js"
 type LayerOutput<T> = T extends Layer.Layer<infer A, infer _E, infer _R> ? A : never
 type BuiltRpcHandlers = LayerOutput<typeof RpcHandlersLive>
 
-export const StateSpec = TaggedEnumClass("StateSpec", {
-  Sqlite: TaggedEnumClass.variant("sqlite", {
+export const StateSpec = Schema.Union([
+  Schema.TaggedStruct("sqlite", {
     home: Schema.optional(Schema.String),
     dbPath: Schema.optional(Schema.String),
   }),
-  Memory: TaggedEnumClass.variant("memory", {}),
-})
+  Schema.TaggedStruct("memory", {}),
+]).pipe(Schema.toTaggedUnion("_tag"))
 export type StateSpec = Schema.Schema.Type<typeof StateSpec>
 
-export const ProviderSpec = TaggedEnumClass("ProviderSpec", {
-  Live: TaggedEnumClass.variant("live", {}),
-  Mock: TaggedEnumClass.variant("mock", {
+export const ProviderSpec = Schema.Union([
+  Schema.TaggedStruct("live", {}),
+  Schema.TaggedStruct("mock", {
     delayMs: Schema.optional(Schema.Number),
     failing: Schema.optional(Schema.Boolean),
     retries: Schema.optional(Schema.Boolean),
   }),
-})
+]).pipe(Schema.toTaggedUnion("_tag"))
 export type ProviderSpec = Schema.Schema.Type<typeof ProviderSpec>
 
 export interface GentServerOptions {
@@ -70,16 +73,16 @@ export interface GentServerOptions {
 }
 
 /** Public opaque server handle. */
-export const GentServer = TaggedEnumClass("GentServer", {
-  Owned: TaggedEnumClass.variant("owned", {
+export const GentServer = Schema.Union([
+  Schema.TaggedStruct("owned", {
     url: Schema.String,
     workspaceId: Schema.String,
   }),
-  Attached: TaggedEnumClass.variant("attached", {
+  Schema.TaggedStruct("attached", {
     url: Schema.String,
     workspaceId: Schema.String,
   }),
-})
+]).pipe(Schema.toTaggedUnion("_tag"))
 export type GentServer = Schema.Schema.Type<typeof GentServer>
 
 // ── Internal state for owned servers ──
@@ -102,20 +105,20 @@ export const getOwnedInternal = (server: GentServer): OwnedServerInternal | unde
 
 export const state = {
   sqlite: (options?: { readonly home?: string; readonly dbPath?: string }): StateSpec =>
-    StateSpec.Sqlite.make({
+    StateSpec.cases["sqlite"].make({
       ...(options?.home !== undefined ? { home: options.home } : {}),
       ...(options?.dbPath !== undefined ? { dbPath: options.dbPath } : {}),
     }),
-  memory: (): StateSpec => StateSpec.Memory.make({}),
+  memory: (): StateSpec => StateSpec.cases["memory"].make({}),
 } as const
 
 export const provider = {
-  live: (): ProviderSpec => ProviderSpec.Live.make({}),
+  live: (): ProviderSpec => ProviderSpec.cases["live"].make({}),
   mock: (options?: {
     readonly delayMs?: number
     readonly failing?: boolean
     readonly retries?: boolean
-  }): ProviderSpec => ProviderSpec.Mock.make({ ...(options ?? {}) }),
+  }): ProviderSpec => ProviderSpec.cases["mock"].make({ ...(options ?? {}) }),
 } as const
 
 // ── Language model layer from spec ──
@@ -247,9 +250,9 @@ const buildOwnedServer = (
         )
       }
 
-      const server: GentServer = GentServer.Owned.make({
+      const server: GentServer = GentServer.cases["owned"].make({
         url,
-        workspaceId: workspaceHeaders["x-gent-workspace-id"],
+        workspaceId: workspaceIdForCwd(options.cwd),
       })
       ownedInternals.set(server, {
         handlerContext: serverRoot.rpcHandlersContext,
@@ -345,9 +348,9 @@ const resolveServerInternal = (
           buildFingerprint: fingerprint,
         })
         if (alive) {
-          return GentServer.Attached.make({
+          return GentServer.cases["attached"].make({
             url: existing.rpcUrl,
-            workspaceId: workspaceHeadersForCwd(options.cwd)["x-gent-workspace-id"],
+            workspaceId: workspaceIdForCwd(options.cwd),
           })
         }
       }

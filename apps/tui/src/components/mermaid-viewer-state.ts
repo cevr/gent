@@ -1,5 +1,4 @@
 import { Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 
 export interface MermaidViewerState {
   readonly diagramIndex: number
@@ -15,7 +14,7 @@ export const MermaidViewerState = {
   }),
 } as const
 
-export const MermaidViewerEvent = TaggedEnumClass("MermaidViewerEvent", {
+export const MermaidViewerEvent = Schema.TaggedUnion({
   Open: {},
   PanLeft: { step: Schema.Number },
   PanRight: { step: Schema.Number },

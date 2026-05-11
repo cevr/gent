@@ -28,15 +28,16 @@ export const promptSearchEventFromKey = (
   event: ScopedKeyboardEvent,
   hasItems: boolean,
 ): PromptSearchEvent | undefined => {
-  if (event.name === "escape") return PromptSearchEvent.Cancel.make({})
-  if (event.name === "backspace") return PromptSearchEvent.Backspace.make({})
-  if (event.name === "return" || event.name === "linefeed") return PromptSearchEvent.Accept.make({})
+  if (event.name === "escape") return PromptSearchEvent.cases.Cancel.make({})
+  if (event.name === "backspace") return PromptSearchEvent.cases.Backspace.make({})
+  if (event.name === "return" || event.name === "linefeed")
+    return PromptSearchEvent.cases.Accept.make({})
 
   if (hasItems && (event.name === "up" || (event.ctrl === true && event.name === "p"))) {
-    return PromptSearchEvent.MoveUp.make({})
+    return PromptSearchEvent.cases.MoveUp.make({})
   }
   if (hasItems && (event.name === "down" || (event.ctrl === true && event.name === "n"))) {
-    return PromptSearchEvent.MoveDown.make({})
+    return PromptSearchEvent.cases.MoveDown.make({})
   }
 
   if (
@@ -46,7 +47,7 @@ export const promptSearchEventFromKey = (
     event.super !== true &&
     event.option !== true
   ) {
-    return PromptSearchEvent.TypeChar.make({ char: event.sequence })
+    return PromptSearchEvent.cases.TypeChar.make({ char: event.sequence })
   }
 
   return undefined

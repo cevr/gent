@@ -36,7 +36,7 @@ export function MermaidViewer(props: MermaidViewerProps) {
 
   createEffect(() => {
     if (!props.open) return
-    setState(transitionMermaidViewer(state(), MermaidViewerEvent.Open.make({})))
+    setState(transitionMermaidViewer(state(), MermaidViewerEvent.cases.Open.make({})))
   })
 
   const currentDiagram = createMemo(() => {
@@ -78,25 +78,37 @@ export function MermaidViewer(props: MermaidViewerProps) {
       // Panning
       if (e.name === "left") {
         setState((current) =>
-          transitionMermaidViewer(current, MermaidViewerEvent.PanLeft.make({ step: PAN_STEP_X })),
+          transitionMermaidViewer(
+            current,
+            MermaidViewerEvent.cases.PanLeft.make({ step: PAN_STEP_X }),
+          ),
         )
         return true
       }
       if (e.name === "right") {
         setState((current) =>
-          transitionMermaidViewer(current, MermaidViewerEvent.PanRight.make({ step: PAN_STEP_X })),
+          transitionMermaidViewer(
+            current,
+            MermaidViewerEvent.cases.PanRight.make({ step: PAN_STEP_X }),
+          ),
         )
         return true
       }
       if (e.name === "up") {
         setState((current) =>
-          transitionMermaidViewer(current, MermaidViewerEvent.PanUp.make({ step: PAN_STEP_Y })),
+          transitionMermaidViewer(
+            current,
+            MermaidViewerEvent.cases.PanUp.make({ step: PAN_STEP_Y }),
+          ),
         )
         return true
       }
       if (e.name === "down") {
         setState((current) =>
-          transitionMermaidViewer(current, MermaidViewerEvent.PanDown.make({ step: PAN_STEP_Y })),
+          transitionMermaidViewer(
+            current,
+            MermaidViewerEvent.cases.PanDown.make({ step: PAN_STEP_Y }),
+          ),
         )
         return true
       }
@@ -104,7 +116,7 @@ export function MermaidViewer(props: MermaidViewerProps) {
       // Diagram cycling
       if (e.sequence === "[") {
         setState((current) =>
-          transitionMermaidViewer(current, MermaidViewerEvent.PrevDiagram.make({})),
+          transitionMermaidViewer(current, MermaidViewerEvent.cases.PrevDiagram.make({})),
         )
         return true
       }
@@ -112,7 +124,7 @@ export function MermaidViewer(props: MermaidViewerProps) {
         setState((current) =>
           transitionMermaidViewer(
             current,
-            MermaidViewerEvent.NextDiagram.make({
+            MermaidViewerEvent.cases.NextDiagram.make({
               diagramCount: props.diagrams.length,
             }),
           ),
@@ -123,7 +135,7 @@ export function MermaidViewer(props: MermaidViewerProps) {
       // Home/End for quick navigation
       if (e.name === "home") {
         setState((current) =>
-          transitionMermaidViewer(current, MermaidViewerEvent.ResetPan.make({})),
+          transitionMermaidViewer(current, MermaidViewerEvent.cases.ResetPan.make({})),
         )
         return true
       }

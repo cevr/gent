@@ -1,6 +1,5 @@
 import { Schema } from "effect"
 import type { Accessor } from "solid-js"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 
 /** A menu item in the command palette. */
 export interface PaletteItem {
@@ -42,7 +41,7 @@ const PaletteLevelSchema = Schema.declare<PaletteLevel>(
     (value["onEnter"] === undefined || typeof value["onEnter"] === "function"),
 )
 
-export const CommandPaletteEvent = TaggedEnumClass("CommandPaletteEvent", {
+export const CommandPaletteEvent = Schema.TaggedUnion({
   Open: { rootLevel: PaletteLevelSchema },
   Close: {},
   PushLevel: { level: PaletteLevelSchema },

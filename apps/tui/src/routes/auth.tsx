@@ -94,7 +94,7 @@ export function Auth(props: AuthProps) {
     const requestVersion = ++loadVersion
     const agentName = clientCtx.agent()
     clientCtx.log.info("auth:load-start")
-    send(AuthEvent.LoadStarted.make({}))
+    send(AuthEvent.cases.LoadStarted.make({}))
     cast(
       Effect.all([
         clientCtx.client.auth.listProviders({
@@ -108,7 +108,12 @@ export function Auth(props: AuthProps) {
             if (!isCurrentRouteVersion(currentRouteVersion) || requestVersion !== loadVersion)
               return
             clientCtx.log.info("auth:load-complete", { providers: loadedProviders.length })
-            send(AuthEvent.Loaded.make({ providers: [...loadedProviders], methods: loadedMethods }))
+            send(
+              AuthEvent.cases.Loaded.make({
+                providers: [...loadedProviders],
+                methods: loadedMethods,
+              }),
+            )
           }),
         ),
         Effect.catchEager((err) =>
@@ -116,7 +121,7 @@ export function Auth(props: AuthProps) {
             if (!isCurrentRouteVersion(currentRouteVersion) || requestVersion !== loadVersion)
               return
             clientCtx.log.error("auth:load", { error: String(err) })
-            send(AuthEvent.LoadFailed.make({ error: formatError(err) }))
+            send(AuthEvent.cases.LoadFailed.make({ error: formatError(err) }))
           }),
         ),
       ),
@@ -132,7 +137,7 @@ export function Auth(props: AuthProps) {
       Effect.catchEager((err) =>
         Effect.sync(() => {
           if (!isCurrentRouteVersion(currentRouteVersion)) return
-          send(AuthEvent.ActionFailed.make({ error: formatError(ClientError(err.message)) }))
+          send(AuthEvent.cases.ActionFailed.make({ error: formatError(ClientError(err.message)) }))
         }),
       ),
     )
@@ -159,8 +164,8 @@ export function Auth(props: AuthProps) {
 
     const index = current.providers.findIndex((p) => missing.includes(p.provider))
     if (index >= 0) {
-      send(AuthEvent.SelectProvider.make({ index }))
-      send(AuthEvent.OpenMethod.make({}))
+      send(AuthEvent.cases.SelectProvider.make({ index }))
+      send(AuthEvent.cases.OpenMethod.make({}))
       setAutoPrompted(true)
     }
   })
@@ -171,21 +176,21 @@ export function Auth(props: AuthProps) {
     const provider = current.providers[current.providerIndex]
     if (provider === undefined || provider.source !== "stored") return
     const currentRouteVersion = invalidateRouteVersion()
-    send(AuthEvent.DeleteStarted.make({}))
+    send(AuthEvent.cases.DeleteStarted.make({}))
 
     cast(
       clientCtx.client.auth.deleteKey({ provider: provider.provider }).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             if (!isCurrentRouteVersion(currentRouteVersion)) return
-            send(AuthEvent.ActionSucceeded.make({}))
+            send(AuthEvent.cases.ActionSucceeded.make({}))
             loadAuth(currentRouteVersion)
           }),
         ),
         Effect.catchEager((err) =>
           Effect.sync(() => {
             if (!isCurrentRouteVersion(currentRouteVersion)) return
-            send(AuthEvent.ActionFailed.make({ error: formatError(err) }))
+            send(AuthEvent.cases.ActionFailed.make({ error: formatError(err) }))
           }),
         ),
       ),
@@ -200,7 +205,7 @@ export function Auth(props: AuthProps) {
     if (provider === undefined || key.length === 0) return
     const currentRouteVersion = invalidateRouteVersion()
     clientCtx.log.info("auth:submit-key", { provider: provider.provider })
-    send(AuthEvent.SubmitKeyStarted.make({}))
+    send(AuthEvent.cases.SubmitKeyStarted.make({}))
 
     cast(
       clientCtx.client.auth.setKey({ provider: provider.provider, key }).pipe(
@@ -208,14 +213,14 @@ export function Auth(props: AuthProps) {
           Effect.sync(() => {
             if (!isCurrentRouteVersion(currentRouteVersion)) return
             flashSuccess(`API key saved for ${provider.provider}`)
-            send(AuthEvent.ActionSucceeded.make({}))
+            send(AuthEvent.cases.ActionSucceeded.make({}))
             loadAuth(currentRouteVersion)
           }),
         ),
         Effect.catchEager((err) =>
           Effect.sync(() => {
             if (!isCurrentRouteVersion(currentRouteVersion)) return
-            send(AuthEvent.ActionFailed.make({ error: formatError(err) }))
+            send(AuthEvent.cases.ActionFailed.make({ error: formatError(err) }))
           }),
         ),
       ),
@@ -233,16 +238,16 @@ export function Auth(props: AuthProps) {
     clientCtx.log.info("auth:start-method", { provider: provider.provider, method: method.type })
 
     if (method.type === "api") {
-      send(AuthEvent.StartKey.make({}))
+      send(AuthEvent.cases.StartKey.make({}))
       return
     }
 
     if (props.sessionId === undefined) {
-      send(AuthEvent.ActionFailed.make({ error: "No active session for authorization" }))
+      send(AuthEvent.cases.ActionFailed.make({ error: "No active session for authorization" }))
       return
     }
 
-    send(AuthEvent.StartOAuthAuthorization.make({}))
+    send(AuthEvent.cases.StartOAuthAuthorization.make({}))
     cast(
       clientCtx.client.auth
         .authorize({
@@ -256,7 +261,7 @@ export function Auth(props: AuthProps) {
               if (!isCurrentRouteVersion(currentRouteVersion)) return
               if (authorization === null) {
                 send(
-                  AuthEvent.ActionFailed.make({
+                  AuthEvent.cases.ActionFailed.make({
                     error: "No authorization available for this method",
                   }),
                 )
@@ -264,12 +269,12 @@ export function Auth(props: AuthProps) {
               }
               if (authorization.method === "done") {
                 flashSuccess(`Authenticated ${provider.provider}`)
-                send(AuthEvent.ActionSucceeded.make({}))
+                send(AuthEvent.cases.ActionSucceeded.make({}))
                 loadAuth(currentRouteVersion)
                 return
               }
               send(
-                AuthEvent.StartOAuth.make({
+                AuthEvent.cases.StartOAuth.make({
                   authorization,
                   method,
                   providerIndex: current.providerIndex,
@@ -302,7 +307,7 @@ export function Auth(props: AuthProps) {
           Effect.catchEager((err) =>
             Effect.sync(() => {
               if (!isCurrentRouteVersion(currentRouteVersion)) return
-              send(AuthEvent.ActionFailed.make({ error: formatError(err) }))
+              send(AuthEvent.cases.ActionFailed.make({ error: formatError(err) }))
             }),
           ),
         ),
@@ -317,7 +322,7 @@ export function Auth(props: AuthProps) {
     methodIndex: number,
   ) => {
     if (props.sessionId === undefined) {
-      send(AuthEvent.OAuthAutoFailed.make({ error: "No active session for authorization" }))
+      send(AuthEvent.cases.OAuthAutoFailed.make({ error: "No active session for authorization" }))
       return
     }
 
@@ -334,14 +339,14 @@ export function Auth(props: AuthProps) {
             Effect.sync(() => {
               if (!isCurrentRouteVersion(currentRouteVersion)) return
               flashSuccess(`Authenticated ${providerName} via OAuth`)
-              send(AuthEvent.ActionSucceeded.make({}))
+              send(AuthEvent.cases.ActionSucceeded.make({}))
               loadAuth(currentRouteVersion)
             }),
           ),
           Effect.catchEager((err) =>
             Effect.sync(() => {
               if (!isCurrentRouteVersion(currentRouteVersion)) return
-              send(AuthEvent.OAuthAutoFailed.make({ error: formatError(err) }))
+              send(AuthEvent.cases.OAuthAutoFailed.make({ error: formatError(err) }))
             }),
           ),
         ),
@@ -363,11 +368,11 @@ export function Auth(props: AuthProps) {
     const code = trimmed.length > 0 ? trimmed : undefined
     if (needsCode && code === undefined) return
     if (props.sessionId === undefined) {
-      send(AuthEvent.ActionFailed.make({ error: "No active session for authorization" }))
+      send(AuthEvent.cases.ActionFailed.make({ error: "No active session for authorization" }))
       return
     }
     const currentRouteVersion = invalidateRouteVersion()
-    send(AuthEvent.SubmitOAuthStarted.make({}))
+    send(AuthEvent.cases.SubmitOAuthStarted.make({}))
 
     cast(
       clientCtx.client.auth
@@ -383,14 +388,14 @@ export function Auth(props: AuthProps) {
             Effect.sync(() => {
               if (!isCurrentRouteVersion(currentRouteVersion)) return
               flashSuccess(`Authenticated ${provider.provider} via OAuth`)
-              send(AuthEvent.ActionSucceeded.make({}))
+              send(AuthEvent.cases.ActionSucceeded.make({}))
               loadAuth(currentRouteVersion)
             }),
           ),
           Effect.catchEager((err) =>
             Effect.sync(() => {
               if (!isCurrentRouteVersion(currentRouteVersion)) return
-              send(AuthEvent.ActionFailed.make({ error: formatError(err) }))
+              send(AuthEvent.cases.ActionFailed.make({ error: formatError(err) }))
             }),
           ),
         ),
@@ -416,7 +421,7 @@ export function Auth(props: AuthProps) {
     if (current === undefined) return undefined
     if (e.name === "escape") {
       invalidateRouteVersion()
-      send(AuthEvent.Cancel.make({}))
+      send(AuthEvent.cases.Cancel.make({}))
       return true
     }
     if (e.name === "return") {
@@ -424,11 +429,11 @@ export function Auth(props: AuthProps) {
       return true
     }
     if (e.name === "backspace") {
-      send(AuthEvent.BackspaceKey.make({}))
+      send(AuthEvent.cases.BackspaceKey.make({}))
       return true
     }
     if (isPrintableAuthChar(e)) {
-      send(AuthEvent.TypeKey.make({ char: e.sequence }))
+      send(AuthEvent.cases.TypeKey.make({ char: e.sequence }))
       return true
     }
     return false
@@ -446,7 +451,7 @@ export function Auth(props: AuthProps) {
     if (current === undefined) return undefined
     if (e.name === "escape") {
       invalidateRouteVersion()
-      send(AuthEvent.Cancel.make({}))
+      send(AuthEvent.cases.Cancel.make({}))
       return true
     }
     if (e.name === "return") {
@@ -454,11 +459,11 @@ export function Auth(props: AuthProps) {
       return true
     }
     if (e.name === "backspace") {
-      send(AuthEvent.BackspaceCode.make({}))
+      send(AuthEvent.cases.BackspaceCode.make({}))
       return true
     }
     if (isPrintableAuthChar(e)) {
-      send(AuthEvent.TypeCode.make({ char: e.sequence }))
+      send(AuthEvent.cases.TypeCode.make({ char: e.sequence }))
       return true
     }
     return false
@@ -474,7 +479,7 @@ export function Auth(props: AuthProps) {
     if (current === undefined) return undefined
     if (e.name === "escape") {
       invalidateRouteVersion()
-      send(AuthEvent.Cancel.make({}))
+      send(AuthEvent.cases.Cancel.make({}))
       return true
     }
     const provider = current.providers[current.providerIndex]
@@ -482,12 +487,12 @@ export function Auth(props: AuthProps) {
     if (methods.length === 0) return false
     if (e.name === "up") {
       const next = current.methodIndex > 0 ? current.methodIndex - 1 : methods.length - 1
-      send(AuthEvent.SelectMethod.make({ index: next }))
+      send(AuthEvent.cases.SelectMethod.make({ index: next }))
       return true
     }
     if (e.name === "down") {
       const next = current.methodIndex < methods.length - 1 ? current.methodIndex + 1 : 0
-      send(AuthEvent.SelectMethod.make({ index: next }))
+      send(AuthEvent.cases.SelectMethod.make({ index: next }))
       return true
     }
     if (e.name === "return") {
@@ -515,17 +520,17 @@ export function Auth(props: AuthProps) {
     if (e.name === "up") {
       const next =
         current.providerIndex > 0 ? current.providerIndex - 1 : current.providers.length - 1
-      send(AuthEvent.SelectProvider.make({ index: next }))
+      send(AuthEvent.cases.SelectProvider.make({ index: next }))
       return true
     }
     if (e.name === "down") {
       const next =
         current.providerIndex < current.providers.length - 1 ? current.providerIndex + 1 : 0
-      send(AuthEvent.SelectProvider.make({ index: next }))
+      send(AuthEvent.cases.SelectProvider.make({ index: next }))
       return true
     }
     if (e.name === "return" || e.name === "a") {
-      send(AuthEvent.OpenMethod.make({}))
+      send(AuthEvent.cases.OpenMethod.make({}))
       return true
     }
     if (e.name === "d") {
@@ -555,12 +560,12 @@ export function Auth(props: AuthProps) {
     if (cleaned.length === 0) return
 
     if (current._tag === "Key") {
-      send(AuthEvent.PasteKey.make({ text: cleaned }))
+      send(AuthEvent.cases.PasteKey.make({ text: cleaned }))
       return
     }
 
     if (current._tag === "OAuth") {
-      send(AuthEvent.PasteCode.make({ text: cleaned }))
+      send(AuthEvent.cases.PasteCode.make({ text: cleaned }))
     }
   })
 

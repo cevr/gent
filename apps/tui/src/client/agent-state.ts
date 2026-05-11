@@ -1,13 +1,12 @@
 import { Schema } from "effect"
 import type { AgentName } from "@gent/core-internal/domain/agent.js"
 import type { ModelId } from "@gent/core-internal/domain/model.js"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 
-export const AgentStatus = TaggedEnumClass("AgentStatus", {
-  Idle: TaggedEnumClass.variant("idle", {}),
-  Streaming: TaggedEnumClass.variant("streaming", {}),
-  Error: TaggedEnumClass.variant("error", { error: Schema.String }),
-})
+export const AgentStatus = Schema.Union([
+  Schema.TaggedStruct("idle", {}),
+  Schema.TaggedStruct("streaming", {}),
+  Schema.TaggedStruct("error", { error: Schema.String }),
+]).pipe(Schema.toTaggedUnion("_tag"))
 
 export type AgentStatus = Schema.Schema.Type<typeof AgentStatus>
 

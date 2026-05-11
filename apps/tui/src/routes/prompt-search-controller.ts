@@ -28,7 +28,7 @@ export function createPromptSearchController(params: {
     state: params.state,
     isOpen: () => params.state()._tag === "open",
     open: () => {
-      onEvent(PromptSearchEvent.Open.make({ draftBeforeOpen: params.draft() }))
+      onEvent(PromptSearchEvent.cases.Open.make({ draftBeforeOpen: params.draft() }))
     },
     onEvent,
     handleKey: (event) => {

@@ -97,7 +97,7 @@ export function CommandPalette() {
   }
 
   const closePalette = () => {
-    dispatch(CommandPaletteEvent.Close.make({}))
+    dispatch(CommandPaletteEvent.cases.Close.make({}))
     command.closePalette()
   }
 
@@ -194,7 +194,7 @@ export function CommandPalette() {
   }
 
   const pushLevel = (level: PaletteLevel) => {
-    dispatch(CommandPaletteEvent.PushLevel.make({ level }))
+    dispatch(CommandPaletteEvent.cases.PushLevel.make({ level }))
     level.onEnter?.()
   }
 
@@ -272,7 +272,7 @@ export function CommandPalette() {
       closePalette()
       return
     }
-    dispatch(CommandPaletteEvent.PopLevel.make({}))
+    dispatch(CommandPaletteEvent.cases.PopLevel.make({}))
   }
 
   const handleSelect = () => {
@@ -285,7 +285,7 @@ export function CommandPalette() {
     (event) => {
       if (event.name === "escape") {
         if (searchQuery().length > 0) {
-          dispatch(CommandPaletteEvent.ClearSearch.make({}))
+          dispatch(CommandPaletteEvent.cases.ClearSearch.make({}))
           return true
         }
         popLevel()
@@ -299,7 +299,7 @@ export function CommandPalette() {
 
       if (event.name === "backspace") {
         if (searchQuery().length > 0) {
-          dispatch(CommandPaletteEvent.SearchBackspaced.make({}))
+          dispatch(CommandPaletteEvent.cases.SearchBackspaced.make({}))
           return true
         }
         if (state().levelStack.length > 1) {
@@ -315,19 +315,19 @@ export function CommandPalette() {
       }
 
       if (event.name === "up" || (event.ctrl === true && event.name === "p")) {
-        dispatch(CommandPaletteEvent.MoveUp.make({ itemCount: filteredItems().length }))
+        dispatch(CommandPaletteEvent.cases.MoveUp.make({ itemCount: filteredItems().length }))
         return true
       }
 
       if (event.name === "down" || (event.ctrl === true && event.name === "n")) {
-        dispatch(CommandPaletteEvent.MoveDown.make({ itemCount: filteredItems().length }))
+        dispatch(CommandPaletteEvent.cases.MoveDown.make({ itemCount: filteredItems().length }))
         return true
       }
 
       if (event.sequence !== undefined && event.sequence.length === 1) {
         const code = event.sequence.charCodeAt(0)
         if (code >= 32 && code <= 126) {
-          dispatch(CommandPaletteEvent.SearchTyped.make({ char: event.sequence }))
+          dispatch(CommandPaletteEvent.cases.SearchTyped.make({ char: event.sequence }))
           return true
         }
       }
@@ -339,7 +339,7 @@ export function CommandPalette() {
 
   createEffect(() => {
     if (command.paletteOpen()) {
-      dispatch(CommandPaletteEvent.Open.make({ rootLevel: rootLevel() }))
+      dispatch(CommandPaletteEvent.cases.Open.make({ rootLevel: rootLevel() }))
     }
   })
 

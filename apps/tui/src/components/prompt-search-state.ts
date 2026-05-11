@@ -1,5 +1,4 @@
 import { Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 
 export type PromptSearchState =
   | { readonly _tag: "closed" }
@@ -22,7 +21,7 @@ export const PromptSearchState = {
   }),
 } as const
 
-export const PromptSearchEvent = TaggedEnumClass("PromptSearchEvent", {
+export const PromptSearchEvent = Schema.TaggedUnion({
   Open: { draftBeforeOpen: Schema.String },
   TypeChar: { char: Schema.String },
   Backspace: {},
@@ -33,7 +32,7 @@ export const PromptSearchEvent = TaggedEnumClass("PromptSearchEvent", {
 })
 export type PromptSearchEvent = Schema.Schema.Type<typeof PromptSearchEvent>
 
-export const PromptSearchEffect = TaggedEnumClass("PromptSearchEffect", {
+export const PromptSearchEffect = Schema.TaggedUnion({
   Preview: { text: Schema.String },
   Close: {},
 })
@@ -100,10 +99,10 @@ export function transitionPromptSearch(
       return {
         state: PromptSearchState.closed(),
         effects: [
-          PromptSearchEffect.Preview.make({
+          PromptSearchEffect.cases.Preview.make({
             text: getPromptSearchPreview(state, entries) ?? state.draftBeforeOpen,
           }),
-          PromptSearchEffect.Close.make({}),
+          PromptSearchEffect.cases.Close.make({}),
         ],
       }
 
@@ -112,8 +111,8 @@ export function transitionPromptSearch(
       return {
         state: PromptSearchState.closed(),
         effects: [
-          PromptSearchEffect.Preview.make({ text: state.draftBeforeOpen }),
-          PromptSearchEffect.Close.make({}),
+          PromptSearchEffect.cases.Preview.make({ text: state.draftBeforeOpen }),
+          PromptSearchEffect.cases.Close.make({}),
         ],
       }
   }
@@ -180,7 +179,9 @@ export function transitionPromptSearch(
   return {
     state: nextState,
     effects: [
-      PromptSearchEffect.Preview.make({ text: getPromptSearchPreview(nextState, entries) ?? "" }),
+      PromptSearchEffect.cases.Preview.make({
+        text: getPromptSearchPreview(nextState, entries) ?? "",
+      }),
     ],
   }
 }

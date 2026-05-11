@@ -1,5 +1,4 @@
 import { Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 
 export interface SessionTreeState {
   readonly query: string
@@ -13,7 +12,7 @@ export const SessionTreeState = {
   }),
 } as const
 
-export const SessionTreeEvent = TaggedEnumClass("SessionTreeEvent", {
+export const SessionTreeEvent = Schema.TaggedUnion({
   Open: { selectedIndex: Schema.Number },
   Backspace: {},
   MoveUp: { itemCount: Schema.Number },

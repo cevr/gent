@@ -6,7 +6,6 @@
  */
 
 import { Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import {
   InteractionPresented,
   type ActiveInteraction,
@@ -26,7 +25,7 @@ export const ComposerState = {
   idle: (): ComposerState => ({ _tag: "idle" }),
 } as const
 
-export const ComposerEvent = TaggedEnumClass("ComposerEvent", {
+export const ComposerEvent = Schema.TaggedUnion({
   EnterInteraction: { interaction: InteractionPresented },
   ResolveInteraction: { result: ApprovalResultSchema },
   CancelInteraction: {},

@@ -46,7 +46,6 @@ import type {
   SessionTreeNode,
   SteerCommand,
 } from "@gent/sdk"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import {
   SessionState,
   SessionStateEvent,
@@ -54,7 +53,7 @@ import {
   type Session,
 } from "./session-state"
 
-export const SteerCommandInput = TaggedEnumClass("SteerCommandInput", {
+export const SteerCommandInput = Schema.TaggedUnion({
   Cancel: {},
   Interrupt: {},
   Interject: {
@@ -349,7 +348,7 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.sync(() => {
             const error = formatError(err)
             log.error("model.list.failed", { error })
-            setAgentStore({ status: AgentStatus.Error.make({ error }) })
+            setAgentStore({ status: AgentStatus.cases["error"].make({ error }) })
           }),
         ),
       ),
@@ -359,7 +358,7 @@ export function ClientProvider(props: ClientProviderProps) {
   // Agent state (derived from events)
   const [agentStore, setAgentStore] = createStore<AgentState>({
     agent: props.initialSession !== undefined ? props.initialAgent : defaultAgent,
-    status: AgentStatus.Idle.make({}),
+    status: AgentStatus.cases["idle"].make({}),
     cost: 0,
     lastModelId: undefined,
   })
@@ -488,7 +487,7 @@ export function ClientProvider(props: ClientProviderProps) {
     }
     setConnectionIssue(null)
     dispatchSession(
-      SessionStateEvent.Activated.make({
+      SessionStateEvent.cases.Activated.make({
         session: {
           sessionId: snapshot.sessionId,
           branchId: snapshot.branchId,
@@ -498,7 +497,10 @@ export function ClientProvider(props: ClientProviderProps) {
       }),
     )
     const rt = snapshot.runtime
-    const status = rt._tag === "Idle" ? AgentStatus.Idle.make({}) : AgentStatus.Streaming.make({})
+    const status =
+      rt._tag === "Idle"
+        ? AgentStatus.cases["idle"].make({})
+        : AgentStatus.cases["streaming"].make({})
     setAgentStore({
       agent: rt.agent,
       status,
@@ -546,7 +548,7 @@ export function ClientProvider(props: ClientProviderProps) {
       case "SessionNameUpdated": {
         const s = session()
         if (s !== null && event.sessionId === s.sessionId) {
-          dispatchSession(SessionStateEvent.UpdateName.make({ name: event.name }))
+          dispatchSession(SessionStateEvent.cases.UpdateName.make({ name: event.name }))
         }
         break
       }
@@ -554,7 +556,7 @@ export function ClientProvider(props: ClientProviderProps) {
       case "BranchSwitched": {
         const s = session()
         if (s !== null && event.sessionId === s.sessionId) {
-          dispatchSession(SessionStateEvent.UpdateBranch.make({ branchId: event.toBranchId }))
+          dispatchSession(SessionStateEvent.cases.UpdateBranch.make({ branchId: event.toBranchId }))
         }
         break
       }
@@ -563,7 +565,7 @@ export function ClientProvider(props: ClientProviderProps) {
         const s = session()
         if (s !== null && event.sessionId === s.sessionId && event.reasoningLevel !== undefined) {
           dispatchSession(
-            SessionStateEvent.UpdateReasoningLevel.make({
+            SessionStateEvent.cases.UpdateReasoningLevel.make({
               reasoningLevel: event.reasoningLevel,
             }),
           )
@@ -637,7 +639,7 @@ export function ClientProvider(props: ClientProviderProps) {
     isLoading,
 
     createSession: (onCreated) => {
-      dispatchSession(SessionStateEvent.CreateRequested.make({}))
+      dispatchSession(SessionStateEvent.cases.CreateRequested.make({}))
       cast(
         Effect.gen(function* () {
           const requestId = yield* Random.nextUUIDv4
@@ -655,7 +657,7 @@ export function ClientProvider(props: ClientProviderProps) {
               // "none"), so the extensionHealth reset is unconditional.
               setAgentStore({
                 agent: defaultAgent,
-                status: AgentStatus.Idle.make({}),
+                status: AgentStatus.cases["idle"].make({}),
                 cost: 0,
                 lastModelId: undefined,
               })
@@ -663,7 +665,7 @@ export function ClientProvider(props: ClientProviderProps) {
               setConnectionIssue(null)
               setExtensionHealth(EMPTY_EXTENSION_HEALTH)
               dispatchSession(
-                SessionStateEvent.CreateSucceeded.make({
+                SessionStateEvent.cases.CreateSucceeded.make({
                   session: {
                     sessionId: result.sessionId,
                     branchId: result.branchId,
@@ -678,8 +680,10 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.catchEager((err) =>
             Effect.sync(() => {
               log.error("createSession.failed", { error: String(err) })
-              dispatchSession(SessionStateEvent.CreateFailed.make({}))
-              setAgentStore({ status: AgentStatus.Error.make({ error: formatError(err) }) })
+              dispatchSession(SessionStateEvent.cases.CreateFailed.make({}))
+              setAgentStore({
+                status: AgentStatus.cases["error"].make({ error: formatError(err) }),
+              })
             }),
           ),
           Effect.withSpan("TUI.createSession"),
@@ -691,7 +695,7 @@ export function ClientProvider(props: ClientProviderProps) {
       const currentSessionId = session()?.sessionId
       setAgentStore({
         agent,
-        status: AgentStatus.Idle.make({}),
+        status: AgentStatus.cases["idle"].make({}),
         cost: 0,
         lastModelId: undefined,
       })
@@ -701,17 +705,17 @@ export function ClientProvider(props: ClientProviderProps) {
         setExtensionHealth(EMPTY_EXTENSION_HEALTH)
       }
       dispatchSession(
-        SessionStateEvent.Activated.make({
+        SessionStateEvent.cases.Activated.make({
           session: { sessionId, branchId, name, reasoningLevel: undefined },
         }),
       )
     },
 
     clearSession: () => {
-      dispatchSession(SessionStateEvent.Clear.make({}))
+      dispatchSession(SessionStateEvent.cases.Clear.make({}))
       setAgentStore({
         agent: defaultAgent,
-        status: AgentStatus.Idle.make({}),
+        status: AgentStatus.cases["idle"].make({}),
         cost: 0,
         lastModelId: undefined,
       })
@@ -741,7 +745,7 @@ export function ClientProvider(props: ClientProviderProps) {
         Effect.tap((result) =>
           Effect.sync(() => {
             dispatchSession(
-              SessionStateEvent.UpdateReasoningLevel.make({
+              SessionStateEvent.cases.UpdateReasoningLevel.make({
                 reasoningLevel: result.reasoningLevel,
               }),
             )
@@ -829,7 +833,9 @@ export function ClientProvider(props: ClientProviderProps) {
         }).pipe(
           Effect.tapError((err) =>
             Effect.sync(() => {
-              setAgentStore({ status: AgentStatus.Error.make({ error: formatError(err) }) })
+              setAgentStore({
+                status: AgentStatus.cases["error"].make({ error: formatError(err) }),
+              })
             }),
           ),
         ),
@@ -866,7 +872,10 @@ export function ClientProvider(props: ClientProviderProps) {
       ),
     setError: (error) =>
       setAgentStore({
-        status: error !== null ? AgentStatus.Error.make({ error }) : AgentStatus.Idle.make({}),
+        status:
+          error !== null
+            ? AgentStatus.cases["error"].make({ error })
+            : AgentStatus.cases["idle"].make({}),
       }),
   }
 

@@ -195,7 +195,7 @@ export function createSessionController(props: {
       setInteractionState((current) =>
         transitionComposerInteraction(
           current,
-          ComposerInteractionEvent.RestoreDraft.make({ text: effect.text }),
+          ComposerInteractionEvent.cases.RestoreDraft.make({ text: effect.text }),
         ),
       )
     }
@@ -209,14 +209,14 @@ export function createSessionController(props: {
 
   createEffect(() => {
     if (isBlockingAuthGate(authGateState()) && uiState().overlay._tag !== "auth") {
-      dispatchSessionUi(SessionUiEvent.OpenAuth.make({ enforceAuth: true }))
+      dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: true }))
     }
   })
 
   // Wire extension overlay dispatch to session UI state
   ext.setOverlayDispatch(
-    (id) => dispatchSessionUi(SessionUiEvent.OpenExtensionOverlay.make({ overlayId: id })),
-    () => dispatchSessionUi(SessionUiEvent.CloseOverlay.make({})),
+    (id) => dispatchSessionUi(SessionUiEvent.cases.OpenExtensionOverlay.make({ overlayId: id })),
+    () => dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({})),
   )
 
   // Wire composer state for extensions — mirrors use-composer-controller's focus logic
@@ -268,7 +268,7 @@ export function createSessionController(props: {
   }
 
   const onInteraction = (interaction: ActiveInteraction) => {
-    dispatchComposer(ComposerEvent.EnterInteraction.make({ interaction }))
+    dispatchComposer(ComposerEvent.cases.EnterInteraction.make({ interaction }))
   }
 
   const onComposerInteraction = (event: ComposerInteractionEvent) => {
@@ -285,7 +285,7 @@ export function createSessionController(props: {
     {
       onInteraction,
       onInteractionDismissed: (requestId) => {
-        dispatchComposer(ComposerEvent.DismissInteraction.make({ requestId }))
+        dispatchComposer(ComposerEvent.cases.DismissInteraction.make({ requestId }))
       },
       onBranchSwitch: (sessionId, branchId) => {
         router.navigateToSession(sessionId, branchId)
@@ -304,7 +304,7 @@ export function createSessionController(props: {
     draft: () => interactionState().draft,
     dispatch: (event, entries) =>
       dispatchSessionUi(
-        SessionUiEvent.PromptSearch.make({
+        SessionUiEvent.cases.PromptSearch.make({
           event,
           entries,
         }),
@@ -395,7 +395,7 @@ export function createSessionController(props: {
 
         const tree = yield* client.getSessionTree(rootId)
         yield* Effect.sync(() => {
-          dispatchSessionUi(SessionUiEvent.OpenTree.make({ tree, sessions }))
+          dispatchSessionUi(SessionUiEvent.cases.OpenTree.make({ tree, sessions }))
         })
       }).pipe(
         Effect.catchEager((error) =>
@@ -412,7 +412,7 @@ export function createSessionController(props: {
       client.setError("No messages to fork")
       return
     }
-    dispatchSessionUi(SessionUiEvent.OpenFork.make({}))
+    dispatchSessionUi(SessionUiEvent.cases.OpenFork.make({}))
   }
 
   // ── Session builtin commands ──
@@ -515,7 +515,7 @@ export function createSessionController(props: {
       category: "Session",
       slash: "permissions",
       slashPriority: 0,
-      onSelect: () => dispatchSessionUi(SessionUiEvent.OpenPermissions.make({})),
+      onSelect: () => dispatchSessionUi(SessionUiEvent.cases.OpenPermissions.make({})),
     },
     {
       id: "session.auth",
@@ -523,7 +523,7 @@ export function createSessionController(props: {
       category: "Session",
       slash: "auth",
       slashPriority: 0,
-      onSelect: () => dispatchSessionUi(SessionUiEvent.OpenAuth.make({ enforceAuth: false })),
+      onSelect: () => dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: false })),
     },
   ]
 
@@ -598,7 +598,7 @@ export function createSessionController(props: {
             const text = queuedDraftText({ steering, followUp })
             if (text === undefined) return
             onComposerInteraction(
-              ComposerInteractionEvent.RestoreDraft.make({
+              ComposerInteractionEvent.cases.RestoreDraft.make({
                 text,
               }),
             )
@@ -614,7 +614,7 @@ export function createSessionController(props: {
     )
   }
 
-  const closeOverlay = () => dispatchSessionUi(SessionUiEvent.CloseOverlay.make({}))
+  const closeOverlay = () => dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({}))
 
   const resolveAuthGate = () => {
     updateControllerState((state) => closeAuthGateState(state, client.agent()))
@@ -633,7 +633,7 @@ export function createSessionController(props: {
 
   const onSessionTreeSelect = (sessionId: SessionId) => {
     const currentOverlay = uiState().overlay
-    dispatchSessionUi(SessionUiEvent.CloseOverlay.make({}))
+    dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({}))
     if (currentOverlay._tag !== "tree") return
 
     const nextSession = currentOverlay.sessions.find((session) => session.id === sessionId)
@@ -647,7 +647,7 @@ export function createSessionController(props: {
   }
 
   const onForkSelect = (messageId: MessageId) => {
-    dispatchSessionUi(SessionUiEvent.CloseOverlay.make({}))
+    dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({}))
     cast(
       client.forkBranch(messageId).pipe(
         Effect.tap((branchId) =>
@@ -666,7 +666,9 @@ export function createSessionController(props: {
 
   const onSubmit = (content: string, mode?: "queue" | "interject") => {
     if (mode === "interject" && client.isStreaming()) {
-      client.steer(SteerCommandInput.Interject.make({ message: content, agent: client.agent() }))
+      client.steer(
+        SteerCommandInput.cases.Interject.make({ message: content, agent: client.agent() }),
+      )
       return
     }
     client.sendMessage(content)
@@ -681,7 +683,7 @@ export function createSessionController(props: {
     if (uiState().overlay._tag !== "none") return false
 
     const clearComposer = () => {
-      onComposerInteraction(ComposerInteractionEvent.ClearDraft.make({}))
+      onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
     }
 
     const handleQuitKey = (chainId: string) => {
@@ -705,7 +707,7 @@ export function createSessionController(props: {
       }
 
       if (client.isStreaming()) {
-        client.steer(SteerCommandInput.Cancel.make({}))
+        client.steer(SteerCommandInput.cases.Cancel.make({}))
         quitChain.reset()
         return true
       }
@@ -726,12 +728,12 @@ export function createSessionController(props: {
     }
 
     if (event.ctrl === true && event.name === "o") {
-      dispatchSessionUi(SessionUiEvent.ToggleTools.make({}))
+      dispatchSessionUi(SessionUiEvent.cases.ToggleTools.make({}))
       return true
     }
 
     if (event.ctrl === true && event.shift === true && event.name === "m") {
-      dispatchSessionUi(SessionUiEvent.OpenMermaid.make({}))
+      dispatchSessionUi(SessionUiEvent.cases.OpenMermaid.make({}))
       return true
     }
 

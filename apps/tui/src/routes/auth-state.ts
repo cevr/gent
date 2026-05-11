@@ -1,5 +1,4 @@
 import { Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core-internal/domain/schema-tagged-enum-class"
 import {
   AuthAuthorization,
   AuthMethod,
@@ -46,7 +45,7 @@ export type AuthState =
       readonly submitting: boolean
     } & AuthCatalog)
 
-export const AuthEvent = TaggedEnumClass("AuthEvent", {
+export const AuthEvent = Schema.TaggedUnion({
   LoadStarted: {},
   Loaded: {
     providers: Schema.Array(AuthProviderInfoSchema),

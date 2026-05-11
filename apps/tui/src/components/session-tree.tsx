@@ -104,7 +104,7 @@ export function SessionTree(props: SessionTreeProps) {
     setState(
       transitionSessionTree(
         state(),
-        SessionTreeEvent.Open.make({
+        SessionTreeEvent.cases.Open.make({
           selectedIndex: currentIndex >= 0 ? currentIndex : 0,
         }),
       ),
@@ -119,7 +119,9 @@ export function SessionTree(props: SessionTreeProps) {
       }
 
       if (e.name === "backspace") {
-        setState((current) => transitionSessionTree(current, SessionTreeEvent.Backspace.make({})))
+        setState((current) =>
+          transitionSessionTree(current, SessionTreeEvent.cases.Backspace.make({})),
+        )
         return true
       }
 
@@ -136,7 +138,7 @@ export function SessionTree(props: SessionTreeProps) {
         setState((current) =>
           transitionSessionTree(
             current,
-            SessionTreeEvent.MoveUp.make({ itemCount: visible.length }),
+            SessionTreeEvent.cases.MoveUp.make({ itemCount: visible.length }),
           ),
         )
         return true
@@ -146,7 +148,7 @@ export function SessionTree(props: SessionTreeProps) {
         setState((current) =>
           transitionSessionTree(
             current,
-            SessionTreeEvent.MoveDown.make({ itemCount: visible.length }),
+            SessionTreeEvent.cases.MoveDown.make({ itemCount: visible.length }),
           ),
         )
         return true
@@ -156,7 +158,7 @@ export function SessionTree(props: SessionTreeProps) {
         const char = e.sequence
         if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
           setState((current) =>
-            transitionSessionTree(current, SessionTreeEvent.TypeChar.make({ char })),
+            transitionSessionTree(current, SessionTreeEvent.cases.TypeChar.make({ char })),
           )
           return true
         }
