@@ -34,7 +34,8 @@
  *
  * @module
  */
-import { Effect, Schema, Stream } from "effect"
+import { Context, Effect, Queue, Schema, Stream } from "effect"
+import type { Cause } from "effect"
 import {
   query as sdkQuery,
   type Options,
@@ -50,8 +51,8 @@ export interface AcpAgentsPlatformShape {
 }
 
 /**
- * Per-session SDK handle. The shape hides the Pushable input stream and
- * the `Query` async iterator behind two Effects.
+ * Per-session SDK handle. The shape hides the input queue and the
+ * `Query` async iterator behind two Effects.
  */
 export interface ClaudeSdkSession {
   /**
@@ -120,54 +121,6 @@ export const ClaudeSdk = { live, test } as const
 
 // ── Live implementation internals ──
 
-/**
- * Pushable async iterable for SDK input. Each `push` either resolves a
- * waiting consumer or queues. `end` closes the stream so the SDK exits.
- *
- * Mirrors `agentclientprotocol/claude-agent-acp` `utils.ts` `Pushable`.
- */
-class Pushable<T> implements AsyncIterable<T> {
-  private queue: T[] = []
-  private resolvers: Array<(value: IteratorResult<T>) => void> = []
-  private done = false
-
-  push(item: T): void {
-    const resolve = this.resolvers.shift()
-    if (resolve !== undefined) {
-      resolve({ value: item, done: false })
-    } else {
-      this.queue.push(item)
-    }
-  }
-
-  end(): void {
-    this.done = true
-    while (this.resolvers.length > 0) {
-      const resolve = this.resolvers.shift()
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-      resolve?.({ value: undefined as never, done: true })
-    }
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<T> {
-    return {
-      next: (): Promise<IteratorResult<T>> => {
-        const queued = this.queue.shift()
-        if (queued !== undefined) {
-          return Promise.resolve({ value: queued, done: false })
-        }
-        if (this.done) {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-          return Promise.resolve({ value: undefined as never, done: true })
-        }
-        const { promise, resolve } = Promise.withResolvers<IteratorResult<T>>()
-        this.resolvers.push(resolve)
-        return promise
-      },
-    }
-  }
-}
-
 const makeUserMessage = (text: string): SDKUserMessage => ({
   type: "user",
   message: { role: "user", content: text },
@@ -178,7 +131,8 @@ function makeLiveService(platform: AcpAgentsPlatformShape): ClaudeSdkServiceShap
   return {
     createSession: ({ cwd, oauthToken, systemPrompt, mcpServers }) =>
       Effect.gen(function* () {
-        const input = new Pushable<SDKUserMessage>()
+        const inputQueue = yield* Queue.unbounded<SDKUserMessage, Cause.Done>()
+        const input = Stream.fromQueue(inputQueue).pipe(Stream.toAsyncIterableWith(Context.empty()))
 
         // Session-lifetime teardown controller — distinct from any
         // per-prompt cancel signal. Aborting this scopes process death
@@ -240,7 +194,7 @@ function makeLiveService(platform: AcpAgentsPlatformShape): ClaudeSdkServiceShap
           try: (_signal) => {
             if (closed) return Promise.resolve(undefined)
             closed = true
-            input.end()
+            Queue.endUnsafe(inputQueue)
             teardownController.abort()
             return Promise.resolve(q.close()).then(() => undefined)
           },
@@ -252,7 +206,7 @@ function makeLiveService(platform: AcpAgentsPlatformShape): ClaudeSdkServiceShap
           signal?: AbortSignal,
         ): Stream.Stream<SDKMessage, ClaudeSdkError> =>
           Stream.suspend(() => {
-            input.push(makeUserMessage(text))
+            Queue.offerUnsafe(inputQueue, makeUserMessage(text))
             // Per-prompt cancel: hook the signal to `q.interrupt()`. The
             // SDK doc reserves `interrupt` for current-query cancel and
             // `abortController.abort()` for full teardown.
