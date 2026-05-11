@@ -76,7 +76,7 @@ Use `effect` skill. Key patterns:
 - Telegraph style, minimal tokens
 - Every service exposes a `Live` layer; add a `Test` layer only when there is a real alternative implementation worth a Tag. Language model tests use `LanguageModelLayers` instead of provider wrapper statics.
 - Schema validation at boundaries
-- **Tagged/discriminated unions use Effect Schema primitives.** Prefer `Schema.TaggedStruct` / `Schema.Union` / `Schema.TaggedErrorClass`; do not hand-roll `{ _tag: "X" } | { _tag: "Y" }` literal unions. Existing `TaggedEnumClass` use is transitional and should not expand.
+- **Tagged/discriminated unions use Effect Schema primitives.** Prefer `Schema.TaggedUnion` (or `Schema.TaggedStruct` + `Schema.toTaggedUnion` for kebab-case wire tags, or `Schema.TaggedErrorClass` for errors); do not hand-roll `{ _tag: "X" } | { _tag: "Y" }` literal unions.
 - **File naming**: kebab-case everywhere (`agent-loop.actor.ts`, `message-list.tsx`)
 
 ## Package Structure

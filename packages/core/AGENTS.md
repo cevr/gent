@@ -10,7 +10,7 @@
 - `Schema.Unknown` for dynamic JSON (`ToolCallPart.input`, `ToolResultPart.output.value`)
 - Decode with `Schema.decodeUnknownSync(schema)(value)` before use
 - Owned unions use `_tag`, not `kind` / `_kind`
-- **Every tagged/discriminated union uses `TaggedEnumClass`** (from `domain/schema-tagged-enum-class`), `Schema.TaggedStruct`, or `Schema.TaggedErrorClass`. Never hand-roll `{ readonly _tag: "X"; ... } | { readonly _tag: "Y"; ... }` literal unions, even for "internal" driver/state events. Construct via `Variant.make({...})`, never `{ _tag: "X", ... } satisfies Union`. Extract types with `type X = Schema.Schema.Type<typeof X>`.
+- **Every tagged/discriminated union uses `Schema.TaggedUnion`** (or `Schema.TaggedStruct` + `Schema.toTaggedUnion` for kebab-case wire tags, or `Schema.TaggedErrorClass` for errors). Never hand-roll `{ readonly _tag: "X"; ... } | { readonly _tag: "Y"; ... }` literal unions, even for "internal" driver/state events. Construct via `Union.cases.Variant.make({...})`, never `{ _tag: "X", ... } satisfies Union`. Extract types with `type X = Schema.Schema.Type<typeof X>`.
 
 ## Runtime Boundary
 

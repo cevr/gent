@@ -1254,10 +1254,6 @@ const plugin: Plugin = {
      * inline-type-literal form. Construction-site form
      * (`{ _tag: "X" } satisfies SomeUnion`) is not covered here; it's
      * already vanishingly rare in this codebase.
-     *
-     * Note: the `TaggedEnumClass` helper from
-     * `@gent/core/domain/schema-tagged-enum-class` is transitional and
-     * will be removed. Use `Schema.TaggedUnion` for new code.
      */
     "no-hand-rolled-tagged-union": {
       create(context) {
@@ -1282,8 +1278,8 @@ const plugin: Plugin = {
           // Pascal-case heuristic — keeps the rule from chasing
           // schema-internal lowercase wire tags like "regular" /
           // "interjection" that legitimately appear inside Schema
-          // metadata. TaggedEnumClass member names are PascalCase by
-          // convention.
+          // metadata. `Schema.TaggedUnion` member names are PascalCase
+          // by convention.
           const first = value.charAt(0)
           return first === first.toUpperCase() && first !== first.toLowerCase()
         }

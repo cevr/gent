@@ -500,8 +500,6 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadExtensionHostPlatform = PublicExtensionApi.ExtensionHostPlatform
     // @ts-expect-error — raw process errors are mapped through ExtensionServiceError in public facades
     type _BadExtensionHostProcessError = typeof PublicExtensionApi.ExtensionHostProcessError
-    // @ts-expect-error — schema helper is an internal core migration primitive
-    type _BadTaggedEnumClass = typeof PublicExtensionApi.TaggedEnumClass
     // @ts-expect-error — host file index Tag is private; extensions reach files through ExtensionContext.Files
     type _BadFileIndex = typeof PublicExtensionApi.FileIndex
     // @ts-expect-error — host file lock Tag is private; extensions reach file locks through ExtensionContext.FileLock

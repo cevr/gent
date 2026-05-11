@@ -2,7 +2,7 @@
  * `AgentLoop` as `Actor.fromEntity`.
  *
  * Replaces the per-(sessionId, branchId) hand-rolled fiber map +
- * `LoopState` `TaggedEnumClass` + actor mailbox persistence.
+ * `LoopState` tagged union + actor mailbox persistence.
  *
  * **Op surface (C5.1-followup counsel):** request/reply only.
  * `Subscribe` and `Snapshot` are NOT actor ops:

@@ -1,10 +1,9 @@
 /**
  * `Schema.TaggedUnion` regression locks.
  *
- * Wave 35 C14: this file used to exercise the bespoke `TaggedEnumClass`
- * factory. It now exercises upstream `Schema.TaggedUnion`/`Schema.TaggedStruct`
- * + `Schema.toTaggedUnion` directly — proving the upstream surface covers
- * the invariants we rely on before production call sites migrate.
+ * Exercises upstream `Schema.TaggedUnion` / `Schema.TaggedStruct` +
+ * `Schema.toTaggedUnion` directly — the invariants production call
+ * sites rely on at the schema layer.
  *
  * Covered invariants:
  * - per-variant TaggedStruct identity (`Schema.is` narrows to a single case)
@@ -136,19 +135,15 @@ describe("Schema.TaggedUnion — runtime-helper payload-validation semantics", (
     expect(Shape.guards.Circle(spoof)).toBe(false)
   })
   test("`isAnyOf` is tag-only — spoofed payload is accepted", () => {
-    // Regression-lock: upstream `isAnyOf` matches against `_tag` only.
-    // Bespoke `TaggedEnumClass` composed `Schema.is(variant)` here, which
-    // would have rejected this value. Production callers do not feed
-    // untrusted values through `isAnyOf`, so the looser upstream semantics
-    // are accepted.
+    // Regression-lock: `isAnyOf` matches against `_tag` only. Production
+    // callers do not feed untrusted values through `isAnyOf`.
     expect(Shape.isAnyOf(["Circle"])(spoof)).toBe(true)
   })
   test("`match` is tag-only — dispatches on spoofed payload", () => {
-    // Regression-lock: upstream `match` dispatches via the `_tag` key into
-    // the handler map without re-validating the payload. Bespoke validated
-    // before dispatch. Production callers (`AgentEvent.match` on events
-    // emitted in-process or decoded via `Schema.decodeUnknownSync`) never
-    // see spoofed values, so the looser upstream semantics are accepted.
+    // Regression-lock: `match` dispatches via the `_tag` key into the
+    // handler map without re-validating the payload. Production callers
+    // (`AgentEvent.match` on events emitted in-process or decoded via
+    // `Schema.decodeUnknownSync`) never see spoofed values.
     const out = Shape.match({
       Circle: (c) => `circle:${typeof c.radius}`,
       Rectangle: (r) => `rect:${r.width * r.height}`,
