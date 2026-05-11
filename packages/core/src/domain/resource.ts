@@ -19,9 +19,18 @@
  */
 
 import type { Context, Effect, Layer } from "effect"
-import type { ServerScope } from "./scope-brand.js"
 
 // ── Scope discriminator + brand mapping ──
+
+/**
+ * Pure type-level scope brand used by Resource declarations. Encodes the
+ * lifetime of a `Scope.Scope` at the type level. Today Resource hosting
+ * supports only process-scoped services: `ServerScope` survives for the
+ * server's lifetime. Add new brands only when their resource host lifecycle
+ * exists. These types carry no runtime payload; they are purely structural.
+ */
+declare const ServerBrand: unique symbol
+export type ServerScope = { readonly [ServerBrand]: true }
 
 /** Runtime literal-string union for Resource lifetimes. */
 export type ResourceScope = "process"

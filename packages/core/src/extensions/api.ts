@@ -195,7 +195,7 @@ export type {
   ScopeOf,
 } from "../domain/resource.js"
 export type { ScheduledJobContribution } from "../domain/scheduled-job.js"
-export { ProjectionError } from "../domain/projection-error.js"
+export { ProjectionError } from "../domain/extension.js"
 export {
   ExtensionContext,
   ExtensionServiceError,
