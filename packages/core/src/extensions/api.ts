@@ -80,8 +80,9 @@ export {
   getDurableAgentRunSessionId,
   AgentRunError,
   type RunSpec,
+  resolveDualModelPair,
+  NoModeledAgentsError,
 } from "../domain/agent.js"
-export { resolveDualModelPair, NoModeledAgentsError } from "../domain/agent-pair.js"
 export { requireAgent, estimateContextPercent } from "../domain/extension-services.js"
 export {
   type GentExtension,

@@ -22,8 +22,13 @@ import { Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import type { FileSystem, Path } from "effect"
 import { KeyValueStore } from "effect/unstable/persistence"
 import { ProviderId, parseModelProvider } from "./model.js"
-import { AgentName, DriverRef, resolveAgentDriver, resolveAgentModel } from "./agent.js"
-import { resolveDualModelPair } from "./agent-pair.js"
+import {
+  AgentName,
+  DriverRef,
+  resolveAgentDriver,
+  resolveAgentModel,
+  resolveDualModelPair,
+} from "./agent.js"
 import { SessionId } from "./ids.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"

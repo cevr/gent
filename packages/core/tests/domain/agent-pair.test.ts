@@ -1,7 +1,11 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Option, Schema } from "effect"
-import { NoModeledAgentsError, resolveDualModelPair } from "@gent/core-internal/domain/agent-pair"
-import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
+import {
+  AgentDefinition,
+  AgentName,
+  NoModeledAgentsError,
+  resolveDualModelPair,
+} from "@gent/core-internal/domain/agent"
 import { ModelId } from "@gent/core-internal/domain/model"
 import { ExternalDriverRef } from "@gent/core-internal/domain/driver"
 
