@@ -863,6 +863,30 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
+  test("flags bare new URL(import.meta.url) as a hand-rolled fileURLToPath", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/server/example.ts",
+        "const here = new URL(import.meta.url).pathname",
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/server/example.ts",
+        line: 1,
+        message:
+          "Bare `new URL(import.meta.url)` is a hand-rolled fileURLToPath; yield GentPlatform and call platform.fileURLToPath(import.meta.url)",
+      },
+    ])
+
+    // Routed through the platform: NOT a hand-rolled path — must not trip.
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/extensions/src/example.ts",
+        "const here = platform.fileURLToPath(import.meta.url)",
+      ),
+    ).toEqual([])
+  })
+
   test("flags server entrypoints that fork the composition root", () => {
     expect(
       findPlatformDuplicationViolations(

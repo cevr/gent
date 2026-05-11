@@ -190,6 +190,14 @@ const bannedProtectedHostFactPatterns: ReadonlyArray<BannedPattern> = [
     message:
       "Direct fileURLToPath() is adapter-only; yield GentPlatform and call platform.fileURLToPath(url)",
   },
+  {
+    // Bare `new URL(import.meta.url).pathname` (or `.href`) is a hand-rolled
+    // fileURLToPath that bypasses the platform adapter and breaks under
+    // Windows file URLs (extra leading slash on drive paths).
+    pattern: /new\s+URL\s*\(\s*import\.meta\.url\s*\)/,
+    message:
+      "Bare `new URL(import.meta.url)` is a hand-rolled fileURLToPath; yield GentPlatform and call platform.fileURLToPath(import.meta.url)",
+  },
 ]
 
 const serverRootConsumerFiles = new Set(["apps/server/src/main.ts", "packages/sdk/src/server.ts"])

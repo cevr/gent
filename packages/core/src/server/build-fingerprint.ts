@@ -36,10 +36,7 @@ const computeLocalFingerprintUncached: Effect.Effect<
   }
 
   // 2. Git hash from gent source root (dev mode)
-  const gentRoot = path.resolve(
-    decodeURIComponent(new URL(import.meta.url).pathname),
-    "../../../..",
-  )
+  const gentRoot = path.resolve(platform.fileURLToPath(import.meta.url), "../../../..")
   const result = yield* runProcess("git", ["rev-parse", "--short", "HEAD"], {
     cwd: gentRoot,
     stdout: "pipe",
