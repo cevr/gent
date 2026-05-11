@@ -38,7 +38,7 @@ const makeProviderAuth: Effect.Effect<
     (providerId: string): PersistAuth =>
     (auth) => {
       if (auth.type === "api") {
-        return authStore.set(providerId, new AuthApi({ type: "api", key: auth.key })).pipe(
+        return authStore.set(providerId, AuthApi.make({ type: "api", key: auth.key })).pipe(
           Effect.mapError(
             (e) =>
               new ProviderAuthError({
@@ -51,7 +51,7 @@ const makeProviderAuth: Effect.Effect<
       return authStore
         .set(
           providerId,
-          new AuthOauth({
+          AuthOauth.make({
             type: "oauth",
             access: auth.access,
             refresh: auth.refresh,

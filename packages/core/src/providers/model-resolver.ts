@@ -88,7 +88,7 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
         authStore
           .set(
             providerName,
-            new AuthOauth({
+            AuthOauth.make({
               type: "oauth",
               access: updated.access,
               refresh: updated.refresh,

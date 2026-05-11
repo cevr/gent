@@ -19,14 +19,14 @@ describe("Auth", () => {
       Effect.gen(function* () {
         const auth = yield* Auth
 
-        yield* auth.set("openai", AuthInfo.Api.make({ type: "api", key: "sk-test" }))
+        yield* auth.set("openai", AuthInfo.cases.Api.make({ type: "api", key: "sk-test" }))
         const openai = yield* auth.get("openai")
         expect(openai?.type).toBe("api")
         if (openai?.type === "api") expect(openai.key).toBe("sk-test")
 
         yield* auth.set(
           "anthropic",
-          AuthInfo.Oauth.make({
+          AuthInfo.cases.Oauth.make({
             type: "oauth",
             access: "a",
             refresh: "r",
@@ -61,7 +61,7 @@ describe("Auth", () => {
 
         const writer = Effect.gen(function* () {
           const auth = yield* Auth
-          yield* auth.set("openai", AuthInfo.Api.make({ type: "api", key: "sk-on-disk" }))
+          yield* auth.set("openai", AuthInfo.cases.Api.make({ type: "api", key: "sk-on-disk" }))
         }).pipe(Effect.provide(Auth.Live(dir)))
         yield* writer
 

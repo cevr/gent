@@ -488,7 +488,7 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "auth.setKey": ({ provider, key }: SetAuthKeyInput) =>
         authStore
-          .set(provider, new AuthApi({ type: "api", key }))
+          .set(provider, AuthApi.make({ type: "api", key }))
           .pipe(Effect.mapError((error) => authPersistenceError("set", provider, error))),
 
       "auth.deleteKey": ({ provider }: DeleteAuthKeyInput) =>

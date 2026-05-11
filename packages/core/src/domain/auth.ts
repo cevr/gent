@@ -21,7 +21,6 @@
 import { Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import type { FileSystem, Path } from "effect"
 import { KeyValueStore } from "effect/unstable/persistence"
-import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 import { ProviderId, parseModelProvider } from "./model.js"
 import { AgentName, DriverRef, resolveAgentDriver, resolveAgentModel } from "./agent.js"
 import { resolveDualModelPair } from "./agent-pair.js"
@@ -64,7 +63,7 @@ export class AuthAuthorization extends Schema.Class<AuthAuthorization>("AuthAuth
  * store entirely; if a future caller needs a persisted presence
  * marker, add it back to this enum at that point.
  */
-export const AuthInfo = TaggedEnumClass("AuthInfo", {
+export const AuthInfo = Schema.TaggedUnion({
   Api: {
     type: Schema.Literal("api"),
     key: Schema.String,
@@ -79,10 +78,10 @@ export const AuthInfo = TaggedEnumClass("AuthInfo", {
 })
 export type AuthInfo = Schema.Schema.Type<typeof AuthInfo>
 
-export const AuthApi = AuthInfo.Api
-export type AuthApi = typeof AuthInfo.Api.Type
-export const AuthOauth = AuthInfo.Oauth
-export type AuthOauth = typeof AuthInfo.Oauth.Type
+export const AuthApi = AuthInfo.cases.Api
+export type AuthApi = typeof AuthInfo.cases.Api.Type
+export const AuthOauth = AuthInfo.cases.Oauth
+export type AuthOauth = typeof AuthInfo.cases.Oauth.Type
 
 export const AuthType = Schema.Literals(["api", "oauth"])
 export type AuthType = typeof AuthType.Type
