@@ -112,7 +112,7 @@ The app surface is split by concern:
 
 `SessionEvents` and `SessionSubscriptions` are inlined into `rpc-handlers.ts` — they are not separate services.
 
-`packages/core/src/server/index.ts` is intentionally small. It only assembles `AppServicesLive`.
+`AppServicesLive` is assembled inline at the top of `packages/core/src/server/server-root.ts` (private to the file — `buildServerRoot` is the only consumer).
 
 `packages/core/src/server/dependencies.ts` owns startup wiring:
 
