@@ -21,7 +21,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
     Effect.gen(function* () {
       const eventStorage = yield* EventStorage
       const sessionStorage = yield* SessionStorage
-      const registry = makeSessionPubSubRegistry()
+      const registry = yield* makeSessionPubSubRegistry
 
       const deliver = yield* makeSerializedEventDelivery(registry.broadcast)
 

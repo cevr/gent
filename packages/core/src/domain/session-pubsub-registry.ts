@@ -1,4 +1,4 @@
-import { Effect, PubSub, type Scope } from "effect"
+import { Effect, HashMap, PubSub, type Scope, TxRef } from "effect"
 import type { EventEnvelope } from "./event.js"
 import { getEventSessionId } from "./event.js"
 import type { SessionId } from "./ids.js"
@@ -25,43 +25,50 @@ export interface SessionPubSubRegistry {
   readonly remove: (sessionId: SessionId) => Effect.Effect<void>
 }
 
-export const makeSessionPubSubRegistry = (): SessionPubSubRegistry => {
-  const sessions = new Map<SessionId, PubSub.PubSub<EventEnvelope>>()
+export const makeSessionPubSubRegistry: Effect.Effect<SessionPubSubRegistry> = Effect.gen(
+  function* () {
+    const sessionsRef = yield* TxRef.make(HashMap.empty<SessionId, PubSub.PubSub<EventEnvelope>>())
 
-  const getOrCreate = (sessionId: SessionId): Effect.Effect<PubSub.PubSub<EventEnvelope>> =>
-    Effect.gen(function* () {
-      const existing = sessions.get(sessionId)
-      if (existing !== undefined) return existing
-      const ps = yield* PubSub.unbounded<EventEnvelope>()
-      sessions.set(sessionId, ps)
-      return ps
-    })
+    const getOrCreate = (sessionId: SessionId): Effect.Effect<PubSub.PubSub<EventEnvelope>> =>
+      Effect.gen(function* () {
+        const existing = HashMap.get(yield* TxRef.get(sessionsRef), sessionId)
+        if (existing._tag === "Some") return existing.value
+        const fresh = yield* PubSub.unbounded<EventEnvelope>()
+        // Race-safe install: re-check, install only if still missing.
+        return yield* TxRef.modify(sessionsRef, (current) => {
+          const found = HashMap.get(current, sessionId)
+          if (found._tag === "Some") return [found.value, current]
+          return [fresh, HashMap.set(current, sessionId, fresh)]
+        })
+      })
 
-  const subscribe = (
-    sessionId: SessionId,
-  ): Effect.Effect<PubSub.Subscription<EventEnvelope>, never, Scope.Scope> =>
-    Effect.gen(function* () {
-      const ps = yield* getOrCreate(sessionId)
-      return yield* PubSub.subscribe(ps)
-    })
+    const subscribe = (
+      sessionId: SessionId,
+    ): Effect.Effect<PubSub.Subscription<EventEnvelope>, never, Scope.Scope> =>
+      Effect.gen(function* () {
+        const ps = yield* getOrCreate(sessionId)
+        return yield* PubSub.subscribe(ps)
+      })
 
-  const broadcast = (envelope: EventEnvelope): Effect.Effect<void> => {
-    const eventSessionId = getEventSessionId(envelope.event)
-    if (eventSessionId === undefined) return Effect.void
-    return Effect.gen(function* () {
-      const ps = yield* getOrCreate(eventSessionId)
-      yield* PubSub.publish(ps, envelope)
-    })
-  }
+    const broadcast = (envelope: EventEnvelope): Effect.Effect<void> => {
+      const eventSessionId = getEventSessionId(envelope.event)
+      if (eventSessionId === undefined) return Effect.void
+      return Effect.gen(function* () {
+        const ps = yield* getOrCreate(eventSessionId)
+        yield* PubSub.publish(ps, envelope)
+      })
+    }
 
-  const remove = (sessionId: SessionId): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const ps = sessions.get(sessionId)
-      if (ps !== undefined) {
-        sessions.delete(sessionId)
-        yield* PubSub.shutdown(ps)
-      }
-    })
+    const remove = (sessionId: SessionId): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const removed = yield* TxRef.modify(sessionsRef, (current) => {
+          const found = HashMap.get(current, sessionId)
+          if (found._tag === "None") return [undefined, current]
+          return [found.value, HashMap.remove(current, sessionId)] as const
+        })
+        if (removed !== undefined) yield* PubSub.shutdown(removed)
+      })
 
-  return { subscribe, broadcast, remove }
-}
+    return { subscribe, broadcast, remove }
+  },
+)

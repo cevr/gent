@@ -484,7 +484,7 @@ export const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): bo
 // EventStore Service
 
 const makeMemoryEventStore = Effect.gen(function* () {
-  const registry = makeSessionPubSubRegistry()
+  const registry = yield* makeSessionPubSubRegistry
   const eventsRef = yield* Ref.make<EventEnvelope[]>([])
   const idRef = yield* Ref.make(0)
 
