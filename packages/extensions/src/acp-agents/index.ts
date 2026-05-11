@@ -223,69 +223,16 @@ interface AcpAgentsManagerDeps {
   readonly makeClaudeCodeSessionManager?: () => ReturnType<typeof createClaudeCodeSessionManager>
 }
 
-const buildAcpContributions = (
-  spawner: ChildProcessSpawner["Service"],
-  deps: AcpAgentsManagerDeps,
-  platform: {
-    readonly acp: AcpAgentsPlatformShape
-    readonly anthropic: AnthropicPlatform["Service"]
-  },
-): ExtensionContributions => {
-  const acpManager = (deps.makeAcpSessionManager ?? createAcpSessionManager)(spawner)
-  const claudeCodeManager = (
-    deps.makeClaudeCodeSessionManager ??
-    (() =>
-      createClaudeCodeSessionManager(claudeSdkLive(platform.acp), () =>
-        readClaudeCodeOAuthToken(platform.anthropic),
-      ))
-  )()
-  const claudeCodeId = `acp-${CLAUDE_CODE_AGENT_NAME}`
-  const claudeCode = {
-    id: claudeCodeId,
-    executor: makeClaudeCodeTurnExecutor(claudeCodeManager),
-    toolSurface: "codemode" as const,
-    invalidate: () => claudeCodeManager.invalidateDriver(claudeCodeId),
-  }
-  const protocolDrivers = Object.entries(ACP_PROTOCOL_AGENTS).map(([name, config]) => {
-    const id = `acp-${name}`
-    return {
-      id,
-      executor: makeAcpTurnExecutor(id, config, acpManager),
-      toolSurface: "codemode" as const,
-      invalidate: () => acpManager.invalidateDriver(id),
-    }
-  })
-
-  return {
-    agents: [claudeCodeAgent, ...protocolAgents],
-    reactions: {
-      systemPrompt: rewriteCodemodeSystemPrompt,
-    },
-    externalDrivers: [claudeCode, ...protocolDrivers],
-    resources: [
-      defineResource({
-        scope: "process",
-        layer: Layer.effect(
-          AcpAgentsDisposer,
-          Effect.acquireRelease(
-            Effect.succeed(AcpAgentsDisposer.of({ _tag: "AcpAgentsDisposer" })),
-            () =>
-              Effect.gen(function* () {
-                yield* acpManager.disposeAll()
-                yield* claudeCodeManager.disposeAll
-              }),
-          ),
-        ),
-      }),
-    ],
-  }
+interface AcpSetupArtifacts {
+  readonly externalDrivers: ExtensionContributions["externalDrivers"]
+  readonly resources: ExtensionContributions["resources"]
 }
 
 export const makeAcpAgentsExtension = (
   deps: AcpAgentsManagerDeps = {},
 ): GentExtension<ChildProcessSpawner> => {
-  const cachedBySetupContext = new WeakMap<object, ExtensionContributions>()
-  const setupContributions = Effect.gen(function* () {
+  const cachedBySetupContext = new WeakMap<object, AcpSetupArtifacts>()
+  const setupArtifacts = Effect.gen(function* () {
     const ctx = yield* ExtensionSetupContext
     const cached = cachedBySetupContext.get(ctx)
     if (cached !== undefined) return cached
@@ -294,12 +241,53 @@ export const makeAcpAgentsExtension = (
     const acpPlatform = {
       parentEnv: anthropicPlatform.parentEnv,
     } satisfies AcpAgentsPlatformShape
-    const contributions = buildAcpContributions(spawner, deps, {
-      acp: acpPlatform,
-      anthropic: anthropicPlatform,
+
+    const acpManager = (deps.makeAcpSessionManager ?? createAcpSessionManager)(spawner)
+    const claudeCodeManager = (
+      deps.makeClaudeCodeSessionManager ??
+      (() =>
+        createClaudeCodeSessionManager(claudeSdkLive(acpPlatform), () =>
+          readClaudeCodeOAuthToken(anthropicPlatform),
+        ))
+    )()
+    const claudeCodeId = `acp-${CLAUDE_CODE_AGENT_NAME}`
+    const claudeCode = {
+      id: claudeCodeId,
+      executor: makeClaudeCodeTurnExecutor(claudeCodeManager),
+      toolSurface: "codemode" as const,
+      invalidate: () => claudeCodeManager.invalidateDriver(claudeCodeId),
+    }
+    const protocolDrivers = Object.entries(ACP_PROTOCOL_AGENTS).map(([name, config]) => {
+      const id = `acp-${name}`
+      return {
+        id,
+        executor: makeAcpTurnExecutor(id, config, acpManager),
+        toolSurface: "codemode" as const,
+        invalidate: () => acpManager.invalidateDriver(id),
+      }
     })
-    cachedBySetupContext.set(ctx, contributions)
-    return contributions
+
+    const artifacts: AcpSetupArtifacts = {
+      externalDrivers: [claudeCode, ...protocolDrivers],
+      resources: [
+        defineResource({
+          scope: "process",
+          layer: Layer.effect(
+            AcpAgentsDisposer,
+            Effect.acquireRelease(
+              Effect.succeed(AcpAgentsDisposer.of({ _tag: "AcpAgentsDisposer" })),
+              () =>
+                Effect.gen(function* () {
+                  yield* acpManager.disposeAll()
+                  yield* claudeCodeManager.disposeAll
+                }),
+            ),
+          ),
+        }),
+      ],
+    }
+    cachedBySetupContext.set(ctx, artifacts)
+    return artifacts
   })
 
   return defineExtension({
@@ -308,8 +296,8 @@ export const makeAcpAgentsExtension = (
     reactions: {
       systemPrompt: rewriteCodemodeSystemPrompt,
     },
-    resources: () => setupContributions.pipe(Effect.map((c) => c.resources ?? [])),
-    externalDrivers: () => setupContributions.pipe(Effect.map((c) => c.externalDrivers ?? [])),
+    resources: () => setupArtifacts.pipe(Effect.map((a) => a.resources ?? [])),
+    externalDrivers: () => setupArtifacts.pipe(Effect.map((a) => a.externalDrivers ?? [])),
   })
 }
 
