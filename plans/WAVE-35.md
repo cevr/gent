@@ -53,9 +53,22 @@ the highest-ROI P1s before the next independent audit may pass.
     (`agent-loop.actor.ts:632`). Make both reentrant and `QueueFollowUp`
     callers go through `ensureStarted`, or formalize the bypass as a typed
     distinct internal-only callback.
-  - **C7.3** Make `Steer` use `send` + `waitFor` like `respondInteraction`
-    (`session-runtime.ts:678` vs `:693`). Persisted fire-forget silently
-    drops delivery errors.
+  - **C7.3 — SUPERSEDED (dropped 2026-05-11).** The original framing
+    ("Persisted fire-forget silently drops delivery errors") is wrong on
+    two counts: (a) `ref.send` is `Effect.map(discardCall, …)` so delivery
+    errors _do_ propagate at runtime (they're only statically typed as
+    `never`); (b) `Steer.Interject` semantics are correctly fire-forget at
+    the actor-handler level — the caller needs to know the steering item
+    was _registered_ (handler-completion via `send` proves that), not that
+    the interjected turn has _run_. A `send + waitFor` switch deadlocks
+    against the gated-turn pattern used by
+    `"steer interject interrupts the active turn ahead of queued
+follow-ups"` (`tests/runtime/session-runtime.test.ts:848`), because
+    `waitFor` blocks on handler completion which can't fire until the
+    in-flight turn releases. Empirically validated: applied the change,
+    test timed out, reverted. Steer/Queue invariants verified:
+    `agent-loop.state.ts:202-220` (steering drains before followUp) +
+    `agent-loop.actor.ts:861-925` (only `applySteer` interrupts).
 - **C8**: Convert STM-unsafe concurrent state to transactional primitives
   (L1-P1-2, P1-5, P1-6, P1-7):
   - **C8.1** `session-pubsub-registry.ts:29` — naked `Map` → `TxRef<HashMap>`
@@ -164,7 +177,7 @@ fields)` 20-line variant for the wire-tag mismatch case) and migrate the
 | C6    | demote `ExtensionRegistry.getAgent`/`getModelCapability` to pure helpers | `registry.ts`, `tool-runner.ts`, `turn-helpers.ts`, `agent-loop.behavior.ts` |
 | C7.1  | actor commandId in TerminateBranch/GetQueue/GetState primaryKey          | `runtime/agent/agent-loop.actor.ts`                                          |
 | C7.2  | unify enqueueMessage handle-access                                       | `runtime/agent/agent-loop.actor.ts`                                          |
-| C7.3  | Steer send+waitFor parity with respondInteraction                        | `runtime/session-runtime.ts`                                                 |
+| C7.3  | SUPERSEDED — Steer semantics are correctly fire-forget; no change needed | —                                                                            |
 | C8.1  | `session-pubsub-registry.ts` `Map` → `TxRef<HashMap>`                    | `domain/session-pubsub-registry.ts`, callers                                 |
 | C8.2  | `executor/controller.ts` `SubscriptionRef` → `TxSubscriptionRef`         | `extensions/src/executor/controller.ts`                                      |
 | C8.3  | `file-lock.ts` `Ref<Map>` → `TxRef<HashMap<string, TxSemaphore>>`        | `domain/file-lock.ts`                                                        |

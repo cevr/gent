@@ -609,11 +609,12 @@ const buildAgentLoopActorHandlers = (config: {
           )
 
     // Both call sites supply an already-resolved `handle`:
-    //   - the reentrant callback wired into `makeAgentLoopBehavior` (`openLoop`)
-    //     hands back the just-created handle (no `ensureStarted` round trip
-    //     needed; we are inside the build).
+    //   - the reentrant callback wired into `makeAgentLoopBehavior` reads
+    //     `reentrantHandle` lazily — the callback fires during turn
+    //     execution (well after `openLoop` published `handleRef`), so the
+    //     read is provably safe by then.
     //   - the `QueueFollowUp` mailbox handler resolves it via `ensureStarted`.
-    // Taking it as a parameter eliminates the `currentHandle` fallback path
+    // Taking it as a parameter eliminates the implicit two-step contract
     // that previously bypassed `ensureStarted` for non-reentrant callers.
     const enqueueMessage = Effect.fn("AgentLoopActor.enqueueMessage")(function* (
       handle: AgentLoopBehavior,
