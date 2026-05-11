@@ -15,7 +15,7 @@
  * @module
  */
 
-import { Context, Effect, Schema } from "effect"
+import { Context, type Effect, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import {
   type CapabilityCoreContext,
@@ -24,7 +24,6 @@ import {
 import { ToolId, type ToolCallId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
-import { ExtensionContext, type ExtensionContextService } from "../extension-services.js"
 
 const ToolCapabilityBrand: unique symbol = Symbol("@gent/core/ToolCapability")
 declare const ToolCapabilityType: unique symbol
@@ -47,13 +46,8 @@ export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unk
   readonly interactive?: boolean
   readonly permissionRules?: ReadonlyArray<PermissionRule>
   readonly prompt?: PromptSection
-  readonly effect: (input: unknown, ctx: ToolCoreContext) => Effect.Effect<Output, Error, never>
+  readonly effect: (input: unknown) => Effect.Effect<Output, Error, never>
 }
-
-const isExtensionContextService = (
-  ctx: ToolCoreContext,
-): ctx is ToolCoreContext & ExtensionContextService =>
-  "Agent" in ctx && "Session" in ctx && "Interaction" in ctx && "Process" in ctx
 
 export const GentToolMetadataTag = Context.Reference<GentToolMetadata | undefined>(
   "@gent/core/src/domain/capability/tool/GentToolMetadata",
@@ -210,14 +204,11 @@ export const tool = <
     ...(input.interactive !== undefined ? { interactive: input.interactive } : {}),
     ...(input.permissionRules !== undefined ? { permissionRules: input.permissionRules } : {}),
     ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
-    effect: (params, ctx) => {
+    effect: (params) => {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
-      const effect = input.execute(params as Schema.Schema.Type<Params>)
-      const provided = isExtensionContextService(ctx)
-        ? effect.pipe(Effect.provideService(ExtensionContext, ctx))
-        : effect
+      const decoded = params as Schema.Schema.Type<Params>
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- factory erases author service requirements; runtime provides them at execution boundaries.
-      return provided as Effect.Effect<Schema.Schema.Type<Output>, Error, never>
+      return input.execute(decoded) as Effect.Effect<Schema.Schema.Type<Output>, Error, never>
     },
   }
 

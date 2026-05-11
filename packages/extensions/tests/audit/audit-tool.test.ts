@@ -14,7 +14,7 @@ import {
   type TestToolContext,
 } from "@gent/core-internal/test-utils/extension-harness"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
@@ -95,7 +95,8 @@ describe("Audit Tool", () => {
       })
 
       return narrowR(
-        getToolEffect(AuditTool)(
+        runToolWithCtx(
+          AuditTool,
           {
             prompt: "check error handling",
             paths: ["src/foo.ts", "src/bar.ts"],
@@ -151,7 +152,7 @@ describe("Audit Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(AuditTool)({ paths: ["src/db.ts"], mode: "report" }, ctx).pipe(
+      runToolWithCtx(AuditTool, { paths: ["src/db.ts"], mode: "report" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.findings.length).toBe(1)
           const executeCalls = calls.filter((c) => c.prompt.includes("Execute this audit plan"))
@@ -168,7 +169,7 @@ describe("Audit Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(AuditTool)({ paths: ["src/clean.ts"], mode: "fix" }, ctx).pipe(
+      runToolWithCtx(AuditTool, { paths: ["src/clean.ts"], mode: "fix" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.findings.length).toBe(0)
           expect(result.output).toBe("No findings to fix.")
@@ -201,7 +202,7 @@ describe("Audit Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(AuditTool)({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
+      runToolWithCtx(AuditTool, { paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
         Effect.map(() => {
           expect(executorAgents.length).toBeGreaterThan(0)
           expect(executorAgents[0]).toBe("cowork")
@@ -234,7 +235,7 @@ describe("Audit Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(AuditTool)({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
+      runToolWithCtx(AuditTool, { paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
         Effect.map(() => {
           expect(auditOverrides.length).toBeGreaterThan(0)
           for (const overrides of auditOverrides) {

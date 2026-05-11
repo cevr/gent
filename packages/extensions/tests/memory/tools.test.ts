@@ -19,7 +19,7 @@ import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 
 const memoryToolTest = it.scopedLive.layer(
   Layer.mergeAll(BunFileSystem.layer, Path.layer, BunGentPlatformLive),
@@ -69,7 +69,8 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
       const cwd = "/some/active/repo"
       const expectedKey = yield* projectKeyOf(cwd)
       yield* runMemoryTool(
-        getToolEffect(MemoryRememberTool)(
+        runToolWithCtx(
+          MemoryRememberTool,
           {
             title: "Auto Key",
             content: "should land in project dir",
@@ -92,7 +93,8 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
       yield* runMemoryTool(
-        getToolEffect(MemoryRememberTool)(
+        runToolWithCtx(
+          MemoryRememberTool,
           {
             title: "Explicit Key",
             content: "uses provided key",
@@ -114,7 +116,8 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
       yield* runMemoryTool(
-        getToolEffect(MemoryRememberTool)(
+        runToolWithCtx(
+          MemoryRememberTool,
           {
             title: "Global Note",
             content: "no project key needed",
@@ -148,7 +151,8 @@ describe("MemoryForgetTool — auto-derived projectKey", () => {
       )
       expect(yield* fs.exists(file)).toBe(true)
       yield* runMemoryTool(
-        getToolEffect(MemoryForgetTool)(
+        runToolWithCtx(
+          MemoryForgetTool,
           { title: "To Remove", scope: "project" },
           makeCtx(cwd, tmpDir),
         ),

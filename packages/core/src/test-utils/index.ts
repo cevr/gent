@@ -309,6 +309,7 @@ export {
 // Extension tool test helpers
 export {
   createToolTestLayer,
+  runToolWithCtx,
   testToolContext,
   type ToolTestLayerConfig,
 } from "./extension-harness.js"

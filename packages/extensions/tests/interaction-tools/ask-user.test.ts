@@ -5,7 +5,7 @@ import { narrowR } from "../../../core/tests/helpers/effect"
 import { AskUserTool } from "../../src/interaction-tools/ask-user.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 
 const makeCtx = (
   decision: Effect.Effect<{ readonly approved: boolean; readonly notes?: string }>,
@@ -36,7 +36,8 @@ describe("AskUser Tool", () => {
   it.live("asks questions and returns answers", () => {
     const { ctx } = makeCtx(Effect.succeed({ approved: true, notes: "Option A" }))
 
-    return getToolEffect(AskUserTool)(
+    return runToolWithCtx(
+      AskUserTool,
       {
         questions: [
           {
@@ -63,7 +64,8 @@ describe("AskUser Tool", () => {
   it.live("cancel returns cancelled flag with empty answers", () => {
     const { ctx } = makeCtx(Effect.succeed({ approved: false }))
 
-    return getToolEffect(AskUserTool)(
+    return runToolWithCtx(
+      AskUserTool,
       {
         questions: [
           {

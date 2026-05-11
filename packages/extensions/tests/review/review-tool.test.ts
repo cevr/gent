@@ -11,7 +11,7 @@ import {
 import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
@@ -67,7 +67,8 @@ describe("ReviewTool", () => {
     })
 
     return narrowR(
-      getToolEffect(ReviewTool)(
+      runToolWithCtx(
+        ReviewTool,
         { description: "refactored auth module", content: "diff --git a/auth.ts b/auth.ts" },
         ctx,
       ).pipe(
@@ -113,7 +114,7 @@ describe("ReviewTool", () => {
     })
 
     return narrowR(
-      getToolEffect(ReviewTool)({ description: "test", content: "fake diff" }, ctx).pipe(
+      runToolWithCtx(ReviewTool, { description: "test", content: "fake diff" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.comments.length).toBe(1)
           expect(result.comments[0]!.severity).toBe("high")
@@ -138,7 +139,7 @@ describe("ReviewTool", () => {
     })
 
     return narrowR(
-      getToolEffect(ReviewTool)({ description: "test", content: "fake diff" }, ctx).pipe(
+      runToolWithCtx(ReviewTool, { description: "test", content: "fake diff" }, ctx).pipe(
         Effect.flip,
         Effect.map((error) => {
           expect(error._tag).toBe("ReviewError")
@@ -188,7 +189,8 @@ describe("ReviewTool", () => {
     })
 
     return narrowR(
-      getToolEffect(ReviewTool)(
+      runToolWithCtx(
+        ReviewTool,
         { description: "test", content: "fake diff", mode: "fix" },
         ctx,
       ).pipe(
@@ -226,7 +228,7 @@ describe("ReviewTool", () => {
     })
 
     return narrowR(
-      getToolEffect(ReviewTool)({ description: "test", content: "fake diff" }, ctx).pipe(
+      runToolWithCtx(ReviewTool, { description: "test", content: "fake diff" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.session).toBeUndefined()
         }),

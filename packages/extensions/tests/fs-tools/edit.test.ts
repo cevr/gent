@@ -10,7 +10,7 @@ import {
   EditTool,
 } from "../../src/fs-tools/edit.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 describe("detectRedaction", () => {
   test("clean replacement → undefined", () => {
     expect(detectRedaction("old code", "new code")).toBeUndefined()
@@ -110,7 +110,8 @@ describe("EditTool execution", () => {
       const filePath = path.join(dir, "test.txt")
       yield* fs.writeFileString(filePath, "hello world\ngoodbye world\n")
       const result = yield* narrowR(
-        getToolEffect(EditTool)(
+        runToolWithCtx(
+          EditTool,
           { path: filePath, oldString: "hello world", newString: "hi there" },
           stubCtx,
         ).pipe(Effect.provide(editLayer)),
@@ -129,7 +130,8 @@ describe("EditTool execution", () => {
       const filePath = path.join(dir, "test.txt")
       yield* fs.writeFileString(filePath, "foo bar foo baz foo\n")
       const result = yield* narrowR(
-        getToolEffect(EditTool)(
+        runToolWithCtx(
+          EditTool,
           { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
           stubCtx,
         ).pipe(Effect.provide(editLayer)),
@@ -148,7 +150,8 @@ describe("EditTool execution", () => {
       yield* fs.writeFileString(filePath, "hello world\n")
       const exit = yield* narrowR(
         Effect.exit(
-          getToolEffect(EditTool)(
+          runToolWithCtx(
+            EditTool,
             { path: filePath, oldString: "not here", newString: "replaced" },
             stubCtx,
           ).pipe(Effect.provide(editLayer)),
@@ -166,7 +169,8 @@ describe("EditTool execution", () => {
       yield* fs.writeFileString(filePath, "foo bar foo\n")
       const exit = yield* narrowR(
         Effect.exit(
-          getToolEffect(EditTool)(
+          runToolWithCtx(
+            EditTool,
             { path: filePath, oldString: "foo", newString: "baz" },
             stubCtx,
           ).pipe(Effect.provide(editLayer)),
@@ -183,7 +187,8 @@ describe("EditTool execution", () => {
       const filePath = path.join(dir, "test.txt")
       yield* fs.writeFileString(filePath, "line1\nline2\n")
       const result = yield* narrowR(
-        getToolEffect(EditTool)(
+        runToolWithCtx(
+          EditTool,
           { path: filePath, oldString: "line1\\nline2", newString: "merged" },
           stubCtx,
         ).pipe(Effect.provide(editLayer)),

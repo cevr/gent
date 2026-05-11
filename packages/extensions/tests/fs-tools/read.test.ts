@@ -5,7 +5,7 @@ import { ReadTool } from "../../src/fs-tools/read.js"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 
 const ctx = testToolContext({
   sessionId: SessionId.make("test-session"),
@@ -35,7 +35,7 @@ describe("ReadTool", () => {
       const testFile = `${tmpDir}/test.txt`
       yield* fs.writeFileString(testFile, "Hello, World!")
 
-      const result = yield* getToolEffect(ReadTool)({ path: testFile }, ctx)
+      const result = yield* runToolWithCtx(ReadTool, { path: testFile }, ctx)
       expect(result.content).toBe("1\tHello, World!")
     }),
   )
@@ -43,7 +43,7 @@ describe("ReadTool", () => {
   readTest("returns error for non-existent file", () =>
     Effect.gen(function* () {
       const result = yield* Effect.result(
-        getToolEffect(ReadTool)({ path: "/nonexistent/file.txt" }, ctx),
+        runToolWithCtx(ReadTool, { path: "/nonexistent/file.txt" }, ctx),
       )
       expect(result._tag).toBe("Failure")
     }),
@@ -54,7 +54,7 @@ describe("ReadTool", () => {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
 
-      const result = yield* Effect.result(getToolEffect(ReadTool)({ path: tmpDir }, ctx))
+      const result = yield* Effect.result(runToolWithCtx(ReadTool, { path: tmpDir }, ctx))
       expect(result._tag).toBe("Failure")
       if (result._tag === "Failure") {
         expect(result.failure.message).toContain("Cannot read directory")

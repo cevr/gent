@@ -2,7 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { DelegateTool } from "../../src/delegate/delegate-tool.js"
 import { AgentName } from "@gent/core-internal/domain/agent"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 import { layer, makeCtx, narrowR, setup, withTodoWrite } from "../todo/helpers.js"
 
 describe("DelegateTool background mode", () => {
@@ -11,7 +11,8 @@ describe("DelegateTool background mode", () => {
       Effect.gen(function* () {
         yield* setup
         const ctx = yield* makeCtx
-        const result = yield* getToolEffect(DelegateTool)(
+        const result = yield* runToolWithCtx(
+          DelegateTool,
           {
             agent: AgentName.make("explore"),
             todo: "analyze the codebase",

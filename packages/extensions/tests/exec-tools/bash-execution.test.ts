@@ -8,7 +8,7 @@ import {
 } from "../../src/exec-tools/bash-storage.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 import {
   testToolContext,
   type TestToolContext,
@@ -107,7 +107,7 @@ describe("BashTool execution", () => {
       withProcessTimeout(
         Effect.gen(function* () {
           const result = yield* provideBun(
-            getToolEffect(BashTool)({ command: "echo hello" }, stubCtx),
+            runToolWithCtx(BashTool, { command: "echo hello" }, stubCtx),
           )
 
           expect(result.stdout.trim()).toBe("hello")
@@ -122,7 +122,7 @@ describe("BashTool execution", () => {
     () =>
       withProcessTimeout(
         Effect.gen(function* () {
-          const result = yield* provideBun(getToolEffect(BashTool)({ command: "exit 2" }, stubCtx))
+          const result = yield* provideBun(runToolWithCtx(BashTool, { command: "exit 2" }, stubCtx))
 
           expect(result.exitCode).toBe(2)
         }),
@@ -136,7 +136,7 @@ describe("BashTool execution", () => {
       withProcessTimeout(
         Effect.gen(function* () {
           const result = yield* provideBun(
-            getToolEffect(BashTool)({ command: "pwd", cwd: "/tmp" }, stubCtx),
+            runToolWithCtx(BashTool, { command: "pwd", cwd: "/tmp" }, stubCtx),
           )
 
           expect(result.stdout.trim()).toMatch(/\/tmp$/)
@@ -152,7 +152,7 @@ describe("BashTool execution", () => {
       withProcessTimeout(
         Effect.gen(function* () {
           const result = yield* provideBun(
-            getToolEffect(BashTool)({ command: "cd /tmp && pwd" }, stubCtx),
+            runToolWithCtx(BashTool, { command: "cd /tmp && pwd" }, stubCtx),
           )
 
           expect(result.stdout.trim()).toMatch(/\/tmp$/)
@@ -189,7 +189,8 @@ describe("BashTool execution", () => {
               ]),
             queueFollowUp: (params) => Deferred.succeed(sent, params),
           })
-          const result = yield* getToolEffect(BashTool)(
+          const result = yield* runToolWithCtx(
+            BashTool,
             { command: "printf background-finished", run_in_background: true },
             ctx,
           )
@@ -235,7 +236,8 @@ describe("BashTool execution", () => {
           })
           const scope = yield* Scope.make()
           const context = yield* Layer.buildWithScope(makePlatformLayer(), scope)
-          const result = yield* getToolEffect(BashTool)(
+          const result = yield* runToolWithCtx(
+            BashTool,
             { command: "sleep 2; printf should-not-arrive", run_in_background: true },
             ctx,
           ).pipe(Effect.provideContext(context))
@@ -265,7 +267,8 @@ describe("BashTool execution", () => {
             queueFollowUp: (params) => Deferred.succeed(sent, params),
           })
 
-          const result = yield* getToolEffect(BashTool)(
+          const result = yield* runToolWithCtx(
+            BashTool,
             { command: "printf stale-session", run_in_background: true },
             ctx,
           ).pipe(provideBun)
@@ -339,7 +342,8 @@ describe("BashTool execution", () => {
             ),
           )
 
-          const retried = yield* getToolEffect(BashTool)(
+          const retried = yield* runToolWithCtx(
+            BashTool,
             { command: "printf should-not-run", run_in_background: true },
             ctx,
           ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
@@ -392,7 +396,8 @@ describe("BashTool execution", () => {
             `/tmp/gent-background-bash-failure-${millis}.db`,
           ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
 
-          const result = yield* getToolEffect(BashTool)(
+          const result = yield* runToolWithCtx(
+            BashTool,
             {
               command: "printf should-not-run",
               cwd: "/tmp/gent-missing-cwd",
@@ -448,7 +453,8 @@ describe("BashTool execution", () => {
           ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
           const processLayer = makeProcessLayer(storageLayer)
           const firstContext = yield* Layer.buildWithScope(processLayer, scope)
-          const started = yield* getToolEffect(BashTool)(
+          const started = yield* runToolWithCtx(
+            BashTool,
             { command: "sleep 2; printf should-not-arrive", run_in_background: true },
             ctx,
           ).pipe(Effect.provideContext(firstContext))
@@ -460,7 +466,8 @@ describe("BashTool execution", () => {
             yield* storage.reconcileInterrupted()
           }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))))
 
-          const retried = yield* getToolEffect(BashTool)(
+          const retried = yield* runToolWithCtx(
+            BashTool,
             { command: "printf should-not-run", run_in_background: true },
             ctx,
           ).pipe(Effect.provide(makeProcessLayer(storageLayer)))

@@ -17,9 +17,11 @@ import type { GentPlatform } from "../runtime/gent-platform.js"
 import { type ExtensionContributions } from "../domain/contribution.js"
 import type { ToolCapability } from "../domain/capability/tool.js"
 import {
+  ExtensionContext,
   ExtensionServiceError,
   type ExtensionContextService,
 } from "../domain/extension-services.js"
+import { getToolEffect } from "../domain/capability/tool.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
@@ -313,3 +315,17 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
     ...overrides,
   }
 }
+
+/**
+ * Test-only adapter for invoking a tool's effect with a wired
+ * `ExtensionContext`. Production wraps tool execution in
+ * `provideExtensionServices`; tests provide the service directly so mocks
+ * stay observable. Keep this helper test-only — production code never wires
+ * `ExtensionContext` at the tool boundary.
+ */
+export const runToolWithCtx = <Input, Output, Error>(
+  tool: ToolCapability<Input, Output, Error>,
+  input: Input,
+  ctx: ExtensionContextService,
+): Effect.Effect<Output, Error, never> =>
+  getToolEffect(tool)(input).pipe(Effect.provideService(ExtensionContext, ctx))

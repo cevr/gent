@@ -5,7 +5,7 @@ import { WriteTool } from "../../src/fs-tools/write.js"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 
 const ctx = testToolContext({
   sessionId: SessionId.make("test-session"),
@@ -33,7 +33,8 @@ describe("WriteTool", () => {
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       const filePath = `${tmpDir}/new-file.txt`
 
-      const result = yield* getToolEffect(WriteTool)(
+      const result = yield* runToolWithCtx(
+        WriteTool,
         { path: filePath, content: "Hello, World!" },
         ctx,
       )
@@ -52,7 +53,7 @@ describe("WriteTool", () => {
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       const filePath = `${tmpDir}/nested/dir/file.txt`
 
-      yield* getToolEffect(WriteTool)({ path: filePath, content: "nested" }, ctx)
+      yield* runToolWithCtx(WriteTool, { path: filePath, content: "nested" }, ctx)
 
       const written = yield* fs.readFileString(filePath)
       expect(written).toBe("nested")
@@ -66,7 +67,7 @@ describe("WriteTool", () => {
       const filePath = `${tmpDir}/existing.txt`
       yield* fs.writeFileString(filePath, "original content")
 
-      yield* getToolEffect(WriteTool)({ path: filePath, content: "replaced" }, ctx)
+      yield* runToolWithCtx(WriteTool, { path: filePath, content: "replaced" }, ctx)
 
       const written = yield* fs.readFileString(filePath)
       expect(written).toBe("replaced")

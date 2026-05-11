@@ -10,7 +10,7 @@ import {
 } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 
 const makeCtx = (overrides: {
   agentRun?: (
@@ -49,7 +49,7 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(DelegateTool)({ agent: AgentName.make("explore"), todo: "hello" }, ctx).pipe(
+      runToolWithCtx(DelegateTool, { agent: AgentName.make("explore"), todo: "hello" }, ctx).pipe(
         Effect.map((result) => {
           if (!("output" in result) || result.output === undefined) {
             throw new Error("expected delegate output")
@@ -77,7 +77,7 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(DelegateTool)({ agent: AgentName.make("cowork"), todo: "hello" }, ctx).pipe(
+      runToolWithCtx(DelegateTool, { agent: AgentName.make("cowork"), todo: "hello" }, ctx).pipe(
         Effect.map((result) => {
           if (!("output" in result) || result.output === undefined) {
             throw new Error("expected delegate output")
@@ -106,7 +106,8 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(DelegateTool)(
+      runToolWithCtx(
+        DelegateTool,
         {
           chain: [
             { agent: AgentName.make("explore"), todo: "first" },
@@ -142,7 +143,8 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(DelegateTool)(
+      runToolWithCtx(
+        DelegateTool,
         {
           todos: [
             { agent: AgentName.make("explore"), todo: "a" },
@@ -180,7 +182,7 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(DelegateTool)({ agent: AgentName.make("explore"), todo: "go" }, ctx).pipe(
+      runToolWithCtx(DelegateTool, { agent: AgentName.make("explore"), todo: "go" }, ctx).pipe(
         Effect.map(() => {
           expect(capturedRunSpec?.persistence).toBe("ephemeral")
         }),
@@ -205,7 +207,8 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(DelegateTool)(
+      runToolWithCtx(
+        DelegateTool,
         {
           chain: [
             { agent: AgentName.make("explore"), todo: "a" },
@@ -239,7 +242,8 @@ describe("Delegate Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(DelegateTool)(
+      runToolWithCtx(
+        DelegateTool,
         {
           todos: [
             { agent: AgentName.make("explore"), todo: "a" },

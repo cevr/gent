@@ -3,7 +3,7 @@ import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GrepTool } from "../../src/fs-tools/grep.js"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 import {
   makeTestCtxWithFileIndex,
   TestExtensionContextWithFileIndex,
@@ -34,7 +34,7 @@ describe("GrepTool", () => {
       yield* fs.writeFileString(`${tmpDir}/file2.ts`, "const bar = 2")
       yield* fs.writeFileString(`${tmpDir}/file3.ts`, "const foo = 3")
 
-      const result = yield* getToolEffect(GrepTool)({ pattern: "foo", path: tmpDir }, ctx)
+      const result = yield* runToolWithCtx(GrepTool, { pattern: "foo", path: tmpDir }, ctx)
       expect(result.matches.length).toBe(2)
     }).pipe(Effect.provide(ToolLayer)),
   )
@@ -47,7 +47,8 @@ describe("GrepTool", () => {
       yield* fs.writeFileString(`${tmpDir}/file1.ts`, "const foo = 1")
       yield* fs.writeFileString(`${tmpDir}/file2.js`, "const foo = 2")
 
-      const result = yield* getToolEffect(GrepTool)(
+      const result = yield* runToolWithCtx(
+        GrepTool,
         { pattern: "foo", path: tmpDir, glob: "*.ts" },
         ctx,
       )
@@ -63,7 +64,8 @@ describe("GrepTool", () => {
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${tmpDir}/target.ts`, "hello\nworld\nhello again")
 
-      const result = yield* getToolEffect(GrepTool)(
+      const result = yield* runToolWithCtx(
+        GrepTool,
         { pattern: "hello", path: `${tmpDir}/target.ts` },
         ctx,
       )

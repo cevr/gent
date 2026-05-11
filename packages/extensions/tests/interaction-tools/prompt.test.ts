@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
 import { PromptTool } from "../../src/interaction-tools/prompt.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 
 describe("Prompt Tool", () => {
   it.live("review mode: writes content and returns decision", () => {
@@ -20,7 +20,7 @@ describe("Prompt Tool", () => {
     const ctx = testToolContext({ Interaction: interaction })
 
     return narrowR(
-      getToolEffect(PromptTool)({ mode: "review", content: "## Plan\\n- Step 1" }, ctx).pipe(
+      runToolWithCtx(PromptTool, { mode: "review", content: "## Plan\\n- Step 1" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.mode).toBe("review")
           if (result.mode === "review") {
@@ -42,7 +42,7 @@ describe("Prompt Tool", () => {
     const ctx = testToolContext({ Interaction: interaction })
 
     return narrowR(
-      getToolEffect(PromptTool)({ mode: "confirm", content: "Proceed?" }, ctx).pipe(
+      runToolWithCtx(PromptTool, { mode: "confirm", content: "Proceed?" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.mode).toBe("confirm")
           if (result.mode === "confirm") {
@@ -63,7 +63,7 @@ describe("Prompt Tool", () => {
     const ctx = testToolContext({ Interaction: interaction })
 
     return narrowR(
-      getToolEffect(PromptTool)({ mode: "present", content: "Info" }, ctx).pipe(
+      runToolWithCtx(PromptTool, { mode: "present", content: "Info" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.mode).toBe("present")
           if (result.mode === "present") {

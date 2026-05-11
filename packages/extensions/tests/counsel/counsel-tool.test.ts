@@ -4,7 +4,7 @@ import { narrowR } from "../../../core/tests/helpers/effect"
 import { CounselTool } from "../../src/counsel/counsel-tool.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { AgentRunResult, SessionId, type ExtensionContextService } from "@gent/core/extensions/api"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
 
 const makeCtx = (overrides: {
@@ -40,7 +40,7 @@ describe("CounselTool", () => {
     })
 
     return narrowR(
-      getToolEffect(CounselTool)({ prompt: "Is this approach sound?" }, ctx).pipe(
+      runToolWithCtx(CounselTool, { prompt: "Is this approach sound?" }, ctx).pipe(
         Effect.map((result) => {
           expect(capturedPrompt).toContain("Is this approach sound?")
           expect(capturedOverrides?.["modelId"]).toBe("openai/gpt-5.4")
@@ -76,7 +76,7 @@ describe("CounselTool", () => {
     })
 
     return narrowR(
-      getToolEffect(CounselTool)({ prompt: "Review this architecture", mode: "deep" }, ctx).pipe(
+      runToolWithCtx(CounselTool, { prompt: "Review this architecture", mode: "deep" }, ctx).pipe(
         Effect.map((result) => {
           expect(capturedOverrides?.["modelId"]).toBe("openai/gpt-5.4")
           expect(capturedOverrides?.["reasoningEffort"]).toBe("high")
@@ -113,7 +113,8 @@ describe("CounselTool", () => {
     })
 
     return narrowR(
-      getToolEffect(CounselTool)(
+      runToolWithCtx(
+        CounselTool,
         { prompt: "Is this safe?", context: "We removed the auth middleware" },
         ctx,
       ).pipe(
@@ -137,7 +138,7 @@ describe("CounselTool", () => {
     })
 
     return narrowR(
-      getToolEffect(CounselTool)({ prompt: "help" }, ctx).pipe(
+      runToolWithCtx(CounselTool, { prompt: "help" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.error).toBe("Model unavailable")
         }),
@@ -164,7 +165,7 @@ describe("CounselTool", () => {
     })
 
     return narrowR(
-      getToolEffect(CounselTool)({ prompt: "thoughts?" }, ctx).pipe(
+      runToolWithCtx(CounselTool, { prompt: "thoughts?" }, ctx).pipe(
         Effect.map(() => {
           expect(capturedAgent?.name).toBe("counsel-worker")
           expect(capturedRunPersistence).toBe("ephemeral")

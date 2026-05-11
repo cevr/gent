@@ -3,7 +3,7 @@ import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GlobTool } from "../../src/fs-tools/glob.js"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 import {
   makeTestCtxWithFileIndex,
   TestExtensionContextWithFileIndex,
@@ -34,7 +34,7 @@ describe("GlobTool", () => {
       yield* fs.writeFileString(`${tmpDir}/b.ts`, "")
       yield* fs.writeFileString(`${tmpDir}/c.js`, "")
 
-      const result = yield* getToolEffect(GlobTool)({ pattern: "*.ts", path: tmpDir }, ctx)
+      const result = yield* runToolWithCtx(GlobTool, { pattern: "*.ts", path: tmpDir }, ctx)
       expect(result.files.length).toBe(2)
       expect(result.files.every((f: string) => f.endsWith(".ts"))).toBe(true)
     }).pipe(Effect.provide(ToolLayer)),
@@ -49,7 +49,8 @@ describe("GlobTool", () => {
         yield* fs.writeFileString(`${tmpDir}/file${i}.ts`, "")
       }
 
-      const result = yield* getToolEffect(GlobTool)(
+      const result = yield* runToolWithCtx(
+        GlobTool,
         { pattern: "*.ts", path: tmpDir, limit: 2 },
         ctx,
       )
@@ -68,7 +69,7 @@ describe("GlobTool", () => {
       yield* fs.utimes(`${tmpDir}/old.ts`, 1_000, 1_000)
       yield* fs.utimes(`${tmpDir}/new.ts`, 2_000, 2_000)
 
-      const result = yield* getToolEffect(GlobTool)({ pattern: "*.ts", path: tmpDir }, ctx)
+      const result = yield* runToolWithCtx(GlobTool, { pattern: "*.ts", path: tmpDir }, ctx)
       expect(result.files.length).toBe(2)
       expect(result.files[0]).toContain("new.ts")
       expect(result.files[1]).toContain("old.ts")

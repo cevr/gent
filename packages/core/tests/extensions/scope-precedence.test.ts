@@ -21,8 +21,7 @@ import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { PermissionRule } from "@gent/core-internal/domain/permission"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
-import { testExtensionHostContext } from "@gent/core-internal/test-utils"
+import { runToolWithCtx, testExtensionHostContext } from "@gent/core-internal/test-utils"
 import type { AgentDefinition } from "@gent/core-internal/domain/agent"
 import { AgentName } from "@gent/core-internal/domain/agent"
 
@@ -83,7 +82,7 @@ describe("scope precedence", () => {
         never
       >
       return narrowR(
-        getToolEffect(resolvedTool)({}, {} as never).pipe(
+        runToolWithCtx(resolvedTool, {}, {} as never).pipe(
           Effect.orDie,
           Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-project"))),
         ),
@@ -204,7 +203,7 @@ describe("scope precedence", () => {
         never
       >
       return narrowR(
-        getToolEffect(resolvedTool)({}, {} as never).pipe(
+        runToolWithCtx(resolvedTool, {}, {} as never).pipe(
           Effect.orDie,
           Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-z"))),
         ),

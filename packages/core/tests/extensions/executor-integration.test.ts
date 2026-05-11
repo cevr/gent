@@ -10,7 +10,11 @@ import { describe, expect, it } from "effect-bun-test"
 import { Context, Deferred, Effect, Layer } from "effect"
 import { narrowR } from "../helpers/effect"
 import { BunServices } from "@effect/platform-bun"
-import { testExtensionHostContext, testSetupCtx } from "@gent/core-internal/test-utils"
+import {
+  runToolWithCtx,
+  testExtensionHostContext,
+  testSetupCtx,
+} from "@gent/core-internal/test-utils"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
@@ -42,7 +46,6 @@ import { defineResource } from "@gent/core-internal/domain/contribution"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import { AgentName } from "@gent/core-internal/domain/agent"
@@ -175,7 +178,7 @@ describe("Executor tools", () => {
       })
       const ctx = makeToolCtx()
       const result = yield* narrowR(
-        getToolEffect(ExecuteTool)({ code: "tools.search({ query: 'api' })" }, ctx).pipe(
+        runToolWithCtx(ExecuteTool, { code: "tools.search({ query: 'api' })" }, ctx).pipe(
           Effect.provide(makeToolLayer(bridgeLayer, readySnapshot)),
         ),
       )
@@ -191,7 +194,7 @@ describe("Executor tools", () => {
       const ctx = makeToolCtx()
       const exit = yield* Effect.exit(
         narrowR(
-          getToolEffect(ExecuteTool)({ code: "bad()" }, ctx).pipe(
+          runToolWithCtx(ExecuteTool, { code: "bad()" }, ctx).pipe(
             Effect.provide(makeToolLayer(bridgeLayer, readySnapshot)),
           ),
         ),
@@ -207,7 +210,7 @@ describe("Executor tools", () => {
       const ctx = makeToolCtx()
       const exit = yield* Effect.exit(
         narrowR(
-          getToolEffect(ExecuteTool)({ code: "x" }, ctx).pipe(
+          runToolWithCtx(ExecuteTool, { code: "x" }, ctx).pipe(
             Effect.provide(makeToolLayer(bridgeLayer, notReadySnapshot)),
           ),
         ),
@@ -222,7 +225,7 @@ describe("Executor tools", () => {
       })
       const ctx = makeToolCtx()
       const result = yield* narrowR(
-        getToolEffect(ExecuteTool)({ code: "api.call()" }, ctx).pipe(
+        runToolWithCtx(ExecuteTool, { code: "api.call()" }, ctx).pipe(
           Effect.provide(makeToolLayer(bridgeLayer, readySnapshot)),
         ),
       )
@@ -245,7 +248,8 @@ describe("Executor tools", () => {
       })
       const ctx = makeToolCtx()
       yield* narrowR(
-        getToolEffect(ResumeTool)(
+        runToolWithCtx(
+          ResumeTool,
           {
             executionId: "exec-1",
             action: "accept" as "accept" | "decline" | "cancel",
@@ -268,7 +272,8 @@ describe("Executor tools", () => {
       const ctx = makeToolCtx()
       const exit = yield* Effect.exit(
         narrowR(
-          getToolEffect(ResumeTool)(
+          runToolWithCtx(
+            ResumeTool,
             {
               executionId: "exec-1",
               action: "accept" as "accept" | "decline" | "cancel",
@@ -289,7 +294,8 @@ describe("Executor tools", () => {
       const ctx = makeToolCtx()
       const exit = yield* Effect.exit(
         narrowR(
-          getToolEffect(ResumeTool)(
+          runToolWithCtx(
+            ResumeTool,
             {
               executionId: "exec-1",
               action: "decline" as "accept" | "decline" | "cancel",

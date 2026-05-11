@@ -6,8 +6,7 @@ import { HandoffCooldown, HandoffExtension } from "../src/handoff.js"
 import { AgentRunResult, SessionId, type ExtensionContextService } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "./helpers/builtin-agents.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { testSetupCtx } from "@gent/core-internal/test-utils"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx, testSetupCtx } from "@gent/core-internal/test-utils"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
@@ -47,7 +46,8 @@ describe("HandoffTool", () => {
     })
 
     return narrowR(
-      getToolEffect(HandoffTool)(
+      runToolWithCtx(
+        HandoffTool,
         {
           context: "Current task: implement auth. Key files: src/auth.ts",
           reason: "context window filling up",
@@ -69,7 +69,8 @@ describe("HandoffTool", () => {
     })
 
     return narrowR(
-      getToolEffect(HandoffTool)(
+      runToolWithCtx(
+        HandoffTool,
         {
           context: "Current task: implement auth",
         },

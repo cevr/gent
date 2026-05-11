@@ -15,7 +15,7 @@ import {
   testToolContext,
   type TestToolContext,
 } from "@gent/core-internal/test-utils/extension-harness"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 
 // Tool execution now flows through Gent metadata on the native Effect tool.
 // Tests provide everything via ctx; narrow R for it.live compatibility.
@@ -95,7 +95,7 @@ describe("Plan Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(PlanTool)({ prompt: "implement caching" }, ctx).pipe(
+      runToolWithCtx(PlanTool, { prompt: "implement caching" }, ctx).pipe(
         Effect.map((result) => {
           // 2 parallel plans + 2 cross-reviews + 2 incorporations + 1 synthesis = 7 subagent calls
           expect(calls.length).toBe(7)
@@ -140,7 +140,8 @@ describe("Plan Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(PlanTool)(
+      runToolWithCtx(
+        PlanTool,
         {
           prompt: "add auth",
           context: "Using JWT tokens",
@@ -171,7 +172,7 @@ describe("Plan Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(PlanTool)({ prompt: "refactor" }, ctx).pipe(
+      runToolWithCtx(PlanTool, { prompt: "refactor" }, ctx).pipe(
         Effect.map((result) => {
           expect(result.decision).toBe("no")
         }),
@@ -198,7 +199,7 @@ describe("Plan Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(PlanTool)({ prompt: "test" }, ctx).pipe(
+      runToolWithCtx(PlanTool, { prompt: "test" }, ctx).pipe(
         Effect.map(() => {
           // Should have at least 2 different models used
           const uniqueModels = new Set(models)
@@ -242,7 +243,7 @@ describe("Plan Tool", () => {
     })
 
     return narrowR(
-      getToolEffect(PlanTool)({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
+      runToolWithCtx(PlanTool, { prompt: "implement caching", mode: "fix" }, ctx).pipe(
         Effect.map((result) => {
           // Single cycle: plan phases + execute (no evaluator loop)
           expect(result.output).toBe("Executed batch 1 successfully.")

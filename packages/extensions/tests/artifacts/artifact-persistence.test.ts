@@ -23,7 +23,7 @@ import {
   type BranchId as BranchIdType,
   SessionId,
 } from "@gent/core-internal/domain/ids"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 import type { Artifact } from "../../src/artifacts-protocol.js"
 import { PlanTool } from "../../src/plan-tool.js"
 import { AuditTool } from "../../src/audit/audit-tool.js"
@@ -119,7 +119,7 @@ describe("PlanTool artifact persistence", () => {
     })
 
     return narrowR(
-      getToolEffect(PlanTool)({ prompt: "implement auth" }, ctx).pipe(
+      runToolWithCtx(PlanTool, { prompt: "implement auth" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls
           expect(saves.length).toBe(1)
@@ -153,7 +153,7 @@ describe("PlanTool artifact persistence", () => {
     })
 
     return narrowR(
-      getToolEffect(PlanTool)({ prompt: "implement auth" }, ctx).pipe(
+      runToolWithCtx(PlanTool, { prompt: "implement auth" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls
           expect(saves.length).toBe(1)
@@ -180,7 +180,7 @@ describe("PlanTool artifact persistence", () => {
     })
 
     return narrowR(
-      getToolEffect(PlanTool)({ prompt: "implement auth" }, ctx).pipe(
+      runToolWithCtx(PlanTool, { prompt: "implement auth" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls
           expect(saves.length).toBe(0)
@@ -200,7 +200,7 @@ describe("PlanTool artifact persistence", () => {
     })
 
     return narrowR(
-      getToolEffect(PlanTool)({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
+      runToolWithCtx(PlanTool, { prompt: "implement caching", mode: "fix" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls
           expect(saves.length).toBe(1)
@@ -233,7 +233,7 @@ describe("AuditTool artifact persistence", () => {
     })
 
     return narrowR(
-      getToolEffect(AuditTool)({ paths: ["src/auth.ts"], mode: "report" }, ctx).pipe(
+      runToolWithCtx(AuditTool, { paths: ["src/auth.ts"], mode: "report" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls
           expect(saves.length).toBe(1)
@@ -268,7 +268,7 @@ describe("ReviewTool artifact persistence", () => {
     })
 
     return narrowR(
-      getToolEffect(ReviewTool)({ content: "diff --git a/auth.ts b/auth.ts\n+code" }, ctx).pipe(
+      runToolWithCtx(ReviewTool, { content: "diff --git a/auth.ts b/auth.ts\n+code" }, ctx).pipe(
         Effect.map(() => {
           const saves = spy.calls
           expect(saves.length).toBe(1)

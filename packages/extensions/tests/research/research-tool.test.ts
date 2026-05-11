@@ -7,7 +7,7 @@ import { AgentRunResult, SessionId, type ExtensionContextService } from "@gent/c
 
 import { BunFileSystem } from "@effect/platform-bun"
 import { GitReader } from "../../src/librarian/index.js"
-import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
 
 const TEST_HOME = "/tmp/test-research-fixture"
@@ -55,7 +55,8 @@ describe("ResearchTool", () => {
 
     return narrowR(
       withRepoFixtures(
-        getToolEffect(ResearchTool)(
+        runToolWithCtx(
+          ResearchTool,
           { question: "How does Effect handle concurrency?", repos: ["effect-ts/effect"] },
           ctx,
         ),
@@ -101,7 +102,8 @@ describe("ResearchTool", () => {
 
     return narrowR(
       withRepoFixtures(
-        getToolEffect(ResearchTool)(
+        runToolWithCtx(
+          ResearchTool,
           {
             question: "Compare concurrency models",
             repos: ["effect-ts/effect", "zio/zio"],
@@ -138,7 +140,8 @@ describe("ResearchTool", () => {
 
     return narrowR(
       withRepoFixtures(
-        getToolEffect(ResearchTool)(
+        runToolWithCtx(
+          ResearchTool,
           {
             question: "How does the scheduler work?",
             repos: ["effect-ts/effect"],
@@ -159,7 +162,8 @@ describe("ResearchTool", () => {
   it.live("rejects empty repos", () =>
     narrowR(
       withRepoFixtures(
-        getToolEffect(ResearchTool)(
+        runToolWithCtx(
+          ResearchTool,
           { question: "test", repos: [] },
           makeCtx({ agentRun: () => Effect.die("unreachable") }),
         ),
@@ -175,7 +179,8 @@ describe("ResearchTool", () => {
   it.live("rejects too many repos", () =>
     narrowR(
       withRepoFixtures(
-        getToolEffect(ResearchTool)(
+        runToolWithCtx(
+          ResearchTool,
           { question: "test", repos: ["a/1", "a/2", "a/3", "a/4", "a/5", "a/6"] },
           makeCtx({ agentRun: () => Effect.die("unreachable") }),
         ),

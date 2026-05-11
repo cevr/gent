@@ -137,9 +137,7 @@ const makeExecutionToolkit = (params: {
           provideCapabilityContext(
             toolCtx,
             // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-            metadata
-              .effect(decodedInput, toolCtx)
-              .pipe(Effect.mapError(normalizeToolExecutionError)),
+            metadata.effect(decodedInput).pipe(Effect.mapError(normalizeToolExecutionError)),
           ),
         )
 
