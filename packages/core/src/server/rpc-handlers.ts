@@ -25,6 +25,8 @@ import { SessionRuntime } from "../runtime/session-runtime.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
 import { WideEvent, rpcBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
 import { BranchStorage } from "../storage/branch-storage.js"
+import { MessageStorage } from "../storage/message-storage.js"
+import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { ConnectionTracker } from "./connection-tracker.js"
 import { ExtensionProtocolError, NotFoundError } from "./errors.js"
@@ -205,6 +207,9 @@ const RpcHandlers = GentRpcs.toLayer(
     const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
     const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
     const sessionStorage = yield* SessionStorage
+    const branchStorage = yield* BranchStorage
+    const messageStorage = yield* MessageStorage
+    const relationshipStorage = yield* RelationshipStorage
     const connectionTrackerOpt = yield* Effect.serviceOption(ConnectionTracker)
     const connectionTracker =
       connectionTrackerOpt._tag === "Some" ? connectionTrackerOpt.value : undefined
@@ -215,7 +220,6 @@ const RpcHandlers = GentRpcs.toLayer(
     // request-time defects instead of layer-build failures.
     yield* RuntimeEnvironment
     yield* DriverRegistry
-    yield* BranchStorage
 
     const loadSession = (sessionId: string) =>
       sessionStorage
@@ -269,7 +273,7 @@ const RpcHandlers = GentRpcs.toLayer(
             withWideEvent(rpcBoundary("session.create", input.requestId)),
           ),
 
-      "session.list": () => queries.listSessions(),
+      "session.list": () => sessionStorage.listSessions(),
 
       "session.get": ({ sessionId }: SessionIdPayload) =>
         sessionStorage.getSession(sessionId).pipe(Effect.map((session) => session ?? null)),
@@ -281,7 +285,7 @@ const RpcHandlers = GentRpcs.toLayer(
         ),
 
       "session.getChildren": ({ parentSessionId }: ParentSessionPayload) =>
-        queries.getChildSessions(parentSessionId),
+        relationshipStorage.getChildSessions(parentSessionId),
 
       "session.getTree": ({ sessionId }: SessionIdPayload) => queries.getSessionTree(sessionId),
 
@@ -305,7 +309,7 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "session.watchRuntime": (input: QueueTarget) => watchRuntimeStream(input),
 
-      "branch.list": ({ sessionId }: SessionIdPayload) => queries.listBranches(sessionId),
+      "branch.list": ({ sessionId }: SessionIdPayload) => branchStorage.listBranches(sessionId),
 
       "branch.create": ({ sessionId, name, requestId }: CreateBranchInput) =>
         commands.createBranch({
@@ -362,7 +366,7 @@ const RpcHandlers = GentRpcs.toLayer(
             withWideEvent(rpcBoundary("message.send", requestId)),
           ),
 
-      "message.list": ({ branchId }: BranchPayload) => queries.listMessages(branchId),
+      "message.list": ({ branchId }: BranchPayload) => messageStorage.listMessages(branchId),
 
       "steer.command": ({ command }: { readonly command: TransportSteerCommand }) =>
         commands.steer(command),

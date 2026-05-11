@@ -1,7 +1,7 @@
 import { Effect, Layer, Context } from "effect"
 import { DEFAULT_AGENT_NAME } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
-import type { Branch, Message, Session, SessionTreeNode } from "../domain/message.js"
+import type { Session, SessionTreeNode } from "../domain/message.js"
 import { projectMessagesWithToolInteractions } from "../domain/message-part-projection.js"
 import { emptyQueueSnapshot, type QueueSnapshot } from "../domain/queue.js"
 import { SessionStorage } from "../storage/session-storage.js"
@@ -16,19 +16,9 @@ import { SessionSnapshot } from "./transport-contract.js"
 import type { GetSessionSnapshotInput } from "./transport-contract.js"
 
 export interface SessionQueriesService {
-  readonly listSessions: () => Effect.Effect<ReadonlyArray<Session>, AppServiceError>
-  readonly getChildSessions: (
-    parentSessionId: SessionId,
-  ) => Effect.Effect<ReadonlyArray<Session>, AppServiceError>
   readonly getSessionTree: (
     rootSessionId: SessionId,
   ) => Effect.Effect<SessionTreeNode, AppServiceError>
-  readonly listBranches: (
-    sessionId: SessionId,
-  ) => Effect.Effect<ReadonlyArray<Branch>, AppServiceError>
-  readonly listMessages: (
-    branchId: BranchId,
-  ) => Effect.Effect<ReadonlyArray<Message>, AppServiceError>
   readonly getQueuedMessages: (input: {
     sessionId: SessionId
     branchId: BranchId
@@ -51,16 +41,6 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       const relationshipStorage = yield* RelationshipStorage
       const storageTransaction = yield* makeStorageTransaction
       const sessionRuntime = yield* SessionRuntime
-
-      const listSessions = Effect.fn("SessionQueries.listSessions")(function* () {
-        return yield* sessionStorage.listSessions()
-      })
-
-      const getChildSessions = Effect.fn("SessionQueries.getChildSessions")(function* (
-        parentSessionId: SessionId,
-      ) {
-        return yield* relationshipStorage.getChildSessions(parentSessionId)
-      })
 
       const buildSessionTreeNode = (
         session: Session,
@@ -160,11 +140,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       })
 
       return {
-        listSessions,
-        getChildSessions,
         getSessionTree,
-        listBranches: (sessionId) => branchStorage.listBranches(sessionId),
-        listMessages: (branchId) => messageStorage.listMessages(branchId),
         getQueuedMessages: ({ sessionId, branchId }) =>
           sessionRuntime
             .getQueuedMessages({ sessionId, branchId })
