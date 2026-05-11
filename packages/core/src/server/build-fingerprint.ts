@@ -3,7 +3,7 @@
  * Used by server identity and SDK registry for version-aware restarts.
  */
 
-import { Config, Effect, FileSystem, Option, Path } from "effect"
+import { Config, Context, Effect, FileSystem, Layer, Option, Path } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { dateFromMillis } from "../domain/message.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
@@ -50,17 +50,43 @@ const computeLocalFingerprintUncached: Effect.Effect<
   return "unknown"
 })
 
-export const computeLocalFingerprint = Effect.runSync(
-  Effect.cached(computeLocalFingerprintUncached),
-)
+export interface BuildFingerprintShape {
+  /** Cached local fingerprint computation. Identical across yields within TTL. */
+  readonly local: Effect.Effect<string>
+  /** Resolved fingerprint — env override (`GENT_BUILD_FINGERPRINT`) wins, else local. */
+  readonly resolved: Effect.Effect<string>
+}
 
-/** Resolve the build fingerprint. Env var takes precedence, then local computation. */
-export const resolveBuildFingerprint: Effect.Effect<
-  string,
-  never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
-> = Effect.gen(function* () {
-  const opt: Option.Option<string> = yield* Config.option(Config.string("GENT_BUILD_FINGERPRINT"))
-  if (Option.isSome(opt) && opt.value !== "") return opt.value
-  return yield* computeLocalFingerprint
-}).pipe(Effect.catchEager(() => computeLocalFingerprint))
+export class BuildFingerprint extends Context.Service<BuildFingerprint, BuildFingerprintShape>()(
+  "@gent/core/src/server/build-fingerprint/BuildFingerprint",
+) {
+  static Live: Layer.Layer<
+    BuildFingerprint,
+    never,
+    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
+  > = Layer.effect(
+    BuildFingerprint,
+    Effect.gen(function* () {
+      const ctx = yield* Effect.context<
+        FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
+      >()
+      const cached = yield* Effect.cachedWithTTL(computeLocalFingerprintUncached, "1 hour")
+      const local: Effect.Effect<string> = Effect.provide(cached, ctx)
+      const resolved: Effect.Effect<string> = Effect.gen(function* () {
+        const opt: Option.Option<string> = yield* Config.option(
+          Config.string("GENT_BUILD_FINGERPRINT"),
+        )
+        if (Option.isSome(opt) && opt.value !== "") return opt.value
+        return yield* local
+      }).pipe(Effect.catchEager(() => local))
+      return { local, resolved }
+    }),
+  )
+
+  /** Deterministic test layer. */
+  static Test = (fingerprint = "test-fingerprint"): Layer.Layer<BuildFingerprint> =>
+    Layer.succeed(BuildFingerprint, {
+      local: Effect.succeed(fingerprint),
+      resolved: Effect.succeed(fingerprint),
+    })
+}

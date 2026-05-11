@@ -6,7 +6,7 @@ import { Clock, Config, Deferred, Effect, Layer, Option, Context } from "effect"
 import { seedDebugSession } from "@gent/core-internal/debug/session.js"
 import { startDebugScenario } from "./debug/scenario.js"
 import { BuiltinExtensions } from "@gent/extensions"
-import { resolveBuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
+import { BuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
 import { buildServerRoot } from "@gent/core-internal/server/server-root.js"
 
 const joinPath = (...parts: readonly string[]) => parts.join("/").replace(/\/+/g, "/")
@@ -80,7 +80,15 @@ const resolveRuntimeConfig = Effect.gen(function* () {
 })
 
 // Platform layer for Storage
-const PlatformLayer = Layer.mergeAll(BunFileSystem.layer, BunServices.layer, BunGentPlatformLive)
+const PlatformBaseLayer = Layer.mergeAll(
+  BunFileSystem.layer,
+  BunServices.layer,
+  BunGentPlatformLive,
+)
+const PlatformLayer = Layer.merge(
+  PlatformBaseLayer,
+  BuildFingerprint.Live.pipe(Layer.provide(PlatformBaseLayer)),
+)
 
 const program = Effect.scoped(
   Effect.gen(function* () {
@@ -97,7 +105,7 @@ const program = Effect.scoped(
 
     const sharedServerUrl =
       config.sharedServerUrl ?? (config.isManaged ? `${baseUrl}/rpc` : undefined)
-    const buildFingerprint = yield* resolveBuildFingerprint
+    const buildFingerprint = yield* (yield* BuildFingerprint).resolved
     const startedAt = yield* Clock.currentTimeMillis
 
     const serverRoot = yield* buildServerRoot({

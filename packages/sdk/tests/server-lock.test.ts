@@ -7,9 +7,8 @@ import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { hostname, tmpdir } from "node:os"
 import { Gent } from "../src/client"
 import {
+  BuildFingerprint,
   ServerLockEntry,
-  computeLocalFingerprint,
-  resolveBuildFingerprint,
   readServerLock,
   writeServerLock,
   removeServerLock,
@@ -19,10 +18,18 @@ import {
   signalIfIdentityOwned,
 } from "../src/server-lock"
 
-const PlatformLayer = Layer.mergeAll(BunServices.layer, BunGentPlatformLive)
+const PlatformBaseLayer = Layer.mergeAll(BunServices.layer, BunGentPlatformLive)
+const PlatformLayer = Layer.merge(
+  PlatformBaseLayer,
+  BuildFingerprint.Live.pipe(Layer.provide(PlatformBaseLayer)),
+)
 
 const provideFs = <A, E>(
-  effect: Effect.Effect<A, E, FileSystem.FileSystem | GentPlatform | Path.Path | Scope.Scope>,
+  effect: Effect.Effect<
+    A,
+    E,
+    BuildFingerprint | FileSystem.FileSystem | GentPlatform | Path.Path | Scope.Scope
+  >,
 ): Effect.Effect<A, E, Scope.Scope> => effect.pipe(Effect.provide(PlatformLayer))
 
 const makeTmpHomeScoped = Effect.gen(function* () {
@@ -47,29 +54,32 @@ const makeEntry = (overrides?: Partial<ServerLockEntry>) =>
   })
 
 describe("Build Fingerprint", () => {
-  it.live("computeLocalFingerprint returns a non-empty string", () =>
+  it.live("BuildFingerprint.local returns a non-empty string", () =>
     Effect.gen(function* () {
-      const fp = yield* computeLocalFingerprint.pipe(Effect.provide(PlatformLayer))
+      const bf = yield* BuildFingerprint
+      const fp = yield* bf.local
       expect(fp).toBeTruthy()
       expect(typeof fp).toBe("string")
       expect(fp.length).toBeGreaterThan(0)
-    }),
+    }).pipe(Effect.provide(PlatformLayer)),
   )
 
-  it.live("computeLocalFingerprint is stable across calls", () =>
+  it.live("BuildFingerprint.local is cached across calls", () =>
     Effect.gen(function* () {
-      const fp1 = yield* computeLocalFingerprint.pipe(Effect.provide(PlatformLayer))
-      const fp2 = yield* computeLocalFingerprint.pipe(Effect.provide(PlatformLayer))
+      const bf = yield* BuildFingerprint
+      const fp1 = yield* bf.local
+      const fp2 = yield* bf.local
       expect(fp1).toBe(fp2)
-    }),
+    }).pipe(Effect.provide(PlatformLayer)),
   )
 
-  it.live("resolveBuildFingerprint resolves to a string", () =>
+  it.live("BuildFingerprint.resolved resolves to a string", () =>
     Effect.gen(function* () {
-      const fp = yield* resolveBuildFingerprint.pipe(Effect.provide(PlatformLayer))
+      const bf = yield* BuildFingerprint
+      const fp = yield* bf.resolved
       expect(typeof fp).toBe("string")
       expect(fp.length).toBeGreaterThan(0)
-    }),
+    }).pipe(Effect.provide(PlatformLayer)),
   )
 })
 
@@ -135,7 +145,7 @@ describe("Server Lock", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         const dbPath = `${home}/data.db`
-        const buildFingerprint = yield* computeLocalFingerprint.pipe(Effect.provide(PlatformLayer))
+        const buildFingerprint = yield* (yield* BuildFingerprint).local
         const entry = makeEntry({ dbPath, buildFingerprint })
         const fakeOwner = yield* Effect.acquireRelease(
           Effect.sync(() =>

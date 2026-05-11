@@ -19,7 +19,7 @@ import type { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js
 import { seedDebugSession } from "@gent/core-internal/debug/session.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import type { LanguageModel } from "effect/unstable/ai"
-import { resolveBuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
+import { BuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
 import { GentConnectionError } from "@gent/core-internal/server/transport-contract.js"
 import { workspaceHeadersForCwd, type WorkspaceHeaders } from "./transport-headers.js"
 import {
@@ -28,7 +28,6 @@ import {
   writeServerLock,
   removeServerLock,
   ServerLockEntry,
-  computeLocalFingerprint,
   serverLockIdentityOf,
   signalIfIdentityOwned,
 } from "./server-lock.js"
@@ -136,10 +135,14 @@ const resolveLanguageModelLayer = (
 
 // ── Platform layers ──
 
-const LocalPlatformLayer = Layer.mergeAll(
+const PlatformBaseLayer = Layer.mergeAll(
   BunServices.layer,
   BunFileSystem.layer,
   BunGentPlatformLive,
+)
+const LocalPlatformLayer = Layer.merge(
+  PlatformBaseLayer,
+  BuildFingerprint.Live.pipe(Layer.provide(PlatformBaseLayer)),
 )
 
 // ── Helpers ──
@@ -195,10 +198,7 @@ const buildOwnedServer = (
       const workspaceHeaders = workspaceHeadersForCwd(options.cwd)
       const home = resolveHome(options, stateSpec, homeDirectory)
       const serverId = yield* platform.randomId
-      const buildFingerprint = yield* resolveBuildFingerprint.pipe(
-        // @effect-diagnostics-next-line strictEffectProvide:off
-        Effect.provide(BunServices.layer),
-      )
+      const buildFingerprint = yield* (yield* BuildFingerprint).resolved
 
       const languageModelLayer = resolveLanguageModelLayer(providerSpec)
       const dbPath = stateSpec._tag === "sqlite" ? resolveDbPath(home, stateSpec) : undefined
@@ -260,7 +260,7 @@ const buildOwnedServer = (
 
       return server
     }),
-    Layer.merge(BunFileSystem.layer, BunGentPlatformLive),
+    LocalPlatformLayer,
   )
 
 // ── Probe an existing server via identity endpoint ──
@@ -327,7 +327,7 @@ const resolveServerInternal = (
     const platform = yield* GentPlatform
     const home = resolveHome(options, stateSpec, yield* platform.homeDirectory)
     const dbPath = resolveDbPath(home, stateSpec)
-    const fingerprint = yield* computeLocalFingerprint
+    const fingerprint = yield* (yield* BuildFingerprint).local
     const osInfo = yield* platform.osInfo
     const pid = yield* platform.pid
 
