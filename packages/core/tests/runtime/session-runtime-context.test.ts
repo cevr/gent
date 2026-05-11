@@ -104,7 +104,6 @@ describe("resolveSessionEnvironment", () => {
           const resolved = yield* resolveSessionEnvironment({
             sessionId: SessionId.make("session-runtime-context-profile"),
             branchId: BranchId.make("branch-runtime-context-profile"),
-            sessionStorage,
             profileCache,
             hostDeps: yield* makeAmbientExtensionHostContextDeps({
               extensionRegistry,
@@ -161,13 +160,11 @@ describe("resolveSessionEnvironment", () => {
         runtimeEnvironmentLayer,
       )
       yield* Effect.gen(function* () {
-        const sessionStorage = yield* SessionStorage
         const extensionRegistry = yield* ExtensionRegistry
         const platform = yield* RuntimeEnvironment
         const resolved = yield* resolveSessionEnvironment({
           sessionId: SessionId.make("missing-session"),
           branchId: BranchId.make("missing-branch"),
-          sessionStorage,
           hostDeps: yield* makeAmbientExtensionHostContextDeps({
             extensionRegistry,
             overrides: { platform },
@@ -211,7 +208,6 @@ describe("resolveSessionEnvironment", () => {
           resolveSessionEnvironment({
             sessionId: SessionId.make("session-runtime-context-storage-failure"),
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
-            sessionStorage: failingSessionStorage,
             hostDeps: yield* makeAmbientExtensionHostContextDeps({
               extensionRegistry,
               overrides: { platform },
@@ -221,7 +217,7 @@ describe("resolveSessionEnvironment", () => {
               permission: AllowAllPermission,
               baseSections: [],
             },
-          }),
+          }).pipe(Effect.provideService(SessionStorage, failingSessionStorage)),
         )
         expect(exit._tag).toBe("Success")
         if (exit._tag === "Success") {
@@ -231,7 +227,6 @@ describe("resolveSessionEnvironment", () => {
           resolveSessionEnvironmentOrFail({
             sessionId: SessionId.make("session-runtime-context-storage-failure"),
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
-            sessionStorage: failingSessionStorage,
             hostDeps: yield* makeAmbientExtensionHostContextDeps({
               extensionRegistry,
               overrides: { platform },
@@ -241,7 +236,7 @@ describe("resolveSessionEnvironment", () => {
               permission: AllowAllPermission,
               baseSections: [],
             },
-          }),
+          }).pipe(Effect.provideService(SessionStorage, failingSessionStorage)),
         )
         expect(strict._tag).toBe("Failure")
         if (strict._tag === "Failure") {
@@ -329,7 +324,6 @@ describe("resolveSessionEnvironment", () => {
         const resolved = yield* resolveSessionEnvironment({
           sessionId: SessionId.make("session-runtime-context-driver"),
           branchId: BranchId.make("branch-runtime-context-driver"),
-          sessionStorage,
           profileCache: fakeProfileCache,
           hostDeps: yield* makeAmbientExtensionHostContextDeps({
             extensionRegistry,

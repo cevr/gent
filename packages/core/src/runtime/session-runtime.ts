@@ -347,11 +347,13 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     effect.pipe(
       Effect.provideService(ActorAddressResolver, actorAddressResolver),
       Effect.provideService(ActorStateRegistry, actorStateRegistry),
+      Effect.provideService(AgentLoopActor.Context, actorClientFactory),
     )
   const provideActorStateServicesToStream = <A, E, R>(stream: Stream.Stream<A, E, R>) =>
     stream.pipe(
       Stream.provideService(ActorAddressResolver, actorAddressResolver),
       Stream.provideService(ActorStateRegistry, actorStateRegistry),
+      Stream.provideService(AgentLoopActor.Context, actorClientFactory),
     )
   const toAgentLoopError = (error: unknown) =>
     Schema.is(AgentLoopError)(error)
@@ -424,9 +426,9 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   ) {
     const workspaceId = yield* CurrentWorkspaceId
     return yield* provideActorStateServices(
-      AgentLoopActor.getState<SessionRuntimeState, AgentLoopError, never, AgentLoopError>(
-        entityIdOf(workspaceId, input.sessionId, input.branchId),
-      ).pipe(Effect.mapError(toAgentLoopError)),
+      AgentLoopActor.getState(entityIdOf(workspaceId, input.sessionId, input.branchId)).pipe(
+        Effect.mapError(toAgentLoopError),
+      ),
     )
   })
 
@@ -435,9 +437,9 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   ) {
     const workspaceId = yield* CurrentWorkspaceId
     return provideActorStateServicesToStream(
-      AgentLoopActor.watchState<SessionRuntimeState, AgentLoopError, never, AgentLoopError>(
-        entityIdOf(workspaceId, input.sessionId, input.branchId),
-      ).pipe(Stream.mapError(toAgentLoopError)),
+      AgentLoopActor.watchState(entityIdOf(workspaceId, input.sessionId, input.branchId)).pipe(
+        Stream.mapError(toAgentLoopError),
+      ),
     )
   })
 

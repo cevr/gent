@@ -49,7 +49,7 @@ import { ConfigService } from "../config-service.js"
 import { DEFAULTS } from "../../domain/defaults.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { StorageError } from "../../domain/storage-error.js"
-import { SessionStorage } from "../../storage/session-storage.js"
+import type { SessionStorage } from "../../storage/session-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { withStorageTransaction } from "../../storage/sqlite-storage.js"
@@ -275,7 +275,6 @@ export const makeAgentLoopBehavior = (
   | GentPlatform
 > =>
   Effect.gen(function* () {
-    const sessionStorage = yield* SessionStorage
     const messageStorage = yield* MessageStorage
     const queueStorage = yield* AgentLoopQueueStorage
     const sql = yield* SqlClient.SqlClient
@@ -358,18 +357,19 @@ export const makeAgentLoopBehavior = (
     const defaultPermission =
       permissionService._tag === "Some" ? permissionService.value : AllowAllPermission
 
-    const resolveTurnProfile = resolveSessionEnvironment({
-      sessionId,
-      branchId,
-      sessionStorage,
-      hostDeps,
-      profileCache,
-      defaults: {
-        driverRegistry,
-        permission: defaultPermission,
-        baseSections,
-      },
-    }).pipe(
+    const resolveTurnProfile = provideRuntime(
+      resolveSessionEnvironment({
+        sessionId,
+        branchId,
+        hostDeps,
+        profileCache,
+        defaults: {
+          driverRegistry,
+          permission: defaultPermission,
+          baseSections,
+        },
+      }),
+    ).pipe(
       Effect.map(({ environment }) => ({
         turnExtensionRegistry: environment.extensionRegistry,
         turnDriverRegistry: environment.driverRegistry,

@@ -7,7 +7,7 @@ import type { BranchId, SessionId } from "../domain/ids.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { StorageError } from "../domain/storage-error.js"
 import { BranchStorage } from "../storage/branch-storage.js"
-import { SessionStorage, type SessionStorageService } from "../storage/session-storage.js"
+import { SessionStorage } from "../storage/session-storage.js"
 import type { DriverRegistryService } from "./extensions/driver-registry.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
 import {
@@ -119,7 +119,6 @@ export const AllowAllPermission: PermissionService = {
 interface ResolveSessionEnvironmentParams {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly sessionStorage: SessionStorageService
   readonly hostDeps: MakeExtensionHostContextDeps
   readonly profileCache?: SessionProfileCacheService
   readonly defaults: SessionEnvironmentDefaults
@@ -156,9 +155,10 @@ const buildResolvedSessionEnvironment = (
 
 export const resolveSessionEnvironment = (
   params: ResolveSessionEnvironmentParams,
-): Effect.Effect<ResolvedSessionEnvironment> =>
+): Effect.Effect<ResolvedSessionEnvironment, never, SessionStorage> =>
   Effect.gen(function* () {
-    const session = yield* params.sessionStorage
+    const sessionStorage = yield* SessionStorage
+    const session = yield* sessionStorage
       .getSession(params.sessionId)
       .pipe(Effect.orElseSucceed(() => undefined))
     return yield* buildResolvedSessionEnvironment({ ...params, session })
@@ -166,9 +166,10 @@ export const resolveSessionEnvironment = (
 
 export const resolveSessionEnvironmentOrFail = (
   params: ResolveSessionEnvironmentParams,
-): Effect.Effect<ResolvedSessionEnvironment, StorageError> =>
+): Effect.Effect<ResolvedSessionEnvironment, StorageError, SessionStorage> =>
   Effect.gen(function* () {
-    const session = yield* params.sessionStorage.getSession(params.sessionId)
+    const sessionStorage = yield* SessionStorage
+    const session = yield* sessionStorage.getSession(params.sessionId)
     return yield* buildResolvedSessionEnvironment({ ...params, session })
   })
 
