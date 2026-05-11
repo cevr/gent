@@ -742,6 +742,58 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
+  test("flags every acquisition form for crypto/url specifiers", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        [
+          'import "node:crypto"',
+          'const c = await import("node:crypto")',
+          'const u = require("node:url")',
+          'const s = require("url")',
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 1,
+        message:
+          "Host crypto module imports are adapter-only; yield GentPlatform and call platform.hash(...) or platform.randomBytes(...)",
+      },
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 2,
+        message:
+          "Host crypto module imports are adapter-only; yield GentPlatform and call platform.hash(...) or platform.randomBytes(...)",
+      },
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 3,
+        message:
+          "Host url module imports are adapter-only; yield GentPlatform and call platform.fileURLToPath(...)",
+      },
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 4,
+        message:
+          "Host url module imports are adapter-only; yield GentPlatform and call platform.fileURLToPath(...)",
+      },
+    ])
+
+    // Plain string usage of "crypto" or "url" as data (param names, log
+    // messages, branded ids) must not trip the guard.
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        [
+          'const moduleName = "url"',
+          'logger.info("crypto subsystem ready")',
+          'type Tag = "node:crypto-fact"',
+        ].join("\n"),
+      ),
+    ).toEqual([])
+  })
+
   test("flags direct hash, randomBytes, and fileURLToPath calls in protected packages", () => {
     expect(
       findPlatformDuplicationViolations(

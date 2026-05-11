@@ -104,16 +104,15 @@ export function pickBestPreset(source: string, maxWidth: number): AsciiRenderOpt
   }
 }
 
-// LRU cache for rendered diagrams — keyed by source + width. Map keys are
-// the raw source string (plus optional `:width` suffix); no hashing needed —
-// this runs inside a Solid `createMemo`, never inside an Effect runtime, and
-// the cache is bounded by `CACHE_MAX` so memory stays flat regardless of
-// key length.
+// LRU cache for rendered diagrams — keyed by source + width. The cache is
+// bounded by `CACHE_MAX` so memory stays bounded; the key is structured
+// JSON so a source string that happens to contain a `:<width>` suffix
+// cannot collide with a separate `(source, width)` call.
 const CACHE_MAX = 20
 const renderCache = new Map<string, string>()
 
 const cacheKey = (source: string, maxWidth?: number): string =>
-  maxWidth === undefined ? source : `${source}:${maxWidth}`
+  JSON.stringify([source, maxWidth ?? null])
 
 /**
  * Render a mermaid diagram to ASCII art.

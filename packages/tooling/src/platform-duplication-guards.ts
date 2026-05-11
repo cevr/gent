@@ -158,12 +158,20 @@ const bannedProtectedHostFactPatterns: ReadonlyArray<BannedPattern> = [
       "Direct `bun` package imports are adapter-only; use ExtensionContext.Process or Effect platform services",
   },
   {
-    pattern: /\bfrom\s+["'](?:node:)?crypto["']/,
+    // Cover every acquisition form for the crypto specifier:
+    //   `from "node:crypto"`        — static `import … from`
+    //   `import "node:crypto"`      — bare side-effect import
+    //   `import("node:crypto")`     — dynamic import
+    //   `require("node:crypto")`    — CJS require
+    // The shared prefix is `from`/`import`/`require` followed by the quoted
+    // specifier (with optional `(` for the call forms). Plain string usage
+    // of `"crypto"` as data (param names, identifiers) does not trip.
+    pattern: /(?:\bfrom\s+|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'](?:node:)?crypto["']/,
     message:
       "Host crypto module imports are adapter-only; yield GentPlatform and call platform.hash(...) or platform.randomBytes(...)",
   },
   {
-    pattern: /\bfrom\s+["'](?:node:)?url["']/,
+    pattern: /(?:\bfrom\s+|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'](?:node:)?url["']/,
     message:
       "Host url module imports are adapter-only; yield GentPlatform and call platform.fileURLToPath(...)",
   },
