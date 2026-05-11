@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, type FileSystem, Layer, type Path, Schema } from "effect"
 import { resolveAgentModel, type AgentDefinition } from "../../domain/agent.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../../domain/driver.js"
 import type { ExtensionId, RpcId } from "../../domain/ids.js"
@@ -12,7 +12,7 @@ import {
   CapabilityError as CapabilityErrorClass,
   CapabilityNotFoundError as CapabilityNotFoundErrorClass,
 } from "../../domain/capability.js"
-import { provideExtensionServices } from "../../domain/extension-services.js"
+import { type ExtensionContext, provideExtensionServices } from "../../domain/extension-services.js"
 import {
   SCOPE_PRECEDENCE,
   type ExtensionStatusInfo,
@@ -93,7 +93,11 @@ export interface CompiledRpcRegistry {
     capabilityId: RpcId | string,
     input: unknown,
     ctx: CapabilityCoreContext,
-  ) => Effect.Effect<unknown, CapabilityError | CapabilityNotFoundError>
+  ) => Effect.Effect<
+    unknown,
+    CapabilityError | CapabilityNotFoundError,
+    FileSystem.FileSystem | Path.Path
+  >
 }
 
 type ScheduledJobFailureByExtension = ReadonlyMap<string, ReadonlyArray<ScheduledJobFailureInfo>>
@@ -264,8 +268,15 @@ const hasExtensionServices = (ctx: CapabilityCoreContext): ctx is ExtensionHostC
 const provideExtensionServicesIfAvailable = <A, E, R>(
   ctx: CapabilityCoreContext,
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> =>
-  hasExtensionServices(ctx) ? provideExtensionServices(ctx, effect) : effect
+): Effect.Effect<A, E, Exclude<R, ExtensionContext> | FileSystem.FileSystem | Path.Path> =>
+  hasExtensionServices(ctx)
+    ? provideExtensionServices(ctx, effect)
+    : // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- fallback branch: ctx lacks host services, so effect's ExtensionContext requirement (if any) propagates upward unresolved; caller is responsible
+      (effect as Effect.Effect<
+        A,
+        E,
+        Exclude<R, ExtensionContext> | FileSystem.FileSystem | Path.Path
+      >)
 
 const compileRpcRegistry = (
   entries: ReadonlyArray<RegisteredCapabilityEntry>,

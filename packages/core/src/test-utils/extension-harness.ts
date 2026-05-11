@@ -1,6 +1,8 @@
 /** Test helpers for extension tool execution. */
 
-import { Effect, Layer } from "effect"
+// @effect-diagnostics nodeBuiltinImport:off — test stub needs sync path ops; ExtensionFilesService captures Path.Path at runtime construction
+import * as nodePath from "node:path"
+import { Effect, FileSystem, Layer, Option } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
   AgentName,
@@ -231,6 +233,24 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
     commandCandidates: host.commandCandidates,
     parentEnv: host.parentEnv,
   }
+  const filesError = (operation: string) => (cause: unknown) =>
+    new ExtensionServiceError({
+      service: "ExtensionFiles",
+      operation,
+      message: cause instanceof Error ? cause.message : String(cause),
+      cause,
+    })
+  const filesFs = <A, E>(
+    operation: string,
+    op: (fs: FileSystem.FileSystem) => Effect.Effect<A, E>,
+  ) =>
+    Effect.serviceOption(FileSystem.FileSystem).pipe(
+      Effect.flatMap((opt) =>
+        Option.isSome(opt)
+          ? op(opt.value).pipe(Effect.mapError(filesError(operation)))
+          : Effect.fail(filesError(operation)(new Error("FileSystem service unavailable in test"))),
+      ),
+    )
   const files: ExtensionContextService["Files"] = {
     listFiles: () =>
       Effect.fail(
@@ -240,6 +260,26 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
           message: "File index service unavailable",
         }),
       ),
+    read: (path) => filesFs("read", (fs) => fs.readFileString(path)),
+    write: (path, content) => filesFs("write", (fs) => fs.writeFileString(path, content)),
+    exists: (path) => filesFs("exists", (fs) => fs.exists(path)),
+    stat: (path) =>
+      filesFs("stat", (fs) =>
+        fs.stat(path).pipe(
+          Effect.map((info) => ({
+            type: info.type,
+            size: info.size,
+            mtime: Option.getOrUndefined(info.mtime),
+          })),
+        ),
+      ),
+    readDirectory: (path, options) =>
+      filesFs("readDirectory", (fs) => fs.readDirectory(path, options)),
+    makeDirectory: (path, options) =>
+      filesFs("makeDirectory", (fs) => fs.makeDirectory(path, options)),
+    resolve: (...paths) => nodePath.resolve(...paths),
+    join: (...paths) => nodePath.join(...paths),
+    dirname: (path) => nodePath.dirname(path),
   }
   const fileLock: ExtensionContextService["FileLock"] = {
     withLock: (_path, effect) => effect,

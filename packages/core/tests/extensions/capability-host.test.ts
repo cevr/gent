@@ -5,7 +5,8 @@
  * dispatch accepts slash-capable requests.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Effect, Exit, Schema } from "effect"
+import { Cause, Effect, Exit, type FileSystem, type Path, Schema } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import {
   type CapabilityCoreContext,
@@ -70,7 +71,11 @@ const shadowTool = (params?: { readonly id?: string }): ToolCapability =>
   })
 
 const expectRpcFailure = (
-  effect: Effect.Effect<unknown, CapabilityError | CapabilityNotFoundError>,
+  effect: Effect.Effect<
+    unknown,
+    CapabilityError | CapabilityNotFoundError,
+    FileSystem.FileSystem | Path.Path
+  >,
 ) =>
   Effect.gen(function* () {
     const exit = yield* Effect.exit(effect)
@@ -82,16 +87,17 @@ const expectRpcFailure = (
   })
 
 describe("extension capability registries", () => {
-  it.live("dispatches request capabilities by (extensionId, capabilityId)", () =>
+  const test = it.live.layer(BunServices.layer)
+
+  test("dispatches request capabilities by (extensionId, capabilityId)", () =>
     Effect.gen(function* () {
       const cap = echoRequest()
       const resolved = resolveExtensions([extWith("builtin", [cap])])
       const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx)
       expect(result).toEqual({ value: "hi" })
-    }),
-  )
+    }))
 
-  it.live("request handlers receive ExtensionContext authority without intent ceremony", () =>
+  test("request handlers receive ExtensionContext authority without intent ceremony", () =>
     Effect.gen(function* () {
       const cap = request({
         id: "context-facade",
@@ -140,10 +146,9 @@ describe("extension capability registries", () => {
         followUpQueued: true,
         interactionPresented: true,
       })
-    }),
-  )
+    }))
 
-  it.live("dispatches slash-decorated request capabilities through the rpc registry", () =>
+  test("dispatches slash-decorated request capabilities through the rpc registry", () =>
     Effect.gen(function* () {
       const cap = request({
         id: "ping",
@@ -162,10 +167,9 @@ describe("extension capability registries", () => {
       const resolved = resolveExtensions([ext])
       const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx)
       expect(result).toEqual({ value: "hi" })
-    }),
-  )
+    }))
 
-  it.live("provides ExtensionContext to request handlers carrying slash metadata", () =>
+  test("provides ExtensionContext to request handlers carrying slash metadata", () =>
     Effect.gen(function* () {
       const cap = request({
         id: "context-request",
@@ -196,10 +200,9 @@ describe("extension capability registries", () => {
         }),
       )
       expect(result).toEqual({ hasRunProcess: true })
-    }),
-  )
+    }))
 
-  it.live("higher-scope slash request shadows lower-scope slash request", () =>
+  test("higher-scope slash request shadows lower-scope slash request", () =>
     Effect.gen(function* () {
       const builtin = request({
         id: "shadowed",
@@ -233,10 +236,9 @@ describe("extension capability registries", () => {
       ])
       const result = yield* resolved.rpcRegistry.run(extensionId, project.id, { value: "hi" }, ctx)
       expect(result).toEqual({ value: "hi" })
-    }),
-  )
+    }))
 
-  it.live("request dispatch follows higher-scope slash request shadowing lower request", () =>
+  test("request dispatch follows higher-scope slash request shadowing lower request", () =>
     Effect.gen(function* () {
       const builtin = echoRequest({ id: "same", value: "builtin-request" })
       const project = pingRequest({ id: "same", value: "project-request" })
@@ -256,10 +258,9 @@ describe("extension capability registries", () => {
       ])
       const result = yield* resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx)
       expect(result).toEqual({ value: "project-request" })
-    }),
-  )
+    }))
 
-  it.live("request dispatch rejects higher-scope tool shadowing lower request", () =>
+  test("request dispatch rejects higher-scope tool shadowing lower request", () =>
     Effect.gen(function* () {
       const builtin = echoRequest({ id: "same", value: "builtin-request" })
       const project = shadowTool({ id: "same" })
@@ -281,10 +282,9 @@ describe("extension capability registries", () => {
         resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx),
       )
       expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
-    }),
-  )
+    }))
 
-  it.live("request dispatch rejects lower request shadowed by higher-scope tool", () =>
+  test("request dispatch rejects lower request shadowed by higher-scope tool", () =>
     Effect.gen(function* () {
       const builtin = echoRequest({ id: "same", value: "builtin-request" })
       const project = shadowTool({ id: "same" })
@@ -306,10 +306,9 @@ describe("extension capability registries", () => {
         resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx),
       )
       expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
-    }),
-  )
+    }))
 
-  it.live("scope precedence shadows lower-scope request capabilities by identity", () =>
+  test("scope precedence shadows lower-scope request capabilities by identity", () =>
     Effect.gen(function* () {
       const builtin = echoRequest({ id: "thing", value: "builtin" })
       const project = echoRequest({ id: "thing", value: "project" })
@@ -319,10 +318,9 @@ describe("extension capability registries", () => {
       ])
       const result = yield* resolved.rpcRegistry.run(extensionId, project.id, { value: "x" }, ctx)
       expect(result).toEqual({ value: "project" })
-    }),
-  )
+    }))
 
-  it.live("scope precedence picks the winning request without intent matching", () =>
+  test("scope precedence picks the winning request without intent matching", () =>
     Effect.gen(function* () {
       const lowerCap = request({
         id: "thing",
@@ -345,10 +343,9 @@ describe("extension capability registries", () => {
 
       const readResult = yield* resolved.rpcRegistry.run(extensionId, higherCap.id, null, ctx)
       expect(readResult).toBe("project-read")
-    }),
-  )
+    }))
 
-  it.live("input decode failure is wrapped in CapabilityError", () =>
+  test("input decode failure is wrapped in CapabilityError", () =>
     Effect.gen(function* () {
       const cap = echoRequest()
       const resolved = resolveExtensions([extWith("builtin", [cap])])
@@ -358,10 +355,9 @@ describe("extension capability registries", () => {
       expect(Schema.is(CapabilityError)(result)).toBe(true)
       if (!Schema.is(CapabilityError)(result)) return
       expect(result.reason).toMatch(/input decode failed/)
-    }),
-  )
+    }))
 
-  it.live("output validation failure is wrapped in CapabilityError", () =>
+  test("output validation failure is wrapped in CapabilityError", () =>
     Effect.gen(function* () {
       const cap = request({
         id: "bad",
@@ -377,10 +373,9 @@ describe("extension capability registries", () => {
       expect(Schema.is(CapabilityError)(result)).toBe(true)
       if (!Schema.is(CapabilityError)(result)) return
       expect(result.reason).toMatch(/output validation failed/)
-    }),
-  )
+    }))
 
-  it.live("handler defects are coerced into typed CapabilityError", () =>
+  test("handler defects are coerced into typed CapabilityError", () =>
     Effect.gen(function* () {
       const cap = request({
         id: "boom",
@@ -396,6 +391,5 @@ describe("extension capability registries", () => {
       expect(Schema.is(CapabilityError)(result)).toBe(true)
       if (!Schema.is(CapabilityError)(result)) return
       expect(result.reason).toMatch(/handler defect/)
-    }),
-  )
+    }))
 })

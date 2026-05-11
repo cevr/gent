@@ -1,7 +1,6 @@
 import { Effect, Option, Schema } from "effect"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import picomatch from "picomatch"
-import { FsRead } from "./read-service.js"
 
 // Grep Tool Error
 
@@ -77,9 +76,8 @@ export const GrepTool = tool({
   output: GrepResult,
   execute: Effect.fn("GrepTool.execute")(function* (params) {
     const ctx = yield* ExtensionContext
-    const fs = yield* FsRead
 
-    const basePath = params.path !== undefined ? fs.resolve(params.path) : ctx.cwd
+    const basePath = params.path !== undefined ? ctx.Files.resolve(params.path) : ctx.cwd
     const limit = params.limit ?? 100
     const contextLines = params.context ?? 0
     const flags = params.caseSensitive === false ? "gi" : "g"
@@ -103,7 +101,7 @@ export const GrepTool = tool({
 
     const searchFile = (filePath: string): Effect.Effect<void> =>
       Effect.gen(function* () {
-        const contentResult = yield* fs.readFileString(filePath).pipe(Effect.option)
+        const contentResult = yield* ctx.Files.read(filePath).pipe(Effect.option)
         if (Option.isNone(contentResult)) return
 
         const content = contentResult.value
@@ -132,7 +130,7 @@ export const GrepTool = tool({
         }
       })
 
-    const baseStat = yield* fs.stat(basePath).pipe(Effect.option)
+    const baseStat = yield* ctx.Files.stat(basePath).pipe(Effect.option)
     if (Option.isNone(baseStat)) {
       return yield* new GrepError({
         message: `Path not found: ${basePath}`,
@@ -144,7 +142,7 @@ export const GrepTool = tool({
       yield* searchFile(basePath)
     } else {
       // Use FileIndex for directory file discovery
-      const allFiles = yield* fs.listFiles({ cwd: basePath })
+      const allFiles = yield* ctx.Files.listFiles({ cwd: basePath })
       const globPattern = params.glob ?? "**/*"
       const matchesGlob = yield* Effect.try({
         try: () => picomatch(globPattern, { dot: true }),

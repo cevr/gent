@@ -1,5 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Data, Effect, Exit } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import type {
   ExtensionContributions,
   ExtensionReactions,
@@ -47,7 +48,9 @@ const turnAfterReactions = (
 })
 
 describe("runtime reactions", () => {
-  it.live("failure is isolated; later reactions still fire", () =>
+  const test = it.live.layer(BunServices.layer)
+
+  test("failure is isolated; later reactions still fire", () =>
     Effect.gen(function* () {
       const calls: string[] = []
       const compiled = compileExtensionReactions([
@@ -69,10 +72,9 @@ describe("runtime reactions", () => {
       const exit = yield* Effect.exit(compiled.emitTurnAfter(stubEvent, stubCtx))
       expect(Exit.isSuccess(exit)).toBe(true)
       expect(calls).toEqual(["failing", "after"])
-    }),
-  )
+    }))
 
-  it.live("happy path: all reactions fire in scope order", () =>
+  test("happy path: all reactions fire in scope order", () =>
     Effect.gen(function* () {
       const calls: string[] = []
       const make = (label: string) =>
@@ -90,6 +92,5 @@ describe("runtime reactions", () => {
 
       yield* compiled.emitTurnAfter(stubEvent, stubCtx)
       expect(calls).toEqual(["builtin", "user", "project"])
-    }),
-  )
+    }))
 })

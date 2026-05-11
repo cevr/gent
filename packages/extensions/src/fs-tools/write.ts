@@ -1,4 +1,4 @@
-import { Effect, Schema, FileSystem, Path } from "effect"
+import { Effect, Schema } from "effect"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
 
 // Write Tool Error
@@ -38,19 +38,17 @@ export const WriteTool = tool({
   params: WriteParams,
   output: WriteResult,
   execute: Effect.fn("WriteTool.execute")(function* (params) {
-    const fs = yield* FileSystem.FileSystem
-    const pathService = yield* Path.Path
     const ctx = yield* ExtensionContext
 
-    const filePath = pathService.resolve(params.path)
+    const filePath = ctx.Files.resolve(params.path)
 
     return yield* ctx.FileLock.withLock(
       filePath,
       Effect.gen(function* () {
-        const dir = pathService.dirname(filePath)
+        const dir = ctx.Files.dirname(filePath)
 
         // Ensure directory exists
-        yield* fs.makeDirectory(dir, { recursive: true }).pipe(
+        yield* ctx.Files.makeDirectory(dir, { recursive: true }).pipe(
           Effect.mapError(
             (e) =>
               new WriteError({
@@ -61,7 +59,7 @@ export const WriteTool = tool({
           ),
         )
 
-        yield* fs.writeFileString(filePath, params.content).pipe(
+        yield* ctx.Files.write(filePath, params.content).pipe(
           Effect.mapError(
             (e) =>
               new WriteError({

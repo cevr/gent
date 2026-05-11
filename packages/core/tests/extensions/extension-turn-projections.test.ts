@@ -7,6 +7,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type {
   ExtensionTurnContext,
@@ -64,7 +65,9 @@ const reactionExt = (
 })
 
 describe("turn projection reactions", () => {
-  it.live("contribute prompt sections and tool policy in scope order", () =>
+  const test = it.live.layer(BunServices.layer)
+
+  test("contribute prompt sections and tool policy in scope order", () =>
     Effect.gen(function* () {
       const compiled = compile([
         reactionExt("builtin-reaction", "builtin", () =>
@@ -93,10 +96,9 @@ describe("turn projection reactions", () => {
         { include: ["builtin-tool"] },
         { exclude: ["project-blocked"] },
       ])
-    }),
-  )
+    }))
 
-  it.live("failing reaction is logged + skipped while later reactions continue", () =>
+  test("failing reaction is logged + skipped while later reactions continue", () =>
     Effect.gen(function* () {
       const compiled = compile([
         reactionExt("bad-reaction", "builtin", () =>
@@ -113,10 +115,9 @@ describe("turn projection reactions", () => {
       const result = yield* compiled.resolveTurnProjection(reactionCtx)
       expect(result.promptSections).toEqual([{ id: "good", content: "still-runs", priority: 50 }])
       expect(result.policyFragments).toEqual([{ include: ["still-runs"] }])
-    }),
-  )
+    }))
 
-  it.live("defecting reaction is logged + skipped", () =>
+  test("defecting reaction is logged + skipped", () =>
     Effect.gen(function* () {
       const compiled = compile([
         reactionExt("defect-reaction", "builtin", () =>
@@ -134,16 +135,14 @@ describe("turn projection reactions", () => {
       const result = yield* compiled.resolveTurnProjection(reactionCtx)
       expect(result.promptSections).toEqual([{ id: "good", content: "after-defect", priority: 50 }])
       expect(result.policyFragments).toEqual([])
-    }),
-  )
+    }))
 
-  it.live("empty reaction result does not affect prompt sections or policy", () =>
+  test("empty reaction result does not affect prompt sections or policy", () =>
     Effect.gen(function* () {
       const compiled = compile([reactionExt("empty-reaction", "builtin", () => Effect.succeed({}))])
 
       const result = yield* compiled.resolveTurnProjection(reactionCtx)
       expect(result.promptSections).toEqual([])
       expect(result.policyFragments).toEqual([])
-    }),
-  )
+    }))
 })

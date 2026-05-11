@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Exit, Layer, Schema } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { tool, ExtensionContext } from "@gent/core/extensions/api"
@@ -46,7 +47,9 @@ class ToolRunnerTestError extends Schema.TaggedErrorClass<ToolRunnerTestError>()
 ) {}
 
 describe("ToolRunner", () => {
-  it.live("runs model capability directly and returns json output", () =>
+  const test = it.live.layer(BunServices.layer)
+
+  test("runs model capability directly and returns json output", () =>
     Effect.gen(function* () {
       const EchoTool = tool({
         id: "echo",
@@ -86,9 +89,8 @@ describe("ToolRunner", () => {
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ echoed: "hello" })
-    }),
-  )
-  it.live("provides host authority through ExtensionContext service", () =>
+    }))
+  test("provides host authority through ExtensionContext service", () =>
     Effect.gen(function* () {
       const Output = Schema.Struct({
         sessionId: Schema.String,
@@ -161,9 +163,8 @@ describe("ToolRunner", () => {
         hasInteraction: true,
         hasProcessRun: true,
       })
-    }),
-  )
-  it.live("returns error result when tool fails", () =>
+    }))
+  test("returns error result when tool fails", () =>
     Effect.gen(function* () {
       const FailTool = tool({
         id: "fail",
@@ -209,9 +210,8 @@ describe("ToolRunner", () => {
           }
         ).error ?? ""
       expect(error).toContain("Tool 'fail' failed")
-    }),
-  )
-  it.live("returns structured error on invalid input", () =>
+    }))
+  test("returns structured error on invalid input", () =>
     Effect.gen(function* () {
       const StrictTool = tool({
         id: "strict",
@@ -258,9 +258,8 @@ describe("ToolRunner", () => {
         ).error ?? ""
       expect(error).toContain("Tool 'strict' input failed:")
       expect(error).toContain("path")
-    }),
-  )
-  it.live("returns structured error when a transformed result violates the output schema", () =>
+    }))
+  test("returns structured error when a transformed result violates the output schema", () =>
     Effect.gen(function* () {
       const StrictOutputTool = tool({
         id: "strict_output",
@@ -317,9 +316,8 @@ describe("ToolRunner", () => {
         ).error ?? ""
       expect(error).toContain("Tool 'strict_output' failed:")
       expect(error).toContain("ok")
-    }),
-  )
-  it.live("returns 'Permission denied' error when tool is denied by permission rules", () =>
+    }))
+  test("returns 'Permission denied' error when tool is denied by permission rules", () =>
     Effect.gen(function* () {
       const SafeTool = tool({
         id: "safe",
@@ -369,9 +367,8 @@ describe("ToolRunner", () => {
           }
         ).error ?? ""
       expect(error).toBe("Permission denied")
-    }),
-  )
-  it.live("uses the provided tool context without reconstructing it", () =>
+    }))
+  test("uses the provided tool context without reconstructing it", () =>
     Effect.gen(function* () {
       const InspectTool = tool({
         id: "inspect",
@@ -433,9 +430,8 @@ describe("ToolRunner", () => {
         branchId: BranchId.make("branch-inspect"),
         agentName: AgentName.make("deepwork"),
       })
-    }),
-  )
-  it.live("provides the selected capability context while executing the tool", () =>
+    }))
+  test("provides the selected capability context while executing the tool", () =>
     Effect.gen(function* () {
       const ContextTool = tool({
         id: "context_tool",
@@ -484,9 +480,8 @@ describe("ToolRunner", () => {
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ value: "selected-profile" })
-    }),
-  )
-  it.live("read tools execute with ordinary profile Effect services", () =>
+    }))
+  test("read tools execute with ordinary profile Effect services", () =>
     Effect.gen(function* () {
       const ReadContextTool = tool({
         id: "read_context_tool",
@@ -548,9 +543,8 @@ describe("ToolRunner", () => {
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ readValue: "read-ok", writeUnavailable: false })
-    }),
-  )
-  it.live("readonly tools receive ExtensionContext with denied write facets", () =>
+    }))
+  test("readonly tools receive ExtensionContext with denied write facets", () =>
     Effect.gen(function* () {
       const ReadContextTool = tool({
         id: "read_extension_context",
@@ -624,9 +618,8 @@ describe("ToolRunner", () => {
         followUpDenied: true,
         interactionDenied: true,
       })
-    }),
-  )
-  it.live("re-raises interaction pending instead of converting it to a tool result", () =>
+    }))
+  test("re-raises interaction pending instead of converting it to a tool result", () =>
     Effect.gen(function* () {
       const PendingTool = tool({
         id: "pending",
@@ -698,6 +691,5 @@ describe("ToolRunner", () => {
           input: {},
         }),
       ])
-    }),
-  )
+    }))
 })

@@ -2,7 +2,6 @@ import { Effect, Schema } from "effect"
 import {
   type GentExtension,
   defineExtension,
-  defineResource,
   ExtensionContext,
   ExtensionId,
   tool,
@@ -34,7 +33,6 @@ import { WriteTool } from "./fs-tools/write.js"
 import { EditTool } from "./fs-tools/edit.js"
 import { GlobTool } from "./fs-tools/glob.js"
 import { GrepTool } from "./fs-tools/grep.js"
-import { FsRead } from "./fs-tools/read-service.js"
 import { WebFetchTool } from "./network-tools/webfetch.js"
 import { WebSearchTool } from "./network-tools/websearch.js"
 import { SearchSessionsTool } from "./session-tools/search-sessions.js"
@@ -73,7 +71,6 @@ const RenameSessionTool = tool({
 
 export const FsToolsExtension = defineExtension({
   id: "@gent/fs-tools",
-  resources: [defineResource({ scope: "process", layer: FsRead.Live })],
   tools: [ReadTool, WriteTool, EditTool, GlobTool, GrepTool],
 })
 

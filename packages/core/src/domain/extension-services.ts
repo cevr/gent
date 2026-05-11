@@ -1,4 +1,4 @@
-import { Context, Effect, Schema, type PlatformError } from "effect"
+import { Context, Effect, FileSystem, Option, Path, Schema, type PlatformError } from "effect"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent.js"
 import type { EventStoreError } from "./event.js"
 import type {
@@ -166,11 +166,40 @@ export const extensionProcessFromHostContext = (
   parentEnv: host.parentEnv,
 })
 
+export interface ExtensionFileStat {
+  readonly type:
+    | "File"
+    | "Directory"
+    | "SymbolicLink"
+    | "BlockDevice"
+    | "CharacterDevice"
+    | "FIFO"
+    | "Socket"
+    | "Unknown"
+  readonly size: bigint
+  readonly mtime: Date | undefined
+}
+
 export interface ExtensionFilesService {
   readonly listFiles: (params: {
     readonly cwd: string
     readonly waitForScanMs?: number
   }) => Effect.Effect<ReadonlyArray<IndexedFile>, ExtensionServiceError>
+  readonly read: (path: string) => Effect.Effect<string, ExtensionServiceError>
+  readonly write: (path: string, content: string) => Effect.Effect<void, ExtensionServiceError>
+  readonly exists: (path: string) => Effect.Effect<boolean, ExtensionServiceError>
+  readonly stat: (path: string) => Effect.Effect<ExtensionFileStat, ExtensionServiceError>
+  readonly readDirectory: (
+    path: string,
+    options?: { readonly recursive?: boolean },
+  ) => Effect.Effect<ReadonlyArray<string>, ExtensionServiceError>
+  readonly makeDirectory: (
+    path: string,
+    options?: { readonly recursive?: boolean; readonly mode?: number },
+  ) => Effect.Effect<void, ExtensionServiceError>
+  readonly resolve: (...paths: ReadonlyArray<string>) => string
+  readonly join: (...paths: ReadonlyArray<string>) => string
+  readonly dirname: (path: string) => string
 }
 
 export interface ExtensionFileLockServiceShape {
@@ -214,7 +243,7 @@ export const extensionServicesFromHostContext = (
     readonly toolCallId?: ToolCallId
     readonly turn?: ExtensionTurnContext
   },
-): Effect.Effect<Context.Context<ExtensionContext>> =>
+): Effect.Effect<Context.Context<ExtensionContext>, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const Session: ExtensionSessionService = {
       listMessages: (branchId) =>
@@ -267,22 +296,47 @@ export const extensionServicesFromHostContext = (
     const fileIndexOption = yield* Effect.serviceOption(FileIndex)
     const fileLockOption = yield* Effect.serviceOption(FileLockService)
     const statePublisherOption = yield* Effect.serviceOption(ExtensionStatePublisher)
+    const fs = yield* FileSystem.FileSystem
+    const pathSvc = yield* Path.Path
 
-    const Files: ExtensionFilesService =
+    const listFiles: ExtensionFilesService["listFiles"] =
       fileIndexOption._tag === "Some"
-        ? {
-            listFiles: (params) =>
-              mapError("ExtensionFiles", "listFiles", fileIndexOption.value.listFiles(params)),
-          }
-        : {
-            listFiles: () =>
-              Effect.fail(
-                serviceError(
-                  "ExtensionFiles",
-                  "listFiles",
-                )(new Error("File index service unavailable")),
-              ),
-          }
+        ? (params) =>
+            mapError("ExtensionFiles", "listFiles", fileIndexOption.value.listFiles(params))
+        : () =>
+            Effect.fail(
+              serviceError(
+                "ExtensionFiles",
+                "listFiles",
+              )(new Error("File index service unavailable")),
+            )
+
+    const Files: ExtensionFilesService = {
+      listFiles,
+      read: (path) => mapError("ExtensionFiles", "read", fs.readFileString(path)),
+      write: (path, content) =>
+        mapError("ExtensionFiles", "write", fs.writeFileString(path, content)),
+      exists: (path) => mapError("ExtensionFiles", "exists", fs.exists(path)),
+      stat: (path) =>
+        mapError(
+          "ExtensionFiles",
+          "stat",
+          fs.stat(path).pipe(
+            Effect.map((info) => ({
+              type: info.type,
+              size: info.size,
+              mtime: Option.getOrUndefined(info.mtime),
+            })),
+          ),
+        ),
+      readDirectory: (path, options) =>
+        mapError("ExtensionFiles", "readDirectory", fs.readDirectory(path, options)),
+      makeDirectory: (path, options) =>
+        mapError("ExtensionFiles", "makeDirectory", fs.makeDirectory(path, options)),
+      resolve: (...paths) => pathSvc.resolve(...paths),
+      join: (...paths) => pathSvc.join(...paths),
+      dirname: (path) => pathSvc.dirname(path),
+    }
 
     const FileLock: ExtensionFileLockServiceShape =
       fileLockOption._tag === "Some"
@@ -349,7 +403,7 @@ export const provideExtensionServices = <A, E, R>(
     readonly turn?: ExtensionTurnContext
   },
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> =>
+): Effect.Effect<A, E, Exclude<R, ExtensionContext> | FileSystem.FileSystem | Path.Path> =>
   Effect.flatMap(extensionServicesFromHostContext(ctx), (services) =>
     effect.pipe(Effect.provideContext(services)),
   )

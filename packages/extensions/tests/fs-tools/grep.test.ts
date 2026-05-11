@@ -2,7 +2,6 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GrepTool } from "../../src/fs-tools/grep.js"
-import { FsRead } from "../../src/fs-tools/read-service"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 import {
@@ -23,7 +22,7 @@ const PlatformLayer = Layer.mergeAll(
   FileIndexLayer,
   ExtensionContextLayer,
 )
-const ToolLayer = Layer.merge(PlatformLayer, Layer.provide(FsRead.Live, PlatformLayer))
+const ToolLayer = PlatformLayer
 
 describe("GrepTool", () => {
   it.scopedLive("finds pattern in files", () =>

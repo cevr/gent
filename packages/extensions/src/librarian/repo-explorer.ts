@@ -1,6 +1,6 @@
-import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
-import { ExtensionContext, tool } from "@gent/core/extensions/api"
+import { ExtensionContext, type ExtensionContextService, tool } from "@gent/core/extensions/api"
 import * as esGit from "es-git"
 
 export class GitReaderError extends Schema.TaggedErrorClass<GitReaderError>()("GitReaderError", {
@@ -15,16 +15,15 @@ type Credential =
 
 const resolveCredential = (
   url: string,
-): Effect.Effect<Credential | undefined, never, ExtensionContext | FileSystem.FileSystem> =>
+): Effect.Effect<Credential | undefined, never, ExtensionContext> =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    const fs = yield* FileSystem.FileSystem
     const home = ctx.home
     if (url.startsWith("git@") || url.includes("ssh://")) {
       const ed25519 = `${home}/.ssh/id_ed25519`
-      if (yield* fs.exists(ed25519).pipe(Effect.orElseSucceed(() => false))) {
+      if (yield* ctx.Files.exists(ed25519).pipe(Effect.orElseSucceed(() => false))) {
         const ed25519Pub = `${home}/.ssh/id_ed25519.pub`
-        const hasPub = yield* fs.exists(ed25519Pub).pipe(Effect.orElseSucceed(() => false))
+        const hasPub = yield* ctx.Files.exists(ed25519Pub).pipe(Effect.orElseSucceed(() => false))
         return {
           type: "SSHKeyFromPath" as const,
           username: "git",
@@ -33,9 +32,9 @@ const resolveCredential = (
         } satisfies Credential
       }
       const rsa = `${home}/.ssh/id_rsa`
-      if (yield* fs.exists(rsa).pipe(Effect.orElseSucceed(() => false))) {
+      if (yield* ctx.Files.exists(rsa).pipe(Effect.orElseSucceed(() => false))) {
         const rsaPub = `${home}/.ssh/id_rsa.pub`
-        const hasPub = yield* fs.exists(rsaPub).pipe(Effect.orElseSucceed(() => false))
+        const hasPub = yield* ctx.Files.exists(rsaPub).pipe(Effect.orElseSucceed(() => false))
         return {
           type: "SSHKeyFromPath" as const,
           username: "git",
@@ -70,10 +69,8 @@ export interface GitReaderService {
     url: string,
     dest: string,
     options?: { depth?: number; ref?: string },
-  ) => Effect.Effect<void, GitReaderError, ExtensionContext | FileSystem.FileSystem>
-  readonly fetch: (
-    repoPath: string,
-  ) => Effect.Effect<void, GitReaderError, ExtensionContext | FileSystem.FileSystem>
+  ) => Effect.Effect<void, GitReaderError, ExtensionContext>
+  readonly fetch: (repoPath: string) => Effect.Effect<void, GitReaderError, ExtensionContext>
   readonly listFiles: (
     repoPath: string,
     ref?: string,
@@ -305,21 +302,23 @@ export function parseSpec(spec: string): ParsedSpec {
   return { type: "github", name: spec, version: undefined }
 }
 
-const getCachePath = (cacheDir: string, spec: string) =>
-  Effect.gen(function* () {
-    const path = yield* Path.Path
-    const parsed = parseSpec(spec)
-    switch (parsed.type) {
-      case "github":
-        return path.join(cacheDir, ...parsed.name.split("/"))
-      case "npm":
-        return path.join(cacheDir, "npm", parsed.name, parsed.version ?? "latest")
-      case "pypi":
-        return path.join(cacheDir, "pypi", parsed.name, parsed.version ?? "latest")
-      case "crates":
-        return path.join(cacheDir, "crates", parsed.name, parsed.version ?? "latest")
-    }
-  })
+const getCachePath = (
+  files: ExtensionContextService["Files"],
+  cacheDir: string,
+  spec: string,
+): string => {
+  const parsed = parseSpec(spec)
+  switch (parsed.type) {
+    case "github":
+      return files.join(cacheDir, ...parsed.name.split("/"))
+    case "npm":
+      return files.join(cacheDir, "npm", parsed.name, parsed.version ?? "latest")
+    case "pypi":
+      return files.join(cacheDir, "pypi", parsed.name, parsed.version ?? "latest")
+    case "crates":
+      return files.join(cacheDir, "crates", parsed.name, parsed.version ?? "latest")
+  }
+}
 
 /** Resolve cache path for a spec without needing the Path service */
 export const getRepoCachePath = (home: string, spec: string): string => {
@@ -340,21 +339,21 @@ export const getRepoCachePath = (home: string, spec: string): string => {
 /** Ensure a repo is cloned/fetched. Returns the cache path. */
 export const fetchRepo = (spec: string, home: string) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
+    const ctx = yield* ExtensionContext
     const gitReader = yield* GitReader
     const cachePath = getRepoCachePath(home, spec)
     const parsed = parseSpec(spec)
 
-    const exists = yield* fs.exists(cachePath)
+    const exists = yield* ctx.Files.exists(cachePath)
     if (exists) return cachePath
 
     // Only auto-fetch GitHub repos — npm/pypi/crates need the full repo tool
     if (parsed.type !== "github") return cachePath
 
     // Create parent dir — let clone create the final directory
-    yield* fs
-      .makeDirectory(cachePath.slice(0, cachePath.lastIndexOf("/")), { recursive: true })
-      .pipe(Effect.ignore)
+    yield* ctx.Files.makeDirectory(cachePath.slice(0, cachePath.lastIndexOf("/")), {
+      recursive: true,
+    }).pipe(Effect.ignore)
 
     const url = `https://github.com/${parsed.name}.git`
     yield* gitReader
@@ -371,8 +370,8 @@ export const fetchRepo = (spec: string, home: string) =>
 
 const ensureCached = (cachePath: string, spec: string) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    yield* fs.exists(cachePath).pipe(
+    const ctx = yield* ExtensionContext
+    yield* ctx.Files.exists(cachePath).pipe(
       Effect.mapError(() => new RepoExplorerError({ message: "Failed to check path", spec })),
       Effect.flatMap((exists) =>
         exists
@@ -394,19 +393,19 @@ export const RepoTool = tool({
     params: typeof RepoExplorerParams.Type,
   ) {
     const ctx = yield* ExtensionContext
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
     const gitReader = yield* GitReader
-    const cacheDir = path.join(ctx.home, ".cache", "repo")
-    const cachePath = yield* getCachePath(cacheDir, params.spec)
+    const cacheDir = ctx.Files.join(ctx.home, ".cache", "repo")
+    const cachePath = getCachePath(ctx.Files, cacheDir, params.spec)
     const parsed = parseSpec(params.spec)
 
     switch (params.action) {
       case "fetch": {
-        yield* fs.makeDirectory(path.dirname(cachePath), { recursive: true }).pipe(Effect.ignore)
+        yield* ctx.Files.makeDirectory(ctx.Files.dirname(cachePath), { recursive: true }).pipe(
+          Effect.ignore,
+        )
 
         if (parsed.type === "github") {
-          const exists = yield* fs.exists(cachePath).pipe(Effect.orElseSucceed(() => false))
+          const exists = yield* ctx.Files.exists(cachePath).pipe(Effect.orElseSucceed(() => false))
           if (exists) {
             if (params.update === true) {
               yield* gitReader.fetch(cachePath).pipe(
@@ -434,7 +433,7 @@ export const RepoTool = tool({
             )
           }
         } else if (parsed.type === "npm") {
-          yield* fs.makeDirectory(cachePath, { recursive: true }).pipe(
+          yield* ctx.Files.makeDirectory(cachePath, { recursive: true }).pipe(
             Effect.mapError(
               (e) =>
                 new RepoExplorerError({
@@ -460,7 +459,7 @@ export const RepoTool = tool({
                 }),
             ),
           )
-          const tarballs = yield* fs.readDirectory(cachePath).pipe(
+          const tarballs = yield* ctx.Files.readDirectory(cachePath).pipe(
             Effect.mapError(
               (e) =>
                 new RepoExplorerError({
@@ -474,7 +473,7 @@ export const RepoTool = tool({
           if (tarball !== undefined) {
             yield* ctx.Process.run("tar", [
               "-xzf",
-              path.join(cachePath, tarball),
+              ctx.Files.join(cachePath, tarball),
               "-C",
               cachePath,
             ]).pipe(

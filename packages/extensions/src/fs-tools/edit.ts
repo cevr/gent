@@ -1,4 +1,4 @@
-import { Effect, Schema, FileSystem, Path } from "effect"
+import { Effect, Schema } from "effect"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
 
 // Edit Tool Error
@@ -145,11 +145,9 @@ export const EditTool = tool({
   params: EditParams,
   output: EditResult,
   execute: Effect.fn("EditTool.execute")(function* (params) {
-    const fs = yield* FileSystem.FileSystem
-    const pathService = yield* Path.Path
     const ctx = yield* ExtensionContext
 
-    const filePath = pathService.resolve(params.path)
+    const filePath = ctx.Files.resolve(params.path)
 
     // Redaction check
     const redaction = detectRedaction(params.oldString, params.newString)
@@ -160,7 +158,7 @@ export const EditTool = tool({
     return yield* ctx.FileLock.withLock(
       filePath,
       Effect.gen(function* () {
-        const content = yield* fs.readFileString(filePath).pipe(
+        const content = yield* ctx.Files.read(filePath).pipe(
           Effect.mapError(
             (e) =>
               new EditError({
@@ -198,7 +196,7 @@ export const EditTool = tool({
           ? content.split(searchStr).join(params.newString)
           : content.replace(searchStr, params.newString)
 
-        yield* fs.writeFileString(filePath, newContent).pipe(
+        yield* ctx.Files.write(filePath, newContent).pipe(
           Effect.mapError(
             (e) =>
               new EditError({

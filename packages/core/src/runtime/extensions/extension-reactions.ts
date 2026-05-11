@@ -1,4 +1,4 @@
-import { Cause, Effect } from "effect"
+import { Cause, Effect, type FileSystem, type Path } from "effect"
 import {
   SCOPE_PRECEDENCE,
   type ExtensionReaction,
@@ -13,7 +13,7 @@ import {
 import type { ExtensionId } from "../../domain/ids.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import type { PromptSection } from "../../domain/prompt.js"
-import { provideExtensionServices } from "../../domain/extension-services.js"
+import { type ExtensionContext, provideExtensionServices } from "../../domain/extension-services.js"
 import { exitErasedEffect, sealErasedEffect } from "./extension-effect-membrane.js"
 
 export interface ExtensionReactionContext {
@@ -90,7 +90,7 @@ const runReaction = <Input>(
 const provideLifecycleHostContext = <A, E, R>(
   ctx: ExtensionHostContext & { readonly turn?: ProjectionTurnContext["turn"] },
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> =>
+): Effect.Effect<A, E, Exclude<R, ExtensionContext> | FileSystem.FileSystem | Path.Path> =>
   ctx.capabilityContext === undefined
     ? provideExtensionServices(ctx, effect)
     : provideExtensionServices(ctx, effect).pipe(Effect.provideContext(ctx.capabilityContext))
@@ -98,7 +98,7 @@ const provideLifecycleHostContext = <A, E, R>(
 const provideProjectionContext = <A, E, R>(
   ctx: ExtensionReactionContext,
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> => {
+): Effect.Effect<A, E, Exclude<R, ExtensionContext> | FileSystem.FileSystem | Path.Path> => {
   const hostCtx: ExtensionHostContext & { readonly turn: ProjectionTurnContext["turn"] } = {
     ...ctx.host,
     turn: ctx.projection.turn,

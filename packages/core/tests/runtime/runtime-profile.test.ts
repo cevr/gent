@@ -20,7 +20,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, Layer, Path, Schema as S } from "effect"
-import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
+import { BunFileSystem, BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import { defineExtension, defineResource, tool, AgentName } from "@gent/core/extensions/api"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
@@ -89,38 +89,37 @@ const dynamicExtension = defineExtension({
 })
 
 describe("resolveRuntimeProfile", () => {
-  it.live(
-    "resolveProfileRuntime starts process resources once and skips duplicate lifecycle hooks",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          let starts = 0
-          const extension = defineExtension({
-            id: "@gent/test-runtime-profile-start-once",
-            resources: [
-              defineResource({
-                scope: "process",
-                layer: Layer.empty,
-                start: Effect.sync(() => {
-                  starts += 1
-                }),
-              }) as never,
-            ],
-          })
+  const test = it.live.layer(BunServices.layer)
 
-          yield* resolveProfileRuntime({
-            cwd: "/tmp",
-            home: "/tmp",
-            platform: "darwin",
-            extensions: [extension],
-          })
+  test("resolveProfileRuntime starts process resources once and skips duplicate lifecycle hooks", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let starts = 0
+        const extension = defineExtension({
+          id: "@gent/test-runtime-profile-start-once",
+          resources: [
+            defineResource({
+              scope: "process",
+              layer: Layer.empty,
+              start: Effect.sync(() => {
+                starts += 1
+              }),
+            }) as never,
+          ],
+        })
 
-          expect(starts).toBe(1)
-        }),
-      ).pipe(Effect.provide(sharedLayer)),
-  )
+        yield* resolveProfileRuntime({
+          cwd: "/tmp",
+          home: "/tmp",
+          platform: "darwin",
+          extensions: [extension],
+        })
 
-  it.live("same inputs across modes produce equivalent profiles", () =>
+        expect(starts).toBe(1)
+      }),
+    ).pipe(Effect.provide(sharedLayer)))
+
+  test("same inputs across modes produce equivalent profiles", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const inputs = {
@@ -155,10 +154,9 @@ describe("resolveRuntimeProfile", () => {
         const sec = sectionsA.find((s) => s.id === "rp-test-section")
         expect(sec?.content).toBe("rp test content")
       }),
-    ).pipe(Effect.provide(sharedLayer)),
-  )
+    ).pipe(Effect.provide(sharedLayer)))
 
-  it.live("buildExtensionLayers wires ExtensionRegistry from resolved data", () =>
+  test("buildExtensionLayers wires ExtensionRegistry from resolved data", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const profile = yield* resolveRuntimeProfile({
@@ -179,10 +177,9 @@ describe("resolveRuntimeProfile", () => {
         const ids = sections.map((s) => s.id)
         expect(ids).toContain("rp-test-section")
       }),
-    ).pipe(Effect.provide(sharedLayer)),
-  )
+    ).pipe(Effect.provide(sharedLayer)))
 
-  it.live("resource-backed turnProjection resolves through buildExtensionLayers", () =>
+  test("resource-backed turnProjection resolves through buildExtensionLayers", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const profile = yield* resolveRuntimeProfile({
@@ -227,10 +224,9 @@ describe("resolveRuntimeProfile", () => {
           content: "dynamic-from-service",
         })
       }),
-    ).pipe(Effect.provide(sharedLayer)),
-  )
+    ).pipe(Effect.provide(sharedLayer)))
 
-  it.live("profile runtime helper gives server and per-cwd paths the same runtime shape", () =>
+  test("profile runtime helper gives server and per-cwd paths the same runtime shape", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const inputs = {
@@ -258,6 +254,5 @@ describe("resolveRuntimeProfile", () => {
           new Map(sections.map((s) => [s.id, s.content]))
         expect(toMap(cacheRuntime.baseSections)).toEqual(toMap(serverRuntime.baseSections))
       }),
-    ).pipe(Effect.provide(sharedLayer)),
-  )
+    ).pipe(Effect.provide(sharedLayer)))
 })

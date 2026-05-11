@@ -2,7 +2,6 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { ReadTool } from "../../src/fs-tools/read.js"
-import { FsRead } from "../../src/fs-tools/read-service"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
@@ -24,7 +23,7 @@ const PlatformLayer = Layer.merge(
     platform: "test",
   }),
 )
-const ToolLayer = Layer.merge(PlatformLayer, Layer.provide(FsRead.Live, PlatformLayer))
+const ToolLayer = PlatformLayer
 
 describe("ReadTool", () => {
   const readTest = it.scopedLive.layer(ToolLayer)

@@ -11,6 +11,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import { narrowR } from "../helpers/effect"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
@@ -63,7 +64,9 @@ const ext = (
 
 describe("scope precedence", () => {
   describe("keyed contributions — later scope wins", () => {
-    it.live("tool with same name: project shadows user shadows builtin", () => {
+    const test = it.live.layer(BunServices.layer)
+
+    test("tool with same name: project shadows user shadows builtin", () => {
       const builtinTool = toolReturning("greet", "from-builtin")
       const userTool = toolReturning("greet", "from-user")
       const projectTool = toolReturning("greet", "from-project")
@@ -87,7 +90,7 @@ describe("scope precedence", () => {
       )
     })
 
-    it.live("agent with same name: project shadows builtin", () => {
+    test("agent with same name: project shadows builtin", () => {
       const builtinAgent = getBuiltinAgent("cowork")!
       const projectAgent = {
         ...getBuiltinAgent("cowork")!,
@@ -101,7 +104,7 @@ describe("scope precedence", () => {
       return Effect.sync(() => expect(resolved.agents.get("cowork")?.description).toBe("shadowed"))
     })
 
-    it.live("prompt section by id: project tool prompt shadows builtin", () => {
+    test("prompt section by id: project tool prompt shadows builtin", () => {
       const builtinTool = tool({
         id: "carrier-builtin",
         description: "carrier",
@@ -128,7 +131,7 @@ describe("scope precedence", () => {
       )
     })
 
-    it.live("tool prompt: shadowed lower-scope prompt does NOT survive", () => {
+    test("tool prompt: shadowed lower-scope prompt does NOT survive", () => {
       // Previously, prompts/rules were collected from raw extracted leaves, not
       // winners. A higher-scope tool shadowing a lower-scope tool would leak
       // the loser's prompt.
@@ -156,7 +159,7 @@ describe("scope precedence", () => {
       return Effect.sync(() => expect(resolved.promptSections.has("shadow-prompt")).toBe(false))
     })
 
-    it.live("tool permissionRules: shadowed lower-scope rules do NOT survive", () => {
+    test("tool permissionRules: shadowed lower-scope rules do NOT survive", () => {
       // A project-scope tool shadowing the builtin `bash` without
       // `permissionRules` must NOT inherit the builtin's deny rules.
       const builtinTool = tool({
@@ -184,7 +187,7 @@ describe("scope precedence", () => {
       return Effect.sync(() => expect(resolved.permissionRules).toEqual([]))
     })
 
-    it.live("same scope ties broken by extension id alphabetically", () => {
+    test("same scope ties broken by extension id alphabetically", () => {
       const toolFromZ = toolReturning("greet", "from-z")
       const toolFromA = toolReturning("greet", "from-a")
 
@@ -210,7 +213,9 @@ describe("scope precedence", () => {
   })
 
   describe("explicit prompt slots — project applies after user after builtin", () => {
-    it.live("systemPrompt rewrite order follows scope precedence", () => {
+    const test = it.live.layer(BunServices.layer)
+
+    test("systemPrompt rewrite order follows scope precedence", () => {
       const make = (id: string, scope: "builtin" | "user" | "project") =>
         ext(id, scope, {
           reactions: {

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
@@ -39,7 +40,9 @@ const ext = (
 })
 
 describe("prompt slots", () => {
-  it.live("compose in scope order: builtin then user then project", () => {
+  const test = it.live.layer(BunServices.layer)
+
+  test("compose in scope order: builtin then user then project", () => {
     const compiled = compileExtensionReactions([
       ext("p", "project", "[project]"),
       ext("a", "builtin", "[builtin]"),
@@ -56,12 +59,11 @@ describe("prompt slots", () => {
       )
   })
 
-  it.live("empty turn reactions are a no-op", () =>
+  test("empty turn reactions are a no-op", () =>
     compileExtensionReactions([])
       .resolveSystemPrompt(
         { basePrompt: "x", agent: getBuiltinAgent("cowork")! },
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
-      .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("x")))),
-  )
+      .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("x")))))
 })

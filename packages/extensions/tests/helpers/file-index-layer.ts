@@ -54,6 +54,7 @@ export const makeTestCtxWithFileIndex: Effect.Effect<TestToolContext, never, Fil
     return {
       ...base,
       Files: {
+        ...base.Files,
         listFiles: (params) =>
           fileIndex.listFiles(params).pipe(Effect.mapError(wrapError("listFiles"))),
       },

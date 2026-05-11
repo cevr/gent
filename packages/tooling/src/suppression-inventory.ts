@@ -376,6 +376,12 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line preferSchemaOverJson:off",
   },
+  {
+    file: "packages/core/src/test-utils/extension-harness.ts",
+    line: 3,
+    kind: "effect-diagnostics",
+    text: "// @effect-diagnostics nodeBuiltinImport:off — test stub needs sync path ops; ExtensionFilesService captures Path.Path at runtime construction",
+  },
 ]
 
 const approvedSuppression = (

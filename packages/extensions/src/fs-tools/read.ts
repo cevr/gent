@@ -1,6 +1,5 @@
 import { Effect, Schema } from "effect"
-import { tool } from "@gent/core/extensions/api"
-import { FsRead } from "./read-service.js"
+import { ExtensionContext, tool } from "@gent/core/extensions/api"
 
 // Read Tool Error
 
@@ -50,12 +49,12 @@ export const ReadTool = tool({
   params: ReadParams,
   output: ReadResult,
   execute: Effect.fn("ReadTool.execute")(function* (params) {
-    const fs = yield* FsRead
+    const ctx = yield* ExtensionContext
 
-    const filePath = fs.resolve(params.path)
+    const filePath = ctx.Files.resolve(params.path)
 
     // Check if path is a directory
-    const stat = yield* fs.stat(filePath).pipe(
+    const stat = yield* ctx.Files.stat(filePath).pipe(
       Effect.mapError(
         (e) =>
           new ReadError({
@@ -73,7 +72,7 @@ export const ReadTool = tool({
       })
     }
 
-    const content = yield* fs.readFileString(filePath).pipe(
+    const content = yield* ctx.Files.read(filePath).pipe(
       Effect.mapError(
         (e) =>
           new ReadError({

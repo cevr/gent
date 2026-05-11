@@ -1,5 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Context, Data, Effect, Exit, Ref } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type {
   ExtensionContributions,
@@ -56,7 +57,9 @@ class ReactionCounter extends Context.Service<
 >()("@gent/core/tests/extensions/extension-reactions.test/ReactionCounter") {}
 
 describe("runtime slots", () => {
-  it.live("systemPrompt composes explicit reaction rewrites in scope order", () => {
+  const test = it.live.layer(BunServices.layer)
+
+  test("systemPrompt composes explicit reaction rewrites in scope order", () => {
     const extensions = [
       makeExt("builtin", "builtin", {
         reactions: {
@@ -82,7 +85,7 @@ describe("runtime slots", () => {
       )
   })
 
-  it.live("systemPrompt isolates failing reaction rewrites", () => {
+  test("systemPrompt isolates failing reaction rewrites", () => {
     const extensions = [
       makeExt("builtin", "builtin", {
         reactions: {
@@ -108,7 +111,7 @@ describe("runtime slots", () => {
       )
   })
 
-  it.live("systemPrompt receives host authority through ExtensionContext", () =>
+  test("systemPrompt receives host authority through ExtensionContext", () =>
     Effect.gen(function* () {
       const sawProcessAuthority = yield* Ref.make(false)
       const slots = compileExtensionReactions([
@@ -137,10 +140,9 @@ describe("runtime slots", () => {
 
       expect(result).toBe("readonly")
       expect(yield* Ref.get(sawProcessAuthority)).toBe(true)
-    }),
-  )
+    }))
 
-  it.live("toolResult applies explicit resource enrichments in scope order", () => {
+  test("toolResult applies explicit resource enrichments in scope order", () => {
     const extensions = [
       makeExt("builtin", "builtin", {
         reactions: {
@@ -172,7 +174,7 @@ describe("runtime slots", () => {
       .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("base-builtin-explicit"))))
   })
 
-  it.live("turnAfter isolates failing reactions; all handlers still run", () => {
+  test("turnAfter isolates failing reactions; all handlers still run", () => {
     const calls: string[] = []
     const extensions = [
       makeExt("first", "builtin", {
@@ -227,7 +229,7 @@ describe("runtime slots", () => {
     })
   })
 
-  it.live("turnAfter receives host authority through ExtensionContext", () =>
+  test("turnAfter receives host authority through ExtensionContext", () =>
     Effect.gen(function* () {
       const sawProcessAuthority = yield* Ref.make(false)
       const slots = compileExtensionReactions([
@@ -256,10 +258,9 @@ describe("runtime slots", () => {
       )
 
       expect(yield* Ref.get(sawProcessAuthority)).toBe(true)
-    }),
-  )
+    }))
 
-  it.live("turnAfter reactions run inside lifecycle capability context", () =>
+  test("turnAfter reactions run inside lifecycle capability context", () =>
     Effect.gen(function* () {
       const ref = yield* Ref.make(0)
       const counter = {
@@ -297,6 +298,5 @@ describe("runtime slots", () => {
 
       const count = yield* counter.get
       expect(count).toBe(1)
-    }),
-  )
+    }))
 })

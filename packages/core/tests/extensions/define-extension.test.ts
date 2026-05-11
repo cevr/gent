@@ -9,6 +9,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Layer, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
+import { BunServices } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import {
   defineScheduledJob,
@@ -50,7 +51,9 @@ const stubProjectionCtx = {
 const setupOf = (ext: GentExtension<never>) => ext.setup(testSetupCtx())
 
 describe("defineExtension", () => {
-  it.live("empty extension produces empty contribution buckets", () =>
+  const test = it.live.layer(BunServices.layer)
+
+  test("empty extension produces empty contribution buckets", () =>
     Effect.gen(function* () {
       const ext = defineExtension({ id: "empty" })
       const contributions = yield* setupOf(ext)
@@ -60,10 +63,9 @@ describe("defineExtension", () => {
       expect(contributions.resources ?? []).toEqual([])
       expect(contributions.externalDrivers ?? []).toEqual([])
       expect(contributions.reactions).toBeUndefined()
-    }),
-  )
+    }))
 
-  it.live("each kind round-trips into its corresponding bucket", () =>
+  test("each kind round-trips into its corresponding bucket", () =>
     Effect.gen(function* () {
       // PermissionRule + PromptSection are bundled on the Capability
       // they decorate (here: `myTool.permissionRules`, `myTool.prompt`).
@@ -110,50 +112,44 @@ describe("defineExtension", () => {
       const resources = contributions.resources ?? []
       expect(resources).toHaveLength(1)
       expect(contributions.scheduledJobs?.[0]?.id).toBe("test-job")
-    }),
-  )
+    }))
 
-  it.live(
-    "Resource.start and Resource.stop run at scope build/teardown via buildResourceLayer in declaration / reverse order",
-    () =>
-      Effect.gen(function* () {
-        const log: string[] = []
-        const append = (s: string) => Effect.sync(() => log.push(s))
-        const ext = defineExtension({
-          id: "lifecycle",
-          resources: [
-            defineResource({
-              scope: "process",
-              layer: Layer.empty as Layer.Layer<unknown>,
-              start: append("startup-1"),
-              stop: append("shutdown-1"),
-            }) as never,
-            defineResource({
-              scope: "process",
-              layer: Layer.empty as Layer.Layer<unknown>,
-              start: append("startup-2"),
-              stop: append("shutdown-2"),
-            }) as never,
-          ],
-        })
-        const contributions = yield* setupOf(ext)
-        const loaded = {
-          manifest: { id: ext.manifest.id },
-          scope: "builtin" as const,
-          sourcePath: "builtin",
-          contributions,
-        }
-        yield* Effect.scoped(
-          Layer.build(buildResourceLayer([loaded], "process")).pipe(Effect.asVoid),
-        )
-        // Strict ordering — no sorting. Codex  review flagged that the
-        // prior `slice(...).sort()` masked a real ordering bug. Lifecycle
-        // is now sequenced through one Effect, so this is deterministic.
-        expect(log).toEqual(["startup-1", "startup-2", "shutdown-2", "shutdown-1"])
-      }),
-  )
+  test("Resource.start and Resource.stop run at scope build/teardown via buildResourceLayer in declaration / reverse order", () =>
+    Effect.gen(function* () {
+      const log: string[] = []
+      const append = (s: string) => Effect.sync(() => log.push(s))
+      const ext = defineExtension({
+        id: "lifecycle",
+        resources: [
+          defineResource({
+            scope: "process",
+            layer: Layer.empty as Layer.Layer<unknown>,
+            start: append("startup-1"),
+            stop: append("shutdown-1"),
+          }) as never,
+          defineResource({
+            scope: "process",
+            layer: Layer.empty as Layer.Layer<unknown>,
+            start: append("startup-2"),
+            stop: append("shutdown-2"),
+          }) as never,
+        ],
+      })
+      const contributions = yield* setupOf(ext)
+      const loaded = {
+        manifest: { id: ext.manifest.id },
+        scope: "builtin" as const,
+        sourcePath: "builtin",
+        contributions,
+      }
+      yield* Effect.scoped(Layer.build(buildResourceLayer([loaded], "process")).pipe(Effect.asVoid))
+      // Strict ordering — no sorting. Codex  review flagged that the
+      // prior `slice(...).sort()` masked a real ordering bug. Lifecycle
+      // is now sequenced through one Effect, so this is deterministic.
+      expect(log).toEqual(["startup-1", "startup-2", "shutdown-2", "shutdown-1"])
+    }))
 
-  it.live("Effect-returning bucket factory is awaited", () =>
+  test("Effect-returning bucket factory is awaited", () =>
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "effectful",
@@ -179,10 +175,9 @@ describe("defineExtension", () => {
             : getToolId((contributions.tools ?? [])[0]!),
         ),
       ).toBe("from-effect")
-    }),
-  )
+    }))
 
-  it.live("setup context is provided to per-bucket factory", () =>
+  test("setup context is provided to per-bucket factory", () =>
     Effect.gen(function* () {
       let captured: PublicExtensionSetupContext | undefined
       const ext = defineExtension({
@@ -202,10 +197,9 @@ describe("defineExtension", () => {
       expect("runProcess" in (captured?.host ?? {})).toBe(false)
       expect(captured?.Process.parentEnv).toBeDefined()
       expect(captured?.Process.runProcess).toBeDefined()
-    }),
-  )
+    }))
 
-  it.live("defineExtension result wires through ExtensionRegistry + explicit prompt slots", () =>
+  test("defineExtension result wires through ExtensionRegistry + explicit prompt slots", () =>
     Effect.gen(function* () {
       const myTool = tool({
         id: "from-define",
@@ -243,10 +237,9 @@ describe("defineExtension", () => {
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
       expect(result).toBe("yo!!")
-    }),
-  )
+    }))
 
-  it.live("bucket factory error becomes ExtensionLoadError", () =>
+  test("bucket factory error becomes ExtensionLoadError", () =>
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "boom",
@@ -259,10 +252,9 @@ describe("defineExtension", () => {
         expect(rendered).toContain("ExtensionLoadError")
         expect(rendered).toContain("tools factory failed: nope")
       }
-    }),
-  )
+    }))
 
-  it.live("raw native Effect tools are rejected at defineExtension setup", () =>
+  test("raw native Effect tools are rejected at defineExtension setup", () =>
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "raw-native",
@@ -282,10 +274,9 @@ describe("defineExtension", () => {
           "tools[0]: tool must be created with `tool({...})` so Gent metadata is attached",
         )
       }
-    }),
-  )
+    }))
 
-  it.live("metadata-spoofed native Effect tools are rejected at defineExtension setup", () =>
+  test("metadata-spoofed native Effect tools are rejected at defineExtension setup", () =>
     Effect.gen(function* () {
       const legit = tool({
         id: "legit",
@@ -312,10 +303,9 @@ describe("defineExtension", () => {
           "tools[0]: tool must be created with `tool({...})` so Gent metadata is attached",
         )
       }
-    }),
-  )
+    }))
 
-  it.live("unknown runtime-loaded contribution buckets fail activation", () =>
+  test("unknown runtime-loaded contribution buckets fail activation", () =>
     Effect.gen(function* () {
       const exit = yield* Effect.exit(
         validateExtensionPackageShape({ id: ExtensionId.make("unknown-bucket") }, {
@@ -329,10 +319,9 @@ describe("defineExtension", () => {
         expect(rendered).toContain("unknown contribution bucket")
         expect(rendered).toContain("actors")
       }
-    }),
-  )
+    }))
 
-  it.live("unknown defineExtension buckets fail activation before normalization", () =>
+  test("unknown defineExtension buckets fail activation before normalization", () =>
     Effect.gen(function* () {
       const ext = defineExtension({ id: "unknown-bucket", actors: [] } as never)
       const exit = yield* Effect.exit(setupOf(ext))
@@ -343,10 +332,9 @@ describe("defineExtension", () => {
         expect(rendered).toContain("unknown contribution bucket")
         expect(rendered).toContain("actors")
       }
-    }),
-  )
+    }))
 
-  it.live("defineExtension preserves contribution buckets", () =>
+  test("defineExtension preserves contribution buckets", () =>
     Effect.gen(function* () {
       const readSnapshot = request({
         id: "read-snapshot",
@@ -376,6 +364,5 @@ describe("defineExtension", () => {
 
       expect(toolContribs.tools?.map((t) => String(getToolId(t)))).toEqual(["helper-tool-call"])
       expect(requestContribs.requests?.map((r) => String(r.id))).toEqual(["read-snapshot"])
-    }),
-  )
+    }))
 })
