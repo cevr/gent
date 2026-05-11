@@ -13,7 +13,7 @@
  * @module
  */
 
-import { Context, Effect, Layer, Ref } from "effect"
+import { Context, Effect, HashMap, HashSet, Layer, TxRef } from "effect"
 import type { SessionId } from "../../domain/ids.js"
 
 export interface AgentLoopSessionGovernanceService {
@@ -29,32 +29,31 @@ export class AgentLoopSessionGovernance extends Context.Service<
   static Live: Layer.Layer<AgentLoopSessionGovernance> = Layer.effect(
     AgentLoopSessionGovernance,
     Effect.gen(function* () {
-      const ref = yield* Ref.make<Map<string, ReadonlySet<SessionId>>>(new Map())
+      const ref = yield* TxRef.make(HashMap.empty<string, HashSet.HashSet<SessionId>>())
       return {
         markTerminated: (workspaceId, sessionId) =>
-          Ref.update(ref, (m) => {
-            const next = new Map(m)
-            const sessions = new Set<SessionId>(next.get(workspaceId) ?? new Set<SessionId>())
-            sessions.add(sessionId)
-            next.set(workspaceId, sessions)
-            return next
+          TxRef.update(ref, (m) => {
+            const sessions = HashMap.get(m, workspaceId).pipe((opt) =>
+              opt._tag === "Some" ? opt.value : HashSet.empty<SessionId>(),
+            )
+            return HashMap.set(m, workspaceId, HashSet.add(sessions, sessionId))
           }),
         clearTerminated: (workspaceId, sessionId) =>
-          Ref.update(ref, (m) => {
-            const sessions = m.get(workspaceId)
-            if (sessions === undefined || !sessions.has(sessionId)) return m
-            const nextSessions = new Set(sessions)
-            nextSessions.delete(sessionId)
-            const next = new Map(m)
-            if (nextSessions.size === 0) {
-              next.delete(workspaceId)
-            } else {
-              next.set(workspaceId, nextSessions)
-            }
-            return next
+          TxRef.update(ref, (m) => {
+            const opt = HashMap.get(m, workspaceId)
+            if (opt._tag === "None" || !HashSet.has(opt.value, sessionId)) return m
+            const nextSessions = HashSet.remove(opt.value, sessionId)
+            return HashSet.size(nextSessions) === 0
+              ? HashMap.remove(m, workspaceId)
+              : HashMap.set(m, workspaceId, nextSessions)
           }),
         isTerminated: (workspaceId, sessionId) =>
-          Ref.get(ref).pipe(Effect.map((m) => m.get(workspaceId)?.has(sessionId) ?? false)),
+          TxRef.get(ref).pipe(
+            Effect.map((m) => {
+              const opt = HashMap.get(m, workspaceId)
+              return opt._tag === "Some" && HashSet.has(opt.value, sessionId)
+            }),
+          ),
       }
     }),
   )
