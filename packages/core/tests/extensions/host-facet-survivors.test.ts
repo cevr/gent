@@ -110,7 +110,7 @@ describe("host facet survivors after C9.5 prune", () => {
       const base = testToolContext()
       const ctxLayer = Layer.succeed(ExtensionContext, {
         ...base,
-        Agent: { ...base.Agent, get: () => Effect.void.pipe(Effect.as(undefined)) },
+        Agent: { ...base.Agent, listAgents: () => Effect.succeed([] as const) },
       })
       const exit = yield* Effect.exit(
         requireAgent(AgentName.make("missing-agent")).pipe(Effect.provide(ctxLayer)),

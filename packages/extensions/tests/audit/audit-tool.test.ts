@@ -41,7 +41,6 @@ const makeCtx = (overrides: {
   testToolContext({
     agentName: AgentName.make("cowork"),
     Agent: {
-      get: (name) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
       run: overrides.agentRun,
       listAgents: () => Effect.succeed(AllBuiltinAgents),
     },

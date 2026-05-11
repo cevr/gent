@@ -29,7 +29,6 @@ const makeCtx = (overrides: {
   testToolContext({
     home: TEST_HOME,
     Agent: {
-      get: () => Effect.void.pipe(Effect.as(undefined)),
       run: overrides.agentRun,
       listAgents: () => Effect.succeed(AllBuiltinAgents),
     },

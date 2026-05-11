@@ -71,7 +71,6 @@ const stubCtx = testToolContext({
   cwd: process.cwd(),
   home: "/tmp",
   Agent: {
-    get: dieStub("get"),
     run: dieStub("run"),
     listAgents: dieStub("listAgents"),
   },

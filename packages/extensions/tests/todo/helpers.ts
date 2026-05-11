@@ -18,8 +18,6 @@ import { toolPreset } from "../helpers/test-preset.js"
 export const withTodoWrite = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
   effect
 
-const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
-
 export const FIXTURE_DATE = dateFromMillis(0)
 
 const mockRunnerSuccess: AgentRunner = {
@@ -41,7 +39,6 @@ export const makeCtx = Effect.gen(function* () {
     branchId: BranchId.make("b1"),
     toolCallId: ToolCallId.make("tc1"),
     Agent: {
-      get: (name) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
       run: (params) =>
         Effect.succeed(
           AgentRunResult.cases.success.make({
@@ -51,7 +48,7 @@ export const makeCtx = Effect.gen(function* () {
             persistence: "ephemeral",
           }),
         ),
-      listAgents: dieStub("agent.listAgents"),
+      listAgents: () => Effect.succeed(AllBuiltinAgents),
     },
   })
   return {

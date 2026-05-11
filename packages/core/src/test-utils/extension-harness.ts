@@ -184,7 +184,6 @@ export type TestToolContext = ExtensionHostContext &
 export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolContext => {
   const host = testExtensionHostContext().host
   const agent = {
-    get: dieStub("agent.get"),
     listAgents: dieStub("agent.listAgents"),
     run: dieStub("agent.run"),
   }

@@ -16,7 +16,6 @@ const die = (operation: string) =>
   Effect.die(new Error(`unconfigured test ExtensionHostContext.${operation}`))
 
 const defaultAgent = (): ExtensionHostContext.Agent => ({
-  get: () => die("agent.get"),
   listAgents: () => die("agent.listAgents"),
   run: () => die("agent.run"),
 })

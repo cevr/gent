@@ -42,7 +42,6 @@ const makeCtx = (cwd: string, home: string): ReturnType<typeof testToolContext> 
     cwd,
     home,
     Agent: {
-      get: dieStub("get"),
       run: dieStub("run"),
       listAgents: dieStub("listAgents"),
     },

@@ -95,9 +95,6 @@ export interface ExtensionSessionService {
 }
 
 export interface ExtensionAgentService {
-  readonly get: (
-    name: AgentName,
-  ) => Effect.Effect<AgentDefinition | undefined, ExtensionServiceError>
   readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>, ExtensionServiceError>
   readonly run: (params: {
     readonly agent: AgentDefinition
@@ -253,7 +250,6 @@ export const extensionServicesFromHostContext = (
       listBranches: () => mapError("ExtensionSession", "listBranches", ctx.session.listBranches()),
     }
     const Agent: ExtensionAgentService = {
-      get: (name) => mapError("ExtensionAgent", "get", ctx.agent.get(name)),
       listAgents: () => mapError("ExtensionAgent", "listAgents", ctx.agent.listAgents()),
       run: (params) =>
         ctx.agent.run(params).pipe(

@@ -4,7 +4,6 @@ import { narrowR } from "../../core/tests/helpers/effect"
 import { HandoffTool } from "../src/handoff-tool.js"
 import { HandoffCooldown, HandoffExtension } from "../src/handoff.js"
 import { AgentRunResult, SessionId, type ExtensionContextService } from "@gent/core/extensions/api"
-import { AllBuiltinAgents } from "./helpers/builtin-agents.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { runToolWithCtx, provideTestSetupContext } from "@gent/core-internal/test-utils"
 
@@ -18,7 +17,6 @@ const makeCtx = (overrides: {
 }) =>
   testToolContext({
     Agent: {
-      get: (name) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
       run:
         overrides.agentRun ??
         ((params) =>

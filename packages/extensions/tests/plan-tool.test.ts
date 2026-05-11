@@ -48,7 +48,6 @@ const makeCtx = (overrides: {
   return {
     ...base,
     Agent: {
-      get: (name) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
       run: agentRun,
       listAgents: () => Effect.succeed(AllBuiltinAgents),
     },

@@ -88,8 +88,9 @@ export const DelegateTool = tool({
     }
 
     const resolveAgent = (agentName: string) =>
-      ctx.Agent.get(AgentName.make(agentName)).pipe(
-        Effect.map((agent) => {
+      ctx.Agent.listAgents().pipe(
+        Effect.map((agents) => {
+          const agent = agents.find((a) => a.name === agentName)
           if (agent === undefined) {
             return { ok: false as const, error: `Unknown agent: ${agentName}` }
           }
@@ -123,7 +124,8 @@ export const DelegateTool = tool({
           .update(todo.id, { status: "in_progress" })
           .pipe(Effect.catchEager(() => Effect.void))
 
-        const resolvedAgent = yield* ctx.Agent.get(agent.name)
+        const agents = yield* ctx.Agent.listAgents()
+        const resolvedAgent = agents.find((a) => a.name === agent.name)
         if (resolvedAgent === undefined) {
           yield* todoService
             .update(todo.id, {
