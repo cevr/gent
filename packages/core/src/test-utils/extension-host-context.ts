@@ -26,7 +26,6 @@ const defaultSession = (): ExtensionHostContext.SessionFacet => ({
   getSession: () => die("session.getSession"),
   getDetail: () => die("session.getDetail"),
   renameCurrent: () => die("session.renameCurrent"),
-  estimateContextPercent: () => die("session.estimateContextPercent"),
   search: () => die("session.search"),
   queueFollowUp: () => die("session.queueFollowUp"),
   listBranches: () => die("session.listBranches"),

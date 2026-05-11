@@ -76,9 +76,6 @@ export interface ExtensionSessionService {
   readonly renameCurrent: (
     name: string,
   ) => Effect.Effect<{ readonly renamed: boolean; readonly name?: string }, ExtensionServiceError>
-  readonly estimateContextPercent: (options?: {
-    readonly modelId?: string
-  }) => Effect.Effect<number, ExtensionServiceError>
   readonly search: (
     query: string,
     options?: {
@@ -249,12 +246,6 @@ export const extensionServicesFromHostContext = (
         mapError("ExtensionSession", "getDetail", ctx.session.getDetail(sessionId)),
       renameCurrent: (name) =>
         mapError("ExtensionSession", "renameCurrent", ctx.session.renameCurrent(name)),
-      estimateContextPercent: (options) =>
-        mapError(
-          "ExtensionSession",
-          "estimateContextPercent",
-          ctx.session.estimateContextPercent(options),
-        ),
       search: (query, options) =>
         mapError("ExtensionSession", "search", ctx.session.search(query, options)),
       queueFollowUp: (params) =>

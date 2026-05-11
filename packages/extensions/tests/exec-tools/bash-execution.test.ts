@@ -80,7 +80,6 @@ const stubCtx = testToolContext({
     getSession: dieStub("getSession"),
     getDetail: dieStub("getDetail"),
     renameCurrent: dieStub("renameCurrent"),
-    estimateContextPercent: dieStub("estimateContextPercent"),
     search: dieStub("search"),
     listBranches: dieStub("listBranches"),
     queueFollowUp: dieStub("queueFollowUp"),

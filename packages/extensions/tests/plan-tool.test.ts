@@ -58,7 +58,6 @@ const makeCtx = (overrides: {
       getSession: dieStub("session.getSession"),
       getDetail: dieStub("session.getDetail"),
       renameCurrent: dieStub("session.renameCurrent"),
-      estimateContextPercent: dieStub("session.estimateContextPercent"),
       search: dieStub("session.search"),
     },
     Interaction: {

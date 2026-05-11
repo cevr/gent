@@ -10,6 +10,7 @@ import { Effect, Schema } from "effect"
 import {
   defineExtension,
   defineResource,
+  estimateContextPercent,
   ExtensionContext,
   ExtensionSetupContext,
   isRecord,
@@ -194,9 +195,7 @@ const autoHandoffImpl = (input: TurnAfterInput) =>
     const snapshot = yield* auto.value.snapshot()
     if (!snapshot.active) return
 
-    const ctx = yield* ExtensionContext
-    const session = ctx.Session
-    const contextPercent = yield* session.estimateContextPercent()
+    const contextPercent = yield* estimateContextPercent()
     if (contextPercent < 85) return
 
     yield* Effect.logInfo("auto.handoff.threshold").pipe(

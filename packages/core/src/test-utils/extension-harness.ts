@@ -191,7 +191,6 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
     getSession: dieStub("session.getSession"),
     getDetail: dieStub("session.getDetail"),
     renameCurrent: dieStub("session.renameCurrent"),
-    estimateContextPercent: dieStub("session.estimateContextPercent"),
     search: dieStub("session.search"),
     queueFollowUp: dieStub("session.queueFollowUp"),
     listBranches: dieStub("session.listBranches"),

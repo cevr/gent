@@ -3,6 +3,7 @@ import {
   CapabilityError,
   defineExtension,
   defineResource,
+  estimateContextPercent,
   ExtensionContext,
   type Message,
   type TurnAfterInput,
@@ -113,7 +114,7 @@ const autoHandoffImpl = (input: TurnAfterInput) =>
 
     const ctx = yield* ExtensionContext
     const session = ctx.Session
-    const contextPercent = yield* session.estimateContextPercent()
+    const contextPercent = yield* estimateContextPercent()
     const handoffThreshold = 85
     if (contextPercent < handoffThreshold) return
 

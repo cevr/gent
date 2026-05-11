@@ -62,7 +62,6 @@ export declare namespace ExtensionHostContext {
     readonly listMessages: SessionFacet["listMessages"]
     readonly getSession: SessionFacet["getSession"]
     readonly getDetail: SessionFacet["getDetail"]
-    readonly estimateContextPercent: SessionFacet["estimateContextPercent"]
     readonly search: SessionFacet["search"]
     readonly listBranches: SessionFacet["listBranches"]
   }
@@ -102,10 +101,6 @@ export declare namespace ExtensionHostContext {
     readonly renameCurrent: (
       name: string,
     ) => Effect.Effect<{ renamed: boolean; name?: string }, ExtensionHostError>
-
-    readonly estimateContextPercent: (options?: {
-      modelId?: string
-    }) => Effect.Effect<number, ExtensionHostError>
 
     readonly search: (
       query: string,
