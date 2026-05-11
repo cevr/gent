@@ -66,4 +66,54 @@ describe("FsToolsExtension via model turn", () => {
       ),
     10_000,
   )
+
+  modelTurnTest(
+    "write tool call routes through ctx.Files.write end-to-end",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const cwd = yield* fs.makeTempDirectoryScoped()
+          const filePath = path.join(cwd, "nested", "out.txt")
+          const content = "produced via real ExtensionFilesService"
+
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("write", { path: filePath, content }),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [AgentsExtension, FsToolsExtension],
+            cwd,
+          })
+          const toolEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter(
+              (envelope) =>
+                (envelope.event._tag === "ToolCallSucceeded" ||
+                  envelope.event._tag === "ToolCallFailed" ||
+                  envelope.event._tag === "ToolCallStarted") &&
+                (envelope.event as { readonly toolName?: string }).toolName === "write",
+            ),
+            Stream.take(2),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "Create the nested output file",
+          })
+
+          const events = Array.from(yield* Fiber.join(toolEventFiber))
+          const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
+          expect(succeeded).toBeDefined()
+
+          const written = yield* fs.readFileString(filePath)
+          expect(written).toBe(content)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
 })
