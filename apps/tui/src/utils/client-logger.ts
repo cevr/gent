@@ -8,21 +8,34 @@
  *   shutdown paths only (after Effect runtime is torn down).
  */
 
-import { DateTime, Effect, Option } from "effect"
+import { Config, DateTime, Effect, Option } from "effect"
 import type { Context } from "effect"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
 
 import { LOG_DIR, buildLogPaths } from "@gent/core-internal/runtime/log-paths"
 
-export const CLIENT_LOG_PATH = buildLogPaths(process.cwd()).client
+// Read cwd via `GENT_CWD` so this module-init read stays aligned with the
+// server's `resolveLogPaths`. Falls back to `process.cwd()` only if the env
+// var is unset (e.g. early dev runs before the launcher exports it).
+const clientCwd = Effect.runSync(
+  Effect.gen(function* () {
+    const opt = yield* Config.option(Config.string("GENT_CWD"))
+    return Option.getOrElse(opt, () => process.cwd())
+  }).pipe(Effect.catchEager(() => Effect.sync(() => process.cwd()))),
+)
+export const CLIENT_LOG_PATH = buildLogPaths(clientCwd).client
 
 try {
   mkdirSync(LOG_DIR, { recursive: true })
 } catch {}
 
+// Clock-bypass: `shutdownLog` runs after Effect runtime teardown, so we
+// cannot yield `Clock.currentTimeMillis` here. `Date.now()` is the standard
+// sync-land alternative.
 const isoNow = () =>
-  DateTime.make(performance.timeOrigin + performance.now()).pipe(
+  // @effect-diagnostics-next-line globalDate:off -- shutdown path, no Effect runtime to yield Clock from
+  DateTime.make(Date.now()).pipe(
     Option.match({
       onNone: () => "unknown",
       onSome: DateTime.formatIso,

@@ -65,6 +65,12 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "// @effect-diagnostics-next-line nodeBuiltinImport:off",
   },
   {
+    file: "apps/tui/src/utils/client-logger.ts",
+    line: 37,
+    kind: "effect-diagnostics",
+    text: "// @effect-diagnostics-next-line globalDate:off -- shutdown path, no Effect runtime to yield Clock from",
+  },
+  {
     file: "apps/tui/tests/extension-effect-setup.test.ts",
     line: 7,
     kind: "effect-diagnostics",
