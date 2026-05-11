@@ -1,4 +1,4 @@
-import { Context, Duration, Effect, Layer, Schema, FileSystem, Path } from "effect"
+import { Context, Effect, Layer, Schema, SynchronizedRef, FileSystem, Path } from "effect"
 import { HttpClient, type HttpClient as HttpClientService } from "effect/unstable/http"
 import { Auth } from "../domain/auth.js"
 import { ProviderAuthError, type DriverError } from "../domain/driver.js"
@@ -179,18 +179,20 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
         Effect.withSpan("ModelRegistry.fetchRemote"),
       )
 
-      /**
-       * Load raw models (disk → remote fallback). Cached for process lifetime;
-       * `refresh` writes new remote payload to disk then `invalidate`s so the
-       * next read re-runs `loadFromDisk` and picks up the fresh data.
-       */
-      const [loadRaw, invalidate] = yield* Effect.cachedInvalidateWithTTL(
+      // SynchronizedRef serializes loadRaw and refresh writes so refresh's
+      // fresh remote payload cannot be overwritten by an in-flight load.
+      // Reads still need the permit (modifyEffect), but the work inside is
+      // short-circuited once `cur !== null`.
+      const cacheRef = yield* SynchronizedRef.make<readonly Model[] | null>(null)
+
+      /** Load raw models (disk → remote fallback), cache unfiltered */
+      const loadRaw = SynchronizedRef.modifyEffect(cacheRef, (cur) =>
         Effect.gen(function* () {
+          if (cur !== null) return [cur, cur] as const
           const disk = yield* loadFromDisk
-          if (disk.length > 0) return disk
-          return yield* fetchRemote
+          const loaded = disk.length > 0 ? disk : yield* fetchRemote
+          return [loaded, loaded] as const
         }),
-        Duration.infinity,
       )
 
       /** Load + apply auth-sensitive provider filters (not cached — re-evaluated per call) */
@@ -232,9 +234,10 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       const refresh = Effect.gen(function* () {
         const remote = yield* fetchRemote
         if (remote.length > 0) {
-          // fetchRemote already wrote canonical models to disk; invalidate the
-          // memoized loadRaw so the next read pulls the fresh disk payload.
-          yield* invalidate
+          // SynchronizedRef.set takes the permit so it cannot race with an
+          // in-flight loadRaw's write — last writer is whoever holds the
+          // permit, and modifyEffect/set serialize through the same semaphore.
+          yield* SynchronizedRef.set(cacheRef, remote)
         }
       }).pipe(Effect.withSpan("ModelRegistry.refresh"))
 
