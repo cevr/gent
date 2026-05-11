@@ -1,9 +1,9 @@
 import { Effect, Layer, Context } from "effect"
 import { DEFAULT_AGENT_NAME } from "../domain/agent.js"
-import type { BranchId, SessionId } from "../domain/ids.js"
+import type { SessionId } from "../domain/ids.js"
 import type { Session, SessionTreeNode } from "../domain/message.js"
 import { projectMessagesWithToolInteractions } from "../domain/message-part-projection.js"
-import { emptyQueueSnapshot, type QueueSnapshot } from "../domain/queue.js"
+import { emptyQueueSnapshot } from "../domain/queue.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
@@ -19,10 +19,6 @@ export interface SessionQueriesService {
   readonly getSessionTree: (
     rootSessionId: SessionId,
   ) => Effect.Effect<SessionTreeNode, AppServiceError>
-  readonly getQueuedMessages: (input: {
-    sessionId: SessionId
-    branchId: BranchId
-  }) => Effect.Effect<QueueSnapshot, AppServiceError>
   readonly getSessionSnapshot: (
     input: GetSessionSnapshotInput,
   ) => Effect.Effect<SessionSnapshot, AppServiceError>
@@ -141,10 +137,6 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
 
       return {
         getSessionTree,
-        getQueuedMessages: ({ sessionId, branchId }) =>
-          sessionRuntime
-            .getQueuedMessages({ sessionId, branchId })
-            .pipe(Effect.withSpan("SessionQueries.getQueuedMessages")),
         getSessionSnapshot,
       } satisfies SessionQueriesService
     }),

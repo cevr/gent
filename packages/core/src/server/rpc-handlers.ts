@@ -377,7 +377,9 @@ const RpcHandlers = GentRpcs.toLayer(
           .pipe(Effect.withSpan("SessionCommands.drainQueuedMessages")),
 
       "queue.get": ({ sessionId, branchId }: QueueTarget) =>
-        queries.getQueuedMessages({ sessionId, branchId }),
+        sessionRuntime
+          .getQueuedMessages({ sessionId, branchId })
+          .pipe(Effect.withSpan("SessionQueries.getQueuedMessages")),
 
       "interaction.respondInteraction": ({
         requestId,
