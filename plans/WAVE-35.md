@@ -88,11 +88,11 @@ follow-ups"` (`tests/runtime/session-runtime.test.ts:848`)
     `SessionRuntime.steer` surface, not a blind switch to
     `waitFor`.
 
-            Steer/Queue invariants verified:
-            `agent-loop.state.ts:194-220` (steering drains before followUp) +
-            `agent-loop.actor.ts:861-925` (only `applySteer` calls
-            `interruptActiveStream`; `enqueueMessage` only appends to
-            `queue.followUp`).
+                    Steer/Queue invariants verified:
+                    `agent-loop.state.ts:194-220` (steering drains before followUp) +
+                    `agent-loop.actor.ts:861-925` (only `applySteer` calls
+                    `interruptActiveStream`; `enqueueMessage` only appends to
+                    `queue.followUp`).
 
 - **C8**: Convert STM-unsafe concurrent state to transactional primitives
   (L1-P1-2, P1-5, P1-6, P1-7):
@@ -140,9 +140,21 @@ never, ChildProcessSpawner>` that yields internally. Drop the
 - **C12**: Remove dead `ExtensionHostContext.ReadOnlyAgent` /
   `ReadOnlySessionFacet` interfaces (L4-P1-2). Unreferenced outside their
   declaring file.
-- **C13**: Remove raw `runProcess` field from `ExtensionProcessService`
-  (L4-P1-3); fix `executor/platform-adapter.ts:51` and
-  `anthropic/platform-adapter.ts:46` to call `ctx.Process.run(...)`.
+- **C13** (void — audit finding L4-P1-3 invalid): the audit asserted that the
+  `Process` facet on `ExtensionProcessService` exposes a raw `runProcess`
+  field bypassing the `run()` wrapper. On re-verification, the runtime
+  facet (`ExtensionProcessService` in `domain/extension-services.ts:132-146`)
+  exposes only `run()` (wrapped, returns `ExtensionServiceError`); the only
+  `runProcess` field lives on `PublicExtensionSetupContext["Process"]` in
+  `extensions/api.ts:243-247`, which is a _setup-time_ facet shaped from the
+  host platform (`ExtensionHostPlatform`) and has no wrapper to bypass —
+  setup happens before runtime services exist. The two facets the audit
+  conflated are independent surfaces. The two adapter sites
+  (`executor/platform-adapter.ts:51`, `anthropic/platform-adapter.ts:46`)
+  store `runProcess` deliberately because downstream callers (e.g.
+  `anthropic/oauth.ts:122`) catch `ExtensionHostProcessError` for
+  keychain-specific timeout/exit-code branches that would be erased by a
+  wrapped `ExtensionServiceError` channel. No change.
 - **C14**: Migrate `schema-tagged-enum-class.ts` (443 lines, 45 sites) onto
   `Schema.TaggedUnion` (L1-P1-1). Split per counsel revision into 4
   sub-commits by package boundary — the helper exposes constructors, guards,
@@ -215,7 +227,7 @@ fields)` 20-line variant for the wire-tag mismatch case) and migrate the
 | C11.1 | drop `promptSnippet` from RequestCapability                              | `domain/capability/request.ts`, `domain/capability.ts`                       |
 | C11.2 | drop `permissionRules` from RequestCapability                            | same + `registry.ts:376`                                                     |
 | C12   | delete `ReadOnlyAgent` / `ReadOnlySessionFacet`                          | `domain/extension-host-context.ts`                                           |
-| C13   | remove `runProcess` raw field; fix platform-adapter callers              | `domain/extension-services.ts`, 2 adapters                                   |
+| C13   | (void — audit finding L4-P1-3 invalid; see body)                         | n/a                                                                          |
 | C14.1 | new helper + migrate `schema-tagged-enum-class` test surface             | new helper file, `tests/domain/schema-tagged-enum-class.test.ts`             |
 | C14.2 | migrate core domain/runtime/server schemas to `Schema.TaggedUnion`       | ~30 sites in `packages/core/src/**`                                          |
 | C14.3 | migrate SDK + TUI schemas to `Schema.TaggedUnion`                        | `packages/sdk/src/**`, `apps/tui/src/**`                                     |
