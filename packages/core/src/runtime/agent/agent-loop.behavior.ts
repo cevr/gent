@@ -45,7 +45,6 @@ import { InteractionRequestId, type BranchId, type SessionId } from "../../domai
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
 import { ConfigService } from "../config-service.js"
-import { DEFAULTS } from "../../domain/defaults.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { StorageError } from "../../domain/storage-error.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
@@ -116,6 +115,9 @@ import {
   type ResolvedTurnContext,
   type ToolResponsePart,
 } from "./turn-helpers.js"
+
+const FOLLOW_UP_QUEUE_MAX = 10
+const MAX_TURN_STEPS = 200
 
 export const resolveStoredAgent = (params: {
   sessionId: SessionId
@@ -510,10 +512,10 @@ export const makeAgentLoopBehavior = (
         return yield* commitQueueTransaction<RunningState | undefined | AgentLoopError>(
           "reserved or queued follow-up",
           (current) => {
-            if (countQueuedFollowUps(current.queue) >= DEFAULTS.followUpQueueMax) {
+            if (countQueuedFollowUps(current.queue) >= FOLLOW_UP_QUEUE_MAX) {
               return {
                 value: new AgentLoopError({
-                  message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
+                  message: `Follow-up queue full (max ${FOLLOW_UP_QUEUE_MAX})`,
                 }),
                 next: current,
                 persist: false,
@@ -1001,9 +1003,9 @@ export const makeAgentLoopBehavior = (
 
       while (true) {
         step++
-        if (step > DEFAULTS.maxTurnSteps) {
+        if (step > MAX_TURN_STEPS) {
           yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
-            Effect.annotateLogs({ step, max: DEFAULTS.maxTurnSteps }),
+            Effect.annotateLogs({ step, max: MAX_TURN_STEPS }),
           )
           break
         }

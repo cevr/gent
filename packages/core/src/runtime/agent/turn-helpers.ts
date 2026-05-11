@@ -15,7 +15,6 @@ import { ConfigService } from "../config-service.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { compileSystemPrompt } from "../../domain/prompt.js"
-import { DEFAULTS } from "../../domain/defaults.js"
 import { Message } from "../../domain/message.js"
 import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
 import {
@@ -55,6 +54,8 @@ import {
   type CollectedTurnResponse,
   type PublishEvent,
 } from "./turn-response.js"
+
+const TOOL_CONCURRENCY = 8
 
 interface CommittedMutation<A> {
   readonly result: A
@@ -526,7 +527,7 @@ export const executeToolCalls = (params: {
               ),
             )
         }),
-      { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
+      { concurrency: Math.max(1, TOOL_CONCURRENCY) },
     )
   })
 
