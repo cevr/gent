@@ -11,11 +11,12 @@ import {
   Context,
   Effect,
   FileSystem,
+  HashMap,
   Layer,
   Path,
-  Ref,
   Scope,
   Semaphore,
+  TxRef,
   type Scope as ScopeType,
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -98,10 +99,12 @@ export class SessionProfileCache extends Context.Service<
         const pathSvc = yield* Path.Path
         const spawner = yield* ChildProcessSpawner
         const platform = yield* GentPlatform
-        const initialCache = new Map<string, SessionProfile>(
-          (config.initialProfiles ?? []).map((profile) => [pathSvc.resolve(profile.cwd), profile]),
+        const initialCache = HashMap.fromIterable(
+          (config.initialProfiles ?? []).map(
+            (profile) => [pathSvc.resolve(profile.cwd), profile] as const,
+          ),
         )
-        const cacheRef = yield* Ref.make<Map<string, SessionProfile>>(initialCache)
+        const cacheRef = yield* TxRef.make(initialCache)
         const initSemaphore = yield* Semaphore.make(1)
         // Capture server scope — extension lifecycle (onShutdown) ties to this
         const serverScope = yield* Scope.Scope
@@ -166,25 +169,21 @@ export class SessionProfileCache extends Context.Service<
             const canonicalCwd = pathSvc.resolve(cwd)
 
             // Fast path — no lock needed for cache hits
-            const cache = yield* Ref.get(cacheRef)
-            const existing = cache.get(canonicalCwd)
-            if (existing !== undefined) return existing
+            const cache = yield* TxRef.get(cacheRef)
+            const existing = HashMap.get(cache, canonicalCwd)
+            if (existing._tag === "Some") return existing.value
 
             // Serialize initialization to prevent duplicate profiles for same cwd
             return yield* initSemaphore.withPermits(1)(
               Effect.gen(function* () {
                 // Re-check inside critical section
-                const current = yield* Ref.get(cacheRef)
-                const found = current.get(canonicalCwd)
-                if (found !== undefined) return found
+                const current = yield* TxRef.get(cacheRef)
+                const found = HashMap.get(current, canonicalCwd)
+                if (found._tag === "Some") return found.value
 
                 const profile = yield* initProfile(canonicalCwd)
 
-                yield* Ref.update(cacheRef, (m) => {
-                  const next = new Map(m)
-                  next.set(canonicalCwd, profile)
-                  return next
-                })
+                yield* TxRef.update(cacheRef, (m) => HashMap.set(m, canonicalCwd, profile))
 
                 return profile
               }),
