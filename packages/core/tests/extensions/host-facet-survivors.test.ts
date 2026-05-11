@@ -16,11 +16,7 @@ import {
 } from "../../src/runtime/make-extension-host-context.js"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
 import { AgentName } from "../../src/domain/agent.js"
-import {
-  requireAgent,
-  ExtensionContext,
-  ExtensionServiceError,
-} from "../../src/domain/extension-services.js"
+import { requireAgent, ExtensionContext, ExtensionServiceError } from "@gent/core/extensions/api"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message.js"
 import { testExtensionHostContext, testToolContext } from "../../src/test-utils/index.js"
 

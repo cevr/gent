@@ -19,7 +19,7 @@ import {
   estimateContextPercent,
   ExtensionContext,
   ExtensionServiceError,
-} from "../../src/domain/extension-services.js"
+} from "@gent/core/extensions/api"
 import { testToolContext } from "../../src/test-utils/index.js"
 
 const SESSION_ID = SessionId.make("test-session")
