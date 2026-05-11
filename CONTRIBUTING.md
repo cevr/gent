@@ -25,8 +25,10 @@ bun run gate       # typecheck + lint + fmt + build + test
 - Schema validation at boundaries
 - Use `Effect.fn(name)` for service methods on hot paths (tracing); plain
   `Effect.gen` is fine elsewhere
-- Discriminated unions go through `TaggedEnumClass` — never hand-roll
-  `{ _tag: "X" } | { _tag: "Y" }` literals
+- Discriminated unions go through `Schema.TaggedUnion` — never hand-roll
+  `{ _tag: "X" } | { _tag: "Y" }` literals. Use `Schema.TaggedStruct`
+  composed with `Schema.toTaggedUnion` for kebab-case wire tags, or
+  `Schema.TaggedErrorClass` for errors.
 
 ## Effect Patterns
 
@@ -41,17 +43,17 @@ export class MyError extends Schema.TaggedError<MyError>()("MyError", {
   message: Schema.String,
 }) {}
 
-// Discriminated union (TaggedEnumClass, not literal _tag union)
-import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+// Discriminated union (Schema.TaggedUnion, not literal _tag union)
+import { Schema } from "effect"
 import { SessionId } from "@gent/core/domain/ids"
 
-export const MyEvent = TaggedEnumClass("MyEvent", {
+export const MyEvent = Schema.TaggedUnion({
   Started: { sessionId: SessionId },
   Completed: { sessionId: SessionId, durationMs: Schema.Number },
 })
 export type MyEvent = Schema.Schema.Type<typeof MyEvent>
 
-const event = MyEvent.Started.make({ sessionId })
+const event = MyEvent.cases.Started.make({ sessionId })
 
 // Domain values
 export class MyData extends Schema.Class<MyData>("MyData")({

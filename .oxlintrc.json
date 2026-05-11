@@ -33,7 +33,7 @@
     "gent/no-bun-outside-adapter": "error",
     // Custom — test control flow must stay in Effect, not try/finally/async/await
     "gent/no-promise-control-flow-in-tests": "error",
-    // Custom — hand-rolled `_tag` discriminated unions banned; use TaggedEnumClass
+    // Custom — hand-rolled `_tag` discriminated unions banned; use Schema.TaggedUnion
     "gent/no-hand-rolled-tagged-union": "error",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
