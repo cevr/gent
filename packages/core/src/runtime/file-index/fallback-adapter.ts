@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Layer, Option, Path, Ref } from "effect"
+import { Effect, FileSystem, HashMap, Layer, Option, Path, TxRef } from "effect"
 import picomatch from "picomatch"
 import {
   FileIndex,
@@ -13,10 +13,10 @@ import {
 
 type PathMatcher = (path: string) => boolean
 
-export type GitignoreCacheRef = Ref.Ref<ReadonlyMap<string, ReadonlyArray<PathMatcher>>>
+export type GitignoreCacheRef = TxRef.TxRef<HashMap.HashMap<string, ReadonlyArray<PathMatcher>>>
 
 export const makeGitignoreCacheRef = (): Effect.Effect<GitignoreCacheRef> =>
-  Ref.make<ReadonlyMap<string, ReadonlyArray<PathMatcher>>>(new Map())
+  TxRef.make(HashMap.empty<string, ReadonlyArray<PathMatcher>>())
 
 const parseGitignorePatterns = (content: string): PathMatcher[] => {
   const patterns: PathMatcher[] = []
@@ -55,15 +55,15 @@ const loadGitignore = (
   cacheRef: GitignoreCacheRef,
 ): Effect.Effect<ReadonlyArray<PathMatcher>> =>
   Effect.gen(function* () {
-    const cache = yield* Ref.get(cacheRef)
-    const cached = cache.get(cwd)
-    if (cached !== undefined) return cached
+    const cache = yield* TxRef.get(cacheRef)
+    const cached = HashMap.get(cache, cwd)
+    if (cached._tag === "Some") return cached.value
 
     const patterns = yield* fs.readFileString(path.join(cwd, ".gitignore")).pipe(
       Effect.map((content) => parseGitignorePatterns(content) as ReadonlyArray<PathMatcher>),
       Effect.orElseSucceed(() => [] as ReadonlyArray<PathMatcher>),
     )
-    yield* Ref.update(cacheRef, (m) => new Map(m).set(cwd, patterns))
+    yield* TxRef.update(cacheRef, (m) => HashMap.set(m, cwd, patterns))
     return patterns
   })
 
