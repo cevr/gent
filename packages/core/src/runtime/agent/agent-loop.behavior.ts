@@ -395,20 +395,22 @@ export const makeAgentLoopBehavior = (
     const queuePersistenceSemaphore = yield* Semaphore.make(1)
     const persistenceFailure = yield* Deferred.make<void, AgentLoopError>()
     const closed = yield* Deferred.make<void>()
-    let started = false
+    const startedRef = yield* Ref.make(false)
 
     const persistCommittedQueue = (queue: LoopQueueState, operation: string) =>
-      started
-        ? queueStorage.putQueueState(sessionId, branchId, queue).pipe(
-            Effect.mapError(
-              (cause) =>
-                new AgentLoopError({
-                  message: `Failed to persist ${operation} for ${sessionId}/${branchId}`,
-                  cause,
-                }),
-            ),
-          )
-        : Effect.void
+      Effect.flatMap(Ref.get(startedRef), (started) =>
+        started
+          ? queueStorage.putQueueState(sessionId, branchId, queue).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new AgentLoopError({
+                    message: `Failed to persist ${operation} for ${sessionId}/${branchId}`,
+                    cause,
+                  }),
+              ),
+            )
+          : Effect.void,
+      )
 
     const recordPersistenceFailure = (error: AgentLoopError) =>
       Deferred.fail(persistenceFailure, error).pipe(Effect.catchEager(() => Effect.void))
@@ -591,7 +593,7 @@ export const makeAgentLoopBehavior = (
       })
 
     const refreshRuntimeState = Effect.gen(function* () {
-      if (!started) return
+      if (!(yield* Ref.get(startedRef))) return
       yield* persistRuntimeState(yield* currentLoopState)
     })
 
@@ -1309,8 +1311,7 @@ export const makeAgentLoopBehavior = (
       )
 
     const start = Effect.gen(function* () {
-      if (started) return
-      started = true
+      if (yield* Ref.getAndSet(startedRef, true)) return
       yield* startTurnWorker
     })
 
