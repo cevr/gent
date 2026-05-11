@@ -18,7 +18,3 @@ export interface ScheduledJobContribution {
     readonly cwd?: string
   }
 }
-
-export const defineScheduledJob = (job: ScheduledJobContribution): ScheduledJobContribution => ({
-  ...job,
-})

@@ -12,7 +12,6 @@ import * as AiTool from "effect/unstable/ai/Tool"
 import { BunServices } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import {
-  defineScheduledJob,
   defineExtension,
   defineResource,
   ExtensionSetupContext,
@@ -93,11 +92,11 @@ describe("defineExtension", () => {
           }) as never,
         ],
         scheduledJobs: [
-          defineScheduledJob({
+          {
             id: "test-job",
             cron: "0 0 * * *",
             target: { agent: "cowork" as never, prompt: "hi" },
-          }),
+          },
         ],
       })
       const contributions = yield* setupOf(ext)

@@ -104,4 +104,3 @@ export const rpcCapabilities = (
 // disposal as a `Layer.scoped` finalizer over a marker tag rather than
 // `{ layer: Layer.empty, stop: ... }`.
 export { defineResource } from "./resource.js"
-export { defineScheduledJob } from "./scheduled-job.js"

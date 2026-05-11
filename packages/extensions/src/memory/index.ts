@@ -18,7 +18,6 @@ import {
   defineAgent,
   defineExtension,
   defineResource,
-  defineScheduledJob,
   ExtensionId,
   ExtensionSetupContext,
   ModelId,
@@ -112,7 +111,7 @@ const MemoryMeditateAgent = defineAgent({
 })
 
 const MemoryDreamJobs: ReadonlyArray<ScheduledJobContribution> = [
-  defineScheduledJob({
+  {
     id: "reflect",
     cron: "0 21 * * 1-5",
     target: {
@@ -120,8 +119,8 @@ const MemoryDreamJobs: ReadonlyArray<ScheduledJobContribution> = [
       prompt:
         "Review today's sessions and extract memories worth keeping. Focus on corrections, preferences, decisions, and gotchas.",
     },
-  }),
-  defineScheduledJob({
+  },
+  {
     id: "meditate",
     cron: "0 9 * * 0",
     target: {
@@ -129,7 +128,7 @@ const MemoryDreamJobs: ReadonlyArray<ScheduledJobContribution> = [
       prompt:
         "Review all stored memories. Merge duplicates, prune noise, and promote recurring project patterns to global principles.",
     },
-  }),
+  },
 ]
 
 export const MemoryExtension = defineExtension({
