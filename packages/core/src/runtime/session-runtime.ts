@@ -270,33 +270,6 @@ const wrapStreamSessionRuntimeError = (operation: string, error: unknown) =>
         cause: error,
       })
 
-export const interruptPayloadToSteerCommand = (input: InterruptPayload): SteerCommandType => {
-  switch (input._tag) {
-    case "Interject":
-      return {
-        _tag: "Interject",
-        sessionId: input.sessionId,
-        branchId: input.branchId,
-        requestId: input.requestId,
-        message: input.message,
-      }
-    case "Cancel":
-      return {
-        _tag: "Cancel",
-        sessionId: input.sessionId,
-        branchId: input.branchId,
-        requestId: input.requestId,
-      }
-    case "Interrupt":
-      return {
-        _tag: "Interrupt",
-        sessionId: input.sessionId,
-        branchId: input.branchId,
-        requestId: input.requestId,
-      }
-  }
-}
-
 interface RunPromptInput {
   readonly sessionId: SessionId
   readonly branchId: BranchId

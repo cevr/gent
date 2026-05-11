@@ -39,6 +39,7 @@ import {
   ExtensionId,
   InteractionRequestId,
   MessageId,
+  RequestId,
   SessionId,
   ToolCallId,
 } from "@gent/core-internal/domain/ids"
@@ -58,7 +59,7 @@ import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
-import { SessionRuntime, interruptPayloadToSteerCommand } from "../../src/runtime/session-runtime"
+import { SessionRuntime } from "../../src/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   const cowork = AgentDefinition.make({
@@ -436,14 +437,12 @@ describe("SessionRuntime", () => {
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
           const { sessionId, branchId } = yield* createCwdSessionBranch
-          yield* sessionRuntime.steer(
-            interruptPayloadToSteerCommand({
-              _tag: "Cancel",
-              sessionId,
-              branchId,
-              requestId: "req-cancel-profile-free",
-            }),
-          )
+          yield* sessionRuntime.steer({
+            _tag: "Cancel",
+            sessionId,
+            branchId,
+            requestId: RequestId.make("req-cancel-profile-free"),
+          })
           yield* sessionRuntime.respondInteraction({
             sessionId,
             branchId,
@@ -880,15 +879,13 @@ describe("SessionRuntime", () => {
           yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "first" })
           yield* controls.waitForCall(0)
           yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "queued" })
-          yield* sessionRuntime.steer(
-            interruptPayloadToSteerCommand({
-              _tag: "Interject",
-              sessionId,
-              branchId,
-              requestId: "req-interject-queued",
-              message: "steer now",
-            }),
-          )
+          yield* sessionRuntime.steer({
+            _tag: "Interject",
+            sessionId,
+            branchId,
+            requestId: RequestId.make("req-interject-queued"),
+            message: "steer now",
+          })
           yield* controls.emitAll(0)
           const messages = yield* waitFor(
             messageStorage.listMessages(branchId),
