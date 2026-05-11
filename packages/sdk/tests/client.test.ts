@@ -41,7 +41,7 @@ describe("sdk client helpers", () => {
   })
 
   test("canonical tool interactions expose running calls", () => {
-    const message = Message.Regular.make({
+    const message = Message.cases.regular.make({
       id: MessageId.make("m1"),
       sessionId: SessionId.make("s1"),
       branchId: BranchId.make("b1"),
@@ -65,7 +65,7 @@ describe("sdk client helpers", () => {
 
   test("canonical tool interactions include completed results", () => {
     const messages: DomainMessage[] = [
-      Message.Regular.make({
+      Message.cases.regular.make({
         id: MessageId.make("m1"),
         sessionId: SessionId.make("s1"),
         branchId: BranchId.make("b1"),
@@ -80,7 +80,7 @@ describe("sdk client helpers", () => {
         ],
         createdAt: dateFromMillis(0),
       }),
-      Message.Regular.make({
+      Message.cases.regular.make({
         id: MessageId.make("m2"),
         sessionId: SessionId.make("s1"),
         branchId: BranchId.make("b1"),

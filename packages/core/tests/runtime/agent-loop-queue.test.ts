@@ -124,7 +124,7 @@ describe("queue drain regression", () => {
             const submitOne = (id: string, text: string) =>
               submitAgentLoop(
                 agentLoop,
-                Message.Regular.make({
+                Message.cases.regular.make({
                   id: MessageId.make(id),
                   sessionId: drainSessionId,
                   branchId: drainBranchId,
@@ -243,7 +243,7 @@ describe("queue drain regression", () => {
           )
         }
         const makeMessage = (id: string, text: string) =>
-          Message.Regular.make({
+          Message.cases.regular.make({
             id: MessageId.make(id),
             sessionId,
             branchId,
@@ -324,7 +324,7 @@ describe("queue drain regression", () => {
             Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
           ),
         )
-        const message = Message.Regular.make({
+        const message = Message.cases.regular.make({
           id: MessageId.make("msg-incomplete-recovery"),
           sessionId,
           branchId,
@@ -404,7 +404,7 @@ describe("queue drain regression", () => {
           ),
         )
         const makeMessage = (id: string, text: string) =>
-          Message.Regular.make({
+          Message.cases.regular.make({
             id: MessageId.make(id),
             sessionId,
             branchId,

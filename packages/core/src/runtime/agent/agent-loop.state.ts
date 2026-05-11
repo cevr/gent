@@ -74,7 +74,7 @@ const mergeQueuedFollowUp = (
 
   return {
     ...existing,
-    message: Message.Regular.make({
+    message: Message.cases.regular.make({
       id: existing.message.id,
       sessionId: existing.message.sessionId,
       branchId: existing.message.branchId,
@@ -182,8 +182,8 @@ const restampQueuedMessage = (message: Message, createdAt: Date): Message => {
     metadata: message.metadata,
   }
   return message._tag === "interjection"
-    ? Message.Interjection.make({ ...fields, role: "user" })
-    : Message.Regular.make(fields)
+    ? Message.cases.interjection.make({ ...fields, role: "user" })
+    : Message.cases.regular.make(fields)
 }
 
 const restampQueuedTurnItem = (item: QueuedTurnItem, createdAt: Date): QueuedTurnItem => ({

@@ -27,7 +27,7 @@ const branchId = BranchId.make("auto-e2e-branch")
 const FIXTURE_DATE = dateFromMillis(0)
 
 const makeMessage = (text: string) =>
-  Message.Regular.make({
+  Message.cases.regular.make({
     id: MessageId.make(`msg-${text.replaceAll(" ", "-").toLowerCase()}`),
     sessionId,
     branchId,

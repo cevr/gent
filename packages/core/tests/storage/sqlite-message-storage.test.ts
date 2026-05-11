@@ -39,8 +39,8 @@ describe("Messages", () => {
           createdAt: FIXED_NOW,
         }),
       )
-      const message = Message.Regular.make({
-        id: "msg-1",
+      const message = Message.cases.regular.make({
+        id: MessageId.make("msg-1"),
         sessionId: SessionId.make("msg-session"),
         branchId: BranchId.make("msg-branch"),
         role: "user",
@@ -75,8 +75,8 @@ describe("Messages", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
-          id: "all-parts-msg",
+        Message.cases.regular.make({
+          id: MessageId.make("all-parts-msg"),
           sessionId: SessionId.make("all-parts-session"),
           branchId: BranchId.make("all-parts-branch"),
           role: "assistant",
@@ -160,8 +160,8 @@ describe("Messages", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
-          id: "chunk-a",
+        Message.cases.regular.make({
+          id: MessageId.make("chunk-a"),
           sessionId: SessionId.make("chunk-s"),
           branchId: BranchId.make("chunk-b"),
           role: "user",
@@ -170,8 +170,8 @@ describe("Messages", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
-          id: "chunk-b-msg",
+        Message.cases.regular.make({
+          id: MessageId.make("chunk-b-msg"),
           sessionId: SessionId.make("chunk-s"),
           branchId: BranchId.make("chunk-b"),
           role: "assistant",
@@ -211,8 +211,8 @@ describe("Messages", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
-          id: "count-msg-1",
+        Message.cases.regular.make({
+          id: MessageId.make("count-msg-1"),
           sessionId: SessionId.make("count-session"),
           branchId: BranchId.make("count-branch"),
           role: "user",
@@ -221,8 +221,8 @@ describe("Messages", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
-          id: "count-msg-2",
+        Message.cases.regular.make({
+          id: MessageId.make("count-msg-2"),
           sessionId: SessionId.make("count-session"),
           branchId: BranchId.make("count-branch"),
           role: "assistant",
@@ -254,8 +254,8 @@ describe("Messages", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
-          id: "lm1",
+        Message.cases.regular.make({
+          id: MessageId.make("lm1"),
           sessionId: SessionId.make("list-msg-session"),
           branchId: BranchId.make("list-msg-branch"),
           role: "user",
@@ -264,8 +264,8 @@ describe("Messages", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
-          id: "lm2",
+        Message.cases.regular.make({
+          id: MessageId.make("lm2"),
           sessionId: SessionId.make("list-msg-session"),
           branchId: BranchId.make("list-msg-branch"),
           role: "assistant",
@@ -300,8 +300,8 @@ describe("Messages", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
-          id: "delete-projection-a",
+        Message.cases.regular.make({
+          id: MessageId.make("delete-projection-a"),
           sessionId: SessionId.make("delete-projection-session"),
           branchId: BranchId.make("delete-projection-branch"),
           role: "user",
@@ -310,8 +310,8 @@ describe("Messages", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
-          id: "delete-projection-b",
+        Message.cases.regular.make({
+          id: MessageId.make("delete-projection-b"),
           sessionId: SessionId.make("delete-projection-session"),
           branchId: BranchId.make("delete-projection-branch"),
           role: "assistant",
@@ -360,8 +360,8 @@ describe("Messages", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
-          id: "msg-updated-at",
+        Message.cases.regular.make({
+          id: MessageId.make("msg-updated-at"),
           sessionId: SessionId.make("session-updated-at"),
           branchId: BranchId.make("branch-updated-at"),
           role: "user",
@@ -405,8 +405,8 @@ describe("Messages", () => {
         `)
       const error = yield* Effect.flip(
         messages.createMessage(
-          Message.Regular.make({
-            id: "tx-message",
+          Message.cases.regular.make({
+            id: MessageId.make("tx-message"),
             sessionId: SessionId.make("tx-message-session"),
             branchId: BranchId.make("tx-message-branch"),
             role: "user",
@@ -444,8 +444,8 @@ describe("Messages", () => {
         }),
       )
       yield* messages.createMessageIfAbsent(
-        Message.Regular.make({
-          id: "if-absent-message",
+        Message.cases.regular.make({
+          id: MessageId.make("if-absent-message"),
           sessionId: SessionId.make("if-absent-session"),
           branchId: BranchId.make("if-absent-branch"),
           role: "user",
@@ -454,8 +454,8 @@ describe("Messages", () => {
         }),
       )
       yield* messages.createMessageIfAbsent(
-        Message.Regular.make({
-          id: "if-absent-message",
+        Message.cases.regular.make({
+          id: MessageId.make("if-absent-message"),
           sessionId: SessionId.make("if-absent-session"),
           branchId: BranchId.make("if-absent-branch"),
           role: "user",
@@ -490,8 +490,8 @@ describe("Messages", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
-          id: "b",
+        Message.cases.regular.make({
+          id: MessageId.make("b"),
           sessionId: SessionId.make("order-session"),
           branchId: BranchId.make("order-branch"),
           role: "user",
@@ -500,8 +500,8 @@ describe("Messages", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
-          id: "a",
+        Message.cases.regular.make({
+          id: MessageId.make("a"),
           sessionId: SessionId.make("order-session"),
           branchId: BranchId.make("order-branch"),
           role: "user",
@@ -535,8 +535,8 @@ describe("Message Metadata", () => {
           createdAt: FIXED_NOW,
         }),
       )
-      const message = Message.Regular.make({
-        id: "meta-msg-1",
+      const message = Message.cases.regular.make({
+        id: MessageId.make("meta-msg-1"),
         sessionId: SessionId.make("meta-s"),
         branchId: BranchId.make("meta-b"),
         role: "user",
@@ -585,8 +585,8 @@ describe("Message Metadata", () => {
           createdAt: FIXED_NOW,
         }),
       )
-      const message = Message.Regular.make({
-        id: "upsert-msg",
+      const message = Message.cases.regular.make({
+        id: MessageId.make("upsert-msg"),
         sessionId: SessionId.make("upsert-s"),
         branchId: BranchId.make("upsert-b"),
         role: "user",
@@ -622,8 +622,8 @@ describe("Message Metadata", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
-          id: "no-meta-msg",
+        Message.cases.regular.make({
+          id: MessageId.make("no-meta-msg"),
           sessionId: SessionId.make("no-meta-s"),
           branchId: BranchId.make("no-meta-b"),
           role: "user",
@@ -669,8 +669,8 @@ describe("Message Metadata", () => {
     }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
   )
   test("domain message preserves metadata for transport", () => {
-    const message = Message.Regular.make({
-      id: "info-msg",
+    const message = Message.cases.regular.make({
+      id: MessageId.make("info-msg"),
       sessionId: SessionId.make("info-s"),
       branchId: BranchId.make("info-b"),
       role: "assistant",
@@ -702,8 +702,8 @@ describe("Message Metadata", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Interjection.make({
-          id: "interjection-msg",
+        Message.cases.interjection.make({
+          id: MessageId.make("interjection-msg"),
           sessionId: SessionId.make("interjection-s"),
           branchId: BranchId.make("interjection-b"),
           role: "user",
@@ -718,8 +718,8 @@ describe("Message Metadata", () => {
     }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
   )
   test("domain message omits metadata when absent", () => {
-    const message = Message.Regular.make({
-      id: "plain-msg",
+    const message = Message.cases.regular.make({
+      id: MessageId.make("plain-msg"),
       sessionId: SessionId.make("plain-s"),
       branchId: BranchId.make("plain-b"),
       role: "user",

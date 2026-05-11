@@ -491,7 +491,7 @@ describe("Sessions", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
+        Message.cases.regular.make({
           id: MessageId.make("cascade-message"),
           sessionId,
           branchId,
@@ -501,7 +501,7 @@ describe("Sessions", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
+        Message.cases.regular.make({
           id: MessageId.make("cascade-child-message"),
           sessionId: childSessionId,
           branchId: childBranchId,

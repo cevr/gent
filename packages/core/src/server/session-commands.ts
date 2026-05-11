@@ -731,7 +731,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
         if (conversation === "") return ""
 
-        const summaryMessage = Message.Regular.make({
+        const summaryMessage = Message.cases.regular.make({
           id: MessageId.make(yield* platform.randomId),
           sessionId: firstMessage.sessionId,
           branchId,

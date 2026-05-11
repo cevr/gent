@@ -6,6 +6,7 @@ import {
   textDeltaPart,
 } from "@gent/core-internal/test-utils/language-model"
 import type { AgentEvent } from "@gent/core-internal/domain/event"
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import {
   assistantDraftFromMessage,
@@ -36,7 +37,11 @@ describe("turn stream parity", () => {
       const modelDraft = yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
-        const message = makeMessage("model-parity-session", "model-parity-branch", "hello")
+        const message = makeMessage(
+          SessionId.make("model-parity-session"),
+          BranchId.make("model-parity-branch"),
+          "hello",
+        )
         yield* runAgentLoop(agentLoop, message)
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
@@ -61,7 +66,11 @@ describe("turn stream parity", () => {
       const externalDraft = yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
-        const message = makeMessage("external-parity-session", "external-parity-branch", "hello")
+        const message = makeMessage(
+          SessionId.make("external-parity-session"),
+          BranchId.make("external-parity-branch"),
+          "hello",
+        )
         yield* runAgentLoop(agentLoop, message, { agentOverride: "test-external-parity" as never })
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()

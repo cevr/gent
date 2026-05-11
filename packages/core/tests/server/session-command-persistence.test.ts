@@ -88,7 +88,7 @@ describe("session command persistence", () => {
         name: "rollback",
       })
       yield* messages.createMessage(
-        Message.Regular.make({
+        Message.cases.regular.make({
           id: messageId,
           sessionId,
           branchId,
@@ -489,7 +489,7 @@ describe("session command persistence", () => {
         name: "delete messages",
       })
       yield* messages.createMessage(
-        Message.Regular.make({
+        Message.cases.regular.make({
           id: firstMessageId,
           sessionId,
           branchId,
@@ -499,7 +499,7 @@ describe("session command persistence", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
+        Message.cases.regular.make({
           id: secondMessageId,
           sessionId,
           branchId,
@@ -547,7 +547,7 @@ describe("session command persistence", () => {
         name: "other",
       })
       yield* messages.createMessage(
-        Message.Regular.make({
+        Message.cases.regular.make({
           id: foreignMessageId,
           sessionId: otherSessionId,
           branchId: otherBranchId,
@@ -557,7 +557,7 @@ describe("session command persistence", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.Regular.make({
+        Message.cases.regular.make({
           id: ownerMessageId,
           sessionId,
           branchId,

@@ -18,17 +18,17 @@ import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import * as Response from "effect/unstable/ai/Response"
 
 const baseMessage = (
-  message: Omit<ConstructorParameters<typeof Message.Regular>[0], "createdAt">,
+  message: Omit<Parameters<typeof Message.cases.regular.make>[0], "createdAt">,
 ) =>
-  Message.Regular.make({
+  Message.cases.regular.make({
     ...message,
     createdAt: dateFromMillis(0),
   })
 
 const baseInterjectionMessage = (
-  message: Omit<ConstructorParameters<typeof Message.Interjection>[0], "createdAt">,
+  message: Omit<Parameters<typeof Message.cases.interjection.make>[0], "createdAt">,
 ) =>
-  Message.Interjection.make({
+  Message.cases.interjection.make({
     ...message,
     createdAt: dateFromMillis(0),
   })

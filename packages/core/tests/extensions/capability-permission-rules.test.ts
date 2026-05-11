@@ -33,7 +33,7 @@ const branchId = BranchId.make("perm-rules-e2e-branch")
 const FIXTURE_DATE = dateFromMillis(0)
 
 const makeMessage = (text: string) =>
-  Message.Regular.make({
+  Message.cases.regular.make({
     id: MessageId.make(`msg-perm-${text.replaceAll(" ", "-").toLowerCase()}`),
     sessionId,
     branchId,

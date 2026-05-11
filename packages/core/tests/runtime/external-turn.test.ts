@@ -63,7 +63,7 @@ import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 const sessionId = SessionId.make("test-session")
 const branchId = BranchId.make("test-branch")
 const makeMessage = (text: string) =>
-  Message.Regular.make({
+  Message.cases.regular.make({
     id: MessageId.make(`${sessionId}-${branchId}-msg`),
     sessionId,
     branchId,
@@ -72,7 +72,7 @@ const makeMessage = (text: string) =>
     createdAt: dateFromMillis(1_767_225_600_000),
   })
 const makeMessageWithParts = (parts: Message["parts"]) =>
-  Message.Regular.make({
+  Message.cases.regular.make({
     id: MessageId.make(`${sessionId}-${branchId}-multipart-msg`),
     sessionId,
     branchId,
@@ -97,7 +97,7 @@ const makeAgentLoopService = Effect.gen(function* () {
   return {
     runOnce: (input) =>
       Effect.gen(function* () {
-        const message = Message.Regular.make({
+        const message = Message.cases.regular.make({
           id: MessageId.make(`${input.sessionId}-${input.branchId}-${input.prompt}`),
           sessionId: input.sessionId,
           branchId: input.branchId,

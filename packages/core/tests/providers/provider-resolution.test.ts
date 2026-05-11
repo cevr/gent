@@ -27,7 +27,13 @@ import * as AiTool from "effect/unstable/ai/Tool"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import type { ToolkitInput } from "effect/unstable/ai/LanguageModel"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import {
+  BranchId,
+  ExtensionId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core-internal/domain/ids"
 import { failingLanguageModel, makeLanguageModel } from "../helpers/failing-language-model"
 const missingAuthInfo: AuthInfo | undefined = undefined
 const testAuthStorage: AuthService = {
@@ -521,8 +527,8 @@ describe("Provider model resolution", () => {
           model: "prompt-live/gpt-5",
           prompt: toPrompt(
             [
-              Message.Regular.make({
-                id: "user-image",
+              Message.cases.regular.make({
+                id: MessageId.make("user-image"),
                 sessionId: SessionId.make("prompt-session"),
                 branchId: BranchId.make("prompt-branch"),
                 role: "user",
@@ -535,16 +541,16 @@ describe("Provider model resolution", () => {
                 ],
                 createdAt: dateFromMillis(0),
               }),
-              Message.Regular.make({
-                id: "assistant-reasoning",
+              Message.cases.regular.make({
+                id: MessageId.make("assistant-reasoning"),
                 sessionId: SessionId.make("prompt-session"),
                 branchId: BranchId.make("prompt-branch"),
                 role: "assistant",
                 parts: [Prompt.reasoningPart({ text: "look at image metadata" })],
                 createdAt: dateFromMillis(0),
               }),
-              Message.Regular.make({
-                id: "hidden",
+              Message.cases.regular.make({
+                id: MessageId.make("hidden"),
                 sessionId: SessionId.make("prompt-session"),
                 branchId: BranchId.make("prompt-branch"),
                 role: "user",

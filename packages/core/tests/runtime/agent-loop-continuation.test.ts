@@ -26,7 +26,7 @@ describe("continuation", () => {
   const contBranchId = BranchId.make("cont-test-branch")
   let messageSequence = 0
   const makeContMessage = (text: string) =>
-    Message.Regular.make({
+    Message.cases.regular.make({
       id: MessageId.make(`msg-${messageSequence++}`),
       sessionId: contSessionId,
       branchId: contBranchId,

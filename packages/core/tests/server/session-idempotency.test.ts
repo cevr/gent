@@ -327,7 +327,7 @@ describe("requestId idempotency", () => {
         now,
       })
       yield* messages.createMessage(
-        Message.Regular.make({
+        Message.cases.regular.make({
           id: messageId,
           sessionId,
           branchId,
@@ -869,7 +869,7 @@ describe("requestId idempotency", () => {
           now: FIXED_NOW,
         })
         yield* messages.createMessage(
-          Message.Regular.make({
+          Message.cases.regular.make({
             id: messageId,
             sessionId,
             branchId,

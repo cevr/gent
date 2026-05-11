@@ -91,8 +91,8 @@ describe("streaming", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const messageA = makeMessage("s1", "b1", "hello")
-          const messageB = makeMessage("s2", "b2", "world")
+          const messageA = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "hello")
+          const messageB = makeMessage(SessionId.make("s2"), BranchId.make("b2"), "world")
           const fiberA = yield* Effect.forkChild(runAgentLoop(agentLoop, messageA))
           yield* Deferred.await(firstStarted)
           const fiberB = yield* Effect.forkChild(runAgentLoop(agentLoop, messageB))
@@ -163,11 +163,17 @@ describe("streaming", () => {
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
           const fiberA = yield* Effect.forkChild(
-            runAgentLoop(agentLoop, makeMessage("s1", "b1", "first")),
+            runAgentLoop(
+              agentLoop,
+              makeMessage(SessionId.make("s1"), BranchId.make("b1"), "first"),
+            ),
           )
           yield* Deferred.await(firstStarted)
           const fiberB = yield* Effect.forkChild(
-            runAgentLoop(agentLoop, makeMessage("s1", "b1", "second")),
+            runAgentLoop(
+              agentLoop,
+              makeMessage(SessionId.make("s1"), BranchId.make("b1"), "second"),
+            ),
           )
           const queuedB = yield* Fiber.join(fiberB).pipe(Effect.timeoutOption("200 millis"))
           expect(queuedB._tag).toBe("Some")
@@ -204,8 +210,8 @@ describe("streaming", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const messageA = makeMessage("s1", "b1", "alpha")
-          const messageB = makeMessage("s2", "b2", "beta")
+          const messageA = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "alpha")
+          const messageB = makeMessage(SessionId.make("s2"), BranchId.make("b2"), "beta")
           const fiberA = yield* Effect.forkChild(runAgentLoop(agentLoop, messageA))
           const fiberB = yield* Effect.forkChild(runAgentLoop(agentLoop, messageB))
           yield* Deferred.await(startedA)
@@ -252,9 +258,9 @@ describe("streaming", () => {
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
           const messageStorage = yield* MessageStorage
-          const first = makeMessage("s1", "b1", "first")
-          const second = makeMessage("s1", "b1", "second")
-          const third = makeMessage("s1", "b1", "third")
+          const first = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "first")
+          const second = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "second")
+          const third = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "third")
           const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(firstStarted)
           yield* runAgentLoop(agentLoop, second)
@@ -285,7 +291,10 @@ describe("streaming", () => {
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
           const recorder = yield* SequenceRecorder
-          yield* runAgentLoop(agentLoop, makeMessage("s1", "b1", "inspect me"))
+          yield* runAgentLoop(
+            agentLoop,
+            makeMessage(SessionId.make("s1"), BranchId.make("b1"), "inspect me"),
+          )
           const calls = yield* recorder.getCalls()
           const publishedEvents = calls
             .filter((call) => call.service === "EventStore" && call.method === "append")
@@ -328,7 +337,11 @@ describe("streaming", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
-        const message = makeMessage("atomic-assistant-session", "atomic-assistant-branch", "hello")
+        const message = makeMessage(
+          SessionId.make("atomic-assistant-session"),
+          BranchId.make("atomic-assistant-branch"),
+          "hello",
+        )
         const exit = yield* Effect.exit(runAgentLoop(agentLoop, message))
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(exit._tag).toBe("Failure")
@@ -358,7 +371,11 @@ describe("streaming", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
-        const message = makeMessage("atomic-turn-session", "atomic-turn-branch", "hello")
+        const message = makeMessage(
+          SessionId.make("atomic-turn-session"),
+          BranchId.make("atomic-turn-branch"),
+          "hello",
+        )
         const exit = yield* Effect.exit(runAgentLoop(agentLoop, message))
         const user = yield* messageStorage.getMessage(message.id)
         expect(exit._tag).toBe("Failure")
@@ -370,7 +387,11 @@ describe("streaming", () => {
     Effect.gen(function* () {
       const messageStorage = yield* MessageStorage
       const agentLoop = yield* makeAgentLoopService
-      const message = makeMessage("image-session", "image-branch", "show image")
+      const message = makeMessage(
+        SessionId.make("image-session"),
+        BranchId.make("image-branch"),
+        "show image",
+      )
       yield* runAgentLoop(agentLoop, message)
       const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
       expect(assistant).toBeDefined()
@@ -432,8 +453,8 @@ describe("streaming", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const first = makeMessage("s1", "b1", "first")
-          const queued = makeMessage("s1", "b1", "queued")
+          const first = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "first")
+          const queued = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "queued")
           const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(firstStarted)
           yield* runAgentLoop(agentLoop, queued)
@@ -479,9 +500,9 @@ describe("streaming", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const first = makeMessage("s1", "b1", "first")
-          const queuedA = makeMessage("s1", "b1", "queued a")
-          const queuedB = makeMessage("s1", "b1", "queued b")
+          const first = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "first")
+          const queuedA = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "queued a")
+          const queuedB = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "queued b")
           const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(firstStarted)
           yield* runAgentLoop(agentLoop, queuedA)
@@ -565,8 +586,12 @@ describe("streaming", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
-          const first = makeMessage("s1", "b1", "first")
-          const queued = makeMessage("s1", "b1", "queued after failure")
+          const first = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "first")
+          const queued = makeMessage(
+            SessionId.make("s1"),
+            BranchId.make("b1"),
+            "queued after failure",
+          )
           const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(firstStarted)
           yield* runAgentLoop(agentLoop, queued)
@@ -608,7 +633,11 @@ describe("streaming", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
-        const message = makeMessage("stream-retry-session", "stream-retry-branch", "retry")
+        const message = makeMessage(
+          SessionId.make("stream-retry-session"),
+          BranchId.make("stream-retry-branch"),
+          "retry",
+        )
         yield* runAgentLoop(agentLoop, message)
         const events = yield* Ref.get(eventsRef)
         const tags = events.map((event) => event._tag)
@@ -653,8 +682,8 @@ describe("streaming", () => {
           const agentLoop = yield* makeAgentLoopService
           const messageStorage = yield* MessageStorage
           const message = makeMessage(
-            "stream-metadata-retry-session",
-            "stream-metadata-retry-branch",
+            SessionId.make("stream-metadata-retry-session"),
+            BranchId.make("stream-metadata-retry-branch"),
             "retry",
           )
           yield* runAgentLoop(agentLoop, message)
@@ -684,8 +713,8 @@ describe("streaming", () => {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
         const message = makeMessage(
-          "stream-retry-exhausted-session",
-          "stream-retry-exhausted-branch",
+          SessionId.make("stream-retry-exhausted-session"),
+          BranchId.make("stream-retry-exhausted-branch"),
           "retry",
         )
         yield* runAgentLoop(agentLoop, message)
@@ -723,7 +752,11 @@ describe("streaming", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
-        const message = makeMessage("stream-no-retry-session", "stream-no-retry-branch", "retry")
+        const message = makeMessage(
+          SessionId.make("stream-no-retry-session"),
+          BranchId.make("stream-no-retry-branch"),
+          "retry",
+        )
         yield* runAgentLoop(agentLoop, message)
         const events = yield* Ref.get(eventsRef)
         const tags = events.map((event) => event._tag)
@@ -750,7 +783,11 @@ describe("streaming", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
-        const message = makeMessage("native-error-session", "native-error-branch", "fail natively")
+        const message = makeMessage(
+          SessionId.make("native-error-session"),
+          BranchId.make("native-error-branch"),
+          "fail natively",
+        )
         yield* runAgentLoop(agentLoop, message)
         const events = yield* Ref.get(eventsRef)
         const tags = events.map((event) => event._tag)

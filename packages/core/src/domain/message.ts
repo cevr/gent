@@ -2,7 +2,6 @@ import { DateTime, Schema, SchemaGetter as Getter } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SessionId, BranchId, MessageId, ToolCallId } from "./ids"
 import { ReasoningEffort } from "./agent"
-import { TaggedEnumClass } from "./schema-tagged-enum-class"
 
 export const dateFromMillis = (millis: number): Date =>
   Schema.decodeUnknownSync(DateFromNumber)(millis)
@@ -66,14 +65,16 @@ const MessageFields = {
   metadata: Schema.optional(MessageMetadata),
 }
 
-export const Message = TaggedEnumClass("Message", {
-  Regular: TaggedEnumClass.variant("regular", MessageFields),
-  Interjection: TaggedEnumClass.variant("interjection", {
-    ...MessageFields,
-    role: Schema.Literal("user"),
-  }),
+const RegularMessageStruct = Schema.TaggedStruct("regular", MessageFields)
+const InterjectionMessageStruct = Schema.TaggedStruct("interjection", {
+  ...MessageFields,
+  role: Schema.Literal("user"),
 })
-export type Message = typeof Message.Type
+
+export const Message = Schema.Union([RegularMessageStruct, InterjectionMessageStruct]).pipe(
+  Schema.toTaggedUnion("_tag"),
+)
+export type Message = Schema.Schema.Type<typeof Message>
 export type RegularMessage = Extract<Message, { _tag: "regular" }>
 export type InterjectionMessage = Extract<Message, { _tag: "interjection" }>
 
@@ -82,14 +83,17 @@ const ProjectedMessageFields = {
   toolInteractions: Schema.Array(ToolInteraction),
 }
 
-export const ProjectedMessage = TaggedEnumClass("ProjectedMessage", {
-  Regular: TaggedEnumClass.variant("regular", ProjectedMessageFields),
-  Interjection: TaggedEnumClass.variant("interjection", {
-    ...ProjectedMessageFields,
-    role: Schema.Literal("user"),
-  }),
+const RegularProjectedMessageStruct = Schema.TaggedStruct("regular", ProjectedMessageFields)
+const InterjectionProjectedMessageStruct = Schema.TaggedStruct("interjection", {
+  ...ProjectedMessageFields,
+  role: Schema.Literal("user"),
 })
-export type ProjectedMessage = typeof ProjectedMessage.Type
+
+export const ProjectedMessage = Schema.Union([
+  RegularProjectedMessageStruct,
+  InterjectionProjectedMessageStruct,
+]).pipe(Schema.toTaggedUnion("_tag"))
+export type ProjectedMessage = Schema.Schema.Type<typeof ProjectedMessage>
 
 export const copyMessageToBranch = (
   message: Message,
@@ -110,8 +114,8 @@ export const copyMessageToBranch = (
     ...(message.metadata !== undefined ? { metadata: message.metadata } : {}),
   }
   return message._tag === "interjection"
-    ? Message.Interjection.make({ ...fields, role: "user" })
-    : Message.Regular.make(fields)
+    ? Message.cases.interjection.make({ ...fields, role: "user" })
+    : Message.cases.regular.make(fields)
 }
 
 export const projectMessage = (
@@ -130,8 +134,8 @@ export const projectMessage = (
     ...(message.metadata !== undefined ? { metadata: message.metadata } : {}),
   }
   return message._tag === "interjection"
-    ? ProjectedMessage.Interjection.make({ ...fields, role: "user" })
-    : ProjectedMessage.Regular.make(fields)
+    ? ProjectedMessage.cases.interjection.make({ ...fields, role: "user" })
+    : ProjectedMessage.cases.regular.make(fields)
 }
 
 // Session

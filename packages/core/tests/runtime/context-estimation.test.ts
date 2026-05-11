@@ -6,13 +6,13 @@ import {
   estimateContextPercent,
   getContextWindow,
 } from "../../src/runtime/context-estimation"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 
 describe("Token Estimation", () => {
   test("estimateTokens calculates token count", () => {
     const messages = [
-      Message.Regular.make({
-        id: "m1",
+      Message.cases.regular.make({
+        id: MessageId.make("m1"),
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
@@ -34,8 +34,8 @@ describe("estimateContextPercent", () => {
   test("calculates percent against model context window", () => {
     // 800 chars = 200 tokens. + 4000 overhead = 4200 tokens. / 1000000 = 0.42% → 0
     const messages = [
-      Message.Regular.make({
-        id: "m1",
+      Message.cases.regular.make({
+        id: MessageId.make("m1"),
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
@@ -50,8 +50,8 @@ describe("estimateContextPercent", () => {
   test("larger messages increase percent", () => {
     // 40000 chars = 10000 tokens. + 4000 = 14000. / 1000000 = 1.4% → 1
     const messages = [
-      Message.Regular.make({
-        id: "m1",
+      Message.cases.regular.make({
+        id: MessageId.make("m1"),
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
@@ -66,8 +66,8 @@ describe("estimateContextPercent", () => {
   test("respects different model context windows", () => {
     // 40000 chars = 10000 tokens. + 4000 = 14000. / 1000000 (codex) = 1.4% → 1
     const messages = [
-      Message.Regular.make({
-        id: "m1",
+      Message.cases.regular.make({
+        id: MessageId.make("m1"),
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
@@ -81,16 +81,16 @@ describe("estimateContextPercent", () => {
 
   test("multiple message types contribute to estimate", () => {
     const messages = [
-      Message.Regular.make({
-        id: "m1",
+      Message.cases.regular.make({
+        id: MessageId.make("m1"),
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
         parts: [Prompt.textPart({ text: "x".repeat(4_000) })],
         createdAt: dateFromMillis(1_767_225_600_000),
       }),
-      Message.Regular.make({
-        id: "m2",
+      Message.cases.regular.make({
+        id: MessageId.make("m2"),
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "assistant",
@@ -105,8 +105,8 @@ describe("estimateContextPercent", () => {
         ],
         createdAt: dateFromMillis(1_767_225_600_000),
       }),
-      Message.Regular.make({
-        id: "m3",
+      Message.cases.regular.make({
+        id: MessageId.make("m3"),
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "tool",
@@ -150,8 +150,8 @@ describe("getContextWindow", () => {
 describe("estimateTokens", () => {
   test("text parts", () => {
     const messages = [
-      Message.Regular.make({
-        id: "m1",
+      Message.cases.regular.make({
+        id: MessageId.make("m1"),
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
@@ -164,8 +164,8 @@ describe("estimateTokens", () => {
 
   test("tool-call parts use JSON.stringify of input", () => {
     const messages = [
-      Message.Regular.make({
-        id: "m1",
+      Message.cases.regular.make({
+        id: MessageId.make("m1"),
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "assistant",
@@ -187,8 +187,8 @@ describe("estimateTokens", () => {
 
   test("tool-result parts use JSON.stringify of output", () => {
     const messages = [
-      Message.Regular.make({
-        id: "m1",
+      Message.cases.regular.make({
+        id: MessageId.make("m1"),
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "tool",
@@ -209,8 +209,8 @@ describe("estimateTokens", () => {
 
   test("image parts estimate ~250 tokens", () => {
     const messages = [
-      Message.Regular.make({
-        id: "m1",
+      Message.cases.regular.make({
+        id: MessageId.make("m1"),
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
@@ -223,16 +223,16 @@ describe("estimateTokens", () => {
 
   test("multiple messages sum correctly", () => {
     const messages = [
-      Message.Regular.make({
-        id: "m1",
+      Message.cases.regular.make({
+        id: MessageId.make("m1"),
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "user",
         parts: [Prompt.textPart({ text: "x".repeat(100) })],
         createdAt: dateFromMillis(1_767_225_600_000),
       }),
-      Message.Regular.make({
-        id: "m2",
+      Message.cases.regular.make({
+        id: MessageId.make("m2"),
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         role: "assistant",

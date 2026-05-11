@@ -124,7 +124,7 @@ describe("Concurrent writes", () => {
             active,
             peak,
             messages.createMessage(
-              Message.Regular.make({
+              Message.cases.regular.make({
                 id,
                 sessionId,
                 branchId,

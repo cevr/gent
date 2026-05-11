@@ -138,7 +138,7 @@ export const recordToolResult = (params: {
       result: params.output,
     })
 
-    const message = Message.Regular.make({
+    const message = Message.cases.regular.make({
       id: params.toolResultMessageId,
       sessionId: params.sessionId,
       branchId: params.branchId,
@@ -227,7 +227,7 @@ export const persistMessageParts = (params: {
     if (params.parts.length === 0) return undefined
 
     const messageStorage = yield* MessageStorage
-    const message = Message.Regular.make({
+    const message = Message.cases.regular.make({
       id: params.messageId,
       sessionId: params.sessionId,
       branchId: params.branchId,

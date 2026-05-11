@@ -630,7 +630,7 @@ const buildAgentLoopActorHandlers = (config: {
       const wasAlreadyWarm = yield* markWrite
       const message =
         input.message ??
-        Message.Regular.make({
+        Message.cases.regular.make({
           id: MessageId.make(yield* platform.randomId),
           sessionId,
           branchId,
@@ -902,7 +902,7 @@ const buildAgentLoopActorHandlers = (config: {
           return
 
         case "Interject": {
-          const interjectMessage = Message.Interjection.make({
+          const interjectMessage = Message.cases.interjection.make({
             id: interjectionMessageIdForCommand(commandId),
             sessionId: command.sessionId,
             branchId: command.branchId,

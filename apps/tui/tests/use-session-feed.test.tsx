@@ -84,7 +84,7 @@ const makeEnvelope = (id: number, event: AgentEvent): EventEnvelope =>
   })
 
 const makeUserMessage = (sessionId: SessionId, branchId: BranchId): Message =>
-  Message.Regular.make({
+  Message.cases.regular.make({
     id: MessageId.make("message-feed-duplicate-user"),
     sessionId,
     branchId,

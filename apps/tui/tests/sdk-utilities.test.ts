@@ -101,7 +101,7 @@ describe("extractImages", () => {
 
 describe("projectMessagesWithToolInteractions", () => {
   const makeMsg = (role: "user" | "assistant" | "tool", parts: MessagePart[]): DomainMessage =>
-    Message.Regular.make({
+    Message.cases.regular.make({
       id: MessageId.make(Bun.randomUUIDv7()),
       sessionId: SessionId.make("s1"),
       branchId: BranchId.make("b1"),

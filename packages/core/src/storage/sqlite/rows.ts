@@ -138,8 +138,8 @@ export const decodeStoredMessage = (row: MessageRow, partJsons: ReadonlyArray<st
             : Option.getOrUndefined(decodeMessageMetadata(row.metadata)),
       }
       return row.kind === "interjection"
-        ? Message.Interjection.make({ ...fields, role: "user" })
-        : Message.Regular.make(fields)
+        ? Message.cases.interjection.make({ ...fields, role: "user" })
+        : Message.cases.regular.make(fields)
     },
   )
 

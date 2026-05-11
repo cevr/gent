@@ -63,7 +63,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   yield* sessions.createSession(session)
   yield* branches.createBranch(branch)
 
-  const user1 = Message.Regular.make({
+  const user1 = Message.cases.regular.make({
     id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
@@ -72,7 +72,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-50_000),
   })
 
-  const assistant1 = Message.Regular.make({
+  const assistant1 = Message.cases.regular.make({
     id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
@@ -120,7 +120,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-47_000),
   })
 
-  const toolResults1 = Message.Regular.make({
+  const toolResults1 = Message.cases.regular.make({
     id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
@@ -169,7 +169,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-46_000),
   })
 
-  const assistant2 = Message.Regular.make({
+  const assistant2 = Message.cases.regular.make({
     id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
@@ -178,7 +178,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-45_000),
   })
 
-  const user2 = Message.Interjection.make({
+  const user2 = Message.cases.interjection.make({
     id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
@@ -187,7 +187,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-38_000),
   })
 
-  const assistant3 = Message.Regular.make({
+  const assistant3 = Message.cases.regular.make({
     id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
@@ -200,7 +200,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-36_000),
   })
 
-  const user3 = Message.Regular.make({
+  const user3 = Message.cases.regular.make({
     id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
@@ -209,7 +209,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-28_000),
   })
 
-  const assistant4 = Message.Regular.make({
+  const assistant4 = Message.cases.regular.make({
     id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
@@ -258,7 +258,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-25_000),
   })
 
-  const toolResults2 = Message.Regular.make({
+  const toolResults2 = Message.cases.regular.make({
     id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
@@ -293,7 +293,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-23_000),
   })
 
-  const assistant5 = Message.Regular.make({
+  const assistant5 = Message.cases.regular.make({
     id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,

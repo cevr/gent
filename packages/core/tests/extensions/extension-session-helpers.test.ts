@@ -24,7 +24,7 @@ const BRANCH_ID = BranchId.make("test-branch")
 const FIXTURE_DATE = dateFromMillis(0)
 
 const textMessage = (id: string, content: string): Message =>
-  Message.Regular.make({
+  Message.cases.regular.make({
     id: MessageId.make(id),
     sessionId: SESSION_ID,
     branchId: BRANCH_ID,

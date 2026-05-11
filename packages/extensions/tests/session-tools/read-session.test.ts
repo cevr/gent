@@ -108,7 +108,7 @@ describe("renderSessionTree", () => {
 
   let messageIndex = 0
   const makeMessage = (branchId: BranchId, role: "user" | "assistant", text: string) =>
-    Message.Regular.make({
+    Message.cases.regular.make({
       id: MessageId.make(`msg-${messageIndex++}`),
       sessionId: sid,
       branchId,

@@ -88,9 +88,9 @@ export const makeExtRegistry = (
     }),
   )
 }
-export const makeMessage = (sessionId: string, branchId: string, text: string) =>
-  Message.Regular.make({
-    id: `${sessionId}-${branchId}-${text}`,
+export const makeMessage = (sessionId: SessionId, branchId: BranchId, text: string) =>
+  Message.cases.regular.make({
+    id: MessageId.make(`${sessionId}-${branchId}-${text}`),
     sessionId,
     branchId,
     role: "user",
@@ -123,7 +123,7 @@ export const makeAgentLoopService = Effect.gen(function* () {
   return {
     runOnce: (input) =>
       Effect.gen(function* () {
-        const message = Message.Regular.make({
+        const message = Message.cases.regular.make({
           id: MessageId.make(yield* platform.randomId),
           sessionId: input.sessionId,
           branchId: input.branchId,

@@ -29,7 +29,7 @@ describe("message part projection", () => {
     role: "assistant" | "tool",
     parts: ReadonlyArray<Prompt.TextPart | Prompt.ToolCallPart | Prompt.ToolResultPart>,
   ) =>
-    Message.Regular.make({
+    Message.cases.regular.make({
       id: MessageId.make(id),
       sessionId: SessionId.make("session-projection"),
       branchId: BranchId.make("branch-projection"),

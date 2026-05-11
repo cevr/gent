@@ -390,7 +390,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const runPromptThroughActor = Effect.fn("SessionRuntime.runPromptThroughActor")(function* (
     input: RunPromptInput,
   ) {
-    const userMessage = Message.Regular.make({
+    const userMessage = Message.cases.regular.make({
       id: MessageId.make(yield* platform.randomId),
       sessionId: input.sessionId,
       branchId: input.branchId,
@@ -486,7 +486,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const queueFollowUpThroughActor = Effect.fn("SessionRuntime.queueFollowUpThroughActor")(
     function* (input: QueueFollowUpPayload) {
       const workspaceId = yield* CurrentWorkspaceId
-      const message = Message.Regular.make({
+      const message = Message.cases.regular.make({
         id: followUpMessageIdForSource({ workspaceId, ...input }),
         sessionId: input.sessionId,
         branchId: input.branchId,
@@ -537,7 +537,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         : ActorCommandId.make(yield* platform.randomId))
     const shouldHoldCompletion = input.requestId !== undefined || input.commandId !== undefined
     const messageId = userMessageIdForCommand(commandId)
-    const message = Message.Regular.make({
+    const message = Message.cases.regular.make({
       id: messageId,
       sessionId: input.sessionId,
       branchId: input.branchId,

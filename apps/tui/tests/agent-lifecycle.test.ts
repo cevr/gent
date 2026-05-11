@@ -11,12 +11,12 @@ import {
 import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import { reduceAgentLifecycle } from "../src/client/agent-lifecycle"
 import { AgentStatus } from "../src/client/agent-state"
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { AgentName } from "@gent/core-internal/domain/agent"
 
 const makeMessage = (role: "user" | "assistant") =>
-  Message.Regular.make({
-    id: "m1",
+  Message.cases.regular.make({
+    id: MessageId.make("m1"),
     sessionId: SessionId.make("s1"),
     branchId: BranchId.make("b1"),
     role,

@@ -5,7 +5,7 @@ import { dateFromMillis, Message, copyMessageToBranch } from "@gent/core-interna
 
 describe("copyMessageToBranch", () => {
   test("preserves interjection variant when copying to a new branch", () => {
-    const message = Message.Interjection.make({
+    const message = Message.cases.interjection.make({
       id: MessageId.make("source-message"),
       sessionId: SessionId.make("source-session"),
       branchId: BranchId.make("source-branch"),
@@ -26,7 +26,7 @@ describe("copyMessageToBranch", () => {
   })
 
   test("preserves regular variant and role when copying", () => {
-    const message = Message.Regular.make({
+    const message = Message.cases.regular.make({
       id: MessageId.make("src-msg"),
       sessionId: SessionId.make("src-session"),
       branchId: BranchId.make("src-branch"),
@@ -49,7 +49,7 @@ describe("copyMessageToBranch", () => {
   })
 
   test("threads explicit sessionId override when provided", () => {
-    const message = Message.Regular.make({
+    const message = Message.cases.regular.make({
       id: MessageId.make("src-msg"),
       sessionId: SessionId.make("src-session"),
       branchId: BranchId.make("src-branch"),
@@ -68,7 +68,7 @@ describe("copyMessageToBranch", () => {
   })
 
   test("preserves optional fields (turnDurationMs, metadata) when present", () => {
-    const message = Message.Regular.make({
+    const message = Message.cases.regular.make({
       id: MessageId.make("src-msg"),
       sessionId: SessionId.make("src-session"),
       branchId: BranchId.make("src-branch"),
@@ -90,7 +90,7 @@ describe("copyMessageToBranch", () => {
   })
 
   test("omits optional fields when source has none (no spurious undefined keys)", () => {
-    const message = Message.Regular.make({
+    const message = Message.cases.regular.make({
       id: MessageId.make("src-msg"),
       sessionId: SessionId.make("src-session"),
       branchId: BranchId.make("src-branch"),

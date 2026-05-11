@@ -742,7 +742,7 @@ describe("AgentRunner", () => {
           const messages = yield* MessageStorage
           const now = dateFromMillis(1_767_225_600_000)
           yield* messages.createMessage(
-            Message.Regular.make({
+            Message.cases.regular.make({
               id: MessageId.make(`${input.sessionId}:assistant:1`),
               sessionId: input.sessionId,
               branchId: input.branchId,
@@ -813,7 +813,7 @@ describe("AgentRunner", () => {
           const messages = yield* MessageStorage
           const now = dateFromMillis(1_767_225_600_000)
           yield* messages.createMessage(
-            Message.Regular.make({
+            Message.cases.regular.make({
               id: MessageId.make(`${input.sessionId}:assistant:1`),
               sessionId: input.sessionId,
               branchId: input.branchId,
@@ -887,7 +887,7 @@ describe("AgentRunner", () => {
           const messages = yield* MessageStorage
           const now = dateFromMillis(1_767_225_600_000)
           yield* messages.createMessage(
-            Message.Regular.make({
+            Message.cases.regular.make({
               id: MessageId.make(`${input.sessionId}:assistant:1`),
               sessionId: input.sessionId,
               branchId: input.branchId,

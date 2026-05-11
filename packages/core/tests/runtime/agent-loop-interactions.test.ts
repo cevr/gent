@@ -22,6 +22,7 @@ import { RecordingEventStore, SequenceRecorder } from "@gent/core-internal/test-
 import {
   BranchId,
   InteractionRequestId,
+  MessageId,
   SessionId,
   ToolCallId,
 } from "@gent/core-internal/domain/ids"
@@ -48,8 +49,8 @@ describe("interaction", () => {
   const intSessionId = SessionId.make("s-interaction")
   const intBranchId = BranchId.make("b-interaction")
   const makeIntMessage = (text: string) =>
-    Message.Regular.make({
-      id: `msg-${text}`,
+    Message.cases.regular.make({
+      id: MessageId.make(`msg-${text}`),
       sessionId: intSessionId,
       branchId: intBranchId,
       role: "user",
