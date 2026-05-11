@@ -7,7 +7,7 @@ import {
   Schema,
   ScopedRef,
   Semaphore,
-  SubscriptionRef,
+  TxSubscriptionRef,
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { type TurnProjection } from "@gent/core/extensions/api"
@@ -63,22 +63,22 @@ export const ExecutorControllerLive = (
       const sidecar = yield* ExecutorSidecar
       const bridge = yield* ExecutorMcpBridge
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-      const state = yield* SubscriptionRef.make<ExecutorState>(ExecutorState.cases.Idle.make({}))
+      const state = yield* TxSubscriptionRef.make<ExecutorState>(ExecutorState.cases.Idle.make({}))
       const gate = yield* Semaphore.make(1)
       const connection = yield* ScopedRef.fromAcquire(
         Effect.succeed<Fiber.Fiber<void> | null>(null),
       )
       const generation = yield* Ref.make(0)
 
-      const snapshot = () => SubscriptionRef.get(state).pipe(Effect.map(projectSnapshot))
+      const snapshot = () => TxSubscriptionRef.get(state).pipe(Effect.map(projectSnapshot))
 
       const setIfCurrent = (expectedGeneration: number, next: ExecutorState) =>
         gate.withPermits(1)(
           Effect.gen(function* () {
             const currentGeneration = yield* Ref.get(generation)
-            const current = yield* SubscriptionRef.get(state)
+            const current = yield* TxSubscriptionRef.get(state)
             if (currentGeneration !== expectedGeneration || current._tag !== "Connecting") return
-            yield* SubscriptionRef.set(state, next)
+            yield* TxSubscriptionRef.set(state, next)
           }),
         )
 
@@ -125,11 +125,11 @@ export const ExecutorControllerLive = (
       const connect = (targetCwd: string) =>
         gate.withPermits(1)(
           Effect.gen(function* () {
-            const current = yield* SubscriptionRef.get(state)
+            const current = yield* TxSubscriptionRef.get(state)
             const next = transitionConnect(current, targetCwd)
             if (next === current) return
             const nextGeneration = yield* Ref.updateAndGet(generation, (n) => n + 1)
-            yield* SubscriptionRef.set(state, next)
+            yield* TxSubscriptionRef.set(state, next)
             yield* ScopedRef.set(
               connection,
               runConnection(targetCwd, nextGeneration).pipe(Effect.forkScoped),
@@ -140,12 +140,12 @@ export const ExecutorControllerLive = (
       const disconnect = () =>
         gate.withPermits(1)(
           Effect.gen(function* () {
-            const current = yield* SubscriptionRef.get(state)
+            const current = yield* TxSubscriptionRef.get(state)
             const next = transitionDisconnect(current)
             if (next === current) return
             yield* Ref.update(generation, (n) => n + 1)
             yield* ScopedRef.set(connection, Effect.succeed(null))
-            yield* SubscriptionRef.set(state, next)
+            yield* TxSubscriptionRef.set(state, next)
           }),
         )
 
@@ -154,7 +154,7 @@ export const ExecutorControllerLive = (
         connect,
         disconnect,
         turnProjection: () =>
-          SubscriptionRef.get(state).pipe(Effect.map((current) => viewForState(current))),
+          TxSubscriptionRef.get(state).pipe(Effect.map((current) => viewForState(current))),
       } satisfies ExecutorRuntimeShape
 
       const read = {
