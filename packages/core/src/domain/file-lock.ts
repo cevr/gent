@@ -1,8 +1,8 @@
-import { Context, Effect, Layer, Path, Ref, Semaphore } from "effect"
+import { Context, Effect, HashMap, Layer, Path, TxRef, TxSemaphore } from "effect"
 
 interface LockEntry {
-  readonly sem: Semaphore.Semaphore
-  refcount: number
+  readonly sem: TxSemaphore.TxSemaphore
+  readonly refcount: number
 }
 
 export interface FileLockShape {
@@ -26,62 +26,43 @@ export class FileLockService extends Context.Service<FileLockService, FileLockSh
       // caller holds (or is waiting on) the lock. Last release evicts.
       // Map size is bounded by concurrent in-flight lock holders, not
       // by total distinct paths ever touched.
-      const locks = yield* Ref.make(new Map<string, LockEntry>())
+      const locksRef = yield* TxRef.make(HashMap.empty<string, LockEntry>())
       const pathService = yield* Path.Path
-
-      const acquireEntry = (resolved: string) =>
-        Ref.modify(locks, (m) => {
-          const existing = m.get(resolved)
-          if (existing !== undefined) {
-            existing.refcount += 1
-            return [existing.sem, m] as const
-          }
-          // Defer Semaphore.make to the caller — it's an Effect; we
-          // can't yield inside Ref.modify. Signal "needs creation"
-          // with undefined and let the surrounding Effect create it.
-          return [undefined, m] as const
-        })
-
-      const installEntry = (resolved: string, sem: Semaphore.Semaphore) =>
-        Ref.modify(locks, (m) => {
-          const existing = m.get(resolved)
-          if (existing !== undefined) {
-            existing.refcount += 1
-            return [existing.sem, m] as const
-          }
-          const next = new Map(m)
-          next.set(resolved, { sem, refcount: 1 })
-          return [sem, next] as const
-        })
-
-      const releaseEntry = (resolved: string) =>
-        Ref.update(locks, (m) => {
-          const existing = m.get(resolved)
-          if (existing === undefined) return m
-          existing.refcount -= 1
-          if (existing.refcount > 0) return m
-          const next = new Map(m)
-          next.delete(resolved)
-          return next
-        })
 
       const acquire = Effect.fn("FileLockService.acquire")(function* (filePath: string) {
         const resolved = pathService.resolve(filePath)
-        const cached = yield* acquireEntry(resolved)
-        if (cached !== undefined) return { sem: cached, resolved }
-        const fresh = yield* Semaphore.make(1)
-        const sem = yield* installEntry(resolved, fresh)
+        // Speculative TxSemaphore allocation outside the transaction;
+        // only the winner gets installed, the loser is discarded.
+        const fresh = yield* TxSemaphore.make(1)
+        const sem = yield* TxRef.modify(locksRef, (current) => {
+          const found = HashMap.get(current, resolved)
+          if (found._tag === "Some") {
+            const bumped: LockEntry = { sem: found.value.sem, refcount: found.value.refcount + 1 }
+            return [found.value.sem, HashMap.set(current, resolved, bumped)] as const
+          }
+          const entry: LockEntry = { sem: fresh, refcount: 1 }
+          return [fresh, HashMap.set(current, resolved, entry)] as const
+        })
         return { sem, resolved }
       })
+
+      const release = (resolved: string) =>
+        TxRef.update(locksRef, (current) => {
+          const found = HashMap.get(current, resolved)
+          if (found._tag === "None") return current
+          const next = found.value.refcount - 1
+          if (next <= 0) return HashMap.remove(current, resolved)
+          return HashMap.set(current, resolved, { sem: found.value.sem, refcount: next })
+        })
 
       return FileLockService.of({
         withLock: (path, effect) =>
           Effect.acquireUseRelease(
             acquire(path),
-            ({ sem }) => sem.withPermits(1)(effect),
-            ({ resolved }) => releaseEntry(resolved),
+            ({ sem }) => TxSemaphore.withPermits(sem, 1, effect),
+            ({ resolved }) => release(resolved),
           ),
-        currentSize: () => Ref.get(locks).pipe(Effect.map((m) => m.size)),
+        currentSize: () => TxRef.get(locksRef).pipe(Effect.map((m) => HashMap.size(m))),
       })
     }),
   )
