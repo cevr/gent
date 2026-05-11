@@ -1,4 +1,4 @@
-import { DateTime, Effect, Random, Stream } from "effect"
+import { DateTime, Effect, Random, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SqlClient } from "effect/unstable/sql"
 import {
@@ -13,7 +13,7 @@ import {
 import { type ToolCapability } from "../../domain/capability/tool.js"
 import { calculateCost, type ModelId } from "../../domain/model.js"
 import { ConfigService } from "../config-service.js"
-import type { InteractionPendingError } from "../../domain/interaction-request.js"
+import { InteractionPendingError } from "../../domain/interaction-request.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { compileSystemPrompt } from "../../domain/prompt.js"
 import { DEFAULTS } from "../../domain/defaults.js"
@@ -481,13 +481,12 @@ export const resolveTurnContext = (params: {
   })
 
 /** InteractionPendingError enriched with the toolCallId that triggered it */
-export class ToolInteractionPending {
-  readonly _tag = "ToolInteractionPending" as const
-  constructor(
-    readonly pending: InteractionPendingError,
-    readonly toolCallId: ToolCallId,
-  ) {}
-}
+export class ToolInteractionPending extends Schema.TaggedErrorClass<ToolInteractionPending>(
+  "@gent/core-internal/runtime/agent/turn-helpers/ToolInteractionPending",
+)("ToolInteractionPending", {
+  pending: InteractionPendingError,
+  toolCallId: ToolCallId,
+}) {}
 
 export const executeToolCalls = (params: {
   toolCalls: ReadonlyArray<Prompt.ToolCallPart>
@@ -519,7 +518,13 @@ export const executeToolCalls = (params: {
               { publishEvent: params.publishEvent },
             )
             .pipe(
-              Effect.mapError((e) => new ToolInteractionPending(e, ToolCallId.make(toolCall.id))),
+              Effect.mapError(
+                (e) =>
+                  new ToolInteractionPending({
+                    pending: e,
+                    toolCallId: ToolCallId.make(toolCall.id),
+                  }),
+              ),
             )
         }),
       { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },

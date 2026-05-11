@@ -984,10 +984,7 @@ export const makeAgentLoopBehavior = (
               permission: turnPermission,
             }).pipe(
               Effect.as(undefined as ToolInteractionPending | undefined),
-              Effect.catchIf(
-                (e): e is ToolInteractionPending => e instanceof ToolInteractionPending,
-                (e) => Effect.succeed(e),
-              ),
+              Effect.catchIf(Schema.is(ToolInteractionPending), (e) => Effect.succeed(e)),
             )
 
             if (interactionSignal !== undefined) {
@@ -1092,10 +1089,7 @@ export const makeAgentLoopBehavior = (
           permission: turnPermission,
         }).pipe(
           Effect.as(undefined as ToolInteractionPending | undefined),
-          Effect.catchIf(
-            (e): e is ToolInteractionPending => e instanceof ToolInteractionPending,
-            (e) => Effect.succeed(e),
-          ),
+          Effect.catchIf(Schema.is(ToolInteractionPending), (e) => Effect.succeed(e)),
         )
 
         if (interactionSignal !== undefined) {
