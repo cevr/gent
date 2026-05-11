@@ -519,13 +519,14 @@ const buildAgentLoopActorHandlers = (config: {
 
     const currentRuntimeState = (loop: AgentLoopBehavior) => loop.runtimeState
 
-    // Reads the currently-published behavior. The only legitimate callers
-    // are reentrant paths from inside the behavior itself (e.g. the
-    // `enqueueMessage` callback wired into `makeAgentLoopBehavior`) and
-    // the addFinalizer cleanup — both of which are scheduled after
-    // `openLoop` has written the handle. Other consumers go through
-    // `ensureStarted`, which guarantees the handle is published.
-    const currentHandle = Effect.gen(function* () {
+    // Typed reentrant-only handle lookup. The only legitimate caller is the
+    // `enqueueFollowUp` callback wired into `makeAgentLoopBehavior` — it
+    // fires from inside the behavior itself (during turn execution), so the
+    // handle is provably published into `handleRef` by then. Mailbox
+    // handlers (which arrive from outside the behavior) MUST go through
+    // `ensureStarted` instead — that path holds `startupSemaphore` across
+    // the rebuild/publish, ensuring no one observes a half-reopened loop.
+    const reentrantHandle = Effect.gen(function* () {
       const value = yield* Ref.get(handleRef)
       if (value === undefined) {
         return yield* new AgentLoopError({
@@ -607,14 +608,24 @@ const buildAgentLoopActorHandlers = (config: {
             }),
           )
 
-    const enqueueMessage = Effect.fn("AgentLoopActor.enqueueMessage")(function* (input: {
-      readonly message?: MessageType
-      readonly content?: string
-      readonly metadata?: MessageMetadata
-      readonly agentOverride?: AgentName
-      readonly runSpec?: RunSpec
-      readonly interactive?: boolean
-    }) {
+    // Both call sites supply an already-resolved `handle`:
+    //   - the reentrant callback wired into `makeAgentLoopBehavior` (`openLoop`)
+    //     hands back the just-created handle (no `ensureStarted` round trip
+    //     needed; we are inside the build).
+    //   - the `QueueFollowUp` mailbox handler resolves it via `ensureStarted`.
+    // Taking it as a parameter eliminates the `currentHandle` fallback path
+    // that previously bypassed `ensureStarted` for non-reentrant callers.
+    const enqueueMessage = Effect.fn("AgentLoopActor.enqueueMessage")(function* (
+      handle: AgentLoopBehavior,
+      input: {
+        readonly message?: MessageType
+        readonly content?: string
+        readonly metadata?: MessageMetadata
+        readonly agentOverride?: AgentName
+        readonly runSpec?: RunSpec
+        readonly interactive?: boolean
+      },
+    ) {
       const wasAlreadyWarm = yield* markWrite
       const message =
         input.message ??
@@ -635,7 +646,6 @@ const buildAgentLoopActorHandlers = (config: {
         runSpec: input.runSpec,
         interactive: input.interactive,
       })
-      const handle = yield* currentHandle
       const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
         coldQueueOnly: !wasAlreadyWarm,
       })
@@ -691,7 +701,11 @@ const buildAgentLoopActorHandlers = (config: {
         branchId,
         sideMutationSemaphore,
         config.baseSections,
-        (input) => enqueueMessage(input),
+        // Reentrant follow-up from inside the behavior. The handle is
+        // already published into `handleRef` by the time this callback
+        // fires (it runs during turn execution, well after `openLoop`
+        // assigns `handleRef`). `reentrantHandle` reads that publication.
+        (input) => reentrantHandle.pipe(Effect.flatMap((h) => enqueueMessage(h, input))),
         initialQueue,
       )
       yield* Ref.set(handleRef, handle)
@@ -919,8 +933,8 @@ const buildAgentLoopActorHandlers = (config: {
       QueueFollowUp: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
         withWorkspace(
           Effect.gen(function* () {
-            yield* ensureStarted
-            yield* enqueueMessage({
+            const handle = yield* ensureStarted
+            yield* enqueueMessage(handle, {
               message: operation.message,
               agentOverride: operation.agentOverride,
               runSpec: operation.runSpec,
