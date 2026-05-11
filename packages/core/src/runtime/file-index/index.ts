@@ -5,7 +5,7 @@ import {
   makeNativeServiceFromModule,
   ensureDbDir,
 } from "./native-adapter.js"
-import { makeFallbackService } from "./fallback-adapter.js"
+import { makeFallbackService, makeGitignoreCacheRef } from "./fallback-adapter.js"
 import { RuntimeEnvironment } from "../runtime-environment.js"
 
 export {
@@ -40,7 +40,8 @@ export const FileIndexLive: Layer.Layer<
   Effect.gen(function* () {
     const path = yield* Path.Path
     const fs = yield* FileSystem.FileSystem
-    const fallback = makeFallbackService(fs, path)
+    const cacheRef = yield* makeGitignoreCacheRef()
+    const fallback = makeFallbackService(fs, path, cacheRef)
     const { home, platform } = yield* RuntimeEnvironment
 
     if (platform === "test" || !isNativeFileIndexAvailable()) {

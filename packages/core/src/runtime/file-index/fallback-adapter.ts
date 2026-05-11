@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Layer, Option, Path } from "effect"
+import { Effect, FileSystem, Layer, Option, Path, Ref } from "effect"
 import picomatch from "picomatch"
 import {
   FileIndex,
@@ -12,6 +12,11 @@ import {
 // ---------------------------------------------------------------------------
 
 type PathMatcher = (path: string) => boolean
+
+export type GitignoreCacheRef = Ref.Ref<ReadonlyMap<string, ReadonlyArray<PathMatcher>>>
+
+export const makeGitignoreCacheRef = (): Effect.Effect<GitignoreCacheRef> =>
+  Ref.make<ReadonlyMap<string, ReadonlyArray<PathMatcher>>>(new Map())
 
 const parseGitignorePatterns = (content: string): PathMatcher[] => {
   const patterns: PathMatcher[] = []
@@ -43,22 +48,24 @@ const parseGitignorePatterns = (content: string): PathMatcher[] => {
 const isGitignored = (path: string, patterns: ReadonlyArray<PathMatcher>): boolean =>
   patterns.some((matches) => matches(path))
 
-const gitignoreCache = new Map<string, PathMatcher[]>()
-
 const loadGitignore = (
   cwd: string,
   fs: FileSystem.FileSystem,
   path: Path.Path,
-): Effect.Effect<PathMatcher[]> => {
-  const cached = gitignoreCache.get(cwd)
-  if (cached !== undefined) return Effect.succeed(cached)
+  cacheRef: GitignoreCacheRef,
+): Effect.Effect<ReadonlyArray<PathMatcher>> =>
+  Effect.gen(function* () {
+    const cache = yield* Ref.get(cacheRef)
+    const cached = cache.get(cwd)
+    if (cached !== undefined) return cached
 
-  return fs.readFileString(path.join(cwd, ".gitignore")).pipe(
-    Effect.map((content) => parseGitignorePatterns(content)),
-    Effect.orElseSucceed(() => [] as PathMatcher[]),
-    Effect.tap((patterns) => Effect.sync(() => gitignoreCache.set(cwd, patterns))),
-  )
-}
+    const patterns = yield* fs.readFileString(path.join(cwd, ".gitignore")).pipe(
+      Effect.map((content) => parseGitignorePatterns(content) as ReadonlyArray<PathMatcher>),
+      Effect.orElseSucceed(() => [] as ReadonlyArray<PathMatcher>),
+    )
+    yield* Ref.update(cacheRef, (m) => new Map(m).set(cwd, patterns))
+    return patterns
+  })
 
 // ---------------------------------------------------------------------------
 // Async scan helper — walks the Effect FileSystem and filters with picomatch
@@ -68,9 +75,10 @@ const scanAllFiles = (
   cwd: string,
   fs: FileSystem.FileSystem,
   pathService: Path.Path,
+  cacheRef: GitignoreCacheRef,
 ): Effect.Effect<ReadonlyArray<IndexedFile>, FileIndexError> =>
   Effect.gen(function* () {
-    const ignorePatterns = yield* loadGitignore(cwd, fs, pathService)
+    const ignorePatterns = yield* loadGitignore(cwd, fs, pathService, cacheRef)
 
     const files: IndexedFile[] = []
     const scanDir: (
@@ -127,9 +135,10 @@ const scanAllFiles = (
 export const makeFallbackService = (
   fs: FileSystem.FileSystem,
   path: Path.Path,
+  cacheRef: GitignoreCacheRef,
 ): FileIndexService => ({
   listFiles: (params) =>
-    scanAllFiles(params.cwd, fs, path).pipe(
+    scanAllFiles(params.cwd, fs, path, cacheRef).pipe(
       Effect.catchEager((e) =>
         Effect.fail(
           new FileIndexError({
@@ -155,6 +164,7 @@ export const FallbackFileIndexLive: Layer.Layer<
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    return makeFallbackService(fs, path)
+    const cacheRef = yield* makeGitignoreCacheRef()
+    return makeFallbackService(fs, path, cacheRef)
   }),
 )

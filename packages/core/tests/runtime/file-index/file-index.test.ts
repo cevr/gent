@@ -90,6 +90,38 @@ describe("FileIndex.Fallback", () => {
       expect(files.length).toBe(50)
     }).pipe(Effect.provide(FallbackLayer)),
   )
+
+  it.scopedLive("gitignore cache is scoped per layer instance (no cross-instance bleed)", () =>
+    Effect.gen(function* () {
+      // Each FallbackFileIndexLive build allocates a fresh cache Ref.
+      // If the cache were module-level (the pre-C13.5 shape), instance B
+      // below would inherit instance A's "ignore foo.txt" mapping for the
+      // same cwd, and the assertion at the bottom would fail.
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/foo.txt`, "x")
+      yield* fs.writeFileString(`${tmpDir}/bar.txt`, "y")
+
+      // Instance A: .gitignore excludes foo.txt; populate the per-instance cache.
+      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "foo.txt")
+      yield* Effect.gen(function* () {
+        const idx = yield* FileIndex
+        yield* idx.listFiles({ cwd: tmpDir })
+      }).pipe(Effect.provide(FallbackLayer), Effect.scoped)
+
+      // Instance B: same cwd, but .gitignore now excludes bar.txt instead.
+      // A module-level cache would short-circuit and still drop foo.txt.
+      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "bar.txt")
+      const filesB = yield* Effect.gen(function* () {
+        const idx = yield* FileIndex
+        return yield* idx.listFiles({ cwd: tmpDir })
+      }).pipe(Effect.provide(FallbackLayer), Effect.scoped)
+      const namesB = filesB.map((f) => f.fileName)
+
+      expect(namesB).toContain("foo.txt")
+      expect(namesB).not.toContain("bar.txt")
+    }).pipe(Effect.provide(PlatformLayer)),
+  )
 })
 
 // ---------------------------------------------------------------------------
