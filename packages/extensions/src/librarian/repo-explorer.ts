@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
-import { ExtensionContext, type ExtensionContextService, tool } from "@gent/core/extensions/api"
+import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import * as esGit from "es-git"
 
 export class GitReaderError extends Schema.TaggedErrorClass<GitReaderError>()("GitReaderError", {
@@ -302,25 +302,7 @@ export function parseSpec(spec: string): ParsedSpec {
   return { type: "github", name: spec, version: undefined }
 }
 
-const getCachePath = (
-  files: ExtensionContextService["Files"],
-  cacheDir: string,
-  spec: string,
-): string => {
-  const parsed = parseSpec(spec)
-  switch (parsed.type) {
-    case "github":
-      return files.join(cacheDir, ...parsed.name.split("/"))
-    case "npm":
-      return files.join(cacheDir, "npm", parsed.name, parsed.version ?? "latest")
-    case "pypi":
-      return files.join(cacheDir, "pypi", parsed.name, parsed.version ?? "latest")
-    case "crates":
-      return files.join(cacheDir, "crates", parsed.name, parsed.version ?? "latest")
-  }
-}
-
-/** Resolve cache path for a spec without needing the Path service */
+/** Resolve cache path for a spec. */
 export const getRepoCachePath = (home: string, spec: string): string => {
   const cacheDir = `${home}/.cache/repo`
   const parsed = parseSpec(spec)
@@ -394,8 +376,7 @@ export const RepoTool = tool({
   ) {
     const ctx = yield* ExtensionContext
     const gitReader = yield* GitReader
-    const cacheDir = ctx.Files.join(ctx.home, ".cache", "repo")
-    const cachePath = getCachePath(ctx.Files, cacheDir, params.spec)
+    const cachePath = getRepoCachePath(ctx.home, params.spec)
     const parsed = parseSpec(params.spec)
 
     switch (params.action) {
