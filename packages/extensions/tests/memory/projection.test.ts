@@ -8,11 +8,14 @@ import {
   type MemoryFrontmatter,
 } from "../../src/memory/vault.js"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
 import { ExtensionContext } from "@gent/core/extensions/api"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 
-const projectionTest = it.scopedLive.layer(Layer.merge(BunFileSystem.layer, Path.layer))
+const projectionTest = it.scopedLive.layer(
+  Layer.mergeAll(BunFileSystem.layer, Path.layer, BunGentPlatformLive),
+)
 
 const makeFm = (scope: "global" | "project" = "global"): MemoryFrontmatter => ({
   scope,
@@ -98,7 +101,7 @@ describe("memory vault turn projection", () => {
         const tmpDir = yield* makeScopedTempDir
         // projectKey("/test-repo") yields "test-repo-<hash>"
         // Compute the expected key + write a file under that path
-        const key = projectKey("/test-repo")
+        const key = yield* projectKey("/test-repo")
         yield* writeFile(
           tmpDir,
           `project/${key}/gotcha.md`,
@@ -139,8 +142,8 @@ describe("memory vault turn projection — read-only and scoped", () => {
     () =>
       Effect.gen(function* () {
         const tmpDir = yield* makeScopedTempDir
-        const activeKey = projectKey("/active-repo")
-        const otherKey = projectKey("/other-repo")
+        const activeKey = yield* projectKey("/active-repo")
+        const otherKey = yield* projectKey("/other-repo")
         yield* writeFile(
           tmpDir,
           `project/${activeKey}/active.md`,

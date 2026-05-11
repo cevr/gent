@@ -16,11 +16,14 @@ import {
   projectKey as projectKeyOf,
 } from "../../src/memory/vault.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
 
-const memoryToolTest = it.scopedLive.layer(Layer.merge(BunFileSystem.layer, Path.layer))
+const memoryToolTest = it.scopedLive.layer(
+  Layer.mergeAll(BunFileSystem.layer, Path.layer, BunGentPlatformLive),
+)
 
 // Tool execution intentionally keeps dependency requirements behind Gent metadata at the public tool boundary.
 // These tests provide MemoryVaultTest(tmpDir) at every call site before narrowing to never.
@@ -66,7 +69,7 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
       const cwd = "/some/active/repo"
-      const expectedKey = projectKeyOf(cwd)
+      const expectedKey = yield* projectKeyOf(cwd)
       yield* runMemoryTool(
         getToolEffect(MemoryRememberTool)(
           {
@@ -134,7 +137,7 @@ describe("MemoryForgetTool — auto-derived projectKey", () => {
     Effect.gen(function* () {
       const tmpDir = yield* makeScopedTempDir
       const cwd = "/yet/another/repo"
-      const key = projectKeyOf(cwd)
+      const key = yield* projectKeyOf(cwd)
       // Pre-create file under derived key
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path

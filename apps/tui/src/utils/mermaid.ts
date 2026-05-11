@@ -6,7 +6,6 @@
  */
 
 import { renderMermaidASCII, type AsciiRenderOptions } from "beautiful-mermaid"
-import { createHash } from "node:crypto"
 
 export interface MermaidBlock {
   /** Original mermaid source code */
@@ -105,15 +104,16 @@ export function pickBestPreset(source: string, maxWidth: number): AsciiRenderOpt
   }
 }
 
-// LRU cache for rendered diagrams — keyed by source + width
+// LRU cache for rendered diagrams — keyed by source + width. Map keys are
+// the raw source string (plus optional `:width` suffix); no hashing needed —
+// this runs inside a Solid `createMemo`, never inside an Effect runtime, and
+// the cache is bounded by `CACHE_MAX` so memory stays flat regardless of
+// key length.
 const CACHE_MAX = 20
 const renderCache = new Map<string, string>()
 
-function hashSource(source: string, maxWidth?: number): string {
-  const hasher = createHash("md5").update(source)
-  if (maxWidth !== undefined) hasher.update(`:${maxWidth}`)
-  return hasher.digest("hex")
-}
+const cacheKey = (source: string, maxWidth?: number): string =>
+  maxWidth === undefined ? source : `${source}:${maxWidth}`
 
 /**
  * Render a mermaid diagram to ASCII art.
@@ -121,7 +121,7 @@ function hashSource(source: string, maxWidth?: number): string {
  * Results are cached (LRU).
  */
 export function renderMermaidToAscii(source: string, maxWidth?: number): string | undefined {
-  const key = hashSource(source, maxWidth)
+  const key = cacheKey(source, maxWidth)
   const cached = renderCache.get(key)
   if (cached !== undefined) {
     // Move to end for LRU

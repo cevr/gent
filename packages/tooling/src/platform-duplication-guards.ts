@@ -157,6 +157,31 @@ const bannedProtectedHostFactPatterns: ReadonlyArray<BannedPattern> = [
     message:
       "Direct `bun` package imports are adapter-only; use ExtensionContext.Process or Effect platform services",
   },
+  {
+    pattern: /\bfrom\s+["'](?:node:)?crypto["']/,
+    message:
+      "Host crypto module imports are adapter-only; yield GentPlatform and call platform.hash(...) or platform.randomBytes(...)",
+  },
+  {
+    pattern: /\bfrom\s+["'](?:node:)?url["']/,
+    message:
+      "Host url module imports are adapter-only; yield GentPlatform and call platform.fileURLToPath(...)",
+  },
+  {
+    pattern: /(?<![.\w])createHash\s*\(/,
+    message:
+      "Direct createHash() is adapter-only; yield GentPlatform and call platform.hash(algorithm, input)",
+  },
+  {
+    pattern: /(?<![.\w])randomBytes\s*\(/,
+    message:
+      "Direct randomBytes() is adapter-only; yield GentPlatform and call platform.randomBytes(n) (or use the Web Crypto global `crypto.getRandomValues` if you need a sync Uint8Array)",
+  },
+  {
+    pattern: /(?<![.\w])fileURLToPath\s*\(/,
+    message:
+      "Direct fileURLToPath() is adapter-only; yield GentPlatform and call platform.fileURLToPath(url)",
+  },
 ]
 
 const serverRootConsumerFiles = new Set(["apps/server/src/main.ts", "packages/sdk/src/server.ts"])
@@ -165,6 +190,15 @@ const platformProviderRootFiles = new Set([
   "packages/core/src/runtime/gent-platform-bun.ts",
   "packages/core/src/server/server-root.ts",
   "packages/core/src/test-utils/extension-harness.ts",
+  // The `api-bun.ts` flavour re-exports the Bun platform layer as part of the
+  // public extension authoring surface; shipped Bun extensions consume it
+  // through `@gent/core/extensions/api/bun` instead of reaching into
+  // `@gent/core-internal/*`.
+  "packages/core/src/extensions/api-bun.ts",
+  // The Anthropic extension wires a keychain-aware AnthropicClient layer that
+  // needs the live Bun platform to satisfy `GentPlatform` inside the
+  // request-signing transform. It's a shipped builtin, not a user extension.
+  "packages/extensions/src/anthropic/index.ts",
   "apps/server/src/main.ts",
   "apps/tui/src/main.tsx",
   "packages/sdk/src/server.ts",
@@ -173,7 +207,8 @@ const platformProviderRootFiles = new Set([
 const protectedHostFactFile = (file: string): boolean =>
   (file.startsWith("packages/core/src/") || file.startsWith("packages/extensions/src/")) &&
   !file.includes("/test-utils/") &&
-  file !== "packages/core/src/runtime/gent-platform-bun.ts"
+  file !== "packages/core/src/runtime/gent-platform-bun.ts" &&
+  file !== "packages/core/src/runtime/gent-platform.ts"
 
 const bannedServerRootConsumerPatterns: ReadonlyArray<BannedPattern> = [
   {

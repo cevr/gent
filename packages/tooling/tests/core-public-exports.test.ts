@@ -12,6 +12,8 @@ describe("core public export guard", () => {
           exports: {
             "./extensions/api": "./src/extensions/api.ts",
             "./extensions/api.js": "./src/extensions/api.ts",
+            "./extensions/api/bun": "./src/extensions/api-bun.ts",
+            "./extensions/api/bun.js": "./src/extensions/api-bun.ts",
           },
         },
         {
@@ -19,6 +21,8 @@ describe("core public export guard", () => {
             paths: {
               "@gent/core/extensions/api": ["./packages/core/src/extensions/api.ts"],
               "@gent/core/extensions/api.js": ["./packages/core/src/extensions/api.ts"],
+              "@gent/core/extensions/api/bun": ["./packages/core/src/extensions/api-bun.ts"],
+              "@gent/core/extensions/api/bun.js": ["./packages/core/src/extensions/api-bun.ts"],
               "@gent/core-internal/*.js": ["./packages/core/src/*.ts"],
               "@gent/core-internal/*": ["./packages/core/src/*"],
             },

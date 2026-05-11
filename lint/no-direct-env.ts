@@ -411,8 +411,14 @@ const plugin: Plugin = {
         const inTuiExtensions = filename.includes("apps/tui/src/extensions/")
         if (!inCoreExtensions && !inExtensionsPackage && !inTuiExtensions) return {}
 
-        // Exempt: api.ts is the public bridge implementation.
-        if (filename.endsWith("/extensions/api.ts")) {
+        // Exempt: api.ts / api-bun.ts are the public bridge implementations.
+        // They live inside `packages/core/src/extensions/` but ARE the
+        // re-export surface other extensions consume, so they need to reach
+        // into core internals to assemble the public API.
+        if (
+          filename.endsWith("/extensions/api.ts") ||
+          filename.endsWith("/extensions/api-bun.ts")
+        ) {
           return {}
         }
 
@@ -420,8 +426,10 @@ const plugin: Plugin = {
         const INTERNAL_RELATIVE =
           /^\.\.?\/(\.\.\/)*(?:domain|runtime|storage|server|providers|core\/src)\//
 
-        // Allowed @gent/core subpaths (everything else is forbidden)
-        const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/api(?:\.js)?$/
+        // Allowed @gent/core subpaths (everything else is forbidden). The
+        // `/bun` flavour exposes `BunGentPlatformLive` for shipped Bun
+        // extensions; pure-logic extensions stay on the bare `api`.
+        const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/api(?:\/bun)?(?:\.js)?$/
 
         const reportForbiddenSource = (node: AstNode, source: string) => {
           if (INTERNAL_RELATIVE.test(source)) {

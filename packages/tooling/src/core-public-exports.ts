@@ -19,7 +19,12 @@ export interface ExtensionsPublicSurfaceFinding {
   readonly message: string
 }
 
-const publicCoreExports = new Set(["./extensions/api", "./extensions/api.js"])
+const publicCoreExports = new Set([
+  "./extensions/api",
+  "./extensions/api.js",
+  "./extensions/api/bun",
+  "./extensions/api/bun.js",
+])
 const forbiddenCorePathPrefixes = [
   "@gent/core/debug",
   "@gent/core/domain",
@@ -52,7 +57,13 @@ export const findCorePublicExportFindings = (
 
   const paths = tsconfigJson.compilerOptions?.paths ?? {}
   for (const key of Object.keys(paths)) {
-    if (key === "@gent/core/extensions/api" || key === "@gent/core/extensions/api.js") continue
+    if (
+      key === "@gent/core/extensions/api" ||
+      key === "@gent/core/extensions/api.js" ||
+      key === "@gent/core/extensions/api/bun" ||
+      key === "@gent/core/extensions/api/bun.js"
+    )
+      continue
     if (key.startsWith("@gent/core-internal/")) continue
     if (!isForbiddenCorePath(key)) continue
     findings.push({

@@ -21,7 +21,8 @@
  *
  * @module
  */
-import { createHash } from "node:crypto"
+import { Effect } from "effect"
+import { GentPlatform } from "@gent/core/extensions/api"
 
 const BILLING_SALT = "59cf53e54c78"
 
@@ -57,8 +58,11 @@ export const extractFirstUserMessageText = (messages: ReadonlyArray<Message>): s
  * recomputed per request (the previous hardcoded `c5e82` placeholder
  * worked exactly once, by accident).
  */
-export const computeCch = (messageText: string): string =>
-  createHash("sha256").update(messageText).digest("hex").slice(0, 5)
+export const computeCch = (messageText: string): Effect.Effect<string, never, GentPlatform> =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    return platform.hash("sha256", messageText).slice(0, 5)
+  })
 
 /**
  * Compute the 3-char version suffix appended to `cc_version`. Samples
@@ -67,11 +71,16 @@ export const computeCch = (messageText: string): string =>
  * then hashes the lot. Anthropic checks this against the version we
  * advertise in the same header.
  */
-export const computeVersionSuffix = (messageText: string, version: string): string => {
-  const sampled = [4, 7, 20].map((i) => (i < messageText.length ? messageText[i] : "0")).join("")
-  const input = `${BILLING_SALT}${sampled}${version}`
-  return createHash("sha256").update(input).digest("hex").slice(0, 3)
-}
+export const computeVersionSuffix = (
+  messageText: string,
+  version: string,
+): Effect.Effect<string, never, GentPlatform> =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    const sampled = [4, 7, 20].map((i) => (i < messageText.length ? messageText[i] : "0")).join("")
+    const input = `${BILLING_SALT}${sampled}${version}`
+    return platform.hash("sha256", input).slice(0, 3)
+  })
 
 /**
  * Build the full billing-header value for insertion as `system[0]`.
@@ -82,14 +91,15 @@ export const buildBillingHeaderValue = (
   messages: ReadonlyArray<Message>,
   version: string,
   entrypoint: string,
-): string => {
-  const text = extractFirstUserMessageText(messages)
-  const suffix = computeVersionSuffix(text, version)
-  const cch = computeCch(text)
-  return (
-    `x-anthropic-billing-header: ` +
-    `cc_version=${version}.${suffix}; ` +
-    `cc_entrypoint=${entrypoint}; ` +
-    `cch=${cch};`
-  )
-}
+): Effect.Effect<string, never, GentPlatform> =>
+  Effect.gen(function* () {
+    const text = extractFirstUserMessageText(messages)
+    const suffix = yield* computeVersionSuffix(text, version)
+    const cch = yield* computeCch(text)
+    return (
+      `x-anthropic-billing-header: ` +
+      `cc_version=${version}.${suffix}; ` +
+      `cc_entrypoint=${entrypoint}; ` +
+      `cch=${cch};`
+    )
+  })

@@ -66,7 +66,7 @@ export const MemoryRememberTool = tool({
     // fall back to the global directory (state.memoryPath line 110) and the
     // vault projection's project section never finds them.
     const projectKey =
-      params["project_key"] ?? (scope === "project" ? projectKeyOf(ctx.cwd) : undefined)
+      params["project_key"] ?? (scope === "project" ? yield* projectKeyOf(ctx.cwd) : undefined)
 
     if (scope === "session") {
       // Session memories are ephemeral; return a marker for event observation.
@@ -203,7 +203,7 @@ export const MemoryForgetTool = tool({
     const scope = params["scope"]
     const title = params["title"]
     const projectKey =
-      params["project_key"] ?? (scope === "project" ? projectKeyOf(ctx.cwd) : undefined)
+      params["project_key"] ?? (scope === "project" ? yield* projectKeyOf(ctx.cwd) : undefined)
 
     if (scope === "session") {
       return {

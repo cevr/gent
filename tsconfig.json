@@ -128,11 +128,13 @@
     ],
     "paths": {
       "@gent/core/extensions/api": ["./packages/core/src/extensions/api.ts"],
+      "@gent/core/extensions/api/bun": ["./packages/core/src/extensions/api-bun.ts"],
       "@gent/extensions": ["./packages/extensions/src/index.ts"],
       "@gent/sdk": ["./packages/sdk/src/index.ts"],
       "@gent/core-internal/*.js": ["./packages/core/src/*.ts"],
       "@gent/core-internal/*": ["./packages/core/src/*"],
       "@gent/core/extensions/api.js": ["./packages/core/src/extensions/api.ts"],
+      "@gent/core/extensions/api/bun.js": ["./packages/core/src/extensions/api-bun.ts"],
       "@gent/extensions/index.js": ["./packages/extensions/src/index.ts"],
       "@gent/extensions/client": ["./packages/extensions/src/client.ts"],
       "@gent/extensions/client.js": ["./packages/extensions/src/client.ts"]

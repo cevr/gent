@@ -24,13 +24,13 @@ import {
   Semaphore,
 } from "effect"
 import {
+  GentPlatform,
   isRecord,
   type GentExtension,
   type PublicExtensionSetupContext,
 } from "@gent/core/extensions/api"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
-import { fileURLToPath } from "node:url"
 import { ExecutorPlatform } from "./platform-adapter.js"
 import {
   type ExecutorEndpoint,
@@ -142,7 +142,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
   ): Layer.Layer<
     ExecutorSidecar,
     never,
-    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
   > =>
     Layer.effect(
       ExecutorSidecar,
@@ -150,6 +150,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         const path = yield* Path.Path
         const fs = yield* FileSystem.FileSystem
         const platform = yield* ExecutorPlatform
+        const gentPlatform = yield* GentPlatform
         const sidecarsByCwd = new Map<string, SidecarRecord>()
         const spawnMutex = yield* Semaphore.make(1)
 
@@ -354,7 +355,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
           // Fallback: package resolution → bootstrap if needed
           const pkgPath = yield* Effect.try({
-            try: () => fileURLToPath(import.meta.resolve("executor/package.json")),
+            try: () => gentPlatform.fileURLToPath(import.meta.resolve("executor/package.json")),
             catch: (e) =>
               new ExecutorSidecarError({
                 code: "PACKAGE_RESOLUTION_FAILED",

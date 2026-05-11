@@ -687,6 +687,130 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
+  test("flags protected node:crypto and node:url module imports", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/storage/example.ts",
+        [
+          'import { createHash } from "node:crypto"',
+          'import { fileURLToPath } from "node:url"',
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/storage/example.ts",
+        line: 1,
+        message:
+          "Host crypto module imports are adapter-only; yield GentPlatform and call platform.hash(...) or platform.randomBytes(...)",
+      },
+      {
+        file: "packages/core/src/storage/example.ts",
+        line: 2,
+        message:
+          "Host url module imports are adapter-only; yield GentPlatform and call platform.fileURLToPath(...)",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/extensions/src/bad.ts",
+        ['import { randomBytes } from "crypto"', 'import { fileURLToPath } from "url"'].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/extensions/src/bad.ts",
+        line: 1,
+        message:
+          "Host crypto module imports are adapter-only; yield GentPlatform and call platform.hash(...) or platform.randomBytes(...)",
+      },
+      {
+        file: "packages/extensions/src/bad.ts",
+        line: 2,
+        message:
+          "Host url module imports are adapter-only; yield GentPlatform and call platform.fileURLToPath(...)",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/gent-platform-bun.ts",
+        [
+          'import { createHash, randomBytes } from "node:crypto"',
+          'import { fileURLToPath } from "node:url"',
+        ].join("\n"),
+      ),
+    ).toEqual([])
+  })
+
+  test("flags direct hash, randomBytes, and fileURLToPath calls in protected packages", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/extensions/src/memory/vault.ts",
+        [
+          "const h = createHash('sha256')",
+          "const bytes = randomBytes(32)",
+          "const p = fileURLToPath(url)",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/extensions/src/memory/vault.ts",
+        line: 1,
+        message:
+          "Direct createHash() is adapter-only; yield GentPlatform and call platform.hash(algorithm, input)",
+      },
+      {
+        file: "packages/extensions/src/memory/vault.ts",
+        line: 2,
+        message:
+          "Direct randomBytes() is adapter-only; yield GentPlatform and call platform.randomBytes(n) (or use the Web Crypto global `crypto.getRandomValues` if you need a sync Uint8Array)",
+      },
+      {
+        file: "packages/extensions/src/memory/vault.ts",
+        line: 3,
+        message:
+          "Direct fileURLToPath() is adapter-only; yield GentPlatform and call platform.fileURLToPath(url)",
+      },
+    ])
+
+    // Test-utils are exempt — they back the platform itself.
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/test-utils/example.ts",
+        "const h = createHash('sha256')",
+      ),
+    ).toEqual([])
+
+    // Adapter root is exempt.
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/gent-platform-bun.ts",
+        ["const h = createHash('sha256')", "const p = fileURLToPath(url)"].join("\n"),
+      ),
+    ).toEqual([])
+
+    // The platform interface file (with JSDoc method references) is also exempt.
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/gent-platform.ts",
+        ["// - randomBytes(n) — secure random", "// - fileURLToPath(url) — convert URL"].join("\n"),
+      ),
+    ).toEqual([])
+
+    // Method calls on a platform instance are NOT bare calls — must not trip.
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/extensions/src/example.ts",
+        [
+          "yield* platform.hash('sha256', input)",
+          "yield* platform.randomBytes(32)",
+          "platform.fileURLToPath(url)",
+          "gentPlatform.fileURLToPath(import.meta.resolve('x'))",
+        ].join("\n"),
+      ),
+    ).toEqual([])
+  })
+
   test("flags server entrypoints that fork the composition root", () => {
     expect(
       findPlatformDuplicationViolations(

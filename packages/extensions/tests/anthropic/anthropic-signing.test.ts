@@ -6,12 +6,33 @@
  */
 import { describe, it, expect } from "bun:test"
 import { createHash } from "node:crypto"
+import { Effect } from "effect"
+import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import {
-  buildBillingHeaderValue,
-  computeCch,
-  computeVersionSuffix,
+  buildBillingHeaderValue as buildBillingHeaderValueEffect,
+  computeCch as computeCchEffect,
+  computeVersionSuffix as computeVersionSuffixEffect,
   extractFirstUserMessageText,
 } from "../../src/anthropic/signing.js"
+
+// `BunGentPlatformLive` is `Layer.succeed` — the real SHA256 hash is
+// computed synchronously, so each helper can run via `Effect.runSync`.
+const runSync = <A>(effect: Effect.Effect<A, never, never>): A => Effect.runSync(effect)
+
+const computeCch = (text: string): string =>
+  runSync(computeCchEffect(text).pipe(Effect.provide(BunGentPlatformLive)))
+const computeVersionSuffix = (text: string, version: string): string =>
+  runSync(computeVersionSuffixEffect(text, version).pipe(Effect.provide(BunGentPlatformLive)))
+const buildBillingHeaderValue = (
+  messages: Parameters<typeof buildBillingHeaderValueEffect>[0],
+  version: string,
+  entrypoint: string,
+): string =>
+  runSync(
+    buildBillingHeaderValueEffect(messages, version, entrypoint).pipe(
+      Effect.provide(BunGentPlatformLive),
+    ),
+  )
 
 describe("extractFirstUserMessageText", () => {
   it("returns the empty string when no messages", () => {

@@ -482,8 +482,10 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadRunProcess = typeof PublicExtensionApi.runProcess
     // @ts-expect-error — process errors are paired with the non-public process runner
     type _BadProcessError = typeof PublicExtensionApi.ProcessError
-    // @ts-expect-error — host platform service is not public extension author API
-    type _BadGentPlatform = typeof PublicExtensionApi.GentPlatform
+    // Host platform service IS public extension author API — exposed so
+    // extensions can yield it inside setup/runtime effects (hash, ids, OS
+    // info, etc.) without reaching into `@gent/core-internal`.
+    type _GoodGentPlatform = typeof PublicExtensionApi.GentPlatform
     // @ts-expect-error — host-context errors are runtime internals, not authoring API
     type _BadExtensionHostError = typeof PublicExtensionApi.ExtensionHostError
     // @ts-expect-error — raw host search result shape is runtime internals, not authoring API

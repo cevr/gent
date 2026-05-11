@@ -203,6 +203,19 @@ export {
 } from "../domain/extension-services.js"
 export { isRecord, isRecordArray } from "../domain/guards.js"
 export { OutputBuffer, headTailChars, saveFullOutput } from "../domain/output-buffer.js"
+// Host-platform service for hashing, ids, OS info, etc. Exposed publicly so
+// extensions can yield it inside their setup/runtime effects (e.g. for
+// content-addressed cache keys) without reaching into `@gent/core-internal`.
+// The corresponding live Bun layer ships from `@gent/core/extensions/api/bun`
+// so platform-agnostic extension authoring stays decoupled from Bun specifics.
+export {
+  GentPlatform,
+  SignalError,
+  type GentPlatformHashAlgorithm,
+  type GentPlatformOsInfo,
+  type GentPlatformShape,
+  type GentPlatformSignal,
+} from "../runtime/gent-platform.js"
 // ── Public API ──
 
 /**

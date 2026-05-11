@@ -12,7 +12,7 @@
  */
 
 import { Effect, Layer, Stream } from "effect"
-import { isRecord, isRecordArray } from "@gent/core/extensions/api"
+import { GentPlatform, isRecord, isRecordArray } from "@gent/core/extensions/api"
 import * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 
 export { SYSTEM_IDENTITY_PREFIX } from "./oauth.js"
@@ -238,23 +238,24 @@ const partitionSystemBlocks = (
  */
 const buildSystemArray = (
   finalMessages: ReadonlyArray<Record<string, unknown>>,
-): ReadonlyArray<Record<string, unknown>> => {
-  const { version, entrypoint } = getBillingHeaderInputs()
-  // Cast through unknown — the Message type in signing.ts is a tighter
-  // shape than the wire-level Record we receive from the SDK. The
-  // signature only reads `role` + `content` defensively.
-  const billing = buildBillingHeaderValue(
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-    finalMessages as ReadonlyArray<{ role?: string; content?: string }>,
-    version,
-    entrypoint,
-  )
+): Effect.Effect<ReadonlyArray<Record<string, unknown>>, never, GentPlatform> =>
+  Effect.gen(function* () {
+    const { version, entrypoint } = getBillingHeaderInputs()
+    // Cast through unknown — the Message type in signing.ts is a tighter
+    // shape than the wire-level Record we receive from the SDK. The
+    // signature only reads `role` + `content` defensively.
+    const billing = yield* buildBillingHeaderValue(
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
+      finalMessages as ReadonlyArray<{ role?: string; content?: string }>,
+      version,
+      entrypoint,
+    )
 
-  return [
-    { type: "text", text: billing },
-    { type: "text", text: SYSTEM_IDENTITY_PREFIX },
-  ]
-}
+    return [
+      { type: "text", text: billing },
+      { type: "text", text: SYSTEM_IDENTITY_PREFIX },
+    ]
+  })
 
 /**
  * Counsel  (opencode parity A) — Anthropic's OAuth-billing path
@@ -390,36 +391,39 @@ const stripHaikuEffort = (payload: Record<string, unknown>): Record<string, unkn
  *      messages; emit the strict `[billing, identity]` system shape.
  *   7. stripHaikuEffort — final payload correction; independent.
  */
-export const transformPayload = (payload: Record<string, unknown>): Record<string, unknown> => {
-  let result: Record<string, unknown> = { ...payload }
+export const transformPayload = (
+  payload: Record<string, unknown>,
+): Effect.Effect<Record<string, unknown>, never, GentPlatform> =>
+  Effect.gen(function* () {
+    let result: Record<string, unknown> = { ...payload }
 
-  if (isRecordArray(result["tools"])) {
-    result["tools"] = transformTools(result["tools"])
-  }
+    if (isRecordArray(result["tools"])) {
+      result["tools"] = transformTools(result["tools"])
+    }
 
-  if (isRecordArray(result["messages"])) {
-    result["messages"] = repairToolPairs(result["messages"])
-  }
+    if (isRecordArray(result["messages"])) {
+      result["messages"] = repairToolPairs(result["messages"])
+    }
 
-  if (isRecordArray(result["messages"])) {
-    result["messages"] = transformMessages(result["messages"])
-  }
+    if (isRecordArray(result["messages"])) {
+      result["messages"] = transformMessages(result["messages"])
+    }
 
-  if ("tool_choice" in result) {
-    result["tool_choice"] = transformToolChoice(result["tool_choice"])
-  }
+    if ("tool_choice" in result) {
+      result["tool_choice"] = transformToolChoice(result["tool_choice"])
+    }
 
-  const { thirdPartyBlocks } = partitionSystemBlocks(result["system"])
-  const messagesAfterRelocate = isRecordArray(result["messages"])
-    ? relocateThirdPartyIntoFirstUser(thirdPartyBlocks, result["messages"])
-    : []
-  result["messages"] = messagesAfterRelocate
-  result["system"] = buildSystemArray(messagesAfterRelocate)
+    const { thirdPartyBlocks } = partitionSystemBlocks(result["system"])
+    const messagesAfterRelocate = isRecordArray(result["messages"])
+      ? relocateThirdPartyIntoFirstUser(thirdPartyBlocks, result["messages"])
+      : []
+    result["messages"] = messagesAfterRelocate
+    result["system"] = yield* buildSystemArray(messagesAfterRelocate)
 
-  result = stripHaikuEffort(result)
+    result = stripHaikuEffort(result)
 
-  return result
-}
+    return result
+  })
 
 // ── Response Transforms (incoming) ──
 
@@ -467,59 +471,65 @@ type CreateMessageStreamOptions = Parameters<AnthropicClient.Service["createMess
 export const keychainClient: Layer.Layer<
   AnthropicClient.AnthropicClient,
   never,
-  AnthropicClient.AnthropicClient
+  AnthropicClient.AnthropicClient | GentPlatform
 > = Layer.effect(
   AnthropicClient.AnthropicClient,
   Effect.gen(function* () {
     const inner = yield* AnthropicClient.AnthropicClient
+    const platform = yield* GentPlatform
+
+    const transformPayloadHere = (payload: Record<string, unknown>) =>
+      transformPayload(payload).pipe(Effect.provideService(GentPlatform, platform))
 
     const service: AnthropicClient.Service = {
       client: inner.client,
       streamRequest: inner.streamRequest,
 
       createMessage: (options: CreateMessageOptions) =>
-        inner
-          .createMessage({
+        Effect.gen(function* () {
+          const transformed = yield* transformPayloadHere(
+            options.payload as Record<string, unknown>,
+          )
+          return yield* inner.createMessage({
             ...options,
             // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-            payload: transformPayload(
-              options.payload as Record<string, unknown>,
-            ) as typeof options.payload,
+            payload: transformed as typeof options.payload,
           })
-          .pipe(
-            Effect.map(([body, response]) => {
-              const b = body as Record<string, unknown>
-              const content = b["content"]
-              if (isRecordArray(content)) {
-                const transformed = {
-                  ...b,
-                  content: transformResponseContent(content),
-                }
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-                return [transformed as typeof body, response] as [typeof body, typeof response]
+        }).pipe(
+          Effect.map(([body, response]) => {
+            const b = body as Record<string, unknown>
+            const content = b["content"]
+            if (isRecordArray(content)) {
+              const transformed = {
+                ...b,
+                content: transformResponseContent(content),
               }
-              return [body, response] as [typeof body, typeof response]
-            }),
-          ),
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
+              return [transformed as typeof body, response] as [typeof body, typeof response]
+            }
+            return [body, response] as [typeof body, typeof response]
+          }),
+        ),
 
       createMessageStream: (options: CreateMessageStreamOptions) =>
-        inner
-          .createMessageStream({
+        Effect.gen(function* () {
+          const transformed = yield* transformPayloadHere(
+            options.payload as Record<string, unknown>,
+          )
+          return yield* inner.createMessageStream({
             ...options,
             // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-            payload: transformPayload(
-              options.payload as Record<string, unknown>,
-            ) as typeof options.payload,
+            payload: transformed as typeof options.payload,
           })
-          .pipe(
-            Effect.map(
-              ([response, stream]) =>
-                [response, stream.pipe(Stream.map(transformStreamEvent))] as [
-                  typeof response,
-                  typeof stream,
-                ],
-            ),
+        }).pipe(
+          Effect.map(
+            ([response, stream]) =>
+              [response, stream.pipe(Stream.map(transformStreamEvent))] as [
+                typeof response,
+                typeof stream,
+              ],
           ),
+        ),
     }
 
     return service

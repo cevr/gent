@@ -15,6 +15,7 @@ import { Effect } from "effect"
 import {
   ExtensionContext,
   ProjectionError,
+  type GentPlatform,
   type PromptSection,
   type TurnProjection,
 } from "@gent/core/extensions/api"
@@ -85,12 +86,12 @@ interface VaultProjectionValue {
 const readVaultProjectionValue = (): Effect.Effect<
   VaultProjectionValue,
   ProjectionError,
-  ExtensionContext | MemoryVaultReadOnly
+  ExtensionContext | MemoryVaultReadOnly | GentPlatform
 > =>
   Effect.gen(function* () {
     const vault = yield* MemoryVaultReadOnly
     const ctx = yield* ExtensionContext
-    const key = projectKeyOf(ctx.cwd)
+    const key = yield* projectKeyOf(ctx.cwd)
     const failed = (e: unknown): ProjectionError =>
       new ProjectionError({
         projectionId: "memory-vault",
@@ -108,7 +109,7 @@ const readVaultProjectionValue = (): Effect.Effect<
 export const projectMemoryVaultTurn = (): Effect.Effect<
   TurnProjection,
   ProjectionError,
-  ExtensionContext | MemoryVaultReadOnly
+  ExtensionContext | MemoryVaultReadOnly | GentPlatform
 > =>
   readVaultProjectionValue().pipe(
     Effect.map((value) => {

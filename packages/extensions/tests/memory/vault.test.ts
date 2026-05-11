@@ -9,9 +9,12 @@ import {
   projectDisplayName,
   type MemoryFrontmatter,
 } from "../../src/memory/vault.js"
+import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
 
-const vaultTest = it.scopedLive.layer(Layer.merge(BunFileSystem.layer, Path.layer))
+const vaultTest = it.scopedLive.layer(
+  Layer.mergeAll(BunFileSystem.layer, Path.layer, BunGentPlatformLive),
+)
 
 const makeFm = (scope: "global" | "project" = "global"): MemoryFrontmatter => ({
   scope,
@@ -164,15 +167,19 @@ describe("serializeFrontmatter", () => {
   })
 })
 describe("projectKey", () => {
-  test("produces slug with hash suffix", () => {
-    const key = projectKey("/Users/dev/projects/my-app")
-    expect(key).toMatch(/^my-app-[a-f0-9]{6}$/)
-  })
-  test("different paths produce different keys", () => {
-    const k1 = projectKey("/Users/dev/work/api")
-    const k2 = projectKey("/Users/dev/personal/api")
-    expect(k1).not.toBe(k2)
-  })
+  vaultTest("produces slug with hash suffix", () =>
+    Effect.gen(function* () {
+      const key = yield* projectKey("/Users/dev/projects/my-app")
+      expect(key).toMatch(/^my-app-[a-f0-9]{6}$/)
+    }),
+  )
+  vaultTest("different paths produce different keys", () =>
+    Effect.gen(function* () {
+      const k1 = yield* projectKey("/Users/dev/work/api")
+      const k2 = yield* projectKey("/Users/dev/personal/api")
+      expect(k1).not.toBe(k2)
+    }),
+  )
 })
 describe("projectDisplayName", () => {
   test("strips hash suffix", () => {

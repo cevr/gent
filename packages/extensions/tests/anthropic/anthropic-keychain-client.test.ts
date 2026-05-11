@@ -1,11 +1,19 @@
 import { describe, test, expect } from "bun:test"
+import { Effect } from "effect"
+import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import {
   repairToolPairs,
-  transformPayload,
+  transformPayload as transformPayloadEffect,
   transformResponseContent,
   transformStreamEvent,
   SYSTEM_IDENTITY_PREFIX,
 } from "../../src/anthropic/keychain-client.js"
+
+// Synchronously run a transformPayload effect with the live Bun platform —
+// `BunGentPlatformLive` is `Layer.succeed`, so the underlying SHA256 hash is
+// computed eagerly without needing an async runtime.
+const transformPayload = (payload: Record<string, unknown>): Record<string, unknown> =>
+  Effect.runSync(transformPayloadEffect(payload).pipe(Effect.provide(BunGentPlatformLive)))
 
 // ── transformPayload ──
 

@@ -7,7 +7,7 @@
 
 import type { PlatformError } from "effect"
 import { DateTime, Effect, FileSystem, Layer, Option, Path, Schema, Context } from "effect"
-import { createHash } from "node:crypto"
+import { GentPlatform } from "@gent/core/extensions/api"
 
 // ── Types ──
 
@@ -132,12 +132,14 @@ const extractSummary = (body: string): string => {
 
 // ── Project key ──
 
-export const projectKey = (repoRoot: string): string => {
-  const lastSlash = repoRoot.lastIndexOf("/")
-  const basename = lastSlash === -1 ? repoRoot : repoRoot.slice(lastSlash + 1)
-  const hash = createHash("sha256").update(repoRoot).digest("hex").slice(0, 6)
-  return `${basename}-${hash}`
-}
+export const projectKey = (repoRoot: string): Effect.Effect<string, never, GentPlatform> =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    const lastSlash = repoRoot.lastIndexOf("/")
+    const basename = lastSlash === -1 ? repoRoot : repoRoot.slice(lastSlash + 1)
+    const hash = platform.hash("sha256", repoRoot).slice(0, 6)
+    return `${basename}-${hash}`
+  })
 
 export const projectDisplayName = (key: string): string => {
   // Strip the -<hash> suffix

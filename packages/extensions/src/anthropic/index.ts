@@ -30,6 +30,7 @@ import {
 import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-cache.js"
 import { buildKeychainTransformClient } from "./keychain-transform.js"
 import { AnthropicPlatform, type AnthropicPlatformShape } from "./platform-adapter.js"
+import { BunGentPlatformLive } from "@gent/core/extensions/api/bun"
 
 const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
   Effect.gen(function* () {
@@ -132,7 +133,10 @@ const makeOauthAnthropicLayer = (
     }),
   ).pipe(Layer.provide(credentialLayer), Layer.provide(cacheLayer))
 
-  const wrappedClient = keychainClient.pipe(Layer.provide(clientLayer))
+  const wrappedClient = keychainClient.pipe(
+    Layer.provide(clientLayer),
+    Layer.provide(BunGentPlatformLive),
+  )
   return AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
     Layer.provide(wrappedClient),
     Layer.provide(BunServices.layer),
