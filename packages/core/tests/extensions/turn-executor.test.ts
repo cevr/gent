@@ -73,7 +73,7 @@ describe("ExternalDriver registry", () => {
     expect(resolved.externalDrivers.size).toBe(1)
     expect(resolved.externalDrivers.get("shared-id")?.executor).toBe(echoExecutor)
   })
-  it.live("getExternalExecutor resolves from driver registry service", () =>
+  it.live("getExternal resolves driver with executor from registry service", () =>
     Effect.gen(function* () {
       const resolved = resolveExtensions([
         makeExt("ext-a", [{ id: "test-executor", executor: echoExecutor }]),
@@ -82,14 +82,14 @@ describe("ExternalDriver registry", () => {
         modelDrivers: resolved.modelDrivers,
         externalDrivers: resolved.externalDrivers,
       })
-      const result = yield* Effect.gen(function* () {
+      const driver = yield* Effect.gen(function* () {
         const registry = yield* DriverRegistry
-        return yield* registry.getExternalExecutor("test-executor")
+        return yield* registry.getExternal("test-executor")
       }).pipe(Effect.provide(registryLayer))
-      expect(result).toBe(echoExecutor)
+      expect(driver?.executor).toBe(echoExecutor)
     }),
   )
-  it.live("getExternalExecutor returns undefined for missing ID", () =>
+  it.live("getExternal returns undefined for missing ID", () =>
     Effect.gen(function* () {
       const resolved = resolveExtensions([makeExt("ext-a", [])])
       const registryLayer = DriverRegistry.fromResolved({
@@ -98,7 +98,7 @@ describe("ExternalDriver registry", () => {
       })
       const result = yield* Effect.gen(function* () {
         const registry = yield* DriverRegistry
-        return yield* registry.getExternalExecutor("nonexistent")
+        return yield* registry.getExternal("nonexistent")
       }).pipe(Effect.provide(registryLayer))
       expect(result).toBeUndefined()
     }),

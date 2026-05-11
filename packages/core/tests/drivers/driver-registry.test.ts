@@ -128,11 +128,11 @@ describe("DriverRegistry", () => {
           externalDrivers: [{ id: "shared", executor: projectExec, invalidate: noopInvalidate }],
         }),
       ])
-      const result = yield* Effect.gen(function* () {
+      const driver = yield* Effect.gen(function* () {
         const reg = yield* DriverRegistry
-        return yield* reg.getExternalExecutor("shared")
+        return yield* reg.getExternal("shared")
       }).pipe(Effect.provide(layer))
-      expect(result).toBe(projectExec)
+      expect(driver?.executor).toBe(projectExec)
     }),
   )
   it.live("requireModel fails with DriverError when missing", () =>

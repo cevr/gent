@@ -566,7 +566,8 @@ export const resolveTurnSource = (params: {
       permissionOption._tag === "Some" ? permissionOption.value : AllowAllPermission
     const { resolved } = params
     if (resolved.driver?._tag === "external") {
-      const executor = yield* driverRegistry.getExternalExecutor(resolved.driver.id)
+      const externalDriver = yield* driverRegistry.getExternal(resolved.driver.id)
+      const executor = externalDriver?.executor
       if (executor === undefined) {
         yield* params
           .publishEvent(

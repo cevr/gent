@@ -22,7 +22,6 @@ import type {
   ModelDriverContribution,
   ProviderAuthError,
   ProviderAuthInfo,
-  TurnExecutor,
 } from "../../domain/driver.js"
 import { DriverError, DriverFailureRef } from "../../domain/driver.js"
 import { Model } from "../../domain/model.js"
@@ -43,8 +42,6 @@ export interface DriverRegistryService {
   readonly getModel: (id: string) => Effect.Effect<ModelDriverContribution | undefined>
   /** Resolve an external driver by id (the runner id, e.g. `acp-claude-code`). */
   readonly getExternal: (id: string) => Effect.Effect<ExternalDriverContribution | undefined>
-  /** Direct accessor for an external driver's executor — convenience for the agent loop. */
-  readonly getExternalExecutor: (id: string) => Effect.Effect<TurnExecutor | undefined>
   /** All registered model drivers in registration order. */
   readonly listModels: () => Effect.Effect<ReadonlyArray<ModelDriverContribution>>
   /** All registered external drivers in registration order. */
@@ -69,8 +66,6 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
     Layer.succeed(DriverRegistry, {
       getModel: (id) => Effect.succeed(resolved.modelDrivers.get(id)),
       getExternal: (id) => Effect.succeed(resolved.externalDrivers.get(id)),
-      getExternalExecutor: (id) =>
-        Effect.succeed(resolved.externalDrivers.get(id)?.executor ?? undefined),
       listModels: () => Effect.succeed([...resolved.modelDrivers.values()]),
       listExternal: () => Effect.succeed([...resolved.externalDrivers.values()]),
       filterModelCatalog: (baseCatalog, resolveAuth) =>
