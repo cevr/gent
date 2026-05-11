@@ -475,6 +475,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
               workspaceId,
               sessionId,
               branchId,
+              commandId: ActorCommandId.make(yield* platform.randomId),
             }),
           )
         }).pipe(Effect.ignore),
@@ -743,7 +744,11 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
           Effect.gen(function* () {
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
             return yield* ref.execute(
-              AgentLoopActor.GetQueue.make({ ...input, workspaceId: yield* CurrentWorkspaceId }),
+              AgentLoopActor.GetQueue.make({
+                ...input,
+                workspaceId: yield* CurrentWorkspaceId,
+                commandId: ActorCommandId.make(yield* platform.randomId),
+              }),
             )
           }),
         ),

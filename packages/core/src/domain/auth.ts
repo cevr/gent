@@ -239,7 +239,7 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
    *
    * Composes auth info (`Auth.get`) with registry-derived metadata
    * (`DriverRegistry.listModels`) and per-session routing
-   * (`ExtensionRegistry.resolveDualModelPair` + `getAgent`) to compute
+   * (`ExtensionRegistry.resolveDualModelPair` + `listAgents`) to compute
    * which providers are required *and* present. External-routed
    * agents (driver._tag === "external") own their own auth, so model
    * auth is short-circuited for them.

@@ -131,12 +131,14 @@ const GetQueueFields = {
   ...WorkspaceFields,
   sessionId: SessionId,
   branchId: BranchId,
+  commandId: ActorCommandId,
 }
 
 const GetStateFields = {
   ...WorkspaceFields,
   sessionId: SessionId,
   branchId: BranchId,
+  commandId: ActorCommandId,
 }
 
 const RecordToolResultFields = {
@@ -170,6 +172,7 @@ const TerminateBranchFields = {
   ...WorkspaceFields,
   sessionId: SessionId,
   branchId: BranchId,
+  commandId: ActorCommandId,
 }
 
 type MessageType = Schema.Schema.Type<typeof Message>
@@ -210,11 +213,13 @@ type GetQueueInput = {
   readonly workspaceId: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
+  readonly commandId: ActorCommandId
 }
 type GetStateInput = {
   readonly workspaceId: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
+  readonly commandId: ActorCommandId
 }
 type RecordToolResultInput = {
   readonly workspaceId: string
@@ -238,6 +243,7 @@ type TerminateBranchInput = {
   readonly workspaceId: string
   readonly sessionId: SessionId
   readonly branchId: BranchId
+  readonly commandId: ActorCommandId
 }
 type HandlerRequest<Operation> = {
   readonly operation: Operation & { readonly _tag: string }
@@ -331,7 +337,7 @@ export const AgentLoop = Actor.fromEntity(
       error: AgentLoopError,
       id: (p: GetQueueInput) => ({
         entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
-        primaryKey: "get-queue",
+        primaryKey: p.commandId,
       }),
     },
     GetState: {
@@ -340,7 +346,7 @@ export const AgentLoop = Actor.fromEntity(
       error: AgentLoopError,
       id: (p: GetStateInput) => ({
         entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
-        primaryKey: "get-state",
+        primaryKey: p.commandId,
       }),
     },
     // Mid-turn tool result. Dedup by toolCallId — replays of the same tool
@@ -376,7 +382,7 @@ export const AgentLoop = Actor.fromEntity(
       error: AgentLoopError,
       id: (p: TerminateBranchInput) => ({
         entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
-        primaryKey: "terminate-branch",
+        primaryKey: p.commandId,
       }),
     },
   },

@@ -40,7 +40,7 @@ import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { ActorCommandId, BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopTestActor,
@@ -150,6 +150,7 @@ describe("agent-loop recovery race", () => {
             const branchStorage = yield* BranchStorage
             const governance = yield* AgentLoopSessionGovernance
             const actorClientFactory = yield* AgentLoopActor.Context
+            const platform = yield* GentPlatform
 
             const now = dateFromMillis(1_767_225_600_000)
             yield* sessionStorage.createSession(
@@ -181,6 +182,7 @@ describe("agent-loop recovery race", () => {
                 workspaceId: DefaultWorkspaceId,
                 sessionId,
                 branchId,
+                commandId: ActorCommandId.make(yield* platform.randomId),
               }),
             )
             yield* governance.clearTerminated(DefaultWorkspaceId, sessionId)
@@ -199,6 +201,7 @@ describe("agent-loop recovery race", () => {
                   workspaceId: DefaultWorkspaceId,
                   sessionId,
                   branchId,
+                  commandId: ActorCommandId.make(yield* platform.randomId),
                 }),
               )
               .pipe(Effect.forkChild)
@@ -227,6 +230,7 @@ describe("agent-loop recovery race", () => {
                   workspaceId: DefaultWorkspaceId,
                   sessionId,
                   branchId,
+                  commandId: ActorCommandId.make(yield* platform.randomId),
                 }),
               )
               .pipe(Effect.andThen(Deferred.succeed(op2Done, undefined)), Effect.forkChild)

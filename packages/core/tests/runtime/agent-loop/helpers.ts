@@ -147,14 +147,22 @@ export const makeAgentLoopService = Effect.gen(function* () {
       Effect.gen(function* () {
         const ref = yield* refFor(input.sessionId, input.branchId)
         return yield* ref.execute(
-          AgentLoopActor.GetQueue.make({ ...input, workspaceId: DefaultWorkspaceId }),
+          AgentLoopActor.GetQueue.make({
+            ...input,
+            workspaceId: DefaultWorkspaceId,
+            commandId: ActorCommandId.make(yield* platform.randomId),
+          }),
         )
       }),
     getState: (input) =>
       Effect.gen(function* () {
         const ref = yield* refFor(input.sessionId, input.branchId)
         return yield* ref.execute(
-          AgentLoopActor.GetState.make({ ...input, workspaceId: DefaultWorkspaceId }),
+          AgentLoopActor.GetState.make({
+            ...input,
+            workspaceId: DefaultWorkspaceId,
+            commandId: ActorCommandId.make(yield* platform.randomId),
+          }),
         )
       }),
   } satisfies AgentLoopService
