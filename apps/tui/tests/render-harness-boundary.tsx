@@ -181,9 +181,9 @@ export const createMockRuntime = (): GentRuntime => ({
   fork: Effect.runFork as never,
   run: Effect.runPromise as never,
   lifecycle: {
-    getState: () => ConnectionState.Connected.make({ generation: 0 }),
+    getState: () => ConnectionState.cases.connected.make({ generation: 0 }),
     subscribe: (listener) => {
-      listener(ConnectionState.Connected.make({ generation: 0 }))
+      listener(ConnectionState.cases.connected.make({ generation: 0 }))
       return () => {}
     },
     restart: Effect.void,

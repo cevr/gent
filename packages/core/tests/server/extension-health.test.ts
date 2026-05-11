@@ -87,7 +87,7 @@ describe("buildExtensionHealthSnapshot", () => {
 
   test("health issue constructors preserve typed failure categories", () => {
     expect(
-      ExtensionHealthIssue.ActivationFailed.make({
+      ExtensionHealthIssue.cases["activation-failed"].make({
         phase: "startup",
         error: "startup boom",
       }),
@@ -97,7 +97,7 @@ describe("buildExtensionHealthSnapshot", () => {
       error: "startup boom",
     })
     expect(
-      ExtensionHealthIssue.ScheduledJobFailed.make({
+      ExtensionHealthIssue.cases["scheduled-job-failed"].make({
         jobId: "reflect",
         error: "launchd boom",
       }),
@@ -110,12 +110,12 @@ describe("buildExtensionHealthSnapshot", () => {
 
   test("degraded constructor requires non-empty issues", () => {
     expect(
-      ExtensionHealth.Degraded.make({
+      ExtensionHealth.cases.degraded.make({
         manifest: { id: "@gent/plan" },
         scope: "builtin",
         sourcePath: "builtin",
         issues: [
-          ExtensionHealthIssue.ScheduledJobFailed.make({
+          ExtensionHealthIssue.cases["scheduled-job-failed"].make({
             jobId: "reflect",
             error: "launchd boom",
           }),

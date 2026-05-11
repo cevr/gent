@@ -32,7 +32,6 @@ import {
 } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
-import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
 
 export { Branch, BranchTreeNode, Session, SessionTreeNode }
@@ -255,17 +254,17 @@ export const ScheduledJobFailureInfo = Schema.Struct({
 })
 export type ScheduledJobFailureInfo = typeof ScheduledJobFailureInfo.Type
 
-export const ExtensionHealthIssue = TaggedEnumClass("ExtensionHealthIssue", {
-  ActivationFailed: TaggedEnumClass.variant("activation-failed", {
+export const ExtensionHealthIssue = Schema.Union([
+  Schema.TaggedStruct("activation-failed", {
     phase: ExtensionActivationPhase,
     error: Schema.String,
   }),
-  ScheduledJobFailed: TaggedEnumClass.variant("scheduled-job-failed", {
+  Schema.TaggedStruct("scheduled-job-failed", {
     jobId: Schema.String,
     error: Schema.String,
   }),
-})
-export type ExtensionHealthIssue = typeof ExtensionHealthIssue.Type
+]).pipe(Schema.toTaggedUnion("_tag"))
+export type ExtensionHealthIssue = Schema.Schema.Type<typeof ExtensionHealthIssue>
 
 const ExtensionHealthIdentityFields = {
   manifest: ExtensionManifestInfo,
@@ -273,44 +272,44 @@ const ExtensionHealthIdentityFields = {
   sourcePath: Schema.String,
 }
 
-export const ExtensionHealth = TaggedEnumClass("ExtensionHealth", {
-  Healthy: TaggedEnumClass.variant("healthy", {
+export const ExtensionHealth = Schema.Union([
+  Schema.TaggedStruct("healthy", {
     ...ExtensionHealthIdentityFields,
   }),
-  Degraded: TaggedEnumClass.variant("degraded", {
+  Schema.TaggedStruct("degraded", {
     ...ExtensionHealthIdentityFields,
     issues: Schema.NonEmptyArray(ExtensionHealthIssue),
   }),
-})
-export type ExtensionHealth = typeof ExtensionHealth.Type
+]).pipe(Schema.toTaggedUnion("_tag"))
+export type ExtensionHealth = Schema.Schema.Type<typeof ExtensionHealth>
 
-export const ExtensionHealthSnapshot = TaggedEnumClass("ExtensionHealthSnapshot", {
-  Healthy: TaggedEnumClass.variant("healthy", {
-    extensions: Schema.Array(ExtensionHealth.Healthy),
+export const ExtensionHealthSnapshot = Schema.Union([
+  Schema.TaggedStruct("healthy", {
+    extensions: Schema.Array(ExtensionHealth.cases.healthy),
   }),
-  Degraded: TaggedEnumClass.variant("degraded", {
-    healthyExtensions: Schema.Array(ExtensionHealth.Healthy),
-    degradedExtensions: Schema.NonEmptyArray(ExtensionHealth.Degraded),
+  Schema.TaggedStruct("degraded", {
+    healthyExtensions: Schema.Array(ExtensionHealth.cases.healthy),
+    degradedExtensions: Schema.NonEmptyArray(ExtensionHealth.cases.degraded),
   }),
-})
-export type ExtensionHealthSnapshot = typeof ExtensionHealthSnapshot.Type
+]).pipe(Schema.toTaggedUnion("_tag"))
+export type ExtensionHealthSnapshot = Schema.Schema.Type<typeof ExtensionHealthSnapshot>
 
 // ---------------------------------------------------------------------------
 // Driver routing
 // ---------------------------------------------------------------------------
 
 /** Per-driver descriptor returned by `driver.list`. The `_tag` matches `DriverRef`. */
-export const DriverInfo = TaggedEnumClass("DriverInfo", {
-  Model: TaggedEnumClass.variant("model", {
+export const DriverInfo = Schema.Union([
+  Schema.TaggedStruct("model", {
     id: Schema.String,
     description: Schema.optional(Schema.String),
   }),
-  External: TaggedEnumClass.variant("external", {
+  Schema.TaggedStruct("external", {
     id: Schema.String,
     description: Schema.optional(Schema.String),
   }),
-})
-export type DriverInfo = typeof DriverInfo.Type
+]).pipe(Schema.toTaggedUnion("_tag"))
+export type DriverInfo = Schema.Schema.Type<typeof DriverInfo>
 
 /** Snapshot returned by `driver.list`. Carries every registered driver
  *  and the active per-agent override map. The TUI joins these against
@@ -341,20 +340,20 @@ export class GentConnectionError extends Schema.TaggedErrorClass<GentConnectionE
   { message: Schema.String },
 ) {}
 
-export const ConnectionState = TaggedEnumClass("ConnectionState", {
-  Connecting: TaggedEnumClass.variant("connecting", {}),
-  Connected: TaggedEnumClass.variant("connected", {
+export const ConnectionState = Schema.Union([
+  Schema.TaggedStruct("connecting", {}),
+  Schema.TaggedStruct("connected", {
     pid: Schema.optional(Schema.Number),
     generation: Schema.Number,
   }),
-  Reconnecting: TaggedEnumClass.variant("reconnecting", {
+  Schema.TaggedStruct("reconnecting", {
     attempt: Schema.Number,
     generation: Schema.Number,
   }),
-  Disconnected: TaggedEnumClass.variant("disconnected", {
+  Schema.TaggedStruct("disconnected", {
     reason: Schema.String,
   }),
-})
+]).pipe(Schema.toTaggedUnion("_tag"))
 export type ConnectionState = Schema.Schema.Type<typeof ConnectionState>
 
 export interface GentLifecycle {

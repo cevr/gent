@@ -407,13 +407,13 @@ const RpcHandlers = GentRpcs.toLayer(
           const agents = yield* extensionRegistry.listAgents()
           const drivers = [
             ...models.map((driver) =>
-              DriverInfo.Model.make({
+              DriverInfo.cases.model.make({
                 id: driver.id,
                 ...(driver.name !== undefined ? { description: driver.name } : {}),
               }),
             ),
             ...externals.map((driver) =>
-              DriverInfo.External.make({
+              DriverInfo.cases.external.make({
                 id: driver.id,
               }),
             ),

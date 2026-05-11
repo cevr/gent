@@ -327,7 +327,9 @@ describe("TUI renderer surfaces", () => {
   )
   it.live("ConnectionWidget refreshes extension status after reconnect generation changes", () =>
     Effect.gen(function* () {
-      const lifecycle = createMutableRuntime(ConnectionState.Connected.make({ generation: 0 }))
+      const lifecycle = createMutableRuntime(
+        ConnectionState.cases.connected.make({ generation: 0 }),
+      )
       let callCount = 0
       let currentHealth: ExtensionHealthSnapshot = {
         _tag: "degraded",
@@ -369,10 +371,10 @@ describe("TUI renderer surfaces", () => {
         _tag: "healthy",
         extensions: [],
       }
-      lifecycle.emit(ConnectionState.Reconnecting.make({ attempt: 1, generation: 1 }))
+      lifecycle.emit(ConnectionState.cases.reconnecting.make({ attempt: 1, generation: 1 }))
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
-      lifecycle.emit(ConnectionState.Connected.make({ generation: 1 }))
+      lifecycle.emit(ConnectionState.cases.connected.make({ generation: 1 }))
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.yieldNow

@@ -208,7 +208,7 @@ const connectWs = (
   Effect.gen(function* () {
     const scope = yield* Effect.scope
     let generation = 0
-    let currentState: ConnectionState = ConnectionState.Connecting.make({})
+    let currentState: ConnectionState = ConnectionState.cases.connecting.make({})
     const listeners = new Set<(state: ConnectionState) => void>()
 
     const emit = (state: ConnectionState) => {
@@ -218,11 +218,11 @@ const connectWs = (
 
     const hooksLayer = Layer.succeed(RpcClient.ConnectionHooks, {
       onConnect: Effect.sync(() => {
-        emit(ConnectionState.Connected.make({ generation }))
+        emit(ConnectionState.cases.connected.make({ generation }))
       }),
       onDisconnect: Effect.sync(() => {
         generation++
-        emit(ConnectionState.Reconnecting.make({ attempt: generation, generation }))
+        emit(ConnectionState.cases.reconnecting.make({ attempt: generation, generation }))
       }),
     })
 
@@ -291,7 +291,7 @@ export const Gent = {
         client: makeNamespacedClient(rpcClient, workspaceHeadersForCwd(process.cwd())),
         runtime: makeRuntime(
           services,
-          staticLifecycle(ConnectionState.Connected.make({ generation: 0 })),
+          staticLifecycle(ConnectionState.cases.connected.make({ generation: 0 })),
         ),
       }
     }),
@@ -336,7 +336,7 @@ export const Gent = {
             client: makeNamespacedClient(rpcClient, headers),
             runtime: makeRuntime(
               services,
-              staticLifecycle(ConnectionState.Connected.make({ generation: 0 })),
+              staticLifecycle(ConnectionState.cases.connected.make({ generation: 0 })),
             ),
           }
         }

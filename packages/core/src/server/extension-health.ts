@@ -12,7 +12,7 @@ export const buildExtensionHealthSnapshot = (
     const schedulerFailures = status.scheduledJobFailures ?? []
     const activationFailure =
       status.status === "failed"
-        ? ExtensionHealthIssue.ActivationFailed.make({
+        ? ExtensionHealthIssue.cases["activation-failed"].make({
             phase: status.phase,
             error: status.error,
           })
@@ -20,7 +20,7 @@ export const buildExtensionHealthSnapshot = (
     const issues = [
       ...(activationFailure !== undefined ? [activationFailure] : []),
       ...schedulerFailures.map((failure) =>
-        ExtensionHealthIssue.ScheduledJobFailed.make({
+        ExtensionHealthIssue.cases["scheduled-job-failed"].make({
           jobId: failure.jobId,
           error: failure.error,
         }),
@@ -35,20 +35,20 @@ export const buildExtensionHealthSnapshot = (
 
     const [firstIssue, ...remainingIssues] = issues
     return firstIssue === undefined
-      ? ExtensionHealth.Healthy.make(payload)
-      : ExtensionHealth.Degraded.make({
+      ? ExtensionHealth.cases.healthy.make(payload)
+      : ExtensionHealth.cases.degraded.make({
           ...payload,
           issues: [firstIssue, ...remainingIssues],
         })
   })
 
-  const healthyExtensions = extensions.filter(ExtensionHealth.guards.Healthy)
-  const degradedExtensions = extensions.filter(ExtensionHealth.guards.Degraded)
+  const healthyExtensions = extensions.filter(ExtensionHealth.guards.healthy)
+  const degradedExtensions = extensions.filter(ExtensionHealth.guards.degraded)
   const [firstDegraded, ...remainingDegraded] = degradedExtensions
 
   return firstDegraded === undefined
-    ? ExtensionHealthSnapshot.Healthy.make({ extensions: healthyExtensions })
-    : ExtensionHealthSnapshot.Degraded.make({
+    ? ExtensionHealthSnapshot.cases.healthy.make({ extensions: healthyExtensions })
+    : ExtensionHealthSnapshot.cases.degraded.make({
         healthyExtensions,
         degradedExtensions: [firstDegraded, ...remainingDegraded],
       })
