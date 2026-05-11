@@ -1,4 +1,4 @@
-import { Clock, Context, Deferred, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
+import { Clock, Context, Deferred, Effect, Layer, Ref, Schema, Stream, TxQueue } from "effect"
 
 import { Message } from "./message"
 import {
@@ -364,10 +364,10 @@ export const makeSerializedEventDelivery = (
   broadcast: (envelope: EventEnvelope) => Effect.Effect<void>,
 ) =>
   Effect.gen(function* () {
-    const queue = yield* Queue.unbounded<EventDeliveryJob>()
+    const queue = yield* TxQueue.unbounded<EventDeliveryJob>()
     const delivered = new Set<EventEnvelope["id"]>()
     const maxDeliveredIds = 1024
-    yield* Queue.take(queue).pipe(
+    yield* TxQueue.take(queue).pipe(
       Effect.flatMap((job) =>
         Effect.gen(function* () {
           if (delivered.has(job.envelope.id)) {
@@ -392,7 +392,7 @@ export const makeSerializedEventDelivery = (
     return (envelope: EventEnvelope) =>
       Effect.gen(function* () {
         const ack = yield* Deferred.make<void>()
-        yield* Queue.offer(queue, { envelope, ack })
+        yield* TxQueue.offer(queue, { envelope, ack })
         yield* Deferred.await(ack)
       })
   })

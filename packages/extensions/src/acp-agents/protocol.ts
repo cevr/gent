@@ -2,7 +2,7 @@
  * Native Effect ACP client over newline-delimited JSON-RPC 2.0 on stdio.
  *
  * No npm dependency — uses effect/unstable/process ChildProcess for the
- * subprocess and Effect primitives (Queue, Deferred, HashMap, PubSub,
+ * subprocess and Effect primitives (TxQueue, Deferred, HashMap, PubSub,
  * Stream, Sink) for multiplexing.
  *
  * @module
@@ -14,7 +14,7 @@ import {
   HashMap,
   Option,
   PubSub,
-  Queue,
+  TxQueue,
   Ref,
   Schema,
   type Sink,
@@ -138,10 +138,10 @@ export const makeAcpConnection = (
       ConnState.cases.open.make({ pending: HashMap.empty<RequestId, PendingRequest>() }),
     )
     const updatesPubSub = yield* PubSub.unbounded<SessionNotification>()
-    const writeQueue = yield* Queue.unbounded<string>()
+    const writeQueue = yield* TxQueue.unbounded<string>()
     const encoder = new TextEncoder()
 
-    const write = (msg: string) => Queue.offer(writeQueue, msg).pipe(Effect.asVoid)
+    const write = (msg: string) => TxQueue.offer(writeQueue, msg).pipe(Effect.asVoid)
 
     /**
      * Atomically seal `stateRef` to `closed` and return the pending map
@@ -176,8 +176,8 @@ export const makeAcpConnection = (
     // an `rpc.prompt(...)` call already past the registration point
     // parks forever and the executor's `Stream.interruptWhen(promptDone)`
     // never fires.
-    const writerFiber = yield* Stream.fromQueue(writeQueue).pipe(
-      Stream.map((line) => encoder.encode(line)),
+    const writerFiber = yield* Stream.fromEffectRepeat(TxQueue.take(writeQueue)).pipe(
+      Stream.map((line: string) => encoder.encode(line)),
       Stream.run(proc.stdin),
       Effect.catchEager((err: PlatformError) =>
         Effect.gen(function* () {
