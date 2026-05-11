@@ -30,7 +30,6 @@ import {
   DEFAULT_AGENT_NAME,
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
-import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
 import {
   AgentSwitched,
   ErrorOccurred,
@@ -666,7 +665,7 @@ export const makeAgentLoopBehavior = (
         return updateCurrentAgentOnState(state, next)
       }).pipe(Effect.orDie)
 
-    const TurnOutcome = TaggedEnumClass("TurnOutcome", {
+    const TurnOutcome = Schema.TaggedUnion({
       Done: {},
       InteractionRequested: {
         pendingRequestId: InteractionRequestId,
@@ -993,7 +992,7 @@ export const makeAgentLoopBehavior = (
 
             if (interactionSignal !== undefined) {
               const { pending, toolCallId } = interactionSignal
-              return TurnOutcome.InteractionRequested.make({
+              return TurnOutcome.cases.InteractionRequested.make({
                 pendingRequestId: pending.requestId,
                 pendingToolCallId: toolCallId as string,
                 currentTurnAgent,
@@ -1101,7 +1100,7 @@ export const makeAgentLoopBehavior = (
 
         if (interactionSignal !== undefined) {
           const { pending, toolCallId } = interactionSignal
-          return TurnOutcome.InteractionRequested.make({
+          return TurnOutcome.cases.InteractionRequested.make({
             pendingRequestId: pending.requestId,
             pendingToolCallId: toolCallId as string,
             currentTurnAgent: resolved.currentTurnAgent,
@@ -1119,7 +1118,7 @@ export const makeAgentLoopBehavior = (
         hostCtx: turnHostCtx,
       })
 
-      return TurnOutcome.Done.make({})
+      return TurnOutcome.cases.Done.make({})
     })
 
     const saveCheckpoint = (next: LoopState): Effect.Effect<void, AgentLoopError> =>
