@@ -828,7 +828,7 @@ export const InProcessRunner = (
             )
 
       return {
-        run: (params) => {
+        run: Effect.fn("AgentRunner.run")(function* (params) {
           const persistence = resolveRunPersistence(params.runSpec)
           const normalizedRunSpec = normalizeRunSpec(params.runSpec)
           const toolCallId = params.runSpec?.parentToolCallId
@@ -845,7 +845,7 @@ export const InProcessRunner = (
           }
 
           if (persistence === "ephemeral") {
-            return Effect.gen(function* () {
+            return yield* Effect.gen(function* () {
               const sessionId = SessionId.make(yield* platform.randomId)
               const branchId = BranchId.make(yield* platform.randomId)
               return yield* runEphemeralAgent({
@@ -868,7 +868,7 @@ export const InProcessRunner = (
             }).pipe(Effect.provideContext(runtimeContext))
           }
 
-          return createDurableAgentRunSession({ ...params, toolCallId })
+          return yield* createDurableAgentRunSession({ ...params, toolCallId })
             .pipe(
               Effect.flatMap(({ sessionId, branchId }) => {
                 const run = Effect.gen(function* () {
@@ -950,7 +950,7 @@ export const InProcessRunner = (
               Effect.catchCause(handleUnexpectedFailure),
             )
             .pipe(Effect.provideContext(runtimeContext))
-        },
+        }),
       }
     }),
   )
@@ -1005,11 +1005,11 @@ export const SubprocessRunner = (
       const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
 
       return {
-        run: (params) => {
+        run: Effect.fn("AgentRunner.run")(function* (params) {
           const persistence = resolveRunPersistence(params.runSpec)
           const toolCallId = params.runSpec?.parentToolCallId
           if (persistence === "ephemeral") {
-            return Effect.gen(function* () {
+            return yield* Effect.gen(function* () {
               const sessionId = SessionId.make(yield* platform.randomId)
               const branchId = BranchId.make(yield* platform.randomId)
               return yield* runEphemeralAgent({
@@ -1032,7 +1032,7 @@ export const SubprocessRunner = (
             }).pipe(Effect.provideContext(runtimeContext))
           }
 
-          return createDurableAgentRunSession({ ...params, toolCallId }).pipe(
+          return yield* createDurableAgentRunSession({ ...params, toolCallId }).pipe(
             Effect.flatMap(({ sessionId, branchId }) => {
               const run = Effect.gen(function* () {
                 yield* WideEvent.set({ childSessionId: sessionId })
@@ -1180,7 +1180,7 @@ export const SubprocessRunner = (
             }),
             Effect.provideContext(runtimeContext),
           )
-        },
+        }),
       }
     }),
   )
