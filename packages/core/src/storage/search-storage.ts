@@ -20,22 +20,6 @@ export const sanitizeFts5Query = (raw: string): string => {
     .join(" ")
 }
 
-const buildSearchFilters = (
-  sql: SqlClient.SqlClient,
-  workspaceId: string,
-  options?: {
-    sessionId?: string
-    dateAfter?: number
-    dateBefore?: number
-  },
-) =>
-  sql.and([
-    sql`s.workspace_id = ${workspaceId}`,
-    ...(options?.sessionId !== undefined ? [sql`m.session_id = ${options.sessionId}`] : []),
-    ...(options?.dateAfter !== undefined ? [sql`m.created_at > ${options.dateAfter}`] : []),
-    ...(options?.dateBefore !== undefined ? [sql`m.created_at < ${options.dateBefore}`] : []),
-  ])
-
 export interface SearchResult {
   readonly sessionId: string
   readonly sessionName: string | null
@@ -64,6 +48,21 @@ export class SearchStorage extends Context.Service<SearchStorage, SearchStorageS
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
 
+      const buildSearchFilters = (
+        workspaceId: string,
+        options?: {
+          sessionId?: string
+          dateAfter?: number
+          dateBefore?: number
+        },
+      ) =>
+        sql.and([
+          sql`s.workspace_id = ${workspaceId}`,
+          ...(options?.sessionId !== undefined ? [sql`m.session_id = ${options.sessionId}`] : []),
+          ...(options?.dateAfter !== undefined ? [sql`m.created_at > ${options.dateAfter}`] : []),
+          ...(options?.dateBefore !== undefined ? [sql`m.created_at < ${options.dateBefore}`] : []),
+        ])
+
       return {
         searchMessages: Effect.fn("SearchStorage.searchMessages")(
           function* (query, options) {
@@ -72,7 +71,7 @@ export class SearchStorage extends Context.Service<SearchStorage, SearchStorageS
             const ftsQuery = sanitizeFts5Query(query)
             if (ftsQuery.length === 0) return []
             const workspaceId = yield* CurrentWorkspaceId
-            const filters = buildSearchFilters(sql, workspaceId, options)
+            const filters = buildSearchFilters(workspaceId, options)
 
             const rows = yield* sql<{
               session_id: string

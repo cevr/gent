@@ -81,14 +81,6 @@ const requiredTodoColumns = [
 
 const requiredTodoEdgeColumns = ["todo_id", "blocked_by_id"] as const
 
-const selectTodoById = (sql: SqlClient.SqlClient, id: TodoId) =>
-  sql<TodoRow>`SELECT id, session_id, branch_id, parent_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM todos WHERE id = ${id}`.pipe(
-    Effect.map((rows) => {
-      const row = rows[0]
-      return row === undefined ? undefined : todoFromRow(row)
-    }),
-  )
-
 const todoFromRow = (row: TodoRow) =>
   Todo.make({
     id: row.id,
@@ -108,19 +100,19 @@ const todoFromRow = (row: TodoRow) =>
   })
 
 const tableColumns = Effect.fn("TodoStorage.tableColumns")(function* (
-  sql: SqlClient.SqlClient,
   table: "todos" | "todo_edges",
 ) {
+  const sql = yield* SqlClient.SqlClient
   const rows = yield* sql.unsafe<{ name: string }>(`PRAGMA table_info(${table})`)
   return new Set(rows.map((row) => row.name))
 })
 
 const tableHasForeignKey = Effect.fn("TodoStorage.tableHasForeignKey")(function* (
-  sql: SqlClient.SqlClient,
   table: "todos" | "todo_edges",
   parentTable: string,
   fromColumns: ReadonlyArray<string>,
 ) {
+  const sql = yield* SqlClient.SqlClient
   const rows = yield* sql.unsafe<{
     id: number
     table: string
@@ -138,45 +130,42 @@ const tableHasForeignKey = Effect.fn("TodoStorage.tableHasForeignKey")(function*
   )
 })
 
-const todosTableNeedsReset = Effect.fn("TodoStorage.todosTableNeedsReset")(function* (
-  sql: SqlClient.SqlClient,
-) {
-  const columns = yield* tableColumns(sql, "todos")
+const todosTableNeedsReset = Effect.fn("TodoStorage.todosTableNeedsReset")(function* () {
+  const columns = yield* tableColumns("todos")
   if (columns.size === 0) return false
   if (requiredTodoColumns.some((column) => !columns.has(column))) return true
-  return !(yield* tableHasForeignKey(sql, "todos", "branches", ["branch_id", "session_id"]))
+  return !(yield* tableHasForeignKey("todos", "branches", ["branch_id", "session_id"]))
 })
 
-const todoEdgesTableNeedsReset = Effect.fn("TodoStorage.todoEdgesTableNeedsReset")(function* (
-  sql: SqlClient.SqlClient,
-) {
-  const columns = yield* tableColumns(sql, "todo_edges")
+const todoEdgesTableNeedsReset = Effect.fn("TodoStorage.todoEdgesTableNeedsReset")(function* () {
+  const columns = yield* tableColumns("todo_edges")
   if (columns.size === 0) return false
   if (requiredTodoEdgeColumns.some((column) => !columns.has(column))) return true
-  const hasTodoFk = yield* tableHasForeignKey(sql, "todo_edges", "todos", ["todo_id"])
-  const hasBlockedByFk = yield* tableHasForeignKey(sql, "todo_edges", "todos", ["blocked_by_id"])
+  const hasTodoFk = yield* tableHasForeignKey("todo_edges", "todos", ["todo_id"])
+  const hasBlockedByFk = yield* tableHasForeignKey("todo_edges", "todos", ["blocked_by_id"])
   return !hasTodoFk || !hasBlockedByFk
 })
 
-const resetIncompatibleTodoTables = Effect.fn("TodoStorage.resetIncompatibleTodoTables")(function* (
-  sql: SqlClient.SqlClient,
-) {
-  const resetTodos = yield* todosTableNeedsReset(sql)
-  const resetTodoEdges = yield* todoEdgesTableNeedsReset(sql)
-  if (!resetTodos && !resetTodoEdges) return
+const resetIncompatibleTodoTables = Effect.fn("TodoStorage.resetIncompatibleTodoTables")(
+  function* () {
+    const sql = yield* SqlClient.SqlClient
+    const resetTodos = yield* todosTableNeedsReset()
+    const resetTodoEdges = yield* todoEdgesTableNeedsReset()
+    if (!resetTodos && !resetTodoEdges) return
 
-  yield* Effect.acquireUseRelease(
-    sql.unsafe(`PRAGMA foreign_keys = OFF`),
-    () =>
-      sql.withTransaction(
-        Effect.gen(function* () {
-          yield* sql.unsafe(`DROP TABLE IF EXISTS todo_edges`)
-          yield* sql.unsafe(`DROP TABLE IF EXISTS todos`)
-        }),
-      ),
-    () => sql.unsafe(`PRAGMA foreign_keys = ON`),
-  )
-})
+    yield* Effect.acquireUseRelease(
+      sql.unsafe(`PRAGMA foreign_keys = OFF`),
+      () =>
+        sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql.unsafe(`DROP TABLE IF EXISTS todo_edges`)
+            yield* sql.unsafe(`DROP TABLE IF EXISTS todos`)
+          }),
+        ),
+      () => sql.unsafe(`PRAGMA foreign_keys = ON`),
+    )
+  },
+)
 
 /**
  * Read slice of the TodoStorage surface — list/get queries + dependency reads.
@@ -242,7 +231,15 @@ const makeTodoStorageService: Effect.Effect<
 > = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
 
-  yield* resetIncompatibleTodoTables(sql).pipe(
+  const selectTodoById = (id: TodoId) =>
+    sql<TodoRow>`SELECT id, session_id, branch_id, parent_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM todos WHERE id = ${id}`.pipe(
+      Effect.map((rows) => {
+        const row = rows[0]
+        return row === undefined ? undefined : todoFromRow(row)
+      }),
+    )
+
+  yield* resetIncompatibleTodoTables().pipe(
     Effect.mapError(mapError("Failed to reset incompatible todo tables")),
   )
 
@@ -404,7 +401,7 @@ const makeTodoStorageService: Effect.Effect<
 
     getTodo: Effect.fn("TodoStorage.getTodo")(
       function* (id) {
-        return yield* selectTodoById(sql, id)
+        return yield* selectTodoById(id)
       },
       Effect.mapError(mapError("Failed to get todo")),
     ),
@@ -449,7 +446,7 @@ const makeTodoStorageService: Effect.Effect<
 
         return yield* sql.withTransaction(
           Effect.gen(function* () {
-            const existing = yield* selectTodoById(sql, id)
+            const existing = yield* selectTodoById(id)
             if (existing === undefined) return undefined
             if (fields.parentId !== undefined && fields.parentId !== null) {
               yield* ensureNoParentCycle(id, fields.parentId)
@@ -465,7 +462,7 @@ const makeTodoStorageService: Effect.Effect<
               })
             }
             yield* sql`UPDATE todos SET ${sql.update(updates)} WHERE id = ${id}`
-            return yield* selectTodoById(sql, id)
+            return yield* selectTodoById(id)
           }),
         )
       },
