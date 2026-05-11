@@ -1,5 +1,7 @@
 import { Context, Effect, FileSystem, Option, Path, Schema, type PlatformError } from "effect"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent.js"
+import { DEFAULT_MODEL_ID } from "./agent.js"
+import { estimateContextPercent as pureEstimateContextPercent } from "../runtime/context-estimation.js"
 import type { EventStoreError } from "./event.js"
 import type {
   ExtensionHostRunProcessOptions,
@@ -387,3 +389,28 @@ export const provideExtensionServices = <A, E, R>(
   Effect.flatMap(extensionServicesFromHostContext(ctx), (services) =>
     effect.pipe(Effect.provideContext(services)),
   )
+
+export const requireAgent = (
+  name: AgentName,
+): Effect.Effect<AgentDefinition, ExtensionServiceError, ExtensionContext> =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const agents = yield* ctx.Agent.listAgents()
+    const agent = agents.find((a) => a.name === name)
+    if (agent !== undefined) return agent
+    return yield* new ExtensionServiceError({
+      service: "ExtensionAgent",
+      operation: "require",
+      message: `Agent "${name}" not found in registry`,
+    })
+  })
+
+export const estimateContextPercent = (options?: {
+  readonly modelId?: string
+}): Effect.Effect<number, ExtensionServiceError, ExtensionContext> =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const messages = yield* ctx.Session.listMessages()
+    const modelId = options?.modelId ?? DEFAULT_MODEL_ID
+    return pureEstimateContextPercent(messages, modelId)
+  })

@@ -14,9 +14,12 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { DEFAULT_MODEL_ID } from "../../src/domain/agent.js"
 import { MessageId, SessionId, BranchId } from "../../src/domain/ids.js"
 import { dateFromMillis, Message } from "../../src/domain/message.js"
-import { estimateContextPercent } from "../../src/domain/extension-session-helpers.js"
 import { estimateContextPercent as pureEstimateContextPercent } from "../../src/runtime/context-estimation.js"
-import { ExtensionContext, ExtensionServiceError } from "../../src/domain/extension-services.js"
+import {
+  estimateContextPercent,
+  ExtensionContext,
+  ExtensionServiceError,
+} from "../../src/domain/extension-services.js"
 import { testToolContext } from "../../src/test-utils/index.js"
 
 const SESSION_ID = SessionId.make("test-session")
