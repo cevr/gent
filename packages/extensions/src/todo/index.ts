@@ -17,7 +17,7 @@ import { defineExtension, defineResource } from "@gent/core/extensions/api"
 import { TodoCreateTool, TodoGetTool, TodoListTool, TodoUpdateTool } from "./tools.js"
 import { TodoStorage } from "../todo-storage.js"
 import { TodoService } from "../todo-service.js"
-import { TODO_EXTENSION_ID } from "./identity.js"
+import { TODO_EXTENSION_ID } from "./domain.js"
 import {
   TodoGetRequest,
   TodoListRequest,
@@ -29,7 +29,7 @@ import {
   TodoRemoveDepRequest,
 } from "./requests.js"
 
-export type { TodoEntry } from "./identity.js"
+export type { TodoEntry } from "./domain.js"
 
 export const TodoExtension = defineExtension({
   id: TODO_EXTENSION_ID,

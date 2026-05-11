@@ -26,7 +26,7 @@ export {
   TodoUiModel,
   type TodoEntry,
   type TodoUiModel as TodoUiModelType,
-} from "./todo/identity.js"
+} from "./todo/domain.js"
 export {
   TodoId,
   TodoStatus,

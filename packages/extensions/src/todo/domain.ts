@@ -1,5 +1,13 @@
 import { Schema } from "effect"
-import { AgentName, BranchId, DateFromNumber, SessionId } from "@gent/core/extensions/api"
+import {
+  AgentName,
+  BranchId,
+  DateFromNumber,
+  ExtensionId,
+  SessionId,
+} from "@gent/core/extensions/api"
+
+export const TODO_EXTENSION_ID = ExtensionId.make("@gent/todo")
 
 export const TodoId = Schema.String.pipe(Schema.brand("TodoId"))
 export type TodoId = typeof TodoId.Type
@@ -49,3 +57,18 @@ export class Todo extends Schema.Class<Todo>("Todo")({
   createdAt: DateFromNumber,
   updatedAt: DateFromNumber,
 }) {}
+
+/** Schema for individual todo entries in the UI snapshot (subset of full Todo). */
+export const TodoEntrySchema = Schema.Struct({
+  id: TodoId,
+  parentId: Schema.optional(TodoId),
+  subject: Schema.String,
+  status: TodoStatus,
+})
+export type TodoEntry = typeof TodoEntrySchema.Type
+
+/** Schema for the todo extension UI snapshot model. */
+export const TodoUiModel = Schema.Struct({
+  todos: Schema.Array(TodoEntrySchema),
+})
+export type TodoUiModel = typeof TodoUiModel.Type

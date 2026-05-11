@@ -5,9 +5,14 @@ import {
   type BranchId,
   type SessionId,
 } from "@gent/core/extensions/api"
-import { Todo, TodoId, type TodoStatus, type TodoTransitionError } from "./todo/domain.js"
+import {
+  Todo,
+  TodoId,
+  TODO_EXTENSION_ID,
+  type TodoStatus,
+  type TodoTransitionError,
+} from "./todo/domain.js"
 import { TodoStorage, type TodoStorageError } from "./todo-storage.js"
-import { TODO_EXTENSION_ID } from "./todo/identity.js"
 
 // Extension-owned todo service. Present only when @gent/todo is loaded.
 // Pure state management — no execution, no fibers, no agent spawning.

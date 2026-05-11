@@ -9,10 +9,9 @@
  */
 import { Effect, Schema } from "effect"
 import { AgentName, CapabilityError, ExtensionContext, request } from "@gent/core/extensions/api"
-import { Todo, TodoId } from "./domain.js"
+import { Todo, TodoId, TODO_EXTENSION_ID } from "./domain.js"
 import { TodoService } from "../todo-service.js"
 import { TodoStorageReadOnly } from "../todo-storage.js"
-import { TODO_EXTENSION_ID } from "./identity.js"
 
 // ── Read Requests ──
 
