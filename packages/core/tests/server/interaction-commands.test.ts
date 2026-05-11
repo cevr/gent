@@ -18,7 +18,7 @@ import { InteractionStorage } from "@gent/core-internal/storage/interaction-stor
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
-import { CurrentWorkspaceId } from "../../src/server/workspace-rpc.js"
+import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc.js"
 import { encodeInteractionDecision } from "../../src/domain/interaction-request.js"
 
 const InteractionProbeExtension: LoadedExtension = {
@@ -50,7 +50,7 @@ const InteractionProbeExtension: LoadedExtension = {
 
 const tempDir = createTempDirFixture("gent-interaction-")
 const currentTestWorkspaceId = () =>
-  createHash("sha256").update(path.resolve(process.cwd())).digest("hex")
+  WorkspaceId.make(createHash("sha256").update(path.resolve(process.cwd())).digest("hex"))
 
 describe("interaction.respondInteraction", () => {
   it.live(

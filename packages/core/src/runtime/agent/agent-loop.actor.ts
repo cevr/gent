@@ -53,7 +53,7 @@ import {
 } from "../../domain/ids.js"
 import { SteerCommand } from "../../domain/steer.js"
 import { GentPlatform } from "../gent-platform.js"
-import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
+import { CurrentWorkspaceId, WorkspaceId } from "../../server/workspace-rpc.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import {
   assistantMessageIdForCommand,
@@ -488,8 +488,9 @@ const buildAgentLoopActorHandlers = (config: {
     // call path is bracketed by `withWorkspace(...)` below, so the storage
     // operations see the correct workspace from fiber context without any
     // per-method wrapping layer.
+    const brandedWorkspaceId = WorkspaceId.make(workspaceId)
     const withWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      effect.pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
+      effect.pipe(Effect.provideService(CurrentWorkspaceId, brandedWorkspaceId))
     const messageStorage = yield* MessageStorage
     const queueStorage = yield* AgentLoopQueueStorage
     const eventStorage = yield* EventStorage
@@ -804,7 +805,9 @@ const buildAgentLoopActorHandlers = (config: {
 
     yield* Actor.registerState({
       get: withWorkspace(currentRegisteredState),
-      watch: registeredStateChanges.pipe(Stream.provideService(CurrentWorkspaceId, workspaceId)),
+      watch: registeredStateChanges.pipe(
+        Stream.provideService(CurrentWorkspaceId, brandedWorkspaceId),
+      ),
     })
 
     const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (

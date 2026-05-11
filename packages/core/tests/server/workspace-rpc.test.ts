@@ -10,13 +10,14 @@ import { RpcHandlersLive } from "../../src/server/rpc-handlers"
 import {
   CurrentWorkspaceId,
   WORKSPACE_ID_HEADER,
+  WorkspaceId,
   validateWorkspaceId,
   withWorkspaceIdHeader,
 } from "../../src/server/workspace-rpc"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
-const validWorkspaceId = "a".repeat(64)
-const otherWorkspaceId = "b".repeat(64)
+const validWorkspaceId = WorkspaceId.make("a".repeat(64))
+const otherWorkspaceId = WorkspaceId.make("b".repeat(64))
 
 describe("workspace RPC middleware", () => {
   it.live("validates workspace ids", () =>
