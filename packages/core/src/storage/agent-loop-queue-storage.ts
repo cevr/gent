@@ -11,7 +11,7 @@ import { SqlClient } from "effect/unstable/sql"
 import {
   LoopQueueState,
   type LoopQueueState as LoopQueueStateType,
-} from "../domain/agent-loop-queue-state.js"
+} from "../runtime/agent/agent-loop.state.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"

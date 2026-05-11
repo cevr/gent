@@ -33,7 +33,7 @@ import {
 import {
   LoopQueueState,
   type LoopQueueState as LoopQueueStateType,
-} from "../../src/domain/agent-loop-queue-state"
+} from "../../src/runtime/agent/agent-loop.state"
 import { AgentLoopQueueStorage } from "../../src/storage/agent-loop-queue-storage"
 import { StorageError } from "../../src/domain/storage-error"
 import { ensureStorageParents } from "@gent/core-internal/test-utils"
