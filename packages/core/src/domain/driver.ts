@@ -39,7 +39,6 @@ import type { BranchId, SessionId } from "./ids.js"
 import type { Message } from "./message.js"
 import type { Model } from "./model.js"
 import type { ProviderError } from "./provider-error.js"
-import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 
 // Note: TurnExecutor is defined below alongside the driver primitives — no
 // external import of `TurnExecutor` is needed.
@@ -53,16 +52,19 @@ export { DriverRef, ModelDriverRef, ExternalDriverRef } from "./agent.js"
 
 // ── Failure type ──
 
-/** Failure raised when a driver lookup or dispatch fails. */
-export const DriverFailureRef = TaggedEnumClass("DriverFailureRef", {
-  Model: TaggedEnumClass.variant("model", {
-    id: Schema.String,
-  }),
-  External: TaggedEnumClass.variant("external", {
-    id: Schema.String,
-  }),
+const DriverFailureModelStruct = Schema.TaggedStruct("model", {
+  id: Schema.String,
 })
-export type DriverFailureRef = typeof DriverFailureRef.Type
+const DriverFailureExternalStruct = Schema.TaggedStruct("external", {
+  id: Schema.String,
+})
+
+/** Failure raised when a driver lookup or dispatch fails. */
+export const DriverFailureRef = Schema.Union([
+  DriverFailureModelStruct,
+  DriverFailureExternalStruct,
+]).pipe(Schema.toTaggedUnion("_tag"))
+export type DriverFailureRef = Schema.Schema.Type<typeof DriverFailureRef>
 
 export class DriverError extends Schema.TaggedErrorClass<DriverError>()("DriverError", {
   driver: DriverFailureRef,
