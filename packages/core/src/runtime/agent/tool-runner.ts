@@ -6,7 +6,7 @@ import {
   type ToolCapability,
 } from "../../domain/capability/tool.js"
 import { provideExtensionServices } from "../../domain/extension-services.js"
-import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
+import { ExtensionRegistry } from "../extensions/registry.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../../domain/event.js"
@@ -122,54 +122,53 @@ const makeExecutionToolkit = (params: {
   tool: ToolCapability
   toolCall: ToolCall
   ctx: ToolCapabilityContext
-  registry: ExtensionRegistryService
-}): Effect.Effect<ToolRunnerToolkit> => {
-  const metadata = getToolMetadata(params.tool)
-  const toolkit = convertTools([params.tool])
-  const toolName = String(getToolId(params.tool))
-  const toolCtx = deriveToolContext(params.ctx)
+}): Effect.Effect<ToolRunnerToolkit, never, ExtensionRegistry> =>
+  Effect.gen(function* () {
+    const registry = yield* ExtensionRegistry
+    const metadata = getToolMetadata(params.tool)
+    const toolkit = convertTools([params.tool])
+    const toolName = String(getToolId(params.tool))
+    const toolCtx = deriveToolContext(params.ctx)
 
-  const handlerMap: AiToolkit.HandlersFrom<ToolCapabilityMap> = {
-    [toolName]: (decodedInput: unknown) =>
-      Effect.gen(function* () {
-        const executeResult = yield* provideExtensionServices(
-          params.ctx,
-          provideCapabilityContext(
-            toolCtx,
-            // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-            metadata.effect(decodedInput).pipe(Effect.mapError(normalizeToolExecutionError)),
-          ),
-        )
-
-        return yield* params.registry.extensionReactions
-          .transformToolResult(
-            {
-              toolCallId: params.toolCall.toolCallId,
-              toolName: params.toolCall.toolName,
-              input: decodedInput,
-              result: executeResult,
-              agentName: params.ctx.agentName,
-              sessionId: params.ctx.sessionId,
-              branchId: params.ctx.branchId,
-            },
+    const handlerMap: AiToolkit.HandlersFrom<ToolCapabilityMap> = {
+      [toolName]: (decodedInput: unknown) =>
+        Effect.gen(function* () {
+          const executeResult = yield* provideExtensionServices(
             params.ctx,
-          )
-          .pipe(
-            Effect.catchEager((e) =>
-              Effect.logWarning("extension.reaction.tool-result.failed").pipe(
-                Effect.annotateLogs({ error: String(e) }),
-                Effect.as(executeResult),
-              ),
+            provideCapabilityContext(
+              toolCtx,
+              // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+              metadata.effect(decodedInput).pipe(Effect.mapError(normalizeToolExecutionError)),
             ),
           )
-      }),
-  }
 
-  return Effect.gen(function* () {
+          return yield* registry.extensionReactions
+            .transformToolResult(
+              {
+                toolCallId: params.toolCall.toolCallId,
+                toolName: params.toolCall.toolName,
+                input: decodedInput,
+                result: executeResult,
+                agentName: params.ctx.agentName,
+                sessionId: params.ctx.sessionId,
+                branchId: params.ctx.branchId,
+              },
+              params.ctx,
+            )
+            .pipe(
+              Effect.catchEager((e) =>
+                Effect.logWarning("extension.reaction.tool-result.failed").pipe(
+                  Effect.annotateLogs({ error: String(e) }),
+                  Effect.as(executeResult),
+                ),
+              ),
+            )
+        }),
+    }
+
     const handlers = yield* toolkit.toHandlers(handlerMap)
     return yield* toolkit.asEffect().pipe(Effect.provideContext(handlers))
   })
-}
 
 const closedHandlerResultStream = (
   stream: Stream.Stream<AiTool.HandlerResult<AiTool.Any>, ToolExecutionError, unknown>,
@@ -312,7 +311,6 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               tool,
               toolCall,
               ctx,
-              registry: activeRegistry,
             })
             return yield* terminalToolResult(executionToolkit, toolCall)
           })
