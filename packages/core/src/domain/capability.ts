@@ -93,7 +93,6 @@ export interface ToolCapability {
 export interface RequestCapability {
   readonly _tag: "request"
   readonly id: RpcId
-  readonly promptSnippet?: string
   readonly prompt?: PromptSection
   readonly permissionRules?: ReadonlyArray<PermissionRule>
   readonly input: unknown

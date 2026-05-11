@@ -43,7 +43,6 @@ export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabi
   readonly public: true
   readonly slash?: RequestInput<Input, Output>["slash"]
   readonly description?: string
-  readonly promptSnippet?: string
   readonly permissionRules?: ReadonlyArray<PermissionRule>
   readonly prompt?: PromptSection
   readonly input: Schema.Schema<Input>

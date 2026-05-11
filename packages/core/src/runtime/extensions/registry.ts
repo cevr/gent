@@ -304,7 +304,7 @@ const sortExtensionsByScope = (
 
 const capabilityToCommand = (extensionId: ExtensionId, cap: RequestCapability): SlashCommand => {
   const slash = cap.slash
-  const description = slash?.description ?? cap.description ?? cap.promptSnippet
+  const description = slash?.description ?? cap.description
   const displayName = slash?.name
   const category = slash?.category
   const keybind = slash?.keybind
