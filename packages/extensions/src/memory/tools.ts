@@ -7,8 +7,39 @@
 
 import { DateTime, Effect, Schema } from "effect"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
-import { MemoryVault, projectKey as projectKeyOf } from "./vault.js"
-import { memoryPath, newFrontmatter } from "./state.js"
+import {
+  MemoryVault,
+  projectKey as projectKeyOf,
+  type MemoryScope,
+  type MemorySource,
+} from "./vault.js"
+
+export const toSlug = (title: string): string =>
+  title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60)
+
+export const memoryPath = (scope: MemoryScope, title: string, projectKey?: string): string => {
+  const slug = toSlug(title)
+  if (scope === "global") return `global/${slug}.md`
+  if (projectKey === undefined) return `global/${slug}.md`
+  return `project/${projectKey}/${slug}.md`
+}
+
+export const newFrontmatter = (
+  scope: MemoryScope,
+  tags: ReadonlyArray<string>,
+  source: MemorySource,
+  now: Date,
+) => ({
+  scope,
+  tags,
+  created: now.toISOString(),
+  updated: now.toISOString(),
+  source,
+})
 
 // ── memory_remember ──
 

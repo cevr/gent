@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { dateFromMillis } from "@gent/core-internal/domain/message"
-import { toSlug, memoryPath, newFrontmatter } from "../../src/memory/state.js"
+import { toSlug, memoryPath, newFrontmatter } from "../../src/memory/tools.js"
 
 describe("toSlug", () => {
   test("lowercases and hyphenates", () => {
