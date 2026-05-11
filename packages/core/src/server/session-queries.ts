@@ -18,8 +18,6 @@ import type { GetSessionSnapshotInput } from "./transport-contract.js"
 
 export interface SessionQueriesService {
   readonly listSessions: () => Effect.Effect<ReadonlyArray<Session>, AppServiceError>
-  readonly getSession: (sessionId: SessionId) => Effect.Effect<Session | null, AppServiceError>
-  readonly getLastSessionByCwd: (cwd: string) => Effect.Effect<Session | null, AppServiceError>
   readonly getChildSessions: (
     parentSessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Session>, AppServiceError>
@@ -59,20 +57,6 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
 
       const listSessions = Effect.fn("SessionQueries.listSessions")(function* () {
         return yield* sessionStorage.listSessions()
-      })
-
-      const getSession = Effect.fn("SessionQueries.getSession")(function* (sessionId: SessionId) {
-        const session = yield* sessionStorage.getSession(sessionId)
-        if (session === undefined) return null
-        return session
-      })
-
-      const getLastSessionByCwd = Effect.fn("SessionQueries.getLastSessionByCwd")(function* (
-        cwd: string,
-      ) {
-        const session = yield* sessionStorage.getLastSessionByCwd(cwd)
-        if (session === undefined) return null
-        return session
       })
 
       const getChildSessions = Effect.fn("SessionQueries.getChildSessions")(function* (
@@ -180,8 +164,6 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
 
       return {
         listSessions,
-        getSession,
-        getLastSessionByCwd,
         getChildSessions,
         getSessionTree,
         listBranches: (sessionId) => branchStorage.listBranches(sessionId),

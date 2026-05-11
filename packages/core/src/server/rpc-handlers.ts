@@ -271,7 +271,8 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "session.list": () => queries.listSessions(),
 
-      "session.get": ({ sessionId }: SessionIdPayload) => queries.getSession(sessionId),
+      "session.get": ({ sessionId }: SessionIdPayload) =>
+        sessionStorage.getSession(sessionId).pipe(Effect.map((session) => session ?? null)),
 
       "session.delete": ({ sessionId }: SessionIdPayload) =>
         commands.deleteSession(sessionId).pipe(
