@@ -22,7 +22,6 @@ import {
   type CapabilityRef,
   type CapabilityError,
 } from "../capability.js"
-import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
 
 /**
@@ -43,7 +42,6 @@ export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabi
   readonly public: true
   readonly slash?: RequestInput<Input, Output>["slash"]
   readonly description?: string
-  readonly permissionRules?: ReadonlyArray<PermissionRule>
   readonly prompt?: PromptSection
   readonly input: Schema.Schema<Input>
   readonly output: Schema.Schema<Output>

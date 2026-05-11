@@ -94,7 +94,6 @@ export interface RequestCapability {
   readonly _tag: "request"
   readonly id: RpcId
   readonly prompt?: PromptSection
-  readonly permissionRules?: ReadonlyArray<PermissionRule>
   readonly input: unknown
   readonly output: unknown
   readonly effect: unknown

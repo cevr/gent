@@ -373,7 +373,8 @@ export const resolveExtensions = (
   // builtin denies.
   const permissionRules: PermissionRule[] = []
   for (const { capability: cap } of capabilityWinners.values()) {
-    const rules = isToolCapability(cap) ? getToolMetadata(cap).permissionRules : cap.permissionRules
+    if (!isToolCapability(cap)) continue
+    const rules = getToolMetadata(cap).permissionRules
     if (rules) permissionRules.push(...rules)
   }
   const slashCommands = compileSlashCommands(capabilityWinners)
