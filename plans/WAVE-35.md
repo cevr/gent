@@ -53,22 +53,50 @@ the highest-ROI P1s before the next independent audit may pass.
     (`agent-loop.actor.ts:632`). Make both reentrant and `QueueFollowUp`
     callers go through `ensureStarted`, or formalize the bypass as a typed
     distinct internal-only callback.
-  - **C7.3 — SUPERSEDED (dropped 2026-05-11).** The original framing
-    ("Persisted fire-forget silently drops delivery errors") is wrong on
-    two counts: (a) `ref.send` is `Effect.map(discardCall, …)` so delivery
-    errors _do_ propagate at runtime (they're only statically typed as
-    `never`); (b) `Steer.Interject` semantics are correctly fire-forget at
-    the actor-handler level — the caller needs to know the steering item
-    was _registered_ (handler-completion via `send` proves that), not that
-    the interjected turn has _run_. A `send + waitFor` switch deadlocks
-    against the gated-turn pattern used by
-    `"steer interject interrupts the active turn ahead of queued
-follow-ups"` (`tests/runtime/session-runtime.test.ts:848`), because
-    `waitFor` blocks on handler completion which can't fire until the
-    in-flight turn releases. Empirically validated: applied the change,
-    test timed out, reverted. Steer/Queue invariants verified:
-    `agent-loop.state.ts:202-220` (steering drains before followUp) +
-    `agent-loop.actor.ts:861-925` (only `applySteer` interrupts).
+  - **C7.3 — SUPERSEDED (dropped 2026-05-11).** Default `send + waitFor`
+    parity with `respondInteraction` is not justified. Three reasons,
+    in order of certainty:
+    1. **The original framing is wrong about delivery errors.**
+       `ref.send` is `Effect.map(discardCall, …)`
+       (`effect-encore/dist/actor.js:439-448`) and the static `send`
+       surface types mailbox/persistence errors
+       (`effect-encore/dist/actor.d.ts:195-208`). Mailbox/persistence
+       delivery failures _do_ propagate. They are not "silently
+       dropped".
+    2. **`waitFor` would deadlock the existing test.**
+       `"steer interject interrupts the active turn ahead of queued
+follow-ups"` (`tests/runtime/session-runtime.test.ts:848`)
+       submits "first" (gated, in-flight), enqueues "queued", then
+       calls `steer` _before_ releasing the gated provider. With
+       `send + waitFor`, `waitFor` blocks on actor-handler completion,
+       but `applySteer` runs through the mailbox after `ensureStarted`
+       and can sit behind the in-flight turn — the test would time out
+       before `controls.emitAll(0)` ever ran. Empirically validated:
+       applied, test timed out at 4s, reverted.
+    3. **`send` and `waitFor` give different acknowledgements; the
+       right one for Interject is `send`.** `send` confirms mailbox
+       enqueue + persistence; `waitFor` confirms the actor handler
+       ran to completion. `applySteer` handler-stage failures
+       (`ensureStarted` / `ensureTarget` / `markWrite` /
+       `appendSteering` / `interruptActiveStream`,
+       `agent-loop.actor.ts:861-925`) are _not_ surfaced to the
+       caller through the current `ref.send` path — they propagate
+       into the actor's error channel and are recovered/logged inside
+       the loop, not awaited by the steer call. That is acceptable
+       today because the steering outcome is observed downstream via
+       state and message polling (the test asserts on
+       `messageStorage.listMessages` ordering), but it is a real
+       semantic gap, not a non-issue. The right follow-up, if/when
+       needed, is a typed handler-completion ack on the public
+       `SessionRuntime.steer` surface, not a blind switch to
+       `waitFor`.
+
+    Steer/Queue invariants verified:
+    `agent-loop.state.ts:194-220` (steering drains before followUp) +
+    `agent-loop.actor.ts:861-925` (only `applySteer` calls
+    `interruptActiveStream`; `enqueueMessage` only appends to
+    `queue.followUp`).
+
 - **C8**: Convert STM-unsafe concurrent state to transactional primitives
   (L1-P1-2, P1-5, P1-6, P1-7):
   - **C8.1** `session-pubsub-registry.ts:29` — naked `Map` → `TxRef<HashMap>`
