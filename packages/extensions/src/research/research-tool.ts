@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import {
+  AgentDefinition,
   AgentName,
-  defineAgent,
   ExtensionContext,
   makeRunSpec,
   resolveDualModelPair,
@@ -21,7 +21,7 @@ Structure your findings clearly. Focus on the specific question asked.
 When comparing implementations, note patterns, tradeoffs, and design decisions.
 `.trim()
 
-const researchAgent = defineAgent({
+const researchAgent = AgentDefinition.make({
   name: AgentName.make("research-worker"),
   allowedTools: ["grep", "glob", "read", "memory_search"],
   systemPromptAddendum: RESEARCHER_PROMPT,

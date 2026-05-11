@@ -67,7 +67,6 @@ import type { ScheduledJobContribution } from "../domain/scheduled-job.js"
 // Tool execution receives params only; host authority is imported through the
 // constrained `ExtensionContext` service.
 export {
-  defineAgent,
   AgentDefinition,
   AgentName,
   DEFAULT_AGENT_NAME,

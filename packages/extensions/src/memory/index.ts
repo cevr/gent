@@ -14,8 +14,8 @@
 
 import { Effect } from "effect"
 import {
+  AgentDefinition,
   AgentName,
-  defineAgent,
   defineExtension,
   defineResource,
   ExtensionId,
@@ -65,7 +65,7 @@ After processing, summarize what you extracted and stored.
 
 const MEMORY_REFLECT_AGENT = AgentName.make("memory:reflect")
 
-const MemoryReflectAgent = defineAgent({
+const MemoryReflectAgent = AgentDefinition.make({
   name: MEMORY_REFLECT_AGENT,
   model: ModelId.make("anthropic/claude-sonnet-4-6"),
   description: "Review recent sessions and extract project-level memories",
@@ -101,7 +101,7 @@ Summarize: how many entries reviewed, merged, promoted, pruned.
 
 const MEMORY_MEDITATE_AGENT = AgentName.make("memory:meditate")
 
-const MemoryMeditateAgent = defineAgent({
+const MemoryMeditateAgent = AgentDefinition.make({
   name: MEMORY_MEDITATE_AGENT,
   model: ModelId.make("anthropic/claude-sonnet-4-6"),
   description: "Consolidate project memories, prune duplicates, promote to global principles",

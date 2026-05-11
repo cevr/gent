@@ -1,6 +1,6 @@
 import {
+  AgentDefinition,
   AgentName,
-  defineAgent,
   defineExtension,
   defineResource,
   ModelId,
@@ -18,7 +18,7 @@ Use read, grep, and glob tools to explore the code. Be precise — cite file pat
 - Always ground conclusions in specific file paths and line numbers.
 `.trim()
 
-export const librarian = defineAgent({
+export const librarian = AgentDefinition.make({
   name: AgentName.make("librarian"),
   description: "Answers questions about external repos using local cached clones",
   model: ModelId.make("openai/gpt-5.4-mini"),

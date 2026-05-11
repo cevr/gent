@@ -1,10 +1,10 @@
 import { Effect, Schema } from "effect"
 import {
+  AgentDefinition,
   AgentName,
   CapabilityError,
   ExtensionContext,
   ExtensionId,
-  defineAgent,
   defineExtension,
   makeRunSpec,
   request,
@@ -27,7 +27,7 @@ Answer the specific question asked. Cite file paths when referencing code.
 If you disagree with the current approach, say so and explain why.
 `.trim()
 
-const counselAgent = defineAgent({
+const counselAgent = AgentDefinition.make({
   name: AgentName.make("counsel-worker"),
 })
 

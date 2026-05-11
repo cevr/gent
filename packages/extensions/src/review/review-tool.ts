@@ -1,9 +1,9 @@
 import { Effect, Schema } from "effect"
 import {
+  AgentDefinition,
   AgentName,
   CapabilityError,
   DEFAULT_AGENT_NAME,
-  defineAgent,
   defineExtension,
   ExtensionId,
   ExtensionContext,
@@ -13,7 +13,6 @@ import {
   requireAgent,
   resolveDualModelPair,
   tool,
-  type AgentDefinition,
   type ToolCallId,
 } from "@gent/core/extensions/api"
 import { requireText, runCommand as runCommandBase } from "../workflow-helpers.js"
@@ -105,7 +104,7 @@ Flag backwards compat / legacy shims as architectural issues.
 Only output the JSON array, no other text.
 `.trim()
 
-const reviewAgent = defineAgent({
+const reviewAgent = AgentDefinition.make({
   name: AgentName.make("review-worker"),
   allowedTools: ["grep", "glob", "read", "memory_search"],
   systemPromptAddendum: REVIEW_AGENT_PROMPT,

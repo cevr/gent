@@ -20,7 +20,7 @@
 
 ## Extension Boundary
 
-- Author with `tool(...)`, `request(...)`, `defineResource(...)`, `reactions`, and `defineAgent(...)`
+- Author with `tool(...)`, `request(...)`, `defineResource(...)`, `reactions`, and `AgentDefinition.make(...)`
 - Slash command presentation lives on `request({ slash: { ... } })` — there is no separate `action(...)` factory
 - Do not reintroduce `query(...)`, `mutation(...)`, `action(...)`, generic `_kind` contribution unions, or flat `Contribution[]`
 - Prompt shaping, policy, and turn reactions belong to `reactions.turnProjection` and explicit runtime slots, not generic middleware APIs

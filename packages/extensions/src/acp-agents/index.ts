@@ -22,8 +22,8 @@ import { Clock, Context, Effect, Layer } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 
 import {
+  AgentDefinition,
   AgentName,
-  defineAgent,
   defineExtension,
   defineResource,
   ExtensionSetupContext,
@@ -101,14 +101,14 @@ class AcpAgentsDisposer extends Context.Service<
   { readonly _tag: "AcpAgentsDisposer" }
 >()("@gent/extensions/src/acp-agents/AcpAgentsDisposer") {}
 
-const claudeCodeAgent = defineAgent({
+const claudeCodeAgent = AgentDefinition.make({
   name: AgentName.make(CLAUDE_CODE_AGENT_NAME),
   description: "Claude Code via Claude Agent SDK",
   driver: ExternalDriverRef.make({ id: `acp-${CLAUDE_CODE_AGENT_NAME}` }),
 })
 
 const protocolAgents = Object.entries(ACP_PROTOCOL_AGENTS).map(([name, config]) =>
-  defineAgent({
+  AgentDefinition.make({
     name: AgentName.make(name),
     description: `${config.command} via ACP`,
     driver: ExternalDriverRef.make({ id: `acp-${name}` }),

@@ -1,11 +1,11 @@
 import { Effect, Schema } from "effect"
 import {
+  AgentDefinition,
   AgentName,
   CapabilityError,
   ExtensionContext,
   ExtensionId,
   ModelId,
-  defineAgent,
   defineExtension,
   request,
 } from "@gent/core/extensions/api"
@@ -25,7 +25,7 @@ Architect agent. Design implementation approach.
 - End with a sequenced implementation plan.
 `.trim()
 
-export const architect = defineAgent({
+export const architect = AgentDefinition.make({
   name: AgentName.make("architect"),
   description: "Designs implementation approaches",
   model: ModelId.make("anthropic/claude-opus-4-6"),

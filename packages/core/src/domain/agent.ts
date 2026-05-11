@@ -79,9 +79,6 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
 
 export type AgentDefinitionInput = ConstructorParameters<typeof AgentDefinition>[0]
 
-export const defineAgent = (input: AgentDefinitionInput): AgentDefinition =>
-  AgentDefinition.make(input)
-
 // Built-in agents and their prompts live in their owning extensions:
 // - @gent/agents (extensions/agents.ts): cowork, deepwork, explore, summarizer, title
 // - @gent/research (extensions/research/index.ts): architect
