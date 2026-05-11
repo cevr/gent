@@ -15,6 +15,7 @@ import { DEFAULT_MODEL_ID } from "../../src/domain/agent.js"
 import { MessageId, SessionId, BranchId } from "../../src/domain/ids.js"
 import { dateFromMillis, Message } from "../../src/domain/message.js"
 import { estimateContextPercent } from "../../src/domain/extension-session-helpers.js"
+import { estimateContextPercent as pureEstimateContextPercent } from "../../src/runtime/context-estimation.js"
 import { ExtensionContext, ExtensionServiceError } from "../../src/domain/extension-services.js"
 import { testToolContext } from "../../src/test-utils/index.js"
 
@@ -47,13 +48,16 @@ const contextLayerFromMessages = (messages: ReadonlyArray<Message>) => {
 describe("estimateContextPercent helper", () => {
   it.live("composes Session.listMessages with the pure estimator", () =>
     Effect.gen(function* () {
-      const messages = [textMessage("m1", "hello world".repeat(100))]
+      // Large fixture so the expected percent is strictly > 0; if the helper
+      // ever drops the listed messages and feeds [] into the pure estimator,
+      // it would return only the system-overhead floor and break equality.
+      const messages = [textMessage("m1", "hello world ".repeat(50_000))]
+      const expected = pureEstimateContextPercent(messages, DEFAULT_MODEL_ID)
+      expect(expected).toBeGreaterThan(0)
       const percent = yield* estimateContextPercent({ modelId: DEFAULT_MODEL_ID }).pipe(
         Effect.provide(contextLayerFromMessages(messages)),
       )
-      expect(typeof percent).toBe("number")
-      expect(percent).toBeGreaterThanOrEqual(0)
-      expect(percent).toBeLessThanOrEqual(100)
+      expect(percent).toBe(expected)
     }),
   )
 
