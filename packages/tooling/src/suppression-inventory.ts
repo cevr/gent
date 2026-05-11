@@ -359,8 +359,8 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "// @effect-diagnostics-next-line strictEffectProvide:off",
   },
   {
-    file: "packages/extensions/src/acp-agents/claude-code-auth.ts",
-    line: 53,
+    file: "packages/extensions/src/acp-agents/index.ts",
+    line: 89,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line strictEffectProvide:off",
   },
