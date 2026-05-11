@@ -8,6 +8,7 @@ import {
   defineExtension,
   makeRunSpec,
   request,
+  resolveDualModelPair,
   tool,
 } from "@gent/core/extensions/api"
 
@@ -76,7 +77,8 @@ export const CounselTool = tool({
     const ctx = yield* ExtensionContext
     const mode = params.mode ?? "standard"
     const agent = ctx.Agent
-    const [, modelB] = yield* agent.resolveDualModelPair()
+    const agents = yield* agent.listAgents()
+    const [, modelB] = yield* resolveDualModelPair(agents)
 
     const isDeep = mode === "deep"
     const prompt = buildCounselPrompt(params.prompt, params.context)

@@ -5,7 +5,6 @@ import { DelegateTool } from "../../src/delegate/delegate-tool.js"
 import {
   AgentName,
   AgentRunResult,
-  ModelId,
   SessionId,
   type ExtensionContextService,
 } from "@gent/core/extensions/api"
@@ -35,11 +34,7 @@ const makeCtx = (overrides: {
               agentName: AgentName.make("test"),
             }),
           )),
-      resolveDualModelPair: () =>
-        Effect.succeed([
-          ModelId.make("anthropic/claude-opus-4-6"),
-          ModelId.make("openai/gpt-5.4"),
-        ] as const),
+      listAgents: () => Effect.succeed(AllBuiltinAgents),
     },
   })
 

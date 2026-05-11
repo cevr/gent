@@ -1,8 +1,7 @@
 import { Context, Effect, type FileSystem, Layer, type Path, Schema } from "effect"
-import { resolveAgentModel, type AgentDefinition } from "../../domain/agent.js"
+import type { AgentDefinition } from "../../domain/agent.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../../domain/driver.js"
 import type { ExtensionId, RpcId } from "../../domain/ids.js"
-import type { ModelId } from "../../domain/model.js"
 import type {
   CapabilityCoreContext,
   CapabilityError,
@@ -509,10 +508,6 @@ export interface ExtensionRegistryService {
   readonly getAgent: (name: string) => Effect.Effect<AgentDefinition | undefined>
   readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
 
-  /** Resolve primary + reviewer model pair for dual-model workflows.
-   *  Tries cowork/deepwork by name, falls back to first two modeled agents, fails if none. */
-  readonly resolveDualModelPair: () => Effect.Effect<[ModelId, ModelId], ExtensionRegistryError>
-
   // Permission rules
   readonly listPermissionRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
 
@@ -549,35 +544,6 @@ export class ExtensionRegistry extends Context.Service<
       listPermissionRules: () => Effect.succeed(resolved.permissionRules),
       getAgent: (name) => Effect.succeed(resolved.agents.get(name)),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
-      resolveDualModelPair: () =>
-        Effect.gen(function* () {
-          const agents = [...resolved.agents.values()]
-          // 1. Name-based: cowork + deepwork (the standard dual-model pair)
-          const cowork = resolved.agents.get("cowork")
-          const deepwork = resolved.agents.get("deepwork")
-          if (cowork !== undefined && deepwork !== undefined) {
-            return [resolveAgentModel(cowork), resolveAgentModel(deepwork)] as [ModelId, ModelId]
-          }
-          // 3. Position-based fallback: first two modeled agents
-          const modeledAgents = agents.filter((agent) => agent.model !== undefined)
-          if (modeledAgents.length >= 2) {
-            const first = modeledAgents[0]
-            const second = modeledAgents[1]
-            if (first !== undefined && second !== undefined) {
-              return [resolveAgentModel(first), resolveAgentModel(second)] as [ModelId, ModelId]
-            }
-          }
-          if (modeledAgents.length === 1) {
-            const only = modeledAgents[0]
-            if (only !== undefined) {
-              return [resolveAgentModel(only), resolveAgentModel(only)] as [ModelId, ModelId]
-            }
-          }
-          return yield* registryFailure(
-            "resolveDualModelPair",
-            "No modeled agents registered — dual-model workflows require at least one agent with a model",
-          )
-        }),
       // Dynamic prompt sections are assembled per-turn by ExtensionReactions.
       // The sections here come from capability leaf `prompt`, all static. No more
       // per-section Effect resolution — return the array directly.

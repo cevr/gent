@@ -405,23 +405,6 @@ describe("ExtensionRegistry", () => {
       expect(agent?.name).toBe(AgentName.make("explore"))
     }),
   )
-  it.live("resolveDualModelPair fails with typed error when no modeled agents exist", () =>
-    Effect.gen(function* () {
-      const registry = yield* buildRegistry([])
-      const exit = yield* Effect.exit(registry.resolveDualModelPair())
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag !== "Failure") return
-      const error = Cause.findErrorOption(exit.cause)
-      expect(Option.isSome(error)).toBe(true)
-      if (!Option.isSome(error)) return
-      expect(Schema.is(ExtensionRegistryError)(error.value)).toBe(true)
-      if (!Schema.is(ExtensionRegistryError)(error.value)) return
-      expect(error.value.operation).toBe("resolveDualModelPair")
-      expect(error.value.message).toBe(
-        "No modeled agents registered — dual-model workflows require at least one agent with a model",
-      )
-    }),
-  )
   it.live("requireAgent fails with typed error when the agent is missing", () =>
     Effect.gen(function* () {
       const exit = yield* Effect.exit(requireAgent("missing"))

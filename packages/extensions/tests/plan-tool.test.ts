@@ -5,7 +5,6 @@ import {
   AgentName,
   AgentRunResult,
   BranchId,
-  ModelId,
   SessionId,
   ToolCallId,
   type ExtensionContextService,
@@ -55,11 +54,7 @@ const makeCtx = (overrides: {
         return agent !== undefined ? Effect.succeed(agent) : Effect.die(`Agent "${name}" not found`)
       },
       run: agentRun,
-      resolveDualModelPair: () =>
-        Effect.succeed([
-          ModelId.make("anthropic/claude-opus-4-6"),
-          ModelId.make("openai/gpt-5.4"),
-        ] as const),
+      listAgents: () => Effect.succeed(AllBuiltinAgents),
     },
     Session: {
       ...base.Session,

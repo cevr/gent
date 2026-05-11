@@ -5,7 +5,6 @@ import { ReviewTool } from "../../src/review/review-tool.js"
 import {
   AgentName,
   AgentRunResult,
-  ModelId,
   SessionId,
   type ExtensionContextService,
 } from "@gent/core/extensions/api"
@@ -33,11 +32,7 @@ const makeCtx = (overrides: {
         return agent !== undefined ? Effect.succeed(agent) : Effect.die(`Agent "${name}" not found`)
       },
       run: overrides.agentRun,
-      resolveDualModelPair: () =>
-        Effect.succeed([
-          ModelId.make("anthropic/claude-opus-4-6"),
-          ModelId.make("openai/gpt-5.4"),
-        ] as const),
+      listAgents: () => Effect.succeed(AllBuiltinAgents),
     },
     Interaction: {
       approve: dieStub("interaction.approve"),

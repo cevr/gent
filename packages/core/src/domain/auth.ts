@@ -24,6 +24,7 @@ import { KeyValueStore } from "effect/unstable/persistence"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 import { ProviderId, parseModelProvider } from "./model.js"
 import { AgentName, DriverRef, resolveAgentDriver, resolveAgentModel } from "./agent.js"
+import { resolveDualModelPair } from "./agent-pair.js"
 import { SessionId } from "./ids.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
@@ -257,7 +258,8 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
         const requiredProviders = Effect.fn("AuthGuard.requiredProviders")(function* (
           query: AuthProviderQuery = {},
         ) {
-          const modelPairExit = yield* Effect.exit(extensionRegistry.resolveDualModelPair())
+          const agents = yield* extensionRegistry.listAgents()
+          const modelPairExit = yield* Effect.exit(resolveDualModelPair(agents))
           const providers: ProviderId[] = []
           const seen = new Set<string>()
           const modelIds = Exit.isSuccess(modelPairExit) ? [...modelPairExit.value] : []

@@ -4,6 +4,7 @@ import {
   DEFAULT_AGENT_NAME,
   ExtensionContext,
   makeRunSpec,
+  resolveDualModelPair,
   tool,
   type AgentDefinition,
   type ToolCallId,
@@ -132,7 +133,8 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
   evaluatorFeedback?: string
 }) {
   const ctx = yield* ExtensionContext
-  const [modelA, modelB] = yield* ctx.Agent.resolveDualModelPair()
+  const agents = yield* ctx.Agent.listAgents()
+  const [modelA, modelB] = yield* resolveDualModelPair(agents)
 
   const runAgent = (prompt: string, modelId: typeof modelA) =>
     ctx.Agent.run({

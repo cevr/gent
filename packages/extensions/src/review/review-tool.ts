@@ -10,6 +10,7 @@ import {
   getDurableAgentRunSessionId,
   makeRunSpec,
   request,
+  resolveDualModelPair,
   tool,
   type AgentDefinition,
   type ToolCallId,
@@ -247,7 +248,8 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   description?: string
 }) {
   const ctx = yield* ExtensionContext
-  const [modelA, modelB] = yield* ctx.Agent.resolveDualModelPair()
+  const agents = yield* ctx.Agent.listAgents()
+  const [modelA, modelB] = yield* resolveDualModelPair(agents)
   const reviewPrompt = buildReviewPrompt(params.reviewInput, params.description)
   const reviewOverrides = {
     allowedTools: ["grep", "glob", "read", "memory_search"] as const,

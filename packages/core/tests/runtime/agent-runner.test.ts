@@ -23,7 +23,6 @@ import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { emptyQueueSnapshot } from "@gent/core-internal/domain/queue"
 import { dateFromMillis, Session, Branch, Message } from "@gent/core-internal/domain/message"
 import {
-  resolveAgentModel,
   AgentRunnerService,
   AgentRunError,
   AgentName,
@@ -242,24 +241,6 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
     }),
   )
 describe("RunSpec", () => {
-  it.live("dual model pair resolves to cowork and deepwork models", () => {
-    const registry = resolveExtensions([
-      {
-        manifest: { id: ExtensionId.make("agents") },
-        scope: "builtin",
-        sourcePath: "test",
-        contributions: { agents: AllBuiltinAgents },
-      },
-    ])
-    const impl = ExtensionRegistry.fromResolved(registry)
-    return Effect.gen(function* () {
-      const reg = yield* ExtensionRegistry
-      const [a, b] = yield* reg.resolveDualModelPair()
-      expect(a).toBe(resolveAgentModel(getBuiltinAgent("cowork")!))
-      expect(b).toBe(resolveAgentModel(getBuiltinAgent("deepwork")!))
-      expect(a).not.toBe(b)
-    }).pipe(Effect.timeout("4 seconds"), Effect.provide(impl))
-  })
   it.live("durable helper-agent runSpec reaches the provider through AgentRunner", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([

@@ -50,7 +50,7 @@ const baseDeps = (overrides: {
   } as MakeExtensionHostContextDeps["promptPresenter"],
   extensionRegistry: {
     getAgent: overrides.getAgent,
-    resolveDualModelPair: die("resolveDualModelPair"),
+    listAgents: die("listAgents"),
   } as unknown as MakeExtensionHostContextDeps["extensionRegistry"],
   sessionStorage: {
     getSession: die("getSession"),

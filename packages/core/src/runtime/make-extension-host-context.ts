@@ -458,6 +458,7 @@ export const makeExtensionHostContext = (
                   ),
             ),
           ),
+      listAgents: () => deps.extensionRegistry.listAgents(),
       run: (params) =>
         deps.agentRunner.run({
           agent: params.agent,
@@ -467,10 +468,6 @@ export const makeExtensionHostContext = (
           cwd: params.cwd ?? runInfo.sessionCwd ?? deps.platform.cwd,
           ...(params.runSpec !== undefined ? { runSpec: params.runSpec } : {}),
         }),
-      resolveDualModelPair: () =>
-        deps.extensionRegistry
-          .resolveDualModelPair()
-          .pipe(Effect.mapError(toHostError("agent.resolveDualModelPair"))),
     },
 
     session: {

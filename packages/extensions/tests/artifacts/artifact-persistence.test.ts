@@ -13,7 +13,6 @@ import { narrowR } from "../../../core/tests/helpers/effect"
 // call site for it.live compatibility.
 import {
   AgentRunResult,
-  ModelId,
   type AgentName,
   type ExtensionContextService,
 } from "@gent/core/extensions/api"
@@ -92,11 +91,7 @@ const agentLookup = {
     const agent = AllBuiltinAgents.find((a) => a.name === name)
     return agent !== undefined ? Effect.succeed(agent) : Effect.die(`Agent "${name}" not found`)
   },
-  resolveDualModelPair: () =>
-    Effect.succeed([
-      ModelId.make("anthropic/claude-opus-4-6"),
-      ModelId.make("openai/gpt-5.4"),
-    ] as const),
+  listAgents: () => Effect.succeed(AllBuiltinAgents),
 }
 
 const runtimeEnvironmentLayer = RuntimeEnvironment.Test({

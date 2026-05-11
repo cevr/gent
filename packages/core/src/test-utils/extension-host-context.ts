@@ -18,8 +18,8 @@ const die = (operation: string) =>
 const defaultAgent = (): ExtensionHostContext.Agent => ({
   get: () => die("agent.get"),
   require: () => die("agent.require"),
+  listAgents: () => die("agent.listAgents"),
   run: () => die("agent.run"),
-  resolveDualModelPair: () => die("agent.resolveDualModelPair"),
 })
 
 const defaultSession = (): ExtensionHostContext.SessionFacet => ({

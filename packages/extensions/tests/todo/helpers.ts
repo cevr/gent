@@ -55,7 +55,7 @@ export const makeCtx = Effect.gen(function* () {
             persistence: "ephemeral",
           }),
         ),
-      resolveDualModelPair: dieStub("agent.resolveDualModelPair"),
+      listAgents: dieStub("agent.listAgents"),
     },
   })
   return {

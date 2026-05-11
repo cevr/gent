@@ -86,6 +86,7 @@ export {
   AgentRunError,
   type RunSpec,
 } from "../domain/agent.js"
+export { resolveDualModelPair, NoModeledAgentsError } from "../domain/agent-pair.js"
 export {
   type GentExtension,
   type TurnProjection,

@@ -9,7 +9,6 @@ import type {
   InteractionPendingError,
 } from "./interaction-request"
 import type { Branch, Message, MessageMetadata, Session } from "./message"
-import type { ModelId } from "./model"
 
 export class ExtensionHostError extends Schema.TaggedErrorClass<ExtensionHostError>()(
   "ExtensionHostError",
@@ -57,7 +56,7 @@ export declare namespace ExtensionHostContext {
   interface ReadOnlyAgent {
     readonly get: Agent["get"]
     readonly require: Agent["require"]
-    readonly resolveDualModelPair: Agent["resolveDualModelPair"]
+    readonly listAgents: Agent["listAgents"]
   }
 
   interface ReadOnlySessionFacet {
@@ -72,6 +71,7 @@ export declare namespace ExtensionHostContext {
   interface Agent {
     readonly get: (name: AgentName) => Effect.Effect<AgentDefinition | undefined>
     readonly require: (name: AgentName) => Effect.Effect<AgentDefinition, ExtensionHostError>
+    readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
 
     readonly run: (params: {
       agent: AgentDefinition
@@ -79,11 +79,6 @@ export declare namespace ExtensionHostContext {
       cwd?: string
       runSpec?: RunSpec
     }) => Effect.Effect<AgentRunResult, AgentRunError>
-
-    readonly resolveDualModelPair: () => Effect.Effect<
-      readonly [ModelId, ModelId],
-      ExtensionHostError
-    >
   }
 
   interface SessionFacet {

@@ -14,7 +14,6 @@ import type { ApprovalDecision, ApprovalRequest } from "./interaction-request.js
 import { InteractionPendingError } from "./interaction-request.js"
 import type { BranchId, ExtensionId, SessionId, ToolCallId } from "./ids.js"
 import type { Branch, Message, MessageMetadata, Session } from "./message.js"
-import type { ModelId } from "./model.js"
 import type { ExtensionHostContext, ExtensionHostSearchResult } from "./extension-host-context.js"
 
 export class ExtensionServiceError extends Schema.TaggedErrorClass<ExtensionServiceError>()(
@@ -103,16 +102,13 @@ export interface ExtensionAgentService {
     name: AgentName,
   ) => Effect.Effect<AgentDefinition | undefined, ExtensionServiceError>
   readonly require: (name: AgentName) => Effect.Effect<AgentDefinition, ExtensionServiceError>
+  readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>, ExtensionServiceError>
   readonly run: (params: {
     readonly agent: AgentDefinition
     readonly prompt: string
     readonly cwd?: string
     readonly runSpec?: RunSpec
   }) => Effect.Effect<AgentRunResult, AgentRunError | ExtensionServiceError>
-  readonly resolveDualModelPair: () => Effect.Effect<
-    readonly [ModelId, ModelId],
-    ExtensionServiceError
-  >
 }
 
 export interface ExtensionInteractionService {
@@ -269,6 +265,7 @@ export const extensionServicesFromHostContext = (
     const Agent: ExtensionAgentService = {
       get: (name) => mapError("ExtensionAgent", "get", ctx.agent.get(name)),
       require: (name) => mapError("ExtensionAgent", "require", ctx.agent.require(name)),
+      listAgents: () => mapError("ExtensionAgent", "listAgents", ctx.agent.listAgents()),
       run: (params) =>
         ctx.agent.run(params).pipe(
           Effect.mapError((cause) =>
@@ -282,8 +279,6 @@ export const extensionServicesFromHostContext = (
                 }),
           ),
         ),
-      resolveDualModelPair: () =>
-        mapError("ExtensionAgent", "resolveDualModelPair", ctx.agent.resolveDualModelPair()),
     }
     const Interaction: ExtensionInteractionService = {
       approve: (params) => mapInteraction("approve", ctx.interaction.approve(params)),

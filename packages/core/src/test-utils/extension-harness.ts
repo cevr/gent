@@ -184,8 +184,8 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
   const agent = {
     get: dieStub("agent.get"),
     require: dieStub("agent.require"),
+    listAgents: dieStub("agent.listAgents"),
     run: dieStub("agent.run"),
-    resolveDualModelPair: dieStub("agent.resolveDualModelPair"),
   }
   const session = {
     listMessages: dieStub("session.listMessages"),

@@ -34,7 +34,7 @@ const makeCtx = (overrides: {
               agentName: params.agent.name,
             }),
           )),
-      resolveDualModelPair: dieStub("agent.resolveDualModelPair"),
+      listAgents: dieStub("agent.listAgents"),
     },
     Interaction: {
       approve: overrides.approve ?? dieStub("interaction.approve"),

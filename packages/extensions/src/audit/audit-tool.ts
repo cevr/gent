@@ -4,6 +4,7 @@ import {
   DEFAULT_AGENT_NAME,
   ExtensionContext,
   makeRunSpec,
+  resolveDualModelPair,
   tool,
   type AgentDefinition,
   type ToolCallId,
@@ -221,7 +222,8 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
   evaluatorFeedback?: string
 }) {
   const ctx = yield* ExtensionContext
-  const [primaryModel, reviewerModel] = yield* ctx.Agent.resolveDualModelPair()
+  const agents = yield* ctx.Agent.listAgents()
+  const [primaryModel, reviewerModel] = yield* resolveDualModelPair(agents)
   const auditOverrides = {
     allowedTools: ["grep", "glob", "read", "memory_search"] as const,
     deniedTools: ["bash"] as const,

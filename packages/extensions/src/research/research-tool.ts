@@ -4,6 +4,7 @@ import {
   defineAgent,
   ExtensionContext,
   makeRunSpec,
+  resolveDualModelPair,
   tool,
 } from "@gent/core/extensions/api"
 import { requireText } from "../workflow-helpers.js"
@@ -152,7 +153,8 @@ export const ResearchTool = tool({
     }
 
     // Multiple findings — synthesize with cross-vendor model
-    const [, modelB] = yield* agent.resolveDualModelPair()
+    const agents = yield* agent.listAgents()
+    const [, modelB] = yield* resolveDualModelPair(agents)
     const synthesisResult = yield* agent.run({
       agent: researchAgent,
       prompt: buildSynthesisPrompt(params.question, findings, params.focus),

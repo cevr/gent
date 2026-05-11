@@ -3,13 +3,9 @@ import { Effect } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
 import { CounselTool } from "../../src/counsel/counsel-tool.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import {
-  AgentRunResult,
-  ModelId,
-  SessionId,
-  type ExtensionContextService,
-} from "@gent/core/extensions/api"
+import { AgentRunResult, SessionId, type ExtensionContextService } from "@gent/core/extensions/api"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
 
 const makeCtx = (overrides: {
   agentRun: (
@@ -21,11 +17,7 @@ const makeCtx = (overrides: {
       get: () => Effect.void.pipe(Effect.as(undefined)),
       require: () => Effect.die("require not wired"),
       run: overrides.agentRun,
-      resolveDualModelPair: () =>
-        Effect.succeed([
-          ModelId.make("anthropic/claude-opus-4-6"),
-          ModelId.make("openai/gpt-5.4"),
-        ] as const),
+      listAgents: () => Effect.succeed(AllBuiltinAgents),
     },
   })
 

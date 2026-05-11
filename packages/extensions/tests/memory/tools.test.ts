@@ -45,7 +45,7 @@ const makeCtx = (cwd: string, home: string): ReturnType<typeof testToolContext> 
       get: dieStub("get"),
       require: dieStub("require"),
       run: dieStub("run"),
-      resolveDualModelPair: dieStub("resolveDualModelPair"),
+      listAgents: dieStub("listAgents"),
     },
     Session: {
       listMessages: dieStub("listMessages"),

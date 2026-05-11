@@ -3,16 +3,12 @@ import { Effect, FileSystem, Layer, Path } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
 import { ResearchTool } from "../../src/research/research-tool.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import {
-  AgentRunResult,
-  ModelId,
-  SessionId,
-  type ExtensionContextService,
-} from "@gent/core/extensions/api"
+import { AgentRunResult, SessionId, type ExtensionContextService } from "@gent/core/extensions/api"
 
 import { BunFileSystem } from "@effect/platform-bun"
 import { GitReader } from "../../src/librarian/index.js"
 import { getToolEffect } from "@gent/core-internal/domain/capability/tool"
+import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
 
 const TEST_HOME = "/tmp/test-research-fixture"
 
@@ -36,11 +32,7 @@ const makeCtx = (overrides: {
       get: () => Effect.void.pipe(Effect.as(undefined)),
       require: () => Effect.die("require not wired"),
       run: overrides.agentRun,
-      resolveDualModelPair: () =>
-        Effect.succeed([
-          ModelId.make("anthropic/claude-opus-4-6"),
-          ModelId.make("openai/gpt-5.4"),
-        ] as const),
+      listAgents: () => Effect.succeed(AllBuiltinAgents),
     },
   })
 
