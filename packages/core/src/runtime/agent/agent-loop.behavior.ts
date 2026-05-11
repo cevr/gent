@@ -317,8 +317,8 @@ export const makeAgentLoopBehavior = (
       >
     > => Effect.provideContext(effect, runtimeContext)
     const getPricing: PricingLookup = (modelId) =>
-      modelRegistryForRun.get(modelId).pipe(
-        Effect.map((m) => m?.pricing),
+      modelRegistryForRun.list().pipe(
+        Effect.map((models) => models.find((m) => m.id === modelId)?.pricing),
         Effect.catchEager(() =>
           Effect.sync(
             (): { readonly input: number; readonly output: number } | undefined => undefined,

@@ -121,9 +121,6 @@ const writeCachedModels = Effect.fn("ModelRegistry.writeCache")(
 
 export interface ModelRegistryService {
   readonly list: () => Effect.Effect<readonly Model[], DriverError | ProviderAuthError>
-  readonly get: (
-    modelId: ModelId,
-  ) => Effect.Effect<Model | undefined, DriverError | ProviderAuthError>
   readonly refresh: () => Effect.Effect<void>
 }
 
@@ -244,11 +241,6 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
 
       return ModelRegistry.of({
         list: () => load.pipe(Effect.provideContext(fsAndPathContext)),
-        get: (modelId) =>
-          load.pipe(
-            Effect.map((models) => models.find((m) => m.id === modelId)),
-            Effect.provideContext(fsAndPathContext),
-          ),
         refresh: () => refresh.pipe(Effect.provideContext(fsAndPathContext)),
       })
     }),
@@ -257,7 +249,6 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
   static Test = (models: readonly Model[] = []): Layer.Layer<ModelRegistry> =>
     Layer.succeed(ModelRegistry, {
       list: () => Effect.succeed(models),
-      get: (modelId) => Effect.succeed(models.find((m) => m.id === modelId)),
       refresh: () => Effect.void,
     })
 }
