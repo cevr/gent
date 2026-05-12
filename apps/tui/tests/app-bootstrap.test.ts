@@ -4,7 +4,7 @@ import { AgentName } from "@gent/core-internal/domain/agent"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { dateFromMillis } from "@gent/core-internal/domain/message"
 import { ProviderId } from "@gent/core-internal/domain/model"
-import { emptyQueueSnapshot, type GentRpcError } from "@gent/sdk"
+import { emptyQueueSnapshot, type GentClientRpcError } from "@gent/sdk"
 import {
   AppBootstrapError,
   resolveInitialState,
@@ -14,7 +14,7 @@ import {
 import { createMockClient } from "./render-harness-boundary"
 
 const expectAppBootstrapFailure = (
-  effect: Effect.Effect<unknown, AppBootstrapError | GentRpcError>,
+  effect: Effect.Effect<unknown, AppBootstrapError | GentClientRpcError>,
 ) =>
   Effect.gen(function* () {
     const exit = yield* Effect.exit(effect)

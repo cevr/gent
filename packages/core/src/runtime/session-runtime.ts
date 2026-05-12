@@ -122,7 +122,7 @@ export const InterruptPayload = Schema.Union([
   CancelInterruptPayload,
   InterruptTurnPayload,
   InterjectPayload,
-])
+]).pipe(Schema.toTaggedUnion("_tag"))
 export type InterruptPayload = typeof InterruptPayload.Type
 
 export const InvokeToolPayload = Schema.Struct({

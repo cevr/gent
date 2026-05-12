@@ -37,8 +37,7 @@ export {
   type ProviderSpec,
   type RpcHandlersContext,
   type GentRpcClient,
-  type GentRpcsClient,
-  type GentRpcError,
+  type GentClientRpcError,
   type GentClientBundle,
   type GentClientOptions,
 } from "./client.js"

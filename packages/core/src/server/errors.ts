@@ -5,7 +5,7 @@ import { ExtensionId } from "../domain/ids.js"
 import { InteractionRequestMismatchError } from "../domain/interaction-request.js"
 import { DriverError, ProviderAuthError } from "../domain/driver.js"
 import { ProviderError } from "../domain/provider-error.js"
-import { SessionRuntimeErrorSchema, type SessionRuntimeError } from "../runtime/session-runtime.js"
+import { SessionRuntimeErrorSchema } from "../runtime/session-runtime.js"
 import { StorageError } from "../storage/sqlite-storage.js"
 
 export { InvalidStateError, NotFoundError } from "../domain/business-errors.js"
@@ -36,21 +36,6 @@ export class PlatformErrorSchema extends Schema.TaggedErrorClass<PlatformErrorSc
   },
 ) {}
 
-export type GentRpcError =
-  | StorageError
-  | SessionRuntimeError
-  | ProviderError
-  | ProviderAuthError
-  | DriverError
-  | ExtensionProtocolError
-  | PlatformErrorSchema
-  | EventStoreError
-  | InteractionRequestMismatchError
-  | NotFoundError
-  | InvalidStateError
-
-export type AppServiceError = GentRpcError
-
 export const GentRpcError = Schema.Union([
   StorageError,
   SessionRuntimeErrorSchema,
@@ -63,4 +48,6 @@ export const GentRpcError = Schema.Union([
   InteractionRequestMismatchError,
   NotFoundError,
   InvalidStateError,
-])
+]).pipe(Schema.toTaggedUnion("_tag"))
+
+export type GentRpcError = typeof GentRpcError.Type

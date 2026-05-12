@@ -7,7 +7,6 @@ import {
   GentRpcs,
   type GentRpcClient,
   type GentRpcClientError,
-  type GentRpcsClient,
 } from "@gent/core-internal/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
 import {
@@ -101,8 +100,8 @@ export type { GentServer, GentServerOptions, StateSpec, ProviderSpec }
 
 // Re-export RPC types. SDK clients can fail with both server-declared RPC errors
 // and transport-level RpcClientError values from the Effect RPC client.
-export type { GentRpcClient, GentRpcClientError, GentRpcsClient }
-export type GentRpcError = GentRpcClientError
+export type { GentRpcClient, GentRpcClientError }
+export type GentClientRpcError = GentRpcClientError
 
 // ---------------------------------------------------------------------------
 // Utility functions (unchanged)

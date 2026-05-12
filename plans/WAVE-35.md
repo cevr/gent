@@ -88,11 +88,11 @@ follow-ups"` (`tests/runtime/session-runtime.test.ts:848`)
     `SessionRuntime.steer` surface, not a blind switch to
     `waitFor`.
 
-                            Steer/Queue invariants verified:
-                            `agent-loop.state.ts:194-220` (steering drains before followUp) +
-                            `agent-loop.actor.ts:861-925` (only `applySteer` calls
-                            `interruptActiveStream`; `enqueueMessage` only appends to
-                            `queue.followUp`).
+                                                                                                    Steer/Queue invariants verified:
+                                                                                                    `agent-loop.state.ts:194-220` (steering drains before followUp) +
+                                                                                                    `agent-loop.actor.ts:861-925` (only `applySteer` calls
+                                                                                                    `interruptActiveStream`; `enqueueMessage` only appends to
+                                                                                                    `queue.followUp`).
 
 - **C8**: Convert STM-unsafe concurrent state to transactional primitives
   (L1-P1-2, P1-5, P1-6, P1-7):

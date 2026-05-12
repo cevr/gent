@@ -16,12 +16,12 @@ import {
   defineResource,
   ExtensionSetupContext,
   getToolId,
-  publicSetupContext,
   type PublicExtensionSetupContext,
   request,
   tool,
   type GentExtension,
 } from "@gent/core/extensions/api"
+import { publicSetupContext } from "../../src/domain/extension-setup-context"
 import { validateExtensionPackageShape } from "../../src/domain/extension-package-shape"
 import { GentToolMetadataTag, getToolMetadata } from "@gent/core-internal/domain/capability/tool"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"

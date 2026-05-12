@@ -4,7 +4,7 @@ import { SessionId } from "@gent/core-internal/domain/ids.js"
 import type { ProviderId } from "@gent/core-internal/domain/model.js"
 import type {
   GentNamespacedClient,
-  GentRpcError,
+  GentClientRpcError,
   Branch,
   Session as DomainSession,
 } from "@gent/sdk"
@@ -88,7 +88,7 @@ export const toSession = (session: DomainSession): ClientSession | undefined => 
 const createAndLoadSession = (input: {
   client: Pick<GentNamespacedClient, "session">
   cwd: string
-}): Effect.Effect<DomainSession, GentRpcError | AppBootstrapError> =>
+}): Effect.Effect<DomainSession, GentClientRpcError | AppBootstrapError> =>
   Effect.gen(function* () {
     const requestId = yield* Random.nextUUIDv4
     const result = yield* input.client.session.create({
@@ -151,7 +151,7 @@ export const resolveInteractiveBootstrap = (input: {
   continue_: boolean
   prompt?: string
   debugMode: boolean
-}): Effect.Effect<InteractiveBootstrapResult, GentRpcError | AppBootstrapError> =>
+}): Effect.Effect<InteractiveBootstrapResult, GentClientRpcError | AppBootstrapError> =>
   Effect.gen(function* () {
     const state = yield* resolveInitialState({
       client: input.client,
@@ -184,7 +184,7 @@ export const resolveInteractiveBootstrap = (input: {
 const resolveSessionRuntimeAgent = (
   client: Pick<GentNamespacedClient, "session">,
   session: DomainSession,
-): Effect.Effect<AgentName | undefined, GentRpcError> => {
+): Effect.Effect<AgentName | undefined, GentClientRpcError> => {
   if (session.activeBranchId === undefined) return Effect.void.pipe(Effect.as(undefined))
   return client.session
     .getSnapshot({
@@ -198,7 +198,7 @@ export const resolveStartupAuthState = (input: {
   client: Pick<GentNamespacedClient, "auth" | "session">
   state: InitialState
   requestedAgent?: AgentName
-}): Effect.Effect<StartupAuthState, GentRpcError> =>
+}): Effect.Effect<StartupAuthState, GentClientRpcError> =>
   Effect.gen(function* () {
     if (input.state._tag === "branchPicker") {
       return {
@@ -244,7 +244,7 @@ export const resolveInitialState = (input: {
   headless: boolean
   prompt: Option.Option<string>
   promptArg: Option.Option<string>
-}): Effect.Effect<InitialState, GentRpcError | AppBootstrapError> =>
+}): Effect.Effect<InitialState, GentClientRpcError | AppBootstrapError> =>
   Effect.gen(function* () {
     const { client, cwd, session, continue_, headless, prompt, promptArg } = input
 

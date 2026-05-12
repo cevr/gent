@@ -1,4 +1,4 @@
-import type { GentRpcError } from "@gent/sdk"
+import type { GentClientRpcError } from "@gent/sdk"
 
 export interface ClientError {
   readonly _tag: "ClientError"
@@ -10,7 +10,7 @@ export const ClientError = (message: string): ClientError => ({
   message,
 })
 
-export type UiError = GentRpcError | ClientError
+export type UiError = GentClientRpcError | ClientError
 
 export const formatError = (error: UiError): string => {
   switch (error._tag) {

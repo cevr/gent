@@ -227,7 +227,6 @@ export type FieldSpec<A, R = never> =
 
 export {
   ExtensionSetupContext,
-  publicSetupContext,
   type PublicExtensionSetupContext,
 } from "../domain/extension-setup-context.js"
 

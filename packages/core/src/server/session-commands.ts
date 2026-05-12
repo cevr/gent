@@ -34,7 +34,7 @@ import * as AiError from "effect/unstable/ai/AiError"
 import { ProviderError } from "../domain/provider-error.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
-import { InvalidStateError, NotFoundError, type AppServiceError } from "./errors.js"
+import { InvalidStateError, NotFoundError, type GentRpcError } from "./errors.js"
 import type {
   CreateBranchInput,
   CreateSessionInput,
@@ -174,19 +174,17 @@ export type SessionCommandError = StorageError | EventStoreError | NotFoundError
 export interface SessionCommandsService {
   readonly createSession: (
     input: CreateSessionInput,
-  ) => Effect.Effect<CreateSessionResult, AppServiceError>
+  ) => Effect.Effect<CreateSessionResult, GentRpcError>
   readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, SessionCommandError>
   readonly createBranch: (
     input: CreateBranchInput,
-  ) => Effect.Effect<CreateBranchResult, AppServiceError>
-  readonly switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, AppServiceError>
-  readonly forkBranch: (
-    input: ForkBranchInput,
-  ) => Effect.Effect<CreateBranchResult, AppServiceError>
-  readonly sendMessage: (input: SendMessageInput) => Effect.Effect<void, AppServiceError>
+  ) => Effect.Effect<CreateBranchResult, GentRpcError>
+  readonly switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, GentRpcError>
+  readonly forkBranch: (input: ForkBranchInput) => Effect.Effect<CreateBranchResult, GentRpcError>
+  readonly sendMessage: (input: SendMessageInput) => Effect.Effect<void, GentRpcError>
   readonly updateSessionReasoningLevel: (
     input: UpdateSessionReasoningLevelInput,
-  ) => Effect.Effect<UpdateSessionReasoningLevelResult, AppServiceError>
+  ) => Effect.Effect<UpdateSessionReasoningLevelResult, GentRpcError>
 }
 
 const makeSessionMutationsService: Effect.Effect<
@@ -680,25 +678,26 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const dedupCreateSession = yield* makeRequestDeduper<
         CreateSessionInput,
         CreateSessionResult,
-        AppServiceError
+        GentRpcError
       >({ body: (input) => doCreateSession(input), keyOf: (input) => input.requestId })
-      const dedupSendMessage = yield* makeRequestDeduper<SendMessageInput, void, AppServiceError>({
+      const dedupSendMessage = yield* makeRequestDeduper<SendMessageInput, void, GentRpcError>({
         body: (input) => doSendMessage(input),
         keyOf: (input) => input.requestId,
       })
       const dedupCreateBranch = yield* makeRequestDeduper<
         CreateBranchInput,
         CreateBranchResult,
-        AppServiceError
+        GentRpcError
       >({ body: (input) => doCreateBranch(input), keyOf: (input) => input.requestId })
       const dedupForkBranch = yield* makeRequestDeduper<
         ForkBranchInput,
         CreateBranchResult,
-        AppServiceError
+        GentRpcError
       >({ body: (input) => doForkBranch(input), keyOf: (input) => input.requestId })
-      const dedupSwitchBranch = yield* makeRequestDeduper<SwitchBranchInput, void, AppServiceError>(
-        { body: (input) => doSwitchBranch(input), keyOf: (input) => input.requestId },
-      )
+      const dedupSwitchBranch = yield* makeRequestDeduper<SwitchBranchInput, void, GentRpcError>({
+        body: (input) => doSwitchBranch(input),
+        keyOf: (input) => input.requestId,
+      })
 
       const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
         branchId: BranchId,
@@ -761,7 +760,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
       const createSession: (
         input: CreateSessionInput,
-      ) => Effect.Effect<CreateSessionResult, AppServiceError> = Effect.fn(
+      ) => Effect.Effect<CreateSessionResult, GentRpcError> = Effect.fn(
         "SessionCommands.createSession",
       )(function* (input: CreateSessionInput) {
         return yield* dedupCreateSession(input)
@@ -900,7 +899,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         })
       })
 
-      const switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, AppServiceError> =
+      const switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, GentRpcError> =
         Effect.fn("SessionCommands.switchBranch")(function* (input: SwitchBranchInput) {
           yield* dedupSwitchBranch(input)
         })
@@ -937,7 +936,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
       const forkBranch: (
         input: ForkBranchInput,
-      ) => Effect.Effect<CreateBranchResult, AppServiceError> = Effect.fn(
+      ) => Effect.Effect<CreateBranchResult, GentRpcError> = Effect.fn(
         "SessionCommands.forkBranch",
       )(function* (input: ForkBranchInput) {
         return yield* dedupForkBranch(input)
@@ -955,10 +954,11 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         })
       })
 
-      const sendMessage: (input: SendMessageInput) => Effect.Effect<void, AppServiceError> =
-        Effect.fn("SessionCommands.sendMessage")(function* (input: SendMessageInput) {
-          yield* dedupSendMessage(input)
-        })
+      const sendMessage: (input: SendMessageInput) => Effect.Effect<void, GentRpcError> = Effect.fn(
+        "SessionCommands.sendMessage",
+      )(function* (input: SendMessageInput) {
+        yield* dedupSendMessage(input)
+      })
 
       const doSendMessage = Effect.fn("SessionCommands.doSendMessage")(function* (
         input: SendMessageInput,

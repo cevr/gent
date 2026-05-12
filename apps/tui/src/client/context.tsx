@@ -35,7 +35,7 @@ import type {
   ConnectionState,
   GentNamespacedClient,
   GentRuntime,
-  GentRpcError,
+  GentClientRpcError,
   Message,
   QueueSnapshot,
   SessionSnapshot,
@@ -140,18 +140,18 @@ export interface ClientSessionValue {
   clearSession: () => void
   updateSessionReasoningLevel: (
     reasoningLevel: ReasoningEffort | undefined,
-  ) => Effect.Effect<void, GentRpcError>
+  ) => Effect.Effect<void, GentClientRpcError>
 
   // Sync data fetching helpers (return Effects for caller to run)
-  listMessages: () => Effect.Effect<readonly Message[], GentRpcError>
-  listSessions: () => Effect.Effect<readonly DomainSession[], GentRpcError>
-  listBranches: () => Effect.Effect<readonly Branch[], GentRpcError>
-  createBranch: (name?: string) => Effect.Effect<BranchId, GentRpcError>
-  getBranchTree: () => Effect.Effect<readonly BranchTreeNode[], GentRpcError>
-  getSessionTree: (sessionId: SessionId) => Effect.Effect<SessionTreeNode, GentRpcError>
-  forkBranch: (messageId: MessageId, name?: string) => Effect.Effect<BranchId, GentRpcError>
-  drainQueuedMessages: () => Effect.Effect<QueueSnapshot, GentRpcError>
-  getQueuedMessages: () => Effect.Effect<QueueSnapshot, GentRpcError>
+  listMessages: () => Effect.Effect<readonly Message[], GentClientRpcError>
+  listSessions: () => Effect.Effect<readonly DomainSession[], GentClientRpcError>
+  listBranches: () => Effect.Effect<readonly Branch[], GentClientRpcError>
+  createBranch: (name?: string) => Effect.Effect<BranchId, GentClientRpcError>
+  getBranchTree: () => Effect.Effect<readonly BranchTreeNode[], GentClientRpcError>
+  getSessionTree: (sessionId: SessionId) => Effect.Effect<SessionTreeNode, GentClientRpcError>
+  forkBranch: (messageId: MessageId, name?: string) => Effect.Effect<BranchId, GentClientRpcError>
+  drainQueuedMessages: () => Effect.Effect<QueueSnapshot, GentClientRpcError>
+  getQueuedMessages: () => Effect.Effect<QueueSnapshot, GentClientRpcError>
 
   // Branch navigation (fire-and-forget)
   switchBranch: (branchId: BranchId, summarize?: boolean) => void

@@ -5,7 +5,7 @@ import { EventPublisher } from "../domain/event-publisher.js"
 import { InteractionRequestMismatchError } from "../domain/interaction-request.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import type { BranchId, InteractionRequestId, SessionId } from "../domain/ids.js"
-import type { AppServiceError } from "./errors.js"
+import type { GentRpcError } from "./errors.js"
 import type { BranchStorage } from "../storage/branch-storage.js"
 import type { SessionStorage } from "../storage/session-storage.js"
 import { resolveExistingSessionBranch } from "../runtime/session-runtime-context.js"
@@ -19,7 +19,7 @@ export interface RespondInteractionInput {
 }
 
 export interface InteractionCommandsService {
-  readonly respond: (input: RespondInteractionInput) => Effect.Effect<void, AppServiceError>
+  readonly respond: (input: RespondInteractionInput) => Effect.Effect<void, GentRpcError>
 }
 
 export class InteractionCommands extends Context.Service<

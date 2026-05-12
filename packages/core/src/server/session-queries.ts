@@ -10,7 +10,7 @@ import { MessageStorage } from "../storage/message-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { makeStorageTransaction } from "../storage/sqlite-storage.js"
-import { NotFoundError, type AppServiceError } from "./errors.js"
+import { NotFoundError, type GentRpcError } from "./errors.js"
 import { SessionRuntime, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
 import { SessionSnapshot } from "./transport-contract.js"
 import type { GetSessionSnapshotInput } from "./transport-contract.js"
@@ -18,10 +18,10 @@ import type { GetSessionSnapshotInput } from "./transport-contract.js"
 export interface SessionQueriesService {
   readonly getSessionTree: (
     rootSessionId: SessionId,
-  ) => Effect.Effect<SessionTreeNode, AppServiceError>
+  ) => Effect.Effect<SessionTreeNode, GentRpcError>
   readonly getSessionSnapshot: (
     input: GetSessionSnapshotInput,
-  ) => Effect.Effect<SessionSnapshot, AppServiceError>
+  ) => Effect.Effect<SessionSnapshot, GentRpcError>
 }
 
 export class SessionQueries extends Context.Service<SessionQueries, SessionQueriesService>()(
@@ -40,7 +40,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
 
       const buildSessionTreeNode = (
         session: Session,
-      ): Effect.Effect<SessionTreeNode, AppServiceError> =>
+      ): Effect.Effect<SessionTreeNode, GentRpcError> =>
         Effect.gen(function* () {
           const children = yield* relationshipStorage.getChildSessions(session.id)
           return {

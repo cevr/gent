@@ -2,7 +2,7 @@
 export {
   type GentNamespacedClient,
   type GentRuntime,
-  type GentRpcError,
+  type GentClientRpcError,
   type Message,
   type Session as DomainSession,
   type Branch,
