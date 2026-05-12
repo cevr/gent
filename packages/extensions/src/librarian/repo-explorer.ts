@@ -110,24 +110,32 @@ export class GitReader extends Context.Service<GitReader, GitReaderService>()(
         const credential = yield* resolveCredential(remote.url())
         yield* Effect.tryPromise({
           try: () =>
-            remote
-              .fetch(["refs/heads/*:refs/remotes/origin/*"], {
-                fetch: { credential },
-              })
-              .then(() => {
-                const headOid = repo.revparseSingle("origin/HEAD")
-                const headCommit = repo.getCommit(headOid)
-                repo.setHeadDetached(headCommit)
-                repo.checkoutHead({ force: true })
-              }),
+            remote.fetch(["refs/heads/*:refs/remotes/origin/*"], {
+              fetch: { credential },
+            }),
           catch: (e) => new GitReaderError({ message: String(e), operation: "fetch", cause: e }),
+        })
+        yield* Effect.try({
+          try: () => {
+            const headOid = repo.revparseSingle("origin/HEAD")
+            const headCommit = repo.getCommit(headOid)
+            repo.setHeadDetached(headCommit)
+            repo.checkoutHead({ force: true })
+          },
+          catch: (e) =>
+            new GitReaderError({ message: String(e), operation: "fetch.checkout", cause: e }),
         })
       }),
 
     listFiles: (repoPath, ref) =>
-      Effect.tryPromise({
-        try: () =>
-          esGit.openRepository(repoPath).then((repo) => {
+      Effect.gen(function* () {
+        const repo = yield* Effect.tryPromise({
+          try: () => esGit.openRepository(repoPath),
+          catch: (e) =>
+            new GitReaderError({ message: String(e), operation: "listFiles.open", cause: e }),
+        })
+        return yield* Effect.try({
+          try: () => {
             const oid = repo.revparseSingle(ref ?? "HEAD")
             const commit = repo.getCommit(oid)
             const files: string[] = []
@@ -144,8 +152,10 @@ export class GitReader extends Context.Service<GitReader, GitReaderService>()(
             }
             walk(commit.tree(), "")
             return files
-          }),
-        catch: (e) => new GitReaderError({ message: String(e), operation: "listFiles", cause: e }),
+          },
+          catch: (e) =>
+            new GitReaderError({ message: String(e), operation: "listFiles", cause: e }),
+        })
       }),
 
     readFile: (repoPath, filePath, ref) =>

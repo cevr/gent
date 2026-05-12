@@ -280,17 +280,16 @@ const provideExtensionServicesIfAvailable = <A, E, R>(
 const compileRpcRegistry = (
   entries: ReadonlyArray<RegisteredCapabilityEntry>,
 ): CompiledRpcRegistry => ({
-  run: (extensionId, capabilityId, input, ctx) =>
-    Effect.gen(function* () {
-      const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)
-      if (entry === undefined || entry.kind !== "rpc") {
-        return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
-      }
-      return yield* provideExtensionServicesIfAvailable(
-        ctx,
-        runExtensionCapability(extensionId, capabilityId, entry.capability, input),
-      )
-    }),
+  run: Effect.fn("CompiledRpcRegistry.run")(function* (extensionId, capabilityId, input, ctx) {
+    const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)
+    if (entry === undefined || entry.kind !== "rpc") {
+      return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
+    }
+    return yield* provideExtensionServicesIfAvailable(
+      ctx,
+      runExtensionCapability(extensionId, capabilityId, entry.capability, input),
+    )
+  }),
 })
 
 const sortExtensionsByScope = (

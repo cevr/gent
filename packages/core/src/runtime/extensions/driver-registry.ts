@@ -68,45 +68,47 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
       getExternal: (id) => Effect.succeed(resolved.externalDrivers.get(id)),
       listModels: () => Effect.succeed([...resolved.modelDrivers.values()]),
       listExternal: () => Effect.succeed([...resolved.externalDrivers.values()]),
-      filterModelCatalog: (baseCatalog, resolveAuth) =>
-        Effect.gen(function* () {
-          let catalog = baseCatalog
-          for (const driver of resolved.modelDrivers.values()) {
-            if (driver.listModels === undefined) continue
-            const auth = resolveAuth !== undefined ? yield* resolveAuth(driver.id) : undefined
-            const nextCatalog = driver.listModels(catalog, auth)
-            const decoded = decodeModelCatalog(nextCatalog)
-            if (decoded._tag === "None") {
-              return yield* new DriverError({
-                driver: DriverFailureRef.cases.model.make({ id: driver.id }),
-                reason: `Model driver "${driver.id}" returned an invalid model catalog`,
-              })
-            }
-            catalog = decoded.value
-          }
-          return catalog
-        }),
-      requireModel: (id) =>
-        Effect.gen(function* () {
-          const found = resolved.modelDrivers.get(id)
-          if (found === undefined) {
+      filterModelCatalog: Effect.fn("DriverRegistry.filterModelCatalog")(function* (
+        baseCatalog: ReadonlyArray<Model>,
+        resolveAuth?: (
+          driverId: string,
+        ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
+      ) {
+        let catalog = baseCatalog
+        for (const driver of resolved.modelDrivers.values()) {
+          if (driver.listModels === undefined) continue
+          const auth = resolveAuth !== undefined ? yield* resolveAuth(driver.id) : undefined
+          const nextCatalog = driver.listModels(catalog, auth)
+          const decoded = decodeModelCatalog(nextCatalog)
+          if (decoded._tag === "None") {
             return yield* new DriverError({
-              driver: DriverFailureRef.cases.model.make({ id }),
-              reason: `No model driver registered for id "${id}"`,
+              driver: DriverFailureRef.cases.model.make({ id: driver.id }),
+              reason: `Model driver "${driver.id}" returned an invalid model catalog`,
             })
           }
-          return found
-        }),
-      requireExternal: (id) =>
-        Effect.gen(function* () {
-          const found = resolved.externalDrivers.get(id)
-          if (found === undefined) {
-            return yield* new DriverError({
-              driver: DriverFailureRef.cases.external.make({ id }),
-              reason: `No external driver registered for id "${id}"`,
-            })
-          }
-          return found
-        }),
+          catalog = decoded.value
+        }
+        return catalog
+      }),
+      requireModel: Effect.fn("DriverRegistry.requireModel")(function* (id: string) {
+        const found = resolved.modelDrivers.get(id)
+        if (found === undefined) {
+          return yield* new DriverError({
+            driver: DriverFailureRef.cases.model.make({ id }),
+            reason: `No model driver registered for id "${id}"`,
+          })
+        }
+        return found
+      }),
+      requireExternal: Effect.fn("DriverRegistry.requireExternal")(function* (id: string) {
+        const found = resolved.externalDrivers.get(id)
+        if (found === undefined) {
+          return yield* new DriverError({
+            driver: DriverFailureRef.cases.external.make({ id }),
+            reason: `No external driver registered for id "${id}"`,
+          })
+        }
+        return found
+      }),
     })
 }
