@@ -15,7 +15,7 @@ import { ExtensionContext, getToolId, tool, type ToolCapability } from "@gent/co
 import { Permission } from "@gent/core-internal/domain/permission"
 import { EventStore } from "@gent/core-internal/domain/event"
 import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
-import { ApprovalService } from "../../src/runtime/approval-service"
+import { ApprovalService } from "../../../src/runtime/approval-service"
 import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { RecordingEventStore, SequenceRecorder } from "@gent/core-internal/test-utils"
@@ -26,13 +26,13 @@ import {
   SessionId,
   ToolCallId,
 } from "@gent/core-internal/domain/ids"
-import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
-import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
-import { ModelRegistry } from "../../src/runtime/model-registry"
-import { GentPlatform } from "../../src/runtime/gent-platform"
-import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
-import { ConfigService } from "../../src/runtime/config-service"
-import { ToolRunner } from "../../src/runtime/agent/tool-runner"
+import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
+import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
+import { ModelRegistry } from "../../../src/runtime/model-registry"
+import { GentPlatform } from "../../../src/runtime/gent-platform"
+import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
+import { ConfigService } from "../../../src/runtime/config-service"
+import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import {
   makeAgentLoopService,
@@ -42,7 +42,7 @@ import {
   runAgentLoop,
   steerAgentLoop,
   waitForPhase,
-} from "./agent-loop/helpers"
+} from "./helpers"
 
 describe("interaction", () => {
   const intSessionId = SessionId.make("s-interaction")

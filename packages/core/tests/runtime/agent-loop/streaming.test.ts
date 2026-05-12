@@ -4,13 +4,13 @@ import { Clock, Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import * as AiError from "effect/unstable/ai/AiError"
-import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
-import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
-import { ModelRegistry } from "../../src/runtime/model-registry"
-import { GentPlatform } from "../../src/runtime/gent-platform"
-import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
-import { ConfigService } from "../../src/runtime/config-service"
-import { ToolRunner } from "../../src/runtime/agent/tool-runner"
+import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
+import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
+import { ModelRegistry } from "../../../src/runtime/model-registry"
+import { GentPlatform } from "../../../src/runtime/gent-platform"
+import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
+import { ConfigService } from "../../../src/runtime/config-service"
+import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import {
   finishPart,
   LanguageModelLayers,
@@ -33,7 +33,7 @@ import { SequenceRecorder } from "@gent/core-internal/test-utils"
 import { emptyQueueSnapshot } from "@gent/core-internal/domain/queue"
 import { AgentName } from "@gent/core-internal/domain/agent"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
-import { assistantMessageIdForTurn } from "../../src/runtime/agent/agent-loop.utils"
+import { assistantMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
 import {
   makeAgentLoopService,
   makeExtRegistry,
@@ -46,7 +46,7 @@ import {
   runAgentLoop,
   scriptedProvider,
   steerAgentLoop,
-} from "./agent-loop/helpers"
+} from "./helpers"
 
 describe("run completion", () => {
   it.live("run returns after a fast turn completes before the caller awaits idle", () =>

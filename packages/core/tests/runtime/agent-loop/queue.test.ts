@@ -15,13 +15,13 @@ import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import { ActorCommandId, BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
-import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
-import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
-import { ModelRegistry } from "../../src/runtime/model-registry"
-import { GentPlatform } from "../../src/runtime/gent-platform"
-import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
-import { ConfigService } from "../../src/runtime/config-service"
-import { ToolRunner } from "../../src/runtime/agent/tool-runner"
+import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
+import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
+import { ModelRegistry } from "../../../src/runtime/model-registry"
+import { GentPlatform } from "../../../src/runtime/gent-platform"
+import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
+import { ConfigService } from "../../../src/runtime/config-service"
+import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import {
   makeAgentLoopService,
@@ -29,20 +29,20 @@ import {
   submitAgentLoop,
   waitFor,
   waitForPhase,
-} from "./agent-loop/helpers"
+} from "./helpers"
 import {
   LoopQueueState,
   type LoopQueueState as LoopQueueStateType,
-} from "../../src/runtime/agent/agent-loop.state"
-import { AgentLoopQueueStorage } from "../../src/storage/agent-loop-queue-storage"
-import { StorageError } from "../../src/domain/storage-error"
+} from "../../../src/runtime/agent/agent-loop.state"
+import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
+import { StorageError } from "../../../src/domain/storage-error"
 import { ensureStorageParents } from "@gent/core-internal/test-utils"
 import {
   assistantMessageIdForCommand,
   toolCallIdForCommand,
   toolResultMessageIdForCommand,
   toolResultMessageIdForToolCall,
-} from "../../src/runtime/agent/agent-loop.utils"
+} from "../../../src/runtime/agent/agent-loop.utils"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })
