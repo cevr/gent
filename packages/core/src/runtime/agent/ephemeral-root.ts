@@ -25,6 +25,7 @@ import { buildExtensionLayers } from "../profile.js"
 import { PromptPresenterLive } from "../prompt-presenter-live.js"
 import { RuntimeEnvironment } from "../runtime-environment.js"
 import { SessionRuntime } from "../session-runtime.js"
+import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { ToolRunner } from "./tool-runner.js"
 
 export interface EphemeralAgentRootConfig {
@@ -51,6 +52,7 @@ type EphemeralOverrideProvides =
   | ApprovalService
   | PromptPresenter
   | ToolRunner
+  | AgentLoopSessionGovernance
   | SessionRuntime
 
 type EphemeralExtensionRequires =
@@ -73,6 +75,7 @@ interface EphemeralRuntimeOverrides {
   readonly approval: Layer.Layer<ApprovalService, never, never>
   readonly promptPresenter: Layer.Layer<PromptPresenter, never, never>
   readonly toolRunner: Layer.Layer<ToolRunner, never, never>
+  readonly sessionGovernance: Layer.Layer<AgentLoopSessionGovernance, never, never>
   readonly sessionRuntime: Layer.Layer<SessionRuntime, EphemeralOverrideError, never>
 }
 
@@ -95,6 +98,7 @@ const composeEphemeralRuntimeLayer = <Provides>(params: {
     params.overrides.approval,
     params.overrides.promptPresenter,
     params.overrides.toolRunner,
+    params.overrides.sessionGovernance,
     params.overrides.sessionRuntime,
   )
 
@@ -193,6 +197,7 @@ export const makeEphemeralAgentRootLayer = (params: {
     ToolRunner.Live,
     Layer.mergeAll(approvalLayer, extensionLayers, parentRuntimeEnvironmentLayer),
   )
+  const sessionGovernanceLayer = AgentLoopSessionGovernance.Live
   const sessionRuntimeLayer = SessionRuntime.Live({
     baseSections: params.config.baseSections ?? [],
   }).pipe(
@@ -207,6 +212,7 @@ export const makeEphemeralAgentRootLayer = (params: {
           parentModelResolverLayer,
           parentConfigLayer,
           parentModelRegistryLayer,
+          sessionGovernanceLayer,
           parentGentPlatformLayer,
         ),
         storageLayer,
@@ -223,6 +229,7 @@ export const makeEphemeralAgentRootLayer = (params: {
       approval: approvalLayer,
       promptPresenter: promptPresenterLayer,
       toolRunner: toolRunnerLayer,
+      sessionGovernance: sessionGovernanceLayer,
       sessionRuntime: sessionRuntimeLayer,
     },
     extensionLayers,

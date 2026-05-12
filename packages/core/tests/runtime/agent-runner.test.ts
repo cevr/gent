@@ -15,6 +15,7 @@ import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-runner"
+import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { makeEphemeralAgentRootLayer } from "../../src/runtime/agent/ephemeral-root"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
@@ -158,6 +159,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<LanguageModel.Langu
     ConfigService.Test(),
     ModelRegistry.Test(),
     ephemeralParentDeps,
+    AgentLoopSessionGovernance.Live,
   )
   const sessionRuntimeLayer = Layer.provide(
     SessionRuntime.Live({ baseSections: [] }),
@@ -231,7 +233,6 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
           }),
         watchState: () => Effect.succeed(SubscriptionRef.changes(runtimeState)),
         terminateSession: () => Effect.void,
-        restoreSession: () => Effect.void,
       } satisfies SessionRuntimeService
     }),
   )

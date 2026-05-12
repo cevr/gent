@@ -12,6 +12,7 @@ import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-mod
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
 import { GentPlatform } from "../../src/runtime/gent-platform"
+import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { SessionRuntimeError } from "../../src/runtime/session-runtime"
 import { makeRequestDeduper, SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
@@ -38,6 +39,7 @@ describe("requestId idempotency", () => {
       sessionRuntimeLayer(),
       EventStore.Memory,
       EventPublisher.Test(),
+      AgentLoopSessionGovernance.Live,
       LanguageModelLayers.debug(),
       ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
       GentPlatform.Test(),
@@ -120,6 +122,7 @@ describe("requestId idempotency", () => {
         countingRuntime,
         EventStore.Memory,
         EventPublisher.Test(),
+        AgentLoopSessionGovernance.Live,
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         GentPlatform.Test(),
@@ -171,6 +174,7 @@ describe("requestId idempotency", () => {
         countingRuntime,
         EventStore.Memory,
         EventPublisher.Test(),
+        AgentLoopSessionGovernance.Live,
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         GentPlatform.Test(),
@@ -691,6 +695,7 @@ describe("requestId idempotency", () => {
           runtimeLayer,
           EventStore.Memory,
           EventPublisher.Test(),
+          AgentLoopSessionGovernance.Live,
           LanguageModelLayers.debug(),
           ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
           GentPlatform.Test(),

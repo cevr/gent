@@ -15,6 +15,7 @@ import {
   SessionRuntimeError,
   type SessionRuntimeService,
 } from "../../../src/runtime/session-runtime"
+import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { SessionCommands } from "../../../src/server/session-commands"
 import {
   BranchStorage,
@@ -84,7 +85,6 @@ export const sessionRuntimeLayer = (
       }),
     watchState: () => Effect.succeed(Stream.empty),
     terminateSession: () => Effect.void,
-    restoreSession: () => Effect.void,
     ...overrides,
   })
 
@@ -93,6 +93,7 @@ export const failingSessionCommandsLayer = () => {
   const deps = Layer.mergeAll(
     storageLayer,
     sessionRuntimeLayer(),
+    sessionGovernanceProbeLayer(),
     EventStore.Memory,
     failingPublisherLayer,
     LanguageModelLayers.debug(),
@@ -136,6 +137,7 @@ export const sendFailingSessionCommandsLayer = () => {
   const deps = Layer.mergeAll(
     storageLayer,
     failingRuntimeLayer,
+    sessionGovernanceProbeLayer(),
     EventStore.Memory,
     EventPublisher.Test(),
     LanguageModelLayers.debug(),
@@ -153,6 +155,7 @@ export const sessionCommandsLayer = () => {
   const deps = Layer.mergeAll(
     storageLayer,
     sessionRuntimeLayer(),
+    sessionGovernanceProbeLayer(),
     EventStore.Memory,
     EventPublisher.Test(),
     LanguageModelLayers.debug(),
@@ -165,19 +168,22 @@ export const sessionCommandsLayer = () => {
   )
 }
 
-export const sessionRuntimeProbeLayer = (
-  terminated: Array<SessionId>,
-  restored?: Array<SessionId>,
-) =>
+export const sessionRuntimeProbeLayer = (terminated: Array<SessionId>) =>
   sessionRuntimeLayer({
     terminateSession: (sessionId) =>
       Effect.sync(() => {
         terminated.push(sessionId)
       }),
-    restoreSession: (sessionId) =>
+  })
+
+const sessionGovernanceProbeLayer = (restored?: Array<SessionId>) =>
+  Layer.succeed(AgentLoopSessionGovernance, {
+    markTerminated: () => Effect.void,
+    clearTerminated: (_workspaceId, sessionId) =>
       Effect.sync(() => {
         restored?.push(sessionId)
       }),
+    isTerminated: () => Effect.succeed(false),
   })
 
 export const sessionCommandsLayerWithMachineProbe = (
@@ -189,7 +195,8 @@ export const sessionCommandsLayerWithMachineProbe = (
     storageLayer,
     runtimeTerminated === undefined
       ? sessionRuntimeLayer()
-      : sessionRuntimeProbeLayer(runtimeTerminated, runtimeRestored),
+      : sessionRuntimeProbeLayer(runtimeTerminated),
+    sessionGovernanceProbeLayer(runtimeRestored),
     EventStore.Memory,
     EventPublisher.Test(),
     LanguageModelLayers.debug(),
@@ -208,6 +215,7 @@ export const sessionMutationsLayerWithMachineProbe = (runtimeTerminated: Array<S
   const deps = Layer.mergeAll(
     storageLayer,
     runtimeLayer,
+    sessionGovernanceProbeLayer(),
     EventStore.Memory,
     EventPublisher.Test(),
     LanguageModelLayers.debug(),
@@ -235,7 +243,8 @@ export const failingDeleteSessionCommandsLayerWithMachineProbe = (
   const deps = Layer.mergeAll(
     storageLayer,
     failingSessionStorageLayer,
-    sessionRuntimeProbeLayer(runtimeTerminated, runtimeRestored),
+    sessionRuntimeProbeLayer(runtimeTerminated),
+    sessionGovernanceProbeLayer(runtimeRestored),
     EventStore.Memory,
     EventPublisher.Test(),
     LanguageModelLayers.debug(),
@@ -299,6 +308,7 @@ export const racySessionCommandsLayer = (params: {
     storageLayer,
     racingSessionStorageLayer,
     sessionRuntimeProbeLayer(params.runtimeTerminated),
+    sessionGovernanceProbeLayer(),
     EventStore.Memory,
     EventPublisher.Test(),
     LanguageModelLayers.debug(),

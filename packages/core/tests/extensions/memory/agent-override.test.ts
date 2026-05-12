@@ -13,6 +13,7 @@ import { textStep } from "@gent/core-internal/debug/provider"
 import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
 import { SessionCommands } from "../../../src/server/session-commands"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
+import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
@@ -74,6 +75,7 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMode
     GentPlatform.Test(),
     Permission.Test(),
     SessionProfileCache.Test(),
+    AgentLoopSessionGovernance.Live,
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   const sessionRuntimeLayer = Layer.provide(

@@ -287,10 +287,17 @@ const RpcHandlers = GentRpcs.toLayer(
       "session.getChildren": ({ parentSessionId }: ParentSessionPayload) =>
         relationshipStorage.getChildSessions(parentSessionId),
 
-      "session.getTree": ({ sessionId }: SessionIdPayload) => queries.getSessionTree(sessionId),
+      "session.getTree": ({ sessionId }: SessionIdPayload) =>
+        queries.getSessionTree(sessionId).pipe(
+          Effect.tap(() => WideEvent.set({ sessionId })),
+          withWideEvent(rpcBoundary("session.getTree")),
+        ),
 
       "session.getSnapshot": ({ sessionId, branchId }: GetSessionSnapshotInput) =>
-        queries.getSessionSnapshot({ sessionId, branchId }),
+        queries.getSessionSnapshot({ sessionId, branchId }).pipe(
+          Effect.tap(() => WideEvent.set({ sessionId, branchId })),
+          withWideEvent(rpcBoundary("session.getSnapshot")),
+        ),
 
       "session.updateReasoningLevel": ({
         sessionId,

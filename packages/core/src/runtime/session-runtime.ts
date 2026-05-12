@@ -182,6 +182,7 @@ type SessionRuntimeLayerRequirements =
   | ModelResolver
   | ToolRunner
   | ConfigService
+  | AgentLoopSessionGovernance
   | ChildProcessSpawner
   | Scope.Scope
 
@@ -208,7 +209,6 @@ export interface SessionRuntimeService {
     input: SessionRuntimeTarget,
   ) => Effect.Effect<Stream.Stream<SessionRuntimeState, SessionRuntimeError>, SessionRuntimeError>
   readonly terminateSession: (sessionId: SessionId) => Effect.Effect<void, SessionRuntimeError>
-  readonly restoreSession: (sessionId: SessionId) => Effect.Effect<void, SessionRuntimeError>
 }
 
 const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
@@ -597,16 +597,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         Effect.catchCause((cause) => Effect.fail(wrapError("respondInteraction failed", cause))),
       ),
 
-    runPrompt: (input: RunPromptInput) =>
-      runPromptThroughActor(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new AgentRunError({
-              message: cause.message,
-              cause,
-            }),
-        ),
-      ),
+    runPrompt: (input: RunPromptInput) => runPromptThroughActor(input),
 
     queueFollowUp: (input) =>
       requireSessionBranch(input).pipe(
@@ -718,12 +709,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       }).pipe(
         Effect.catchCause((cause) => Effect.fail(wrapError("terminateSession failed", cause))),
       ),
-
-    restoreSession: (sessionId) =>
-      Effect.gen(function* () {
-        const workspaceId = yield* CurrentWorkspaceId
-        yield* agentLoopSessionGovernance.clearTerminated(workspaceId, sessionId)
-      }),
   } satisfies SessionRuntimeService
 })
 
@@ -738,10 +723,6 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       // captures actor clients, but the AgentLoop entity manager must remain
       // scoped for those clients to make progress.
       Layer.provideMerge(AgentLoopLiveActor(config)),
-      // `AgentLoopSessionGovernance` is a runtime-internal shared service.
-      // Encore owns actor state registration; session governance remains a
-      // Gent policy boundary shared by the facade and actor handler.
-      Layer.provideMerge(AgentLoopSessionGovernance.Live),
     )
     return live as Layer.Layer<SessionRuntime, never, SessionRuntimeLayerRequirements>
   }

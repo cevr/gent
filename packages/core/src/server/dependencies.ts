@@ -19,6 +19,7 @@ import { ProviderAuth } from "../providers/provider-auth.js"
 import { DebugSlowLanguageModelDelayMs, LanguageModelLayers } from "../test-utils/language-model.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InProcessRunner, SubprocessRunner } from "../runtime/agent/agent-runner.js"
+import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-governance.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
@@ -413,6 +414,7 @@ export const createDependencies = (config: DependenciesConfig) => {
       Layer.provide(modelRegistryLive, FetchHttpClient.layer),
       extensionRegistryLive,
       fileLockServiceLive,
+      AgentLoopSessionGovernance.Live,
       modelResolverLive,
       ...optionalPermissionLayer(config.overrides?.permissionLayer),
       makeFileIndexLayer(config.overrides?.fileIndexLayer, runtimeEnvironmentLive),

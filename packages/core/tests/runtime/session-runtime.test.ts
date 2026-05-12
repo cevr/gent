@@ -33,6 +33,7 @@ import {
 } from "@gent/core-internal/test-utils"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ApprovalService } from "../../src/runtime/approval-service"
+import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import {
   ActorCommandId,
   BranchId,
@@ -116,6 +117,7 @@ const makeRuntimeLayer = (
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
+    AgentLoopSessionGovernance.Live,
   )
   const baseDeps =
     profileCacheLayer === undefined
@@ -158,6 +160,7 @@ const makeRuntimeLayerWithEventPublisher = (
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
+    AgentLoopSessionGovernance.Live,
   )
   const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, baseDeps)
   const sessionRuntimeLayer = Layer.provide(
@@ -202,6 +205,7 @@ const makeLiveToolRuntimeLayer = (
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
+    AgentLoopSessionGovernance.Live,
   )
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)

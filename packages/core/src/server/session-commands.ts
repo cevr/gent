@@ -33,7 +33,9 @@ import { toPrompt } from "../providers/ai-transcript.js"
 import * as AiError from "effect/unstable/ai/AiError"
 import { ProviderError } from "../domain/provider-error.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
+import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-governance.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
+import { CurrentWorkspaceId } from "./workspace-rpc.js"
 import { InvalidStateError, NotFoundError, type GentRpcError } from "./errors.js"
 import type {
   CreateBranchInput,
@@ -149,8 +151,9 @@ const cleanupSessionRuntimeState = Effect.fn("SessionCommands.cleanupSessionRunt
 
 const restoreSessionRuntimeState = Effect.fn("SessionCommands.restoreSessionRuntimeState")(
   function* (sessionId: SessionId) {
-    const sessionRuntime = yield* SessionRuntime
-    yield* sessionRuntime.restoreSession(sessionId).pipe(Effect.orDie)
+    const governance = yield* AgentLoopSessionGovernance
+    const workspaceId = yield* CurrentWorkspaceId
+    yield* governance.clearTerminated(workspaceId, sessionId).pipe(Effect.orDie)
   },
 )
 
@@ -199,6 +202,7 @@ const makeSessionMutationsService: Effect.Effect<
   | RelationshipStorage
   | SessionOperationStorage
   | SessionRuntime
+  | AgentLoopSessionGovernance
   | GentPlatform
 > = Effect.gen(function* () {
   const storageTransaction = yield* makeStorageTransaction
@@ -209,7 +213,9 @@ const makeSessionMutationsService: Effect.Effect<
   const sessionOperationStorage = yield* SessionOperationStorage
   const eventPublisher = yield* EventPublisher
   const platform = yield* GentPlatform
-  const sessionRuntimeContext = yield* Effect.context<SessionRuntime | EventStore>()
+  const sessionRuntimeContext = yield* Effect.context<
+    SessionRuntime | EventStore | AgentLoopSessionGovernance
+  >()
 
   const transactWithEvent = <A, E, R>(
     mutation: Effect.Effect<A, E, R>,
