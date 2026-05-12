@@ -4,7 +4,10 @@ import { type AgentName as AgentNameType } from "../../domain/agent.js"
 import { type BranchId, type MessageId, type SessionId, ToolCallId } from "../../domain/ids.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { MessageStorage } from "../../storage/message-storage.js"
-import { CurrentExtensionHostContext } from "./current-extension-host-context.js"
+import {
+  CurrentExtensionHostContext,
+  provideCurrentHostCtx,
+} from "./current-extension-host-context.js"
 import { ToolRunner } from "./tool-runner"
 import { persistAssistantParts, persistToolParts } from "./turn-persistence.js"
 
@@ -52,6 +55,7 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
                   toolCallId: ToolCallId.make(toolCall.id),
                 }),
             ),
+            provideCurrentHostCtx(ctx),
           )
       }),
     { concurrency: Math.max(1, TOOL_CONCURRENCY) },

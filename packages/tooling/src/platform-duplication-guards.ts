@@ -137,6 +137,10 @@ const bannedAgentRunnerCompositionPatterns: ReadonlyArray<BannedPattern> = [
   },
 ]
 
+const withEffectWrapperDefinitionPattern = /\b(?:export\s+)?const\s+with[A-Z][A-Za-z0-9_]*\b/
+const withEffectWrapperMessage =
+  "`withX(effect, ...)` wrapper helpers are banned; expose a pipeable provider and call it from `.pipe(...)`"
+
 const hostFactPatternSources = new Set([
   "\\bprocess\\.(?:platform|pid|execPath|kill)\\b",
   "\\bos\\.(?:hostname|homedir|release)\\s*\\(",
@@ -281,6 +285,12 @@ export const findPlatformDuplicationViolations = (
   const lines = text.split("\n")
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index] ?? ""
+    if (withEffectWrapperDefinitionPattern.test(line)) {
+      const declarationWindow = lines.slice(index, index + 8).join("\n")
+      if (declarationWindow.includes("effect: Effect.Effect")) {
+        findings.push({ file, line: index + 1, message: withEffectWrapperMessage })
+      }
+    }
     for (const { pattern, message } of patterns) {
       if (pattern.test(line)) {
         findings.push({ file, line: index + 1, message })

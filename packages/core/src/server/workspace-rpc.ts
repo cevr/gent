@@ -32,28 +32,27 @@ export const validateWorkspaceId = (
         }),
       )
 
-export const withWorkspaceIdHeader = <A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-  headers: Headers.Headers,
-): Effect.Effect<A, E | WorkspaceHeaderError, R> =>
-  Option.match(Headers.get(headers, WORKSPACE_ID_HEADER), {
-    onNone: () =>
-      Effect.fail(
-        new WorkspaceHeaderError({
-          message: `Missing ${WORKSPACE_ID_HEADER} header`,
-        }),
-      ),
-    onSome: (workspaceId) =>
-      validateWorkspaceId(workspaceId).pipe(
-        Effect.andThen((valid) => Effect.provideService(effect, CurrentWorkspaceId, valid)),
-      ),
-  })
+export const provideWorkspaceIdHeader =
+  (headers: Headers.Headers) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E | WorkspaceHeaderError, R> =>
+    Option.match(Headers.get(headers, WORKSPACE_ID_HEADER), {
+      onNone: () =>
+        Effect.fail(
+          new WorkspaceHeaderError({
+            message: `Missing ${WORKSPACE_ID_HEADER} header`,
+          }),
+        ),
+      onSome: (workspaceId) =>
+        validateWorkspaceId(workspaceId).pipe(
+          Effect.andThen((valid) => Effect.provideService(effect, CurrentWorkspaceId, valid)),
+        ),
+    })
 
 export class WorkspaceRpcMiddleware extends RpcMiddleware.Service<WorkspaceRpcMiddleware>()(
   "@gent/core/src/server/workspace-rpc/WorkspaceRpcMiddleware",
   { error: WorkspaceHeaderError },
 ) {
   static Live = Layer.succeed(WorkspaceRpcMiddleware, (effect, options) =>
-    withWorkspaceIdHeader(effect, options.headers),
+    effect.pipe(provideWorkspaceIdHeader(options.headers)),
   )
 }

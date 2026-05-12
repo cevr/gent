@@ -37,7 +37,7 @@ import {
 } from "./agent-runner.durable.js"
 import { runEphemeralAgent } from "./agent-runner.ephemeral.js"
 import { loadAgentRunSuccessData, saveAgentRunOutput } from "./agent-runner.metadata.js"
-import { normalizeRunSpec, withAgentRunFailureHandling } from "./agent-runner.run-spec.js"
+import { normalizeRunSpec, handleAgentRunFailure } from "./agent-runner.run-spec.js"
 export type { AgentRunnerConfig } from "./agent-runner.config.js"
 export { getSessionDepth } from "./agent-runner.durable.js"
 
@@ -228,18 +228,19 @@ export const InProcessRunner = (
                   return AgentRunResult.cases.success.make({ ...success, savedPath })
                 }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
 
-                return withAgentRunFailureHandling(
-                  run,
-                  {
-                    parentSessionId: params.parentSessionId,
-                    parentBranchId: params.parentBranchId,
-                    toolCallId,
-                    sessionId,
-                    agentName: params.agent.name,
-                    persistence,
-                    spanName: "AgentRunner.inProcess",
-                  },
-                  publishAgentRunFailed,
+                return run.pipe(
+                  handleAgentRunFailure(
+                    {
+                      parentSessionId: params.parentSessionId,
+                      parentBranchId: params.parentBranchId,
+                      toolCallId,
+                      sessionId,
+                      agentName: params.agent.name,
+                      persistence,
+                      spanName: "AgentRunner.inProcess",
+                    },
+                    publishAgentRunFailed,
+                  ),
                 )
               }),
               Effect.catchCause(handleUnexpectedFailure),
@@ -449,18 +450,19 @@ export const SubprocessRunner = (
                 return AgentRunResult.cases.success.make({ ...success, savedPath })
               }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
 
-              return withAgentRunFailureHandling(
-                run,
-                {
-                  parentSessionId: params.parentSessionId,
-                  parentBranchId: params.parentBranchId,
-                  toolCallId,
-                  sessionId,
-                  agentName: params.agent.name,
-                  persistence,
-                  spanName: "AgentRunner.subprocess",
-                },
-                publishAgentRunFailed,
+              return run.pipe(
+                handleAgentRunFailure(
+                  {
+                    parentSessionId: params.parentSessionId,
+                    parentBranchId: params.parentBranchId,
+                    toolCallId,
+                    sessionId,
+                    agentName: params.agent.name,
+                    persistence,
+                    spanName: "AgentRunner.subprocess",
+                  },
+                  publishAgentRunFailed,
+                ),
               )
             }),
             Effect.catchCause((cause) => {

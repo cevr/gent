@@ -47,7 +47,7 @@ import {
   publishAgentRunSucceeded,
 } from "./agent-runner.durable.js"
 import { loadAgentRunSuccessData, saveAgentRunOutput } from "./agent-runner.metadata.js"
-import { withAgentRunFailureHandling } from "./agent-runner.run-spec.js"
+import { handleAgentRunFailure } from "./agent-runner.run-spec.js"
 import { makeEphemeralAgentRootLayer } from "./ephemeral-root.js"
 
 const reparentEphemeralChildEvent = (
@@ -323,17 +323,19 @@ export const runEphemeralAgent = (params: {
     })
   }).pipe(withWideEvent(agentRunBoundary(params.agentName, params.parentSessionId)))
 
-  return withAgentRunFailureHandling(
-    run,
-    {
-      parentSessionId: params.parentSessionId,
-      parentBranchId: params.parentBranchId,
-      toolCallId: params.toolCallId,
-      sessionId,
-      agentName: params.agentName,
-      persistence: params.persistence,
-      spanName: "AgentRunner.inProcess.ephemeral",
-    },
-    publishAgentRunFailed,
-  ).pipe(Effect.catchCause(handleUnexpectedFailure))
+  return run.pipe(
+    handleAgentRunFailure(
+      {
+        parentSessionId: params.parentSessionId,
+        parentBranchId: params.parentBranchId,
+        toolCallId: params.toolCallId,
+        sessionId,
+        agentName: params.agentName,
+        persistence: params.persistence,
+        spanName: "AgentRunner.inProcess.ephemeral",
+      },
+      publishAgentRunFailed,
+    ),
+    Effect.catchCause(handleUnexpectedFailure),
+  )
 }

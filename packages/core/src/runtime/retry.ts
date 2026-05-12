@@ -102,8 +102,8 @@ export const getRetryAfter = (error: unknown, nowMs = 0): number | undefined => 
   return undefined
 }
 
-// Calculate delay for attempt — private. `withRetry` is the only consumer;
-// unit coverage flows through `withRetry({ onRetry })` reporting the
+// Calculate delay for attempt — private. `retryProviderCall` is the only consumer;
+// unit coverage flows through `retryProviderCall({ onRetry })` reporting the
 // computed delay (see retry-progress test).
 
 const getRetryDelay = (
@@ -139,49 +139,52 @@ export interface RetryAttemptInfo {
 
 type ProviderOrAuthError = ProviderError | ProviderAuthError
 
-export const withRetry = <A, R, R2 = never>(
-  effect: Effect.Effect<A, ProviderOrAuthError, R>,
-  config: RetryConfig = DEFAULT_RETRY_CONFIG,
-  options?: {
-    readonly onRetry?: (info: RetryAttemptInfo) => Effect.Effect<void, never, R2>
-  },
-): Effect.Effect<A, ProviderOrAuthError, R | R2> => {
-  // meta.attempt is 1-indexed: 1 after first failure, 2 after second, etc.
-  // Allow retries while attempt < maxAttempts (i.e. maxAttempts-1 retries total)
-  const schedule = Schedule.fromStepWithMetadata<
-    ProviderOrAuthError,
-    number,
-    R2,
-    never,
-    never,
-    never
-  >(
-    Effect.succeed((meta: Schedule.InputMetadata<ProviderOrAuthError>) => {
-      if (meta.attempt >= config.maxAttempts) {
-        return Cause.done(meta.attempt)
-      }
-      if (!Schema.is(ProviderError)(meta.input)) {
-        return Cause.done(meta.attempt)
-      }
-      const error = meta.input
-      return Effect.gen(function* () {
-        const nowMs = yield* Clock.currentTimeMillis
-        const delayMs = getRetryDelay(meta.attempt - 1, error, nowMs, config)
-        if (options?.onRetry !== undefined) {
-          yield* options.onRetry({
-            attempt: meta.attempt,
-            maxAttempts: config.maxAttempts,
-            delayMs,
-            error,
-          })
+export const retryProviderCall =
+  <R2 = never>(
+    config: RetryConfig = DEFAULT_RETRY_CONFIG,
+    options?: {
+      readonly onRetry?: (info: RetryAttemptInfo) => Effect.Effect<void, never, R2>
+    },
+  ): (<A, R>(
+    effect: Effect.Effect<A, ProviderOrAuthError, R>,
+  ) => Effect.Effect<A, ProviderOrAuthError, R | R2>) =>
+  <A, R>(effect: Effect.Effect<A, ProviderOrAuthError, R>) => {
+    // meta.attempt is 1-indexed: 1 after first failure, 2 after second, etc.
+    // Allow retries while attempt < maxAttempts (i.e. maxAttempts-1 retries total)
+    const schedule = Schedule.fromStepWithMetadata<
+      ProviderOrAuthError,
+      number,
+      R2,
+      never,
+      never,
+      never
+    >(
+      Effect.succeed((meta: Schedule.InputMetadata<ProviderOrAuthError>) => {
+        if (meta.attempt >= config.maxAttempts) {
+          return Cause.done(meta.attempt)
         }
-        return [meta.attempt, Duration.millis(delayMs)] as [number, Duration.Duration]
-      })
-    }),
-  )
+        if (!Schema.is(ProviderError)(meta.input)) {
+          return Cause.done(meta.attempt)
+        }
+        const error = meta.input
+        return Effect.gen(function* () {
+          const nowMs = yield* Clock.currentTimeMillis
+          const delayMs = getRetryDelay(meta.attempt - 1, error, nowMs, config)
+          if (options?.onRetry !== undefined) {
+            yield* options.onRetry({
+              attempt: meta.attempt,
+              maxAttempts: config.maxAttempts,
+              delayMs,
+              error,
+            })
+          }
+          return [meta.attempt, Duration.millis(delayMs)] as [number, Duration.Duration]
+        })
+      }),
+    )
 
-  return Effect.retry(effect, {
-    schedule,
-    while: (error) => isRetryable(error),
-  }).pipe(Effect.withSpan("withRetry"))
-}
+    return Effect.retry(effect, {
+      schedule,
+      while: (error) => isRetryable(error),
+    }).pipe(Effect.withSpan("provider.retry"))
+  }

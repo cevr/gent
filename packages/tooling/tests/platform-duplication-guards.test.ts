@@ -61,6 +61,39 @@ describe("platform duplication guards", () => {
     ])
   })
 
+  test("flags withX effect wrapper helpers", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        [
+          "export const withThing = <A, E, R>(",
+          "  effect: Effect.Effect<A, E, R>,",
+          "  value: string,",
+          ") => effect.pipe(Effect.annotateLogs({ value }))",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 1,
+        message:
+          "`withX(effect, ...)` wrapper helpers are banned; expose a pipeable provider and call it from `.pipe(...)`",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        [
+          "export const provideThing =",
+          "  (value: string) =>",
+          "  <A, E, R>(effect: Effect.Effect<A, E, R>) =>",
+          "    effect.pipe(Effect.annotateLogs({ value }))",
+        ].join("\n"),
+      ),
+    ).toEqual([])
+  })
+
   test("flags deleted public actor rpc path", () => {
     expect(findPlatformDuplicationViolations("packages/core/src/server/rpcs/actor.ts", "")).toEqual(
       [

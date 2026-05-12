@@ -322,7 +322,7 @@ export function ensureStorageParents(input: {
 export {
   createE2ELayer,
   type E2ELayerConfig,
-  withTinyContextWindow,
+  provideTinyContextWindow,
   trackingApprovalService,
 } from "./e2e-layer.js"
 

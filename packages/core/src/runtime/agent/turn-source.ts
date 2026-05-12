@@ -12,12 +12,12 @@ import { toPrompt } from "../../providers/ai-transcript.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
-import { withRetry } from "../retry"
+import { retryProviderCall } from "../retry"
 import { AllowAllPermission } from "../session-runtime-context.js"
 import { providerStreamBoundary, WideEvent, withWideEvent } from "../wide-event-boundary"
 import {
   CurrentExtensionHostContext,
-  withCurrentHostCtx,
+  provideCurrentHostCtx,
 } from "./current-extension-host-context.js"
 import { convertTools, ToolRunner } from "./tool-runner"
 import {
@@ -108,20 +108,19 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
         abortSignal: params.activeStream.abortSignal,
         hostCtx,
         runTool: (toolName, args) =>
-          withCurrentHostCtx(
-            hostCtx,
-            Effect.gen(function* () {
-              const toolCallId = ToolCallId.make(yield* Random.nextUUIDv4)
-              return yield* toolRunner
-                .run({ toolCallId, toolName, input: args }, { ...hostCtx, toolCallId })
-                .pipe(
-                  Effect.provideService(ExtensionRegistry, extensionRegistry),
-                  Effect.provideService(Permission, permission),
-                  Effect.provideService(EventPublisher, eventPublisher),
-                  Effect.orDie,
-                )
-            }),
-          ),
+          Effect.gen(function* () {
+            const toolCallId = ToolCallId.make(yield* Random.nextUUIDv4)
+            const toolHostCtx = { ...hostCtx, toolCallId }
+            return yield* toolRunner
+              .run({ toolCallId, toolName, input: args }, toolHostCtx)
+              .pipe(
+                Effect.provideService(ExtensionRegistry, extensionRegistry),
+                Effect.provideService(Permission, permission),
+                Effect.provideService(EventPublisher, eventPublisher),
+                Effect.orDie,
+                provideCurrentHostCtx(toolHostCtx),
+              )
+          }),
       }),
       formatStreamError: (streamError: unknown) =>
         `External turn executor error: ${formatStreamErrorMessage(streamError)}`,
@@ -176,19 +175,21 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       // not retryable, not recoverable mid-turn. Let it escape so the RPC
       // seam surfaces the typed auth failure; narrow the retry scope to
       // transient `ProviderError` only.
-      withRetry(effect.pipe(Effect.provideService(EventPublisher, eventPublisher)), undefined, {
-        onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
-          publishEventOrDie(
-            ProviderRetrying.make({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              attempt,
-              maxAttempts,
-              delayMs,
-              error: error.message,
-            }),
-          ),
-      }).pipe(
+      effect.pipe(
+        Effect.provideService(EventPublisher, eventPublisher),
+        retryProviderCall(undefined, {
+          onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
+            publishEventOrDie(
+              ProviderRetrying.make({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                attempt,
+                maxAttempts,
+                delayMs,
+                error: error.message,
+              }),
+            ),
+        }),
         Effect.catchTag("ProviderError", (streamError) =>
           collectFailedModelTurnResponse({
             streamError,

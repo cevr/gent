@@ -207,10 +207,10 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
  *
  * Usage:
  * ```ts
- * yield* withTinyContextWindow(Effect.gen(function* () { ... }))
+ * yield* Effect.gen(function* () { ... }).pipe(provideTinyContextWindow)
  * ```
  */
-export const withTinyContextWindow = <A, E, R>(
+export const provideTinyContextWindow = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> => {
   const originalWindow = MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID]

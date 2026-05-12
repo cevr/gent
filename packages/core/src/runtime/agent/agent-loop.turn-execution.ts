@@ -45,7 +45,7 @@ import { resolveTurnSource, toolCallsFromResponseParts } from "./turn-source.js"
 import { executeToolCalls, ToolInteractionPending } from "./turn-tool-execution.js"
 import {
   CurrentExtensionHostContext,
-  withCurrentHostCtx,
+  provideCurrentHostCtx,
 } from "./current-extension-host-context.js"
 
 const MAX_TURN_STEPS = 200
@@ -341,161 +341,158 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
       turnHostCtx,
     } = yield* deps.resolveTurnProfile
 
-    return yield* withCurrentHostCtx(
-      turnHostCtx,
-      Effect.gen(function* () {
-        let step = 0
-        let interrupted = yield* Ref.get(deps.interruptedRef)
-        let streamFailed = false
-        let currentTurnAgent: AgentNameType = state.currentAgent ?? DEFAULT_AGENT_NAME
+    return yield* Effect.gen(function* () {
+      let step = 0
+      let interrupted = yield* Ref.get(deps.interruptedRef)
+      let streamFailed = false
+      let currentTurnAgent: AgentNameType = state.currentAgent ?? DEFAULT_AGENT_NAME
 
-        const resumeStep = 1
-        const existingAssistant = yield* deps.messageStorage
-          .getMessage(assistantMessageIdForTurn(state.message.id, resumeStep))
-          .pipe(Effect.orElseSucceed(() => undefined))
-        if (existingAssistant !== undefined && !interrupted) {
-          const toolCalls = assistantDraftFromMessage(existingAssistant).toolCalls
-          if (toolCalls.length > 0) {
-            const existingResults = yield* deps.messageStorage
-              .getMessage(toolResultMessageIdForTurn(state.message.id, resumeStep))
-              .pipe(Effect.orElseSucceed(() => undefined))
-            if (existingResults === undefined) {
-              yield* Effect.logInfo("turn.resume-tools")
-              const interactionSignal = yield* executeTools({
-                messageId: state.message.id,
-                step: resumeStep,
-                toolCalls,
-                currentTurnAgent,
-              }).pipe(
-                Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
-                Effect.provideService(Permission, turnPermission),
-                Effect.as(undefined as ToolInteractionPending | undefined),
-                Effect.catchIf(Schema.is(ToolInteractionPending), (e) => Effect.succeed(e)),
-              )
-
-              if (interactionSignal !== undefined) {
-                const { pending, toolCallId } = interactionSignal
-                return TurnOutcome.cases.InteractionRequested.make({
-                  pendingRequestId: pending.requestId,
-                  pendingToolCallId: toolCallId as string,
-                  currentTurnAgent,
-                })
-              }
-              step = 1
-            }
-          }
-        }
-
-        while (true) {
-          step++
-          if (step > MAX_TURN_STEPS) {
-            yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
-              Effect.annotateLogs({ step, max: MAX_TURN_STEPS }),
+      const resumeStep = 1
+      const existingAssistant = yield* deps.messageStorage
+        .getMessage(assistantMessageIdForTurn(state.message.id, resumeStep))
+        .pipe(Effect.orElseSucceed(() => undefined))
+      if (existingAssistant !== undefined && !interrupted) {
+        const toolCalls = assistantDraftFromMessage(existingAssistant).toolCalls
+        if (toolCalls.length > 0) {
+          const existingResults = yield* deps.messageStorage
+            .getMessage(toolResultMessageIdForTurn(state.message.id, resumeStep))
+            .pipe(Effect.orElseSucceed(() => undefined))
+          if (existingResults === undefined) {
+            yield* Effect.logInfo("turn.resume-tools")
+            const interactionSignal = yield* executeTools({
+              messageId: state.message.id,
+              step: resumeStep,
+              toolCalls,
+              currentTurnAgent,
+            }).pipe(
+              Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
+              Effect.provideService(Permission, turnPermission),
+              Effect.as(undefined as ToolInteractionPending | undefined),
+              Effect.catchIf(Schema.is(ToolInteractionPending), (e) => Effect.succeed(e)),
             )
-            break
-          }
 
-          if (yield* Ref.get(deps.interruptedRef)) {
-            interrupted = true
-            break
-          }
-
-          yield* persistMessageReceived({ message: state.message })
-          yield* deps.clearInFlightTurn(state.message.id)
-
-          const resolved = yield* resolveTurnContext({
-            agentOverride: state.agentOverride,
-            runSpec: state.runSpec,
-            currentAgent: state.currentAgent,
-            branchId: deps.branchId,
-            sessionId: deps.sessionId,
-            baseSections: turnBaseSections,
-            interactive: state.interactive,
-          }).pipe(
-            Effect.provideService(ConfigService, deps.configServiceForRun),
-            Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
-            Effect.provideService(DriverRegistry, turnDriverRegistry),
-          )
-          if (resolved === undefined) break
-
-          currentTurnAgent = resolved.currentTurnAgent
-          if (step === 1) {
-            yield* Ref.update(deps.turnMetricsRef, (m) => ({
-              ...m,
-              agent: resolved.currentTurnAgent,
-              model: resolved.modelId,
-            }))
-          }
-
-          if (yield* Ref.get(deps.interruptedRef)) {
-            interrupted = true
-            break
-          }
-
-          const collected = yield* Effect.scoped(
-            Effect.gen(function* () {
-              const activeStream = yield* makeActiveStreamHandle()
-              yield* Ref.set(deps.activeStreamRef, activeStream)
-              return yield* collectTurnStream({
-                messageId: state.message.id,
-                step,
-                resolved,
-                activeStream,
-              }).pipe(
-                Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
-                Effect.provideService(DriverRegistry, turnDriverRegistry),
-                Effect.provideService(Permission, turnPermission),
-              )
-            }).pipe(Effect.ensuring(Ref.set(deps.activeStreamRef, undefined))),
-          )
-
-          if (collected.interrupted) {
-            interrupted = true
-            break
-          }
-          if (collected.streamFailed) {
-            streamFailed = true
-            break
-          }
-
-          if (collected.driverKind === "external") break
-
-          const toolCalls = toolCallsFromResponseParts(collected.responseParts)
-          if (toolCalls.length === 0) break
-
-          const interactionSignal = yield* executeTools({
-            messageId: state.message.id,
-            step,
-            toolCalls,
-            currentTurnAgent: resolved.currentTurnAgent,
-          }).pipe(
-            Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
-            Effect.provideService(Permission, turnPermission),
-            Effect.as(undefined as ToolInteractionPending | undefined),
-            Effect.catchIf(Schema.is(ToolInteractionPending), (e) => Effect.succeed(e)),
-          )
-
-          if (interactionSignal !== undefined) {
-            const { pending, toolCallId } = interactionSignal
-            return TurnOutcome.cases.InteractionRequested.make({
-              pendingRequestId: pending.requestId,
-              pendingToolCallId: toolCallId as string,
-              currentTurnAgent: resolved.currentTurnAgent,
-            })
+            if (interactionSignal !== undefined) {
+              const { pending, toolCallId } = interactionSignal
+              return TurnOutcome.cases.InteractionRequested.make({
+                pendingRequestId: pending.requestId,
+                pendingToolCallId: toolCallId as string,
+                currentTurnAgent,
+              })
+            }
+            step = 1
           }
         }
+      }
 
-        yield* finalizeTurn({
-          startedAtMs: state.startedAtMs,
+      while (true) {
+        step++
+        if (step > MAX_TURN_STEPS) {
+          yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
+            Effect.annotateLogs({ step, max: MAX_TURN_STEPS }),
+          )
+          break
+        }
+
+        if (yield* Ref.get(deps.interruptedRef)) {
+          interrupted = true
+          break
+        }
+
+        yield* persistMessageReceived({ message: state.message })
+        yield* deps.clearInFlightTurn(state.message.id)
+
+        const resolved = yield* resolveTurnContext({
+          agentOverride: state.agentOverride,
+          runSpec: state.runSpec,
+          currentAgent: state.currentAgent,
+          branchId: deps.branchId,
+          sessionId: deps.sessionId,
+          baseSections: turnBaseSections,
+          interactive: state.interactive,
+        }).pipe(
+          Effect.provideService(ConfigService, deps.configServiceForRun),
+          Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
+          Effect.provideService(DriverRegistry, turnDriverRegistry),
+        )
+        if (resolved === undefined) break
+
+        currentTurnAgent = resolved.currentTurnAgent
+        if (step === 1) {
+          yield* Ref.update(deps.turnMetricsRef, (m) => ({
+            ...m,
+            agent: resolved.currentTurnAgent,
+            model: resolved.modelId,
+          }))
+        }
+
+        if (yield* Ref.get(deps.interruptedRef)) {
+          interrupted = true
+          break
+        }
+
+        const collected = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const activeStream = yield* makeActiveStreamHandle()
+            yield* Ref.set(deps.activeStreamRef, activeStream)
+            return yield* collectTurnStream({
+              messageId: state.message.id,
+              step,
+              resolved,
+              activeStream,
+            }).pipe(
+              Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
+              Effect.provideService(DriverRegistry, turnDriverRegistry),
+              Effect.provideService(Permission, turnPermission),
+            )
+          }).pipe(Effect.ensuring(Ref.set(deps.activeStreamRef, undefined))),
+        )
+
+        if (collected.interrupted) {
+          interrupted = true
+          break
+        }
+        if (collected.streamFailed) {
+          streamFailed = true
+          break
+        }
+
+        if (collected.driverKind === "external") break
+
+        const toolCalls = toolCallsFromResponseParts(collected.responseParts)
+        if (toolCalls.length === 0) break
+
+        const interactionSignal = yield* executeTools({
           messageId: state.message.id,
-          turnInterrupted: interrupted,
-          streamFailed,
-          currentAgent: currentTurnAgent,
-        }).pipe(Effect.provideService(ExtensionRegistry, turnExtensionRegistry))
+          step,
+          toolCalls,
+          currentTurnAgent: resolved.currentTurnAgent,
+        }).pipe(
+          Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
+          Effect.provideService(Permission, turnPermission),
+          Effect.as(undefined as ToolInteractionPending | undefined),
+          Effect.catchIf(Schema.is(ToolInteractionPending), (e) => Effect.succeed(e)),
+        )
 
-        return TurnOutcome.cases.Done.make({})
-      }),
-    )
+        if (interactionSignal !== undefined) {
+          const { pending, toolCallId } = interactionSignal
+          return TurnOutcome.cases.InteractionRequested.make({
+            pendingRequestId: pending.requestId,
+            pendingToolCallId: toolCallId as string,
+            currentTurnAgent: resolved.currentTurnAgent,
+          })
+        }
+      }
+
+      yield* finalizeTurn({
+        startedAtMs: state.startedAtMs,
+        messageId: state.message.id,
+        turnInterrupted: interrupted,
+        streamFailed,
+        currentAgent: currentTurnAgent,
+      }).pipe(Effect.provideService(ExtensionRegistry, turnExtensionRegistry))
+
+      return TurnOutcome.cases.Done.make({})
+    }).pipe(provideCurrentHostCtx(turnHostCtx))
   })
 
   return { runTurn }

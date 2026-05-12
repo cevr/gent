@@ -342,51 +342,50 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
   },
 )
 
-const withAmbientHostContextOverrides = <A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-  overrides: AmbientHostContextOverrides,
-): Effect.Effect<A, E, R> => {
-  let next = effect
-  if (overrides.platform !== undefined) {
-    next = next.pipe(Effect.provideService(HostPlatformRef, overrides.platform))
+const provideAmbientHostContextOverrides =
+  (overrides: AmbientHostContextOverrides) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> => {
+    let next = effect
+    if (overrides.platform !== undefined) {
+      next = next.pipe(Effect.provideService(HostPlatformRef, overrides.platform))
+    }
+    if (overrides.host !== undefined) {
+      next = next.pipe(Effect.provideService(HostExtensionPlatformRef, overrides.host))
+    }
+    if (overrides.approvalService !== undefined) {
+      next = next.pipe(Effect.provideService(HostApprovalServiceRef, overrides.approvalService))
+    }
+    if (overrides.promptPresenter !== undefined) {
+      next = next.pipe(Effect.provideService(HostPromptPresenterRef, overrides.promptPresenter))
+    }
+    if (overrides.sessionStorage !== undefined) {
+      next = next.pipe(Effect.provideService(HostSessionStorageRef, overrides.sessionStorage))
+    }
+    if (overrides.branchStorage !== undefined) {
+      next = next.pipe(Effect.provideService(HostBranchStorageRef, overrides.branchStorage))
+    }
+    if (overrides.messageStorage !== undefined) {
+      next = next.pipe(Effect.provideService(HostMessageStorageRef, overrides.messageStorage))
+    }
+    if (overrides.relationshipStorage !== undefined) {
+      next = next.pipe(
+        Effect.provideService(HostRelationshipStorageRef, overrides.relationshipStorage),
+      )
+    }
+    if (overrides.searchStorage !== undefined) {
+      next = next.pipe(Effect.provideService(HostSearchStorageRef, overrides.searchStorage))
+    }
+    if (overrides.agentRunner !== undefined) {
+      next = next.pipe(Effect.provideService(HostAgentRunnerRef, overrides.agentRunner))
+    }
+    if (overrides.sessionMutations !== undefined) {
+      next = next.pipe(Effect.provideService(HostSessionMutationsRef, overrides.sessionMutations))
+    }
+    if (overrides.sessionControl !== undefined) {
+      next = next.pipe(Effect.provideService(HostSessionControlRef, overrides.sessionControl))
+    }
+    return next
   }
-  if (overrides.host !== undefined) {
-    next = next.pipe(Effect.provideService(HostExtensionPlatformRef, overrides.host))
-  }
-  if (overrides.approvalService !== undefined) {
-    next = next.pipe(Effect.provideService(HostApprovalServiceRef, overrides.approvalService))
-  }
-  if (overrides.promptPresenter !== undefined) {
-    next = next.pipe(Effect.provideService(HostPromptPresenterRef, overrides.promptPresenter))
-  }
-  if (overrides.sessionStorage !== undefined) {
-    next = next.pipe(Effect.provideService(HostSessionStorageRef, overrides.sessionStorage))
-  }
-  if (overrides.branchStorage !== undefined) {
-    next = next.pipe(Effect.provideService(HostBranchStorageRef, overrides.branchStorage))
-  }
-  if (overrides.messageStorage !== undefined) {
-    next = next.pipe(Effect.provideService(HostMessageStorageRef, overrides.messageStorage))
-  }
-  if (overrides.relationshipStorage !== undefined) {
-    next = next.pipe(
-      Effect.provideService(HostRelationshipStorageRef, overrides.relationshipStorage),
-    )
-  }
-  if (overrides.searchStorage !== undefined) {
-    next = next.pipe(Effect.provideService(HostSearchStorageRef, overrides.searchStorage))
-  }
-  if (overrides.agentRunner !== undefined) {
-    next = next.pipe(Effect.provideService(HostAgentRunnerRef, overrides.agentRunner))
-  }
-  if (overrides.sessionMutations !== undefined) {
-    next = next.pipe(Effect.provideService(HostSessionMutationsRef, overrides.sessionMutations))
-  }
-  if (overrides.sessionControl !== undefined) {
-    next = next.pipe(Effect.provideService(HostSessionControlRef, overrides.sessionControl))
-  }
-  return next
-}
 
 export interface MakeAmbientExtensionHostContextDepsInput {
   readonly extensionRegistry: ExtensionRegistryService
@@ -398,10 +397,12 @@ export const makeAmbientExtensionHostContextDeps = (
   input: MakeAmbientExtensionHostContextDepsInput,
 ): Effect.Effect<MakeExtensionHostContextDeps> =>
   Effect.gen(function* () {
-    const defaults = yield* withAmbientHostContextOverrides(loadAmbientHostContextDefaults, {
-      ...(yield* availableAmbientHostContextOverrides),
-      ...input.overrides,
-    })
+    const defaults = yield* loadAmbientHostContextDefaults.pipe(
+      provideAmbientHostContextOverrides({
+        ...(yield* availableAmbientHostContextOverrides),
+        ...input.overrides,
+      }),
+    )
     return {
       platform: defaults.platform,
       host: defaults.host,

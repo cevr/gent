@@ -7,43 +7,46 @@ import {
 } from "../../domain/agent.js"
 import type { ToolCallId, SessionId, BranchId } from "../../domain/ids.js"
 
-export const withAgentRunFailureHandling = <E, R, R2>(
-  effect: Effect.Effect<AgentRunResult, E, R>,
-  params: {
-    parentSessionId: SessionId
-    parentBranchId: BranchId
-    toolCallId?: ToolCallId
-    sessionId: SessionId
-    agentName: AgentName
-    persistence: AgentPersistence
-    spanName: string
-  },
-  publishFailed: (params: {
-    parentSessionId: SessionId
-    parentBranchId: BranchId
-    toolCallId?: ToolCallId
-    sessionId: SessionId
-    agentName: AgentName
-  }) => Effect.Effect<void, never, R2>,
-) =>
-  effect.pipe(
-    Effect.withSpan(params.spanName, {
-      attributes: { agentName: params.agentName },
-    }),
-    Effect.catchCause((cause) => {
-      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-      return Effect.gen(function* () {
-        const error = Cause.pretty(cause)
-        yield* publishFailed(params)
-        return AgentRunResult.cases.error.make({
-          error,
-          sessionId: params.sessionId,
-          agentName: params.agentName,
-          persistence: params.persistence,
+export const handleAgentRunFailure =
+  <R2>(
+    params: {
+      parentSessionId: SessionId
+      parentBranchId: BranchId
+      toolCallId?: ToolCallId
+      sessionId: SessionId
+      agentName: AgentName
+      persistence: AgentPersistence
+      spanName: string
+    },
+    publishFailed: (params: {
+      parentSessionId: SessionId
+      parentBranchId: BranchId
+      toolCallId?: ToolCallId
+      sessionId: SessionId
+      agentName: AgentName
+    }) => Effect.Effect<void, never, R2>,
+  ): (<E, R>(
+    effect: Effect.Effect<AgentRunResult, E, R>,
+  ) => Effect.Effect<AgentRunResult, E, R | R2>) =>
+  <E, R>(effect: Effect.Effect<AgentRunResult, E, R>) =>
+    effect.pipe(
+      Effect.withSpan(params.spanName, {
+        attributes: { agentName: params.agentName },
+      }),
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+        return Effect.gen(function* () {
+          const error = Cause.pretty(cause)
+          yield* publishFailed(params)
+          return AgentRunResult.cases.error.make({
+            error,
+            sessionId: params.sessionId,
+            agentName: params.agentName,
+            persistence: params.persistence,
+          })
         })
-      })
-    }),
-  )
+      }),
+    )
 
 const overrideArray = <A>(values: ReadonlyArray<A> | undefined) =>
   values === undefined ? undefined : [...values]

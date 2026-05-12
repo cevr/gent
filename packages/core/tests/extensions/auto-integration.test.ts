@@ -9,7 +9,7 @@ import {
 } from "@gent/core-internal/test-utils/language-model"
 import {
   createE2ELayer,
-  withTinyContextWindow,
+  provideTinyContextWindow,
   trackingApprovalService,
 } from "@gent/core-internal/test-utils/e2e-layer"
 import { ensureStorageParents } from "@gent/core-internal/test-utils"
@@ -400,41 +400,39 @@ describe("Auto extension E2E", () => {
   )
 
   it.live("threshold: auto active queues follow-up instead of HandoffPresented", () =>
-    withTinyContextWindow(
-      Effect.gen(function* () {
-        const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
+    Effect.gen(function* () {
+      const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
 
-        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-          textStep("x".repeat(2000)), // ~500 tokens — context over 85%
-          toolCallStep("auto_checkpoint", {
-            status: "complete",
-            summary: "Done with threshold test",
-          }),
-          // Extra step for the queued handoff follow-up turn
-          textStep("Acknowledged handoff request."),
-        ])
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        textStep("x".repeat(2000)), // ~500 tokens — context over 85%
+        toolCallStep("auto_checkpoint", {
+          status: "complete",
+          summary: "Done with threshold test",
+        }),
+        // Extra step for the queued handoff follow-up turn
+        textStep("Acknowledged handoff request."),
+      ])
 
-        const e2eLayer = createE2ELayer({
-          ...e2ePreset,
-          providerLayer,
-          extraLayers: [handoffLayer as Layer.Layer<never>],
-        })
+      const e2eLayer = createE2ELayer({
+        ...e2ePreset,
+        providerLayer,
+        extraLayers: [handoffLayer as Layer.Layer<never>],
+      })
 
-        yield* Effect.gen(function* () {
-          const auto = yield* AutoWrite
+      yield* Effect.gen(function* () {
+        const auto = yield* AutoWrite
 
-          yield* ensureStorageParents({ sessionId, branchId })
+        yield* ensureStorageParents({ sessionId, branchId })
 
-          yield* auto.start({ goal: "Threshold handoff test" })
+        yield* auto.start({ goal: "Threshold handoff test" })
 
-          yield* runAgentMessage(makeMessage("begin"))
+        yield* runAgentMessage(makeMessage("begin"))
 
-          // Auto's interceptor queued a follow-up, NOT a direct HandoffPresented
-          expect(yield* Ref.get(presentCalled)).toBe(false)
-          expect(yield* controls.callCount).toBe(3)
-          yield* controls.assertDone()
-        }).pipe(Effect.provide(e2eLayer))
-      }),
-    ),
+        // Auto's interceptor queued a follow-up, NOT a direct HandoffPresented
+        expect(yield* Ref.get(presentCalled)).toBe(false)
+        expect(yield* controls.callCount).toBe(3)
+        yield* controls.assertDone()
+      }).pipe(Effect.provide(e2eLayer))
+    }).pipe(provideTinyContextWindow),
   )
 })

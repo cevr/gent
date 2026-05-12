@@ -6,7 +6,7 @@ import {
   isRetryable,
   getRetryAfter,
   DEFAULT_RETRY_CONFIG,
-  withRetry,
+  retryProviderCall,
 } from "../../src/runtime/retry"
 import { ProviderError } from "@gent/core-internal/domain/provider-error"
 
@@ -63,7 +63,7 @@ describe("Retry Logic", () => {
     })
     expect(isRetryable(authError)).toBe(false)
   })
-  it.effect("withRetry computes HTTP-date retry-after delay from TestClock", () =>
+  it.effect("retryProviderCall computes HTTP-date retry-after delay from TestClock", () =>
     Effect.gen(function* () {
       // Plant a retry-after HTTP-date 30s past TestClock's current time.
       // The schedule's new Clock.currentTimeMillis read must observe the
@@ -75,25 +75,26 @@ describe("Retry Logic", () => {
       const attempts: Array<number> = []
       let callCount = 0
       const fiber = yield* Effect.forkChild(
-        withRetry(
-          Effect.gen(function* () {
-            callCount += 1
-            if (callCount < 2) {
-              return yield* new ProviderError({
-                message: "Rate limit",
-                model: "test",
-                cause: { headers },
-              })
-            }
-            return "ok"
-          }),
-          { ...DEFAULT_RETRY_CONFIG, initialDelay: 1, maxDelay: 60_000, maxAttempts: 3 },
-          {
-            onRetry: ({ delayMs }) =>
-              Effect.sync(() => {
-                attempts.push(delayMs)
-              }),
-          },
+        Effect.gen(function* () {
+          callCount += 1
+          if (callCount < 2) {
+            return yield* new ProviderError({
+              message: "Rate limit",
+              model: "test",
+              cause: { headers },
+            })
+          }
+          return "ok"
+        }).pipe(
+          retryProviderCall(
+            { ...DEFAULT_RETRY_CONFIG, initialDelay: 1, maxDelay: 60_000, maxAttempts: 3 },
+            {
+              onRetry: ({ delayMs }) =>
+                Effect.sync(() => {
+                  attempts.push(delayMs)
+                }),
+            },
+          ),
         ),
       )
       // Drive the schedule's sleep deterministically.
@@ -106,7 +107,7 @@ describe("Retry Logic", () => {
     }),
   )
 
-  it.live("withRetry reports retry progress", () =>
+  it.live("retryProviderCall reports retry progress", () =>
     Effect.gen(function* () {
       const attempts: Array<{
         attempt: number
@@ -115,24 +116,25 @@ describe("Retry Logic", () => {
         error: string
       }> = []
       let callCount = 0
-      const result = yield* withRetry(
-        Effect.gen(function* () {
-          callCount += 1
-          if (callCount < 3) {
-            return yield* new ProviderError({
-              message: "Rate limit exceeded (429)",
-              model: "test",
-            })
-          }
-          return "ok"
-        }),
-        { ...DEFAULT_RETRY_CONFIG, initialDelay: 1, maxDelay: 1, maxAttempts: 3 },
-        {
-          onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
-            Effect.sync(() => {
-              attempts.push({ attempt, maxAttempts, delayMs, error: error.message })
-            }),
-        },
+      const result = yield* Effect.gen(function* () {
+        callCount += 1
+        if (callCount < 3) {
+          return yield* new ProviderError({
+            message: "Rate limit exceeded (429)",
+            model: "test",
+          })
+        }
+        return "ok"
+      }).pipe(
+        retryProviderCall(
+          { ...DEFAULT_RETRY_CONFIG, initialDelay: 1, maxDelay: 1, maxAttempts: 3 },
+          {
+            onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
+              Effect.sync(() => {
+                attempts.push({ attempt, maxAttempts, delayMs, error: error.message })
+              }),
+          },
+        ),
       )
       expect(result).toBe("ok")
       expect(attempts).toEqual([

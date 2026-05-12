@@ -12,7 +12,7 @@ import {
   WORKSPACE_ID_HEADER,
   WorkspaceId,
   validateWorkspaceId,
-  withWorkspaceIdHeader,
+  provideWorkspaceIdHeader,
 } from "../../src/server/workspace-rpc"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
@@ -30,9 +30,8 @@ describe("workspace RPC middleware", () => {
 
   it.live("publishes the validated workspace id to request scope", () =>
     Effect.gen(function* () {
-      const observed = yield* withWorkspaceIdHeader(
-        Effect.service(CurrentWorkspaceId),
-        Headers.fromInput({ [WORKSPACE_ID_HEADER]: validWorkspaceId }),
+      const observed = yield* Effect.service(CurrentWorkspaceId).pipe(
+        provideWorkspaceIdHeader(Headers.fromInput({ [WORKSPACE_ID_HEADER]: validWorkspaceId })),
       )
       expect(observed).toBe(validWorkspaceId)
     }),
