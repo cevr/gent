@@ -15,7 +15,7 @@ import { RunSpecSchema } from "@gent/core-internal/domain/agent"
 
 // ── Tests ──
 
-describe("RunSpec CLI serialization", () => {
+describe("run spec CLI serialization", () => {
   const codec = Schema.fromJsonString(RunSpecSchema)
 
   test("round-trips through JSON encode/decode", () => {

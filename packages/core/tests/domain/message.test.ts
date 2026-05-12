@@ -3,7 +3,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { dateFromMillis, Message, copyMessageToBranch } from "@gent/core-internal/domain/message"
 
-describe("copyMessageToBranch", () => {
+describe("message branch copies", () => {
   test("preserves interjection variant when copying to a new branch", () => {
     const message = Message.cases.interjection.make({
       id: MessageId.make("source-message"),

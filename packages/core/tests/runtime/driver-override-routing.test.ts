@@ -25,7 +25,7 @@ const hardcoded = AgentDefinition.make({
   driver: ExternalDriverRef.make({ id: "acp-claude-code" }),
 })
 
-describe("driver override routing through ConfigService", () => {
+describe("configured driver override routing", () => {
   it.live("agent without hardcoded driver picks up config override (source: config)", () =>
     Effect.gen(function* () {
       const cfg = yield* ConfigService

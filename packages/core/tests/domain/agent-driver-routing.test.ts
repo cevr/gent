@@ -16,7 +16,7 @@ const makeAgent = (
   overrides: Partial<ConstructorParameters<typeof AgentDefinition>[0]> = {},
 ): AgentDefinition => AgentDefinition.make({ name: name as never, ...overrides })
 
-describe("resolveAgentDriver", () => {
+describe("agent driver precedence", () => {
   test("agent.driver wins — config override is ignored when the agent hardcodes a driver", () => {
     const agent = makeAgent("special", {
       driver: ExternalDriverRef.make({ id: "acp-claude-code" }),

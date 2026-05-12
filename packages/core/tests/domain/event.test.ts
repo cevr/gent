@@ -18,7 +18,7 @@ const session = SessionId.make("session-1")
 const branch = BranchId.make("branch-1")
 const child = SessionId.make("child-session")
 
-describe("getEventSessionId", () => {
+describe("event session routing", () => {
   test("standard variants surface the session field", () => {
     const event = StreamChunk.make({
       sessionId: session,
@@ -51,7 +51,7 @@ describe("getEventSessionId", () => {
   })
 })
 
-describe("getEventBranchId", () => {
+describe("event branch routing", () => {
   test("BranchSwitched returns undefined to match either-side delivery", () => {
     const switched = BranchSwitched.make({
       sessionId: session,
@@ -79,7 +79,7 @@ describe("getEventBranchId", () => {
   })
 })
 
-describe("AgentSwitched event branding", () => {
+describe("agent switch event branding", () => {
   test("fromAgent/toAgent reject unbranded raw strings at construction", () => {
     expect(() =>
       AgentSwitched.make({

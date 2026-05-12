@@ -219,7 +219,7 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
       } satisfies SessionRuntimeService
     }),
   )
-describe("RunSpec", () => {
+describe("helper run spec propagation", () => {
   it.live("durable helper-agent runSpec reaches the provider through AgentRunner", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([

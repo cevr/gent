@@ -23,7 +23,7 @@ const externalAgent = (name: string): AgentDefinition =>
     driver: ExternalDriverRef.make({ id: `acp-${name}` }),
   })
 
-describe("resolveDualModelPair", () => {
+describe("dual-model pair selection", () => {
   it.live("name-based: cowork + deepwork win when both present", () =>
     Effect.gen(function* () {
       const [a, b] = yield* resolveDualModelPair([

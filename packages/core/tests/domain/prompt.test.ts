@@ -11,7 +11,7 @@ import { buildTurnPrompt } from "../../src/runtime/agent/agent-loop.utils"
 import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 
-describe("buildSystemPrompt", () => {
+describe("system prompt composition", () => {
   const base = {
     cwd: "/home/user/project",
     platform: "linux",
@@ -88,7 +88,7 @@ describe("buildSystemPrompt", () => {
   })
 })
 
-describe("buildBasePromptSections", () => {
+describe("base prompt sections", () => {
   const base = {
     cwd: "/test",
     platform: "darwin",
@@ -115,7 +115,7 @@ describe("buildBasePromptSections", () => {
   })
 })
 
-describe("withSectionMarkers / sectionPatternFor", () => {
+describe("section marker parsing", () => {
   // Counsel  — `PromptSection.id` is unconstrained; the helpers must
   // tolerate ids carrying regex metacharacters without leaking them
   // into the compiled pattern.
@@ -152,7 +152,7 @@ describe("withSectionMarkers / sectionPatternFor", () => {
   })
 })
 
-describe("buildTurnPrompt", () => {
+describe("turn prompt composition", () => {
   const makeTool = (
     id: string,
     overrides: {

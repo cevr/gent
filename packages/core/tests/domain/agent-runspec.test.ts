@@ -8,7 +8,7 @@ import {
 import { SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { ModelId } from "@gent/core-internal/domain/model"
 
-describe("makeRunSpec", () => {
+describe("run spec construction", () => {
   test("empty input produces empty spec — no spurious keys", () => {
     const spec = makeRunSpec()
     expect(Object.keys(spec)).toEqual([])
@@ -65,7 +65,7 @@ describe("makeRunSpec", () => {
   })
 })
 
-describe("getDurableAgentRunSessionId", () => {
+describe("durable child session exposure", () => {
   const sid = SessionId.make("session-1")
   const agentName = AgentName.make("cowork")
 
