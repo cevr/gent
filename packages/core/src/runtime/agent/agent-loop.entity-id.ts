@@ -19,7 +19,7 @@
  * @module
  */
 
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { BranchId, SessionId } from "../../domain/ids.js"
 import { WorkspaceId } from "../../server/workspace-rpc.js"
 import { AgentLoopError } from "./agent-loop.state.js"
@@ -50,8 +50,8 @@ export const parseEntityId = (
     const rawWorkspace = entityId.slice(0, firstSep)
     const rawSession = entityId.slice(firstSep + 1, secondSep)
     const rawBranch = entityId.slice(secondSep + 1)
-    const workspaceId = decodeOrFail(rawWorkspace)
-    if (workspaceId === undefined) {
+    const workspaceRaw = decodeOrFail(rawWorkspace)
+    if (workspaceRaw === undefined) {
       return yield* new AgentLoopError({
         message: `Invalid entity id (workspaceId decode): ${entityId}`,
       })
@@ -68,10 +68,13 @@ export const parseEntityId = (
         message: `Invalid entity id (branchId decode): ${entityId}`,
       })
     }
+    const workspaceId = yield* decodeWorkspaceId(workspaceRaw, entityId)
+    const sessionId = yield* decodeSessionId(sessionRaw, entityId)
+    const branchId = yield* decodeBranchId(branchRaw, entityId)
     return {
-      workspaceId: WorkspaceId.make(workspaceId),
-      sessionId: SessionId.make(sessionRaw),
-      branchId: BranchId.make(branchRaw),
+      workspaceId,
+      sessionId,
+      branchId,
     }
   })
 
@@ -82,3 +85,39 @@ const decodeOrFail = (raw: string): string | undefined => {
     return undefined
   }
 }
+
+const decodeWorkspaceId = (
+  raw: string,
+  entityId: string,
+): Effect.Effect<WorkspaceId, AgentLoopError> =>
+  Schema.decodeUnknownEffect(WorkspaceId)(raw).pipe(
+    Effect.mapError(
+      (cause) =>
+        new AgentLoopError({
+          message: `Invalid entity id (workspaceId schema): ${entityId}`,
+          cause,
+        }),
+    ),
+  )
+
+const decodeSessionId = (raw: string, entityId: string): Effect.Effect<SessionId, AgentLoopError> =>
+  Schema.decodeUnknownEffect(SessionId)(raw).pipe(
+    Effect.mapError(
+      (cause) =>
+        new AgentLoopError({
+          message: `Invalid entity id (sessionId schema): ${entityId}`,
+          cause,
+        }),
+    ),
+  )
+
+const decodeBranchId = (raw: string, entityId: string): Effect.Effect<BranchId, AgentLoopError> =>
+  Schema.decodeUnknownEffect(BranchId)(raw).pipe(
+    Effect.mapError(
+      (cause) =>
+        new AgentLoopError({
+          message: `Invalid entity id (branchId schema): ${entityId}`,
+          cause,
+        }),
+    ),
+  )

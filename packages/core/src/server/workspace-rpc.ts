@@ -5,7 +5,9 @@ import { RpcMiddleware } from "effect/unstable/rpc"
 export const WORKSPACE_ID_HEADER = "x-gent-workspace-id"
 
 const WorkspaceIdPattern = /^[a-f0-9]{64}$/
-export const WorkspaceId = Schema.String.pipe(Schema.brand("@gent/core/server/WorkspaceId"))
+export const WorkspaceId = Schema.String.check(Schema.isPattern(WorkspaceIdPattern)).pipe(
+  Schema.brand("@gent/core/server/WorkspaceId"),
+)
 export type WorkspaceId = typeof WorkspaceId.Type
 export const DefaultWorkspaceId: WorkspaceId = WorkspaceId.make("0".repeat(64))
 
@@ -24,13 +26,14 @@ export class WorkspaceHeaderError extends Schema.TaggedErrorClass<WorkspaceHeade
 export const validateWorkspaceId = (
   workspaceId: string,
 ): Effect.Effect<WorkspaceId, WorkspaceHeaderError> =>
-  WorkspaceIdPattern.test(workspaceId)
-    ? Effect.succeed(WorkspaceId.make(workspaceId))
-    : Effect.fail(
+  Schema.decodeUnknownEffect(WorkspaceId)(workspaceId).pipe(
+    Effect.mapError(
+      () =>
         new WorkspaceHeaderError({
           message: `Invalid ${WORKSPACE_ID_HEADER} header`,
         }),
-      )
+    ),
+  )
 
 export const provideWorkspaceIdHeader =
   (headers: Headers.Headers) =>

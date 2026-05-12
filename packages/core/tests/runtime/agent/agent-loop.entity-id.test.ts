@@ -64,4 +64,12 @@ describe("agent-loop.entity-id", () => {
       expect(exit._tag).toBe("Failure")
     }),
   )
+
+  it.effect("rejects workspace ids that do not satisfy the workspace schema", () =>
+    Effect.gen(function* () {
+      const encoded = `${"g".repeat(64)}:session:branch`
+      const exit = yield* Effect.exit(parseEntityId(encoded))
+      expect(exit._tag).toBe("Failure")
+    }),
+  )
 })
