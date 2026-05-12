@@ -370,7 +370,7 @@ describe("ExtensionRegistry", () => {
         ],
       )
       const tools = yield* registry.listModelCapabilities()
-      const failed = yield* registry.listFailedExtensions()
+      const failed = registry.getResolved().failedExtensions
       const statuses = yield* registry.listExtensionStatuses()
       expect(tools.map((tool) => String(getToolId(tool)))).toEqual(["read"])
       expect(failed).toEqual([

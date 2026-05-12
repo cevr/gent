@@ -508,7 +508,6 @@ export interface ExtensionRegistryService {
   readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
 
   // Diagnostics
-  readonly listFailedExtensions: () => Effect.Effect<ReadonlyArray<FailedExtension>>
   readonly listExtensionStatuses: () => Effect.Effect<ReadonlyArray<ExtensionStatusInfo>>
 
   readonly extensionReactions: CompiledExtensionReactions
@@ -534,7 +533,6 @@ export class ExtensionRegistry extends Context.Service<
           ),
         ),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
-      listFailedExtensions: () => Effect.succeed(resolved.failedExtensions),
       listExtensionStatuses: () => Effect.succeed(resolved.extensionStatuses),
       extensionReactions: resolved.extensionReactions,
       getResolved: () => resolved,
