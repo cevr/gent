@@ -56,6 +56,7 @@ describe("transport-only extension widgets", () => {
           branchId: BranchId.make("branch-B"),
         }
         yield* Deferred.succeed(requestDeferred, { active: true, phase: "working", iteration: 1 })
+        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
         yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
@@ -79,6 +80,7 @@ describe("transport-only extension widgets", () => {
           iteration: 2,
           maxIterations: 4,
         })
+        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
         yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([{ text: "auto 2/4", color: "info" }])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
@@ -97,6 +99,7 @@ describe("transport-only extension widgets", () => {
         const borderLabel = findBorderLabel(contributions, "top-left")
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, { active: "yes" })
+        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
         yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
@@ -130,6 +133,7 @@ describe("transport-only extension widgets", () => {
             updatedAt: 2,
           },
         ])
+        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
         yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
@@ -159,6 +163,7 @@ describe("transport-only extension widgets", () => {
             updatedAt: 2,
           },
         ])
+        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
         yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([{ text: "1 artifact", color: "info" }])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
@@ -177,6 +182,7 @@ describe("transport-only extension widgets", () => {
         const borderLabel = findBorderLabel(contributions, "bottom-right")
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, [{ status: "active" }])
+        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
         yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
@@ -205,6 +211,7 @@ describe("transport-only extension widgets", () => {
             updatedAt: 2,
           },
         ])
+        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
         yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([{ text: "1 todo ↓", color: "info" }])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
@@ -234,6 +241,7 @@ describe("transport-only extension widgets", () => {
         const contributions = yield* runClientExtensionSetup(runtime, todosBuiltin)
         const borderLabel = findBorderLabel(contributions, "bottom-left")
         expect(borderLabel).toBeDefined()
+        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
         yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([])
         todos = [
@@ -248,7 +256,9 @@ describe("transport-only extension widgets", () => {
           },
         ]
         for (const cb of sessionEventSubscribers) cb(makeEnvelope())
+        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
         yield* Effect.sleep("0 millis")
+        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
         yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([{ text: "1 todo ↓", color: "info" }])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
@@ -267,6 +277,7 @@ describe("transport-only extension widgets", () => {
         const borderLabel = findBorderLabel(contributions, "bottom-left")
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, [{ subject: "missing id", status: "pending" }])
+        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
         yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([])
       }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))

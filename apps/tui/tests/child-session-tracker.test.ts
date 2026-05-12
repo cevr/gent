@@ -31,6 +31,7 @@ const waitForEntry = (
           message: `child session ${childSessionId} did not settle`,
         })
       }
+      // gent/no-sleep: allow yield-then-retry primitive — tracker projection must absorb queued events between checks
       yield* Effect.sleep("0 millis")
       return yield* poll(attempts - 1)
     })

@@ -52,6 +52,7 @@ const readReadyUrl = (proc: Bun.Subprocess): Effect.Effect<string, ServerProcess
     }
     pump()
   })
+  // gent/no-sleep: allow real-clock timeout fence for subprocess readiness probe
   const timeout = Effect.sleep("10 seconds").pipe(
     Effect.andThen(
       Effect.fail(new ServerProcessFixtureError({ message: "server did not become ready" })),
@@ -121,6 +122,7 @@ export const waitForExit = (pid: number, timeoutMs: number): Effect.Effect<numbe
       if (!alive) return 0
       const now = yield* Clock.currentTimeMillis
       if (now >= deadline) return -1
+      // gent/no-sleep: allow OS-level wait while polling subprocess exit status
       yield* Effect.sleep("50 millis")
       return yield* loop
     })
@@ -138,6 +140,7 @@ export const waitUntil = (
       if (predicate()) return true
       const now = yield* Clock.currentTimeMillis
       if (now >= deadline) return false
+      // gent/no-sleep: allow real-clock polling primitive — predicate observes external subprocess state
       yield* Effect.sleep(`${intervalMs} millis`)
       return yield* loop
     })

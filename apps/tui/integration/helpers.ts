@@ -33,6 +33,7 @@ export const waitForFrame = (
       lastFrame = frame
       if (predicate(frame)) return frame
 
+      // gent/no-sleep: allow render-poll primitive — TUI frame must be re-rendered between observations
       yield* Effect.sleep("10 millis")
     }
 
@@ -63,6 +64,7 @@ export const waitForCondition = (
 
       if (predicate()) return
 
+      // gent/no-sleep: allow render-poll primitive — predicate reads reactive signals updated by render
       yield* Effect.sleep("10 millis")
     }
 

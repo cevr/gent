@@ -33,6 +33,7 @@ const raceWithNullTimeout = <A>(
 ): Effect.Effect<A | null> =>
   Effect.race(
     Effect.promise(() => promise),
+    // gent/no-sleep: allow real-clock timeout race for foreign Promise resolution
     Effect.sleep(`${timeoutMs} millis`).pipe(Effect.as(null)),
   )
 

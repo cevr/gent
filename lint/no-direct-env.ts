@@ -29,6 +29,9 @@
  * - no-hand-rolled-tagged-union: bans inline `{ _tag: "X"; ... } | { _tag: "Y"; ... }`
  *   type literals; require `Schema.TaggedUnion` / `Schema.TaggedStruct` /
  *   `Schema.TaggedErrorClass` instead.
+ * - no-sleep: bans `.sleep(...)` calls in test files. Opt out per-site with
+ *   `// gent/no-sleep: allow <reason>` (retries, debounce probes, real-clock
+ *   timing tests, deliberate fiber-pacing pauses in PTY/server fixtures).
  */
 
 import type { Plugin } from "#oxlint/plugins"
@@ -1305,6 +1308,103 @@ const plugin: Plugin = {
             context.report({
               message:
                 "Hand-rolled `_tag` discriminated union — use `Schema.TaggedUnion` (preferred) or `Schema.TaggedStruct` / `Schema.TaggedErrorClass`. Construct via `.cases.<Name>.make({...})`. See packages/core/CLAUDE.md.",
+              node,
+            })
+          },
+        }
+      },
+    },
+
+    /**
+     * Bans `.sleep(...)` calls in test files.
+     *
+     * Why: `Effect.sleep("0 millis")` / `Effect.sleep("10 millis")` is the
+     * canonical "wait for the next tick" anti-pattern in this codebase —
+     * tests that need to wait for a state transition should use `Deferred`,
+     * `controls.waitForCall`, or `waitFor` polling helpers, not a fixed
+     * delay. Non-zero sleeps in tests usually indicate a missing
+     * synchronisation primitive and produce flaky timing-coupled assertions.
+     *
+     * Legitimate uses do exist:
+     *   - real-clock timing assertions (idle-timeout eviction in
+     *     server-lifecycle, headless CLI exit timeout fallback)
+     *   - deliberate fiber-pacing in PTY / subprocess fixtures, where the
+     *     OS-level scheduler needs to be exercised
+     *   - retry / backoff sleeps when the retry helper is itself the
+     *     subject under test
+     *
+     * Opt out per-site by placing
+     * `// gent/no-sleep: allow <reason>` on the line directly above the
+     * call. The reason must be non-empty so the carveout encodes why this
+     * specific sleep is intentional.
+     *
+     * Matches both `Effect.sleep(...)` and `Bun.sleep(...)`. Scoped to test
+     * files (`*.test.ts`, `*.test.tsx`, `tests/**`) and test-adjacent
+     * fixtures (`pty-fixture.ts`, `server-process-fixture.ts`, `helpers.ts`
+     * inside `tests/`, `helpers-boundary.ts`). The rule does NOT apply to
+     * product code — production retries/timeouts/debounces are unaffected.
+     */
+    "no-sleep": {
+      create(context) {
+        const filename = context.filename
+        if (!isTestFilename(filename) && !isTestBoundaryFilename(filename)) {
+          // Also cover test fixtures and helpers that don't end in
+          // `.test.ts` but live alongside tests (`pty-fixture.ts`,
+          // `server-process-fixture.ts`, `tests/.../helpers.ts`,
+          // `integration/helpers.ts`).
+          const inTestsTree = /\/tests\//.test(filename)
+          const inIntegrationTree = /\/integration\//.test(filename)
+          const isPackageE2eSrc = /\/packages\/e2e\/src\//.test(filename)
+          if (!inTestsTree && !inIntegrationTree && !isPackageE2eSrc) return {}
+        }
+        // Fixtures directory verifies rule behavior — let the fixture
+        // files participate normally (including the allow-comment carveout)
+        // so the fixtures test can count diagnostics on the invalid fixture
+        // and zero diagnostics on the valid fixture.
+
+        const getComments = (): ReadonlyArray<AstNode> => {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- oxlint plugin context exposes sourceCode outside public types
+          const ctx = context as unknown as {
+            sourceCode?: { getAllComments?: () => ReadonlyArray<unknown> }
+          }
+          const getAll = ctx.sourceCode?.getAllComments
+          if (typeof getAll !== "function") return []
+          return getAll.call(ctx.sourceCode).filter(isAstNode)
+        }
+
+        const hasAllowComment = (node: AstNode): boolean => {
+          const startLine = getLocLine(node, "start")
+          if (startLine === undefined) return false
+          return getComments().some((comment) => {
+            const endLine = getLocLine(comment, "end")
+            if (endLine === undefined) return false
+            // Allow either an immediately-preceding line OR a same-line
+            // trailing comment.
+            if (endLine !== startLine - 1 && endLine !== startLine) return false
+            const value = getStringField(comment, "value")
+            return value !== undefined && /\bgent\/no-sleep:\s*allow\s+\S/.test(value)
+          })
+        }
+
+        return {
+          CallExpression(node) {
+            if (!isAstNode(node)) return
+            const callee = getNodeField(node, "callee")
+            if (callee?.type !== "MemberExpression") return
+            const prop = getNodeField(callee, "property")
+            if (prop?.type !== "Identifier") return
+            if (getStringField(prop, "name") !== "sleep") return
+            // Restrict to recognized sleep call shapes — `Effect.sleep(...)`
+            // and `Bun.sleep(...)`. Other `.sleep(...)` on unrelated
+            // objects (e.g., a domain object exposing a `sleep` action)
+            // would be false positives and aren't worth catching here.
+            const obj = getNodeField(callee, "object")
+            if (obj?.type !== "Identifier") return
+            const objectName = getStringField(obj, "name")
+            if (objectName !== "Effect" && objectName !== "Bun") return
+            if (hasAllowComment(node)) return
+            context.report({
+              message: `\`${objectName}.sleep(...)\` in test code — replace fixed delays with deterministic synchronisation: \`Deferred\` for coordination, \`controls.waitForCall(...)\` / \`controls.waitForStreamStart()\` for sequence-provider gating, or \`waitFor\` polling helpers for projection convergence. If this site is a real-clock timing assertion, OS-level fiber pacing, or a retry/backoff test, add \`// gent/no-sleep: allow <reason>\` on the line directly above the call.`,
               node,
             })
           },

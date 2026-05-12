@@ -214,6 +214,7 @@ describe("server lifecycle", () => {
             ({ proc }) => killProcess(proc),
           )
 
+          // gent/no-sleep: allow real-clock idle-timeout exercise — subject under test is wall-clock idle eviction
           yield* Effect.sleep(`${idleTimeoutMs * 0.6} millis`)
 
           const clientScope = yield* Scope.make()
@@ -225,10 +226,12 @@ describe("server lifecycle", () => {
           const status = yield* bundle.client.runtime.status().pipe(Effect.mapError(toTestFailure))
           expect(status.connectionCount).toBeGreaterThanOrEqual(1)
 
+          // gent/no-sleep: allow real-clock idle-timeout exercise — verifies eviction has not fired before deadline
           yield* Effect.sleep(`${idleTimeoutMs * 0.6} millis`)
           expect(() => process.kill(proc.pid, 0)).not.toThrow()
 
           yield* Scope.close(clientScope, Exit.void)
+          // gent/no-sleep: allow real-clock grace window after client scope close, before idle eviction
           yield* Effect.sleep("100 millis")
           expect(() => process.kill(proc.pid, 0)).not.toThrow()
 

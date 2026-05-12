@@ -23,6 +23,7 @@ const waitFor = (predicate: () => boolean): Effect.Effect<void, AtomSolidTestErr
     if (attempts <= 0) {
       return yield* new AtomSolidTestError({ message: "condition did not settle" })
     }
+    // gent/no-sleep: allow yield-then-retry primitive — Solid signal microtasks must drain between checks
     yield* Effect.sleep("0 millis")
     return yield* check
   }) as Effect.Effect<void, AtomSolidTestError>

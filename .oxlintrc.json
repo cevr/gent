@@ -35,6 +35,8 @@
     "gent/no-promise-control-flow-in-tests": "error",
     // Custom — hand-rolled `_tag` discriminated unions banned; use Schema.TaggedUnion
     "gent/no-hand-rolled-tagged-union": "error",
+    // Custom — .sleep(...) banned in tests; carve out with `// gent/no-sleep: allow <reason>`
+    "gent/no-sleep": "error",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
     // TypeScript - flag unsafe type assertions (as X)

@@ -38,6 +38,7 @@ export const waitForRenderedFrame = (
       const frame = renderFrame(setup)
       lastFrame = frame
       if (predicate(frame)) return frame
+      // gent/no-sleep: allow render-poll primitive — TUI frame must be re-rendered between observations
       yield* Effect.sleep("10 millis")
       return yield* loop(startedAt)
     })

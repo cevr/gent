@@ -179,6 +179,13 @@ const CASES: ReadonlyArray<RuleCase> = [
     // 4 hand-rolled `_tag` unions in the invalid fixture
     expectedCount: 4,
   },
+  {
+    rule: "gent/no-sleep",
+    invalid: "no-sleep.invalid.test.ts",
+    valid: "no-sleep.valid.test.ts",
+    // 4 unguarded sleeps + 1 malformed-carveout sleep
+    expectedCount: 5,
+  },
 ]
 
 const assertProcessed = (run: OxlintRun, fixtureFile: string): void => {

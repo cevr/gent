@@ -39,6 +39,7 @@ const waitForExit = (pid: number, timeoutMs: number): Effect.Effect<void> =>
       if (!isPidAlive(pid)) return
       const now = yield* Clock.currentTimeMillis
       if (now >= deadline) return
+      // gent/no-sleep: allow OS-level wait for kernel to reap the PTY subprocess
       yield* Effect.sleep("50 millis")
       return yield* loop
     })
@@ -142,6 +143,7 @@ export const ptyWaitFor = (
   opts: { timeout: number },
 ): Effect.Effect<void> => Effect.promise(() => pty.waitFor(text, opts))
 
+// gent/no-sleep: allow PTY fixture primitive — deliberate OS-level pause for terminal redraw cycles
 export const shortPause = (ms: number): Effect.Effect<void> => Effect.sleep(`${ms} millis`)
 
 const escape = "\\u001b"

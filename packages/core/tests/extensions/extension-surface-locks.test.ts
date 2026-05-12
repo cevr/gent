@@ -608,6 +608,7 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("extension reactions and lifecycle hooks reject Promise handlers", () => {
+    // gent/no-sleep: allow source a `Promise<void>` value purely for type-level assignability check below
     const promiseVoid = Bun.sleep(0)
     defineExtension({
       id: "purity-reaction",

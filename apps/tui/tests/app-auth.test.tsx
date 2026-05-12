@@ -41,6 +41,7 @@ const waitForMessage = (
           message: `timed out waiting for message: ${content}`,
         })
       }
+      // gent/no-sleep: allow render-poll primitive — TUI frame must be re-rendered between observations
       yield* Effect.sleep("10 millis")
       return yield* poll(startedAt)
     })
@@ -372,6 +373,7 @@ describe("App auth gate", () => {
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, () => authChecks > 0, "auth check failure"),
       )
+      // gent/no-sleep: allow real-clock gap so any spurious send fiber has time to surface (negative assertion follows)
       yield* Effect.sleep("20 millis")
       yield* Effect.promise(() => setup.renderOnce())
       expect(sentMessages).toEqual([])
@@ -841,6 +843,7 @@ describe("App auth gate", () => {
           authType: undefined,
         },
       ])
+      // gent/no-sleep: allow real-clock gap so the resumed-send fiber resolves before assertion
       yield* Effect.sleep("20 millis")
       yield* Effect.promise(() => setup.renderOnce())
       expect(renderFrame(setup)).not.toContain("API Keys")
