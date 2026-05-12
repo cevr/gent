@@ -12,6 +12,7 @@ import { SqlClient } from "effect/unstable/sql"
 import {
   branchFromRow,
   decodeStoredMessage,
+  decodeMessageChunkRow,
   groupMessageChunkRows,
   sessionFromRow,
   type BranchRow,
@@ -108,7 +109,7 @@ export class RelationshipStorage extends Context.Service<
             }
 
             const branchIds = branches.map((b) => b.id)
-            const allMsgRows = yield* sql<MessageChunkRow>`SELECT
+            const allMsgRawRows = yield* sql`SELECT
               m.id,
               m.session_id,
               m.branch_id,
@@ -126,11 +127,14 @@ export class RelationshipStorage extends Context.Service<
             WHERE m.branch_id IN ${sql.in(branchIds)}
               AND s.workspace_id = ${workspaceId}
             ORDER BY m.created_at ASC, m.id ASC, mc.ordinal ASC`
+            const allMsgRows = yield* Effect.forEach(allMsgRawRows, (row) =>
+              decodeMessageChunkRow(row),
+            )
 
             const rowsByBranch = new Map<BranchId, Array<MessageChunkRow>>()
             for (const branch of branches) rowsByBranch.set(branch.id, [])
             for (const row of allMsgRows) {
-              const bucket = rowsByBranch.get(row.branch_id as BranchId)
+              const bucket = rowsByBranch.get(row.branch_id)
               if (bucket !== undefined) bucket.push(row)
             }
 

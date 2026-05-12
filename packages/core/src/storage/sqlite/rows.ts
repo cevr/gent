@@ -2,7 +2,7 @@ import { Effect, Option, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Message, Branch, MessageMetadata, Session, dateFromMillis } from "../../domain/message.js"
 import { messagePartsSearchText } from "../../domain/message-part-projection.js"
-import { AgentEvent } from "../../domain/event.js"
+import { AgentEvent, EventId } from "../../domain/event.js"
 import { BranchId, MessageId, SessionId } from "../../domain/ids.js"
 import { ReasoningEffort } from "../../domain/agent.js"
 import { GentPlatform } from "../../runtime/gent-platform.js"
@@ -57,28 +57,36 @@ export const BranchRow = Schema.Struct({
 })
 export type BranchRow = typeof BranchRow.Type
 
-export interface MessageRow {
-  id: MessageId
-  session_id: SessionId
-  branch_id: BranchId
-  kind: "regular" | "interjection" | null
-  role: "user" | "assistant" | "system" | "tool"
-  created_at: number
-  turn_duration_ms: number | null
-  metadata: string | null
-}
+export const MessageRow = Schema.Struct({
+  id: MessageId,
+  session_id: SessionId,
+  branch_id: BranchId,
+  kind: Schema.NullOr(Schema.Literals(["regular", "interjection"])),
+  role: Schema.Literals(["user", "assistant", "system", "tool"]),
+  created_at: Schema.Number,
+  turn_duration_ms: Schema.NullOr(Schema.Number),
+  metadata: Schema.NullOr(Schema.String),
+})
+export type MessageRow = typeof MessageRow.Type
 
-export interface MessageChunkRow extends MessageRow {
-  chunk_ordinal: number | null
-  chunk_part_json: string | null
-}
+export const MessageChunkRow = Schema.Struct({
+  ...MessageRow.fields,
+  chunk_ordinal: Schema.NullOr(Schema.Number),
+  chunk_part_json: Schema.NullOr(Schema.String),
+})
+export type MessageChunkRow = typeof MessageChunkRow.Type
 
-export interface EventRow {
-  id: number
-  event_json: string
-  created_at: number
-  trace_id: string | null
-}
+export const EventRow = Schema.Struct({
+  id: EventId,
+  event_json: Schema.String,
+  created_at: Schema.Number,
+  trace_id: Schema.NullOr(Schema.String),
+})
+export type EventRow = typeof EventRow.Type
+
+export const decodeMessageRow = Schema.decodeUnknownEffect(MessageRow)
+export const decodeMessageChunkRow = Schema.decodeUnknownEffect(MessageChunkRow)
+export const decodeEventRow = Schema.decodeUnknownEffect(EventRow)
 
 export const SESSION_PARENT_BRANCH_CHECK =
   "CHECK (parent_branch_id IS NULL OR parent_session_id IS NOT NULL)"

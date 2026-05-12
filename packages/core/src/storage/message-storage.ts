@@ -11,12 +11,12 @@ import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 import { SqlClient, SqlModel } from "effect/unstable/sql"
 import {
+  decodeMessageChunkRow,
   decodeStoredMessage,
   encodeStoredMessage,
   groupMessageChunkRows,
   indexMessageSearch,
   insertMessageContent,
-  type MessageChunkRow,
 } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
@@ -140,7 +140,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
           getMessage: Effect.fn("MessageStorage.getMessage")(
             function* (id) {
               const workspaceId = yield* CurrentWorkspaceId
-              const rows = yield* sql<MessageChunkRow>`SELECT
+              const rawRows = yield* sql`SELECT
               m.id,
               m.session_id,
               m.branch_id,
@@ -157,6 +157,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
             JOIN sessions s ON s.id = m.session_id
             WHERE m.id = ${id} AND s.workspace_id = ${workspaceId}
             ORDER BY mc.ordinal ASC`
+              const rows = yield* Effect.forEach(rawRows, (row) => decodeMessageChunkRow(row))
               const grouped = groupMessageChunkRows(rows)
               const entry = grouped[0]
               if (entry === undefined) return undefined
@@ -168,7 +169,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
           listMessages: Effect.fn("MessageStorage.listMessages")(
             function* (branchId) {
               const workspaceId = yield* CurrentWorkspaceId
-              const rows = yield* sql<MessageChunkRow>`SELECT
+              const rawRows = yield* sql`SELECT
               m.id,
               m.session_id,
               m.branch_id,
@@ -185,6 +186,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
             JOIN sessions s ON s.id = m.session_id
             WHERE m.branch_id = ${branchId} AND s.workspace_id = ${workspaceId}
             ORDER BY m.created_at ASC, m.id ASC, mc.ordinal ASC`
+              const rows = yield* Effect.forEach(rawRows, (row) => decodeMessageChunkRow(row))
               return yield* Effect.forEach(groupMessageChunkRows(rows), ({ row, partJsons }) =>
                 decodeStoredMessage(row, partJsons),
               )
