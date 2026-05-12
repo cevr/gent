@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Context, Effect, Exit, FileSystem, Layer, Option, Schema } from "effect"
+import { Cause, Context, Effect, Exit, FileSystem, Layer, MutableRef, Option, Schema } from "effect"
+import { MinimumLogLevel } from "effect/References"
 import { narrowR } from "../helpers/effect"
 import {
   ExtensionLoadError,
@@ -35,6 +36,7 @@ import * as ExtensionApi from "@gent/core/extensions/api"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import { ConfigService } from "../../src/runtime/config-service"
 import { TodoStorage } from "../../../extensions/src/todo-storage.js"
+import { WideEventLogger, type LogEvent } from "../../src/runtime/wide-event-boundary"
 class ProfileToken extends Context.Service<
   ProfileToken,
   {
@@ -147,11 +149,16 @@ describe("extension command RPCs", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+            const wideEvents = MutableRef.make<Array<LogEvent>>([])
+            const minimumLogLevel = Layer.effectContext(
+              Effect.succeed(Context.make(MinimumLogLevel, "Info")),
+            )
             const { client, sessionId, branchId } = yield* createRpcHarness({
               ...e2ePreset,
               providerLayer,
               extensionInputs: [TestCommandsExtension],
               cwd: "/tmp/gent-extension-request-session",
+              extraLayers: [WideEventLogger.Capture(wideEvents), minimumLogLevel],
             })
             createdSessionId = sessionId
             const commands = yield* client.extension.listSlashCommands({ sessionId })
@@ -168,6 +175,12 @@ describe("extension command RPCs", () => {
               input: "rpc-world",
               branchId,
             })
+            const extensionRequestEvent = MutableRef.get(wideEvents).find(
+              (event) =>
+                event.annotations["service"] === "rpc" &&
+                event.annotations["method"] === "extension.request",
+            )
+            expect(extensionRequestEvent).not.toBeUndefined()
           }).pipe(Effect.timeout("4 seconds")),
         ),
       )
