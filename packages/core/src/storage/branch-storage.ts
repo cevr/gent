@@ -106,7 +106,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
               WHERE b.id = ${id} AND s.workspace_id = ${workspaceId}`
             const row = rows[0]
             if (row === undefined) return undefined
-            return branchFromRow(row)
+            return yield* branchFromRow(row)
           },
           Effect.mapError(mapError("Failed to get branch")),
         ),
@@ -120,7 +120,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
               JOIN sessions s ON s.id = b.session_id
               WHERE b.session_id = ${sessionId} AND s.workspace_id = ${workspaceId}
               ORDER BY b.created_at ASC`
-            return rows.map(branchFromRow)
+            return yield* Effect.forEach(rows, branchFromRow)
           },
           Effect.mapError(mapError("Failed to list branches")),
         ),

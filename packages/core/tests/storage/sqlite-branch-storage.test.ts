@@ -5,6 +5,7 @@ import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { SqlClient } from "effect/unstable/sql"
 
 const FIXED_NOW_MILLIS = 1_767_225_600_000
 const FIXED_NOW = dateFromMillis(FIXED_NOW_MILLIS)
@@ -60,6 +61,23 @@ describe("Branches", () => {
       )
       const branchesResult = yield* branches.listBranches(SessionId.make("multi-branch"))
       expect(branchesResult.length).toBe(2)
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+  )
+  it.live("fails through StorageError for invalid durable branch row shape", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const sql = yield* SqlClient.SqlClient
+      yield* sessions.createSession(
+        new Session({
+          id: SessionId.make("invalid-branch-session"),
+          createdAt: FIXED_NOW,
+          updatedAt: FIXED_NOW,
+        }),
+      )
+      yield* sql`INSERT INTO branches (id, session_id, created_at) VALUES (${"invalid-branch-row"}, ${"invalid-branch-session"}, ${"not-a-number"})`
+      const exit = yield* Effect.exit(branches.getBranch(BranchId.make("invalid-branch-row")))
+      expect(exit._tag).toBe("Failure")
     }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
   )
   it.live("updates branch summary", () =>

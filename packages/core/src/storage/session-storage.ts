@@ -105,7 +105,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
               yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${id} AND workspace_id = ${workspaceId}`
             const row = rows[0]
             if (row === undefined) return undefined
-            return sessionFromRow(row)
+            return yield* sessionFromRow(row)
           },
           Effect.mapError(mapError("Failed to get session")),
         ),
@@ -117,7 +117,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
               yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE cwd = ${cwd} AND workspace_id = ${workspaceId} ORDER BY updated_at DESC LIMIT 1`
             const row = rows[0]
             if (row === undefined) return undefined
-            return sessionFromRow(row)
+            return yield* sessionFromRow(row)
           },
           Effect.mapError(mapError("Failed to get last session by cwd")),
         ),
@@ -127,7 +127,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
             const workspaceId = yield* CurrentWorkspaceId
             const rows =
               yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE workspace_id = ${workspaceId} ORDER BY updated_at DESC`
-            return rows.map(sessionFromRow)
+            return yield* Effect.forEach(rows, sessionFromRow)
           },
           Effect.mapError(mapError("Failed to list sessions")),
         ),

@@ -109,9 +109,9 @@ const rowToSession = (row: SessionRow) =>
     updatedAt: dateFromMillis(row.updated_at),
   })
 
-const decodeSessionRow = Schema.decodeUnknownSync(SessionRow)
+const decodeSessionRow = Schema.decodeUnknownEffect(SessionRow)
 
-export const sessionFromRow = (row: SessionRow): Session => rowToSession(decodeSessionRow(row))
+export const sessionFromRow = (row: SessionRow) => Effect.map(decodeSessionRow(row), rowToSession)
 
 const rowToBranch = (row: BranchRow) =>
   new Branch({
@@ -124,9 +124,9 @@ const rowToBranch = (row: BranchRow) =>
     createdAt: dateFromMillis(row.created_at),
   })
 
-const decodeBranchRow = Schema.decodeUnknownSync(BranchRow)
+const decodeBranchRow = Schema.decodeUnknownEffect(BranchRow)
 
-export const branchFromRow = (row: BranchRow): Branch => rowToBranch(decodeBranchRow(row))
+export const branchFromRow = (row: BranchRow) => Effect.map(decodeBranchRow(row), rowToBranch)
 
 export const decodeStoredMessage = (row: MessageRow, partJsons: ReadonlyArray<string>) =>
   Effect.map(

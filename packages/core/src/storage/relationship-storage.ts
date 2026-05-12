@@ -59,7 +59,7 @@ export class RelationshipStorage extends Context.Service<
             const workspaceId = yield* CurrentWorkspaceId
             const rows =
               yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE parent_session_id = ${parentSessionId} AND workspace_id = ${workspaceId} ORDER BY created_at ASC`
-            return rows.map(sessionFromRow)
+            return yield* Effect.forEach(rows, sessionFromRow)
           },
           Effect.mapError(mapError("Failed to get child sessions")),
         ),
@@ -80,7 +80,7 @@ export class RelationshipStorage extends Context.Service<
           SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at
           FROM ancestors
           ORDER BY depth ASC`
-            return rows.map(sessionFromRow)
+            return yield* Effect.forEach(rows, sessionFromRow)
           },
           Effect.mapError(mapError("Failed to get session ancestors")),
         ),
@@ -94,7 +94,7 @@ export class RelationshipStorage extends Context.Service<
             if (sessionRow === undefined) {
               return yield* new StorageError({ message: `Session not found: ${sessionId}` })
             }
-            const session = sessionFromRow(sessionRow)
+            const session = yield* sessionFromRow(sessionRow)
 
             const branchRows =
               yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.summary, b.created_at
@@ -102,7 +102,7 @@ export class RelationshipStorage extends Context.Service<
                 JOIN sessions s ON s.id = b.session_id
                 WHERE b.session_id = ${sessionId} AND s.workspace_id = ${workspaceId}
                 ORDER BY b.created_at ASC`
-            const branches = branchRows.map(branchFromRow)
+            const branches = yield* Effect.forEach(branchRows, branchFromRow)
 
             if (branches.length === 0) {
               return { session, branches: [] }

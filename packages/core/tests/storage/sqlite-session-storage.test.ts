@@ -107,6 +107,15 @@ describe("Sessions", () => {
       expect(retrieved?.reasoningLevel).toBeUndefined()
     }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
   )
+  it.live("fails through StorageError for invalid durable session row shape", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const sql = yield* SqlClient.SqlClient
+      yield* sql`INSERT INTO sessions (id, created_at, updated_at) VALUES (${"invalid-session-row"}, ${"not-a-number"}, ${FIXED_NOW_MILLIS})`
+      const exit = yield* Effect.exit(sessions.getSession(SessionId.make("invalid-session-row")))
+      expect(exit._tag).toBe("Failure")
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+  )
   it.live("deletes a session", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage

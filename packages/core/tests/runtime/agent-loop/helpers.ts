@@ -341,22 +341,29 @@ export const makeLiveToolLayer = (
   )
 }
 export const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
-  Layer.succeed(EventStore, {
-    append: (event: AgentEvent) =>
-      Effect.gen(function* () {
-        yield* Ref.update(eventsRef, (events) => [...events, event])
-        return EventEnvelope.make({
-          id: EventId.make(0),
-          event,
-          createdAt: yield* Clock.currentTimeMillis,
-        })
-      }),
-    broadcast: () => Effect.void,
-    deliver: () => Effect.void,
-    publish: (event: AgentEvent) => Ref.update(eventsRef, (events) => [...events, event]),
-    subscribe: () => Stream.empty,
-    removeSession: () => Effect.void,
-  })
+  Layer.effect(
+    EventStore,
+    Effect.gen(function* () {
+      const idRef = yield* Ref.make(0)
+      return {
+        append: (event: AgentEvent) =>
+          Effect.gen(function* () {
+            const id = yield* Ref.modify(idRef, (n) => [n + 1, n + 1])
+            yield* Ref.update(eventsRef, (events) => [...events, event])
+            return EventEnvelope.make({
+              id: EventId.make(id),
+              event,
+              createdAt: yield* Clock.currentTimeMillis,
+            })
+          }),
+        broadcast: () => Effect.void,
+        deliver: () => Effect.void,
+        publish: (event: AgentEvent) => Ref.update(eventsRef, (events) => [...events, event]),
+        subscribe: () => Stream.empty,
+        removeSession: () => Effect.void,
+      }
+    }),
+  )
 export const makeLayerWithEvents = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   eventsRef: Ref.Ref<AgentEvent[]>,
