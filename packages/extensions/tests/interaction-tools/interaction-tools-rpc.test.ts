@@ -116,4 +116,53 @@ describe("InteractionToolsExtension via model turn", () => {
       ),
     15_000,
   )
+
+  it.live(
+    "prompt tool (review mode) routes through per-request scope, writes a file, and auto-approves",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("prompt", {
+              mode: "review",
+              content: "# Plan\n\nMigrate the actor mailbox to bounded queues.",
+              title: "Migration plan",
+            }),
+            textStep("reviewed"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+          })
+
+          const toolEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter(
+              (envelope) =>
+                (envelope.event._tag === "ToolCallSucceeded" ||
+                  envelope.event._tag === "ToolCallFailed") &&
+                (envelope.event as { readonly toolName?: string }).toolName === "prompt",
+            ),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "review the plan",
+          })
+
+          const events = Array.from(yield* Fiber.join(toolEventFiber))
+          const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
+          expect(succeeded).toBeDefined()
+          if (succeeded?.event._tag === "ToolCallSucceeded") {
+            expect(succeeded.event.output).toContain('"mode": "review"')
+            expect(succeeded.event.output).toContain('"decision": "yes"')
+            expect(succeeded.event.output).toContain(".gent/prompts/")
+          }
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
 })
