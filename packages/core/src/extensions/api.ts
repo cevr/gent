@@ -98,7 +98,6 @@ export {
 export type { TurnExecutor, TurnContext, TurnStreamPart } from "../domain/driver.js"
 export { ProviderAuthError, TurnError } from "../domain/driver.js"
 export type {
-  AnyDriverContribution,
   ExternalDriverContribution,
   ModelDriverContribution,
   ProviderAuthContribution,
@@ -133,10 +132,8 @@ export type { Question } from "../domain/event.js"
 export {
   messagePartImage,
   messagePartReasoning,
-  messagePartSearchText,
   messagePartText,
   messagePartToolCall,
-  messagePartToolResult,
   messagePartsDisplayText,
   messagePartsImages,
   messagePartsReasoning,
@@ -146,11 +143,6 @@ export {
   messagePartsTextLines,
   messagePartsToolCalls,
   messagePartsToolResults,
-  stringifySearchValue,
-  type ImagePartProjection,
-  type MessagePartsDisplayTextOptions,
-  type ToolCallPartProjection,
-  type ToolResultPartProjection,
 } from "../domain/message-part-projection.js"
 export { PermissionRule, type PermissionResult } from "../domain/permission.js"
 export {
@@ -180,13 +172,7 @@ export {
 } from "../domain/capability/request.js"
 export type { CapabilityRef } from "../domain/capability.js"
 export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
-export type {
-  ResourceContribution,
-  AnyResourceContribution,
-  ResourceSpec,
-  ResourceScope,
-  ScopeOf,
-} from "../domain/resource.js"
+export type { ResourceContribution, AnyResourceContribution } from "../domain/resource.js"
 export type { ScheduledJobContribution } from "../domain/scheduled-job.js"
 export { ProjectionError } from "../domain/extension.js"
 export {
@@ -221,7 +207,7 @@ export {
  * by `defineExtension` and do not leak into the loaded extension dependency
  * type.
  */
-export type FieldSpec<A, R = never> =
+type FieldSpec<A, R = never> =
   | ReadonlyArray<A>
   | (() => ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R>)
 
@@ -232,7 +218,7 @@ export {
 
 type RemainingSetupRequirements<R> = Exclude<R, ExtensionSetupContext>
 
-export interface DefineExtensionInput<R = never> {
+interface DefineExtensionInput<R = never> {
   readonly id: string
   readonly resources?: FieldSpec<AnyResourceContribution, R>
   readonly scheduledJobs?: FieldSpec<ScheduledJobContribution, R>

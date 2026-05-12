@@ -191,7 +191,7 @@ export type GentRpcClient = RpcClient.RpcClient<
   RpcClientError.RpcClientError | GentConnectionError
 >
 
-export type GentRpcClientError =
+export type GentClientRpcError =
   | Rpc.Error<RpcGroupNs.Rpcs<typeof GentRpcs>>
   | RpcClientError.RpcClientError
   | GentConnectionError
