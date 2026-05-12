@@ -16,7 +16,10 @@ import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensio
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-runner"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
-import { makeEphemeralAgentRootLayer } from "../../src/runtime/agent/ephemeral-root"
+import {
+  makeEphemeralAgentRootLayer,
+  type EphemeralParentServices,
+} from "../../src/runtime/agent/ephemeral-root"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
@@ -1112,7 +1115,7 @@ describe("ephemeral service propagation", () => {
       )
       const layer = Layer.unwrap(
         Effect.gen(function* () {
-          const parentServices = yield* Effect.context()
+          const parentServices = yield* Effect.context<EphemeralParentServices>()
           const extensionRegistry = yield* ExtensionRegistry
           return makeEphemeralAgentRootLayer({
             config: { baseSections: [] },

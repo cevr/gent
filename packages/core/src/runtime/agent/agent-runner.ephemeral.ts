@@ -48,7 +48,7 @@ import {
 } from "./agent-runner.durable.js"
 import { loadAgentRunSuccessData, saveAgentRunOutput } from "./agent-runner.metadata.js"
 import { handleAgentRunFailure } from "./agent-runner.run-spec.js"
-import { makeEphemeralAgentRootLayer } from "./ephemeral-root.js"
+import { makeEphemeralAgentRootLayer, type EphemeralParentServices } from "./ephemeral-root.js"
 
 const reparentEphemeralChildEvent = (
   event: AgentEvent,
@@ -98,7 +98,7 @@ const reparentEphemeralChildEvent = (
 
 export const runEphemeralAgent = (params: {
   runnerConfig: AgentRunnerConfig
-  parentServices: Context.Context<never>
+  parentServices: Context.Context<EphemeralParentServices>
   parentSessionId: SessionId
   parentBranchId: BranchId
   toolCallId?: ToolCallId

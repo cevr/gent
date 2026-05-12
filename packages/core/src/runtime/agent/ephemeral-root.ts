@@ -34,6 +34,15 @@ export interface EphemeralAgentRootConfig {
 
 type EphemeralOverrideError = StorageError | Config.ConfigError
 
+export type EphemeralParentServices =
+  | RuntimeEnvironment
+  | FileSystem.FileSystem
+  | Path.Path
+  | ModelResolver
+  | ConfigService
+  | ModelRegistry
+  | GentPlatform
+
 type EphemeralStorageProvides =
   | SqlClient.SqlClient
   | SessionStorage
@@ -86,7 +95,7 @@ const recoverExtensionLayer = <Provides>(
   layer as Layer.Layer<Provides, never, EphemeralExtensionRequires> // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- explicit extension-layer recovery membrane
 
 const composeEphemeralRuntimeLayer = <Provides>(params: {
-  readonly parentServices: Context.Context<never>
+  readonly parentServices: Context.Context<EphemeralParentServices>
   readonly overrides: EphemeralRuntimeOverrides
   readonly extensionLayers?: Layer.Layer<Provides, unknown, unknown>
 }): Layer.Layer<Provides | EphemeralOverrideProvides, EphemeralOverrideError, never> => {
@@ -135,7 +144,7 @@ const composeEphemeralRuntimeLayer = <Provides>(params: {
  */
 export const makeEphemeralAgentRootLayer = (params: {
   readonly config: EphemeralAgentRootConfig
-  readonly parentServices: Context.Context<never>
+  readonly parentServices: Context.Context<EphemeralParentServices>
   readonly extensionRegistry: ExtensionRegistryService
 }) => {
   const resolved = params.extensionRegistry.getResolved()

@@ -1,4 +1,13 @@
-import { Cause, Duration, Effect, type FileSystem, Layer, type Path, Schema } from "effect"
+import {
+  Cause,
+  Duration,
+  Effect,
+  type Context,
+  type FileSystem,
+  Layer,
+  type Path,
+  Schema,
+} from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import type { SqlClient } from "effect/unstable/sql"
 import { runProcess } from "../../utils/run-process.js"
@@ -36,10 +45,24 @@ import {
   publishAgentRunSucceeded,
 } from "./agent-runner.durable.js"
 import { runEphemeralAgent } from "./agent-runner.ephemeral.js"
+import type { EphemeralParentServices } from "./ephemeral-root.js"
 import { loadAgentRunSuccessData, saveAgentRunOutput } from "./agent-runner.metadata.js"
 import { normalizeRunSpec, handleAgentRunFailure } from "./agent-runner.run-spec.js"
 export type { AgentRunnerConfig } from "./agent-runner.config.js"
 export { getSessionDepth } from "./agent-runner.durable.js"
+
+type AgentRunnerRuntimeServices =
+  | SessionStorage
+  | BranchStorage
+  | MessageStorage
+  | EventStorage
+  | RelationshipStorage
+  | SqlClient.SqlClient
+  | EventPublisher
+  | GentPlatform
+  | FileSystem.FileSystem
+
+type AgentRunnerParentServices = EphemeralParentServices
 
 export const InProcessRunner = (
   runnerConfig: AgentRunnerConfig,
@@ -73,23 +96,13 @@ export const InProcessRunner = (
       const sessionRuntime = yield* SessionRuntime
       const extensionRegistry = yield* ExtensionRegistry
 
-      // Snapshot layer-build context so the `run` method can resolve Tags
-      // that helpers yield inside (createDurableAgentRunSession,
-      // loadAgentRunSuccessData, publishAgentRunSucceeded, publishAgentRunFailed).
-      // Without this snapshot, helper requirements leak through the returned
-      // Effect and break the `AgentRunner` interface contract.
-      const runtimeContext = yield* Effect.context<
-        | SessionStorage
-        | BranchStorage
-        | MessageStorage
-        | EventStorage
-        | RelationshipStorage
-        | SqlClient.SqlClient
-        | EventPublisher
-        | GentPlatform
-        | FileSystem.FileSystem
-      >()
-      const parentServices = yield* Effect.context<never>()
+      // AgentRunner exposes a closed `run` method to extension authors. Capture
+      // only the service families the runner helpers actually yield, instead of
+      // smuggling the whole layer context through the method closure.
+      const runtimeContext: Context.Context<AgentRunnerRuntimeServices> =
+        yield* Effect.context<AgentRunnerRuntimeServices>()
+      const parentServices: Context.Context<AgentRunnerParentServices> =
+        yield* Effect.context<AgentRunnerParentServices>()
 
       const platform = yield* GentPlatform
       const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
@@ -281,21 +294,13 @@ export const SubprocessRunner = (
       const extensionRegistry = yield* ExtensionRegistry
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
 
-      // Snapshot layer-build context so the `run` method can resolve Tags that
-      // helpers yield inside. Without this, helper requirements leak into the
-      // `run` method's R-channel and break the `AgentRunner` interface.
-      const runtimeContext = yield* Effect.context<
-        | SessionStorage
-        | BranchStorage
-        | MessageStorage
-        | EventStorage
-        | RelationshipStorage
-        | SqlClient.SqlClient
-        | EventPublisher
-        | GentPlatform
-        | FileSystem.FileSystem
-      >()
-      const parentServices = yield* Effect.context<never>()
+      // AgentRunner exposes a closed `run` method to extension authors. Capture
+      // only the service families the runner helpers actually yield, instead of
+      // smuggling the whole layer context through the method closure.
+      const runtimeContext: Context.Context<AgentRunnerRuntimeServices> =
+        yield* Effect.context<AgentRunnerRuntimeServices>()
+      const parentServices: Context.Context<AgentRunnerParentServices> =
+        yield* Effect.context<AgentRunnerParentServices>()
 
       const platform = yield* GentPlatform
       const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
