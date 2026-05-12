@@ -94,6 +94,63 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
+  test("flags withX wrappers around function invocations", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        "yield* withWorkspace(submitTurn(operation))",
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 1,
+        message:
+          "`withX(fn(...))` invocation style is banned; call the inner effect and pipe the wrapper (`fn(...).pipe(withX)`).",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        [
+          "yield* withWorkspace(",
+          "  Effect.gen(function* () {",
+          "    yield* submitTurn(operation)",
+          "  }),",
+          ")",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 1,
+        message:
+          "`withX(fn(...))` invocation style is banned; call the inner effect and pipe the wrapper (`fn(...).pipe(withX)`).",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        "yield* submitTurn(operation).pipe(provideWorkspace)",
+      ),
+    ).toEqual([])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        "yield* run.pipe(withWideEvent(agentRunBoundary(agentName, sessionId)))",
+      ),
+    ).toEqual([])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/extensions/src/openai/codex-transform.ts",
+        "const withBody = rewriteCodexBody(withHeaders(req, headers))",
+      ),
+    ).toEqual([])
+  })
+
   test("flags deleted public actor rpc path", () => {
     expect(findPlatformDuplicationViolations("packages/core/src/server/rpcs/actor.ts", "")).toEqual(
       [

@@ -140,6 +140,11 @@ const bannedAgentRunnerCompositionPatterns: ReadonlyArray<BannedPattern> = [
 const withEffectWrapperDefinitionPattern = /\b(?:export\s+)?const\s+with[A-Z][A-Za-z0-9_]*\b/
 const withEffectWrapperMessage =
   "`withX(effect, ...)` wrapper helpers are banned; expose a pipeable provider and call it from `.pipe(...)`"
+const withFunctionInvocationPattern = /(?<![.\w$])with[A-Z][A-Za-z0-9_]*\s*\(/g
+const wrappedFunctionInvocationPattern =
+  /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s*\(/
+const withFunctionInvocationMessage =
+  "`withX(fn(...))` invocation style is banned; call the inner effect and pipe the wrapper (`fn(...).pipe(withX)`)."
 
 const hostFactPatternSources = new Set([
   "\\bprocess\\.(?:platform|pid|execPath|kill)\\b",
@@ -267,6 +272,40 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => [
     : []),
 ]
 
+const startsInsidePipeCall = (
+  lines: ReadonlyArray<string>,
+  index: number,
+  column: number,
+): boolean => {
+  const prefixWindow = [
+    ...lines.slice(Math.max(0, index - 64), index),
+    (lines[index] ?? "").slice(0, column),
+  ].join("\n")
+  const pipeStart = prefixWindow.lastIndexOf(".pipe(")
+  if (pipeStart === -1) return false
+
+  let depth = 0
+  for (const char of prefixWindow.slice(pipeStart + ".pipe".length)) {
+    if (char === "(") depth++
+    if (char === ")") depth--
+  }
+
+  return depth > 0
+}
+
+const startsByWrappingFunctionInvocation = (
+  lines: ReadonlyArray<string>,
+  index: number,
+  column: number,
+): boolean => {
+  const firstArgumentWindow = [
+    (lines[index] ?? "").slice(column),
+    ...lines.slice(index + 1, index + 8),
+  ].join("\n")
+
+  return wrappedFunctionInvocationPattern.test(firstArgumentWindow.trimStart())
+}
+
 export const findPlatformDuplicationViolations = (
   file: string,
   text: string,
@@ -289,6 +328,17 @@ export const findPlatformDuplicationViolations = (
       const declarationWindow = lines.slice(index, index + 8).join("\n")
       if (declarationWindow.includes("effect: Effect.Effect")) {
         findings.push({ file, line: index + 1, message: withEffectWrapperMessage })
+      }
+    }
+    withFunctionInvocationPattern.lastIndex = 0
+    let invocationMatch: RegExpExecArray | null
+    while ((invocationMatch = withFunctionInvocationPattern.exec(line)) !== null) {
+      const firstArgumentColumn = invocationMatch.index + invocationMatch[0].length
+      if (
+        startsByWrappingFunctionInvocation(lines, index, firstArgumentColumn) &&
+        !startsInsidePipeCall(lines, index, invocationMatch.index)
+      ) {
+        findings.push({ file, line: index + 1, message: withFunctionInvocationMessage })
       }
     }
     for (const { pattern, message } of patterns) {
