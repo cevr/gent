@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 
 // Valid Regex Pattern - validates regex at decode time
 const ValidRegexPattern = Schema.String.pipe(
@@ -71,18 +71,13 @@ export class Permission extends Context.Service<Permission, PermissionService>()
     initialRules: ReadonlyArray<PermissionRule> = [],
     defaultAction: PermissionRule["action"] = "allow",
   ): Layer.Layer<Permission> =>
-    Layer.effect(
-      Permission,
-      Effect.gen(function* () {
-        const rulesRef = yield* Ref.make<StoredRule[]>([...compilePermissionRules(initialRules)])
-        return Permission.of({
-          check: (tool, args) =>
-            Ref.get(rulesRef).pipe(
-              Effect.map((rules) => evaluatePermissionRules(rules, tool, args, defaultAction)),
-            ),
-        })
-      }),
-    )
+    Layer.sync(Permission, () => {
+      const rules = compilePermissionRules(initialRules)
+      return Permission.of({
+        check: (tool, args) =>
+          Effect.succeed(evaluatePermissionRules(rules, tool, args, defaultAction)),
+      })
+    })
 
   static Test = (): Layer.Layer<Permission> =>
     Layer.succeed(Permission, {
