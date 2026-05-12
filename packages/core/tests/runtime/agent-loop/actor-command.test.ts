@@ -277,6 +277,40 @@ describe("agent-loop actor commands", () => {
     }),
   )
 
+  it.live("Interrupt reports invalid derived cancel commands through the error channel", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* narrowR(
+        Effect.gen(function* () {
+          const { sessionId, branchId } = yield* createSessionBranchWithIds({
+            sessionId: SessionId.make("interrupt-invalid-command-session"),
+            branchId: BranchId.make("interrupt-invalid-command-branch"),
+          })
+          const actorClientFactory = yield* AgentLoopActor.Context
+          const ref = yield* actorClientFactory(entityIdOf(DefaultWorkspaceId, sessionId, branchId))
+          const exit = yield* ref
+            .execute(
+              AgentLoopActor.Interrupt.make({
+                workspaceId: DefaultWorkspaceId,
+                sessionId,
+                branchId,
+                commandId: ActorCommandId.make("x".repeat(129)),
+              }),
+            )
+            .pipe(Effect.exit)
+
+          expect(exit._tag).toBe("Failure")
+          if (exit._tag === "Failure") {
+            const repr = Bun.inspect(exit.cause)
+            expect(repr).toContain("AgentLoopError")
+            expect(repr).toContain("Invalid interrupt command")
+          }
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      )
+    }),
+  )
+
   it.live("recordToolResult dedupes by commandId", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])

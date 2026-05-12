@@ -963,17 +963,21 @@ const buildAgentLoopActorHandlers = (config: {
       Steer: Effect.fn("AgentLoop.Steer")(({ operation }: HandlerRequest<SteerInput>) =>
         applySteer(operation.commandId, operation.command).pipe(provideActorWorkspace),
       ),
-      Interrupt: Effect.fn("AgentLoop.Interrupt")(({ operation }: HandlerRequest<InterruptInput>) =>
-        applySteer(
-          operation.commandId,
-          Schema.decodeSync(SteerCommand)({
-            _tag: "Cancel",
-            sessionId: operation.sessionId,
-            branchId: operation.branchId,
-            requestId: operation.commandId,
-          }),
-        ).pipe(provideActorWorkspace),
-      ),
+      Interrupt: Effect.fn("AgentLoop.Interrupt")(function* ({
+        operation,
+      }: HandlerRequest<InterruptInput>) {
+        const command = yield* Schema.decodeUnknownEffect(SteerCommand)({
+          _tag: "Cancel",
+          sessionId: operation.sessionId,
+          branchId: operation.branchId,
+          requestId: operation.commandId,
+        }).pipe(
+          Effect.mapError(
+            (cause) => new AgentLoopError({ message: "Invalid interrupt command", cause }),
+          ),
+        )
+        yield* applySteer(operation.commandId, command).pipe(provideActorWorkspace)
+      }),
       RespondInteraction: Effect.fn("AgentLoop.RespondInteraction")(function* ({
         operation,
       }: HandlerRequest<RespondInteractionInput>) {
