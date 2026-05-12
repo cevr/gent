@@ -28,7 +28,6 @@ import {
 } from "@gent/core-internal/domain/ids"
 import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
-import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
@@ -127,7 +126,6 @@ describe("interaction", () => {
       ApprovalService.Test(),
       Permission.Live([], "allow"),
       BunServices.layer,
-      ResourceManagerLive,
       ModelRegistry.Test(),
       GentPlatform.Test(),
       recorderLayer,
@@ -279,7 +277,6 @@ describe("interaction", () => {
         EventStore.Memory,
         ToolRunner.Test(),
         BunServices.layer,
-        ResourceManagerLive,
         ModelRegistry.Test(),
         GentPlatform.Test(),
       )

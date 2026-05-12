@@ -18,7 +18,6 @@ import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-
 import { makeEphemeralAgentRootLayer } from "../../src/runtime/agent/ephemeral-root"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
-import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { emptyQueueSnapshot } from "@gent/core-internal/domain/queue"
 import { dateFromMillis, Session, Branch, Message } from "@gent/core-internal/domain/message"
@@ -157,7 +156,6 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<LanguageModel.Langu
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunPlatformLive,
     ConfigService.Test(),
-    ResourceManagerLive,
     ModelRegistry.Test(),
     ephemeralParentDeps,
   )

@@ -17,7 +17,6 @@ import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import { ActorCommandId, BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
-import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
@@ -105,7 +104,6 @@ describe("queue drain regression", () => {
           EventStore.Memory,
           ToolRunner.Test(),
           BunServices.layer,
-          ResourceManagerLive,
           ModelRegistry.Test(),
           GentPlatform.Test(),
         )
@@ -237,7 +235,6 @@ describe("queue drain regression", () => {
             EventStore.Memory,
             ToolRunner.Test(),
             BunServices.layer,
-            ResourceManagerLive,
             ModelRegistry.Test(),
             GentPlatform.Test(),
           )
@@ -320,7 +317,6 @@ describe("queue drain regression", () => {
           EventStore.Memory,
           ToolRunner.Test(),
           BunServices.layer,
-          ResourceManagerLive,
           ModelRegistry.Test(),
           GentPlatform.Test(),
         )
@@ -399,7 +395,6 @@ describe("queue drain regression", () => {
           EventStore.Memory,
           ToolRunner.Test(),
           BunServices.layer,
-          ResourceManagerLive,
           ModelRegistry.Test(),
           GentPlatform.Test(),
         )

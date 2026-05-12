@@ -38,7 +38,6 @@ import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { BunGentPlatformLive, BunPlatformLive } from "../runtime/gent-platform-bun.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
-import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { EventPublisherLive } from "../domain/event-publisher.js"
 import { ModelResolver } from "../providers/model-resolver.js"
@@ -129,7 +128,6 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         languageModelLayer,
         ModelResolver.fromLanguageModel(languageModelLayer),
         ToolRunner.Test(),
-        ResourceManagerLive,
         ConfigService.Test(),
         ModelRegistry.Test(),
         // Required for resource layers below: `Layer.provideMerge(r.layer,

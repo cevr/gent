@@ -51,7 +51,6 @@ import {
   SessionId,
   ToolCallId,
 } from "@gent/core-internal/domain/ids"
-import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ConfigService } from "../../src/runtime/config-service"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -289,7 +288,6 @@ const makeLayerWithEvents = (
     ToolRunner.Test(),
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunServices.layer,
-    ResourceManagerLive,
     ModelRegistry.Test(),
     ConfigService.Test(),
     GentPlatform.Test(),
@@ -492,7 +490,6 @@ describe("external turn execution", () => {
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
-        ResourceManagerLive,
         ModelRegistry.Test(),
         GentPlatform.Test(),
       )
@@ -648,7 +645,6 @@ describe("ExternalDriverContribution end-to-end", () => {
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
-        ResourceManagerLive,
         ModelRegistry.Test(),
         GentPlatform.Test(),
       )
@@ -731,7 +727,6 @@ describe("ExternalDriverContribution end-to-end", () => {
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
-        ResourceManagerLive,
         ModelRegistry.Test(),
         GentPlatform.Test(),
       )
@@ -829,7 +824,6 @@ describe("ExternalDriverContribution end-to-end", () => {
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
-        ResourceManagerLive,
         ModelRegistry.Test(),
         GentPlatform.Test(),
       )
@@ -926,7 +920,6 @@ describe("ExternalDriverContribution end-to-end", () => {
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
-        ResourceManagerLive,
         ModelRegistry.Test(),
         GentPlatform.Test(),
       )

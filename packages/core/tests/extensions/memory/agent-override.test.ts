@@ -12,7 +12,6 @@ import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-mod
 import { textStep } from "@gent/core-internal/debug/provider"
 import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
 import { SessionCommands } from "../../../src/server/session-commands"
-import { ResourceManagerLive } from "../../../src/runtime/resource-manager"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
@@ -71,7 +70,6 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMode
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     BunServices.layer,
-    ResourceManagerLive,
     ModelRegistry.Test(),
     GentPlatform.Test(),
     Permission.Test(),

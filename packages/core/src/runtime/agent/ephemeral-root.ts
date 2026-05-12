@@ -23,7 +23,6 @@ import { ModelRegistry } from "../model-registry.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import { buildExtensionLayers } from "../profile.js"
 import { PromptPresenterLive } from "../prompt-presenter-live.js"
-import { ResourceManagerLive, type ResourceManager } from "../resource-manager.js"
 import { RuntimeEnvironment } from "../runtime-environment.js"
 import { SessionRuntime } from "../session-runtime.js"
 import { ToolRunner } from "./tool-runner.js"
@@ -51,7 +50,6 @@ type EphemeralOverrideProvides =
   | ExtensionEventSink
   | ApprovalService
   | PromptPresenter
-  | ResourceManager
   | ToolRunner
   | SessionRuntime
 
@@ -74,7 +72,6 @@ interface EphemeralRuntimeOverrides {
   >
   readonly approval: Layer.Layer<ApprovalService, never, never>
   readonly promptPresenter: Layer.Layer<PromptPresenter, never, never>
-  readonly resourceManager: Layer.Layer<ResourceManager, never, never>
   readonly toolRunner: Layer.Layer<ToolRunner, never, never>
   readonly sessionRuntime: Layer.Layer<SessionRuntime, EphemeralOverrideError, never>
 }
@@ -97,7 +94,6 @@ const composeEphemeralRuntimeLayer = <Provides>(params: {
     params.overrides.eventPublisher,
     params.overrides.approval,
     params.overrides.promptPresenter,
-    params.overrides.resourceManager,
     params.overrides.toolRunner,
     params.overrides.sessionRuntime,
   )
@@ -207,7 +203,6 @@ export const makeEphemeralAgentRootLayer = (params: {
           eventStoreLayer,
           eventPublisherLayer,
           toolRunnerLayer,
-          ResourceManagerLive,
           extensionLayers,
           parentModelResolverLayer,
           parentConfigLayer,
@@ -227,7 +222,6 @@ export const makeEphemeralAgentRootLayer = (params: {
       eventPublisher: eventPublisherLayer,
       approval: approvalLayer,
       promptPresenter: promptPresenterLayer,
-      resourceManager: ResourceManagerLive,
       toolRunner: toolRunnerLayer,
       sessionRuntime: sessionRuntimeLayer,
     },

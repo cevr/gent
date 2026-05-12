@@ -6,7 +6,6 @@ import * as Response from "effect/unstable/ai/Response"
 import * as AiError from "effect/unstable/ai/AiError"
 import { AgentLoopTestActor } from "../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
-import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
@@ -149,7 +148,6 @@ describe("streaming", () => {
         EventStore.Memory,
         ToolRunner.Test(),
         BunServices.layer,
-        ResourceManagerLive,
         ModelRegistry.Test(),
         GentPlatform.Test(),
       )

@@ -50,7 +50,6 @@ import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { SessionCommands } from "../../src/server/session-commands"
@@ -114,7 +113,6 @@ const makeRuntimeLayer = (
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     BunServices.layer,
-    ResourceManagerLive,
     ModelRegistry.Test(),
     GentPlatform.Test(),
   )
@@ -157,7 +155,6 @@ const makeRuntimeLayerWithEventPublisher = (
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     BunServices.layer,
-    ResourceManagerLive,
     ModelRegistry.Test(),
     GentPlatform.Test(),
   )
@@ -202,7 +199,6 @@ const makeLiveToolRuntimeLayer = (
     ApprovalService.Test(),
     Permission.Live([], "allow"),
     BunServices.layer,
-    ResourceManagerLive,
     ModelRegistry.Test(),
     GentPlatform.Test(),
   )

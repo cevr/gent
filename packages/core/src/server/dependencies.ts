@@ -20,7 +20,6 @@ import { DebugSlowLanguageModelDelayMs, LanguageModelLayers } from "../test-util
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InProcessRunner, SubprocessRunner } from "../runtime/agent/agent-runner.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
-import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { resolveProfileRuntime } from "../runtime/profile.js"
@@ -443,7 +442,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     approvalServiceLive,
     toolRunnerLive,
     promptPresenterLive,
-    ResourceManagerLive,
   )
 
   // Recover pending interaction requests from storage by rehydrating the

@@ -33,7 +33,6 @@ import type { ModelRegistry } from "./model-registry.js"
 import type { ModelResolver } from "../providers/model-resolver.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { ToolRunner } from "./agent/tool-runner.js"
-import type { ResourceManager } from "./resource-manager.js"
 import type { ConfigService } from "./config-service.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 import type { SteerCommand as SteerCommandType } from "../domain/steer.js"
@@ -182,7 +181,6 @@ type SessionRuntimeLayerRequirements =
   | SqlClient.SqlClient
   | ModelResolver
   | ToolRunner
-  | ResourceManager
   | ConfigService
   | ChildProcessSpawner
   | Scope.Scope

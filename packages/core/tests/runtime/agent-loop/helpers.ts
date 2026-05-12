@@ -14,7 +14,6 @@ import {
 } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
-import { ResourceManagerLive } from "../../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
@@ -266,7 +265,6 @@ export const makeLayer = (
     EventStore.Memory,
     ToolRunner.Test(),
     BunServices.layer,
-    ResourceManagerLive,
     ModelRegistry.Test(),
     GentPlatform.Test(),
   )
@@ -287,7 +285,6 @@ export const makeRecordingLayer = (providerLayer: Layer.Layer<LanguageModel.Lang
     ConfigService.Test(),
     ToolRunner.Test(),
     BunServices.layer,
-    ResourceManagerLive,
     ModelRegistry.Test(),
     GentPlatform.Test(),
     recorderLayer,
@@ -334,7 +331,6 @@ export const makeLiveToolLayer = (
     ApprovalService.Test(),
     Permission.Live([], "allow"),
     BunServices.layer,
-    ResourceManagerLive,
     ModelRegistry.Test(),
     GentPlatform.Test(),
   )
@@ -376,7 +372,6 @@ export const makeLayerWithEvents = (
     makeCountingEventStore(eventsRef),
     ToolRunner.Test(),
     BunServices.layer,
-    ResourceManagerLive,
     ModelRegistry.Test(),
     GentPlatform.Test(),
   )
@@ -399,7 +394,6 @@ export const makeLayerWithEventPublisher = (
     EventStore.Memory,
     ToolRunner.Test(),
     BunServices.layer,
-    ResourceManagerLive,
     ModelRegistry.Test(),
     GentPlatform.Test(),
   )
@@ -465,7 +459,6 @@ export const makeExternalLayerWithEvents = (
     makeCountingEventStore(eventsRef),
     ToolRunner.Test(),
     BunServices.layer,
-    ResourceManagerLive,
     ModelRegistry.Test(),
     GentPlatform.Test(),
   )

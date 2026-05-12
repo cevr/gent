@@ -47,7 +47,6 @@ import {
 } from "../../../src/runtime/agent/agent-loop.actor"
 import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
-import { ResourceManagerLive } from "../../../src/runtime/resource-manager"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
@@ -133,7 +132,6 @@ describe("agent-loop recovery race", () => {
           EventStore.Memory,
           ToolRunner.Test(),
           BunServices.layer,
-          ResourceManagerLive,
           ModelRegistry.Test(),
           GentPlatform.Test(),
         )
