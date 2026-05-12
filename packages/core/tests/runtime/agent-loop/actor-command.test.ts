@@ -302,16 +302,18 @@ describe("agent-loop actor commands", () => {
             .pipe(Effect.exit)
 
           expect(exit._tag).toBe("Failure")
-          if (exit._tag === "Failure") {
-            const errorOption = Cause.findErrorOption(exit.cause)
-            expect(errorOption._tag).toBe("Some")
-            if (errorOption._tag === "Some") {
-              expect(Schema.is(AgentLoopError)(errorOption.value)).toBe(true)
-              if (Schema.is(AgentLoopError)(errorOption.value)) {
-                expect(errorOption.value.message).toBe("Invalid interrupt command")
-              }
-            }
+          if (exit._tag !== "Failure") return
+          const errorOption = Cause.findErrorOption(exit.cause)
+          if (errorOption._tag !== "Some") {
+            throw new Error(
+              `Expected interrupt failure error, got cause: ${Cause.pretty(exit.cause)}`,
+            )
           }
+          const error = errorOption.value
+          if (!Schema.is(AgentLoopError)(error)) {
+            throw new Error(`Expected AgentLoopError, got: ${String(error)}`)
+          }
+          expect(error.message).toBe("Invalid interrupt command")
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
