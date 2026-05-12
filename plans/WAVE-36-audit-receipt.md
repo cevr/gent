@@ -49,6 +49,19 @@ Wave 37 is needed (19 P1s, no P0s). No emergency.
   surface implies sync completion. Failures are invisible. Fix: switch
   to `ref.execute(...)` like Submit/Run/DrainQueue, or send+waitFor like
   RespondInteraction.
+  - **RESOLVED-BY-SUPERSEDE 2026-05-11 (W37-S4-C10).** The finding
+    framing is wrong on three counts: (a) `ref.send` does propagate
+    runtime delivery errors (the `Effect.map(discardCall, …)` keeps
+    them; only statically typed `never`); (b) `Steer.Interject`
+    semantics are correctly fire-forget at the handler level — caller
+    needs "steering item registered," not "interjected turn ran";
+    (c) switching deadlocks against the gated-turn test pattern
+    (`tests/runtime/session-runtime.test.ts:847`) because `applySteer`
+    yields `ensureStarted` while the in-flight turn holds the actor.
+    Empirically validated twice: W35-C7.3 (commit `a8b084bc`) and
+    W37-S4-C10 (2026-05-11) — both produced 4s timeout. Resolution:
+    durable code comment at `session-runtime.steer` + supersede note
+    in `plans/WAVE-37.md` C10.
 - **L2-P1-4** — `packages/core/src/server/rpc-handlers.ts:258-415` —
   `branch.create / branch.switch / branch.fork / steer.command /
 queue.drain / queue.get / interaction.respondInteraction /

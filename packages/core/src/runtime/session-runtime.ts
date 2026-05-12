@@ -638,6 +638,20 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         Effect.catchCause((cause) => Effect.fail(wrapError("invokeTool failed", cause))),
       ),
 
+    // `ref.send` is fire-forget at the handler level — INTENTIONAL.
+    // `Steer.Interject` semantics: caller needs to know the steering item
+    // is registered (handler enqueue complete), not that the interjected
+    // turn ran. Switching to `ref.execute` (or `send + waitFor`) deadlocks
+    // because `applySteer` itself yields `ensureStarted` while the gated
+    // in-flight turn holds the actor; the persisted reply can't drain.
+    // Empirically validated twice: W35-C7.3 (commit `a8b084bc`),
+    // re-derived W37-S4-C10 (2026-05-11) — both produced 4s timeout on
+    // `tests/runtime/session-runtime.test.ts` ("steer interject interrupts
+    // the active turn ahead of queued follow-ups"). Note: `ref.send` does
+    // NOT silently drop runtime delivery errors — the discardCall Effect
+    // propagates; only statically typed `never`. `Steer.persisted: true`
+    // is the durability guarantee (Steer survives crash + redeliver) and
+    // is NOT what's being relaxed here.
     steer: (command) =>
       requireSessionBranch(command).pipe(
         Effect.flatMap(() =>

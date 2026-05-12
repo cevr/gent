@@ -509,12 +509,19 @@ const buildAgentLoopActorHandlers = (config: {
     const handleRef = yield* Ref.make<AgentLoopBehavior | undefined>(undefined)
     const startupExitRef = yield* Ref.make<Exit.Exit<void, AgentLoopError> | undefined>(undefined)
 
+    // Holds `startupSemaphore` across the closed-flip + close so a
+    // concurrent `openLoop` cannot observe a half-torn-down loop nor
+    // publish a fresh handle while the old one is closing.
     const closeBehavior = (loop: AgentLoopBehavior) =>
-      Effect.gen(function* () {
-        if (yield* Ref.get(closed)) return
-        yield* Ref.set(closed, true)
-        yield* loop.close
-      }).pipe(Effect.ignore)
+      startupSemaphore
+        .withPermits(1)(
+          Effect.gen(function* () {
+            if (yield* Ref.get(closed)) return
+            yield* Ref.set(closed, true)
+            yield* loop.close
+          }),
+        )
+        .pipe(Effect.ignore)
 
     const cleanupLoop = (loop: AgentLoopBehavior) => closeBehavior(loop)
 

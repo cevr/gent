@@ -74,9 +74,25 @@ Observability gap.
 - **C9** — Wrap `closeBehavior` flip + close in
   `startupSemaphore.withPermits(1)` at
   `agent-loop.actor.ts:512-519`. (L2-P1-2)
-- **C10** — Make `steer` failures visible: switch
-  `ref.send(...)` → `ref.execute(...)` (or send+waitFor) at
-  `session-runtime.ts:652`. (L2-P1-3)
+- **C10 — SUPERSEDED (dropped 2026-05-11).** Empirically the same as
+  the previously-superseded W35-C7.3. The L2-P1-3 audit finding
+  ("Persisted fire-forget silently drops delivery errors") is wrong:
+  (a) `ref.send` is `Effect.map(discardCall, …)` — runtime delivery
+  errors _do_ propagate (they're only statically typed `never`); and
+  (b) `Steer.Interject` semantics are correctly fire-forget at the
+  handler level — the caller needs to know the steering item was
+  _registered_ (handler-completion via `send` proves that), not that
+  the interjected turn has _run_. A `send + waitFor` (or `ref.execute`
+  on the persisted Steer) switch deadlocks against the gated-turn
+  pattern used by `"steer interject interrupts the active turn ahead
+of queued follow-ups"`
+  (`tests/runtime/session-runtime.test.ts:847`) because the waiter
+  blocks on handler completion which can't fire until the in-flight
+  turn releases. Re-validated empirically 2026-05-11 (W37-S4-C10):
+  applied, test timed out at 4s, reverted. See commit `a8b084bc` for
+  the original W35-C7.3 investigation; this re-derivation adds a code
+  comment at the `session-runtime.steer` call site so future audits
+  don't relitigate the call.
 
 ### S5 — JSON parse hardening (2 P1)
 
