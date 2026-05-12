@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Message, Branch, MessageMetadata, Session, dateFromMillis } from "../../domain/message.js"
 import { messagePartsSearchText } from "../../domain/message-part-projection.js"
@@ -27,8 +27,8 @@ export const encodeEventJson = Schema.encodeEffect(EventJson)
 export const encodeEvent = (event: AgentEvent) =>
   Schema.encodeEffect(AgentEvent)(event).pipe(Effect.flatMap(encodeEventJson))
 export const MessageMetadataJson = Schema.fromJsonString(MessageMetadata)
-export const decodeMessageMetadata = Schema.decodeUnknownOption(MessageMetadataJson)
-export const encodeMessageMetadata = Schema.encodeSync(MessageMetadataJson)
+export const decodeMessageMetadata = Schema.decodeUnknownEffect(MessageMetadataJson)
+export const encodeMessageMetadata = Schema.encodeEffect(MessageMetadataJson)
 
 export const decodeEvent = (json: string) =>
   decodeEventJson(json).pipe(Effect.flatMap(Schema.decodeUnknownEffect(AgentEvent)))
@@ -129,34 +129,31 @@ const decodeBranchRow = Schema.decodeUnknownEffect(BranchRow)
 export const branchFromRow = (row: BranchRow) => Effect.map(decodeBranchRow(row), rowToBranch)
 
 export const decodeStoredMessage = (row: MessageRow, partJsons: ReadonlyArray<string>) =>
-  Effect.map(
-    Effect.forEach(partJsons, (partJson) => decodeStoredPromptPart(partJson)),
-    (parts) => {
-      const fields = {
-        id: row.id,
-        sessionId: row.session_id,
-        branchId: row.branch_id,
-        role: row.role,
-        parts,
-        createdAt: dateFromMillis(row.created_at),
-        turnDurationMs: row.turn_duration_ms ?? undefined,
-        metadata:
-          row.metadata === null
-            ? undefined
-            : Option.getOrUndefined(decodeMessageMetadata(row.metadata)),
-      }
-      return row.kind === "interjection"
-        ? Message.cases.interjection.make({ ...fields, role: "user" })
-        : Message.cases.regular.make(fields)
-    },
-  )
+  Effect.gen(function* () {
+    const parts = yield* Effect.forEach(partJsons, (partJson) => decodeStoredPromptPart(partJson))
+    const metadata = row.metadata === null ? undefined : yield* decodeMessageMetadata(row.metadata)
+    const fields = {
+      id: row.id,
+      sessionId: row.session_id,
+      branchId: row.branch_id,
+      role: row.role,
+      parts,
+      createdAt: dateFromMillis(row.created_at),
+      turnDurationMs: row.turn_duration_ms ?? undefined,
+      metadata,
+    }
+    return row.kind === "interjection"
+      ? Message.cases.interjection.make({ ...fields, role: "user" })
+      : Message.cases.regular.make(fields)
+  })
 
 export const encodeStoredMessage = (message: Message) =>
   Effect.gen(function* () {
     const partJsons = yield* Effect.forEach(message.parts, (part) => encodeStoredPromptPart(part))
     return {
       partJsons,
-      metadataJson: message.metadata !== undefined ? encodeMessageMetadata(message.metadata) : null,
+      metadataJson:
+        message.metadata !== undefined ? yield* encodeMessageMetadata(message.metadata) : null,
     }
   })
 

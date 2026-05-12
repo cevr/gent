@@ -635,7 +635,7 @@ describe("Message Metadata", () => {
       expect(messagesResult[0]!.metadata).toBeUndefined()
     }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
   )
-  it.live("invalid stored metadata decodes to undefined across read surfaces", () =>
+  it.live("invalid stored metadata fails across read surfaces", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
@@ -657,15 +657,14 @@ describe("Message Metadata", () => {
         }),
       )
       yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, created_at, turn_duration_ms, metadata) VALUES (${"bad-meta-msg"}, ${"bad-meta-s"}, ${"bad-meta-b"}, ${null}, ${"assistant"}, ${FIXED_NOW_MILLIS}, ${null}, ${'{"customType":1}'})`
-      const messagesResult = yield* messages.listMessages(BranchId.make("bad-meta-b"))
-      expect(messagesResult).toHaveLength(1)
-      expect(messagesResult[0]!.metadata).toBeUndefined()
-      const message = yield* messages.getMessage(MessageId.make("bad-meta-msg"))
-      expect(message?.metadata).toBeUndefined()
-      const detail = yield* relationships.getSessionDetail(SessionId.make("bad-meta-s"))
-      expect(detail.branches).toHaveLength(1)
-      expect(detail.branches[0]!.messages).toHaveLength(1)
-      expect(detail.branches[0]!.messages[0]!.metadata).toBeUndefined()
+      const listExit = yield* Effect.exit(messages.listMessages(BranchId.make("bad-meta-b")))
+      expect(listExit._tag).toBe("Failure")
+      const getExit = yield* Effect.exit(messages.getMessage(MessageId.make("bad-meta-msg")))
+      expect(getExit._tag).toBe("Failure")
+      const detailExit = yield* Effect.exit(
+        relationships.getSessionDetail(SessionId.make("bad-meta-s")),
+      )
+      expect(detailExit._tag).toBe("Failure")
     }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
   )
   test("domain message preserves metadata for transport", () => {
