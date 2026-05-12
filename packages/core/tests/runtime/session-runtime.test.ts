@@ -247,6 +247,34 @@ const getActorState = (input: { sessionId: SessionId; branchId: BranchId }) =>
     )
   })
 
+const recordToolResultViaActor = (input: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly commandId: ActorCommandId
+  readonly toolCallId: ToolCallId
+  readonly toolName: string
+  readonly output: unknown
+  readonly isError?: boolean
+}) =>
+  Effect.gen(function* () {
+    const actorClientFactory = yield* AgentLoopActor.Context
+    const ref = yield* actorClientFactory(
+      entityIdOf(DefaultWorkspaceId, input.sessionId, input.branchId),
+    )
+    yield* ref.execute(
+      AgentLoopActor.RecordToolResult.make({
+        workspaceId: DefaultWorkspaceId,
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+        commandId: input.commandId,
+        toolCallId: input.toolCallId,
+        toolName: input.toolName,
+        output: input.output,
+        isError: input.isError,
+      }),
+    )
+  })
+
 const createCwdSessionBranch = Effect.gen(function* () {
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
@@ -608,7 +636,6 @@ describe("SessionRuntime", () => {
       const layer = makeRuntimeLayer(providerLayer)
       yield* narrowR(
         Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
           const messageStorage = yield* MessageStorage
           const recorder = yield* SequenceRecorder
           const target = yield* createSessionBranchWithIds({
@@ -622,8 +649,8 @@ describe("SessionRuntime", () => {
             toolName: "read",
             output: { ok: true },
           }
-          yield* sessionRuntime.recordToolResult(command)
-          yield* sessionRuntime.recordToolResult(command)
+          yield* recordToolResultViaActor(command)
+          yield* recordToolResultViaActor(command)
           const messages = yield* messageStorage.listMessages(target.branchId)
           const calls = yield* recorder.getCalls()
           expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
@@ -652,12 +679,11 @@ describe("SessionRuntime", () => {
       const layer = makeRuntimeLayerWithEventPublisher(providerLayer, failingPublisherLayer)
       yield* narrowR(
         Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
           const messageStorage = yield* MessageStorage
           const { sessionId, branchId } = yield* createSessionBranch
           const commandId = ActorCommandId.make("record-tool-atomicity")
           const exit = yield* Effect.exit(
-            sessionRuntime.recordToolResult({
+            recordToolResultViaActor({
               commandId,
               sessionId,
               branchId,
@@ -716,7 +742,6 @@ describe("SessionRuntime", () => {
       const layer = makeRuntimeLayerWithEventPublisher(providerLayer, eventPublisherLayer)
       yield* narrowR(
         Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
           const { sessionId, branchId } = yield* createSessionBranch
           const first = {
             commandId: ActorCommandId.make("record-tool-serialize-a"),
@@ -734,9 +759,9 @@ describe("SessionRuntime", () => {
             toolName: "read",
             output: { value: "b" },
           }
-          const firstFiber = yield* Effect.forkChild(sessionRuntime.recordToolResult(first))
+          const firstFiber = yield* Effect.forkChild(recordToolResultViaActor(first))
           yield* Deferred.await(firstDeliveryStarted).pipe(Effect.timeout("5 seconds"))
-          const secondFiber = yield* Effect.forkChild(sessionRuntime.recordToolResult(second))
+          const secondFiber = yield* Effect.forkChild(recordToolResultViaActor(second))
           const earlySecond = yield* Fiber.join(secondFiber).pipe(Effect.timeoutOption("1 millis"))
           expect(earlySecond._tag).toBe("None")
           expect(deliveredToolResults).toBe(1)
@@ -777,7 +802,7 @@ describe("SessionRuntime", () => {
           )
           yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
           const recordFiber = yield* Effect.forkChild(
-            sessionRuntime.recordToolResult({
+            recordToolResultViaActor({
               commandId: ActorCommandId.make("record-tool-active-owner"),
               sessionId,
               branchId,
@@ -836,7 +861,7 @@ describe("SessionRuntime", () => {
           )
           yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
           const recordFiber = yield* Effect.forkChild(
-            sessionRuntime.recordToolResult({
+            recordToolResultViaActor({
               commandId: ActorCommandId.make("record-tool-terminate-owner"),
               sessionId,
               branchId,

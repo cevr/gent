@@ -14,7 +14,6 @@ import {
   MessageId,
   RequestId,
   SessionId,
-  ToolCallId,
   type InteractionRequestId,
 } from "../domain/ids.js"
 import { Message, MessageMetadata } from "../domain/message.js"
@@ -81,17 +80,6 @@ export const SendUserMessagePayload = Schema.Struct({
   requestId: Schema.optional(RequestId),
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
-
-export const SendToolResultPayload = Schema.Struct({
-  commandId: Schema.optional(ActorCommandId),
-  sessionId: SessionId,
-  branchId: BranchId,
-  toolCallId: ToolCallId,
-  toolName: Schema.String,
-  output: Schema.Unknown,
-  isError: Schema.optional(Schema.Boolean),
-})
-export type SendToolResultPayload = typeof SendToolResultPayload.Type
 
 export const CancelInterruptPayload = Schema.TaggedStruct("Cancel", {
   commandId: Schema.optional(ActorCommandId),
@@ -202,9 +190,6 @@ type SessionRuntimeLayerRequirements =
 export interface SessionRuntimeService {
   readonly sendUserMessage: (
     input: SendUserMessagePayload,
-  ) => Effect.Effect<void, SessionRuntimeError>
-  readonly recordToolResult: (
-    input: SendToolResultPayload,
   ) => Effect.Effect<void, SessionRuntimeError>
   readonly steer: (command: SteerCommandType) => Effect.Effect<void, SessionRuntimeError>
   readonly respondInteraction: (
@@ -564,28 +549,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     sendUserMessage: (input) =>
       sendUserMessage(input).pipe(
         Effect.catchCause((cause) => Effect.fail(wrapError("sendUserMessage failed", cause))),
-      ),
-
-    recordToolResult: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.flatMap(() =>
-          Effect.gen(function* () {
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            yield* ref.execute(
-              AgentLoopActor.RecordToolResult.make({
-                workspaceId: yield* CurrentWorkspaceId,
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                toolCallId: input.toolCallId,
-                toolName: input.toolName,
-                output: input.output,
-                commandId: input.commandId,
-                isError: input.isError,
-              }),
-            )
-          }),
-        ),
-        Effect.catchCause((cause) => Effect.fail(wrapError("recordToolResult failed", cause))),
       ),
 
     // `ref.send` is fire-forget at the handler level — INTENTIONAL.

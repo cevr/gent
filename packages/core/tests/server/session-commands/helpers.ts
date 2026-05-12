@@ -66,7 +66,6 @@ export const sessionRuntimeLayer = (
 ): Layer.Layer<SessionRuntime> =>
   Layer.succeed(SessionRuntime, {
     sendUserMessage: () => Effect.void,
-    recordToolResult: () => Effect.void,
     steer: () => Effect.void,
     respondInteraction: () => Effect.void,
     runPrompt: () => Effect.void,
