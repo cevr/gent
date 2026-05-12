@@ -1,7 +1,6 @@
 import { Deferred, Effect, Layer, Stream } from "effect"
 import { ExtensionContext } from "@gent/core/extensions/api"
 import { textStep } from "@gent/core-internal/debug/provider"
-import { DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
@@ -14,7 +13,6 @@ import { GentPlatform } from "../../../src/runtime/gent-platform"
 import {
   SessionRuntime,
   SessionRuntimeError,
-  SessionRuntimeStateSchema,
   type SessionRuntimeService,
 } from "../../../src/runtime/session-runtime"
 import { SessionCommands } from "../../../src/server/session-commands"
@@ -75,13 +73,6 @@ export const sessionRuntimeLayer = (
     queueFollowUp: () => Effect.void,
     drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
     getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-    getState: () =>
-      Effect.succeed(
-        SessionRuntimeStateSchema.cases.Idle.make({
-          agent: DEFAULT_AGENT_NAME,
-          queue: emptyQueueSnapshot(),
-        }),
-      ),
     getMetrics: () =>
       Effect.succeed({
         turns: 0,

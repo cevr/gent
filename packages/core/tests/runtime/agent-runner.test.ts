@@ -222,7 +222,6 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
         queueFollowUp: () => Effect.void,
         drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
         getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-        getState: () => SubscriptionRef.get(runtimeState),
         getMetrics: () =>
           Effect.succeed({
             turns: 0,

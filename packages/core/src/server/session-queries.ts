@@ -12,6 +12,11 @@ import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { makeStorageTransaction } from "../storage/sqlite-storage.js"
 import { NotFoundError, type GentRpcError } from "./errors.js"
 import { SessionRuntime, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
+import { AgentLoop as AgentLoopActor } from "../runtime/agent/agent-loop.actor.js"
+import { entityIdOf } from "../runtime/agent/agent-loop.entity-id.js"
+import { ActorCommandId } from "../domain/ids.js"
+import { GentPlatform } from "../runtime/gent-platform.js"
+import { CurrentWorkspaceId } from "./workspace-rpc.js"
 import { SessionSnapshot } from "./transport-contract.js"
 import type { GetSessionSnapshotInput } from "./transport-contract.js"
 
@@ -37,6 +42,8 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       const relationshipStorage = yield* RelationshipStorage
       const storageTransaction = yield* makeStorageTransaction
       const sessionRuntime = yield* SessionRuntime
+      const actorClientFactory = yield* AgentLoopActor.Context
+      const platform = yield* GentPlatform
 
       const buildSessionTreeNode = (
         session: Session,
@@ -93,8 +100,20 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           agent: DEFAULT_AGENT_NAME,
           queue: emptyQueueSnapshot(),
         })
-        const runtime = yield* sessionRuntime
-          .getState({ sessionId: input.sessionId, branchId: input.branchId })
+        const workspaceId = yield* CurrentWorkspaceId
+        const actorRef = yield* actorClientFactory(
+          entityIdOf(workspaceId, input.sessionId, input.branchId),
+        )
+        const commandUuid = yield* platform.randomId
+        const runtime = yield* actorRef
+          .execute(
+            AgentLoopActor.GetState.make({
+              workspaceId,
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              commandId: ActorCommandId.make(commandUuid),
+            }),
+          )
           .pipe(Effect.catchEager(() => Effect.succeed(idleRuntime)))
 
         // Cumulative metrics (turns, cost, last-model) are the authority for

@@ -230,6 +230,23 @@ const createSessionBranch = Effect.gen(function* () {
   yield* branchStorage.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
   return { sessionId, branchId }
 })
+let getActorStateCounter = 0
+const getActorState = (input: { sessionId: SessionId; branchId: BranchId }) =>
+  Effect.gen(function* () {
+    const actorClientFactory = yield* AgentLoopActor.Context
+    const ref = yield* actorClientFactory(
+      entityIdOf(DefaultWorkspaceId, input.sessionId, input.branchId),
+    )
+    return yield* ref.execute(
+      AgentLoopActor.GetState.make({
+        workspaceId: DefaultWorkspaceId,
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+        commandId: ActorCommandId.make(`get-state-${++getActorStateCounter}`),
+      }),
+    )
+  })
+
 const createCwdSessionBranch = Effect.gen(function* () {
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
@@ -365,18 +382,6 @@ describe("SessionRuntime", () => {
             expect(Cause.pretty(sendExit.cause)).toContain("Branch not found for session")
           }
 
-          const { sessionId } = yield* createSessionBranch
-          const readExit = yield* Effect.exit(
-            sessionRuntime.getState({
-              sessionId,
-              branchId: BranchId.make("runtime-target-missing-branch"),
-            }),
-          )
-          expect(readExit._tag).toBe("Failure")
-          if (readExit._tag === "Failure") {
-            expect(Cause.pretty(readExit.cause)).toContain("Branch not found for session")
-          }
-
           const queueTarget = yield* createSessionBranchWithIds({
             sessionId: SessionId.make("runtime-queue-first"),
             branchId: BranchId.make("runtime-queue-first-branch"),
@@ -504,7 +509,7 @@ describe("SessionRuntime", () => {
               "assistant",
             ])
             const state = yield* waitFor(
-              sessionRuntime.getState({ sessionId, branchId }),
+              getActorState({ sessionId, branchId }),
               (current) => current._tag === "Idle",
               5000,
               "idle runtime state",
@@ -846,9 +851,7 @@ describe("SessionRuntime", () => {
           yield* sessionRuntime.terminateSession(sessionId).pipe(Effect.timeout("1 second"))
           yield* Fiber.join(submitFiber).pipe(Effect.ignore)
           yield* Fiber.join(recordFiber).pipe(Effect.ignore)
-          const afterTerminate = yield* Effect.exit(
-            sessionRuntime.getState({ sessionId, branchId }),
-          )
+          const afterTerminate = yield* Effect.exit(getActorState({ sessionId, branchId }))
           expect(afterTerminate._tag).toBe("Failure")
           yield* Deferred.succeed(streamReleased, undefined).pipe(Effect.ignore)
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
@@ -1000,7 +1003,7 @@ describe("SessionRuntime", () => {
           } satisfies QueueSnapshot)
           yield* controls.emitAll(0)
           yield* waitFor(
-            sessionRuntime.getState({ sessionId, branchId }),
+            getActorState({ sessionId, branchId }),
             (state) => state._tag === "Idle",
             5000,
             "idle after drained follow-up",
@@ -1031,7 +1034,7 @@ describe("SessionRuntime", () => {
             content: "trigger interaction",
           })
           yield* waitFor(
-            sessionRuntime.getState({ sessionId, branchId }),
+            getActorState({ sessionId, branchId }),
             (current) => current._tag === "WaitingForInteraction",
             5000,
             "waiting interaction state",
@@ -1043,7 +1046,7 @@ describe("SessionRuntime", () => {
           })
           yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
           const state = yield* waitFor(
-            sessionRuntime.getState({ sessionId, branchId }),
+            getActorState({ sessionId, branchId }),
             (current) => current._tag === "Idle",
             5000,
             "idle after interaction response",

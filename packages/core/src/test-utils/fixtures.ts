@@ -64,15 +64,15 @@ const toWaitForError = (error: unknown) =>
   new WaitForError({ message: error instanceof Error ? error.message : String(error) })
 
 /** Poll an effect until predicate passes or timeout */
-export const waitFor = <A>(
-  effect: Effect.Effect<A, unknown>,
+export const waitFor = <A, R = never>(
+  effect: Effect.Effect<A, unknown, R>,
   predicate: (value: A) => boolean,
   timeoutMs = 5_000,
   label = "condition",
-): Effect.Effect<A, WaitForError> =>
+): Effect.Effect<A, WaitForError, R> =>
   Effect.gen(function* () {
     const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
-    const loop: Effect.Effect<A, WaitForError> = Effect.gen(function* () {
+    const loop: Effect.Effect<A, WaitForError, R> = Effect.gen(function* () {
       const attempt = yield* effect.pipe(Effect.exit)
       if (attempt._tag === "Success" && predicate(attempt.value)) {
         return attempt.value

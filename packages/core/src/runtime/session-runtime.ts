@@ -218,9 +218,6 @@ export interface SessionRuntimeService {
   readonly getQueuedMessages: (
     input: SessionRuntimeTarget,
   ) => Effect.Effect<QueueSnapshot, SessionRuntimeError>
-  readonly getState: (
-    input: SessionRuntimeTarget,
-  ) => Effect.Effect<SessionRuntimeState, SessionRuntimeError>
   readonly getMetrics: (
     input: SessionRuntimeTarget,
   ) => Effect.Effect<SessionRuntimeMetrics, SessionRuntimeError>
@@ -381,17 +378,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
             }),
         ),
       )
-  })
-
-  const getRuntimeState = Effect.fn("SessionRuntime.getRuntimeState")(function* (
-    input: SessionRuntimeTarget,
-  ) {
-    const workspaceId = yield* CurrentWorkspaceId
-    return yield* provideActorStateServices(
-      AgentLoopActor.getState(entityIdOf(workspaceId, input.sessionId, input.branchId)).pipe(
-        Effect.mapError(toAgentLoopError),
-      ),
-    )
   })
 
   const watchRuntimeState = Effect.fn("SessionRuntime.watchRuntimeState")(function* (
@@ -702,14 +688,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         ),
         Effect.catchCause((cause) => Effect.fail(wrapError("getQueuedMessages failed", cause))),
       ),
-
-    getState: (input) =>
-      Effect.gen(function* () {
-        yield* requireSessionBranch(input)
-        yield* redeliverPendingActorMessages(input)
-        const loopState = yield* getRuntimeState(input)
-        return loopState satisfies SessionRuntimeState
-      }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause)))),
 
     getMetrics: (input) =>
       Effect.gen(function* () {
