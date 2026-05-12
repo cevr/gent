@@ -214,10 +214,17 @@ const agentLoopQueueMigration = Effect.gen(function* () {
 const sessionWorkspaceMigration = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
 
+  // Idempotent: re-applying must not brick the DB if migration tracking
+  // is ever corrupted or manually replayed. SQLite throws "duplicate
+  // column name" on re-add and "index already exists" on re-create.
+  yield* sql
+    .unsafe(
+      `ALTER TABLE sessions ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '${DefaultWorkspaceId}'`,
+    )
+    .pipe(Effect.catch(() => Effect.void))
   yield* sql.unsafe(
-    `ALTER TABLE sessions ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '${DefaultWorkspaceId}'`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id, updated_at)`,
   )
-  yield* sql.unsafe(`CREATE INDEX idx_sessions_workspace ON sessions(workspace_id, updated_at)`)
 })
 
 const agentLoopQueueWorkspaceMigration = Effect.gen(function* () {
@@ -245,7 +252,11 @@ const agentLoopQueueWorkspaceMigration = Effect.gen(function* () {
 const interactionDecisionMigration = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
 
-  yield* sql.unsafe(`ALTER TABLE interaction_requests ADD COLUMN decision_json TEXT`)
+  // Idempotent: SQLite throws "duplicate column name" on re-add. See
+  // sessionWorkspaceMigration for rationale.
+  yield* sql
+    .unsafe(`ALTER TABLE interaction_requests ADD COLUMN decision_json TEXT`)
+    .pipe(Effect.catch(() => Effect.void))
 })
 
 const durableOperationsMigration = Effect.gen(function* () {
