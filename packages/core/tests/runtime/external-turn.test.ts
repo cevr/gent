@@ -206,7 +206,7 @@ const makeMockExecutor = (parts: ReadonlyArray<TurnStreamPart>): TurnExecutor =>
 /** Create a TurnExecutor that captures the TurnContext for assertions. */
 const makeCapturingExecutor = (
   parts: ReadonlyArray<TurnStreamPart>,
-  capture: (ctx: TurnContext) => void,
+  capture: (ctx: TurnContext<unknown>) => void,
 ): TurnExecutor => ({
   executeTurn: (ctx) => {
     capture(ctx)
@@ -514,7 +514,7 @@ describe("external turn execution", () => {
   it.live("executor receives correct TurnContext", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
-      let capturedCtx: TurnContext | undefined
+      let capturedCtx: TurnContext<unknown> | undefined
       const executor = makeCapturingExecutor([finish()], (ctx) => {
         capturedCtx = ctx
       })
@@ -539,7 +539,7 @@ describe("external turn execution", () => {
   it.live("executor receives all live user message parts", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
-      let capturedCtx: TurnContext | undefined
+      let capturedCtx: TurnContext<unknown> | undefined
       const executor = makeCapturingExecutor([finish()], (ctx) => {
         capturedCtx = ctx
       })

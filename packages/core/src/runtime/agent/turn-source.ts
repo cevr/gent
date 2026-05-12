@@ -56,10 +56,12 @@ type ModelTurnSource = {
 type ExternalTurnSource = {
   readonly driverKind: "external"
   readonly driverId?: string
-  readonly stream: Stream.Stream<Response.AnyPart, TurnError>
+  readonly stream: Stream.Stream<Response.AnyPart, TurnError, ExternalRunToolContext>
   readonly formatStreamError: (streamError: TurnError) => string
   readonly collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
+
+type ExternalRunToolContext = ToolRunner | ExtensionRegistry | EventPublisher
 
 export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
   resolved: ResolvedTurnContext
@@ -76,7 +78,6 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     })
   const { resolved } = params
   if (resolved.driver?._tag === "external") {
-    const runToolContext = yield* Effect.context<ToolRunner | ExtensionRegistry | EventPublisher>()
     const externalDriver = yield* driverRegistry.getExternal(resolved.driver.id)
     const executor = externalDriver?.executor
     if (executor === undefined) {
@@ -93,7 +94,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     return {
       driverKind: "external" as const,
       driverId: resolved.driver.id,
-      stream: executor.executeTurn({
+      stream: executor.executeTurn<ExternalRunToolContext>({
         sessionId: params.sessionId,
         branchId: params.branchId,
         agent: resolved.agent,
@@ -111,7 +112,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
             return yield* toolRunner
               .run({ toolCallId, toolName, input: args }, toolHostCtx)
               .pipe(Effect.orDie, provideCurrentHostCtx(toolHostCtx))
-          }).pipe(Effect.provideContext(runToolContext)),
+          }),
       }),
       formatStreamError: (streamError: unknown) =>
         `External turn executor error: ${formatStreamErrorMessage(streamError)}`,

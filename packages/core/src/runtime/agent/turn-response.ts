@@ -358,8 +358,8 @@ const collectExternalResponsePart = (params: {
   }
 }
 
-export const collectExternalTurnResponse = (params: {
-  turnStream: Stream.Stream<Response.AnyPart, TurnError>
+export const collectExternalTurnResponse = <R>(params: {
+  turnStream: Stream.Stream<Response.AnyPart, TurnError, R>
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle

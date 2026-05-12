@@ -21,9 +21,12 @@ import type { CodemodeConfig } from "./mcp-codemode.js"
  *   `toolRunner.run({ toolCallId, toolName, input }, toolCtx)`
  * — pinned by this function. No other Effect leaves Effect-land here.
  */
-export const makeAcpRunTool = (params: {
-  readonly services: Context.Context<never>
-  readonly runTool: (toolName: string, args: unknown) => Effect.Effect<unknown>
+export const makeAcpRunTool = <RunToolContext>(params: {
+  readonly services: Context.Context<RunToolContext>
+  readonly runTool: (
+    toolName: string,
+    args: unknown,
+  ) => Effect.Effect<unknown, never, RunToolContext>
 }): CodemodeConfig["runTool"] => {
   const runOnRuntime = Effect.runPromiseWith(params.services)
 

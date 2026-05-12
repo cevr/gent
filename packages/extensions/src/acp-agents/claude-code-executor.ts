@@ -328,9 +328,8 @@ export interface ClaudeCodeSessionManager {
  * `defineResource` `stop` finalizer so subprocesses are torn down when
  * the host shuts down.
  *
- * The SDK service is captured at construction time so the executor's
- * `executeTurn` Stream stays free of any service requirement —
- * `TurnExecutor.executeTurn` returns a Stream without a context channel.
+ * The SDK service is captured at construction time so the executor only
+ * inherits the per-turn tool runner context from `TurnContext.runTool`.
  */
 /** Resolves the Claude Code OAuth token. Defaults to the macOS keychain
  *  reader; tests inject a stub so they can exercise lifecycle/cache
@@ -481,9 +480,9 @@ export const createClaudeCodeSessionManager = (
 // ── Turn Executor Factory ──
 
 export const makeClaudeCodeTurnExecutor = (manager: ClaudeCodeSessionManager): TurnExecutor => ({
-  executeTurn: (ctx: TurnContext) => {
+  executeTurn: <RunToolContext>(ctx: TurnContext<RunToolContext>) => {
     const runTurn = Effect.gen(function* () {
-      const services = yield* Effect.context<never>()
+      const services = yield* Effect.context<RunToolContext>()
       const runTool: CodemodeConfig["runTool"] = makeAcpRunTool({
         services,
         runTool: ctx.runTool,

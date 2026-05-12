@@ -12,12 +12,12 @@ import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { finishPart } from "@gent/core-internal/test-utils/language-model"
-import type { TurnExecutor, TurnContext } from "@gent/core-internal/domain/driver"
+import type { TurnExecutor } from "@gent/core-internal/domain/driver"
 const noopExecutor: TurnExecutor = {
   executeTurn: () => Stream.empty,
 }
 const echoExecutor: TurnExecutor = {
-  executeTurn: (ctx: TurnContext) =>
+  executeTurn: (ctx) =>
     Stream.fromIterable([
       Response.makePart("text-delta", { id: "test-text", delta: `echo: ${ctx.systemPrompt}` }),
       finishPart({ finishReason: "stop" }),

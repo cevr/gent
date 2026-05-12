@@ -242,12 +242,12 @@ export const makeAcpTurnExecutor = (
   config: AcpProtocolAgentConfig,
   manager: AcpSessionManager,
 ): TurnExecutor => ({
-  executeTurn: (ctx: TurnContext) => {
+  executeTurn: <RunToolContext>(ctx: TurnContext<RunToolContext>) => {
     const runTurn = Effect.gen(function* () {
       // SDK boundary: the codemode JS sandbox invokes `runTool` as a
       // Promise-returning function. Adapter built in `executor-boundary.ts`;
       // core owns actual tool execution through `ctx.runTool`.
-      const services = yield* Effect.context<never>()
+      const services = yield* Effect.context<RunToolContext>()
       const runTool: CodemodeConfig["runTool"] = makeAcpRunTool({
         services,
         runTool: ctx.runTool,

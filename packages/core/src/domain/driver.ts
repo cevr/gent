@@ -205,7 +205,7 @@ export class TurnError extends Schema.TaggedErrorClass<TurnError>()("TurnError",
 }) {}
 
 /** What an external driver receives per turn. */
-export interface TurnContext {
+export interface TurnContext<RunToolContext = never> {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly agent: AgentDefinition
@@ -215,7 +215,10 @@ export interface TurnContext {
   readonly cwd: string
   readonly abortSignal: AbortSignal
   readonly hostCtx: ExtensionHostContext
-  readonly runTool: (toolName: string, args: unknown) => Effect.Effect<unknown>
+  readonly runTool: (
+    toolName: string,
+    args: unknown,
+  ) => Effect.Effect<unknown, never, RunToolContext>
 }
 
 /** Executor interface implemented by external drivers (ACP agents, etc.).
@@ -227,7 +230,9 @@ export interface TurnContext {
  *  cache key, so it cannot target a specific cached session correctly.
  *  Counsel  — drop the dead optional rather than keep it as a no-op stub. */
 export interface TurnExecutor {
-  readonly executeTurn: (ctx: TurnContext) => Stream.Stream<TurnStreamPart, TurnError>
+  readonly executeTurn: <RunToolContext>(
+    ctx: TurnContext<RunToolContext>,
+  ) => Stream.Stream<TurnStreamPart, TurnError, RunToolContext>
 }
 
 export type TurnToolEventMode = "capture-tool-calls" | "observe-external-tools"

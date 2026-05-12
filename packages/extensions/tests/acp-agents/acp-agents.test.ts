@@ -372,6 +372,10 @@ describe("codemode proxy", () => {
 // `Effect.runPromiseWith`, or pulling ToolRunner from the wrong context)
 // surfaces here and not in the stubbed test above.
 describe("codemode proxy via makeAcpRunTool", () => {
+  class BoundaryProbe extends Context.Service<BoundaryProbe, { readonly value: string }>()(
+    "@gent/extensions/tests/acp-agents/acp-agents.test/BoundaryProbe",
+  ) {}
+
   it.scopedLive("runs through the boundary helper and reaches core runTool", () =>
     Effect.gen(function* () {
       const calls: Array<{
@@ -416,6 +420,50 @@ describe("codemode proxy via makeAcpRunTool", () => {
       expect(calls[0]!.name).toBe("echo")
       expect(calls[0]!.input).toEqual({ text: "via-boundary" })
       expect(result).toBeDefined()
+    }).pipe(Effect.provide(BunGentPlatformLive)),
+  )
+  it.scopedLive("provides required services at the runTool boundary", () =>
+    Effect.gen(function* () {
+      const observed: string[] = []
+      const services = Context.empty().pipe(
+        Context.add(BoundaryProbe, BoundaryProbe.of({ value: "from-boundary-context" })),
+      )
+      const runTool = makeAcpRunTool({
+        services,
+        runTool: (toolName) =>
+          Effect.gen(function* () {
+            const probe = yield* BoundaryProbe
+            observed.push(probe.value)
+            return Prompt.toolResultPart({
+              id: ToolCallId.make("tc-acp-boundary-context"),
+              name: toolName,
+              isFailure: false,
+              result: { boundary: probe.value },
+            })
+          }),
+      })
+      const mockTool: ToolCapability = tool({
+        id: "echo",
+        description: "echo tool",
+        params: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({ echoed: Schema.Boolean }),
+        execute: () => Effect.succeed({ echoed: true }),
+      })
+      const server = yield* startCodemodeServer({ tools: [mockTool], runTool })
+      const response = yield* Effect.promise(() =>
+        callMcp(server.url, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "execute",
+            arguments: { code: 'return gent.echo({ text: "needs-context" })' },
+          },
+        }),
+      )
+      const result = yield* parseSseResult(response)
+      expect(result).toBeDefined()
+      expect(observed).toEqual(["from-boundary-context"])
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
   it.scopedLive("propagates core runTool errors back through the SDK boundary", () =>
