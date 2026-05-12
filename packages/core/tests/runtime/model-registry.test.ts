@@ -205,7 +205,7 @@ describe("ModelRegistry", () => {
     ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )
 
-  it.live("refresh writes canonical model cache instead of raw remote payload", () =>
+  it.live("background refresh writes canonical model cache instead of raw remote payload", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -214,7 +214,12 @@ describe("ModelRegistry", () => {
         const cachePath = path.join(tmpDir, ".gent/models.json")
 
         const registry = yield* loadRegistry(tmpDir, encodeAnyJson(remoteCatalog))
-        yield* registry.refresh()
+        yield* waitFor(
+          registry.list(),
+          (models) => models.some((model) => model.id === "openai/gpt-5.4"),
+          5_000,
+          "background refresh to land",
+        )
 
         const cached = yield* fs.readFileString(cachePath)
         const decoded = yield* Schema.decodeUnknownEffect(CachedModelsJson)(cached)
@@ -228,19 +233,25 @@ describe("ModelRegistry", () => {
     ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )
 
-  it.live("refresh preserves valid remote models when sibling entries are malformed", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const tmpDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+  it.live(
+    "background refresh preserves valid remote models when sibling entries are malformed",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tmpDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
 
-        const registry = yield* loadRegistry(tmpDir, encodeAnyJson(mixedRemoteCatalog))
-        yield* registry.refresh()
-        const models = yield* registry.list()
+          const registry = yield* loadRegistry(tmpDir, encodeAnyJson(mixedRemoteCatalog))
+          const models = yield* waitFor(
+            registry.list(),
+            (models) => models.some((model) => model.id === "openai/gpt-5.4"),
+            5_000,
+            "background refresh to land",
+          )
 
-        expect(models).toHaveLength(1)
-        expect(models[0]?.id).toBe(ModelId.make("openai/gpt-5.4"))
-      }),
-    ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+          expect(models).toHaveLength(1)
+          expect(models[0]?.id).toBe(ModelId.make("openai/gpt-5.4"))
+        }),
+      ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )
 
   it.live("applies typed model-driver catalog filters", () =>
@@ -264,8 +275,12 @@ describe("ModelRegistry", () => {
         )
         const registry = Context.get(context, ModelRegistry)
 
-        yield* registry.refresh()
-        const models = yield* registry.list()
+        const models = yield* waitFor(
+          registry.list(),
+          (models) => models.some((model) => model.name === "GPT-5.4 filtered"),
+          5_000,
+          "background refresh + filter to land",
+        )
 
         expect(models[0]?.id).toBe(ModelId.make("openai/gpt-5.4"))
         expect(models[0]?.name).toBe("GPT-5.4 filtered")
@@ -295,7 +310,6 @@ describe("ModelRegistry", () => {
         )
         const registry = Context.get(context, ModelRegistry)
 
-        yield* registry.refresh()
         const error = yield* Effect.flip(registry.list())
 
         expect(error._tag).toBe("DriverError")
@@ -331,7 +345,6 @@ describe("ModelRegistry", () => {
         )
         const registry = Context.get(context, ModelRegistry)
 
-        yield* registry.refresh()
         const error = yield* Effect.flip(registry.list())
 
         expect(error._tag).toBe("ProviderAuthError")
