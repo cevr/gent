@@ -93,9 +93,6 @@ describe("extension command RPCs", () => {
   )
   const allowAllPermission = {
     check: () => Effect.succeed("allowed" as const),
-    addRule: () => Effect.void,
-    removeRule: () => Effect.void,
-    getRules: () => Effect.succeed([]),
   }
   const makeProfile = (cwd: string, extensions: ReadonlyArray<LoadedExtension>) =>
     Effect.gen(function* () {

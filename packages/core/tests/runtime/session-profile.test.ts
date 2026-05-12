@@ -30,9 +30,6 @@ const makeEmptyProfile = (cwd: string) =>
       layerContext,
       permissionService: {
         check: () => Effect.succeed("allowed" as const),
-        addRule: () => Effect.void,
-        removeRule: () => Effect.void,
-        getRules: () => Effect.succeed([]),
       },
       registryService: Context.get(layerContext, ExtensionRegistry),
       driverRegistryService: Context.get(layerContext, DriverRegistry),

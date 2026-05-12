@@ -108,12 +108,6 @@ export const makeProfilePermissionService = (params: {
         "allow",
       )
     }),
-    addRule: (rule) => params.configService.addPermissionRule(rule),
-    removeRule: (tool, pattern) => params.configService.removePermissionRule(tool, pattern),
-    getRules: Effect.fn("RuntimeProfile.permission.getRules")(function* () {
-      const config = yield* params.configService.get(params.cwd)
-      return [...params.extensionRules, ...permissionRulesFromConfig(config)]
-    }),
   }
 }
 

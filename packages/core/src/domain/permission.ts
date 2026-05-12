@@ -62,9 +62,6 @@ export const evaluatePermissionRules = (
 
 export interface PermissionService {
   readonly check: (tool: string, args: unknown) => Effect.Effect<PermissionResult>
-  readonly addRule: (rule: PermissionRule) => Effect.Effect<void>
-  readonly removeRule: (tool: string, pattern?: string) => Effect.Effect<void>
-  readonly getRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
 }
 
 export class Permission extends Context.Service<Permission, PermissionService>()(
@@ -83,15 +80,6 @@ export class Permission extends Context.Service<Permission, PermissionService>()
             Ref.get(rulesRef).pipe(
               Effect.map((rules) => evaluatePermissionRules(rules, tool, args, defaultAction)),
             ),
-          addRule: (rule) => Ref.update(rulesRef, (rules) => [...rules, toStoredRule(rule)]),
-          removeRule: (tool, pattern) =>
-            Ref.update(rulesRef, (rules) =>
-              rules.filter(
-                (entry) => !(entry.rule.tool === tool && entry.rule.pattern === pattern),
-              ),
-            ),
-          getRules: () =>
-            Ref.get(rulesRef).pipe(Effect.map((rules) => rules.map((entry) => entry.rule))),
         })
       }),
     )
@@ -99,8 +87,5 @@ export class Permission extends Context.Service<Permission, PermissionService>()
   static Test = (): Layer.Layer<Permission> =>
     Layer.succeed(Permission, {
       check: () => Effect.succeed("allowed" as const),
-      addRule: () => Effect.void,
-      removeRule: () => Effect.void,
-      getRules: () => Effect.succeed([]),
     })
 }

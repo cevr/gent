@@ -2,7 +2,6 @@ import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { Cause, Context, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect"
-import { PermissionRule } from "@gent/core-internal/domain/permission"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { dateFromMillis, Session } from "@gent/core-internal/domain/message"
 import { ConfigService } from "../../src/runtime/config-service"
@@ -133,15 +132,6 @@ describe("resolveSessionEnvironment", () => {
       })
       const defaultPermission = {
         check: () => Effect.succeed("denied" as const),
-        addRule: () => Effect.void,
-        removeRule: () => Effect.void,
-        getRules: () =>
-          Effect.succeed([
-            new PermissionRule({
-              tool: "bash",
-              action: "deny",
-            }),
-          ]),
       }
       const driverRegistryContext = yield* Layer.build(
         DriverRegistry.fromResolved({
@@ -309,9 +299,6 @@ describe("resolveSessionEnvironment", () => {
           layerContext: Context.empty(),
           permissionService: {
             check: () => Effect.succeed("allowed" as const),
-            addRule: () => Effect.void,
-            removeRule: () => Effect.void,
-            getRules: () => Effect.succeed([]),
           },
           registryService: extensionRegistry,
           driverRegistryService: profileDriverRegistry,

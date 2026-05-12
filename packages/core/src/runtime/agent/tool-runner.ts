@@ -221,9 +221,6 @@ const normalizeToolExecutionError = (failure: unknown): InteractionPendingError 
 
 const allowAllPermission: PermissionService = {
   check: () => Effect.succeed("allowed"),
-  addRule: () => Effect.void,
-  removeRule: () => Effect.void,
-  getRules: () => Effect.succeed([]),
 }
 
 export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()(

@@ -111,9 +111,6 @@ const buildSessionEnvironment = (params: {
 
 export const AllowAllPermission: PermissionService = {
   check: () => Effect.succeed("allowed"),
-  addRule: () => Effect.void,
-  removeRule: () => Effect.void,
-  getRules: () => Effect.succeed([]),
 }
 
 interface ResolveSessionEnvironmentParams {

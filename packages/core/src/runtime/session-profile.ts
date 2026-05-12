@@ -37,9 +37,6 @@ import { resolveProfileRuntime, type RuntimeProfile } from "./profile.js"
 
 const allowAllPermission: PermissionService = {
   check: () => Effect.succeed("allowed"),
-  addRule: () => Effect.void,
-  removeRule: () => Effect.void,
-  getRules: () => Effect.succeed([]),
 }
 
 // ── SessionProfile ──
