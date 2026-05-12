@@ -115,6 +115,7 @@ import {
   type ResolvedTurnContext,
   type ToolResponsePart,
 } from "./turn-helpers.js"
+import { WideEvent, turnBoundary, withWideEvent } from "../wide-event-boundary.js"
 
 const FOLLOW_UP_QUEUE_MAX = 10
 const MAX_TURN_STEPS = 200
@@ -926,25 +927,15 @@ export const makeAgentLoopBehavior = (
       )
 
       const metrics = yield* Ref.get(turnMetricsRef)
-      let status: "ok" | "error" | "interrupted" = "ok"
-      if (params.turnInterrupted) status = "interrupted"
-      else if (params.streamFailed) status = "error"
-      yield* Effect.logInfo("wide-event").pipe(
-        Effect.annotateLogs({
-          service: "agent-loop",
-          method: "turn",
-          actor: metrics.agent,
-          sessionId,
-          branchId,
-          model: metrics.model,
-          inputTokens: metrics.inputTokens,
-          outputTokens: metrics.outputTokens,
-          toolCallCount: metrics.toolCallCount,
-          durationMs: Number(turnDurationMs),
-          interrupted: params.turnInterrupted,
-          status,
-        }),
-      )
+      yield* WideEvent.set({
+        actor: metrics.agent,
+        model: metrics.model,
+        inputTokens: metrics.inputTokens,
+        outputTokens: metrics.outputTokens,
+        toolCallCount: metrics.toolCallCount,
+        interrupted: params.turnInterrupted,
+        ...(params.streamFailed && !params.turnInterrupted ? { streamFailed: true } : {}),
+      })
     })
 
     const runTurn = Effect.fn("AgentLoop.runTurn")(function* (state: RunningState) {
@@ -1193,6 +1184,9 @@ export const makeAgentLoopBehavior = (
         runTurn(startState).pipe(
           Effect.annotateLogs({ sessionId, branchId }),
           Effect.withSpan("AgentLoop.turn"),
+          withWideEvent(
+            turnBoundary(sessionId, branchId, startState.currentAgent ?? DEFAULT_AGENT_NAME),
+          ),
           Effect.matchCauseEffect({
             onFailure: (cause) => failTurnWorker(startState, cause),
             onSuccess: (outcome) => finishTurnWorker(startState, outcome),

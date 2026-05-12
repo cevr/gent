@@ -296,7 +296,10 @@ const RpcHandlers = GentRpcs.toLayer(
         sessionId,
         reasoningLevel,
       }: UpdateSessionReasoningLevelInput) =>
-        commands.updateSessionReasoningLevel({ sessionId, reasoningLevel }),
+        commands.updateSessionReasoningLevel({ sessionId, reasoningLevel }).pipe(
+          Effect.tap(() => WideEvent.set({ sessionId, reasoningLevel })),
+          withWideEvent(rpcBoundary("session.updateReasoningLevel")),
+        ),
 
       "session.events": ({ sessionId, branchId, after }: SubscribeEventsInput) =>
         eventStore
@@ -312,11 +315,16 @@ const RpcHandlers = GentRpcs.toLayer(
       "branch.list": ({ sessionId }: SessionIdPayload) => branchStorage.listBranches(sessionId),
 
       "branch.create": ({ sessionId, name, requestId }: CreateBranchInput) =>
-        commands.createBranch({
-          sessionId,
-          ...(name !== undefined ? { name } : {}),
-          ...(requestId !== undefined ? { requestId } : {}),
-        }),
+        commands
+          .createBranch({
+            sessionId,
+            ...(name !== undefined ? { name } : {}),
+            ...(requestId !== undefined ? { requestId } : {}),
+          })
+          .pipe(
+            Effect.tap((result) => WideEvent.set({ sessionId, branchId: result.branchId })),
+            withWideEvent(rpcBoundary("branch.create", requestId)),
+          ),
 
       "branch.getTree": ({ sessionId }: SessionIdPayload) => getBranchTree(sessionId),
 
@@ -327,22 +335,34 @@ const RpcHandlers = GentRpcs.toLayer(
         summarize,
         requestId,
       }: SwitchBranchInput) =>
-        commands.switchBranch({
-          sessionId,
-          fromBranchId,
-          toBranchId,
-          ...(summarize !== undefined ? { summarize } : {}),
-          ...(requestId !== undefined ? { requestId } : {}),
-        }),
+        commands
+          .switchBranch({
+            sessionId,
+            fromBranchId,
+            toBranchId,
+            ...(summarize !== undefined ? { summarize } : {}),
+            ...(requestId !== undefined ? { requestId } : {}),
+          })
+          .pipe(
+            Effect.tap(() => WideEvent.set({ sessionId, fromBranchId, toBranchId })),
+            withWideEvent(rpcBoundary("branch.switch", requestId)),
+          ),
 
       "branch.fork": ({ sessionId, fromBranchId, atMessageId, name, requestId }: ForkBranchInput) =>
-        commands.forkBranch({
-          sessionId,
-          fromBranchId,
-          atMessageId,
-          ...(name !== undefined ? { name } : {}),
-          ...(requestId !== undefined ? { requestId } : {}),
-        }),
+        commands
+          .forkBranch({
+            sessionId,
+            fromBranchId,
+            atMessageId,
+            ...(name !== undefined ? { name } : {}),
+            ...(requestId !== undefined ? { requestId } : {}),
+          })
+          .pipe(
+            Effect.tap((result) =>
+              WideEvent.set({ sessionId, fromBranchId, branchId: result.branchId }),
+            ),
+            withWideEvent(rpcBoundary("branch.fork", requestId)),
+          ),
 
       "message.send": ({
         sessionId,
@@ -369,17 +389,30 @@ const RpcHandlers = GentRpcs.toLayer(
       "message.list": ({ branchId }: BranchPayload) => messageStorage.listMessages(branchId),
 
       "steer.command": ({ command }: { readonly command: TransportSteerCommand }) =>
-        sessionRuntime.steer(command),
+        sessionRuntime.steer(command).pipe(
+          Effect.tap(() =>
+            WideEvent.set({
+              sessionId: command.sessionId,
+              branchId: command.branchId,
+              steerTag: command._tag,
+            }),
+          ),
+          withWideEvent(rpcBoundary("steer.command")),
+        ),
 
       "queue.drain": ({ sessionId, branchId, requestId }: QueueDrainInput) =>
-        sessionRuntime
-          .drainQueuedMessages({ sessionId, branchId, requestId })
-          .pipe(Effect.withSpan("SessionCommands.drainQueuedMessages")),
+        sessionRuntime.drainQueuedMessages({ sessionId, branchId, requestId }).pipe(
+          Effect.withSpan("SessionCommands.drainQueuedMessages"),
+          Effect.tap(() => WideEvent.set({ sessionId, branchId })),
+          withWideEvent(rpcBoundary("queue.drain", requestId)),
+        ),
 
       "queue.get": ({ sessionId, branchId }: QueueTarget) =>
-        sessionRuntime
-          .getQueuedMessages({ sessionId, branchId })
-          .pipe(Effect.withSpan("SessionQueries.getQueuedMessages")),
+        sessionRuntime.getQueuedMessages({ sessionId, branchId }).pipe(
+          Effect.withSpan("SessionQueries.getQueuedMessages"),
+          Effect.tap(() => WideEvent.set({ sessionId, branchId })),
+          withWideEvent(rpcBoundary("queue.get")),
+        ),
 
       "interaction.respondInteraction": ({
         requestId,
@@ -388,13 +421,18 @@ const RpcHandlers = GentRpcs.toLayer(
         approved,
         notes,
       }: RespondInteractionInput) =>
-        interactions.respond({
-          requestId,
-          sessionId,
-          branchId,
-          approved,
-          ...(notes !== undefined ? { notes } : {}),
-        }),
+        interactions
+          .respond({
+            requestId,
+            sessionId,
+            branchId,
+            approved,
+            ...(notes !== undefined ? { notes } : {}),
+          })
+          .pipe(
+            Effect.tap(() => WideEvent.set({ sessionId, branchId, requestId, approved })),
+            withWideEvent(rpcBoundary("interaction.respondInteraction")),
+          ),
 
       // ----------------------------------------------------------------------
       // Config / driver / model / auth / permission
