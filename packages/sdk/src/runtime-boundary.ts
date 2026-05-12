@@ -13,7 +13,8 @@
  */
 
 import { Effect, type Context } from "effect"
-import type { GentLifecycle, GentRuntime } from "./namespaced-client.js"
+import type { GentLifecycle } from "@gent/core-internal/server/transport-contract.js"
+import type { GentRuntime } from "./namespaced-client.js"
 
 export const makeGentRuntime = <Services>(
   services: Context.Context<Services>,
