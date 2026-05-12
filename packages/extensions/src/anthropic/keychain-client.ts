@@ -12,7 +12,8 @@
  */
 
 import { Effect, Layer, Stream } from "effect"
-import { GentPlatform, isRecord, isRecordArray } from "@gent/core/extensions/api"
+import { isRecord, isRecordArray } from "@gent/core/extensions/api"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 
 export { SYSTEM_IDENTITY_PREFIX } from "./oauth.js"

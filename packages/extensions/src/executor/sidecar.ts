@@ -23,7 +23,8 @@ import {
   Scope,
   Semaphore,
 } from "effect"
-import { GentPlatform, isRecord, type PublicExtensionSetupContext } from "@gent/core/extensions/api"
+import { isRecord, type PublicExtensionSetupContext } from "@gent/core/extensions/api"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import { ExecutorPlatform } from "./platform-adapter.js"

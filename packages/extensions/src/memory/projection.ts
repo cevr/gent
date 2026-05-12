@@ -15,10 +15,10 @@ import { Effect } from "effect"
 import {
   ExtensionContext,
   ProjectionError,
-  type GentPlatform,
   type PromptSection,
   type TurnProjection,
 } from "@gent/core/extensions/api"
+import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import {
   MemoryVaultReadOnly,
   projectDisplayName,

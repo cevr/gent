@@ -216,11 +216,6 @@ const platformProviderRootFiles = new Set([
   "packages/core/src/runtime/gent-platform-bun.ts",
   "packages/core/src/server/server-root.ts",
   "packages/core/src/test-utils/extension-harness.ts",
-  // The `api-bun.ts` flavour re-exports the Bun platform layer as part of the
-  // public extension authoring surface; shipped Bun extensions consume it
-  // through `@gent/core/extensions/api/bun` instead of reaching into
-  // `@gent/core-internal/*`.
-  "packages/core/src/extensions/api-bun.ts",
   // The Anthropic extension wires a keychain-aware AnthropicClient layer that
   // needs the live Bun platform to satisfy `GentPlatform` inside the
   // request-signing transform. It's a shipped builtin, not a user extension.

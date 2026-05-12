@@ -4,9 +4,7 @@
   "type": "module",
   "exports": {
     "./extensions/api": "./src/extensions/api.ts",
-    "./extensions/api.js": "./src/extensions/api.ts",
-    "./extensions/api/bun": "./src/extensions/api-bun.ts",
-    "./extensions/api/bun.js": "./src/extensions/api-bun.ts"
+    "./extensions/api.js": "./src/extensions/api.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.locks.json",

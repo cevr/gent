@@ -1,4 +1,5 @@
 import { defineExtension, SessionId } from "@gent/core/extensions/api"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { localHelper } from "./support/local-helper"
 
 export const extension = defineExtension({
@@ -12,4 +13,4 @@ export const extension = defineExtension({
   }),
 })
 
-export const values = [SessionId, localHelper]
+export const values = [SessionId, GentPlatform, localHelper]

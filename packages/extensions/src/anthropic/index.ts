@@ -32,7 +32,7 @@ import {
   type AnthropicKeychainEnv,
   type AnthropicPlatformShape,
 } from "./platform-adapter.js"
-import { BunGentPlatformLive } from "@gent/core/extensions/api/bun"
+import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 
 const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
   Effect.gen(function* () {

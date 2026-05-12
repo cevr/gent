@@ -7,7 +7,7 @@
 
 import type { PlatformError } from "effect"
 import { DateTime, Effect, FileSystem, Layer, Option, Path, Schema, Context } from "effect"
-import { GentPlatform } from "@gent/core/extensions/api"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
 // ── Types ──
 

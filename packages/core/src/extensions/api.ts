@@ -83,18 +83,12 @@ export { requireAgent, estimateContextPercent } from "../domain/extension-servic
 export {
   type GentExtension,
   type TurnProjection,
-  type ExtensionTurnContext,
   type SystemPromptInput,
   type TurnAfterInput,
   type ToolResultInput,
 } from "../domain/extension.js"
 export type { PromptSection } from "../domain/prompt.js"
-export {
-  sectionStartMarker,
-  sectionEndMarker,
-  sectionPatternFor,
-  withSectionMarkers,
-} from "../domain/prompt.js"
+export { sectionPatternFor, withSectionMarkers } from "../domain/prompt.js"
 export type { TurnExecutor, TurnContext, TurnStreamPart } from "../domain/driver.js"
 export { ProviderAuthError, TurnError } from "../domain/driver.js"
 export type {
@@ -125,7 +119,6 @@ export {
   dateFromMillis,
   type Message,
   type MessagePart,
-  MessageMetadata,
   type Branch,
 } from "../domain/message.js"
 export type { Question } from "../domain/event.js"
@@ -182,19 +175,6 @@ export {
 } from "../domain/extension-services.js"
 export { isRecord, isRecordArray } from "../domain/guards.js"
 export { OutputBuffer, headTailChars, saveFullOutput } from "../domain/output-buffer.js"
-// Host-platform service for hashing, ids, OS info, etc. Exposed publicly so
-// extensions can yield it inside their setup/runtime effects (e.g. for
-// content-addressed cache keys) without reaching into `@gent/core-internal`.
-// The corresponding live Bun layer ships from `@gent/core/extensions/api/bun`
-// so platform-agnostic extension authoring stays decoupled from Bun specifics.
-export {
-  GentPlatform,
-  SignalError,
-  type GentPlatformHashAlgorithm,
-  type GentPlatformOsInfo,
-  type GentPlatformShape,
-  type GentPlatformSignal,
-} from "../runtime/gent-platform.js"
 // ── Public API ──
 
 /**

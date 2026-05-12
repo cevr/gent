@@ -22,7 +22,7 @@
  * @module
  */
 import { Effect } from "effect"
-import { GentPlatform } from "@gent/core/extensions/api"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
 const BILLING_SALT = "59cf53e54c78"
 

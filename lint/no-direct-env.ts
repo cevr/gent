@@ -4,7 +4,8 @@
  * Rules:
  * - no-positional-log-error: flags Effect.logWarning("msg", error) (use annotateLogs)
  * - no-extension-internal-imports: keeps extension code on the public
- *   @gent/core/extensions/api surface and off @gent/core internals.
+ *   @gent/core/extensions/api surface and off @gent/core internals, with
+ *   narrow builtin platform exceptions.
  * - no-projection-writes: heuristic AST-string-match fence on
  *   `QueryContribution.handler` AND read-intent `CapabilityContribution.effect`
  *   for write-shaped method names. Projection coverage is enforced
@@ -397,8 +398,9 @@ const plugin: Plugin = {
      *   - Relative paths that escape into domain/, runtime/, storage/, etc.
      *
      * `@gent/core-internal/*` is forbidden for public extension implementations,
-     * including shipped extensions. Builtins are just the starting extension set,
-     * not a privileged API lane.
+     * except the narrow builtin platform boundary imports. Builtins are just the
+     * starting extension set, not a privileged API lane for domain/runtime
+     * services.
      *
      * Applies to: packages/core/src/extensions/**, packages/extensions/src/**,
      * and apps/tui/src/extensions/**
@@ -414,14 +416,11 @@ const plugin: Plugin = {
         const inTuiExtensions = filename.includes("apps/tui/src/extensions/")
         if (!inCoreExtensions && !inExtensionsPackage && !inTuiExtensions) return {}
 
-        // Exempt: api.ts / api-bun.ts are the public bridge implementations.
-        // They live inside `packages/core/src/extensions/` but ARE the
-        // re-export surface other extensions consume, so they need to reach
-        // into core internals to assemble the public API.
-        if (
-          filename.endsWith("/extensions/api.ts") ||
-          filename.endsWith("/extensions/api-bun.ts")
-        ) {
+        // Exempt: api.ts is the public bridge implementation. It lives inside
+        // `packages/core/src/extensions/` but IS the re-export surface other
+        // extensions consume, so it needs to reach into core internals to
+        // assemble the public API.
+        if (filename.endsWith("/extensions/api.ts")) {
           return {}
         }
 
@@ -429,10 +428,10 @@ const plugin: Plugin = {
         const INTERNAL_RELATIVE =
           /^\.\.?\/(\.\.\/)*(?:domain|runtime|storage|server|providers|core\/src)\//
 
-        // Allowed @gent/core subpaths (everything else is forbidden). The
-        // `/bun` flavour exposes `BunGentPlatformLive` for shipped Bun
-        // extensions; pure-logic extensions stay on the bare `api`.
-        const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/api(?:\/bun)?(?:\.js)?$/
+        // Allowed @gent/core subpaths (everything else is forbidden).
+        const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/api(?:\.js)?$/
+        const ALLOWED_BUILTIN_INTERNAL_PACKAGE =
+          /^@gent\/core-internal\/runtime\/gent-platform(?:-bun)?(?:\.js)?$/
 
         const reportForbiddenSource = (node: AstNode, source: string) => {
           if (INTERNAL_RELATIVE.test(source)) {
@@ -445,7 +444,8 @@ const plugin: Plugin = {
 
           if (
             source.startsWith("@gent/core-internal") &&
-            (inCoreExtensions || inExtensionsPackage)
+            (inCoreExtensions || inExtensionsPackage) &&
+            !(inExtensionsPackage && ALLOWED_BUILTIN_INTERNAL_PACKAGE.test(source))
           ) {
             context.report({
               message: `Extensions must import from "@gent/core/extensions/api", not @gent/core-internal. Forbidden: "${source}"`,
