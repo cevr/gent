@@ -1,13 +1,4 @@
-import {
-  Cause,
-  Duration,
-  Effect,
-  type Context,
-  type FileSystem,
-  Layer,
-  type Path,
-  Schema,
-} from "effect"
+import { Cause, Duration, Effect, type FileSystem, Layer, type Path, Schema } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import type { SqlClient } from "effect/unstable/sql"
 import { runProcess } from "../../utils/run-process.js"
@@ -39,30 +30,13 @@ import type { RuntimeEnvironment } from "../runtime-environment.js"
 import type { ConfigService } from "../config-service.js"
 import type { ModelRegistry } from "../model-registry.js"
 import type { AgentRunnerConfig } from "./agent-runner.config.js"
-import {
-  createDurableAgentRunSession,
-  publishAgentRunFailed,
-  publishAgentRunSucceeded,
-} from "./agent-runner.durable.js"
+import { makeDurableAgentRunRuntime } from "./agent-runner.durable.js"
 import { runEphemeralAgent } from "./agent-runner.ephemeral.js"
-import type { EphemeralParentServices } from "./ephemeral-root.js"
-import { loadAgentRunSuccessData, saveAgentRunOutput } from "./agent-runner.metadata.js"
+import { makeEphemeralAgentRootLayerFactory } from "./ephemeral-root.js"
+import { makeAgentRunMetadataRuntime } from "./agent-runner.metadata.js"
 import { normalizeRunSpec, handleAgentRunFailure } from "./agent-runner.run-spec.js"
 export type { AgentRunnerConfig } from "./agent-runner.config.js"
 export { getSessionDepth } from "./agent-runner.durable.js"
-
-type AgentRunnerRuntimeServices =
-  | SessionStorage
-  | BranchStorage
-  | MessageStorage
-  | EventStorage
-  | RelationshipStorage
-  | SqlClient.SqlClient
-  | EventPublisher
-  | GentPlatform
-  | FileSystem.FileSystem
-
-type AgentRunnerParentServices = EphemeralParentServices
 
 export const InProcessRunner = (
   runnerConfig: AgentRunnerConfig,
@@ -95,14 +69,9 @@ export const InProcessRunner = (
       const eventPublisher = yield* EventPublisher
       const sessionRuntime = yield* SessionRuntime
       const extensionRegistry = yield* ExtensionRegistry
-
-      // AgentRunner exposes a closed `run` method to extension authors. Capture
-      // only the service families the runner helpers actually yield, instead of
-      // smuggling the whole layer context through the method closure.
-      const runtimeContext: Context.Context<AgentRunnerRuntimeServices> =
-        yield* Effect.context<AgentRunnerRuntimeServices>()
-      const parentServices: Context.Context<AgentRunnerParentServices> =
-        yield* Effect.context<AgentRunnerParentServices>()
+      const durableRuntime = yield* makeDurableAgentRunRuntime
+      const metadataRuntime = yield* makeAgentRunMetadataRuntime
+      const makeEphemeralAgentRootLayer = yield* makeEphemeralAgentRootLayerFactory
 
       const platform = yield* GentPlatform
       const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
@@ -153,112 +122,110 @@ export const InProcessRunner = (
           }
 
           if (persistence === "ephemeral") {
-            return yield* Effect.gen(function* () {
-              const sessionId = SessionId.make(yield* platform.randomId)
-              const branchId = BranchId.make(yield* platform.randomId)
-              return yield* runEphemeralAgent({
-                runnerConfig,
-                parentServices,
-                parentSessionId: params.parentSessionId,
-                parentBranchId: params.parentBranchId,
-                toolCallId,
-                cwd: params.cwd,
-                agentName: params.agent.name,
-                prompt: params.prompt,
-                runSpec: normalizedRunSpec,
-                persistence,
-                parentBaseEventStore: baseEventStore,
-                notifyMirroredEventObservers,
-                sessionId,
-                branchId,
-                extensionRegistry,
-              })
-            }).pipe(Effect.provideContext(runtimeContext))
+            const sessionId = SessionId.make(yield* platform.randomId)
+            const branchId = BranchId.make(yield* platform.randomId)
+            return yield* runEphemeralAgent({
+              runnerConfig,
+              makeEphemeralAgentRootLayer,
+              durableRuntime,
+              metadataRuntime,
+              parentSessionId: params.parentSessionId,
+              parentBranchId: params.parentBranchId,
+              toolCallId,
+              cwd: params.cwd,
+              agentName: params.agent.name,
+              prompt: params.prompt,
+              runSpec: normalizedRunSpec,
+              persistence,
+              parentBaseEventStore: baseEventStore,
+              notifyMirroredEventObservers,
+              sessionId,
+              branchId,
+              extensionRegistry,
+            })
           }
 
-          return yield* createDurableAgentRunSession({ ...params, toolCallId })
-            .pipe(
-              Effect.flatMap(({ sessionId, branchId }) => {
-                const run = Effect.gen(function* () {
-                  yield* WideEvent.set({ childSessionId: sessionId })
+          return yield* durableRuntime.createDurableAgentRunSession({ ...params, toolCallId }).pipe(
+            Effect.flatMap(({ sessionId, branchId }) => {
+              const run = Effect.gen(function* () {
+                yield* WideEvent.set({ childSessionId: sessionId })
 
-                  yield* publishAgentSwitch({
+                yield* publishAgentSwitch({
+                  sessionId,
+                  branchId,
+                  agentName: params.agent.name,
+                })
+
+                const durableRunSpec: RunSpec | undefined =
+                  toolCallId !== undefined
+                    ? makeRunSpec({
+                        persistence: normalizedRunSpec?.persistence,
+                        overrides: normalizedRunSpec?.overrides,
+                        tags: normalizedRunSpec?.tags,
+                        parentToolCallId: toolCallId,
+                      })
+                    : normalizedRunSpec
+                yield* runWithTimeout(
+                  sessionRuntime.runPrompt({
                     sessionId,
                     branchId,
                     agentName: params.agent.name,
-                  })
+                    prompt: params.prompt,
+                    interactive: false,
+                    ...(durableRunSpec !== undefined ? { runSpec: durableRunSpec } : {}),
+                  }),
+                )
 
-                  const durableRunSpec: RunSpec | undefined =
-                    toolCallId !== undefined
-                      ? makeRunSpec({
-                          persistence: normalizedRunSpec?.persistence,
-                          overrides: normalizedRunSpec?.overrides,
-                          tags: normalizedRunSpec?.tags,
-                          parentToolCallId: toolCallId,
-                        })
-                      : normalizedRunSpec
-                  yield* runWithTimeout(
-                    sessionRuntime.runPrompt({
-                      sessionId,
-                      branchId,
-                      agentName: params.agent.name,
-                      prompt: params.prompt,
-                      interactive: false,
-                      ...(durableRunSpec !== undefined ? { runSpec: durableRunSpec } : {}),
-                    }),
-                  )
+                const { success, reasoning } = yield* metadataRuntime.loadAgentRunSuccessData({
+                  branchId,
+                  sessionId,
+                  agentName: params.agent.name,
+                  persistence,
+                })
+                const savedPath = yield* metadataRuntime.saveAgentRunOutput({
+                  text: success.text,
+                  reasoning,
+                  agentName: params.agent.name,
+                  sessionId,
+                })
+                const preview =
+                  success.text.length > 200 ? success.text.slice(0, 200) + "…" : success.text
+                yield* durableRuntime.publishAgentRunSucceeded({
+                  parentSessionId: params.parentSessionId,
+                  parentBranchId: params.parentBranchId,
+                  toolCallId,
+                  sessionId,
+                  agentName: params.agent.name,
+                  usage: success.usage,
+                  preview,
+                  savedPath,
+                })
 
-                  const { success, reasoning } = yield* loadAgentRunSuccessData({
-                    branchId,
-                    sessionId,
-                    agentName: params.agent.name,
-                    persistence,
-                  })
-                  const savedPath = yield* saveAgentRunOutput({
-                    text: success.text,
-                    reasoning,
-                    agentName: params.agent.name,
-                    sessionId,
-                  })
-                  const preview =
-                    success.text.length > 200 ? success.text.slice(0, 200) + "…" : success.text
-                  yield* publishAgentRunSucceeded({
+                yield* WideEvent.set({
+                  usage: success.usage,
+                  toolCallCount: success.toolCalls?.length ?? 0,
+                })
+
+                return AgentRunResult.cases.success.make({ ...success, savedPath })
+              }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
+
+              return run.pipe(
+                handleAgentRunFailure(
+                  {
                     parentSessionId: params.parentSessionId,
                     parentBranchId: params.parentBranchId,
                     toolCallId,
                     sessionId,
                     agentName: params.agent.name,
-                    usage: success.usage,
-                    preview,
-                    savedPath,
-                  })
-
-                  yield* WideEvent.set({
-                    usage: success.usage,
-                    toolCallCount: success.toolCalls?.length ?? 0,
-                  })
-
-                  return AgentRunResult.cases.success.make({ ...success, savedPath })
-                }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
-
-                return run.pipe(
-                  handleAgentRunFailure(
-                    {
-                      parentSessionId: params.parentSessionId,
-                      parentBranchId: params.parentBranchId,
-                      toolCallId,
-                      sessionId,
-                      agentName: params.agent.name,
-                      persistence,
-                      spanName: "AgentRunner.inProcess",
-                    },
-                    publishAgentRunFailed,
-                  ),
-                )
-              }),
-              Effect.catchCause(handleUnexpectedFailure),
-            )
-            .pipe(Effect.provideContext(runtimeContext))
+                    persistence,
+                    spanName: "AgentRunner.inProcess",
+                  },
+                  durableRuntime.publishAgentRunFailed,
+                ),
+              )
+            }),
+            Effect.catchCause(handleUnexpectedFailure),
+          )
         }),
       }
     }),
@@ -293,14 +260,9 @@ export const SubprocessRunner = (
       const baseEventStore = yield* EventStore
       const extensionRegistry = yield* ExtensionRegistry
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-
-      // AgentRunner exposes a closed `run` method to extension authors. Capture
-      // only the service families the runner helpers actually yield, instead of
-      // smuggling the whole layer context through the method closure.
-      const runtimeContext: Context.Context<AgentRunnerRuntimeServices> =
-        yield* Effect.context<AgentRunnerRuntimeServices>()
-      const parentServices: Context.Context<AgentRunnerParentServices> =
-        yield* Effect.context<AgentRunnerParentServices>()
+      const durableRuntime = yield* makeDurableAgentRunRuntime
+      const metadataRuntime = yield* makeAgentRunMetadataRuntime
+      const makeEphemeralAgentRootLayer = yield* makeEphemeralAgentRootLayerFactory
 
       const platform = yield* GentPlatform
       const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
@@ -310,30 +272,30 @@ export const SubprocessRunner = (
           const persistence = resolveRunPersistence(params.runSpec)
           const toolCallId = params.runSpec?.parentToolCallId
           if (persistence === "ephemeral") {
-            return yield* Effect.gen(function* () {
-              const sessionId = SessionId.make(yield* platform.randomId)
-              const branchId = BranchId.make(yield* platform.randomId)
-              return yield* runEphemeralAgent({
-                runnerConfig: config,
-                parentServices,
-                parentSessionId: params.parentSessionId,
-                parentBranchId: params.parentBranchId,
-                toolCallId,
-                cwd: params.cwd,
-                agentName: params.agent.name,
-                prompt: params.prompt,
-                runSpec: params.runSpec,
-                persistence,
-                parentBaseEventStore: baseEventStore,
-                notifyMirroredEventObservers,
-                sessionId,
-                branchId,
-                extensionRegistry,
-              })
-            }).pipe(Effect.provideContext(runtimeContext))
+            const sessionId = SessionId.make(yield* platform.randomId)
+            const branchId = BranchId.make(yield* platform.randomId)
+            return yield* runEphemeralAgent({
+              runnerConfig: config,
+              makeEphemeralAgentRootLayer,
+              durableRuntime,
+              metadataRuntime,
+              parentSessionId: params.parentSessionId,
+              parentBranchId: params.parentBranchId,
+              toolCallId,
+              cwd: params.cwd,
+              agentName: params.agent.name,
+              prompt: params.prompt,
+              runSpec: params.runSpec,
+              persistence,
+              parentBaseEventStore: baseEventStore,
+              notifyMirroredEventObservers,
+              sessionId,
+              branchId,
+              extensionRegistry,
+            })
           }
 
-          return yield* createDurableAgentRunSession({ ...params, toolCallId }).pipe(
+          return yield* durableRuntime.createDurableAgentRunSession({ ...params, toolCallId }).pipe(
             Effect.flatMap(({ sessionId, branchId }) => {
               const run = Effect.gen(function* () {
                 yield* WideEvent.set({ childSessionId: sessionId })
@@ -403,7 +365,7 @@ export const SubprocessRunner = (
                 )
 
                 if (exitCode !== 0) {
-                  yield* publishAgentRunFailed({
+                  yield* durableRuntime.publishAgentRunFailed({
                     parentSessionId: params.parentSessionId,
                     parentBranchId: params.parentBranchId,
                     toolCallId,
@@ -422,13 +384,13 @@ export const SubprocessRunner = (
                   })
                 }
 
-                const { success, reasoning } = yield* loadAgentRunSuccessData({
+                const { success, reasoning } = yield* metadataRuntime.loadAgentRunSuccessData({
                   branchId,
                   sessionId,
                   agentName: params.agent.name,
                   persistence,
                 })
-                const savedPath = yield* saveAgentRunOutput({
+                const savedPath = yield* metadataRuntime.saveAgentRunOutput({
                   text: success.text,
                   reasoning,
                   agentName: params.agent.name,
@@ -436,7 +398,7 @@ export const SubprocessRunner = (
                 })
                 const preview =
                   success.text.length > 200 ? success.text.slice(0, 200) + "…" : success.text
-                yield* publishAgentRunSucceeded({
+                yield* durableRuntime.publishAgentRunSucceeded({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
                   toolCallId,
@@ -466,7 +428,7 @@ export const SubprocessRunner = (
                     persistence,
                     spanName: "AgentRunner.subprocess",
                   },
-                  publishAgentRunFailed,
+                  durableRuntime.publishAgentRunFailed,
                 ),
               )
             }),
@@ -480,7 +442,6 @@ export const SubprocessRunner = (
                 }),
               )
             }),
-            Effect.provideContext(runtimeContext),
           )
         }),
       }

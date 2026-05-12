@@ -73,6 +73,11 @@ type EphemeralExtensionRequires =
   | ConfigService
   | ModelRegistry
 
+export type EphemeralAgentRootLayerFactory = (params: {
+  readonly config: EphemeralAgentRootConfig
+  readonly extensionRegistry: ExtensionRegistryService
+}) => Layer.Layer<EphemeralOverrideProvides, EphemeralOverrideError, never>
+
 interface EphemeralRuntimeOverrides {
   readonly storage: Layer.Layer<EphemeralStorageProvides, StorageError, never>
   readonly eventStore: Layer.Layer<EventStore, EphemeralOverrideError, never>
@@ -95,11 +100,10 @@ const recoverExtensionLayer = <Provides>(
   layer as Layer.Layer<Provides, never, EphemeralExtensionRequires> // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- explicit extension-layer recovery membrane
 
 const composeEphemeralRuntimeLayer = <Provides>(params: {
-  readonly parentServices: Context.Context<EphemeralParentServices>
+  readonly parentLayer: Layer.Layer<EphemeralParentServices, never, never>
   readonly overrides: EphemeralRuntimeOverrides
   readonly extensionLayers?: Layer.Layer<Provides, unknown, unknown>
 }): Layer.Layer<Provides | EphemeralOverrideProvides, EphemeralOverrideError, never> => {
-  const parentLayer = Layer.succeedContext(params.parentServices)
   const overridesLayer = Layer.mergeAll(
     params.overrides.storage,
     params.overrides.eventStore,
@@ -119,7 +123,10 @@ const composeEphemeralRuntimeLayer = <Provides>(params: {
   const extensionLayer =
     typedExtensionLayer === undefined
       ? undefined
-      : Layer.provideMerge(typedExtensionLayer, Layer.merge(parentLayer, params.overrides.storage))
+      : Layer.provideMerge(
+          typedExtensionLayer,
+          Layer.merge(params.parentLayer, params.overrides.storage),
+        )
 
   const childLayer =
     extensionLayer === undefined ? overridesLayer : Layer.merge(extensionLayer, overridesLayer)
@@ -127,7 +134,7 @@ const composeEphemeralRuntimeLayer = <Provides>(params: {
   // Fresh memoization keeps child-owned layer constants, such as in-memory
   // SqliteClient, from aliasing the parent runtime's memoized services.
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Provides plus override provides is the local composition output
-  return Layer.fresh(Layer.provideMerge(childLayer, parentLayer)) as Layer.Layer<
+  return Layer.fresh(Layer.provideMerge(childLayer, params.parentLayer)) as Layer.Layer<
     Provides | EphemeralOverrideProvides,
     EphemeralOverrideError,
     never
@@ -142,105 +149,119 @@ const composeEphemeralRuntimeLayer = <Provides>(params: {
  * resource services against child storage, skip process lifecycle, and override
  * only the child-owned runtime families.
  */
-export const makeEphemeralAgentRootLayer = (params: {
-  readonly config: EphemeralAgentRootConfig
-  readonly parentServices: Context.Context<EphemeralParentServices>
-  readonly extensionRegistry: ExtensionRegistryService
-}) => {
-  const resolved = params.extensionRegistry.getResolved()
-  const extensionLayers = buildExtensionLayers(resolved, { lifecycle: "skip" })
-  const parentService = <S>(tag: Context.Key<unknown, S>): S =>
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime root owns erased generic boundary
-    Context.get(params.parentServices as Context.Context<unknown>, tag)
+export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
+  EphemeralAgentRootLayerFactory,
+  never,
+  EphemeralParentServices
+> = Effect.gen(function* () {
+  const runtimeEnvironment = yield* RuntimeEnvironment
+  const fileSystem = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const modelResolver = yield* ModelResolver
+  const configService = yield* ConfigService
+  const modelRegistry = yield* ModelRegistry
+  const gentPlatform = yield* GentPlatform
 
-  const parentRuntimeEnvironmentLayer = Layer.succeed(
-    RuntimeEnvironment,
-    parentService(RuntimeEnvironment),
-  )
-  const parentFileSystemLayer = Layer.succeed(
-    FileSystem.FileSystem,
-    parentService(FileSystem.FileSystem),
-  )
-  const parentPathLayer = Layer.succeed(Path.Path, parentService(Path.Path))
-  const parentModelResolverLayer = Layer.succeed(ModelResolver, parentService(ModelResolver))
-  const parentConfigLayer = Layer.succeed(ConfigService, parentService(ConfigService))
-  const parentModelRegistryLayer = Layer.succeed(ModelRegistry, parentService(ModelRegistry))
-  const parentGentPlatformLayer = Layer.succeed(GentPlatform, parentService(GentPlatform))
-  const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(parentGentPlatformLayer))
-  const clusterRunnerLayer = Layer.provide(
-    SingleRunner.layer({ runnerStorage: "memory" }),
-    storageLayer,
-  )
-  const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
-  const approvalLayer = ApprovalService.LiveAutoResolve
-  const promptPresenterLayer = Layer.provide(
-    PromptPresenterLive,
-    Layer.mergeAll(
-      approvalLayer,
-      parentRuntimeEnvironmentLayer,
-      parentFileSystemLayer,
-      parentPathLayer,
-    ),
+  const parentRuntimeEnvironmentLayer = Layer.succeed(RuntimeEnvironment, runtimeEnvironment)
+  const parentFileSystemLayer = Layer.succeed(FileSystem.FileSystem, fileSystem)
+  const parentPathLayer = Layer.succeed(Path.Path, path)
+  const parentModelResolverLayer = Layer.succeed(ModelResolver, modelResolver)
+  const parentConfigLayer = Layer.succeed(ConfigService, configService)
+  const parentModelRegistryLayer = Layer.succeed(ModelRegistry, modelRegistry)
+  const parentGentPlatformLayer = Layer.succeed(GentPlatform, gentPlatform)
+  const parentLayer = Layer.mergeAll(
+    parentRuntimeEnvironmentLayer,
+    parentFileSystemLayer,
+    parentPathLayer,
+    parentModelResolverLayer,
+    parentConfigLayer,
+    parentModelRegistryLayer,
+    parentGentPlatformLayer,
   )
 
-  // Ephemeral child sessions are synthetic. Persist local events so the child
-  // loop can complete, but do not run local extension reduction on those ids;
-  // mirrored parent observers handle the subset of child events that escapes.
-  const eventPublisherLayer = Layer.effectContext(
-    Effect.gen(function* () {
-      const baseEventStore = yield* EventStore
-      const publisher = EventPublisher.of({
-        append: (event) => baseEventStore.append(event),
-        deliver: (envelope) => baseEventStore.deliver(envelope),
-        publish: (event) => baseEventStore.publish(event),
-      })
-      return Context.empty().pipe(
-        Context.add(EventPublisher, publisher),
-        Context.add(ExtensionEventSink, {
-          publish: publisher.publish,
-        }),
-      )
-    }),
-  ).pipe(Layer.provide(eventStoreLayer))
-  const toolRunnerLayer = Layer.provideMerge(
-    ToolRunner.Live,
-    Layer.mergeAll(approvalLayer, extensionLayers, parentRuntimeEnvironmentLayer),
-  )
-  const sessionGovernanceLayer = AgentLoopSessionGovernance.Live
-  const sessionRuntimeLayer = SessionRuntime.Live({
-    baseSections: params.config.baseSections ?? [],
-  }).pipe(
-    Layer.provide(
-      Layer.provideMerge(
-        Layer.mergeAll(
-          clusterRunnerLayer,
-          eventStoreLayer,
-          eventPublisherLayer,
-          toolRunnerLayer,
-          extensionLayers,
-          parentModelResolverLayer,
-          parentConfigLayer,
-          parentModelRegistryLayer,
-          sessionGovernanceLayer,
-          parentGentPlatformLayer,
-        ),
-        storageLayer,
+  return (params: {
+    readonly config: EphemeralAgentRootConfig
+    readonly extensionRegistry: ExtensionRegistryService
+  }) => {
+    const resolved = params.extensionRegistry.getResolved()
+    const extensionLayers = buildExtensionLayers(resolved, { lifecycle: "skip" })
+    const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(parentGentPlatformLayer))
+    const clusterRunnerLayer = Layer.provide(
+      SingleRunner.layer({ runnerStorage: "memory" }),
+      storageLayer,
+    )
+    const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
+    const approvalLayer = ApprovalService.LiveAutoResolve
+    const promptPresenterLayer = Layer.provide(
+      PromptPresenterLive,
+      Layer.mergeAll(
+        approvalLayer,
+        parentRuntimeEnvironmentLayer,
+        parentFileSystemLayer,
+        parentPathLayer,
       ),
-    ),
-  )
+    )
 
-  return composeEphemeralRuntimeLayer({
-    parentServices: params.parentServices,
-    overrides: {
-      storage: storageLayer,
-      eventStore: eventStoreLayer,
-      eventPublisher: eventPublisherLayer,
-      approval: approvalLayer,
-      promptPresenter: promptPresenterLayer,
-      toolRunner: toolRunnerLayer,
-      sessionGovernance: sessionGovernanceLayer,
-      sessionRuntime: sessionRuntimeLayer,
-    },
-    extensionLayers,
-  })
-}
+    // Ephemeral child sessions are synthetic. Persist local events so the child
+    // loop can complete, but do not run local extension reduction on those ids;
+    // mirrored parent observers handle the subset of child events that escapes.
+    const eventPublisherLayer = Layer.effectContext(
+      Effect.gen(function* () {
+        const baseEventStore = yield* EventStore
+        const publisher = EventPublisher.of({
+          append: (event) => baseEventStore.append(event),
+          deliver: (envelope) => baseEventStore.deliver(envelope),
+          publish: (event) => baseEventStore.publish(event),
+        })
+        return Context.empty().pipe(
+          Context.add(EventPublisher, publisher),
+          Context.add(ExtensionEventSink, {
+            publish: publisher.publish,
+          }),
+        )
+      }),
+    ).pipe(Layer.provide(eventStoreLayer))
+    const toolRunnerLayer = Layer.provideMerge(
+      ToolRunner.Live,
+      Layer.mergeAll(approvalLayer, extensionLayers, parentRuntimeEnvironmentLayer),
+    )
+    const sessionGovernanceLayer = AgentLoopSessionGovernance.Live
+    const sessionRuntimeLayer = SessionRuntime.Live({
+      baseSections: params.config.baseSections ?? [],
+    }).pipe(
+      Layer.provide(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            clusterRunnerLayer,
+            eventStoreLayer,
+            eventPublisherLayer,
+            toolRunnerLayer,
+            extensionLayers,
+            parentModelResolverLayer,
+            parentConfigLayer,
+            parentModelRegistryLayer,
+            sessionGovernanceLayer,
+            parentGentPlatformLayer,
+          ),
+          storageLayer,
+        ),
+      ),
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension-provided services are extra outputs; child runtime requires only override provides
+    return composeEphemeralRuntimeLayer({
+      parentLayer,
+      overrides: {
+        storage: storageLayer,
+        eventStore: eventStoreLayer,
+        eventPublisher: eventPublisherLayer,
+        approval: approvalLayer,
+        promptPresenter: promptPresenterLayer,
+        toolRunner: toolRunnerLayer,
+        sessionGovernance: sessionGovernanceLayer,
+        sessionRuntime: sessionRuntimeLayer,
+      },
+      extensionLayers,
+    }) as Layer.Layer<EphemeralOverrideProvides, EphemeralOverrideError, never>
+  }
+})

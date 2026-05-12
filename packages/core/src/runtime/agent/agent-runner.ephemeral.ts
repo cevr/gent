@@ -1,15 +1,4 @@
-import {
-  Cause,
-  type Context,
-  DateTime,
-  Duration,
-  Effect,
-  Fiber,
-  Layer,
-  Ref,
-  Scope,
-  Stream,
-} from "effect"
+import { Cause, DateTime, Duration, Effect, Fiber, Layer, Ref, Scope, Stream } from "effect"
 import {
   AgentRunError,
   AgentRunResult,
@@ -41,14 +30,10 @@ import type { ExtensionRegistryService } from "../extensions/registry.js"
 import { SessionRuntime } from "../session-runtime.js"
 import { agentRunBoundary, WideEvent, withWideEvent } from "../wide-event-boundary"
 import type { AgentRunnerConfig } from "./agent-runner.config.js"
-import {
-  publishAgentRunFailed,
-  publishAgentRunSpawned,
-  publishAgentRunSucceeded,
-} from "./agent-runner.durable.js"
-import { loadAgentRunSuccessData, saveAgentRunOutput } from "./agent-runner.metadata.js"
+import { type DurableAgentRunRuntime } from "./agent-runner.durable.js"
+import { loadAgentRunSuccessData, type AgentRunMetadataRuntime } from "./agent-runner.metadata.js"
 import { handleAgentRunFailure } from "./agent-runner.run-spec.js"
-import { makeEphemeralAgentRootLayer, type EphemeralParentServices } from "./ephemeral-root.js"
+import type { EphemeralAgentRootLayerFactory } from "./ephemeral-root.js"
 
 const reparentEphemeralChildEvent = (
   event: AgentEvent,
@@ -98,7 +83,9 @@ const reparentEphemeralChildEvent = (
 
 export const runEphemeralAgent = (params: {
   runnerConfig: AgentRunnerConfig
-  parentServices: Context.Context<EphemeralParentServices>
+  makeEphemeralAgentRootLayer: EphemeralAgentRootLayerFactory
+  durableRuntime: DurableAgentRunRuntime
+  metadataRuntime: AgentRunMetadataRuntime
   parentSessionId: SessionId
   parentBranchId: BranchId
   toolCallId?: ToolCallId
@@ -122,9 +109,8 @@ export const runEphemeralAgent = (params: {
     "ToolCallSucceeded",
     "ToolCallFailed",
   ])
-  const ephemeralLayer = makeEphemeralAgentRootLayer({
+  const ephemeralLayer = params.makeEphemeralAgentRootLayer({
     config: params.runnerConfig,
-    parentServices: params.parentServices,
     extensionRegistry: params.extensionRegistry,
   })
 
@@ -264,7 +250,7 @@ export const runEphemeralAgent = (params: {
   const run = Effect.gen(function* () {
     yield* WideEvent.set({ childSessionId: sessionId })
 
-    yield* publishAgentRunSpawned({
+    yield* params.durableRuntime.publishAgentRunSpawned({
       parentSessionId: params.parentSessionId,
       parentBranchId: params.parentBranchId,
       toolCallId: params.toolCallId,
@@ -292,7 +278,7 @@ export const runEphemeralAgent = (params: {
     }).pipe(Effect.scoped)
 
     // Save full output to disk (runs in parent context where FileSystem is available)
-    const savedPath = yield* saveAgentRunOutput({
+    const savedPath = yield* params.metadataRuntime.saveAgentRunOutput({
       text: success.text,
       reasoning,
       agentName: params.agentName,
@@ -301,7 +287,7 @@ export const runEphemeralAgent = (params: {
 
     const preview = success.text.length > 200 ? success.text.slice(0, 200) + "…" : success.text
 
-    yield* publishAgentRunSucceeded({
+    yield* params.durableRuntime.publishAgentRunSucceeded({
       parentSessionId: params.parentSessionId,
       parentBranchId: params.parentBranchId,
       toolCallId: params.toolCallId,
@@ -334,7 +320,7 @@ export const runEphemeralAgent = (params: {
         persistence: params.persistence,
         spanName: "AgentRunner.inProcess.ephemeral",
       },
-      publishAgentRunFailed,
+      params.durableRuntime.publishAgentRunFailed,
     ),
     Effect.catchCause(handleUnexpectedFailure),
   )

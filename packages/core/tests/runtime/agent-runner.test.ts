@@ -3,23 +3,14 @@ import type { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Context, Effect, Fiber, Layer, Schema, Stream, SubscriptionRef } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
-import {
-  finishPart,
-  LanguageModelLayers,
-  textDeltaPart,
-  toolCallPart,
-  type LanguageModelStreamPart,
-} from "@gent/core-internal/test-utils/language-model"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-runner"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
-import {
-  makeEphemeralAgentRootLayer,
-  type EphemeralParentServices,
-} from "../../src/runtime/agent/ephemeral-root"
+import { makeEphemeralAgentRootLayerFactory } from "../../src/runtime/agent/ephemeral-root"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
@@ -69,17 +60,6 @@ import {
   type SessionRuntimeState,
 } from "../../src/runtime/session-runtime"
 import { BunFileSystem, BunPath } from "@effect/platform-bun"
-/** Scripted provider: returns stream parts from an array, one response per model stream call. */
-const scriptedProvider = (
-  responses: ReadonlyArray<ReadonlyArray<LanguageModelStreamPart>>,
-): Layer.Layer<LanguageModel.LanguageModel> => {
-  let index = 0
-  return LanguageModelLayers.testStream(() =>
-    Effect.succeed(
-      Stream.fromIterable(responses[index++] ?? [finishPart({ finishReason: "stop" })]),
-    ),
-  )
-}
 const bashStubTool = tool({
   id: "bash",
   description: "Stub bash tool for tests",
@@ -553,8 +533,8 @@ describe("AgentRunner", () => {
     Effect.gen(function* () {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-      const providerLayer = scriptedProvider([
-        [textDeltaPart("ephemeral response"), finishPart({ finishReason: "stop" })],
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        textStep("ephemeral response"),
       ])
       const deps = Layer.mergeAll(
         SqliteStorage.TestWithSql(),
@@ -565,10 +545,9 @@ describe("AgentRunner", () => {
         ModelResolver.fromLanguageModel(providerLayer),
         ToolRunner.Test(),
         sessionRuntimeStub(),
+        ephemeralParentDeps,
       )
-      const runnerLayer = InProcessRunner({}).pipe(
-        Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
-      )
+      const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
         const sessions = yield* SessionStorage
@@ -614,12 +593,9 @@ describe("AgentRunner", () => {
       const storageLayer = Layer.orDie(SqliteStorage.TestWithSql())
       const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-      const providerLayer = scriptedProvider([
-        [
-          toolCallPart("bash", { command: "pwd" }, { toolCallId: ToolCallId.make("tc-ephemeral") }),
-          finishPart({ finishReason: "tool-calls" }),
-        ],
-        [textDeltaPart("tool finished"), finishPart({ finishReason: "stop" })],
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("bash", { command: "pwd" }, { toolCallId: ToolCallId.make("tc-ephemeral") }),
+        textStep("tool finished"),
       ])
       const deps = Layer.mergeAll(
         storageLayer,
@@ -630,10 +606,9 @@ describe("AgentRunner", () => {
         ModelResolver.fromLanguageModel(providerLayer),
         ToolRunner.Test(),
         sessionRuntimeStub(),
+        ephemeralParentDeps,
       )
-      const runnerLayer = InProcessRunner({}).pipe(
-        Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
-      )
+      const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
         const sessions = yield* SessionStorage
@@ -1115,11 +1090,10 @@ describe("ephemeral service propagation", () => {
       )
       const layer = Layer.unwrap(
         Effect.gen(function* () {
-          const parentServices = yield* Effect.context<EphemeralParentServices>()
           const extensionRegistry = yield* ExtensionRegistry
+          const makeEphemeralAgentRootLayer = yield* makeEphemeralAgentRootLayerFactory
           return makeEphemeralAgentRootLayer({
             config: { baseSections: [] },
-            parentServices,
             extensionRegistry,
           })
         }).pipe(Effect.provide(parentDeps)),

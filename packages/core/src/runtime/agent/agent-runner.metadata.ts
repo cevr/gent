@@ -1,5 +1,10 @@
 import { DateTime, Effect, FileSystem } from "effect"
-import type { AgentRunToolCall, AgentName, AgentPersistence } from "../../domain/agent.js"
+import type {
+  AgentRunResult as AgentRunResultType,
+  AgentRunToolCall,
+  AgentName,
+  AgentPersistence,
+} from "../../domain/agent.js"
 import { AgentRunResult } from "../../domain/agent.js"
 import type { EventEnvelope } from "../../domain/event.js"
 import type { ToolCallId, SessionId, BranchId } from "../../domain/ids.js"
@@ -10,6 +15,24 @@ import {
 } from "../../domain/message-part-projection.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
+import type { StorageError } from "../../domain/storage-error.js"
+
+type AgentRunSuccess = Extract<AgentRunResultType, { readonly _tag: "success" }>
+
+export interface AgentRunMetadataRuntime {
+  readonly loadAgentRunSuccessData: (params: {
+    branchId: BranchId
+    sessionId: SessionId
+    agentName: AgentName
+    persistence: AgentPersistence
+  }) => Effect.Effect<{ success: AgentRunSuccess; reasoning: string }, StorageError, never>
+  readonly saveAgentRunOutput: (result: {
+    text: string
+    reasoning: string
+    agentName: AgentName
+    sessionId: SessionId
+  }) => Effect.Effect<string | undefined, never, never>
+}
 
 interface ChildMetadata {
   usage?: { input: number; output: number }
@@ -156,3 +179,79 @@ export const saveAgentRunOutput = (result: {
       Effect.orElseSucceed((): string | undefined => undefined),
     )
   })
+
+export const makeAgentRunMetadataRuntime: Effect.Effect<
+  AgentRunMetadataRuntime,
+  never,
+  EventStorage | MessageStorage
+> = Effect.gen(function* () {
+  const eventStorage = yield* EventStorage
+  const messageStorage = yield* MessageStorage
+  const fs = yield* Effect.serviceOption(FileSystem.FileSystem)
+
+  const collectChildMetadata = (sessionId: SessionId) =>
+    eventStorage.listEvents({ sessionId }).pipe(
+      Effect.map((envelopes) => {
+        const state = createChildMetadataAccumulator()
+        for (const env of envelopes) applyChildMetadataEnvelope(state, env)
+        return finalizeChildMetadata(state)
+      }),
+      Effect.catchEager((e) =>
+        Effect.logWarning("failed to collect agent-run metadata").pipe(
+          Effect.annotateLogs({ error: String(e) }),
+          Effect.as<ChildMetadata>({}),
+        ),
+      ),
+    )
+
+  const loadAgentRunSuccessData = (params: {
+    branchId: BranchId
+    sessionId: SessionId
+    agentName: AgentName
+    persistence: AgentPersistence
+  }) =>
+    Effect.gen(function* () {
+      const messages = yield* messageStorage.listMessages(params.branchId)
+      const { text, reasoning } = latestAssistantContent(messages)
+      const meta = yield* collectChildMetadata(params.sessionId)
+      const success = AgentRunResult.cases.success.make({
+        text: text.length > 0 ? text : reasoning,
+        sessionId: params.sessionId,
+        agentName: params.agentName,
+        persistence: params.persistence,
+        usage: meta.usage,
+        toolCalls: meta.toolCalls,
+      })
+      return { success, reasoning }
+    })
+
+  const saveAgentRunOutput = (result: {
+    text: string
+    reasoning: string
+    agentName: AgentName
+    sessionId: SessionId
+  }) =>
+    Effect.gen(function* () {
+      const fullContent = [
+        result.reasoning.length > 0 ? `## Reasoning\n\n${result.reasoning}\n\n` : "",
+        `## Response\n\n${result.text}`,
+      ]
+        .filter(Boolean)
+        .join("")
+
+      if (fullContent.length === 0 || fs._tag === "None") return undefined
+
+      const ts = DateTime.formatIso(yield* DateTime.now).replace(/[:.]/g, "-")
+      const dir = "/tmp/gent/outputs"
+      yield* fs.value.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore)
+      const safe = result.agentName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40)
+      const filepath = `${dir}/${safe}_${result.sessionId.slice(0, 13)}_${ts}.md`
+      const header = `# ${result.agentName} — ${result.sessionId}\n\n`
+      return yield* fs.value.writeFileString(filepath, header + fullContent).pipe(
+        Effect.as(filepath as string | undefined),
+        Effect.orElseSucceed((): string | undefined => undefined),
+      )
+    })
+
+  return { loadAgentRunSuccessData, saveAgentRunOutput }
+})
