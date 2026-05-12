@@ -593,31 +593,36 @@ describe("SessionRuntime", () => {
           expect(eventTags(calls)).toContain("ToolCallSucceeded")
           expect(eventTags(calls).filter((tag) => tag === "ToolCallStarted")).toHaveLength(1)
           expect(eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(1)
-
-          const baselineSucceeded = eventTags(calls).filter(
-            (tag) => tag === "ToolCallSucceeded",
-          ).length
-          const retryTarget = yield* createSessionBranchWithIds({
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      )
+    }),
+  )
+  it.live("recordToolResult dedupes by commandId", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const messageStorage = yield* MessageStorage
+          const recorder = yield* SequenceRecorder
+          const target = yield* createSessionBranchWithIds({
             sessionId: SessionId.make("record-tool-idempotent-session"),
             branchId: BranchId.make("record-tool-idempotent-branch"),
           })
-          const commandId = ActorCommandId.make("record-tool-idempotent")
           const command = {
-            commandId,
-            ...retryTarget,
+            commandId: ActorCommandId.make("record-tool-idempotent"),
+            ...target,
             toolCallId: ToolCallId.make("tool-call-idempotent"),
             toolName: "read",
             output: { ok: true },
           }
           yield* sessionRuntime.recordToolResult(command)
           yield* sessionRuntime.recordToolResult(command)
-          const retryMessages = yield* messageStorage.listMessages(retryTarget.branchId)
-          const afterRetryCalls = yield* recorder.getCalls()
-          const toolSucceeded = eventTags(afterRetryCalls).filter(
-            (tag) => tag === "ToolCallSucceeded",
-          )
-          expect(retryMessages.filter((message) => message.role === "tool")).toHaveLength(1)
-          expect(toolSucceeded.length - baselineSucceeded).toBe(1)
+          const messages = yield* messageStorage.listMessages(target.branchId)
+          const calls = yield* recorder.getCalls()
+          expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
+          expect(eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(1)
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),

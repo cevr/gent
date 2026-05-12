@@ -10,7 +10,6 @@ Public write surface:
 
 - `sendUserMessage(...)`
 - `recordToolResult(...)`
-- `invokeTool(...)`
 - `steer(...)`
 - `respondInteraction(...)`
 
@@ -30,7 +29,6 @@ The public runtime protocol is explicit:
 
 - user-message submission
 - external tool-result recording
-- direct tool invocation
 - steering
 - interaction response
 
