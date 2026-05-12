@@ -221,7 +221,12 @@ const sessionWorkspaceMigration = Effect.gen(function* () {
     .unsafe(
       `ALTER TABLE sessions ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '${DefaultWorkspaceId}'`,
     )
-    .pipe(Effect.catch(() => Effect.void))
+    .pipe(
+      Effect.ignore({
+        log: "Warn",
+        message: "003_session_workspace: ADD COLUMN skipped (column likely exists)",
+      }),
+    )
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id, updated_at)`,
   )
@@ -254,9 +259,12 @@ const interactionDecisionMigration = Effect.gen(function* () {
 
   // Idempotent: SQLite throws "duplicate column name" on re-add. See
   // sessionWorkspaceMigration for rationale.
-  yield* sql
-    .unsafe(`ALTER TABLE interaction_requests ADD COLUMN decision_json TEXT`)
-    .pipe(Effect.catch(() => Effect.void))
+  yield* sql.unsafe(`ALTER TABLE interaction_requests ADD COLUMN decision_json TEXT`).pipe(
+    Effect.ignore({
+      log: "Warn",
+      message: "005_interaction_decision: ADD COLUMN skipped (column likely exists)",
+    }),
+  )
 })
 
 const durableOperationsMigration = Effect.gen(function* () {
