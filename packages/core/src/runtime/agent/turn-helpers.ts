@@ -62,33 +62,33 @@ interface CommittedMutation<A> {
   readonly envelope?: EventEnvelope
 }
 
-export const findPersistedEvent = (params: {
+export const findPersistedEvent = Effect.fn("TurnHelpers.findPersistedEvent")(function* (params: {
   sessionId: SessionId
   branchId: BranchId
   match: (envelope: EventEnvelope) => boolean
-}) =>
-  Effect.gen(function* () {
-    const eventStorage = yield* EventStorage
-    const events = yield* eventStorage.listEvents({
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-    })
-    return [...events].reverse().find(params.match)
+}) {
+  const eventStorage = yield* EventStorage
+  const events = yield* eventStorage.listEvents({
+    sessionId: params.sessionId,
+    branchId: params.branchId,
   })
+  return [...events].reverse().find(params.match)
+})
 
-export const commitWithEvent = <A, E, R>(mutation: Effect.Effect<CommittedMutation<A>, E, R>) =>
-  Effect.gen(function* () {
-    const eventPublisher = yield* EventPublisher
-    const storageTransaction = yield* makeStorageTransaction
-    const committed = yield* storageTransaction(mutation)
-    if (committed.envelope !== undefined) {
-      yield* eventPublisher.deliver(committed.envelope)
-    }
-    return committed.result
-  })
+export const commitWithEvent = Effect.fn("TurnHelpers.commitWithEvent")(function* <A, E, R>(
+  mutation: Effect.Effect<CommittedMutation<A>, E, R>,
+) {
+  const eventPublisher = yield* EventPublisher
+  const storageTransaction = yield* makeStorageTransaction
+  const committed = yield* storageTransaction(mutation)
+  if (committed.envelope !== undefined) {
+    yield* eventPublisher.deliver(committed.envelope)
+  }
+  return committed.result
+})
 
-export const persistMessageReceived = (params: { message: Message }) =>
-  Effect.gen(function* () {
+export const persistMessageReceived = Effect.fn("TurnHelpers.persistMessageReceived")(
+  function* (params: { message: Message }) {
     const messageStorage = yield* MessageStorage
     const eventPublisher = yield* EventPublisher
     return yield* commitWithEvent(
@@ -117,9 +117,10 @@ export const persistMessageReceived = (params: { message: Message }) =>
         return { result: params.message, envelope }
       }),
     )
-  })
+  },
+)
 
-export const recordToolResult = (params: {
+export const recordToolResult = Effect.fn("TurnHelpers.recordToolResult")(function* (params: {
   toolResultMessageId: MessageId
   sessionId: SessionId
   branchId: BranchId
@@ -127,62 +128,61 @@ export const recordToolResult = (params: {
   toolName: string
   output: unknown
   isError?: boolean
-}) =>
-  Effect.gen(function* () {
-    const messageStorage = yield* MessageStorage
-    const eventPublisher = yield* EventPublisher
-    const part = Prompt.toolResultPart({
-      id: params.toolCallId,
-      name: params.toolName,
-      isFailure: params.isError === true,
-      result: params.output,
-    })
-
-    const message = Message.cases.regular.make({
-      id: params.toolResultMessageId,
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      role: "tool",
-      parts: [part],
-      createdAt: yield* DateTime.nowAsDate,
-    })
-
-    const isError = params.isError ?? false
-    const toolCallFields = {
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      toolCallId: params.toolCallId,
-      toolName: params.toolName,
-      summary: summarizeToolOutput(part),
-      output: stringifyOutput(part.result),
-    }
-
-    yield* commitWithEvent(
-      Effect.gen(function* () {
-        const existing = yield* messageStorage.getMessage(message.id)
-        if (existing !== undefined) {
-          const envelope = yield* findPersistedEvent({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            match: (candidate) =>
-              (candidate.event._tag === "ToolCallSucceeded" ||
-                candidate.event._tag === "ToolCallFailed") &&
-              candidate.event.toolCallId === params.toolCallId,
-          })
-          return {
-            result: existing,
-            ...(envelope !== undefined ? { envelope } : {}),
-          }
-        }
-
-        const result = yield* messageStorage.createMessageIfAbsent(message)
-        const envelope = yield* eventPublisher.append(
-          isError ? ToolCallFailed.make(toolCallFields) : ToolCallSucceeded.make(toolCallFields),
-        )
-        return { result, envelope }
-      }),
-    )
+}) {
+  const messageStorage = yield* MessageStorage
+  const eventPublisher = yield* EventPublisher
+  const part = Prompt.toolResultPart({
+    id: params.toolCallId,
+    name: params.toolName,
+    isFailure: params.isError === true,
+    result: params.output,
   })
+
+  const message = Message.cases.regular.make({
+    id: params.toolResultMessageId,
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    role: "tool",
+    parts: [part],
+    createdAt: yield* DateTime.nowAsDate,
+  })
+
+  const isError = params.isError ?? false
+  const toolCallFields = {
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    toolCallId: params.toolCallId,
+    toolName: params.toolName,
+    summary: summarizeToolOutput(part),
+    output: stringifyOutput(part.result),
+  }
+
+  yield* commitWithEvent(
+    Effect.gen(function* () {
+      const existing = yield* messageStorage.getMessage(message.id)
+      if (existing !== undefined) {
+        const envelope = yield* findPersistedEvent({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          match: (candidate) =>
+            (candidate.event._tag === "ToolCallSucceeded" ||
+              candidate.event._tag === "ToolCallFailed") &&
+            candidate.event.toolCallId === params.toolCallId,
+        })
+        return {
+          result: existing,
+          ...(envelope !== undefined ? { envelope } : {}),
+        }
+      }
+
+      const result = yield* messageStorage.createMessageIfAbsent(message)
+      const envelope = yield* eventPublisher.append(
+        isError ? ToolCallFailed.make(toolCallFields) : ToolCallSucceeded.make(toolCallFields),
+      )
+      return { result, envelope }
+    }),
+  )
+})
 
 export interface ResolvedTurnContext extends ResolvedTurn {
   agent: AgentDefinition
@@ -215,32 +215,31 @@ export const toolCallsFromResponseParts = (
         : [],
   )
 
-export const persistMessageParts = (params: {
+export const persistMessageParts = Effect.fn("TurnHelpers.persistMessageParts")(function* (params: {
   sessionId: SessionId
   branchId: BranchId
   messageId: MessageId
   role: "assistant" | "tool"
   parts: ReadonlyArray<Message["parts"][number]>
   createdAt?: Date
-}) =>
-  Effect.gen(function* () {
-    if (params.parts.length === 0) return undefined
+}) {
+  if (params.parts.length === 0) return undefined
 
-    const messageStorage = yield* MessageStorage
-    const message = Message.cases.regular.make({
-      id: params.messageId,
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      role: params.role,
-      parts: [...params.parts],
-      createdAt: params.createdAt ?? (yield* DateTime.nowAsDate),
-    })
-
-    const existing = yield* messageStorage.getMessage(message.id)
-    if (existing !== undefined) return existing
-
-    return yield* persistMessageReceived({ message })
+  const messageStorage = yield* MessageStorage
+  const message = Message.cases.regular.make({
+    id: params.messageId,
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    role: params.role,
+    parts: [...params.parts],
+    createdAt: params.createdAt ?? (yield* DateTime.nowAsDate),
   })
+
+  const existing = yield* messageStorage.getMessage(message.id)
+  if (existing !== undefined) return existing
+
+  return yield* persistMessageReceived({ message })
+})
 
 export const persistAssistantParts = (params: {
   sessionId: SessionId
@@ -282,17 +281,18 @@ export const persistToolParts = (params: {
  * (defaulting to `"native"` when omitted); model drivers are always native.
  * Returns `undefined` when no driver is set.
  */
-export const resolveDriverToolSurface = (
+export const resolveDriverToolSurface: (
   agent: AgentDefinition,
-): Effect.Effect<"native" | "codemode" | undefined, never, DriverRegistry> =>
-  Effect.gen(function* () {
-    const driver = agent.driver
-    if (driver === undefined) return undefined
-    if (driver._tag === "model") return "native"
-    const driverRegistry = yield* DriverRegistry
-    const ext = yield* driverRegistry.getExternal(driver.id)
-    return ext?.toolSurface ?? "native"
-  })
+) => Effect.Effect<"native" | "codemode" | undefined, never, DriverRegistry> = Effect.fn(
+  "TurnHelpers.resolveDriverToolSurface",
+)(function* (agent) {
+  const driver = agent.driver
+  if (driver === undefined) return undefined
+  if (driver._tag === "model") return "native"
+  const driverRegistry = yield* DriverRegistry
+  const ext = yield* driverRegistry.getExternal(driver.id)
+  return ext?.toolSurface ?? "native"
+})
 
 const hasAgentOverrides = (overrides: AgentRunOverrides | undefined) =>
   overrides?.allowedTools !== undefined ||
@@ -330,7 +330,7 @@ const applyAgentOverrides = (
   })
 }
 
-export const resolveTurnContext = (params: {
+export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function* (params: {
   agentOverride?: AgentNameType
   runSpec?: RunSpec
   currentAgent?: AgentNameType
@@ -340,145 +340,144 @@ export const resolveTurnContext = (params: {
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
   hostCtx: ExtensionHostContext
-}) =>
-  Effect.gen(function* () {
-    const extensionRegistry = yield* ExtensionRegistry
-    const messageStorage = yield* MessageStorage
-    const sessionStorage = yield* SessionStorage
-    const currentAgent = params.agentOverride ?? params.currentAgent ?? DEFAULT_AGENT_NAME
-    const rawMessages = yield* messageStorage
-      .listMessages(params.branchId)
-      .pipe(Effect.map((items) => [...items]))
-    const agents = yield* extensionRegistry.listAgents()
-    const agent = agents.find((entry) => entry.name === currentAgent)
-    if (agent === undefined) {
-      yield* params
-        .publishEvent(
-          ErrorOccurred.make({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            error: `Unknown agent: ${currentAgent}`,
-          }),
-        )
-        .pipe(Effect.orDie)
-      return undefined
-    }
-    const effectiveAgent = applyAgentOverrides(agent, params.runSpec?.overrides)
+}) {
+  const extensionRegistry = yield* ExtensionRegistry
+  const messageStorage = yield* MessageStorage
+  const sessionStorage = yield* SessionStorage
+  const currentAgent = params.agentOverride ?? params.currentAgent ?? DEFAULT_AGENT_NAME
+  const rawMessages = yield* messageStorage
+    .listMessages(params.branchId)
+    .pipe(Effect.map((items) => [...items]))
+  const agents = yield* extensionRegistry.listAgents()
+  const agent = agents.find((entry) => entry.name === currentAgent)
+  if (agent === undefined) {
+    yield* params
+      .publishEvent(
+        ErrorOccurred.make({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          error: `Unknown agent: ${currentAgent}`,
+        }),
+      )
+      .pipe(Effect.orDie)
+    return undefined
+  }
+  const effectiveAgent = applyAgentOverrides(agent, params.runSpec?.overrides)
 
-    // Resolve runtime driver routing — `agent.driver` (hardcoded) wins,
-    // then `UserConfig.driverOverrides[agent.name]`, else default.
-    // `ConfigService` is a hard requirement of the actor behavior deps.
-    // Making it optional here let test layers omit it and silently fall
-    // through to the default driver, hiding wiring bugs.
-    const configService = yield* ConfigService
-    // Read driver overrides from the session's cwd. Without per-session
-    // resolution, a multi-cwd server's project overrides would all
-    // come from the launch cwd. `get(undefined)` falls back to the
-    // launch-cwd cached config.
-    const sessionConfig = yield* configService.get(params.hostCtx.cwd)
-    const driverOverrides = sessionConfig.driverOverrides ?? undefined
-    const driverResolution = resolveAgentDriver(effectiveAgent, driverOverrides)
-    // If config-routed and the agent had no hardcoded driver, the
-    // override replaces it — `effectiveAgent` is otherwise unchanged.
-    const dispatchAgent =
-      driverResolution.source === "config"
-        ? AgentDefinition.make({ ...effectiveAgent, driver: driverResolution.driver })
-        : effectiveAgent
+  // Resolve runtime driver routing — `agent.driver` (hardcoded) wins,
+  // then `UserConfig.driverOverrides[agent.name]`, else default.
+  // `ConfigService` is a hard requirement of the actor behavior deps.
+  // Making it optional here let test layers omit it and silently fall
+  // through to the default driver, hiding wiring bugs.
+  const configService = yield* ConfigService
+  // Read driver overrides from the session's cwd. Without per-session
+  // resolution, a multi-cwd server's project overrides would all
+  // come from the launch cwd. `get(undefined)` falls back to the
+  // launch-cwd cached config.
+  const sessionConfig = yield* configService.get(params.hostCtx.cwd)
+  const driverOverrides = sessionConfig.driverOverrides ?? undefined
+  const driverResolution = resolveAgentDriver(effectiveAgent, driverOverrides)
+  // If config-routed and the agent had no hardcoded driver, the
+  // override replaces it — `effectiveAgent` is otherwise unchanged.
+  const dispatchAgent =
+    driverResolution.source === "config"
+      ? AgentDefinition.make({ ...effectiveAgent, driver: driverResolution.driver })
+      : effectiveAgent
 
-    // Derive extension projections from explicit prompt/message slots.
-    const allTools = yield* extensionRegistry.listModelCapabilities()
-    const turnCtx = {
+  // Derive extension projections from explicit prompt/message slots.
+  const allTools = yield* extensionRegistry.listModelCapabilities()
+  const turnCtx = {
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    agent: effectiveAgent,
+    allTools,
+    interactive: params.interactive,
+    tags: params.runSpec?.tags,
+    agentName: currentAgent,
+    parentToolCallId: params.runSpec?.parentToolCallId,
+  }
+  const projectionCtx = {
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    cwd: params.hostCtx.cwd,
+    home: params.hostCtx.home,
+    sessionCwd: params.hostCtx.cwd,
+    ...(params.hostCtx.capabilityContext !== undefined
+      ? { capabilityContext: params.hostCtx.capabilityContext }
+      : {}),
+    turn: turnCtx,
+  }
+  // Filter out hidden messages — visible in transcript but excluded from LLM context
+  const messages = rawMessages.filter((m) => m.metadata?.hidden !== true)
+
+  const projEval = yield* extensionRegistry.extensionReactions.resolveTurnProjection({
+    projection: projectionCtx,
+    host: params.hostCtx,
+  })
+  const extensionProjections = [
+    ...projEval.policyFragments.map((p) => ({ toolPolicy: p })),
+    ...(projEval.promptSections.length > 0 ? [{ promptSections: projEval.promptSections }] : []),
+  ]
+
+  // Resolve tools + extension prompt sections via ToolPolicy compiler
+  const { tools, promptSections: extensionSections } = yield* extensionRegistry.resolveToolPolicy(
+    effectiveAgent,
+    {
       sessionId: params.sessionId,
       branchId: params.branchId,
-      agent: effectiveAgent,
-      allTools,
+      agentName: currentAgent,
       interactive: params.interactive,
       tags: params.runSpec?.tags,
-      agentName: currentAgent,
       parentToolCallId: params.runSpec?.parentToolCallId,
-    }
-    const projectionCtx = {
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      cwd: params.hostCtx.cwd,
-      home: params.hostCtx.home,
-      sessionCwd: params.hostCtx.cwd,
-      ...(params.hostCtx.capabilityContext !== undefined
-        ? { capabilityContext: params.hostCtx.capabilityContext }
-        : {}),
-      turn: turnCtx,
-    }
-    // Filter out hidden messages — visible in transcript but excluded from LLM context
-    const messages = rawMessages.filter((m) => m.metadata?.hidden !== true)
+    },
+    extensionProjections,
+  )
 
-    const projEval = yield* extensionRegistry.extensionReactions.resolveTurnProjection({
-      projection: projectionCtx,
-      host: params.hostCtx,
-    })
-    const extensionProjections = [
-      ...projEval.policyFragments.map((p) => ({ toolPolicy: p })),
-      ...(projEval.promptSections.length > 0 ? [{ promptSections: projEval.promptSections }] : []),
-    ]
-
-    // Resolve tools + extension prompt sections via ToolPolicy compiler
-    const { tools, promptSections: extensionSections } = yield* extensionRegistry.resolveToolPolicy(
-      effectiveAgent,
-      {
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        agentName: currentAgent,
-        interactive: params.interactive,
-        tags: params.runSpec?.tags,
-        parentToolCallId: params.runSpec?.parentToolCallId,
-      },
-      extensionProjections,
-    )
-
-    // Build tool-aware prompt, then run through explicit prompt slots.
-    // We hand the slot layer both the compiled `basePrompt` (for append-only
-    // rewrites) AND the structured `sections` (for slots
-    // that need to swap or strip a section by id, e.g. codemode replacing
-    // `tool-list` / `tool-guidelines` rather than appending a contradicting
-    // surface).
-    const allAgents = yield* extensionRegistry.listAgents()
-    const sections = buildTurnPromptSections(
-      params.baseSections,
-      effectiveAgent,
-      tools,
-      extensionSections,
-      allAgents,
-    )
-    const turnPrompt = compileSystemPrompt(sections)
-    const driverToolSurface = yield* resolveDriverToolSurface(dispatchAgent)
-    const systemPrompt = yield* extensionRegistry.extensionReactions.resolveSystemPrompt(
-      {
-        basePrompt: turnPrompt,
-        agent: dispatchAgent,
-        interactive: params.interactive,
-        driverSource: driverResolution.source,
-        tools,
-        ...(driverToolSurface !== undefined ? { driverToolSurface } : {}),
-        sections,
-      },
-      { projection: projectionCtx, host: params.hostCtx },
-    )
-    const session = yield* sessionStorage
-      .getSession(params.sessionId)
-      .pipe(Effect.catchEager(() => Effect.void))
-
-    return {
-      currentTurnAgent: currentAgent,
-      messages,
+  // Build tool-aware prompt, then run through explicit prompt slots.
+  // We hand the slot layer both the compiled `basePrompt` (for append-only
+  // rewrites) AND the structured `sections` (for slots
+  // that need to swap or strip a section by id, e.g. codemode replacing
+  // `tool-list` / `tool-guidelines` rather than appending a contradicting
+  // surface).
+  const allAgents = yield* extensionRegistry.listAgents()
+  const sections = buildTurnPromptSections(
+    params.baseSections,
+    effectiveAgent,
+    tools,
+    extensionSections,
+    allAgents,
+  )
+  const turnPrompt = compileSystemPrompt(sections)
+  const driverToolSurface = yield* resolveDriverToolSurface(dispatchAgent)
+  const systemPrompt = yield* extensionRegistry.extensionReactions.resolveSystemPrompt(
+    {
+      basePrompt: turnPrompt,
       agent: dispatchAgent,
-      tools,
-      systemPrompt,
-      modelId: params.runSpec?.overrides?.modelId ?? resolveAgentModel(dispatchAgent),
-      reasoning: resolveReasoning(dispatchAgent, session?.reasoningLevel),
-      temperature: dispatchAgent.temperature,
-      driver: dispatchAgent.driver,
+      interactive: params.interactive,
       driverSource: driverResolution.source,
-    }
-  })
+      tools,
+      ...(driverToolSurface !== undefined ? { driverToolSurface } : {}),
+      sections,
+    },
+    { projection: projectionCtx, host: params.hostCtx },
+  )
+  const session = yield* sessionStorage
+    .getSession(params.sessionId)
+    .pipe(Effect.catchEager(() => Effect.void))
+
+  return {
+    currentTurnAgent: currentAgent,
+    messages,
+    agent: dispatchAgent,
+    tools,
+    systemPrompt,
+    modelId: params.runSpec?.overrides?.modelId ?? resolveAgentModel(dispatchAgent),
+    reasoning: resolveReasoning(dispatchAgent, session?.reasoningLevel),
+    temperature: dispatchAgent.temperature,
+    driver: dispatchAgent.driver,
+    driverSource: driverResolution.source,
+  }
+})
 
 /** InteractionPendingError enriched with the toolCallId that triggered it */
 export class ToolInteractionPending extends Schema.TaggedErrorClass<ToolInteractionPending>(
@@ -488,48 +487,47 @@ export class ToolInteractionPending extends Schema.TaggedErrorClass<ToolInteract
   toolCallId: ToolCallId,
 }) {}
 
-export const executeToolCalls = (params: {
+export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(function* (params: {
   toolCalls: ReadonlyArray<Prompt.ToolCallPart>
   publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
   currentTurnAgent: AgentNameType
   hostCtx: ExtensionHostContext
-}) =>
-  Effect.gen(function* () {
-    const toolRunner = yield* ToolRunner
-    return yield* Effect.forEach(
-      params.toolCalls,
-      (toolCall) =>
-        Effect.gen(function* () {
-          const ctx = {
-            ...params.hostCtx,
-            agentName: params.currentTurnAgent,
-            toolCallId: ToolCallId.make(toolCall.id),
-          }
-          return yield* toolRunner
-            .run(
-              {
-                toolCallId: ToolCallId.make(toolCall.id),
-                toolName: toolCall.name,
-                input: toolCall.params,
-              },
-              ctx,
-              { publishEvent: params.publishEvent },
-            )
-            .pipe(
-              Effect.mapError(
-                (e) =>
-                  new ToolInteractionPending({
-                    pending: e,
-                    toolCallId: ToolCallId.make(toolCall.id),
-                  }),
-              ),
-            )
-        }),
-      { concurrency: Math.max(1, TOOL_CONCURRENCY) },
-    )
-  })
+}) {
+  const toolRunner = yield* ToolRunner
+  return yield* Effect.forEach(
+    params.toolCalls,
+    (toolCall) =>
+      Effect.gen(function* () {
+        const ctx = {
+          ...params.hostCtx,
+          agentName: params.currentTurnAgent,
+          toolCallId: ToolCallId.make(toolCall.id),
+        }
+        return yield* toolRunner
+          .run(
+            {
+              toolCallId: ToolCallId.make(toolCall.id),
+              toolName: toolCall.name,
+              input: toolCall.params,
+            },
+            ctx,
+            { publishEvent: params.publishEvent },
+          )
+          .pipe(
+            Effect.mapError(
+              (e) =>
+                new ToolInteractionPending({
+                  pending: e,
+                  toolCallId: ToolCallId.make(toolCall.id),
+                }),
+            ),
+          )
+      }),
+    { concurrency: Math.max(1, TOOL_CONCURRENCY) },
+  )
+})
 
 type ModelTurnSource = {
   readonly driverKind: "model"
@@ -549,155 +547,153 @@ type ExternalTurnSource = {
   readonly collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
 
-export const resolveTurnSource = (params: {
+export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
   resolved: ResolvedTurnContext
   publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle
   hostCtx: ExtensionHostContext
-}) =>
-  Effect.gen(function* () {
-    const driverRegistry = yield* DriverRegistry
-    const modelResolver = yield* ModelResolver
-    const toolRunner = yield* ToolRunner
-    const extensionRegistry = yield* ExtensionRegistry
-    const permissionOption = yield* Effect.serviceOption(Permission)
-    const permission =
-      permissionOption._tag === "Some" ? permissionOption.value : AllowAllPermission
-    const { resolved } = params
-    if (resolved.driver?._tag === "external") {
-      const externalDriver = yield* driverRegistry.getExternal(resolved.driver.id)
-      const executor = externalDriver?.executor
-      if (executor === undefined) {
-        yield* params
-          .publishEvent(
-            ErrorOccurred.make({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              error: `External driver "${resolved.driver.id}" not found`,
-            }),
-          )
-          .pipe(Effect.orDie)
-        return undefined
-      }
-
-      return {
-        driverKind: "external" as const,
-        driverId: resolved.driver.id,
-        stream: executor.executeTurn({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          agent: resolved.agent,
-          messages: resolved.messages,
-          tools: resolved.tools,
-          systemPrompt: resolved.systemPrompt,
-          cwd: params.hostCtx.cwd,
-          abortSignal: params.activeStream.abortSignal,
-          hostCtx: params.hostCtx,
-          runTool: (toolName, args) =>
-            Effect.gen(function* () {
-              const toolCallId = ToolCallId.make(yield* Random.nextUUIDv4)
-              return yield* toolRunner
-                .run({ toolCallId, toolName, input: args }, { ...params.hostCtx, toolCallId })
-                .pipe(
-                  Effect.provideService(ExtensionRegistry, extensionRegistry),
-                  Effect.provideService(Permission, permission),
-                  Effect.orDie,
-                )
-            }),
-        }),
-        formatStreamError: (streamError: unknown) =>
-          `External turn executor error: ${formatStreamErrorMessage(streamError)}`,
-        collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
-      } satisfies ExternalTurnSource
+}) {
+  const driverRegistry = yield* DriverRegistry
+  const modelResolver = yield* ModelResolver
+  const toolRunner = yield* ToolRunner
+  const extensionRegistry = yield* ExtensionRegistry
+  const permissionOption = yield* Effect.serviceOption(Permission)
+  const permission = permissionOption._tag === "Some" ? permissionOption.value : AllowAllPermission
+  const { resolved } = params
+  if (resolved.driver?._tag === "external") {
+    const externalDriver = yield* driverRegistry.getExternal(resolved.driver.id)
+    const executor = externalDriver?.executor
+    if (executor === undefined) {
+      yield* params
+        .publishEvent(
+          ErrorOccurred.make({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            error: `External driver "${resolved.driver.id}" not found`,
+          }),
+        )
+        .pipe(Effect.orDie)
+      return undefined
     }
-
-    const modelRequest = {
-      modelId: resolved.modelId,
-      hints: {
-        ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
-        ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
-      },
-      driverRegistry,
-      ...(resolved.driver?._tag === "model" && resolved.driver.id !== undefined
-        ? { driverId: resolved.driver.id }
-        : {}),
-    }
-    const prompt = toPrompt(resolved.messages, { systemPrompt: resolved.systemPrompt })
-    const toolkit = convertTools([...resolved.tools])
-    const rawStream = Stream.unwrap(
-      modelResolver.resolve(modelRequest).pipe(
-        Effect.map((model) =>
-          resolved.tools.length > 0
-            ? model.streamText({
-                prompt,
-                toolkit,
-                disableToolCallResolution: true as const,
-              })
-            : model.streamText({ prompt }),
-        ),
-      ),
-    )
 
     return {
-      driverKind: "model" as const,
-      stream: rawStream.pipe(
-        Stream.mapError(
-          (error: unknown) =>
-            new ProviderError({
-              message: AiError.isAiError(error) ? error.message : String(error),
-              model: resolved.modelId,
-              cause: error,
-            }),
-        ),
-      ),
-      formatStreamError: formatStreamErrorMessage,
-      collect: <R>(
-        effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
-      ) =>
-        // `ProviderAuthError` is a fail-closed credential-absence signal —
-        // not retryable, not recoverable mid-turn. Let it escape so the RPC
-        // seam surfaces the typed auth failure; narrow the retry scope to
-        // transient `ProviderError` only.
-        withRetry(effect, undefined, {
-          onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
-            params
-              .publishEvent(
-                ProviderRetrying.make({
-                  sessionId: params.sessionId,
-                  branchId: params.branchId,
-                  attempt,
-                  maxAttempts,
-                  delayMs,
-                  error: error.message,
-                }),
+      driverKind: "external" as const,
+      driverId: resolved.driver.id,
+      stream: executor.executeTurn({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        agent: resolved.agent,
+        messages: resolved.messages,
+        tools: resolved.tools,
+        systemPrompt: resolved.systemPrompt,
+        cwd: params.hostCtx.cwd,
+        abortSignal: params.activeStream.abortSignal,
+        hostCtx: params.hostCtx,
+        runTool: (toolName, args) =>
+          Effect.gen(function* () {
+            const toolCallId = ToolCallId.make(yield* Random.nextUUIDv4)
+            return yield* toolRunner
+              .run({ toolCallId, toolName, input: args }, { ...params.hostCtx, toolCallId })
+              .pipe(
+                Effect.provideService(ExtensionRegistry, extensionRegistry),
+                Effect.provideService(Permission, permission),
+                Effect.orDie,
               )
-              .pipe(Effect.orDie),
-        }).pipe(
-          Effect.catchTag("ProviderError", (streamError) =>
-            collectFailedModelTurnResponse({
-              streamError,
-              publishEvent: params.publishEvent,
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              activeStream: params.activeStream,
-              formatStreamError: formatStreamErrorMessage,
-            }),
-          ),
-          Effect.tap((collected) =>
-            WideEvent.set({
-              inputTokens: collected.messageProjection.usage?.inputTokens ?? 0,
-              outputTokens: collected.messageProjection.usage?.outputTokens ?? 0,
-              toolCallCount: toolCallsFromResponseParts(collected.responseParts).length,
-              interrupted: collected.interrupted,
-              streamFailed: collected.streamFailed,
-            }),
-          ),
-          withWideEvent(providerStreamBoundary(resolved.modelId)),
+          }),
+      }),
+      formatStreamError: (streamError: unknown) =>
+        `External turn executor error: ${formatStreamErrorMessage(streamError)}`,
+      collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
+    } satisfies ExternalTurnSource
+  }
+
+  const modelRequest = {
+    modelId: resolved.modelId,
+    hints: {
+      ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
+      ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
+    },
+    driverRegistry,
+    ...(resolved.driver?._tag === "model" && resolved.driver.id !== undefined
+      ? { driverId: resolved.driver.id }
+      : {}),
+  }
+  const prompt = toPrompt(resolved.messages, { systemPrompt: resolved.systemPrompt })
+  const toolkit = convertTools([...resolved.tools])
+  const rawStream = Stream.unwrap(
+    modelResolver.resolve(modelRequest).pipe(
+      Effect.map((model) =>
+        resolved.tools.length > 0
+          ? model.streamText({
+              prompt,
+              toolkit,
+              disableToolCallResolution: true as const,
+            })
+          : model.streamText({ prompt }),
+      ),
+    ),
+  )
+
+  return {
+    driverKind: "model" as const,
+    stream: rawStream.pipe(
+      Stream.mapError(
+        (error: unknown) =>
+          new ProviderError({
+            message: AiError.isAiError(error) ? error.message : String(error),
+            model: resolved.modelId,
+            cause: error,
+          }),
+      ),
+    ),
+    formatStreamError: formatStreamErrorMessage,
+    collect: <R>(
+      effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
+    ) =>
+      // `ProviderAuthError` is a fail-closed credential-absence signal —
+      // not retryable, not recoverable mid-turn. Let it escape so the RPC
+      // seam surfaces the typed auth failure; narrow the retry scope to
+      // transient `ProviderError` only.
+      withRetry(effect, undefined, {
+        onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
+          params
+            .publishEvent(
+              ProviderRetrying.make({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                attempt,
+                maxAttempts,
+                delayMs,
+                error: error.message,
+              }),
+            )
+            .pipe(Effect.orDie),
+      }).pipe(
+        Effect.catchTag("ProviderError", (streamError) =>
+          collectFailedModelTurnResponse({
+            streamError,
+            publishEvent: params.publishEvent,
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            activeStream: params.activeStream,
+            formatStreamError: formatStreamErrorMessage,
+          }),
         ),
-    } satisfies ModelTurnSource
-  })
+        Effect.tap((collected) =>
+          WideEvent.set({
+            inputTokens: collected.messageProjection.usage?.inputTokens ?? 0,
+            outputTokens: collected.messageProjection.usage?.outputTokens ?? 0,
+            toolCallCount: toolCallsFromResponseParts(collected.responseParts).length,
+            interrupted: collected.interrupted,
+            streamFailed: collected.streamFailed,
+          }),
+        ),
+        withWideEvent(providerStreamBoundary(resolved.modelId)),
+      ),
+  } satisfies ModelTurnSource
+})
 
 // Pricing snapshot lookup: given a modelId, yield current pricing (or
 // undefined if not known). Resolved once per session at AgentLoop start so
@@ -712,19 +708,20 @@ export type PricingLookup = (
 // zero contribution. Storing the computed cost on the event makes the
 // transcript authoritative: replaying the same events always sums to the
 // same cost, even if ModelRegistry pricing later refreshes.
-export const computeStreamEndedCost = (params: {
+export const computeStreamEndedCost: (params: {
   modelId: ModelId
   usage: { inputTokens: number; outputTokens: number } | undefined
   getPricing: PricingLookup
-}): Effect.Effect<number | undefined> =>
-  Effect.gen(function* () {
+}) => Effect.Effect<number | undefined> = Effect.fn("TurnHelpers.computeStreamEndedCost")(
+  function* (params) {
     if (params.usage === undefined) return undefined
     const pricing = yield* params.getPricing(params.modelId)
     if (pricing === undefined) return undefined
     return calculateCost(params.usage, pricing)
-  })
+  },
+)
 
-export const invokeTool = (params: {
+export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params: {
   assistantMessageId: MessageId
   toolResultMessageId: MessageId
   toolCallId: ToolCallId
@@ -735,41 +732,40 @@ export const invokeTool = (params: {
   branchId: BranchId
   currentTurnAgent: AgentNameType
   hostCtx: ExtensionHostContext
-}) =>
-  Effect.gen(function* () {
-    const messageStorage = yield* MessageStorage
-    const toolCalls = [
-      Prompt.toolCallPart({
-        id: params.toolCallId,
-        name: params.toolName,
-        params: params.input,
-        providerExecuted: false,
-      }),
-    ] as const
+}) {
+  const messageStorage = yield* MessageStorage
+  const toolCalls = [
+    Prompt.toolCallPart({
+      id: params.toolCallId,
+      name: params.toolName,
+      params: params.input,
+      providerExecuted: false,
+    }),
+  ] as const
 
-    yield* persistAssistantParts({
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      messageId: params.assistantMessageId,
-      parts: toolCalls,
-      agentName: params.currentTurnAgent,
-    })
-
-    const existing = yield* messageStorage.getMessage(params.toolResultMessageId)
-    if (existing !== undefined) return
-
-    const toolResults = yield* executeToolCalls({
-      toolCalls,
-      publishEvent: params.publishEvent,
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      currentTurnAgent: params.currentTurnAgent,
-      hostCtx: params.hostCtx,
-    })
-    yield* persistToolParts({
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      messageId: params.toolResultMessageId,
-      parts: toolResults,
-    })
+  yield* persistAssistantParts({
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    messageId: params.assistantMessageId,
+    parts: toolCalls,
+    agentName: params.currentTurnAgent,
   })
+
+  const existing = yield* messageStorage.getMessage(params.toolResultMessageId)
+  if (existing !== undefined) return
+
+  const toolResults = yield* executeToolCalls({
+    toolCalls,
+    publishEvent: params.publishEvent,
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    currentTurnAgent: params.currentTurnAgent,
+    hostCtx: params.hostCtx,
+  })
+  yield* persistToolParts({
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    messageId: params.toolResultMessageId,
+    parts: toolResults,
+  })
+})
