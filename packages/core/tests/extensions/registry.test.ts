@@ -618,17 +618,13 @@ describe("ExtensionRegistry", () => {
           promptSections: [{ id: "test", content: "Hello", priority: 50 }],
         }),
       ])
-      const sections = yield* registry.listPromptSections()
+      const sections = [...registry.getResolved().promptSections.values()]
       expect(sections.length).toBe(1)
       expect(sections[0]?.id).toBe("test")
       expect(sections[0]?.content).toBe("Hello")
       expect(sections[0]?.priority).toBe(50)
     }),
   )
-  //  dropped: dynamic prompt sections were `DynamicPromptSection.resolve`.
-  // After  dynamic content is assembled per-turn by ExtensionReactions, not
-  // by `listPromptSections` (which only sees static sections from capability
-  // leaf `prompt`).
 })
 // Slash-command discovery — identity-first scope shadowing followed by
 // bucket/surface authorization.

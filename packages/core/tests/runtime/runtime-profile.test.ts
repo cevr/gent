@@ -173,7 +173,7 @@ describe("resolveRuntimeProfile", () => {
           Effect.map((ctx) => Context.get(ctx, ExtensionRegistry)),
         )
 
-        const sections = yield* registryService.listPromptSections()
+        const sections = [...registryService.getResolved().promptSections.values()]
         const ids = sections.map((s) => s.id)
         expect(ids).toContain("rp-test-section")
       }),

@@ -507,9 +507,6 @@ export interface ExtensionRegistryService {
   // Agent resolution
   readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
 
-  // Prompt sections
-  readonly listPromptSections: () => Effect.Effect<ReadonlyArray<PromptSection>>
-
   // Diagnostics
   readonly listFailedExtensions: () => Effect.Effect<ReadonlyArray<FailedExtension>>
   readonly listExtensionStatuses: () => Effect.Effect<ReadonlyArray<ExtensionStatusInfo>>
@@ -537,10 +534,6 @@ export class ExtensionRegistry extends Context.Service<
           ),
         ),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
-      // Dynamic prompt sections are assembled per-turn by ExtensionReactions.
-      // The sections here come from capability leaf `prompt`, all static. No more
-      // per-section Effect resolution — return the array directly.
-      listPromptSections: () => Effect.succeed([...resolved.promptSections.values()]),
       listFailedExtensions: () => Effect.succeed(resolved.failedExtensions),
       listExtensionStatuses: () => Effect.succeed(resolved.extensionStatuses),
       extensionReactions: resolved.extensionReactions,
