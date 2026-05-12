@@ -1,10 +1,10 @@
 import { Effect, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { type AgentName as AgentNameType } from "../../domain/agent.js"
-import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { type BranchId, type MessageId, type SessionId, ToolCallId } from "../../domain/ids.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { MessageStorage } from "../../storage/message-storage.js"
+import { CurrentExtensionHostContext } from "./current-extension-host-context.js"
 import { ToolRunner } from "./tool-runner"
 import { persistAssistantParts, persistToolParts } from "./turn-persistence.js"
 
@@ -23,15 +23,15 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
   sessionId: SessionId
   branchId: BranchId
   currentTurnAgent: AgentNameType
-  hostCtx: ExtensionHostContext
 }) {
   const toolRunner = yield* ToolRunner
+  const hostCtx = yield* CurrentExtensionHostContext
   return yield* Effect.forEach(
     params.toolCalls,
     (toolCall) =>
       Effect.gen(function* () {
         const ctx = {
-          ...params.hostCtx,
+          ...hostCtx,
           agentName: params.currentTurnAgent,
           toolCallId: ToolCallId.make(toolCall.id),
         }
@@ -67,7 +67,6 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
   sessionId: SessionId
   branchId: BranchId
   currentTurnAgent: AgentNameType
-  hostCtx: ExtensionHostContext
 }) {
   const messageStorage = yield* MessageStorage
   const toolCalls = [
@@ -95,7 +94,6 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
     sessionId: params.sessionId,
     branchId: params.branchId,
     currentTurnAgent: params.currentTurnAgent,
-    hostCtx: params.hostCtx,
   })
   yield* persistToolParts({
     sessionId: params.sessionId,

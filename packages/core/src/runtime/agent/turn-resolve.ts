@@ -11,7 +11,6 @@ import {
 import { type ToolCapability } from "../../domain/capability/tool.js"
 import { ErrorOccurred } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
-import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { type BranchId, type SessionId } from "../../domain/ids.js"
 import { compileSystemPrompt, type PromptSection } from "../../domain/prompt.js"
 import { MessageStorage } from "../../storage/message-storage.js"
@@ -21,6 +20,7 @@ import { DriverRegistry } from "../extensions/driver-registry.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import type { ResolvedTurn } from "./agent-loop.state.js"
 import { buildTurnPromptSections, resolveReasoning } from "./agent-loop.utils.js"
+import { CurrentExtensionHostContext } from "./current-extension-host-context.js"
 
 export interface ResolvedTurnContext extends ResolvedTurn {
   agent: AgentDefinition
@@ -91,12 +91,12 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   sessionId: SessionId
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
-  hostCtx: ExtensionHostContext
 }) {
   const extensionRegistry = yield* ExtensionRegistry
   const messageStorage = yield* MessageStorage
   const sessionStorage = yield* SessionStorage
   const eventPublisher = yield* EventPublisher
+  const hostCtx = yield* CurrentExtensionHostContext
   const currentAgent = params.agentOverride ?? params.currentAgent ?? DEFAULT_AGENT_NAME
   const rawMessages = yield* messageStorage
     .listMessages(params.branchId)
@@ -127,7 +127,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   // resolution, a multi-cwd server's project overrides would all
   // come from the launch cwd. `get(undefined)` falls back to the
   // launch-cwd cached config.
-  const sessionConfig = yield* configService.get(params.hostCtx.cwd)
+  const sessionConfig = yield* configService.get(hostCtx.cwd)
   const driverOverrides = sessionConfig.driverOverrides ?? undefined
   const driverResolution = resolveAgentDriver(effectiveAgent, driverOverrides)
   // If config-routed and the agent had no hardcoded driver, the
@@ -152,11 +152,11 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   const projectionCtx = {
     sessionId: params.sessionId,
     branchId: params.branchId,
-    cwd: params.hostCtx.cwd,
-    home: params.hostCtx.home,
-    sessionCwd: params.hostCtx.cwd,
-    ...(params.hostCtx.capabilityContext !== undefined
-      ? { capabilityContext: params.hostCtx.capabilityContext }
+    cwd: hostCtx.cwd,
+    home: hostCtx.home,
+    sessionCwd: hostCtx.cwd,
+    ...(hostCtx.capabilityContext !== undefined
+      ? { capabilityContext: hostCtx.capabilityContext }
       : {}),
     turn: turnCtx,
   }
@@ -165,7 +165,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
 
   const projEval = yield* extensionRegistry.extensionReactions.resolveTurnProjection({
     projection: projectionCtx,
-    host: params.hostCtx,
+    host: hostCtx,
   })
   const extensionProjections = [
     ...projEval.policyFragments.map((p) => ({ toolPolicy: p })),
@@ -212,7 +212,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
       ...(driverToolSurface !== undefined ? { driverToolSurface } : {}),
       sections,
     },
-    { projection: projectionCtx, host: params.hostCtx },
+    { projection: projectionCtx, host: hostCtx },
   )
   const session = yield* sessionStorage
     .getSession(params.sessionId)

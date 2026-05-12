@@ -89,6 +89,7 @@ import { ExtensionRegistry } from "../extensions/registry.js"
 import { Permission } from "../../domain/permission.js"
 import { recordToolResult } from "./turn-persistence.js"
 import { invokeTool } from "./turn-tool-execution.js"
+import { withCurrentHostCtx } from "./current-extension-host-context.js"
 
 const WorkspaceFields = {
   workspaceId: WorkspaceId,
@@ -1091,19 +1092,21 @@ const buildAgentLoopActorHandlers = (config: {
               Effect.gen(function* () {
                 const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
                 const environment = yield* handle.resolveTurnProfile
-                yield* invokeTool({
-                  assistantMessageId: assistantMessageIdForCommand(operation.commandId),
-                  toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
-                  toolCallId: toolCallIdForCommand(operation.commandId),
-                  toolName: operation.toolName,
-                  input: operation.input,
-                  sessionId: operation.sessionId,
-                  branchId: operation.branchId,
-                  currentTurnAgent,
-                  hostCtx: environment.turnHostCtx,
-                }).pipe(
-                  Effect.provideService(ExtensionRegistry, environment.turnExtensionRegistry),
-                  Effect.provideService(Permission, environment.turnPermission),
+                yield* withCurrentHostCtx(
+                  environment.turnHostCtx,
+                  invokeTool({
+                    assistantMessageId: assistantMessageIdForCommand(operation.commandId),
+                    toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
+                    toolCallId: toolCallIdForCommand(operation.commandId),
+                    toolName: operation.toolName,
+                    input: operation.input,
+                    sessionId: operation.sessionId,
+                    branchId: operation.branchId,
+                    currentTurnAgent,
+                  }).pipe(
+                    Effect.provideService(ExtensionRegistry, environment.turnExtensionRegistry),
+                    Effect.provideService(Permission, environment.turnPermission),
+                  ),
                 )
               }),
             )

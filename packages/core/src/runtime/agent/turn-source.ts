@@ -5,7 +5,6 @@ import type * as Response from "effect/unstable/ai/Response"
 import { type ProviderAuthError, type TurnError } from "../../domain/driver.js"
 import { ErrorOccurred, ProviderRetrying } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
-import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { ToolCallId, type BranchId, type SessionId } from "../../domain/ids.js"
 import { Permission } from "../../domain/permission.js"
 import { ProviderError } from "../../domain/provider-error.js"
@@ -16,6 +15,10 @@ import { ExtensionRegistry } from "../extensions/registry.js"
 import { withRetry } from "../retry"
 import { AllowAllPermission } from "../session-runtime-context.js"
 import { providerStreamBoundary, WideEvent, withWideEvent } from "../wide-event-boundary"
+import {
+  CurrentExtensionHostContext,
+  withCurrentHostCtx,
+} from "./current-extension-host-context.js"
 import { convertTools, ToolRunner } from "./tool-runner"
 import {
   collectFailedModelTurnResponse,
@@ -65,13 +68,13 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle
-  hostCtx: ExtensionHostContext
 }) {
   const driverRegistry = yield* DriverRegistry
   const modelResolver = yield* ModelResolver
   const toolRunner = yield* ToolRunner
   const extensionRegistry = yield* ExtensionRegistry
   const eventPublisher = yield* EventPublisher
+  const hostCtx = yield* CurrentExtensionHostContext
   const permissionOption = yield* Effect.serviceOption(Permission)
   const permission = permissionOption._tag === "Some" ? permissionOption.value : AllowAllPermission
   const publishEventOrDie = (event: ErrorOccurred | ProviderRetrying) =>
@@ -101,21 +104,24 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
         messages: resolved.messages,
         tools: resolved.tools,
         systemPrompt: resolved.systemPrompt,
-        cwd: params.hostCtx.cwd,
+        cwd: hostCtx.cwd,
         abortSignal: params.activeStream.abortSignal,
-        hostCtx: params.hostCtx,
+        hostCtx,
         runTool: (toolName, args) =>
-          Effect.gen(function* () {
-            const toolCallId = ToolCallId.make(yield* Random.nextUUIDv4)
-            return yield* toolRunner
-              .run({ toolCallId, toolName, input: args }, { ...params.hostCtx, toolCallId })
-              .pipe(
-                Effect.provideService(ExtensionRegistry, extensionRegistry),
-                Effect.provideService(Permission, permission),
-                Effect.provideService(EventPublisher, eventPublisher),
-                Effect.orDie,
-              )
-          }),
+          withCurrentHostCtx(
+            hostCtx,
+            Effect.gen(function* () {
+              const toolCallId = ToolCallId.make(yield* Random.nextUUIDv4)
+              return yield* toolRunner
+                .run({ toolCallId, toolName, input: args }, { ...hostCtx, toolCallId })
+                .pipe(
+                  Effect.provideService(ExtensionRegistry, extensionRegistry),
+                  Effect.provideService(Permission, permission),
+                  Effect.provideService(EventPublisher, eventPublisher),
+                  Effect.orDie,
+                )
+            }),
+          ),
       }),
       formatStreamError: (streamError: unknown) =>
         `External turn executor error: ${formatStreamErrorMessage(streamError)}`,
