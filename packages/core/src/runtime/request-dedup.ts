@@ -23,12 +23,18 @@ const DEDUP_MAX_ENTRIES = 1024
  *   retry observes a still-fresh cache entry; an unrelated stale entry is the
  *   one evicted to make room.
  */
+export interface RequestDeduper<In, A, E> {
+  (input: In): Effect.Effect<A, E>
+  readonly invalidate: (input: In) => Effect.Effect<void>
+  readonly invalidateKey: (key: string) => Effect.Effect<void>
+}
+
 export const makeRequestDeduper = <In, A, E>(opts: {
   readonly body: (input: In) => Effect.Effect<A, E>
   readonly keyOf: (input: In) => string | undefined
   readonly maxEntries?: number
   readonly successTtl?: Duration.Input
-}): Effect.Effect<(input: In) => Effect.Effect<A, E>> =>
+}): Effect.Effect<RequestDeduper<In, A, E>> =>
   Effect.gen(function* () {
     // Body bridge: `Cache.lookup` takes only the key, but each call has a
     // distinct body Effect. Pending stores the body keyed by `requestId`; the
@@ -48,7 +54,12 @@ export const makeRequestDeduper = <In, A, E>(opts: {
         timeToLive: (exit) => (Exit.isSuccess(exit) ? successTtl : Duration.zero),
       },
     )
-    return (input) => {
+    const invalidateKey = (key: string) => Cache.invalidate(cache, key)
+    const invalidate = (input: In) => {
+      const key = opts.keyOf(input)
+      return key === undefined ? Effect.void : invalidateKey(key)
+    }
+    const run = (input: In) => {
       const key = opts.keyOf(input)
       if (key === undefined) return opts.body(input)
       const body = opts.body(input)
@@ -74,4 +85,5 @@ export const makeRequestDeduper = <In, A, E>(opts: {
         return yield* Cache.get(cache, key)
       }).pipe(Effect.ensuring(remove))
     }
+    return Object.assign(run, { invalidate, invalidateKey }) satisfies RequestDeduper<In, A, E>
   })

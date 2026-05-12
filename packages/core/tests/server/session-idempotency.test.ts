@@ -15,7 +15,7 @@ import { GentPlatform } from "../../src/runtime/gent-platform"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { SessionRuntimeError } from "../../src/runtime/session-runtime"
 import { makeRequestDeduper } from "../../src/runtime/request-dedup"
-import { SessionCommands } from "../../src/server/session-commands"
+import { SessionCommands, SessionCommandsDedupControl } from "../../src/server/session-commands"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
@@ -550,22 +550,46 @@ describe("requestId idempotency", () => {
     ),
   )
 
-  // Dedup-cache TTL eviction. The cache schedules a delayed
-  // eviction via `Effect.forkDetach(Effect.sleep(60s))`, but createSession
-  // now has a durable operation result underneath the process cache. Beyond
-  // the TTL window, a retry of the same `requestId` still returns the
-  // original session/branch ids.
-  it.effect("durable createSession result survives process-cache TTL eviction", () =>
-    Effect.gen(function* () {
+  // Process-cache eviction. createSession has a durable operation result
+  // underneath the in-memory process cache, so a retry of the same
+  // `requestId` still returns the original session/branch ids even after
+  // that cache entry is removed.
+  it.effect("durable createSession result survives process-cache eviction", () => {
+    let invalidateCreateSession: ((requestId: string) => Effect.Effect<void>) | undefined =
+      undefined
+    const dedupControlLayer = Layer.succeed(SessionCommandsDedupControl, {
+      registerCreateSessionInvalidator: (invalidate) =>
+        Effect.sync(() => {
+          invalidateCreateSession = invalidate
+        }),
+    })
+    const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
+    const deps = Layer.mergeAll(
+      storageLayer,
+      sessionRuntimeLayer(),
+      EventStore.Memory,
+      EventPublisher.Test(),
+      AgentLoopSessionGovernance.Live,
+      LanguageModelLayers.debug(),
+      ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
+      GentPlatform.Test(),
+      dedupControlLayer,
+    )
+    const layer = Layer.provideMerge(
+      SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+      deps,
+    )
+    return Effect.gen(function* () {
       const commands = yield* SessionCommands
       const sessions = yield* SessionStorage
       const first = yield* commands.createSession({
         cwd: "/tmp/ttl",
         requestId: "req-ttl-1",
       })
-      // Advance past the 60s TTL so the detached eviction fork wakes
-      // up and removes the cache entry.
-      yield* TestClock.adjust("61 seconds")
+      if (invalidateCreateSession === undefined) {
+        return yield* Effect.die("createSession dedup invalidator was not registered")
+      }
+      yield* invalidateCreateSession("req-ttl-1")
       const second = yield* commands.createSession({
         cwd: "/tmp/ttl",
         requestId: "req-ttl-1",
@@ -573,8 +597,8 @@ describe("requestId idempotency", () => {
       expect(second.sessionId).toBe(first.sessionId)
       expect(second.branchId).toBe(first.branchId)
       expect((yield* sessions.listSessions()).length).toBe(1)
-    }).pipe(Effect.provide(sessionCommandsLayer())),
-  )
+    }).pipe(Effect.provide(layer))
+  })
 
   // Companion to the TTL eviction test: prove the bound is the bound.
   // Within the 60s window, a retry MUST collapse onto the cached outcome

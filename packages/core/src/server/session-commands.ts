@@ -1,4 +1,4 @@
-import { DateTime, Effect, Layer, Context, Stream } from "effect"
+import { DateTime, Effect, Layer, Context, Option, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { SessionMutations, type SessionMutationError } from "../domain/session-mutations.js"
@@ -74,6 +74,17 @@ export interface SessionCommandsService {
   ) => Effect.Effect<UpdateSessionReasoningLevelResult, GentRpcError>
 }
 
+export interface SessionCommandsDedupControlService {
+  readonly registerCreateSessionInvalidator: (
+    invalidate: (requestId: string) => Effect.Effect<void>,
+  ) => Effect.Effect<void>
+}
+
+export class SessionCommandsDedupControl extends Context.Service<
+  SessionCommandsDedupControl,
+  SessionCommandsDedupControlService
+>()("@gent/core/src/server/session-commands/SessionCommandsDedupControl") {}
+
 export class SessionCommands extends Context.Service<SessionCommands, SessionCommandsService>()(
   "@gent/core/src/server/session-commands/SessionCommands",
 ) {
@@ -114,6 +125,10 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         CreateSessionResult,
         GentRpcError
       >({ body: (input) => doCreateSession(input), keyOf: (input) => input.requestId })
+      const dedupControl = yield* Effect.serviceOption(SessionCommandsDedupControl)
+      if (Option.isSome(dedupControl)) {
+        yield* dedupControl.value.registerCreateSessionInvalidator(dedupCreateSession.invalidateKey)
+      }
       const dedupSendMessage = yield* makeRequestDeduper<SendMessageInput, void, GentRpcError>({
         body: (input) => doSendMessage(input),
         keyOf: (input) => input.requestId,
