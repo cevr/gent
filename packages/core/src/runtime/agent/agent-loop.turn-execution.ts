@@ -339,6 +339,15 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
       turnHostCtx,
     } = yield* deps.resolveTurnProfile
 
+    const provideTurnContext = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      effect.pipe(
+        Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
+        Effect.provideService(DriverRegistry, turnDriverRegistry),
+        Effect.provideService(Permission, turnPermission),
+        Effect.provideService(ConfigService, deps.configServiceForRun),
+        provideCurrentHostCtx(turnHostCtx),
+      )
+
     return yield* Effect.gen(function* () {
       let step = 0
       let interrupted = yield* Ref.get(deps.interruptedRef)
@@ -363,8 +372,6 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
               toolCalls,
               currentTurnAgent,
             }).pipe(
-              Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
-              Effect.provideService(Permission, turnPermission),
               Effect.as(undefined as ToolInteractionPending | undefined),
               Effect.catchIf(Schema.is(ToolInteractionPending), (e) => Effect.succeed(e)),
             )
@@ -407,11 +414,7 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
           sessionId: deps.sessionId,
           baseSections: turnBaseSections,
           interactive: state.interactive,
-        }).pipe(
-          Effect.provideService(ConfigService, deps.configServiceForRun),
-          Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
-          Effect.provideService(DriverRegistry, turnDriverRegistry),
-        )
+        })
         if (resolved === undefined) break
 
         currentTurnAgent = resolved.currentTurnAgent
@@ -437,11 +440,7 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
               step,
               resolved,
               activeStream,
-            }).pipe(
-              Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
-              Effect.provideService(DriverRegistry, turnDriverRegistry),
-              Effect.provideService(Permission, turnPermission),
-            )
+            })
           }).pipe(Effect.ensuring(Ref.set(deps.activeStreamRef, undefined))),
         )
 
@@ -465,8 +464,6 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
           toolCalls,
           currentTurnAgent: resolved.currentTurnAgent,
         }).pipe(
-          Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
-          Effect.provideService(Permission, turnPermission),
           Effect.as(undefined as ToolInteractionPending | undefined),
           Effect.catchIf(Schema.is(ToolInteractionPending), (e) => Effect.succeed(e)),
         )
@@ -487,10 +484,10 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
         turnInterrupted: interrupted,
         streamFailed,
         currentAgent: currentTurnAgent,
-      }).pipe(Effect.provideService(ExtensionRegistry, turnExtensionRegistry))
+      })
 
       return TurnOutcome.cases.Done.make({})
-    }).pipe(provideCurrentHostCtx(turnHostCtx))
+    }).pipe(provideTurnContext)
   })
 
   return { runTurn }
