@@ -245,28 +245,37 @@ export class ExecutorMcpBridge extends Context.Service<
     ExecutorMcpBridge.of({
       inspect: (baseUrl) =>
         withConnection(baseUrl, (conn) =>
-          Effect.tryPromise({
-            try: () => {
-              const tools: Array<{ name: string; description?: string }> = []
-              const readPage = (cursor: string | undefined): Promise<ExecutorMcpInspection> =>
-                conn.client.listTools(cursor ? { cursor } : undefined).then((response) => {
-                  for (const t of response.tools) {
-                    tools.push({ name: t.name, description: t.description })
-                  }
+          Effect.gen(function* () {
+            const listPage = (cursor: string | undefined) =>
+              Effect.tryPromise({
+                try: () => conn.client.listTools(cursor ? { cursor } : undefined),
+                catch: (e) =>
+                  new ExecutorMcpError({
+                    phase: "inspect",
+                    message: `MCP inspect failed: ${e instanceof Error ? e.message : String(e)}`,
+                  }),
+              })
+            type Tool = { name: string; description?: string }
+            const readPage: (
+              cursor: string | undefined,
+              acc: ReadonlyArray<Tool>,
+            ) => Effect.Effect<ReadonlyArray<Tool>, ExecutorMcpError> = (cursor, acc) =>
+              listPage(cursor).pipe(
+                Effect.flatMap((response) => {
+                  const next: ReadonlyArray<Tool> = [
+                    ...acc,
+                    ...response.tools.map((t) => ({ name: t.name, description: t.description })),
+                  ]
                   return response.nextCursor === undefined
-                    ? ({
-                        instructions: conn.client.getInstructions(),
-                        tools,
-                      } satisfies ExecutorMcpInspection)
-                    : readPage(response.nextCursor)
-                })
-              return readPage(undefined)
-            },
-            catch: (e) =>
-              new ExecutorMcpError({
-                phase: "inspect",
-                message: `MCP inspect failed: ${e instanceof Error ? e.message : String(e)}`,
-              }),
+                    ? Effect.succeed(next)
+                    : Effect.suspend(() => readPage(response.nextCursor, next))
+                }),
+              )
+            const tools = yield* readPage(undefined, [])
+            return {
+              instructions: conn.client.getInstructions(),
+              tools,
+            } satisfies ExecutorMcpInspection
           }),
         ),
 
