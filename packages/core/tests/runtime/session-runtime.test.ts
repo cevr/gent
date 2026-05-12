@@ -654,7 +654,23 @@ describe("SessionRuntime", () => {
           yield* recordToolResultViaActor(command)
           const messages = yield* messageStorage.listMessages(target.branchId)
           const calls = yield* recorder.getCalls()
-          expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
+          const toolMessages = messages.filter((message) => message.role === "tool")
+          const state = yield* getActorState(target)
+          expect(toolMessages).toHaveLength(1)
+          expect(toolMessages[0]?.id).toBe(MessageId.make("record-tool-idempotent:tool-result"))
+          expect(toolMessages[0]?.parts).toEqual([
+            Prompt.toolResultPart({
+              id: ToolCallId.make("tool-call-idempotent"),
+              name: "read",
+              isFailure: false,
+              result: { ok: true },
+            }),
+          ])
+          expect(state).toEqual({
+            _tag: "Idle",
+            agent: AgentName.make("cowork"),
+            queue: { followUp: [], steering: [] },
+          })
           expect(eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(1)
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
