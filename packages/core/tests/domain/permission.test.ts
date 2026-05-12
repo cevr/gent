@@ -7,22 +7,22 @@ import { Effect } from "effect"
 import { Permission, PermissionRule } from "@gent/core-internal/domain/permission"
 
 describe("Permission", () => {
-  describe("check", () => {
-    it.live("returns 'allowed' when no rules match and default is allow", () =>
+  describe("permission decisions", () => {
+    it.live("missing rule allows when default is allow", () =>
       Permission.use((p) => p.check("TestTool", {})).pipe(
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("allowed"))),
         Effect.provide(Permission.Live([], "allow")),
       ),
     )
 
-    it.live("returns 'denied' when no rules match and default is deny", () =>
+    it.live("missing rule denies when default is deny", () =>
       Permission.use((p) => p.check("TestTool", {})).pipe(
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("denied"))),
         Effect.provide(Permission.Live([], "deny")),
       ),
     )
 
-    it.live("returns 'allowed' when tool matches allow rule", () => {
+    it.live("matching allow rule allows", () => {
       const rules = [new PermissionRule({ tool: "ReadFile", action: "allow" })]
       const layer = Permission.Live(rules, "deny")
       return Permission.use((p) => p.check("ReadFile", { path: "/tmp/test" })).pipe(
@@ -31,7 +31,7 @@ describe("Permission", () => {
       )
     })
 
-    it.live("returns 'denied' when tool matches deny rule", () => {
+    it.live("matching deny rule denies", () => {
       const rules = [new PermissionRule({ tool: "Bash", action: "deny" })]
       const layer = Permission.Live(rules, "allow")
       return Permission.use((p) => p.check("Bash", { command: "rm -rf /" })).pipe(
@@ -40,7 +40,7 @@ describe("Permission", () => {
       )
     })
 
-    it.live("matches wildcard tool rule", () => {
+    it.live("wildcard tool rule applies", () => {
       const rules = [new PermissionRule({ tool: "*", action: "deny" })]
       const layer = Permission.Live(rules, "allow")
       return Permission.use((p) => p.check("AnyTool", {})).pipe(
@@ -49,7 +49,7 @@ describe("Permission", () => {
       )
     })
 
-    it.live("matches pattern against args", () => {
+    it.live("argument pattern gates matching tool", () => {
       const rules = [new PermissionRule({ tool: "Bash", pattern: "rm.*-rf", action: "deny" })]
       const layer = Permission.Live(rules, "allow")
       return Effect.gen(function* () {
@@ -63,7 +63,7 @@ describe("Permission", () => {
       }).pipe(Effect.provide(layer))
     })
 
-    it.live("uses first matching rule", () => {
+    it.live("first matching rule wins", () => {
       const rules = [
         new PermissionRule({ tool: "Bash", pattern: "git", action: "allow" }),
         new PermissionRule({ tool: "Bash", action: "deny" }),
