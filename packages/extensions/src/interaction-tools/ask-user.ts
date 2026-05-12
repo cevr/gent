@@ -1,18 +1,13 @@
 import { Effect, Schema } from "effect"
 import { ExtensionContext, tool, type Question } from "@gent/core/extensions/api"
 
-const parseAnswers = (notes: string): string[][] => {
-  try {
-    const parsed = JSON.parse(notes) as unknown
-    if (Array.isArray(parsed) && parsed.every(Array.isArray)) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-      return parsed as string[][]
-    }
-    return [[notes]]
-  } catch {
-    return [[notes]]
-  }
-}
+const AnswersSchema = Schema.fromJsonString(Schema.Array(Schema.Array(Schema.String)))
+const decodeAnswers = Schema.decodeUnknownEffect(AnswersSchema)
+
+const parseAnswers = (notes: string): Effect.Effect<ReadonlyArray<ReadonlyArray<string>>> =>
+  decodeAnswers(notes).pipe(
+    Effect.orElseSucceed(() => [[notes]] as ReadonlyArray<ReadonlyArray<string>>),
+  )
 
 // AskUser Params — canonical questions[] input
 // Mirrors QuestionSchema with exact-optional fields for provider tool schemas.
@@ -83,11 +78,8 @@ export const AskUserTool = tool({
     if (!decision.approved) {
       return { answers: [], cancelled: true }
     }
-    // Parse structured answers from notes (JSON-encoded string[][])
-    let answers: string[][] = [[]]
-    if (decision.notes !== undefined) {
-      answers = parseAnswers(decision.notes)
-    }
+    const answers =
+      decision.notes !== undefined ? yield* parseAnswers(decision.notes) : [[] as string[]]
     return { answers }
   }),
 })

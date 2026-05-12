@@ -13,6 +13,8 @@ import {
   type ExecutorSettings,
 } from "../../src/executor/domain.js"
 import { readExecutionId, normalizeToolResult } from "../../src/executor/mcp-bridge.js"
+import { decodeRegistryFile } from "../../src/executor/sidecar.js"
+import { Effect, Exit } from "effect"
 
 // ── State machine ──
 //
@@ -309,5 +311,39 @@ describe("normalizeToolResult", () => {
       error: "boom",
       logs: [],
     })
+  })
+})
+
+describe("Executor sidecar registry codec", () => {
+  test("round-trips a well-formed registry file", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      sidecars: {
+        "/repo/a": {
+          cwd: "/repo/a",
+          pid: 1234,
+          port: 51200,
+          baseUrl: "http://127.0.0.1:51200",
+          startedAt: "2026-05-11T00:00:00.000Z",
+        },
+      },
+    })
+    const exit = Effect.runSyncExit(decodeRegistryFile(raw))
+    expect(Exit.isSuccess(exit)).toBe(true)
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.version).toBe(1)
+      expect(exit.value.sidecars["/repo/a"]?.pid).toBe(1234)
+    }
+  })
+
+  test("fails on malformed JSON", () => {
+    const exit = Effect.runSyncExit(decodeRegistryFile("not-json {{{"))
+    expect(Exit.isFailure(exit)).toBe(true)
+  })
+
+  test("fails on shape mismatch", () => {
+    const raw = JSON.stringify({ version: 1, sidecars: { "/x": { cwd: "/x" } } })
+    const exit = Effect.runSyncExit(decodeRegistryFile(raw))
+    expect(Exit.isFailure(exit)).toBe(true)
   })
 })

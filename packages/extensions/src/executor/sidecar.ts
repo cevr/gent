@@ -84,18 +84,23 @@ const SidecarRecord = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("_tag"))
 type SidecarRecord = Schema.Schema.Type<typeof SidecarRecord>
 
-interface RegisteredSidecar {
-  readonly cwd: string
-  readonly pid: number
-  readonly port: number
-  readonly baseUrl: string
-  readonly startedAt: string
-}
+export const RegisteredSidecarSchema = Schema.Struct({
+  cwd: Schema.String,
+  pid: Schema.Number,
+  port: Schema.Number,
+  baseUrl: Schema.String,
+  startedAt: Schema.String,
+})
+type RegisteredSidecar = Schema.Schema.Type<typeof RegisteredSidecarSchema>
 
-interface SidecarRegistryFile {
-  readonly version: number
-  readonly sidecars: Record<string, RegisteredSidecar>
-}
+export const SidecarRegistryFileSchema = Schema.Struct({
+  version: Schema.Number,
+  sidecars: Schema.Record(Schema.String, RegisteredSidecarSchema),
+})
+type SidecarRegistryFile = Schema.Schema.Type<typeof SidecarRegistryFileSchema>
+
+export const SidecarRegistryFileFromJson = Schema.fromJsonString(SidecarRegistryFileSchema)
+export const decodeRegistryFile = Schema.decodeUnknownEffect(SidecarRegistryFileFromJson)
 
 const PortProbe = Schema.Union([
   Schema.TaggedStruct("free", {
@@ -254,26 +259,8 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         const registryPath = path.join(home, ".gent", "executor-sidecars.json")
         const emptyRegistry: SidecarRegistryFile = { version: 1, sidecars: {} }
 
-        const parseRegistry = (raw: unknown): SidecarRegistryFile => {
-          if (!isRecord(raw)) return emptyRegistry
-          const sidecars = raw["sidecars"]
-          if (!isRecord(sidecars)) return emptyRegistry
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-          return { version: 1, sidecars: sidecars as Record<string, RegisteredSidecar> }
-        }
-
-        // @effect-diagnostics preferSchemaOverJson:off — parsing sidecar registry file
         const readRegistry = fs.readFileString(registryPath).pipe(
-          Effect.flatMap((raw) =>
-            Effect.try({
-              try: () => parseRegistry(JSON.parse(raw)),
-              catch: () =>
-                new ExecutorSidecarError({
-                  code: "STARTUP_TIMEOUT",
-                  message: "Invalid registry JSON",
-                }),
-            }),
-          ),
+          Effect.flatMap(decodeRegistryFile),
           Effect.orElseSucceed(() => emptyRegistry),
         )
 
@@ -289,14 +276,17 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           Effect.gen(function* () {
             if (record._tag === "external") return
             const registry = yield* readRegistry
-            registry.sidecars[record.cwd] = {
+            const entry: RegisteredSidecar = {
               cwd: record.cwd,
               pid: record.pid,
               port: record.port,
               baseUrl: record.baseUrl,
               startedAt: DateTime.formatIso(yield* DateTime.now),
             }
-            yield* writeRegistry(registry)
+            yield* writeRegistry({
+              ...registry,
+              sidecars: { ...registry.sidecars, [record.cwd]: entry },
+            })
           })
 
         const unregisterSidecar = (cwd: string, pid?: number) =>
@@ -305,8 +295,8 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             const existing = registry.sidecars[cwd]
             if (!existing) return
             if (pid !== undefined && existing.pid !== pid) return
-            delete registry.sidecars[cwd]
-            yield* writeRegistry(registry)
+            const { [cwd]: _removed, ...rest } = registry.sidecars
+            yield* writeRegistry({ ...registry, sidecars: rest })
           })
 
         const getRegisteredSidecar = (cwd: string) =>

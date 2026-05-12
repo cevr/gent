@@ -61,6 +61,40 @@ describe("AskUser Tool", () => {
     )
   })
 
+  it.live("decodes structured JSON answers from notes", () => {
+    const { ctx } = makeCtx(
+      Effect.succeed({ approved: true, notes: '[["Option A","Option B"],["Option C"]]' }),
+    )
+
+    return runToolWithCtx(
+      AskUserTool,
+      {
+        questions: [
+          { question: "Pick first set", options: [{ label: "Option A" }, { label: "Option B" }] },
+          { question: "Pick second", options: [{ label: "Option C" }] },
+        ],
+      },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.answers).toEqual([["Option A", "Option B"], ["Option C"]])
+        expect(result.cancelled).toBeUndefined()
+      }),
+      narrowR,
+    )
+  })
+
+  it.live("falls back to wrapping raw notes when JSON is malformed", () => {
+    const { ctx } = makeCtx(Effect.succeed({ approved: true, notes: "not-json {{{" }))
+
+    return runToolWithCtx(AskUserTool, { questions: [{ question: "Free-form?" }] }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.answers).toEqual([["not-json {{{"]])
+      }),
+      narrowR,
+    )
+  })
+
   it.live("cancel returns cancelled flag with empty answers", () => {
     const { ctx } = makeCtx(Effect.succeed({ approved: false }))
 
