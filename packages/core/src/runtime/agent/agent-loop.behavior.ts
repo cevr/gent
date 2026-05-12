@@ -397,18 +397,86 @@ export const makeAgentLoopBehavior = (
     const closed = yield* Deferred.make<void>()
     const startedRef = yield* Ref.make(false)
 
+    type BehaviorDeps = {
+      readonly sessionId: SessionId
+      readonly branchId: BranchId
+      readonly sideMutationSemaphore: Semaphore.Semaphore
+      readonly baseSections: ReadonlyArray<PromptSection>
+      readonly enqueueFollowUp: EnqueueFollowUp
+      readonly messageStorage: typeof messageStorage
+      readonly queueStorage: typeof queueStorage
+      readonly eventPublisher: typeof eventPublisher
+      readonly storageTransaction: typeof storageTransaction
+      readonly provideRuntime: typeof provideRuntime
+      readonly getPricing: PricingLookup
+      readonly publishEvent: typeof publishEvent
+      readonly publishEventOrDie: typeof publishEventOrDie
+      readonly resolveTurnProfile: typeof resolveTurnProfile
+      readonly hostDeps: typeof hostDeps
+      readonly configServiceForRun: typeof configServiceForRun
+      readonly modelRegistryForRun: typeof modelRegistryForRun
+      readonly host: typeof host
+      readonly extensionRegistry: typeof extensionRegistry
+      readonly driverRegistry: typeof driverRegistry
+      readonly loopScope: typeof loopScope
+      readonly turnWorkerQueue: typeof turnWorkerQueue
+      readonly activeStreamRef: typeof activeStreamRef
+      readonly turnMetricsRef: typeof turnMetricsRef
+      readonly interruptedRef: typeof interruptedRef
+      readonly loopRef: typeof loopRef
+      readonly queuePersistenceSemaphore: typeof queuePersistenceSemaphore
+      readonly persistenceFailure: typeof persistenceFailure
+      readonly closed: typeof closed
+      readonly startedRef: typeof startedRef
+    }
+
+    const behaviorDeps = {
+      sessionId,
+      branchId,
+      sideMutationSemaphore,
+      baseSections,
+      enqueueFollowUp,
+      messageStorage,
+      queueStorage,
+      eventPublisher,
+      storageTransaction,
+      provideRuntime,
+      getPricing,
+      publishEvent,
+      publishEventOrDie,
+      resolveTurnProfile,
+      hostDeps,
+      configServiceForRun,
+      modelRegistryForRun,
+      host,
+      extensionRegistry,
+      driverRegistry,
+      loopScope,
+      turnWorkerQueue,
+      activeStreamRef,
+      turnMetricsRef,
+      interruptedRef,
+      loopRef,
+      queuePersistenceSemaphore,
+      persistenceFailure,
+      closed,
+      startedRef,
+    } satisfies BehaviorDeps
+
     const persistCommittedQueue = (queue: LoopQueueState, operation: string) =>
-      Effect.flatMap(Ref.get(startedRef), (started) =>
+      Effect.flatMap(Ref.get(behaviorDeps.startedRef), (started) =>
         started
-          ? queueStorage.putQueueState(sessionId, branchId, queue).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new AgentLoopError({
-                    message: `Failed to persist ${operation} for ${sessionId}/${branchId}`,
-                    cause,
-                  }),
-              ),
-            )
+          ? behaviorDeps.queueStorage
+              .putQueueState(behaviorDeps.sessionId, behaviorDeps.branchId, queue)
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new AgentLoopError({
+                      message: `Failed to persist ${operation} for ${behaviorDeps.sessionId}/${behaviorDeps.branchId}`,
+                      cause,
+                    }),
+                ),
+              )
           : Effect.void,
       )
 
