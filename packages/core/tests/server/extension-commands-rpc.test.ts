@@ -181,6 +181,10 @@ describe("extension command RPCs", () => {
                 event.annotations["method"] === "extension.request",
             )
             expect(extensionRequestEvent).not.toBeUndefined()
+            expect(extensionRequestEvent?.annotations["sessionId"]).toBe(sessionId)
+            expect(extensionRequestEvent?.annotations["branchId"]).toBe(branchId)
+            expect(extensionRequestEvent?.annotations["extensionId"]).toBe(greet!.extensionId)
+            expect(extensionRequestEvent?.annotations["capabilityId"]).toBe(greet!.capabilityId)
           }).pipe(Effect.timeout("4 seconds")),
         ),
       )

@@ -636,7 +636,17 @@ const RpcHandlers = GentRpcs.toLayer(
           return yield* capabilityContext !== undefined
             ? request.pipe(Effect.provideContext(capabilityContext))
             : request
-        }).pipe(withWideEvent(rpcBoundary("extension.request"))),
+        }).pipe(
+          Effect.tap(() =>
+            WideEvent.set({
+              sessionId,
+              branchId,
+              extensionId,
+              capabilityId,
+            }),
+          ),
+          withWideEvent(rpcBoundary("extension.request")),
+        ),
 
       "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>
         Effect.gen(function* () {
