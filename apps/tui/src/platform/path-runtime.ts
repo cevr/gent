@@ -2,20 +2,36 @@ import { Effect, ManagedRuntime, Path } from "effect"
 
 const runtime = ManagedRuntime.make(Path.layer)
 
-const withPath = <A>(f: (path: Path.Path) => A): A =>
-  runtime.runSync(
+const runPath = <A>(effect: Effect.Effect<A, never, Path.Path>): A => runtime.runSync(effect)
+
+export const joinPath = (...parts: ReadonlyArray<string>): string =>
+  runPath(
     Effect.gen(function* () {
-      return f(yield* Path.Path)
+      const path = yield* Path.Path
+      return path.join(...parts)
     }),
   )
 
-export const joinPath = (...parts: ReadonlyArray<string>): string =>
-  withPath((path) => path.join(...parts))
-
-export const dirnamePath = (value: string): string => withPath((path) => path.dirname(value))
+export const dirnamePath = (value: string): string =>
+  runPath(
+    Effect.gen(function* () {
+      const path = yield* Path.Path
+      return path.dirname(value)
+    }),
+  )
 
 export const resolvePath = (...parts: ReadonlyArray<string>): string =>
-  withPath((path) => path.resolve(...parts))
+  runPath(
+    Effect.gen(function* () {
+      const path = yield* Path.Path
+      return path.resolve(...parts)
+    }),
+  )
 
 export const relativePath = (from: string, to: string): string =>
-  withPath((path) => path.relative(from, to))
+  runPath(
+    Effect.gen(function* () {
+      const path = yield* Path.Path
+      return path.relative(from, to)
+    }),
+  )

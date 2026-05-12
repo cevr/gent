@@ -229,10 +229,8 @@ const releaseConnection = (conn: McpConnection) =>
       .then(() => conn.client.close().catch(() => undefined)),
   ).pipe(Effect.orElseSucceed(() => {}))
 
-const withConnection = <A>(
-  baseUrl: string,
-  use: (conn: McpConnection) => Effect.Effect<A, ExecutorMcpError>,
-) => Effect.acquireUseRelease(acquireConnection(baseUrl), use, releaseConnection)
+const connection = (baseUrl: string) =>
+  Effect.acquireRelease(acquireConnection(baseUrl), releaseConnection)
 
 // ── Service ──
 
@@ -244,80 +242,92 @@ export class ExecutorMcpBridge extends Context.Service<
     ExecutorMcpBridge,
     ExecutorMcpBridge.of({
       inspect: (baseUrl) =>
-        withConnection(baseUrl, (conn) =>
-          Effect.gen(function* () {
-            const listPage = (cursor: string | undefined) =>
-              Effect.tryPromise({
-                try: () => conn.client.listTools(cursor ? { cursor } : undefined),
-                catch: (e) =>
-                  new ExecutorMcpError({
-                    phase: "inspect",
-                    message: `MCP inspect failed: ${e instanceof Error ? e.message : String(e)}`,
+        connection(baseUrl).pipe(
+          Effect.flatMap((conn) =>
+            Effect.gen(function* () {
+              const listPage = (cursor: string | undefined) =>
+                Effect.tryPromise({
+                  try: () => conn.client.listTools(cursor ? { cursor } : undefined),
+                  catch: (e) =>
+                    new ExecutorMcpError({
+                      phase: "inspect",
+                      message: `MCP inspect failed: ${e instanceof Error ? e.message : String(e)}`,
+                    }),
+                })
+              type Tool = { name: string; description?: string }
+              const readPage: (
+                cursor: string | undefined,
+                acc: ReadonlyArray<Tool>,
+              ) => Effect.Effect<ReadonlyArray<Tool>, ExecutorMcpError> = (cursor, acc) =>
+                listPage(cursor).pipe(
+                  Effect.flatMap((response) => {
+                    const next: ReadonlyArray<Tool> = [
+                      ...acc,
+                      ...response.tools.map((t) => ({
+                        name: t.name,
+                        description: t.description,
+                      })),
+                    ]
+                    return response.nextCursor === undefined
+                      ? Effect.succeed(next)
+                      : Effect.suspend(() => readPage(response.nextCursor, next))
                   }),
-              })
-            type Tool = { name: string; description?: string }
-            const readPage: (
-              cursor: string | undefined,
-              acc: ReadonlyArray<Tool>,
-            ) => Effect.Effect<ReadonlyArray<Tool>, ExecutorMcpError> = (cursor, acc) =>
-              listPage(cursor).pipe(
-                Effect.flatMap((response) => {
-                  const next: ReadonlyArray<Tool> = [
-                    ...acc,
-                    ...response.tools.map((t) => ({ name: t.name, description: t.description })),
-                  ]
-                  return response.nextCursor === undefined
-                    ? Effect.succeed(next)
-                    : Effect.suspend(() => readPage(response.nextCursor, next))
-                }),
-              )
-            const tools = yield* readPage(undefined, [])
-            return {
-              instructions: conn.client.getInstructions(),
-              tools,
-            } satisfies ExecutorMcpInspection
-          }),
+                )
+              const tools = yield* readPage(undefined, [])
+              return {
+                instructions: conn.client.getInstructions(),
+                tools,
+              } satisfies ExecutorMcpInspection
+            }),
+          ),
+          Effect.scoped,
         ),
 
       execute: (baseUrl, code) =>
-        withConnection(baseUrl, (conn) =>
-          Effect.tryPromise({
-            try: () =>
-              conn.client
-                .callTool({
-                  name: "execute",
-                  arguments: { code },
-                })
-                .then(normalizeToolResult),
-            catch: (e) =>
-              new ExecutorMcpError({
-                phase: "execute",
-                message: `MCP execute failed: ${e instanceof Error ? e.message : String(e)}`,
-              }),
-          }),
+        connection(baseUrl).pipe(
+          Effect.flatMap((conn) =>
+            Effect.tryPromise({
+              try: () =>
+                conn.client
+                  .callTool({
+                    name: "execute",
+                    arguments: { code },
+                  })
+                  .then(normalizeToolResult),
+              catch: (e) =>
+                new ExecutorMcpError({
+                  phase: "execute",
+                  message: `MCP execute failed: ${e instanceof Error ? e.message : String(e)}`,
+                }),
+            }),
+          ),
+          Effect.scoped,
         ),
 
       resume: (baseUrl, executionId, action, content) =>
-        withConnection(baseUrl, (conn) =>
-          Effect.tryPromise({
-            try: () =>
-              conn.client
-                .callTool({
-                  name: "resume",
-                  arguments: {
-                    executionId,
-                    action,
-                    // @effect-diagnostics-next-line preferSchemaOverJson:off
-                    content: content ? JSON.stringify(content) : "{}",
-                  },
-                })
-                .then(normalizeToolResult),
-            catch: (e) =>
-              new ExecutorMcpError({
-                phase: "resume",
-                message: `MCP resume failed: ${e instanceof Error ? e.message : String(e)}`,
-              }),
-          }),
+        connection(baseUrl).pipe(
+          Effect.flatMap((conn) =>
+            Effect.tryPromise({
+              try: () =>
+                conn.client
+                  .callTool({
+                    name: "resume",
+                    arguments: {
+                      executionId,
+                      action,
+                      // @effect-diagnostics-next-line preferSchemaOverJson:off
+                      content: content ? JSON.stringify(content) : "{}",
+                    },
+                  })
+                  .then(normalizeToolResult),
+              catch: (e) =>
+                new ExecutorMcpError({
+                  phase: "resume",
+                  message: `MCP resume failed: ${e instanceof Error ? e.message : String(e)}`,
+                }),
+            }),
+          ),
+          Effect.scoped,
         ),
     }),
   )

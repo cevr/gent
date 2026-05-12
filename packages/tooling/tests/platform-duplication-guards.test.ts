@@ -113,6 +113,56 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
+  test("flags withX callback wrapper helpers", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        [
+          "const withThing = <A>(",
+          "  use: (thing: Thing) => A,",
+          ") => runtime.runSync(Effect.map(Thing, use))",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 1,
+        message:
+          "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`.",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        [
+          "const withConnection = <A>(",
+          "  baseUrl: string,",
+          "  use: (conn: McpConnection) => Effect.Effect<A, ExecutorMcpError>,",
+          ") => Effect.acquireUseRelease(acquireConnection(baseUrl), use, releaseConnection)",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 1,
+        message:
+          "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`.",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/file-index/example.ts",
+        [
+          "const withFallback = (primary: FileIndexService, fallback: FileIndexService): FileIndexService => ({",
+          "  getStatus: (path) => primary.getStatus(path),",
+          "})",
+        ].join("\n"),
+      ),
+    ).toEqual([])
+  })
+
   test("flags withX wrappers around function invocations", () => {
     expect(
       findPlatformDuplicationViolations(
@@ -185,6 +235,47 @@ describe("platform duplication guards", () => {
       findPlatformDuplicationViolations(
         "packages/extensions/src/openai/codex-transform.ts",
         "const withBody = rewriteCodexBody(withHeaders(req, headers))",
+      ),
+    ).toEqual([])
+  })
+
+  test("flags withX callback invocations", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "apps/tui/src/platform/path-runtime.ts",
+        "const joined = withPath((path) => path.join(...parts))",
+      ),
+    ).toEqual([
+      {
+        file: "apps/tui/src/platform/path-runtime.ts",
+        line: 1,
+        message:
+          "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`.",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/extensions/src/executor/mcp-bridge.ts",
+        [
+          "withConnection(baseUrl, (conn) =>",
+          "  Effect.tryPromise(() => conn.client.callTool({ name: 'execute' })),",
+          ")",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/extensions/src/executor/mcp-bridge.ts",
+        line: 1,
+        message:
+          "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`.",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        "yield* effect.pipe(withWideEvent(rpcBoundary('message.send')), Effect.tap(() => log()))",
       ),
     ).toEqual([])
   })

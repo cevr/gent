@@ -142,10 +142,15 @@ const effectWrapperArgumentPattern = /:\s*Effect\.Effect\b/
 const withEffectWrapperMessage =
   "`withX(effect, ...)` wrapper helpers are banned; expose a pipeable provider and call it from `.pipe(...)`"
 const withFunctionInvocationPattern = /(?<![.\w$])with[A-Z][A-Za-z0-9_]*\s*\(/g
+const callbackArgumentPattern =
+  /(?:^|,)\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][A-Za-z0-9_$]*\s*=>)/
+const callbackParameterPattern = /:\s*\([^)]*\)\s*=>/
 const wrappedFunctionInvocationPattern =
   /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s*\(/
 const withFunctionInvocationMessage =
   "`withX(fn(...))` invocation style is banned; call the inner effect and pipe the wrapper (`fn(...).pipe(withX)`)."
+const withCallbackWrapperMessage =
+  "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`."
 
 const hostFactPatternSources = new Set([
   "\\bprocess\\.(?:platform|pid|execPath|kill)\\b",
@@ -299,6 +304,25 @@ const startsByWrappingFunctionInvocation = (
   return wrappedFunctionInvocationPattern.test(firstArgumentWindow.trimStart())
 }
 
+const startsWithCallbackArgument = (
+  lines: ReadonlyArray<string>,
+  index: number,
+  column: number,
+): boolean => {
+  const callWindow = [(lines[index] ?? "").slice(column), ...lines.slice(index + 1, index + 8)]
+    .join("\n")
+    .trimStart()
+
+  return callbackArgumentPattern.test(callWindow)
+}
+
+const declaresCallbackParameter = (declarationWindow: string): boolean => {
+  const firstArrowIndex = declarationWindow.indexOf("=>")
+  const signatureWindow =
+    firstArrowIndex === -1 ? declarationWindow : declarationWindow.slice(0, firstArrowIndex + 2)
+  return callbackParameterPattern.test(signatureWindow)
+}
+
 export const findPlatformDuplicationViolations = (
   file: string,
   text: string,
@@ -322,6 +346,9 @@ export const findPlatformDuplicationViolations = (
       if (effectWrapperArgumentPattern.test(declarationWindow)) {
         findings.push({ file, line: index + 1, message: withEffectWrapperMessage })
       }
+      if (declaresCallbackParameter(declarationWindow)) {
+        findings.push({ file, line: index + 1, message: withCallbackWrapperMessage })
+      }
     }
     withFunctionInvocationPattern.lastIndex = 0
     let invocationMatch: RegExpExecArray | null
@@ -332,6 +359,12 @@ export const findPlatformDuplicationViolations = (
         !startsInsidePipeCall(lines, index, invocationMatch.index)
       ) {
         findings.push({ file, line: index + 1, message: withFunctionInvocationMessage })
+      }
+      if (
+        startsWithCallbackArgument(lines, index, firstArgumentColumn) &&
+        !startsInsidePipeCall(lines, index, invocationMatch.index)
+      ) {
+        findings.push({ file, line: index + 1, message: withCallbackWrapperMessage })
       }
     }
     for (const { pattern, message } of patterns) {
