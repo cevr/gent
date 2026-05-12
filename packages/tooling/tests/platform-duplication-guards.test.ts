@@ -85,6 +85,25 @@ describe("platform duplication guards", () => {
       findPlatformDuplicationViolations(
         "packages/core/src/runtime/example.ts",
         [
+          "export const withThing = <A, E, R>(",
+          "  eff: Effect.Effect<A, E, R>,",
+          "  value: string,",
+          ") => eff.pipe(Effect.annotateLogs({ value }))",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "packages/core/src/runtime/example.ts",
+        line: 1,
+        message:
+          "`withX(effect, ...)` wrapper helpers are banned; expose a pipeable provider and call it from `.pipe(...)`",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        [
           "export const provideThing =",
           "  (value: string) =>",
           "  <A, E, R>(effect: Effect.Effect<A, E, R>) =>",
@@ -140,6 +159,25 @@ describe("platform duplication guards", () => {
       findPlatformDuplicationViolations(
         "packages/core/src/runtime/example.ts",
         "yield* run.pipe(withWideEvent(agentRunBoundary(agentName, sessionId)))",
+      ),
+    ).toEqual([])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/runtime/example.ts",
+        [
+          "yield* run.pipe(",
+          "  Effect.tap(() => WideEvent.set({ sessionId, branchId })),",
+          "  withWideEvent(rpcBoundary('message.send', requestId)),",
+          ")",
+        ].join("\n"),
+      ),
+    ).toEqual([])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/core/src/storage/example.ts",
+        "return yield* sql.withTransaction(saveMessage(message))",
       ),
     ).toEqual([])
 

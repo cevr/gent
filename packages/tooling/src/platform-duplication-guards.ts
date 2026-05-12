@@ -138,6 +138,7 @@ const bannedAgentRunnerCompositionPatterns: ReadonlyArray<BannedPattern> = [
 ]
 
 const withEffectWrapperDefinitionPattern = /\b(?:export\s+)?const\s+with[A-Z][A-Za-z0-9_]*\b/
+const effectWrapperArgumentPattern = /:\s*Effect\.Effect\b/
 const withEffectWrapperMessage =
   "`withX(effect, ...)` wrapper helpers are banned; expose a pipeable provider and call it from `.pipe(...)`"
 const withFunctionInvocationPattern = /(?<![.\w$])with[A-Z][A-Za-z0-9_]*\s*\(/g
@@ -277,10 +278,7 @@ const startsInsidePipeCall = (
   index: number,
   column: number,
 ): boolean => {
-  const prefixWindow = [
-    ...lines.slice(Math.max(0, index - 64), index),
-    (lines[index] ?? "").slice(0, column),
-  ].join("\n")
+  const prefixWindow = [...lines.slice(0, index), (lines[index] ?? "").slice(0, column)].join("\n")
   const pipeStart = prefixWindow.lastIndexOf(".pipe(")
   if (pipeStart === -1) return false
 
@@ -326,7 +324,7 @@ export const findPlatformDuplicationViolations = (
     const line = lines[index] ?? ""
     if (withEffectWrapperDefinitionPattern.test(line)) {
       const declarationWindow = lines.slice(index, index + 8).join("\n")
-      if (declarationWindow.includes("effect: Effect.Effect")) {
+      if (effectWrapperArgumentPattern.test(declarationWindow)) {
         findings.push({ file, line: index + 1, message: withEffectWrapperMessage })
       }
     }
