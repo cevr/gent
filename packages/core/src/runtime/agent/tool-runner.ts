@@ -10,6 +10,7 @@ import { ExtensionRegistry } from "../extensions/registry.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../../domain/event.js"
+import { EventPublisher } from "../../domain/event-publisher.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { withWideEvent, WideEvent, toolBoundary, ToolError } from "../wide-event-boundary"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
@@ -29,14 +30,6 @@ export function convertTools(
 }
 
 type ToolCall = { toolCallId: ToolCallId; toolName: string; input: unknown }
-
-type ToolLifecycleEvent = ToolCallStarted | ToolCallSucceeded | ToolCallFailed
-
-type PublishToolEvent = (event: ToolLifecycleEvent) => Effect.Effect<unknown>
-
-export interface ToolRunOptions {
-  readonly publishEvent?: PublishToolEvent
-}
 
 type ToolCapabilityContext = ExtensionHostContext & {
   readonly toolCallId: ToolCallId
@@ -59,8 +52,11 @@ export interface ToolRunnerService {
   readonly run: (
     toolCall: ToolCall,
     ctx: ToolCapabilityContext,
-    options?: ToolRunOptions,
-  ) => Effect.Effect<Prompt.ToolResultPart, InteractionPendingError, ExtensionRegistry>
+  ) => Effect.Effect<
+    Prompt.ToolResultPart,
+    InteractionPendingError,
+    ExtensionRegistry | EventPublisher
+  >
 }
 
 const deriveToolContext = (ctx: ToolCapabilityContext): ToolRuntimeContext => ({
@@ -82,28 +78,25 @@ const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, mes
     result: { error: message },
   })
 
-const publishStarted = (params: {
-  publishEvent?: PublishToolEvent
-  ctx: ToolCapabilityContext
-  toolCall: ToolCall
-}) =>
-  params.publishEvent?.(
-    ToolCallStarted.make({
-      sessionId: params.ctx.sessionId,
-      branchId: params.ctx.branchId,
-      toolCallId: params.toolCall.toolCallId,
-      toolName: params.toolCall.toolName,
-      input: params.toolCall.input,
-    }),
-  ) ?? Effect.void
-
-const publishCompleted = (params: {
-  publishEvent?: PublishToolEvent
-  ctx: ToolCapabilityContext
-  result: Prompt.ToolResultPart
-}) =>
+const publishStarted = (params: { ctx: ToolCapabilityContext; toolCall: ToolCall }) =>
   Effect.gen(function* () {
-    if (params.publishEvent === undefined) return
+    const eventPublisher = yield* EventPublisher
+    yield* eventPublisher
+      .publish(
+        ToolCallStarted.make({
+          sessionId: params.ctx.sessionId,
+          branchId: params.ctx.branchId,
+          toolCallId: params.toolCall.toolCallId,
+          toolName: params.toolCall.toolName,
+          input: params.toolCall.input,
+        }),
+      )
+      .pipe(Effect.orDie)
+  })
+
+const publishCompleted = (params: { ctx: ToolCapabilityContext; result: Prompt.ToolResultPart }) =>
+  Effect.gen(function* () {
+    const eventPublisher = yield* EventPublisher
     const outputSummary = summarizeToolOutput(params.result)
     const fields = {
       sessionId: params.ctx.sessionId,
@@ -113,9 +106,11 @@ const publishCompleted = (params: {
       summary: outputSummary,
       output: stringifyOutput(params.result.result),
     }
-    yield* params.publishEvent(
-      params.result.isFailure ? ToolCallFailed.make(fields) : ToolCallSucceeded.make(fields),
-    )
+    yield* eventPublisher
+      .publish(
+        params.result.isFailure ? ToolCallFailed.make(fields) : ToolCallSucceeded.make(fields),
+      )
+      .pipe(Effect.orDie)
   })
 
 const makeExecutionToolkit = (params: {
@@ -229,7 +224,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
   static Live: Layer.Layer<ToolRunner> = Layer.succeed(
     ToolRunner,
     ToolRunner.of({
-      run: Effect.fn("ToolRunner.run")(function* (toolCall, ctx, options) {
+      run: Effect.fn("ToolRunner.run")(function* (toolCall, ctx) {
         const activeRegistry = yield* ExtensionRegistry
         const basePermissionOpt = yield* Effect.serviceOption(Permission)
         const activePermission: PermissionService =
@@ -237,7 +232,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
 
         return yield* Effect.gen(function* () {
           yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })
-          yield* publishStarted({ publishEvent: options?.publishEvent, ctx, toolCall })
+          yield* publishStarted({ ctx, toolCall })
 
           const capabilities = yield* activeRegistry.listModelCapabilities()
           const tool: ToolCapability | undefined = capabilities.find(
@@ -247,7 +242,6 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
           const finish = (result: Prompt.ToolResultPart) =>
             Effect.gen(function* () {
               yield* publishCompleted({
-                publishEvent: options?.publishEvent,
                 ctx,
                 result,
               })
@@ -349,16 +343,16 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
 
   static Test = (): Layer.Layer<ToolRunner> =>
     Layer.succeed(ToolRunner, {
-      run: (toolCall, ctx, options) =>
+      run: (toolCall, ctx) =>
         Effect.gen(function* () {
-          yield* publishStarted({ publishEvent: options?.publishEvent, ctx, toolCall })
+          yield* publishStarted({ ctx, toolCall })
           const result = Prompt.toolResultPart({
             id: toolCall.toolCallId,
             name: toolCall.toolName,
             isFailure: false,
             result: null,
           })
-          yield* publishCompleted({ publishEvent: options?.publishEvent, ctx, result })
+          yield* publishCompleted({ ctx, result })
           return result
         }),
     })

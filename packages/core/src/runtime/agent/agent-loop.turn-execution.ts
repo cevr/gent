@@ -5,8 +5,8 @@ import {
   DEFAULT_AGENT_NAME,
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
-import { StreamEnded, StreamStarted, TurnCompleted, type AgentEvent } from "../../domain/event.js"
-import type { EventPublisherService } from "../../domain/event-publisher.js"
+import { StreamEnded, StreamStarted, TurnCompleted } from "../../domain/event.js"
+import { EventPublisher, type EventPublisherService } from "../../domain/event-publisher.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { InteractionRequestId, type BranchId, type SessionId } from "../../domain/ids.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
@@ -70,7 +70,6 @@ export type AgentLoopTurnExecutionDeps = {
   readonly messageStorage: MessageStorageService
   readonly eventPublisher: EventPublisherService
   readonly storageTransaction: StorageTransaction
-  readonly publishEventOrDie: (event: AgentEvent) => Effect.Effect<void>
   readonly getPricing: PricingLookup
   readonly resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile>
   readonly configServiceForRun: ConfigServiceService
@@ -98,7 +97,6 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
 
     const toolResults = yield* executeToolCalls({
       toolCalls: params.toolCalls,
-      publishEvent: deps.publishEventOrDie,
       sessionId: deps.sessionId,
       branchId: deps.branchId,
       currentTurnAgent: params.currentTurnAgent,
@@ -143,7 +141,6 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
 
     const source = yield* resolveTurnSource({
       resolved: params.resolved,
-      publishEvent: deps.publishEventOrDie,
       sessionId: deps.sessionId,
       branchId: deps.branchId,
       activeStream: params.activeStream,
@@ -160,7 +157,11 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
       }
     }
 
-    yield* deps.publishEventOrDie(
+    const eventPublisher = yield* EventPublisher
+    const publishEventOrDie = (event: StreamStarted | StreamEnded) =>
+      eventPublisher.publish(event).pipe(Effect.orDie)
+
+    yield* publishEventOrDie(
       StreamStarted.make({ sessionId: deps.sessionId, branchId: deps.branchId }),
     )
 
@@ -178,7 +179,6 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
         ? yield* source.collect(
             collectModelTurnResponse({
               turnStream: source.stream,
-              publishEvent: deps.publishEventOrDie,
               sessionId: deps.sessionId,
               branchId: deps.branchId,
               modelId: params.resolved.modelId,
@@ -190,7 +190,6 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
         : yield* source.collect(
             collectExternalTurnResponse({
               turnStream: source.stream,
-              publishEvent: deps.publishEventOrDie,
               sessionId: deps.sessionId,
               branchId: deps.branchId,
               activeStream: params.activeStream,
@@ -199,7 +198,7 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
           )
 
     if (collected.interrupted) {
-      yield* deps.publishEventOrDie(
+      yield* publishEventOrDie(
         StreamEnded.make({
           sessionId: deps.sessionId,
           branchId: deps.branchId,
@@ -221,7 +220,7 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
       usage: collected.messageProjection.usage,
       getPricing: deps.getPricing,
     })
-    yield* deps.publishEventOrDie(
+    yield* publishEventOrDie(
       StreamEnded.make({
         sessionId: deps.sessionId,
         branchId: deps.branchId,
@@ -408,7 +407,6 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
         currentAgent: state.currentAgent,
         branchId: deps.branchId,
         sessionId: deps.sessionId,
-        publishEvent: deps.publishEventOrDie,
         baseSections: turnBaseSections,
         interactive: state.interactive,
         hostCtx: turnHostCtx,

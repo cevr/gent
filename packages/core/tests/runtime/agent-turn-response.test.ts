@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Ref, Stream, type Scope } from "effect"
+import { Effect, Layer, Ref, Stream, type Scope } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import {
   collectExternalTurnResponse,
@@ -17,6 +17,7 @@ import type { TurnError } from "@gent/core-internal/domain/driver"
 import { ProviderError } from "@gent/core-internal/domain/provider-error"
 import { finishPart, textDeltaPart } from "@gent/core-internal/test-utils/language-model"
 import type { AgentEvent } from "@gent/core-internal/domain/event"
+import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
 
 const sessionId = SessionId.make("collector-session")
 const branchId = BranchId.make("collector-branch")
@@ -33,8 +34,12 @@ const makeActiveStream = (
 const captureEvents = () =>
   Effect.gen(function* () {
     const events = yield* Ref.make<ReadonlyArray<AgentEvent>>([])
-    const publish = (event: AgentEvent) => Ref.update(events, (items) => [...items, event])
-    return { events, publish }
+    const layer = Layer.succeed(EventPublisher, {
+      append: () => Effect.die("append not exercised in turn response tests"),
+      deliver: () => Effect.void,
+      publish: (event) => Ref.update(events, (items) => [...items, event]),
+    })
+    return { events, layer }
   })
 
 describe("agent turn response collectors", () => {
@@ -67,17 +72,16 @@ describe("agent turn response collectors", () => {
   it.scopedLive("model collector retries pre-output provider failures by re-raising them", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(false)
-      const { publish } = yield* captureEvents()
+      const { layer } = yield* captureEvents()
       const error = yield* collectModelTurnResponse({
         turnStream: Stream.fail(new ProviderError({ message: "boom", model: "test/model" })),
-        publishEvent: publish,
         sessionId,
         branchId,
         modelId: "test/model",
         activeStream,
         formatStreamError: (error) => error.message,
         retryPreOutputFailures: true,
-      }).pipe(Effect.flip)
+      }).pipe(Effect.flip, Effect.provide(layer))
 
       expect(error._tag).toBe("ProviderError")
       expect(error.message).toBe("boom")
@@ -87,15 +91,14 @@ describe("agent turn response collectors", () => {
   it.scopedLive("failed model collector treats interrupted failures as non-stream failures", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(true)
-      const { events, publish } = yield* captureEvents()
+      const { events, layer } = yield* captureEvents()
       const collected = yield* collectFailedModelTurnResponse({
         streamError: new ProviderError({ message: "interrupted boom", model: "test/model" }),
-        publishEvent: publish,
         sessionId,
         branchId,
         activeStream,
         formatStreamError: (error) => error.message,
-      })
+      }).pipe(Effect.provide(layer))
 
       expect(collected.interrupted).toBe(true)
       expect(collected.streamFailed).toBe(false)
@@ -106,7 +109,7 @@ describe("agent turn response collectors", () => {
   it.scopedLive("external collector preserves tool names and usage in projected parts", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(false)
-      const { events, publish } = yield* captureEvents()
+      const { events, layer } = yield* captureEvents()
       const toolCallId = ToolCallId.make("collector-tool")
 
       const collected = yield* collectExternalTurnResponse({
@@ -131,12 +134,11 @@ describe("agent turn response collectors", () => {
             usage: { inputTokens: 7, outputTokens: 11 },
           }),
         ]),
-        publishEvent: publish,
         sessionId,
         branchId,
         activeStream,
         formatStreamError: (error: TurnError) => error.message,
-      })
+      }).pipe(Effect.provide(layer))
 
       expect(collected.messageProjection.assistant.map((part) => part.type)).toEqual(["tool-call"])
       expect(
@@ -164,7 +166,7 @@ describe("agent turn response collectors", () => {
     () =>
       Effect.gen(function* () {
         const activeStream = yield* makeActiveStream(false)
-        const { events, publish } = yield* captureEvents()
+        const { events, layer } = yield* captureEvents()
         const toolCallId = ToolCallId.make("collector-dup")
         const toolCallPart = Response.makePart("tool-call", {
           id: toolCallId,
@@ -175,12 +177,11 @@ describe("agent turn response collectors", () => {
 
         yield* collectExternalTurnResponse({
           turnStream: Stream.fromIterable([toolCallPart, toolCallPart]),
-          publishEvent: publish,
           sessionId,
           branchId,
           activeStream,
           formatStreamError: (error: TurnError) => error.message,
-        })
+        }).pipe(Effect.provide(layer))
 
         expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual(["ToolCallStarted"])
       }),
@@ -191,7 +192,7 @@ describe("agent turn response collectors", () => {
     () =>
       Effect.gen(function* () {
         const activeStream = yield* makeActiveStream(false)
-        const { events, publish } = yield* captureEvents()
+        const { events, layer } = yield* captureEvents()
         const toolCallId = ToolCallId.make("collector-result-dup")
         const toolResultPart = Response.makePart("tool-result", {
           id: toolCallId,
@@ -205,12 +206,11 @@ describe("agent turn response collectors", () => {
 
         yield* collectExternalTurnResponse({
           turnStream: Stream.fromIterable([toolResultPart, toolResultPart]),
-          publishEvent: publish,
           sessionId,
           branchId,
           activeStream,
           formatStreamError: (error: TurnError) => error.message,
-        })
+        }).pipe(Effect.provide(layer))
 
         expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual(["ToolCallSucceeded"])
       }),
@@ -219,21 +219,20 @@ describe("agent turn response collectors", () => {
   it.scopedLive("model collector keeps partial output when post-output stream fails", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(false)
-      const { events, publish } = yield* captureEvents()
+      const { events, layer } = yield* captureEvents()
 
       const collected = yield* collectModelTurnResponse({
         turnStream: Stream.concat(
           Stream.fromIterable([textDeltaPart("partial")]),
           Stream.fail(new ProviderError({ message: "late boom", model: "test/model" })),
         ),
-        publishEvent: publish,
         sessionId,
         branchId,
         modelId: "test/model",
         activeStream,
         formatStreamError: (error) => error.message,
         retryPreOutputFailures: true,
-      })
+      }).pipe(Effect.provide(layer))
 
       expect(collected.streamFailed).toBe(true)
       expect(collected.messageProjection.assistant.map((part) => part.type)).toEqual(["text"])

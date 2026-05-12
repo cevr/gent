@@ -76,7 +76,7 @@ import {
   causeToAgentLoopError,
   makeAgentLoopBehavior,
 } from "./agent-loop.behavior.js"
-import { EventPublisher } from "../../domain/event-publisher.js"
+import type { EventPublisher } from "../../domain/event-publisher.js"
 import type { ToolRunner } from "./tool-runner.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
@@ -496,7 +496,6 @@ const buildAgentLoopActorHandlers = (config: {
     const messageStorage = yield* MessageStorage
     const queueStorage = yield* AgentLoopQueueStorage
     const eventStorage = yield* EventStorage
-    const eventPublisher = yield* EventPublisher
     const closed = yield* Ref.make(false)
     const operationSeen = yield* Ref.make(false)
 
@@ -1098,8 +1097,6 @@ const buildAgentLoopActorHandlers = (config: {
                   toolCallId: toolCallIdForCommand(operation.commandId),
                   toolName: operation.toolName,
                   input: operation.input,
-                  publishEvent: (event) =>
-                    eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
                   sessionId: operation.sessionId,
                   branchId: operation.branchId,
                   currentTurnAgent,

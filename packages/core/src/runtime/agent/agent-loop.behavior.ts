@@ -258,8 +258,6 @@ export const makeAgentLoopBehavior = (
             }),
         ),
       )
-    const publishEventOrDie = (event: AgentEvent) => publishEvent(event).pipe(Effect.orDie)
-
     const sessionProfileCache = yield* Effect.serviceOption(SessionProfileCache)
     const permissionService = yield* Effect.serviceOption(Permission)
 
@@ -331,7 +329,6 @@ export const makeAgentLoopBehavior = (
       readonly provideRuntime: typeof provideRuntime
       readonly getPricing: PricingLookup
       readonly publishEvent: typeof publishEvent
-      readonly publishEventOrDie: typeof publishEventOrDie
       readonly resolveTurnProfile: typeof resolveTurnProfile
       readonly hostDeps: typeof hostDeps
       readonly configServiceForRun: typeof configServiceForRun
@@ -364,7 +361,6 @@ export const makeAgentLoopBehavior = (
       provideRuntime,
       getPricing,
       publishEvent,
-      publishEventOrDie,
       resolveTurnProfile,
       hostDeps,
       configServiceForRun,
@@ -455,7 +451,6 @@ export const makeAgentLoopBehavior = (
       messageStorage,
       eventPublisher,
       storageTransaction,
-      publishEventOrDie,
       getPricing,
       resolveTurnProfile,
       configServiceForRun,

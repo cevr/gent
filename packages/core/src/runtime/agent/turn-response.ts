@@ -11,6 +11,7 @@ import {
   ToolCallSucceeded,
   type AgentEvent,
 } from "../../domain/event.js"
+import { EventPublisher } from "../../domain/event-publisher.js"
 import { ToolCallId, type BranchId, type SessionId } from "../../domain/ids.js"
 import { hasMessage } from "../../domain/guards.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
@@ -21,8 +22,6 @@ import {
 import { ProviderError } from "../../domain/provider-error.js"
 import { summarizeOutput, stringifyOutput } from "../../domain/tool-output.js"
 import type { AssistantResponsePart, ToolResponsePart } from "./turn-persistence.js"
-
-export type PublishEvent = (event: AgentEvent) => Effect.Effect<void, never, never>
 
 /**
  * Cancellation handle for an in-flight turn stream. `interrupted` is the
@@ -94,6 +93,12 @@ export const formatStreamErrorMessage = (streamError: unknown) => {
   if (hasMessage(streamError)) return streamError.message
   return String(streamError)
 }
+
+const publishEventOrDie = (event: AgentEvent) =>
+  Effect.gen(function* () {
+    const eventPublisher = yield* EventPublisher
+    yield* eventPublisher.publish(event).pipe(Effect.orDie)
+  })
 
 export const toResponseFinishReason = (stopReason: string): Response.FinishReason => {
   switch (stopReason) {
@@ -170,7 +175,6 @@ const isObservableModelOutputPart = (part: Response.AnyPart): boolean => {
 
 export const collectModelTurnResponse = (params: {
   turnStream: Stream.Stream<Response.AnyPart, ProviderError>
-  publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
   modelId: string
@@ -196,15 +200,13 @@ export const collectModelTurnResponse = (params: {
           responseParts.push(part)
           hasObservableOutput = hasObservableOutput || isObservableModelOutputPart(part)
           if (part.type === "text-delta") {
-            yield* params
-              .publishEvent(
-                EventStreamChunk.make({
-                  sessionId: params.sessionId,
-                  branchId: params.branchId,
-                  chunk: part.delta,
-                }),
-              )
-              .pipe(Effect.orDie)
+            yield* publishEventOrDie(
+              EventStreamChunk.make({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                chunk: part.delta,
+              }),
+            )
           }
         }),
     ).pipe(
@@ -219,20 +221,16 @@ export const collectModelTurnResponse = (params: {
           yield* Effect.logWarning("stream error, persisting partial output").pipe(
             Effect.annotateLogs({ error: String(streamError) }),
           )
-          yield* params
-            .publishEvent(
-              StreamEnded.make({ sessionId: params.sessionId, branchId: params.branchId }),
-            )
-            .pipe(Effect.orDie)
-          yield* params
-            .publishEvent(
-              ErrorOccurred.make({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                error: params.formatStreamError(streamError),
-              }),
-            )
-            .pipe(Effect.orDie)
+          yield* publishEventOrDie(
+            StreamEnded.make({ sessionId: params.sessionId, branchId: params.branchId }),
+          )
+          yield* publishEventOrDie(
+            ErrorOccurred.make({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              error: params.formatStreamError(streamError),
+            }),
+          )
           return true
         }),
       ),
@@ -249,7 +247,6 @@ export const collectModelTurnResponse = (params: {
 
 export const collectFailedModelTurnResponse = (params: {
   streamError: ProviderError
-  publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle
@@ -261,18 +258,16 @@ export const collectFailedModelTurnResponse = (params: {
       yield* Effect.logWarning("stream error before output, retries exhausted").pipe(
         Effect.annotateLogs({ error: String(params.streamError) }),
       )
-      yield* params
-        .publishEvent(StreamEnded.make({ sessionId: params.sessionId, branchId: params.branchId }))
-        .pipe(Effect.orDie)
-      yield* params
-        .publishEvent(
-          ErrorOccurred.make({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            error: params.formatStreamError(params.streamError),
-          }),
-        )
-        .pipe(Effect.orDie)
+      yield* publishEventOrDie(
+        StreamEnded.make({ sessionId: params.sessionId, branchId: params.branchId }),
+      )
+      yield* publishEventOrDie(
+        ErrorOccurred.make({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          error: params.formatStreamError(params.streamError),
+        }),
+      )
     }
 
     return collectNormalizedResponse({
@@ -291,41 +286,34 @@ const externalToolOutput = (
 })
 
 const publishExternalStreamChunk = (params: {
-  publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
   chunk: string
 }) =>
-  params
-    .publishEvent(
-      EventStreamChunk.make({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        chunk: params.chunk,
-      }),
-    )
-    .pipe(Effect.orDie)
+  publishEventOrDie(
+    EventStreamChunk.make({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      chunk: params.chunk,
+    }),
+  )
 
 const publishExternalToolCallStarted = (params: {
-  publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
   part: Extract<Response.AnyPart, { readonly type: "tool-call" }>
 }) =>
-  params
-    .publishEvent(
-      ToolCallStarted.make({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        toolCallId: ToolCallId.make(params.part.id),
-        toolName: params.part.name,
-        input: params.part.params,
-      }),
-    )
-    .pipe(Effect.orDie)
+  publishEventOrDie(
+    ToolCallStarted.make({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      toolCallId: ToolCallId.make(params.part.id),
+      toolName: params.part.name,
+      input: params.part.params,
+    }),
+  )
 
 const publishExternalToolResult = (params: {
-  publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
   part: Extract<Response.AnyPart, { readonly type: "tool-result" }>
@@ -339,15 +327,12 @@ const publishExternalToolResult = (params: {
     summary: summarizeOutput(output),
     output: stringifyOutput(output.value),
   }
-  return params
-    .publishEvent(
-      params.part.isFailure ? ToolCallFailed.make(fields) : ToolCallSucceeded.make(fields),
-    )
-    .pipe(Effect.orDie)
+  return publishEventOrDie(
+    params.part.isFailure ? ToolCallFailed.make(fields) : ToolCallSucceeded.make(fields),
+  )
 }
 
 const collectExternalResponsePart = (params: {
-  publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
   part: Response.AnyPart
@@ -375,7 +360,6 @@ const collectExternalResponsePart = (params: {
 
 export const collectExternalTurnResponse = (params: {
   turnStream: Stream.Stream<Response.AnyPart, TurnError>
-  publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle
@@ -398,7 +382,6 @@ export const collectExternalTurnResponse = (params: {
           }
           responseParts.push(part)
           yield* collectExternalResponsePart({
-            publishEvent: params.publishEvent,
             sessionId: params.sessionId,
             branchId: params.branchId,
             part,
@@ -415,20 +398,16 @@ export const collectExternalTurnResponse = (params: {
           yield* Effect.logWarning("stream error, persisting partial output").pipe(
             Effect.annotateLogs({ error: String(streamError) }),
           )
-          yield* params
-            .publishEvent(
-              StreamEnded.make({ sessionId: params.sessionId, branchId: params.branchId }),
-            )
-            .pipe(Effect.orDie)
-          yield* params
-            .publishEvent(
-              ErrorOccurred.make({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                error: params.formatStreamError(streamError),
-              }),
-            )
-            .pipe(Effect.orDie)
+          yield* publishEventOrDie(
+            StreamEnded.make({ sessionId: params.sessionId, branchId: params.branchId }),
+          )
+          yield* publishEventOrDie(
+            ErrorOccurred.make({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              error: params.formatStreamError(streamError),
+            }),
+          )
           return true
         }),
       ),

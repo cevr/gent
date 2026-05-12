@@ -8,7 +8,8 @@ import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core-internal/domain/permission"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
-import type { ToolCallStarted } from "../../src/domain/event"
+import type { AgentEvent, ToolCallStarted } from "../../src/domain/event"
+import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import {
   BranchId,
@@ -70,6 +71,7 @@ describe("ToolRunner", () => {
           ]),
         ),
         Permission.Test(),
+        EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
@@ -134,6 +136,7 @@ describe("ToolRunner", () => {
           ]),
         ),
         Permission.Test(),
+        EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
@@ -185,6 +188,7 @@ describe("ToolRunner", () => {
           ]),
         ),
         Permission.Test(),
+        EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
@@ -232,6 +236,7 @@ describe("ToolRunner", () => {
           ]),
         ),
         Permission.Test(),
+        EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
@@ -290,6 +295,7 @@ describe("ToolRunner", () => {
           ]),
         ),
         Permission.Test(),
+        EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
@@ -342,6 +348,7 @@ describe("ToolRunner", () => {
           ]),
         ),
         denyAllPermission,
+        EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
@@ -405,6 +412,7 @@ describe("ToolRunner", () => {
           ]),
         ),
         Permission.Test(),
+        EventPublisher.Test(),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -457,6 +465,7 @@ describe("ToolRunner", () => {
           ]),
         ),
         Permission.Test(),
+        EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
@@ -514,6 +523,7 @@ describe("ToolRunner", () => {
           ]),
         ),
         Permission.Test(),
+        EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         Layer.succeed(ToolWriteToken, { write: () => Effect.succeed("outer-write") }),
@@ -589,6 +599,7 @@ describe("ToolRunner", () => {
           ]),
         ),
         Permission.Test(),
+        EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
@@ -636,6 +647,17 @@ describe("ToolRunner", () => {
             })
           }),
       })
+      const eventTags: Array<string> = []
+      const events: Array<ToolCallStarted> = []
+      const eventPublisherLayer = Layer.succeed(EventPublisher, {
+        append: () => Effect.die("append not exercised in ToolRunner tests"),
+        deliver: () => Effect.void,
+        publish: (event: AgentEvent) =>
+          Effect.sync(() => {
+            eventTags.push(event._tag)
+            if (event._tag === "ToolCallStarted") events.push(event)
+          }),
+      })
       const deps = Layer.mergeAll(
         ExtensionRegistry.fromResolved(
           resolveExtensions([
@@ -648,13 +670,12 @@ describe("ToolRunner", () => {
           ]),
         ),
         Permission.Test(),
+        eventPublisherLayer,
         ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
-      const eventTags: Array<string> = []
-      const events: Array<ToolCallStarted> = []
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
         return yield* Effect.flip(
@@ -666,13 +687,6 @@ describe("ToolRunner", () => {
               toolCallId: ToolCallId.make("tc-pending"),
               agentName: AgentName.make("cowork"),
             }),
-            {
-              publishEvent: (event) =>
-                Effect.sync(() => {
-                  eventTags.push(event._tag)
-                  if (event._tag === "ToolCallStarted") events.push(event)
-                }),
-            },
           ),
         )
       }).pipe(Effect.provide(layer))

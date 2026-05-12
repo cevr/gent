@@ -4,6 +4,7 @@ import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
 import { type ProviderAuthError, type TurnError } from "../../domain/driver.js"
 import { ErrorOccurred, ProviderRetrying } from "../../domain/event.js"
+import { EventPublisher } from "../../domain/event-publisher.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { ToolCallId, type BranchId, type SessionId } from "../../domain/ids.js"
 import { Permission } from "../../domain/permission.js"
@@ -21,7 +22,6 @@ import {
   formatStreamErrorMessage,
   type ActiveStreamHandle,
   type CollectedTurnResponse,
-  type PublishEvent,
 } from "./turn-response.js"
 import type { ResolvedTurnContext } from "./turn-resolve.js"
 
@@ -62,7 +62,6 @@ type ExternalTurnSource = {
 
 export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
   resolved: ResolvedTurnContext
-  publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle
@@ -72,22 +71,23 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   const modelResolver = yield* ModelResolver
   const toolRunner = yield* ToolRunner
   const extensionRegistry = yield* ExtensionRegistry
+  const eventPublisher = yield* EventPublisher
   const permissionOption = yield* Effect.serviceOption(Permission)
   const permission = permissionOption._tag === "Some" ? permissionOption.value : AllowAllPermission
+  const publishEventOrDie = (event: ErrorOccurred | ProviderRetrying) =>
+    eventPublisher.publish(event).pipe(Effect.orDie)
   const { resolved } = params
   if (resolved.driver?._tag === "external") {
     const externalDriver = yield* driverRegistry.getExternal(resolved.driver.id)
     const executor = externalDriver?.executor
     if (executor === undefined) {
-      yield* params
-        .publishEvent(
-          ErrorOccurred.make({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            error: `External driver "${resolved.driver.id}" not found`,
-          }),
-        )
-        .pipe(Effect.orDie)
+      yield* publishEventOrDie(
+        ErrorOccurred.make({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          error: `External driver "${resolved.driver.id}" not found`,
+        }),
+      )
       return undefined
     }
 
@@ -112,6 +112,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
               .pipe(
                 Effect.provideService(ExtensionRegistry, extensionRegistry),
                 Effect.provideService(Permission, permission),
+                Effect.provideService(EventPublisher, eventPublisher),
                 Effect.orDie,
               )
           }),
@@ -169,30 +170,27 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       // not retryable, not recoverable mid-turn. Let it escape so the RPC
       // seam surfaces the typed auth failure; narrow the retry scope to
       // transient `ProviderError` only.
-      withRetry(effect, undefined, {
+      withRetry(effect.pipe(Effect.provideService(EventPublisher, eventPublisher)), undefined, {
         onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
-          params
-            .publishEvent(
-              ProviderRetrying.make({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                attempt,
-                maxAttempts,
-                delayMs,
-                error: error.message,
-              }),
-            )
-            .pipe(Effect.orDie),
+          publishEventOrDie(
+            ProviderRetrying.make({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              attempt,
+              maxAttempts,
+              delayMs,
+              error: error.message,
+            }),
+          ),
       }).pipe(
         Effect.catchTag("ProviderError", (streamError) =>
           collectFailedModelTurnResponse({
             streamError,
-            publishEvent: params.publishEvent,
             sessionId: params.sessionId,
             branchId: params.branchId,
             activeStream: params.activeStream,
             formatStreamError: formatStreamErrorMessage,
-          }),
+          }).pipe(Effect.provideService(EventPublisher, eventPublisher)),
         ),
         Effect.tap((collected) =>
           WideEvent.set({

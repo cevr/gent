@@ -10,6 +10,7 @@ import {
 } from "../../domain/agent.js"
 import { type ToolCapability } from "../../domain/capability/tool.js"
 import { ErrorOccurred } from "../../domain/event.js"
+import { EventPublisher } from "../../domain/event-publisher.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { type BranchId, type SessionId } from "../../domain/ids.js"
 import { compileSystemPrompt, type PromptSection } from "../../domain/prompt.js"
@@ -20,7 +21,6 @@ import { DriverRegistry } from "../extensions/driver-registry.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import type { ResolvedTurn } from "./agent-loop.state.js"
 import { buildTurnPromptSections, resolveReasoning } from "./agent-loop.utils.js"
-import type { PublishEvent } from "./turn-response.js"
 
 export interface ResolvedTurnContext extends ResolvedTurn {
   agent: AgentDefinition
@@ -89,7 +89,6 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   currentAgent?: AgentNameType
   branchId: BranchId
   sessionId: SessionId
-  publishEvent: PublishEvent
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
   hostCtx: ExtensionHostContext
@@ -97,6 +96,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   const extensionRegistry = yield* ExtensionRegistry
   const messageStorage = yield* MessageStorage
   const sessionStorage = yield* SessionStorage
+  const eventPublisher = yield* EventPublisher
   const currentAgent = params.agentOverride ?? params.currentAgent ?? DEFAULT_AGENT_NAME
   const rawMessages = yield* messageStorage
     .listMessages(params.branchId)
@@ -104,8 +104,8 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   const agents = yield* extensionRegistry.listAgents()
   const agent = agents.find((entry) => entry.name === currentAgent)
   if (agent === undefined) {
-    yield* params
-      .publishEvent(
+    yield* eventPublisher
+      .publish(
         ErrorOccurred.make({
           sessionId: params.sessionId,
           branchId: params.branchId,

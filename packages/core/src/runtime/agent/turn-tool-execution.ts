@@ -7,7 +7,6 @@ import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { ToolRunner } from "./tool-runner"
 import { persistAssistantParts, persistToolParts } from "./turn-persistence.js"
-import type { PublishEvent } from "./turn-response.js"
 
 const TOOL_CONCURRENCY = 8
 
@@ -21,7 +20,6 @@ export class ToolInteractionPending extends Schema.TaggedErrorClass<ToolInteract
 
 export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(function* (params: {
   toolCalls: ReadonlyArray<Prompt.ToolCallPart>
-  publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
   currentTurnAgent: AgentNameType
@@ -45,7 +43,6 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
               input: toolCall.params,
             },
             ctx,
-            { publishEvent: params.publishEvent },
           )
           .pipe(
             Effect.mapError(
@@ -67,7 +64,6 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
   toolCallId: ToolCallId
   toolName: string
   input: unknown
-  publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
   currentTurnAgent: AgentNameType
@@ -96,7 +92,6 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
 
   const toolResults = yield* executeToolCalls({
     toolCalls,
-    publishEvent: params.publishEvent,
     sessionId: params.sessionId,
     branchId: params.branchId,
     currentTurnAgent: params.currentTurnAgent,
