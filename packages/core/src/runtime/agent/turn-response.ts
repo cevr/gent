@@ -20,7 +20,7 @@ import {
 } from "../../domain/message-part-projection.js"
 import { ProviderError } from "../../domain/provider-error.js"
 import { summarizeOutput, stringifyOutput } from "../../domain/tool-output.js"
-import type { AssistantResponsePart, ToolResponsePart } from "./turn-helpers.js"
+import type { AssistantResponsePart, ToolResponsePart } from "./turn-persistence.js"
 
 export type PublishEvent = (event: AgentEvent) => Effect.Effect<void, never, never>
 

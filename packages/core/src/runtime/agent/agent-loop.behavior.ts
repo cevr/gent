@@ -67,7 +67,7 @@ import {
 } from "./agent-loop.state.js"
 import type { QueueSnapshot } from "../../domain/queue.js"
 import { emptyTurnMetrics, type ActiveStreamHandle } from "./turn-response.js"
-import { type PricingLookup } from "./turn-helpers.js"
+import { type PricingLookup } from "./turn-pricing.js"
 import { makeAgentLoopQueue } from "./agent-loop.queue.js"
 import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
 import { makeAgentLoopWorker } from "./agent-loop.worker.js"
@@ -209,7 +209,7 @@ export const makeAgentLoopBehavior = (
     const storageTransaction = yield* makeStorageTransaction
     // Snapshot the layer-build context so behavior methods (declared as
     // `Effect<A, E, never>` in `AgentLoopBehavior`) can resolve Tags that
-    // turn-helpers now yield inside (post-W33-C3.3). Without this, helper
+    // Turn helper modules now yield inside (post-W33-C3.3). Without this, helper
     // requirements like `MessageStorage`, `EventPublisher`, `SqlClient`,
     // `ModelResolver`, `ToolRunner`, etc. leak into the method R-channels
     // and break the interface.

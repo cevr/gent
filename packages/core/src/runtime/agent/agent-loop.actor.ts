@@ -87,7 +87,8 @@ import { entityIdOf, parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { Permission } from "../../domain/permission.js"
-import { invokeTool, recordToolResult } from "./turn-helpers.js"
+import { recordToolResult } from "./turn-persistence.js"
+import { invokeTool } from "./turn-tool-execution.js"
 
 const WorkspaceFields = {
   workspaceId: WorkspaceId,
