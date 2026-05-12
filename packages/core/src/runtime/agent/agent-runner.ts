@@ -65,6 +65,7 @@ import type { ModelRegistry } from "../model-registry.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { makeEphemeralAgentRootLayer } from "./ephemeral-root.js"
 import { loadAgentRunSuccessData, saveAgentRunOutput } from "./agent-runner.metadata.js"
+import { normalizeRunSpec, withAgentRunFailureHandling } from "./agent-runner.run-spec.js"
 
 export interface AgentRunnerConfig {
   readonly subprocessBinaryPath?: string
@@ -73,78 +74,6 @@ export interface AgentRunnerConfig {
   readonly baseSections?: ReadonlyArray<PromptSection>
   /** URL of the shared server. Subprocess children pass --connect <url> to reuse it. */
   readonly sharedServerUrl?: string
-}
-
-const withAgentRunFailureHandling = <E, R, R2>(
-  effect: Effect.Effect<AgentRunResult, E, R>,
-  params: {
-    parentSessionId: SessionId
-    parentBranchId: BranchId
-    toolCallId?: ToolCallId
-    sessionId: SessionId
-    agentName: AgentName
-    persistence: AgentPersistence
-    spanName: string
-  },
-  publishFailed: (params: {
-    parentSessionId: SessionId
-    parentBranchId: BranchId
-    toolCallId?: ToolCallId
-    sessionId: SessionId
-    agentName: AgentName
-  }) => Effect.Effect<void, never, R2>,
-) =>
-  effect.pipe(
-    Effect.withSpan(params.spanName, {
-      attributes: { agentName: params.agentName },
-    }),
-    Effect.catchCause((cause) => {
-      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-      return Effect.gen(function* () {
-        const error = Cause.pretty(cause)
-        yield* publishFailed(params)
-        return AgentRunResult.cases.error.make({
-          error,
-          sessionId: params.sessionId,
-          agentName: params.agentName,
-          persistence: params.persistence,
-        })
-      })
-    }),
-  )
-
-const overrideArray = <A>(values: ReadonlyArray<A> | undefined) =>
-  values === undefined ? undefined : [...values]
-
-const normalizeRunSpec = (runSpec: RunSpec | undefined): RunSpec | undefined => {
-  if (runSpec === undefined) return undefined
-  const overrides = runSpec.overrides
-  const normalizedOverrides =
-    overrides === undefined
-      ? undefined
-      : {
-          ...(overrides.modelId !== undefined ? { modelId: overrides.modelId } : {}),
-          ...(overrides.allowedTools !== undefined
-            ? { allowedTools: overrideArray(overrides.allowedTools) }
-            : {}),
-          ...(overrides.deniedTools !== undefined
-            ? { deniedTools: overrideArray(overrides.deniedTools) }
-            : {}),
-          ...(overrides.reasoningEffort !== undefined
-            ? { reasoningEffort: overrides.reasoningEffort }
-            : {}),
-          ...(overrides.systemPromptAddendum !== undefined
-            ? { systemPromptAddendum: overrides.systemPromptAddendum }
-            : {}),
-        }
-  return {
-    ...(runSpec.persistence !== undefined ? { persistence: runSpec.persistence } : {}),
-    ...(normalizedOverrides !== undefined ? { overrides: normalizedOverrides } : {}),
-    ...(runSpec.tags !== undefined ? { tags: overrideArray(runSpec.tags) } : {}),
-    ...(runSpec.parentToolCallId !== undefined
-      ? { parentToolCallId: runSpec.parentToolCallId }
-      : {}),
-  }
 }
 
 /** Compute nesting depth of a session from its persisted parent chain. Root sessions have depth 0. */
