@@ -10,7 +10,6 @@
 
 import {
   Cause,
-  Clock,
   Deferred,
   Effect,
   Exit,
@@ -29,7 +28,7 @@ import {
   DEFAULT_AGENT_NAME,
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
-import { AgentSwitched, ErrorOccurred, type AgentEvent } from "../../domain/event.js"
+import { AgentSwitched, type AgentEvent } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import type { MessageMetadata } from "../../domain/message.js"
 import type { BranchId, InteractionRequestId, SessionId } from "../../domain/ids.js"
@@ -55,9 +54,7 @@ import { Permission, type PermissionService } from "../../domain/permission.js"
 import { AllowAllPermission, resolveSessionEnvironment } from "../session-runtime-context.js"
 import {
   buildIdleState,
-  buildRunningState,
   emptyLoopQueueState,
-  toWaitingForInteractionState,
   updateCurrentAgentOnState,
   buildInitialAgentLoopState,
   AgentLoopError,
@@ -69,15 +66,11 @@ import {
   type SessionRuntimeState,
 } from "./agent-loop.state.js"
 import type { QueueSnapshot } from "../../domain/queue.js"
-import {
-  emptyTurnMetrics,
-  signalActiveStreamInterrupt,
-  type ActiveStreamHandle,
-} from "./turn-response.js"
+import { emptyTurnMetrics, type ActiveStreamHandle } from "./turn-response.js"
 import { type PricingLookup } from "./turn-helpers.js"
 import { makeAgentLoopQueue } from "./agent-loop.queue.js"
-import { makeAgentLoopTurnExecution, type TurnOutcome } from "./agent-loop.turn-execution.js"
-import { turnBoundary, withWideEvent } from "../wide-event-boundary.js"
+import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
+import { makeAgentLoopWorker } from "./agent-loop.worker.js"
 
 export const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(function* (params: {
   sessionId: SessionId
@@ -146,37 +139,6 @@ export type AgentLoopBehavior = {
   awaitExit: Effect.Effect<void>
   close: Effect.Effect<void>
 }
-
-export const interruptActiveStream = Effect.fn("AgentLoop.interruptActiveStream")(function* (
-  activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>,
-) {
-  const activeStream = yield* Ref.get(activeStreamRef)
-  if (activeStream === undefined) return
-  yield* signalActiveStreamInterrupt(activeStream)
-})
-
-const publishPhaseFailure = (params: {
-  publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
-  sessionId: SessionId
-  branchId: BranchId
-  cause: Cause.Cause<unknown>
-}) =>
-  params
-    .publishEvent(
-      ErrorOccurred.make({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        error: Cause.pretty(params.cause),
-      }),
-    )
-    .pipe(
-      Effect.catchEager((error) =>
-        Effect.logWarning("failed to publish ErrorOccurred").pipe(
-          Effect.annotateLogs({ error: String(error) }),
-        ),
-      ),
-      Effect.asVoid,
-    )
 
 export const causeToAgentLoopError = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause)
@@ -503,190 +465,25 @@ export const makeAgentLoopBehavior = (
       clearInFlightTurn,
     })
 
-    const enqueueTurnWorker = (state: RunningState): Effect.Effect<void> =>
-      TxQueue.offer(turnWorkerQueue, state).pipe(Effect.asVoid)
+    const worker = makeAgentLoopWorker({
+      sessionId,
+      branchId,
+      sideMutationSemaphore,
+      turnWorkerQueue,
+      activeStreamRef,
+      interruptedRef,
+      currentLoopState,
+      saveCheckpoint,
+      takeNextQueuedTurn: takeNextQueuedTurnCommitted,
+      recordTurnFailure,
+      publishEvent,
+      runTurn,
+      switchAgentOnState,
+    })
 
-    const finishTurnWorker = (
-      startState: RunningState,
-      outcome: TurnOutcome,
-    ): Effect.Effect<void, AgentLoopError> =>
-      Effect.gen(function* () {
-        if (outcome._tag === "InteractionRequested") {
-          const next = toWaitingForInteractionState({
-            state: startState,
-            currentTurnAgent: outcome.currentTurnAgent,
-            pendingRequestId: outcome.pendingRequestId,
-            pendingToolCallId: outcome.pendingToolCallId,
-          })
-          yield* saveCheckpoint(next)
-          return
-        }
-
-        const nextItem = yield* takeNextQueuedTurnCommitted
-        yield* Ref.set(interruptedRef, false)
-        if (nextItem !== undefined) {
-          const startedAtMs = yield* Clock.currentTimeMillis
-          const nextRunning = buildRunningState(
-            { currentAgent: startState.currentAgent },
-            nextItem,
-            { startedAtMs },
-          )
-          yield* saveCheckpoint(nextRunning)
-          yield* enqueueTurnWorker(nextRunning)
-          return
-        }
-        yield* saveCheckpoint(buildIdleState({ currentAgent: startState.currentAgent }))
-      })
-
-    const failTurnWorker = (
-      startState: RunningState,
-      cause: Cause.Cause<unknown>,
-    ): Effect.Effect<void, AgentLoopError> =>
-      Effect.gen(function* () {
-        yield* recordTurnFailure(cause)
-        yield* publishPhaseFailure({ publishEvent, sessionId, branchId, cause })
-        const nextItem = yield* takeNextQueuedTurnCommitted
-        const current = yield* currentLoopState
-        yield* Ref.set(interruptedRef, false)
-        if (nextItem !== undefined) {
-          const startedAtMs = yield* Clock.currentTimeMillis
-          const nextRunning = buildRunningState(
-            { currentAgent: current.currentAgent ?? startState.currentAgent },
-            nextItem,
-            { startedAtMs },
-          )
-          yield* saveCheckpoint(nextRunning)
-          yield* enqueueTurnWorker(nextRunning)
-          return
-        }
-        yield* saveCheckpoint(
-          buildIdleState({ currentAgent: current.currentAgent ?? startState.currentAgent }),
-        )
-      })
-
-    const runTurnWorker = (startState: RunningState) =>
-      sideMutationSemaphore.withPermits(1)(
-        runTurn(startState).pipe(
-          Effect.annotateLogs({ sessionId, branchId }),
-          Effect.withSpan("AgentLoop.turn"),
-          withWideEvent(
-            turnBoundary(sessionId, branchId, startState.currentAgent ?? DEFAULT_AGENT_NAME),
-          ),
-          Effect.matchCauseEffect({
-            onFailure: (cause) => failTurnWorker(startState, cause),
-            onSuccess: (outcome) => finishTurnWorker(startState, outcome),
-          }),
-          Effect.catchCause((cause) =>
-            recordTurnFailure(cause).pipe(
-              Effect.andThen(publishPhaseFailure({ publishEvent, sessionId, branchId, cause })),
-              Effect.ignore,
-            ),
-          ),
-          Effect.ignore,
-        ),
-      )
-
-    const turnWorkerLoop = TxQueue.take(turnWorkerQueue).pipe(
-      Effect.flatMap(runTurnWorker),
-      Effect.forever,
-      Effect.ignore,
-    )
-
-    const startTurnWorker = Effect.forkIn(provideRuntime(turnWorkerLoop), loopScope, {
+    const startTurnWorker = Effect.forkIn(provideRuntime(worker.turnWorkerLoop), loopScope, {
       startImmediately: true,
     }).pipe(Effect.asVoid)
-
-    const interrupt: Effect.Effect<void, AgentLoopError> = Effect.gen(function* () {
-      const snap = yield* currentLoopState
-      if (snap._tag === "Idle") return
-      if (snap._tag === "Running") {
-        yield* Ref.set(interruptedRef, true)
-        yield* interruptActiveStream(activeStreamRef)
-        return
-      }
-      yield* sideMutationSemaphore.withPermits(1)(
-        Effect.gen(function* () {
-          const state = yield* currentLoopState
-          if (state._tag !== "WaitingForInteraction") return
-          yield* Ref.set(interruptedRef, true)
-          const resumed = buildRunningState(
-            { currentAgent: state.currentAgent },
-            {
-              message: state.message,
-              ...(state.agentOverride !== undefined ? { agentOverride: state.agentOverride } : {}),
-              ...(state.runSpec !== undefined ? { runSpec: state.runSpec } : {}),
-              ...(state.interactive !== undefined ? { interactive: state.interactive } : {}),
-            },
-            { startedAtMs: state.startedAtMs },
-          )
-          yield* saveCheckpoint(resumed)
-          yield* enqueueTurnWorker(resumed)
-        }),
-      )
-    }).pipe(Effect.withSpan("AgentLoop.interrupt"))
-
-    const startTurn = Effect.fn("AgentLoop.startTurn")((item: QueuedTurnItem) =>
-      sideMutationSemaphore.withPermits(1)(
-        Effect.gen(function* () {
-          const state = yield* currentLoopState
-          if (state._tag !== "Idle") return
-          yield* Ref.set(interruptedRef, false)
-          const startedAtMs = yield* Clock.currentTimeMillis
-          const next = buildRunningState(state, item, { startedAtMs })
-          yield* saveCheckpoint(next)
-          yield* enqueueTurnWorker(next)
-        }),
-      ),
-    )
-
-    const switchAgent = Effect.fn("AgentLoop.switchAgent")((agent: AgentNameType) =>
-      sideMutationSemaphore.withPermits(1)(
-        Effect.gen(function* () {
-          const state = yield* currentLoopState
-          const next = yield* switchAgentOnState(state, agent)
-          if (next === state) return
-          yield* saveCheckpoint(next)
-        }),
-      ),
-    )
-
-    const respondInteraction = Effect.fn("AgentLoop.respondInteraction")(
-      (requestId: InteractionRequestId) =>
-        sideMutationSemaphore.withPermits(1)(
-          Effect.gen(function* () {
-            const state = yield* currentLoopState
-            if (state._tag !== "WaitingForInteraction") return
-            if (requestId !== state.pendingRequestId) {
-              yield* Effect.logWarning(
-                "Ignoring stale interaction response for non-pending request",
-              ).pipe(
-                Effect.annotateLogs({
-                  sessionId: state.message.sessionId,
-                  branchId: state.message.branchId,
-                  expectedRequestId: state.pendingRequestId,
-                  actualRequestId: requestId,
-                }),
-              )
-              return
-            }
-            yield* Ref.set(interruptedRef, false)
-            const resumed = buildRunningState(
-              { currentAgent: state.currentAgent },
-              {
-                message: state.message,
-                ...(state.agentOverride !== undefined
-                  ? { agentOverride: state.agentOverride }
-                  : {}),
-                ...(state.runSpec !== undefined ? { runSpec: state.runSpec } : {}),
-                ...(state.interactive !== undefined ? { interactive: state.interactive } : {}),
-              },
-              { startedAtMs: state.startedAtMs },
-            )
-            yield* saveCheckpoint(resumed)
-            yield* enqueueTurnWorker(resumed)
-          }),
-        ),
-    )
 
     const start = Effect.gen(function* () {
       if (yield* Ref.getAndSet(startedRef, true)) return
@@ -694,7 +491,7 @@ export const makeAgentLoopBehavior = (
     }).pipe(Effect.withSpan("AgentLoop.start"))
 
     const close = Effect.gen(function* () {
-      yield* interruptActiveStream(activeStreamRef)
+      yield* worker.interruptActiveStream
       yield* Deferred.succeed(closed, undefined).pipe(Effect.ignore)
       yield* Scope.close(loopScope, Exit.void)
     }).pipe(Effect.ignore, Effect.withSpan("AgentLoop.close"))
@@ -716,12 +513,12 @@ export const makeAgentLoopBehavior = (
       persistState: persistRuntimeState,
       refreshRuntimeState,
       snapshot: currentLoopState,
-      startTurn,
-      interruptActiveStream: interruptActiveStream(activeStreamRef),
-      interrupt,
-      switchAgent,
-      respondInteraction,
-      withSideMutation: (effect) => sideMutationSemaphore.withPermits(1)(effect),
+      startTurn: worker.startTurn,
+      interruptActiveStream: worker.interruptActiveStream,
+      interrupt: worker.interrupt,
+      switchAgent: worker.switchAgent,
+      respondInteraction: worker.respondInteraction,
+      withSideMutation: worker.withSideMutation,
       start,
       awaitExit: Deferred.await(closed),
       close,
