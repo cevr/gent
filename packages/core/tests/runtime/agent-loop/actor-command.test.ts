@@ -1,7 +1,7 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
-import { Clock, Deferred, Effect, Fiber, Layer, Stream } from "effect"
+import { Cause, Clock, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { narrowR } from "../../helpers/effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
@@ -53,6 +53,7 @@ import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"
 import { AgentLoop as AgentLoopActor } from "../../../src/runtime/agent/agent-loop.actor"
 import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
+import { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
 import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
 
@@ -302,9 +303,14 @@ describe("agent-loop actor commands", () => {
 
           expect(exit._tag).toBe("Failure")
           if (exit._tag === "Failure") {
-            const repr = Bun.inspect(exit.cause)
-            expect(repr).toContain("AgentLoopError")
-            expect(repr).toContain("Invalid interrupt command")
+            const errorOption = Cause.findErrorOption(exit.cause)
+            expect(errorOption._tag).toBe("Some")
+            if (errorOption._tag === "Some") {
+              expect(Schema.is(AgentLoopError)(errorOption.value)).toBe(true)
+              if (Schema.is(AgentLoopError)(errorOption.value)) {
+                expect(errorOption.value.message).toBe("Invalid interrupt command")
+              }
+            }
           }
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
