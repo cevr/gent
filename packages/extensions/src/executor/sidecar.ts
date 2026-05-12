@@ -596,55 +596,57 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         // ── Service implementation ──
 
         return ExecutorSidecar.of({
-          resolveEndpoint: (cwd) =>
-            Effect.gen(function* () {
-              const settings = yield* loadSettings(cwd)
-              if (settings.mode === "remote") {
-                const remoteUrl = settings.remoteUrl.trim().replace(/\/+$/, "")
-                if (remoteUrl.length === 0) {
-                  return yield* new ExecutorSidecarError({
-                    code: "STARTUP_TIMEOUT",
-                    message: "remoteUrl is required when mode is 'remote'",
-                  })
-                }
-                const scope = yield* fetchScope(remoteUrl)
-                return {
-                  mode: "remote" as const,
-                  baseUrl: remoteUrl,
-                  ownedByGent: false,
-                  scope,
-                } satisfies ExecutorEndpoint
+          resolveEndpoint: Effect.fn("ExecutorSidecar.resolveEndpoint")(function* (cwd) {
+            const settings = yield* loadSettings(cwd)
+            if (settings.mode === "remote") {
+              const remoteUrl = settings.remoteUrl.trim().replace(/\/+$/, "")
+              if (remoteUrl.length === 0) {
+                return yield* new ExecutorSidecarError({
+                  code: "STARTUP_TIMEOUT",
+                  message: "remoteUrl is required when mode is 'remote'",
+                })
               }
-              const record = yield* ensureSidecar(cwd)
-              return toEndpoint(record)
-            }),
+              const scope = yield* fetchScope(remoteUrl)
+              return {
+                mode: "remote" as const,
+                baseUrl: remoteUrl,
+                ownedByGent: false,
+                scope,
+              } satisfies ExecutorEndpoint
+            }
+            const record = yield* ensureSidecar(cwd)
+            return toEndpoint(record)
+          }),
 
-          stop: (cwd) =>
-            Effect.gen(function* () {
-              const normalized = path.resolve(cwd)
-              const running = yield* findRunning(normalized)
-              if (running) {
-                yield* killRecord(running)
-                sidecarsByCwd.delete(normalized)
-                return "stopped" as const
-              }
-
-              const registered = yield* getRegisteredSidecar(normalized)
-              if (!registered) return "missing" as const
-
-              if (!(yield* platform.isPidAlive(registered.pid))) {
-                yield* unregisterSidecar(normalized, registered.pid)
-                return "missing" as const
-              }
-
-              yield* terminatePid(registered.pid)
-              yield* unregisterSidecar(normalized, registered.pid)
+          stop: Effect.fn("ExecutorSidecar.stop")(function* (cwd) {
+            const normalized = path.resolve(cwd)
+            const running = yield* findRunning(normalized)
+            if (running) {
+              yield* killRecord(running)
+              sidecarsByCwd.delete(normalized)
               return "stopped" as const
-            }),
+            }
 
-          find: (cwd) => findRunning(cwd).pipe(Effect.map((r) => (r ? toEndpoint(r) : undefined))),
+            const registered = yield* getRegisteredSidecar(normalized)
+            if (!registered) return "missing" as const
 
-          resolveSettings: (cwd) => loadSettings(cwd),
+            if (!(yield* platform.isPidAlive(registered.pid))) {
+              yield* unregisterSidecar(normalized, registered.pid)
+              return "missing" as const
+            }
+
+            yield* terminatePid(registered.pid)
+            yield* unregisterSidecar(normalized, registered.pid)
+            return "stopped" as const
+          }),
+
+          find: Effect.fn("ExecutorSidecar.find")((cwd: string) =>
+            findRunning(cwd).pipe(Effect.map((r) => (r ? toEndpoint(r) : undefined))),
+          ),
+
+          resolveSettings: Effect.fn("ExecutorSidecar.resolveSettings")((cwd: string) =>
+            loadSettings(cwd),
+          ),
         })
       }),
     ).pipe(Layer.provide(Layer.merge(FetchHttpClient.layer, platformLayer)))

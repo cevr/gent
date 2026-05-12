@@ -935,14 +935,21 @@ const buildAgentLoopActorHandlers = (config: {
     })
 
     return {
-      Submit: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
+      Submit: Effect.fn("AgentLoop.Submit")(({ operation }: HandlerRequest<TurnSubmissionInput>) =>
         withWorkspace(submitTurn(operation)),
-      SubmitDurable: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
-        withWorkspace(submitTurn(operation)),
-      Run: ({ operation }: HandlerRequest<Parameters<typeof runTurn>[0]>) =>
-        withWorkspace(runTurn(operation)),
-      QueueFollowUp: ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
-        withWorkspace(
+      ),
+      SubmitDurable: Effect.fn("AgentLoop.SubmitDurable")(
+        ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
+          withWorkspace(submitTurn(operation)),
+      ),
+      Run: Effect.fn("AgentLoop.Run")(
+        ({ operation }: HandlerRequest<Parameters<typeof runTurn>[0]>) =>
+          withWorkspace(runTurn(operation)),
+      ),
+      QueueFollowUp: Effect.fn("AgentLoop.QueueFollowUp")(function* ({
+        operation,
+      }: HandlerRequest<TurnSubmissionInput>) {
+        yield* withWorkspace(
           Effect.gen(function* () {
             const handle = yield* ensureStarted
             yield* enqueueMessage(handle, {
@@ -952,10 +959,12 @@ const buildAgentLoopActorHandlers = (config: {
               interactive: operation.interactive,
             })
           }),
-        ),
-      Steer: ({ operation }: HandlerRequest<SteerInput>) =>
+        )
+      }),
+      Steer: Effect.fn("AgentLoop.Steer")(({ operation }: HandlerRequest<SteerInput>) =>
         withWorkspace(applySteer(operation.commandId, operation.command)),
-      Interrupt: ({ operation }: HandlerRequest<InterruptInput>) =>
+      ),
+      Interrupt: Effect.fn("AgentLoop.Interrupt")(({ operation }: HandlerRequest<InterruptInput>) =>
         withWorkspace(
           applySteer(
             operation.commandId,
@@ -967,8 +976,11 @@ const buildAgentLoopActorHandlers = (config: {
             }),
           ),
         ),
-      RespondInteraction: ({ operation }: HandlerRequest<RespondInteractionInput>) =>
-        withWorkspace(
+      ),
+      RespondInteraction: Effect.fn("AgentLoop.RespondInteraction")(function* ({
+        operation,
+      }: HandlerRequest<RespondInteractionInput>) {
+        yield* withWorkspace(
           Effect.gen(function* () {
             yield* ensureTarget(operation)
             yield* markWrite
@@ -1003,36 +1015,48 @@ const buildAgentLoopActorHandlers = (config: {
                 ),
               )
           }),
-        ),
-      DrainQueue: ({ operation }: HandlerRequest<DrainQueueInput>) =>
-        withWorkspace(
+        )
+      }),
+      DrainQueue: Effect.fn("AgentLoop.DrainQueue")(function* ({
+        operation,
+      }: HandlerRequest<DrainQueueInput>) {
+        return yield* withWorkspace(
           Effect.gen(function* () {
             yield* ensureTarget(operation)
             yield* markWrite
             const handle = yield* ensureStarted
             return yield* handle.drainQueue
           }),
-        ),
-      GetQueue: ({ operation }: HandlerRequest<GetQueueInput>) =>
-        withWorkspace(
+        )
+      }),
+      GetQueue: Effect.fn("AgentLoop.GetQueue")(function* ({
+        operation,
+      }: HandlerRequest<GetQueueInput>) {
+        return yield* withWorkspace(
           Effect.gen(function* () {
             yield* ensureTarget(operation)
             yield* rejectIfTerminated
             const handle = yield* ensureStarted
             return yield* handle.queueSnapshot
           }),
-        ),
-      GetState: ({ operation }: HandlerRequest<GetStateInput>) =>
-        withWorkspace(
+        )
+      }),
+      GetState: Effect.fn("AgentLoop.GetState")(function* ({
+        operation,
+      }: HandlerRequest<GetStateInput>) {
+        return yield* withWorkspace(
           Effect.gen(function* () {
             yield* ensureTarget(operation)
             yield* rejectIfTerminated
             const handle = yield* ensureStarted
             return yield* handle.runtimeState
           }),
-        ),
-      RecordToolResult: ({ operation }: HandlerRequest<RecordToolResultInput>) =>
-        withWorkspace(
+        )
+      }),
+      RecordToolResult: Effect.fn("AgentLoop.RecordToolResult")(function* ({
+        operation,
+      }: HandlerRequest<RecordToolResultInput>) {
+        yield* withWorkspace(
           Effect.gen(function* () {
             yield* ensureTarget(operation)
             yield* markWrite
@@ -1052,9 +1076,12 @@ const buildAgentLoopActorHandlers = (config: {
               }),
             )
           }).pipe(Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause)))),
-        ),
-      InvokeTool: ({ operation }: HandlerRequest<InvokeToolInput>) =>
-        withWorkspace(
+        )
+      }),
+      InvokeTool: Effect.fn("AgentLoop.InvokeTool")(function* ({
+        operation,
+      }: HandlerRequest<InvokeToolInput>) {
+        yield* withWorkspace(
           Effect.gen(function* () {
             yield* ensureTarget(operation)
             yield* markWrite
@@ -1082,9 +1109,12 @@ const buildAgentLoopActorHandlers = (config: {
               }),
             )
           }).pipe(Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause)))),
-        ),
-      TerminateBranch: ({ operation }: HandlerRequest<TerminateBranchInput>) =>
-        withWorkspace(
+        )
+      }),
+      TerminateBranch: Effect.fn("AgentLoop.TerminateBranch")(function* ({
+        operation,
+      }: HandlerRequest<TerminateBranchInput>) {
+        yield* withWorkspace(
           Effect.gen(function* () {
             yield* ensureTarget(operation)
             yield* sessionGovernance.markTerminated(workspaceId, sessionId)
@@ -1097,7 +1127,8 @@ const buildAgentLoopActorHandlers = (config: {
               yield* cleanupLoop(handle)
             }
           }),
-        ),
+        )
+      }),
     }
   })
 

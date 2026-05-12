@@ -120,27 +120,26 @@ import { WideEvent, turnBoundary, withWideEvent } from "../wide-event-boundary.j
 const FOLLOW_UP_QUEUE_MAX = 10
 const MAX_TURN_STEPS = 200
 
-export const resolveStoredAgent = (params: {
+export const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(function* (params: {
   sessionId: SessionId
   branchId: BranchId
-}): Effect.Effect<AgentNameType, never, EventStorage> =>
-  Effect.gen(function* () {
-    const eventStorage = yield* EventStorage
-    const latestAgentEvent = yield* eventStorage
-      .getLatestEvent({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        tags: ["AgentSwitched"],
-      })
-      .pipe(Effect.catchEager(() => Effect.void))
+}) {
+  const eventStorage = yield* EventStorage
+  const latestAgentEvent = yield* eventStorage
+    .getLatestEvent({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      tags: ["AgentSwitched"],
+    })
+    .pipe(Effect.catchEager(() => Effect.void))
 
-    const raw =
-      latestAgentEvent !== undefined && latestAgentEvent._tag === "AgentSwitched"
-        ? latestAgentEvent.toAgent
-        : undefined
+  const raw =
+    latestAgentEvent !== undefined && latestAgentEvent._tag === "AgentSwitched"
+      ? latestAgentEvent.toAgent
+      : undefined
 
-    return Schema.is(AgentName)(raw) ? raw : DEFAULT_AGENT_NAME
-  })
+  return Schema.is(AgentName)(raw) ? raw : DEFAULT_AGENT_NAME
+})
 
 export type AgentLoopBehavior = {
   persistenceFailure: Effect.Effect<void, AgentLoopError>
@@ -189,14 +188,13 @@ export type AgentLoopBehavior = {
   close: Effect.Effect<void>
 }
 
-export const interruptActiveStream = (
+export const interruptActiveStream = Effect.fn("AgentLoop.interruptActiveStream")(function* (
   activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>,
-): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    const activeStream = yield* Ref.get(activeStreamRef)
-    if (activeStream === undefined) return
-    yield* signalActiveStreamInterrupt(activeStream)
-  })
+) {
+  const activeStream = yield* Ref.get(activeStreamRef)
+  if (activeStream === undefined) return
+  yield* signalActiveStreamInterrupt(activeStream)
+})
 
 const publishPhaseFailure = (params: {
   publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
@@ -499,16 +497,14 @@ export const makeAgentLoopBehavior = (
     const runtimeState = readState.pipe(Effect.map(projectRuntimeState))
     const queueState = readState.pipe(Effect.map((s) => s.queue))
     const queueSnapshot = queueState.pipe(Effect.map(queueSnapshotFromQueueState))
-    const setStartingState = (state: RunningState) =>
+    const setStartingState = Effect.fn("AgentLoop.setStartingState")((state: RunningState) =>
       TxSubscriptionRef.update(loopRef, (s) => ({
         ...s,
         startingState: state,
-      }))
-    const reserveStartOrQueueFollowUp = (
-      item: QueuedTurnItem,
-      options: { readonly coldQueueOnly: boolean },
-    ) =>
-      Effect.gen(function* () {
+      })),
+    )
+    const reserveStartOrQueueFollowUp = Effect.fn("AgentLoop.reserveStartOrQueueFollowUp")(
+      function* (item: QueuedTurnItem, options: { readonly coldQueueOnly: boolean }) {
         const startedAtMs = yield* Clock.currentTimeMillis
         return yield* commitQueueTransaction<RunningState | undefined | AgentLoopError>(
           "reserved or queued follow-up",
@@ -565,10 +561,11 @@ export const makeAgentLoopBehavior = (
               Schema.is(AgentLoopError)(value) ? Effect.fail(value) : Effect.succeed(value),
           ),
         )
-      })
+      },
+    )
 
-    const reserveRunStartOrQueueFollowUp = (item: QueuedTurnItem) =>
-      Effect.gen(function* () {
+    const reserveRunStartOrQueueFollowUp = Effect.fn("AgentLoop.reserveRunStartOrQueueFollowUp")(
+      function* (item: QueuedTurnItem) {
         const startedAtMs = yield* Clock.currentTimeMillis
         return yield* commitQueueTransaction("run start reservation", (current) => {
           if (current.state._tag !== "Idle" || current.startingState !== undefined) {
@@ -592,15 +589,16 @@ export const makeAgentLoopBehavior = (
             persist: false,
           }
         })
-      })
+      },
+    )
 
     const refreshRuntimeState = Effect.gen(function* () {
       if (!(yield* Ref.get(startedRef))) return
       yield* persistRuntimeState(yield* currentLoopState)
-    })
+    }).pipe(Effect.withSpan("AgentLoop.refreshRuntimeState"))
 
-    const takeNextQueuedTurnFromState = (options: { readonly onlyIfIdle: boolean }) =>
-      Effect.gen(function* () {
+    const takeNextQueuedTurnFromState = Effect.fn("AgentLoop.takeNextQueuedTurnFromState")(
+      function* (options: { readonly onlyIfIdle: boolean }) {
         const queuedCreatedAt = yield* DateTime.nowAsDate
         return yield* commitQueueTransaction("dequeued turn", (s) => {
           if (options.onlyIfIdle && s.state._tag !== "Idle") {
@@ -613,33 +611,37 @@ export const makeAgentLoopBehavior = (
             persist: queue !== s.queue,
           }
         })
-      })
+      },
+    )
 
     const takeNextQueuedTurnIfIdle = takeNextQueuedTurnFromState({ onlyIfIdle: true })
     const takeNextQueuedTurnCommitted = takeNextQueuedTurnFromState({ onlyIfIdle: false })
 
-    const clearInFlightTurn = (messageId: QueuedTurnItem["message"]["id"]) =>
-      commitQueueTransaction("cleared in-flight turn", (s) => {
-        const queue = clearInFlightQueuedTurn(s.queue, messageId)
-        return {
-          value: undefined,
-          next: { ...s, queue },
-          persist: queue !== s.queue,
-        }
-      })
+    const clearInFlightTurn = Effect.fn("AgentLoop.clearInFlightTurn")(
+      (messageId: QueuedTurnItem["message"]["id"]) =>
+        commitQueueTransaction("cleared in-flight turn", (s) => {
+          const queue = clearInFlightQueuedTurn(s.queue, messageId)
+          return {
+            value: undefined,
+            next: { ...s, queue },
+            persist: queue !== s.queue,
+          }
+        }),
+    )
 
-    const appendSteering = (item: QueuedTurnItem) =>
+    const appendSteering = Effect.fn("AgentLoop.appendSteering")((item: QueuedTurnItem) =>
       commitQueueTransaction("queued steering", (s) => ({
         value: s.state,
         next: { ...s, queue: appendSteeringItem(s.queue, item) },
         persist: true,
-      }))
+      })),
+    )
 
     const drainQueue = commitQueueTransaction("drained queue", (s) => ({
       value: queueSnapshotFromQueueState(s.queue),
       next: { ...s, queue: drainVisibleQueueItems(s.queue) },
       persist: true,
-    }))
+    })).pipe(Effect.withSpan("AgentLoop.drainQueue"))
 
     const switchAgentOnState = (state: LoopState, next: AgentNameType): Effect.Effect<LoopState> =>
       Effect.gen(function* () {
@@ -1238,9 +1240,9 @@ export const makeAgentLoopBehavior = (
           yield* enqueueTurnWorker(resumed)
         }),
       )
-    })
+    }).pipe(Effect.withSpan("AgentLoop.interrupt"))
 
-    const startTurn = (item: QueuedTurnItem): Effect.Effect<void, AgentLoopError> =>
+    const startTurn = Effect.fn("AgentLoop.startTurn")((item: QueuedTurnItem) =>
       sideMutationSemaphore.withPermits(1)(
         Effect.gen(function* () {
           const state = yield* currentLoopState
@@ -1251,9 +1253,10 @@ export const makeAgentLoopBehavior = (
           yield* saveCheckpoint(next)
           yield* enqueueTurnWorker(next)
         }),
-      )
+      ),
+    )
 
-    const switchAgent = (agent: AgentNameType): Effect.Effect<void, AgentLoopError> =>
+    const switchAgent = Effect.fn("AgentLoop.switchAgent")((agent: AgentNameType) =>
       sideMutationSemaphore.withPermits(1)(
         Effect.gen(function* () {
           const state = yield* currentLoopState
@@ -1261,54 +1264,57 @@ export const makeAgentLoopBehavior = (
           if (next === state) return
           yield* saveCheckpoint(next)
         }),
-      )
+      ),
+    )
 
-    const respondInteraction = (
-      requestId: InteractionRequestId,
-    ): Effect.Effect<void, AgentLoopError> =>
-      sideMutationSemaphore.withPermits(1)(
-        Effect.gen(function* () {
-          const state = yield* currentLoopState
-          if (state._tag !== "WaitingForInteraction") return
-          if (requestId !== state.pendingRequestId) {
-            yield* Effect.logWarning(
-              "Ignoring stale interaction response for non-pending request",
-            ).pipe(
-              Effect.annotateLogs({
-                sessionId: state.message.sessionId,
-                branchId: state.message.branchId,
-                expectedRequestId: state.pendingRequestId,
-                actualRequestId: requestId,
-              }),
+    const respondInteraction = Effect.fn("AgentLoop.respondInteraction")(
+      (requestId: InteractionRequestId) =>
+        sideMutationSemaphore.withPermits(1)(
+          Effect.gen(function* () {
+            const state = yield* currentLoopState
+            if (state._tag !== "WaitingForInteraction") return
+            if (requestId !== state.pendingRequestId) {
+              yield* Effect.logWarning(
+                "Ignoring stale interaction response for non-pending request",
+              ).pipe(
+                Effect.annotateLogs({
+                  sessionId: state.message.sessionId,
+                  branchId: state.message.branchId,
+                  expectedRequestId: state.pendingRequestId,
+                  actualRequestId: requestId,
+                }),
+              )
+              return
+            }
+            yield* Ref.set(interruptedRef, false)
+            const resumed = buildRunningState(
+              { currentAgent: state.currentAgent },
+              {
+                message: state.message,
+                ...(state.agentOverride !== undefined
+                  ? { agentOverride: state.agentOverride }
+                  : {}),
+                ...(state.runSpec !== undefined ? { runSpec: state.runSpec } : {}),
+                ...(state.interactive !== undefined ? { interactive: state.interactive } : {}),
+              },
+              { startedAtMs: state.startedAtMs },
             )
-            return
-          }
-          yield* Ref.set(interruptedRef, false)
-          const resumed = buildRunningState(
-            { currentAgent: state.currentAgent },
-            {
-              message: state.message,
-              ...(state.agentOverride !== undefined ? { agentOverride: state.agentOverride } : {}),
-              ...(state.runSpec !== undefined ? { runSpec: state.runSpec } : {}),
-              ...(state.interactive !== undefined ? { interactive: state.interactive } : {}),
-            },
-            { startedAtMs: state.startedAtMs },
-          )
-          yield* saveCheckpoint(resumed)
-          yield* enqueueTurnWorker(resumed)
-        }),
-      )
+            yield* saveCheckpoint(resumed)
+            yield* enqueueTurnWorker(resumed)
+          }),
+        ),
+    )
 
     const start = Effect.gen(function* () {
       if (yield* Ref.getAndSet(startedRef, true)) return
       yield* startTurnWorker
-    })
+    }).pipe(Effect.withSpan("AgentLoop.start"))
 
     const close = Effect.gen(function* () {
       yield* interruptActiveStream(activeStreamRef)
       yield* Deferred.succeed(closed, undefined).pipe(Effect.ignore)
       yield* Scope.close(loopScope, Exit.void)
-    }).pipe(Effect.ignore)
+    }).pipe(Effect.ignore, Effect.withSpan("AgentLoop.close"))
 
     return {
       persistenceFailure: Deferred.await(persistenceFailure),

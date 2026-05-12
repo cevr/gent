@@ -545,33 +545,32 @@ export const listSlashCommands = (resolved: ResolvedExtensions): ReadonlyArray<S
   resolved.slashCommands
 
 /** Find an agent by name. Returns undefined when not registered. */
-export const findAgent = (name: string) =>
-  Effect.gen(function* () {
-    const registry = yield* ExtensionRegistry
-    const agents = yield* registry.listAgents()
-    return agents.find((agent) => agent.name === name)
-  })
+export const findAgent = Effect.fn("ExtensionRegistry.findAgent")(function* (name: string) {
+  const registry = yield* ExtensionRegistry
+  const agents = yield* registry.listAgents()
+  return agents.find((agent) => agent.name === name)
+})
 
 /** Find a model capability by name. Returns undefined when not registered. */
-export const findModelCapability = (name: string) =>
-  Effect.gen(function* () {
-    const registry = yield* ExtensionRegistry
-    const capabilities = yield* registry.listModelCapabilities()
-    return capabilities.find((capability) => String(getToolId(capability)) === name)
-  })
+export const findModelCapability = Effect.fn("ExtensionRegistry.findModelCapability")(function* (
+  name: string,
+) {
+  const registry = yield* ExtensionRegistry
+  const capabilities = yield* registry.listModelCapabilities()
+  return capabilities.find((capability) => String(getToolId(capability)) === name)
+})
 
 /** Resolve a required agent from the registry. Fails with a clear error if not found. */
-export const requireAgent = (name: string) =>
-  Effect.gen(function* () {
-    const agent = yield* findAgent(name)
-    if (agent === undefined) {
-      return yield* registryFailure(
-        "requireAgent",
-        `Required agent "${name}" not found in ExtensionRegistry. Is @gent/agents disabled?`,
-      )
-    }
-    return agent
-  })
+export const requireAgent = Effect.fn("ExtensionRegistry.requireAgent")(function* (name: string) {
+  const agent = yield* findAgent(name)
+  if (agent === undefined) {
+    return yield* registryFailure(
+      "requireAgent",
+      `Required agent "${name}" not found in ExtensionRegistry. Is @gent/agents disabled?`,
+    )
+  }
+  return agent
+})
 
 // Tool filtering — pure helper for agent tool visibility
 
