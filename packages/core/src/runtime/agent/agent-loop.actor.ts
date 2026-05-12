@@ -161,7 +161,7 @@ const InvokeToolFields = {
   sessionId: SessionId,
   branchId: BranchId,
   commandId: ActorCommandId,
-  toolName: Schema.String,
+  toolName: ToolName,
   input: Schema.Unknown,
 }
 
@@ -240,7 +240,7 @@ type InvokeToolInput = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
-  readonly toolName: string
+  readonly toolName: ToolName
   readonly input: unknown
 }
 type TerminateBranchInput = {
