@@ -10,6 +10,7 @@
 
 import {
   Cause,
+  Context,
   Deferred,
   Effect,
   Exit,
@@ -161,6 +162,15 @@ export type EnqueueFollowUp = (input: {
   metadata?: MessageMetadata
 }) => Effect.Effect<void, AgentLoopError | StorageError>
 
+export interface AgentLoopFollowUpService {
+  readonly enqueue: EnqueueFollowUp
+}
+
+export class AgentLoopFollowUp extends Context.Service<
+  AgentLoopFollowUp,
+  AgentLoopFollowUpService
+>()("@gent/core/src/runtime/agent/agent-loop.behavior/AgentLoopFollowUp") {}
+
 /**
  * Per-(sessionId, branchId) loop behavior factory.
  *
@@ -174,7 +184,6 @@ export const makeAgentLoopBehavior = (
   branchId: BranchId,
   sideMutationSemaphore: Semaphore.Semaphore,
   baseSections: ReadonlyArray<PromptSection>,
-  enqueueFollowUp: EnqueueFollowUp,
   initialQueue: LoopQueueState = emptyLoopQueueState(),
 ): Effect.Effect<
   AgentLoopBehavior,
@@ -189,6 +198,7 @@ export const makeAgentLoopBehavior = (
   | DriverRegistry
   | EventPublisher
   | ToolRunner
+  | AgentLoopFollowUp
   | ConfigService
   | ModelRegistry
   | ChildProcessSpawner
@@ -203,6 +213,7 @@ export const makeAgentLoopBehavior = (
     const eventPublisher = yield* EventPublisher
     yield* ToolRunner
     const configServiceForRun = yield* ConfigService
+    const followUp = yield* AgentLoopFollowUp
     const host = yield* makeExtensionHostPlatform
     const storageTransaction = yield* makeStorageTransaction
     // Snapshot the layer-build context so behavior methods (declared as
@@ -258,7 +269,7 @@ export const makeAgentLoopBehavior = (
         host,
         sessionControl: {
           queueFollowUp: (input): Effect.Effect<void, AgentLoopError | StorageError> =>
-            enqueueFollowUp(input),
+            followUp.enqueue(input),
         },
       },
     })
@@ -312,7 +323,6 @@ export const makeAgentLoopBehavior = (
       readonly branchId: BranchId
       readonly sideMutationSemaphore: Semaphore.Semaphore
       readonly baseSections: ReadonlyArray<PromptSection>
-      readonly enqueueFollowUp: EnqueueFollowUp
       readonly messageStorage: typeof messageStorage
       readonly queueStorage: typeof queueStorage
       readonly eventPublisher: typeof eventPublisher
@@ -342,7 +352,6 @@ export const makeAgentLoopBehavior = (
       branchId,
       sideMutationSemaphore,
       baseSections,
-      enqueueFollowUp,
       messageStorage,
       queueStorage,
       eventPublisher,

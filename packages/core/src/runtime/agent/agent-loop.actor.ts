@@ -72,6 +72,7 @@ import {
   type QueuedTurnItem,
 } from "./agent-loop.state.js"
 import {
+  AgentLoopFollowUp,
   type AgentLoopBehavior,
   causeToAgentLoopError,
   makeAgentLoopBehavior,
@@ -530,12 +531,12 @@ const buildAgentLoopActorHandlers = (config: {
     const currentRuntimeState = (loop: AgentLoopBehavior) => loop.runtimeState
 
     // Typed reentrant-only handle lookup. The only legitimate caller is the
-    // `enqueueFollowUp` callback wired into `makeAgentLoopBehavior` — it
+    // `AgentLoopFollowUp` enqueue implementation provided to the behavior — it
     // fires from inside the behavior itself (during turn execution), so the
-    // handle is provably published into `handleRef` by then. Mailbox
-    // handlers (which arrive from outside the behavior) MUST go through
-    // `ensureStarted` instead — that path holds `startupSemaphore` across
-    // the rebuild/publish, ensuring no one observes a half-reopened loop.
+    // handle is provably published into `handleRef` by then. Mailbox handlers
+    // (which arrive from outside the behavior) MUST go through `ensureStarted`
+    // instead — that path holds `startupSemaphore` across the rebuild/publish,
+    // ensuring no one observes a half-reopened loop.
     const reentrantHandle = Effect.gen(function* () {
       const value = yield* Ref.get(handleRef)
       if (value === undefined) {
@@ -619,10 +620,9 @@ const buildAgentLoopActorHandlers = (config: {
           )
 
     // Both call sites supply an already-resolved `handle`:
-    //   - the reentrant callback wired into `makeAgentLoopBehavior` reads
-    //     `reentrantHandle` lazily — the callback fires during turn
-    //     execution (well after `openLoop` published `handleRef`), so the
-    //     read is provably safe by then.
+    //   - the `AgentLoopFollowUp` enqueue implementation reads
+    //     `reentrantHandle` lazily — it fires during turn execution (well
+    //     after `openLoop` published `handleRef`), so the read is provably safe.
     //   - the `QueueFollowUp` mailbox handler resolves it via `ensureStarted`.
     // Taking it as a parameter eliminates the implicit two-step contract
     // that previously bypassed `ensureStarted` for non-reentrant callers.
@@ -712,12 +712,11 @@ const buildAgentLoopActorHandlers = (config: {
         branchId,
         sideMutationSemaphore,
         config.baseSections,
-        // Reentrant follow-up from inside the behavior. The handle is
-        // already published into `handleRef` by the time this callback
-        // fires (it runs during turn execution, well after `openLoop`
-        // assigns `handleRef`). `reentrantHandle` reads that publication.
-        (input) => reentrantHandle.pipe(Effect.flatMap((h) => enqueueMessage(h, input))),
         initialQueue,
+      ).pipe(
+        Effect.provideService(AgentLoopFollowUp, {
+          enqueue: (input) => reentrantHandle.pipe(Effect.flatMap((h) => enqueueMessage(h, input))),
+        }),
       )
       yield* Ref.set(handleRef, handle)
       if (initialQueueFailure !== undefined) {
