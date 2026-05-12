@@ -2,17 +2,11 @@ import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Stream } from "effect"
 import { RpcClient } from "effect/unstable/rpc"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import {
-  Gent,
-  extractText,
-  extractImages,
-  Message,
-  type Message as DomainMessage,
-} from "../src/index"
+import { Gent, extractText, extractImages, type Message as DomainMessage } from "../src/index"
 import { makeNamespacedClient } from "../src/namespaced-client"
 import { GentRpcs, type GentRpcClient } from "@gent/core-internal/server/rpcs"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { dateFromMillis } from "@gent/core-internal/domain/message"
+import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import { projectMessagesWithToolInteractions } from "@gent/core-internal/domain/message-part-projection"
 import { WORKSPACE_ID_HEADER } from "@gent/core-internal/server/workspace-rpc"
 import { workspaceHeadersForCwd, workspaceIdForCwd } from "../src/transport-headers"

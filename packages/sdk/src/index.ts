@@ -5,8 +5,6 @@ export {
   emptyQueueSnapshot,
 } from "@gent/core-internal/domain/queue.js"
 
-export { Message } from "@gent/core-internal/domain/message.js"
-
 export {
   Session,
   Branch,
@@ -53,6 +51,7 @@ export type { AuthProviderInfo, AuthMethod, AuthAuthorization } from "./client.j
 
 // Part types (re-exported from @gent/core)
 export type {
+  Message,
   MessagePart,
   TextPart,
   ReasoningPart,
