@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Deferred, Effect, Ref, Stream } from "effect"
+import { Cause, Deferred, Effect, Layer, Ref, Stream } from "effect"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
@@ -7,6 +7,14 @@ import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
+import { AgentLoop as AgentLoopActor } from "../../src/runtime/agent/agent-loop.actor"
+import { dateFromMillis, Branch, Session } from "../../src/domain/message"
+import { SessionStorage } from "../../src/storage/session-storage"
+import { BranchStorage } from "../../src/storage/branch-storage"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
+import { GentPlatform } from "../../src/runtime/gent-platform"
+import { SessionQueries } from "../../src/server/session-queries"
+import { sessionRuntimeLayer } from "./session-commands/helpers"
 
 const makeClient = (reply = "ok") =>
   Effect.gen(function* () {
@@ -31,6 +39,23 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
     yield* Deferred.await(ready).pipe(Effect.timeout("5 seconds"))
     return values
   })
+
+const failingActorClientLayer = Layer.succeed(AgentLoopActor.Context, () =>
+  Effect.succeed({
+    execute: () => Effect.die(new Error("injected actor state failure")),
+    send: () => Effect.die("unused actor send in session snapshot test"),
+  }),
+)
+
+const sessionQueriesActorFailureLayer = (() => {
+  const base = Layer.mergeAll(
+    SqliteStorage.TestWithSql(),
+    GentPlatform.Test(),
+    sessionRuntimeLayer(),
+    failingActorClientLayer,
+  )
+  return Layer.mergeAll(base, Layer.provide(SessionQueries.Live, base))
+})()
 
 describe("session queries", () => {
   it.live(
@@ -98,6 +123,34 @@ describe("session queries", () => {
           ).toBe(true)
         }).pipe(Effect.timeout("4 seconds")),
       ),
+  )
+
+  it.live("getSessionSnapshot surfaces actor state failures instead of reporting idle", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("snapshot-actor-failure-session")
+      const branchId = BranchId.make("snapshot-actor-failure-branch")
+      const now = dateFromMillis(0)
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      yield* sessions.createSession(
+        new Session({
+          id: sessionId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+      yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+
+      const queries = yield* SessionQueries
+      const exit = yield* queries.getSessionSnapshot({ sessionId, branchId }).pipe(Effect.exit)
+
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const fail = exit.cause.reasons.find(Cause.isFailReason)
+        expect(fail?.error._tag).toBe("InvalidStateError")
+        expect(String(fail?.error.message)).toContain("Failed to read session runtime state")
+      }
+    }).pipe(Effect.timeout("4 seconds"), Effect.provide(sessionQueriesActorFailureLayer)),
   )
 
   it.live("getChildSessions returns only direct descendants", () =>
