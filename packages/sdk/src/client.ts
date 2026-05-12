@@ -1,6 +1,5 @@
 import { Effect, Layer } from "effect"
 import type { Scope } from "effect"
-import type * as Prompt from "effect/unstable/ai/Prompt"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
 import { Socket } from "effect/unstable/socket"
 import {
@@ -54,15 +53,8 @@ import {
   provider as providerFactories,
   type GentServer,
   type GentServerOptions,
-  type StateSpec,
-  type ProviderSpec,
 } from "./server.js"
 import { workspaceHeadersForCwd } from "./transport-headers.js"
-
-export type TextPart = Prompt.TextPart
-export type ReasoningPart = Prompt.ReasoningPart
-export type ToolCallPart = Prompt.ToolCallPart
-export type ToolResultPart = Prompt.ToolResultPart
 
 export type {
   MessagePart,
@@ -79,9 +71,6 @@ export type {
   ProjectedMessage,
   ToolInteraction,
 }
-export type CreateSessionResult = Effect.Success<
-  ReturnType<GentNamespacedClient["session"]["create"]>
->
 export type {
   GentLifecycle,
   SteerCommand,
@@ -96,7 +85,7 @@ export type {
 }
 export { ConnectionState, GentConnectionError }
 export type { GentNamespacedClient, GentRuntime }
-export type { GentServer, GentServerOptions, StateSpec, ProviderSpec }
+export type { GentServer, GentServerOptions }
 
 // Re-export RPC errors. SDK clients can fail with both server-declared RPC errors
 // and transport-level RpcClientError values from the Effect RPC client.
@@ -188,7 +177,7 @@ export interface GentClientBundle<Services = Scope.Scope> {
   readonly runtime: GentRuntime<Services>
 }
 
-export interface GentClientOptions {
+interface GentClientOptions {
   readonly cwd?: string
 }
 

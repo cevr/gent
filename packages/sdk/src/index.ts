@@ -24,19 +24,15 @@ export type {
   SteerCommand,
   SessionTreeNode,
 } from "@gent/core-internal/server/transport-contract.js"
-export type { CreateSessionResult } from "./client.js"
 
 // Client constructors
 export {
   Gent,
   type GentServer,
   type GentServerOptions,
-  type StateSpec,
-  type ProviderSpec,
   type RpcHandlersContext,
   type GentClientRpcError,
   type GentClientBundle,
-  type GentClientOptions,
 } from "./client.js"
 
 // Namespaced client + runtime types
@@ -52,10 +48,6 @@ export type { AuthProviderInfo, AuthMethod, AuthAuthorization } from "./client.j
 export type {
   Message,
   MessagePart,
-  TextPart,
-  ReasoningPart,
-  ToolCallPart,
-  ToolResultPart,
   ProjectedMessage,
   ToolInteraction,
   PermissionRule,
