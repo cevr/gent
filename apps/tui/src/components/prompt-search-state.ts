@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { matchSorter } from "match-sorter"
 
 export type PromptSearchState =
   | { readonly _tag: "closed" }
@@ -43,16 +44,6 @@ export interface PromptSearchTransitionResult {
   readonly effects: readonly PromptSearchEffect[]
 }
 
-const fuzzyMatch = (text: string, query: string): boolean => {
-  const lower = text.toLowerCase()
-  const q = query.toLowerCase()
-  let j = 0
-  for (let i = 0; i < lower.length && j < q.length; i++) {
-    if (lower[i] === q[j]) j++
-  }
-  return j === q.length
-}
-
 export const getPromptSearchItems = (
   state: PromptSearchState,
   entries: readonly string[],
@@ -60,7 +51,7 @@ export const getPromptSearchItems = (
   if (state._tag !== "open") return []
   const currentQuery = state.query.trim()
   if (currentQuery.length === 0) return entries
-  return entries.filter((entry) => fuzzyMatch(entry, currentQuery))
+  return matchSorter(entries, currentQuery)
 }
 
 const clampSelectedIndex = (selectedIndex: number, itemCount: number): number => {

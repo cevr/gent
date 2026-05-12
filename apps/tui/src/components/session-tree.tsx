@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
+import { matchSorter } from "match-sorter"
 import type { SessionId } from "@gent/core-internal/domain/ids.js"
 import type { SessionTreeNode } from "../client"
 import { ChromePanel } from "./chrome-panel"
@@ -16,15 +17,8 @@ interface FlatNode {
   isCurrent: boolean
 }
 
-const fuzzyMatch = (text: string, query: string): boolean => {
-  const lower = text.toLowerCase()
-  const q = query.toLowerCase()
-  let j = 0
-  for (let i = 0; i < lower.length && j < q.length; i++) {
-    if (lower[i] === q[j]) j++
-  }
-  return j === q.length
-}
+const labelMatches = (label: string, query: string): boolean =>
+  matchSorter([label], query).length > 0
 
 const labelFor = (node: SessionTreeNode): string => {
   const name = node.session.name ?? node.session.id.slice(0, 8)
@@ -51,7 +45,7 @@ const buildTreeLines = (
   )
   const visible =
     query.length === 0 ||
-    fuzzyMatch(label, query) ||
+    labelMatches(label, query) ||
     node.session.id === currentSessionId ||
     childMatches.length > 0
 

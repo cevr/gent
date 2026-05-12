@@ -11,6 +11,7 @@ import {
 } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
+import { matchSorter } from "match-sorter"
 import { useClient } from "../client/index"
 import type { DomainSession } from "../client"
 import { useCommand } from "../command/context"
@@ -27,24 +28,11 @@ import { useScopedKeyboard } from "../keyboard/context"
 import { useRouter } from "../router"
 import { useTheme } from "../theme/index"
 
-const fuzzyMatch = (text: string, query: string): boolean => {
-  const lower = text.toLowerCase()
-  const q = query.toLowerCase()
-  let j = 0
-  for (let i = 0; i < lower.length && j < q.length; i++) {
-    if (lower[i] === q[j]) j++
-  }
-  return j === q.length
-}
-
 const filterItems = (items: readonly PaletteItem[], query: string): readonly PaletteItem[] => {
   if (query.length === 0) return items
-  return items.filter(
-    (item) =>
-      fuzzyMatch(item.title, query) ||
-      fuzzyMatch(item.description ?? "", query) ||
-      fuzzyMatch(item.category ?? "", query),
-  )
+  return matchSorter(items, query, {
+    keys: ["title", "description", "category"],
+  })
 }
 
 type SessionNode = {

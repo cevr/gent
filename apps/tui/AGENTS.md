@@ -180,14 +180,13 @@ Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → 
 
 ## Key Files (Composer + Session)
 
-| File                                        | Purpose                             |
-| ------------------------------------------- | ----------------------------------- |
-| `src/routes/session-controller.ts`          | session-screen orchestration        |
-| `src/routes/session.tsx`                    | session presentation + route keys   |
-| `src/components/composer.tsx`               | composer render surface             |
-| `src/components/use-composer-controller.ts` | composer interaction wiring         |
-| `src/components/autocomplete-popup.tsx`     | Generic contribution-driven popup   |
-| `src/utils/fuzzy-score.ts`                  | Fuzzy match scoring for file search |
-| `src/utils/shell.ts`                        | Shell execution + truncation        |
-| `src/utils/file-refs.ts`                    | @file#line expansion                |
-| `src/commands/slash-commands.ts`            | Slash command handlers              |
+| File                                        | Purpose                           |
+| ------------------------------------------- | --------------------------------- |
+| `src/routes/session-controller.ts`          | session-screen orchestration      |
+| `src/routes/session.tsx`                    | session presentation + route keys |
+| `src/components/composer.tsx`               | composer render surface           |
+| `src/components/use-composer-controller.ts` | composer interaction wiring       |
+| `src/components/autocomplete-popup.tsx`     | Generic contribution-driven popup |
+| `src/utils/shell.ts`                        | Shell execution + truncation      |
+| `src/utils/file-refs.ts`                    | @file#line expansion              |
+| `src/commands/slash-commands.ts`            | Slash command handlers            |
