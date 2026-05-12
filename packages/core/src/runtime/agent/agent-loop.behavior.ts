@@ -685,8 +685,6 @@ export const makeAgentLoopBehavior = (
       step: number
       toolCalls: ReadonlyArray<Prompt.ToolCallPart>
       currentTurnAgent: AgentNameType
-      extensionRegistry: ExtensionRegistryService
-      permission: PermissionService
       hostCtx: ExtensionHostContext
     }) {
       if (params.toolCalls.length === 0) return
@@ -702,10 +700,7 @@ export const makeAgentLoopBehavior = (
         branchId,
         currentTurnAgent: params.currentTurnAgent,
         hostCtx: params.hostCtx,
-      }).pipe(
-        Effect.provideService(ExtensionRegistry, params.extensionRegistry),
-        Effect.provideService(Permission, params.permission),
-      )
+      })
       yield* persistToolParts({
         sessionId,
         branchId,
@@ -718,9 +713,6 @@ export const makeAgentLoopBehavior = (
       messageId: RunningState["message"]["id"]
       step: number
       resolved: ResolvedTurnContext
-      extensionRegistry: ExtensionRegistryService
-      permission?: PermissionService
-      driverRegistry: DriverRegistryService
       hostCtx: ExtensionHostContext
       activeStream: ActiveStreamHandle
     }) {
@@ -746,20 +738,14 @@ export const makeAgentLoopBehavior = (
           createdAt,
         })
 
-      const sourceEffect = resolveTurnSource({
+      const source = yield* resolveTurnSource({
         resolved: params.resolved,
         publishEvent: publishEventOrDie,
         sessionId,
         branchId,
         activeStream: params.activeStream,
         hostCtx: params.hostCtx,
-      }).pipe(
-        Effect.provideService(ExtensionRegistry, params.extensionRegistry),
-        Effect.provideService(DriverRegistry, params.driverRegistry),
-      )
-      const source = yield* params.permission !== undefined
-        ? sourceEffect.pipe(Effect.provideService(Permission, params.permission))
-        : sourceEffect
+      })
 
       if (source === undefined) {
         return {
@@ -871,9 +857,9 @@ export const makeAgentLoopBehavior = (
       turnInterrupted: boolean
       streamFailed: boolean
       currentAgent: AgentNameType
-      extensionRegistry: ExtensionRegistryService
       hostCtx: ExtensionHostContext
     }) {
+      const extensionRegistry = yield* ExtensionRegistry
       const existingMessage = yield* messageStorage.getMessage(params.messageId)
       if (existingMessage?.turnDurationMs !== undefined) {
         const envelope = yield* findPersistedEvent({
@@ -909,7 +895,7 @@ export const makeAgentLoopBehavior = (
       yield* eventPublisher.deliver(envelope)
 
       yield* Effect.logDebug("finalize.turn-after.start")
-      yield* params.extensionRegistry.extensionReactions.emitTurnAfter(
+      yield* extensionRegistry.extensionReactions.emitTurnAfter(
         {
           sessionId,
           branchId,
@@ -974,9 +960,9 @@ export const makeAgentLoopBehavior = (
               toolCalls,
               currentTurnAgent,
               hostCtx: turnHostCtx,
-              extensionRegistry: turnExtensionRegistry,
-              permission: turnPermission,
             }).pipe(
+              Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
+              Effect.provideService(Permission, turnPermission),
               Effect.as(undefined as ToolInteractionPending | undefined),
               Effect.catchIf(Schema.is(ToolInteractionPending), (e) => Effect.succeed(e)),
             )
@@ -1050,12 +1036,13 @@ export const makeAgentLoopBehavior = (
               messageId: state.message.id,
               step,
               resolved,
-              extensionRegistry: turnExtensionRegistry,
-              permission: turnPermission,
-              driverRegistry: turnDriverRegistry,
               hostCtx: turnHostCtx,
               activeStream,
-            })
+            }).pipe(
+              Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
+              Effect.provideService(DriverRegistry, turnDriverRegistry),
+              Effect.provideService(Permission, turnPermission),
+            )
           }).pipe(Effect.ensuring(Ref.set(activeStreamRef, undefined))),
         )
 
@@ -1079,9 +1066,9 @@ export const makeAgentLoopBehavior = (
           toolCalls,
           currentTurnAgent: resolved.currentTurnAgent,
           hostCtx: turnHostCtx,
-          extensionRegistry: turnExtensionRegistry,
-          permission: turnPermission,
         }).pipe(
+          Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
+          Effect.provideService(Permission, turnPermission),
           Effect.as(undefined as ToolInteractionPending | undefined),
           Effect.catchIf(Schema.is(ToolInteractionPending), (e) => Effect.succeed(e)),
         )
@@ -1102,9 +1089,8 @@ export const makeAgentLoopBehavior = (
         turnInterrupted: interrupted,
         streamFailed,
         currentAgent: currentTurnAgent,
-        extensionRegistry: turnExtensionRegistry,
         hostCtx: turnHostCtx,
-      })
+      }).pipe(Effect.provideService(ExtensionRegistry, turnExtensionRegistry))
 
       return TurnOutcome.cases.Done.make({})
     })
