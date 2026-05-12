@@ -125,15 +125,6 @@ export const InterruptPayload = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type InterruptPayload = typeof InterruptPayload.Type
 
-export const InvokeToolPayload = Schema.Struct({
-  commandId: ActorCommandId,
-  sessionId: SessionId,
-  branchId: BranchId,
-  toolName: Schema.String,
-  input: Schema.Unknown,
-})
-export type InvokeToolPayload = typeof InvokeToolPayload.Type
-
 export const RunPromptPayload = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
@@ -215,7 +206,6 @@ export interface SessionRuntimeService {
   readonly recordToolResult: (
     input: SendToolResultPayload,
   ) => Effect.Effect<void, SessionRuntimeError>
-  readonly invokeTool: (input: InvokeToolPayload) => Effect.Effect<void, SessionRuntimeError>
   readonly steer: (command: SteerCommandType) => Effect.Effect<void, SessionRuntimeError>
   readonly respondInteraction: (
     input: SessionRuntimeTarget & { readonly requestId: InteractionRequestId },
@@ -616,26 +606,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
           }),
         ),
         Effect.catchCause((cause) => Effect.fail(wrapError("recordToolResult failed", cause))),
-      ),
-
-    invokeTool: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.flatMap(() =>
-          Effect.gen(function* () {
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            yield* ref.execute(
-              AgentLoopActor.InvokeTool.make({
-                workspaceId: yield* CurrentWorkspaceId,
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                commandId: input.commandId,
-                toolName: input.toolName,
-                input: input.input,
-              }),
-            )
-          }),
-        ),
-        Effect.catchCause((cause) => Effect.fail(wrapError("invokeTool failed", cause))),
       ),
 
     // `ref.send` is fire-forget at the handler level — INTENTIONAL.

@@ -136,9 +136,20 @@ Same demotion pattern as W35 C2-C6.
 - **C17** — Drop `ExtensionRegistry.listFailedExtensions` from
   interface (`registry.ts:514`); tests read
   `getResolved().failedExtensions`. (L9-P1-2)
-- **C18** — Drop `ModelRegistry.refresh()` from interface
-  (`model-registry.ts:124`); keep internal `refresh` for the scoped
-  fork. (L9-P1-3)
+- **C18 — SUPERSEDED (deferred to W38, 2026-05-11).** Drop is correct
+  target shape but the W36 audit clustered L9-P1-3 with L9-P1-1/-2/-4
+  as a pure-accessor demotion. `ModelRegistry.refresh()` is the only
+  externally-observable join point against the auto-forked
+  `Effect.forkScoped(refresh)` initialization fiber
+  (`packages/core/src/runtime/model-registry.ts:240`). 5 tests in
+  `tests/runtime/model-registry.test.ts:217,237,267,298,334` use it
+  as a synchronization primitive, not a method call. Migration is a
+  fixture redesign (`waitFor(registry.list(), predicate)` per the
+  test-407 precedent at `model-registry.test.ts:407-498`), not a
+  5-line interface trim — different cost profile from C16/C17/C19.
+  Reclassified to W38 with explicit fixture-migration budget. Counsel
+  verdict via Opus Agent fallback: defer-with-W38-carry-over.
+  (L9-P1-3, carried to W38)
 - **C19** — Delete `SessionRuntime.invokeTool` from interface +
   impl (`session-runtime.ts:218, 621`); inline the
   `AgentLoopActor.InvokeTool.make(...)` call at

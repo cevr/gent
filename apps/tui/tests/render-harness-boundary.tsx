@@ -155,7 +155,6 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
     actor: {
       sendUserMessage: () => noRpcError(undefined),
       sendToolResult: () => noRpcError(undefined),
-      invokeTool: () => noRpcError(undefined),
       interrupt: () => noRpcError(undefined),
       getState: () => noRpcError(undefined),
       getMetrics: () => noRpcError(undefined),

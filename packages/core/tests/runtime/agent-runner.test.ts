@@ -196,7 +196,6 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
       return {
         sendUserMessage: () => Effect.void,
         recordToolResult: () => Effect.void,
-        invokeTool: () => Effect.void,
         steer: () => Effect.void,
         respondInteraction: () => Effect.void,
         runPrompt: (input) =>

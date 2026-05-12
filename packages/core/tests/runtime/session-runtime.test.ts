@@ -60,6 +60,9 @@ import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
+import { AgentLoop as AgentLoopActor } from "../../src/runtime/agent/agent-loop.actor"
+import { entityIdOf } from "../../src/runtime/agent/agent-loop.entity-id"
+import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   const cowork = AgentDefinition.make({
@@ -552,7 +555,7 @@ describe("SessionRuntime", () => {
       )
     }),
   )
-  it.live("persists tool messages without queueing or duplicating durable results", () =>
+  it.live("InvokeTool actor command dedupes by commandId", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
       const layer = makeRuntimeLayer(providerLayer)
@@ -562,15 +565,18 @@ describe("SessionRuntime", () => {
           const messageStorage = yield* MessageStorage
           const recorder = yield* SequenceRecorder
           const { sessionId, branchId } = yield* createSessionBranch
-          const invokeCommand = {
-            commandId: ActorCommandId.make("invoke-tool-idempotent"),
+          const actorClientFactory = yield* AgentLoopActor.Context
+          const ref = yield* actorClientFactory(entityIdOf(DefaultWorkspaceId, sessionId, branchId))
+          const invokePayload = AgentLoopActor.InvokeTool.make({
+            workspaceId: DefaultWorkspaceId,
             sessionId,
             branchId,
+            commandId: ActorCommandId.make("invoke-tool-idempotent"),
             toolName: "read",
             input: {},
-          }
-          yield* sessionRuntime.invokeTool(invokeCommand)
-          yield* sessionRuntime.invokeTool(invokeCommand)
+          })
+          yield* ref.execute(invokePayload)
+          yield* ref.execute(invokePayload)
           const messages = yield* waitFor(
             messageStorage.listMessages(branchId),
             (current) => current.length === 2,
