@@ -509,7 +509,7 @@ describe("AgentRunner", () => {
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
-        sessionRuntimeStub(() => Effect.sleep("50 millis")),
+        sessionRuntimeStub(() => Effect.never),
         eventStoreLayer,
         eventPublisherLayer,
       )

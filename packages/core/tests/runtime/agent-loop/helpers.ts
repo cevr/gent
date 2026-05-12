@@ -474,7 +474,7 @@ export const makeExternalLayerWithEvents = (
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
-/** Poll `getState` until the phase matches, with a short sleep between attempts. */
+/** Poll `check` until it yields a defined value, with a short sleep between attempts. */
 export const waitFor = <A, E, R>(
   check: () => Effect.Effect<A | undefined, E, R>,
   description: string,

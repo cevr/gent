@@ -49,36 +49,47 @@ const makeFakeProc = (firstWrite?: Deferred.Deferred<void>) => {
   }
 }
 /**
- * Variant where stdout *ends naturally* after a short delay. Models
- * "agent process exited cleanly without error" — the runDrain finishes
- * without throwing. Without the post-runDrain seal in the reader fiber,
- * pending RPCs would never be failed.
+ * Variant where stdout *ends naturally* after the first stdin write —
+ * models "agent process exited cleanly without error" — the runDrain
+ * finishes without throwing. Without the post-runDrain seal in the
+ * reader fiber, pending RPCs would never be failed.
+ *
+ * Gated on `firstWrite` instead of a wall-clock sleep so the test is
+ * deterministic: stdout cannot close before `initialize` has written
+ * its request and registered the pending Deferred.
  */
-const makeFakeProcStdoutEof = () => {
+const makeFakeProcStdoutEof = (firstWrite: Deferred.Deferred<void>) => {
   const writes: string[] = []
   const decoder = new TextDecoder()
   const stdin = Sink.forEach((chunk: Uint8Array) =>
-    Effect.sync(() => writes.push(decoder.decode(chunk))),
+    Effect.gen(function* () {
+      writes.push(decoder.decode(chunk))
+      yield* Deferred.succeed(firstWrite, void 0).pipe(Effect.ignore)
+    }),
   )
-  // Stream that yields nothing for 50ms then ends — emulates agent
-  // closing stdout after exiting cleanly. The delay gives `initialize`
-  // time to register its pending Deferred before the seal fires.
-  const stdout = Stream.fromEffect(Effect.sleep("50 millis")).pipe(
+  const stdout = Stream.fromEffect(Deferred.await(firstWrite)).pipe(
     Stream.flatMap(() => Stream.empty),
   )
   return { writes, proc: { stdin, stdout } }
 }
 /**
- * Variant where stdout fails with a PlatformError after a short delay.
- * Models "broken pipe / read error from a dying child process". Without
- * the reader's catchEager calling failPendingWith, pending RPCs would
- * be left parked.
+ * Variant where stdout fails with a PlatformError after the first
+ * stdin write — models "broken pipe / read error from a dying child
+ * process". Without the reader's catchEager calling failPendingWith,
+ * pending RPCs would be left parked.
+ *
+ * Gated on `firstWrite` instead of a wall-clock sleep so the read
+ * failure cannot fire before `initialize` has registered its pending
+ * Deferred.
  */
-const makeFakeProcStdoutError = () => {
+const makeFakeProcStdoutError = (firstWrite: Deferred.Deferred<void>) => {
   const writes: string[] = []
   const decoder = new TextDecoder()
   const stdin = Sink.forEach((chunk: Uint8Array) =>
-    Effect.sync(() => writes.push(decoder.decode(chunk))),
+    Effect.gen(function* () {
+      writes.push(decoder.decode(chunk))
+      yield* Deferred.succeed(firstWrite, void 0).pipe(Effect.ignore)
+    }),
   )
   const err = new PlatformError(
     new BadArgument({
@@ -87,9 +98,9 @@ const makeFakeProcStdoutError = () => {
       description: "simulated read error",
     }),
   )
-  // 50ms gives `initialize` time to register its pending Deferred
-  // before the read failure fires.
-  const stdout = Stream.fromEffect(Effect.sleep("50 millis").pipe(Effect.andThen(Effect.fail(err))))
+  const stdout = Stream.fromEffect(
+    Deferred.await(firstWrite).pipe(Effect.andThen(Effect.fail(err))),
+  )
   return { writes, proc: { stdin, stdout } }
 }
 describe("AcpConnection.close", () => {
@@ -238,7 +249,8 @@ describe("AcpConnection.close", () => {
     Effect.gen(function* () {
       const program = Effect.gen(function* () {
         const scope = yield* Scope.make()
-        const { proc } = makeFakeProcStdoutError()
+        const firstWrite = yield* Deferred.make<void>()
+        const { proc } = makeFakeProcStdoutError(firstWrite)
         const conn = yield* makeAcpConnection(proc).pipe(Effect.provideService(Scope.Scope, scope))
         const inflight = yield* Effect.forkIn(
           conn.initialize({
@@ -251,9 +263,10 @@ describe("AcpConnection.close", () => {
           }),
           scope,
         )
-        // The fake stdout fails after 5ms; the reader fiber's catchEager
-        // must seal stateRef and fail every pending Deferred. Bound by
-        // timeout so a regression surfaces as a hang.
+        // The fake stdout fails once initialize has written its request
+        // and registered its pending Deferred. The reader fiber's
+        // catchEager must then seal stateRef and fail every pending
+        // Deferred. Bound by timeout so a regression surfaces as a hang.
         const exit = yield* Fiber.await(inflight).pipe(Effect.timeout("1 seconds"))
         yield* Scope.close(scope, exit).pipe(Effect.ignore)
         return exit
@@ -271,7 +284,8 @@ describe("AcpConnection.close", () => {
     Effect.gen(function* () {
       const program = Effect.gen(function* () {
         const scope = yield* Scope.make()
-        const { proc } = makeFakeProcStdoutEof()
+        const firstWrite = yield* Deferred.make<void>()
+        const { proc } = makeFakeProcStdoutEof(firstWrite)
         const conn = yield* makeAcpConnection(proc).pipe(Effect.provideService(Scope.Scope, scope))
         const inflight = yield* Effect.forkIn(
           conn.initialize({
