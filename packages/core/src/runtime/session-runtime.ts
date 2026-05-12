@@ -306,18 +306,17 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       Effect.provideContext(storageContext),
     )
 
+  const actorContext = Context.empty().pipe(
+    Context.add(ActorAddressResolver, actorAddressResolver),
+    Context.add(ActorStateRegistry, actorStateRegistry),
+    Context.add(AgentLoopActor.Context, actorClientFactory),
+    Context.add(ClusterMessageStorage.MessageStorage, clusterMessageStorage),
+    Context.add(Sharding.Sharding, sharding),
+  )
   const provideActorStateServices = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(
-      Effect.provideService(ActorAddressResolver, actorAddressResolver),
-      Effect.provideService(ActorStateRegistry, actorStateRegistry),
-      Effect.provideService(AgentLoopActor.Context, actorClientFactory),
-    )
+    Effect.provide(effect, actorContext)
   const provideActorStateServicesToStream = <A, E, R>(stream: Stream.Stream<A, E, R>) =>
-    stream.pipe(
-      Stream.provideService(ActorAddressResolver, actorAddressResolver),
-      Stream.provideService(ActorStateRegistry, actorStateRegistry),
-      Stream.provideService(AgentLoopActor.Context, actorClientFactory),
-    )
+    Stream.provideContext(stream, actorContext)
   const toAgentLoopError = (error: unknown) =>
     Schema.is(AgentLoopError)(error)
       ? error
@@ -482,12 +481,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     Effect.gen(function* () {
       const workspaceId = yield* CurrentWorkspaceId
       yield* AgentLoopActor.redeliver(entityIdOf(workspaceId, target.sessionId, target.branchId))
-    }).pipe(
-      Effect.provideService(ClusterMessageStorage.MessageStorage, clusterMessageStorage),
-      Effect.provideService(ActorAddressResolver, actorAddressResolver),
-      Effect.provideService(Sharding.Sharding, sharding),
-      Effect.ignore,
-    )
+    }).pipe(provideActorStateServices, Effect.ignore)
 
   const sendUserMessage = Effect.fn("SessionRuntime.sendUserMessage")(function* (
     input: SendUserMessagePayload,
@@ -650,10 +644,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
             })
             yield* ref.send(payload)
             yield* redeliverPendingActorMessages(input)
-            yield* AgentLoopActor.RespondInteraction.waitFor(payload).pipe(
-              Effect.provideService(ClusterMessageStorage.MessageStorage, clusterMessageStorage),
-              Effect.provideService(ActorAddressResolver, actorAddressResolver),
-            )
+            yield* provideActorStateServices(AgentLoopActor.RespondInteraction.waitFor(payload))
           }),
         ),
         Effect.catchCause((cause) => Effect.fail(wrapError("respondInteraction failed", cause))),
