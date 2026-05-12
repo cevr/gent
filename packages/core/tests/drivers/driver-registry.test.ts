@@ -2,10 +2,10 @@
  * DriverRegistry — unit tests for the unified driver lookup.
  *
  * Covers both categories (model + external) under one registry, scope precedence
- * across categories, requireModel/requireExternal failure, and filterModelCatalog
- * composition. Pinned at this seam because every agent turn dispatches through
- * `agent.driver: DriverRef → DriverRegistry`. Regressing scope precedence or
- * the require* fallthrough silently breaks per-cwd extension resolution.
+ * across categories, and filterModelCatalog composition. Pinned at this seam
+ * because every agent turn dispatches through
+ * `agent.driver: DriverRef → DriverRegistry`. Regressing scope precedence
+ * silently breaks per-cwd extension resolution.
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Stream } from "effect"
@@ -133,28 +133,6 @@ describe("DriverRegistry", () => {
         return yield* reg.getExternal("shared")
       }).pipe(Effect.provide(layer))
       expect(driver?.executor).toBe(projectExec)
-    }),
-  )
-  it.live("requireModel fails with DriverError when missing", () =>
-    Effect.gen(function* () {
-      const layer = buildRegistry([])
-      const result = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.requireModel("nonexistent")
-      }).pipe(Effect.provide(layer), Effect.flip)
-      expect(result.driver._tag).toBe("model")
-      expect(result.driver.id).toBe("nonexistent")
-    }),
-  )
-  it.live("requireExternal fails with DriverError when missing", () =>
-    Effect.gen(function* () {
-      const layer = buildRegistry([])
-      const result = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.requireExternal("missing")
-      }).pipe(Effect.provide(layer), Effect.flip)
-      expect(result.driver._tag).toBe("external")
-      expect(result.driver.id).toBe("missing")
     }),
   )
   it.live("filterModelCatalog composes every driver's listModels filter", () =>

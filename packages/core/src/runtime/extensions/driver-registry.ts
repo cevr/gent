@@ -53,10 +53,6 @@ export interface DriverRegistryService {
       driverId: string,
     ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
   ) => Effect.Effect<ReadonlyArray<Model>, DriverError | ProviderAuthError>
-  /** Require a model driver — fail with `DriverError` when missing. */
-  readonly requireModel: (id: string) => Effect.Effect<ModelDriverContribution, DriverError>
-  /** Require an external driver — fail with `DriverError` when missing. */
-  readonly requireExternal: (id: string) => Effect.Effect<ExternalDriverContribution, DriverError>
 }
 
 export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegistryService>()(
@@ -89,26 +85,6 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
           catalog = decoded.value
         }
         return catalog
-      }),
-      requireModel: Effect.fn("DriverRegistry.requireModel")(function* (id: string) {
-        const found = resolved.modelDrivers.get(id)
-        if (found === undefined) {
-          return yield* new DriverError({
-            driver: DriverFailureRef.cases.model.make({ id }),
-            reason: `No model driver registered for id "${id}"`,
-          })
-        }
-        return found
-      }),
-      requireExternal: Effect.fn("DriverRegistry.requireExternal")(function* (id: string) {
-        const found = resolved.externalDrivers.get(id)
-        if (found === undefined) {
-          return yield* new DriverError({
-            driver: DriverFailureRef.cases.external.make({ id }),
-            reason: `No external driver registered for id "${id}"`,
-          })
-        }
-        return found
       }),
     })
 }
