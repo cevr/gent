@@ -34,7 +34,6 @@ export {
   type StateSpec,
   type ProviderSpec,
   type RpcHandlersContext,
-  type GentRpcClient,
   type GentClientRpcError,
   type GentClientBundle,
   type GentClientOptions,

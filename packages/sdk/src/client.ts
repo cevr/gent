@@ -98,9 +98,9 @@ export { ConnectionState, GentConnectionError }
 export type { GentNamespacedClient, GentRuntime }
 export type { GentServer, GentServerOptions, StateSpec, ProviderSpec }
 
-// Re-export RPC types. SDK clients can fail with both server-declared RPC errors
+// Re-export RPC errors. SDK clients can fail with both server-declared RPC errors
 // and transport-level RpcClientError values from the Effect RPC client.
-export type { GentRpcClient, GentClientRpcError }
+export type { GentClientRpcError }
 
 // ---------------------------------------------------------------------------
 // Utility functions (unchanged)
