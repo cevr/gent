@@ -38,7 +38,7 @@ const makeEmptyProfile = (cwd: string) =>
     }
   })
 
-describe("SessionProfileCache", () => {
+describe("session profile resolution", () => {
   it.scopedLive("returns an initial launch profile instead of rebuilding that cwd", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

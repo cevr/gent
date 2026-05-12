@@ -47,7 +47,7 @@ class ToolRunnerTestError extends Schema.TaggedErrorClass<ToolRunnerTestError>()
   { message: Schema.String },
 ) {}
 
-describe("ToolRunner", () => {
+describe("tool execution", () => {
   const test = it.live.layer(BunServices.layer)
 
   test("runs model capability directly and returns json output", () =>

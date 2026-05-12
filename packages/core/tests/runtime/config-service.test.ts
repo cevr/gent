@@ -12,8 +12,8 @@ import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
-describe("ConfigService", () => {
-  describe("Test implementation", () => {
+describe("user configuration", () => {
+  describe("in-memory reads and writes", () => {
     it.live("seeded initial config reads back unchanged", () => {
       const initial = new UserConfig({
         permissions: [new PermissionRule({ tool: "Bash", action: "deny" })],

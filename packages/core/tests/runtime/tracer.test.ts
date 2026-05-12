@@ -5,7 +5,7 @@ import { GentTracerLive } from "../../src/runtime/tracer"
 const tracerWithConfig = (env: Record<string, string>) =>
   Layer.provide(GentTracerLive, ConfigProvider.layer(ConfigProvider.fromEnv({ env })))
 
-describe("GentTracerLive", () => {
+describe("tracer configuration", () => {
   it.live("keeps the default Effect tracer when OTLP is not configured", () =>
     Effect.gen(function* () {
       const span = yield* Effect.currentSpan

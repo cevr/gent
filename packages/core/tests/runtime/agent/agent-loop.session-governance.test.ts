@@ -8,7 +8,7 @@ const sessionB = SessionId.make("session-b")
 const workspaceA = "a".repeat(64)
 const workspaceB = "b".repeat(64)
 
-describe("AgentLoopSessionGovernance", () => {
+describe("session termination markers", () => {
   it.effect("isTerminated returns false for unmarked sessions", () =>
     Effect.gen(function* () {
       const governance = yield* AgentLoopSessionGovernance

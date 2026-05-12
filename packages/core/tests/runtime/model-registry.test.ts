@@ -174,7 +174,7 @@ const loadDeferredRegistry = (
     return Context.get(context, ModelRegistry)
   })
 
-describe("ModelRegistry", () => {
+describe("model catalog resolution", () => {
   it.live("loads cached canonical models from disk", () =>
     Effect.scoped(
       Effect.gen(function* () {

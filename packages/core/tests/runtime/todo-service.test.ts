@@ -40,7 +40,7 @@ const makeLayer = () => {
   return Layer.provideMerge(todoExtensionLayer, runtimeLayer)
 }
 
-describe("TodoService", () => {
+describe("todo lifecycle", () => {
   it.live("create fails with typed unavailable error when todo storage is absent", () =>
     Effect.gen(function* () {
       const todoService = yield* TodoService
