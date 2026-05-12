@@ -18,7 +18,12 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Exit, Fiber, Scope, Sink, Stream } from "effect"
 import { BadArgument, PlatformError } from "effect/PlatformError"
-import { makeAcpConnection } from "../../src/acp-agents/protocol.js"
+import {
+  makeAcpConnection,
+  type AcpClosedError,
+  type AcpConnection,
+  type AcpError,
+} from "../../src/acp-agents/protocol.js"
 /**
  * Build a never-closing stdout stream and a write-spy stdin sink so
  * `makeAcpConnection` can be exercised without a child process.
@@ -103,6 +108,31 @@ const makeFakeProcStdoutError = (firstWrite: Deferred.Deferred<void>) => {
   )
   return { writes, proc: { stdin, stdout } }
 }
+/**
+ * Variant where stdout replies after the first stdin write. The response
+ * id is deterministic because each fake connection starts `nextIdRef`
+ * at 1. The stream then ends naturally; by then the pending RPC has
+ * already been resolved or failed by `handleResponse`.
+ */
+const makeFakeProcStdoutLine = (firstWrite: Deferred.Deferred<void>, line: string) => {
+  const writes: string[] = []
+  const decoder = new TextDecoder()
+  const encoder = new TextEncoder()
+  const stdin = Sink.forEach((chunk: Uint8Array) =>
+    Effect.gen(function* () {
+      writes.push(decoder.decode(chunk))
+      yield* Deferred.succeed(firstWrite, void 0).pipe(Effect.ignore)
+    }),
+  )
+  const stdout = Stream.fromEffect(Deferred.await(firstWrite)).pipe(
+    Stream.flatMap(() => Stream.fromIterable([encoder.encode(line)])),
+  )
+  return { writes, proc: { stdin, stdout } }
+}
+
+const invalidResponseLine = (result: unknown) =>
+  JSON.stringify({ jsonrpc: "2.0", id: 1, result }) + "\n"
+
 describe("AcpConnection.close", () => {
   it.live("fails in-flight RPC Deferreds with AcpClosedError", () =>
     Effect.gen(function* () {
@@ -310,6 +340,58 @@ describe("AcpConnection.close", () => {
         const repr = Bun.inspect(exit.cause)
         expect(repr).toContain("AcpClosedError")
         expect(repr).toContain("stdout closed")
+      }
+    }),
+  )
+})
+
+describe("AcpConnection RPC response decoding", () => {
+  it.live("invalid wire responses fail with AcpError instead of defects", () =>
+    Effect.gen(function* () {
+      const scenarios: ReadonlyArray<{
+        readonly method: string
+        readonly result: unknown
+        readonly run: (conn: AcpConnection) => Effect.Effect<unknown, AcpError | AcpClosedError>
+      }> = [
+        {
+          method: "initialize",
+          result: { protocolVersion: "bad" },
+          run: (conn) =>
+            conn.initialize({
+              protocolVersion: 1,
+              clientCapabilities: {
+                fs: { readTextFile: false, writeTextFile: false },
+                terminal: false,
+              },
+              clientInfo: { name: "gent-test", version: "0.0.0" },
+            }),
+        },
+        {
+          method: "session/new",
+          result: { sessionId: 123 },
+          run: (conn) => conn.newSession({ cwd: "/tmp/gent-acp-test" }),
+        },
+        {
+          method: "session/prompt",
+          result: { stopReason: "invalid_stop" },
+          run: (conn) => conn.prompt({ sessionId: "acp-session", prompt: [] }),
+        },
+      ]
+
+      for (const scenario of scenarios) {
+        const scope = yield* Scope.make()
+        const firstWrite = yield* Deferred.make<void>()
+        const { proc } = makeFakeProcStdoutLine(firstWrite, invalidResponseLine(scenario.result))
+        const conn = yield* makeAcpConnection(proc).pipe(Effect.provideService(Scope.Scope, scope))
+        const exit = yield* scenario.run(conn).pipe(Effect.exit)
+        yield* Scope.close(scope, exit).pipe(Effect.ignore)
+
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          const repr = Bun.inspect(exit.cause)
+          expect(repr).toContain("AcpError")
+          expect(repr).toContain(`invalid ACP ${scenario.method} response`)
+        }
       }
     }),
   )

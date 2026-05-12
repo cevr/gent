@@ -122,6 +122,22 @@ const IncomingJsonRpcEnvelope = Schema.Record(Schema.String, Schema.Unknown)
 const decodeIncomingEnvelope = Schema.decodeUnknownOption(
   Schema.fromJsonString(IncomingJsonRpcEnvelope),
 )
+const decodeInitializeResponse = (raw: unknown) =>
+  Schema.decodeUnknownEffect(S.InitializeResponse)(raw).pipe(
+    Effect.mapError((cause) => new AcpError({ message: "invalid ACP initialize response", cause })),
+  )
+const decodeNewSessionResponse = (raw: unknown) =>
+  Schema.decodeUnknownEffect(S.NewSessionResponse)(raw).pipe(
+    Effect.mapError(
+      (cause) => new AcpError({ message: "invalid ACP session/new response", cause }),
+    ),
+  )
+const decodePromptResponse = (raw: unknown) =>
+  Schema.decodeUnknownEffect(S.PromptResponse)(raw).pipe(
+    Effect.mapError(
+      (cause) => new AcpError({ message: "invalid ACP session/prompt response", cause }),
+    ),
+  )
 
 // ── Connection Factory ──
 
@@ -375,17 +391,11 @@ export const makeAcpConnection = (
 
     const connection: AcpConnection = {
       initialize: (params) =>
-        rpcRaw("initialize", params).pipe(
-          Effect.map((raw) => Schema.decodeUnknownSync(S.InitializeResponse)(raw)),
-        ),
+        rpcRaw("initialize", params).pipe(Effect.flatMap(decodeInitializeResponse)),
       newSession: (params) =>
-        rpcRaw("session/new", params).pipe(
-          Effect.map((raw) => Schema.decodeUnknownSync(S.NewSessionResponse)(raw)),
-        ),
+        rpcRaw("session/new", params).pipe(Effect.flatMap(decodeNewSessionResponse)),
       prompt: (params) =>
-        rpcRaw("session/prompt", params).pipe(
-          Effect.map((raw) => Schema.decodeUnknownSync(S.PromptResponse)(raw)),
-        ),
+        rpcRaw("session/prompt", params).pipe(Effect.flatMap(decodePromptResponse)),
       cancel: (sessionId) => write(encodeNotification("session/cancel", { sessionId })),
       updates: Stream.fromPubSub(updatesPubSub),
       // Atomically seal the state and claim the pending map in one
