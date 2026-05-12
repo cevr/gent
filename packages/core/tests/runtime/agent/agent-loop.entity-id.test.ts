@@ -2,7 +2,7 @@ import { describe, expect, it, test } from "effect-bun-test"
 import { Effect } from "effect"
 import { entityIdOf, parseEntityId } from "../../../src/runtime/agent/agent-loop.entity-id"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
-import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
+import { DefaultWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 
 const cases: ReadonlyArray<{ readonly session: string; readonly branch: string }> = [
   { session: "session-a", branch: "branch-main" },
@@ -37,8 +37,16 @@ describe("agent-loop.entity-id", () => {
   })
 
   test("does not collide across workspaces", () => {
-    const a = entityIdOf("a".repeat(64), SessionId.make("same"), BranchId.make("same"))
-    const b = entityIdOf("b".repeat(64), SessionId.make("same"), BranchId.make("same"))
+    const a = entityIdOf(
+      WorkspaceId.make("a".repeat(64)),
+      SessionId.make("same"),
+      BranchId.make("same"),
+    )
+    const b = entityIdOf(
+      WorkspaceId.make("b".repeat(64)),
+      SessionId.make("same"),
+      BranchId.make("same"),
+    )
     expect(a).not.toBe(b)
   })
 

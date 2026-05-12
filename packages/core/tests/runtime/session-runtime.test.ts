@@ -42,6 +42,7 @@ import {
   RequestId,
   SessionId,
   ToolCallId,
+  ToolName,
 } from "@gent/core-internal/domain/ids"
 import { Permission } from "@gent/core-internal/domain/permission"
 import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
@@ -248,7 +249,7 @@ const recordToolResultViaActor = (input: {
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
   readonly toolCallId: ToolCallId
-  readonly toolName: string
+  readonly toolName: ToolName
   readonly output: unknown
   readonly isError?: boolean
 }) =>
@@ -601,7 +602,7 @@ describe("SessionRuntime", () => {
             sessionId,
             branchId,
             commandId: ActorCommandId.make("invoke-tool-idempotent"),
-            toolName: "read",
+            toolName: ToolName.make("read"),
             input: {},
           })
           yield* ref.execute(invokePayload)
@@ -642,7 +643,7 @@ describe("SessionRuntime", () => {
             commandId: ActorCommandId.make("record-tool-idempotent"),
             ...target,
             toolCallId: ToolCallId.make("tool-call-idempotent"),
-            toolName: "read",
+            toolName: ToolName.make("read"),
             output: { ok: true },
           }
           yield* recordToolResultViaActor(command)
@@ -684,7 +685,7 @@ describe("SessionRuntime", () => {
               sessionId,
               branchId,
               toolCallId: ToolCallId.make("tool-call-atomicity"),
-              toolName: "read",
+              toolName: ToolName.make("read"),
               output: { ok: true },
             }),
           )
@@ -744,7 +745,7 @@ describe("SessionRuntime", () => {
             sessionId,
             branchId,
             toolCallId: ToolCallId.make("tool-call-serialize-a"),
-            toolName: "read",
+            toolName: ToolName.make("read"),
             output: { value: "a" },
           }
           const second = {
@@ -752,7 +753,7 @@ describe("SessionRuntime", () => {
             sessionId,
             branchId,
             toolCallId: ToolCallId.make("tool-call-serialize-b"),
-            toolName: "read",
+            toolName: ToolName.make("read"),
             output: { value: "b" },
           }
           const firstFiber = yield* Effect.forkChild(recordToolResultViaActor(first))
@@ -803,7 +804,7 @@ describe("SessionRuntime", () => {
               sessionId,
               branchId,
               toolCallId: ToolCallId.make("tool-call-active-owner"),
-              toolName: "read",
+              toolName: ToolName.make("read"),
               output: { value: "blocked until turn completes" },
             }),
           )
@@ -862,7 +863,7 @@ describe("SessionRuntime", () => {
               sessionId,
               branchId,
               toolCallId: ToolCallId.make("tool-call-terminate-owner"),
-              toolName: "read",
+              toolName: ToolName.make("read"),
               output: { value: "blocked until turn completes" },
             }),
           )

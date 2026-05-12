@@ -50,6 +50,7 @@ import {
   MessageId,
   SessionId,
   ToolCallId,
+  ToolName,
 } from "../../domain/ids.js"
 import { SteerCommand } from "../../domain/steer.js"
 import { GentPlatform } from "../gent-platform.js"
@@ -89,7 +90,7 @@ import { Permission } from "../../domain/permission.js"
 import { invokeTool, recordToolResult } from "./turn-helpers.js"
 
 const WorkspaceFields = {
-  workspaceId: Schema.String,
+  workspaceId: WorkspaceId,
 }
 
 const TurnSubmissionFields = {
@@ -147,7 +148,7 @@ const RecordToolResultFields = {
   branchId: BranchId,
   commandId: Schema.optional(ActorCommandId),
   toolCallId: ToolCallId,
-  toolName: Schema.String,
+  toolName: ToolName,
   output: Schema.Unknown,
   isError: Schema.optional(Schema.Boolean),
 }
@@ -179,7 +180,7 @@ type MessageType = Schema.Schema.Type<typeof Message>
 type SteerCommandType = Schema.Schema.Type<typeof SteerCommand>
 
 type WorkspaceInput = {
-  readonly workspaceId: string
+  readonly workspaceId: WorkspaceId
 }
 type TurnSubmissionInput = WorkspaceInput & {
   readonly message: MessageType
@@ -192,47 +193,47 @@ type SteerInput = WorkspaceInput & {
   readonly command: SteerCommandType
 }
 type InterruptInput = {
-  readonly workspaceId: string
+  readonly workspaceId: WorkspaceId
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
 }
 type RespondInteractionInput = {
-  readonly workspaceId: string
+  readonly workspaceId: WorkspaceId
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly requestId: InteractionRequestId
 }
 type DrainQueueInput = {
-  readonly workspaceId: string
+  readonly workspaceId: WorkspaceId
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
 }
 type GetQueueInput = {
-  readonly workspaceId: string
+  readonly workspaceId: WorkspaceId
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
 }
 type GetStateInput = {
-  readonly workspaceId: string
+  readonly workspaceId: WorkspaceId
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
 }
 type RecordToolResultInput = {
-  readonly workspaceId: string
+  readonly workspaceId: WorkspaceId
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId?: ActorCommandId
   readonly toolCallId: ToolCallId
-  readonly toolName: string
+  readonly toolName: ToolName
   readonly output: unknown
   readonly isError?: boolean
 }
 type InvokeToolInput = {
-  readonly workspaceId: string
+  readonly workspaceId: WorkspaceId
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
@@ -240,7 +241,7 @@ type InvokeToolInput = {
   readonly input: unknown
 }
 type TerminateBranchInput = {
-  readonly workspaceId: string
+  readonly workspaceId: WorkspaceId
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
@@ -488,7 +489,7 @@ const buildAgentLoopActorHandlers = (config: {
     // call path is bracketed by `withWorkspace(...)` below, so the storage
     // operations see the correct workspace from fiber context without any
     // per-method wrapping layer.
-    const brandedWorkspaceId = WorkspaceId.make(workspaceId)
+    const brandedWorkspaceId = workspaceId
     const withWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(Effect.provideService(CurrentWorkspaceId, brandedWorkspaceId))
     const messageStorage = yield* MessageStorage

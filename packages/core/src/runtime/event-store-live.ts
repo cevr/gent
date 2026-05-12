@@ -7,13 +7,12 @@ import {
 } from "../domain/event.js"
 import type { EventStoreService } from "../domain/event.js"
 import { makeSessionPubSubRegistry } from "../domain/session-pubsub-registry.js"
-import type { StorageError } from "../domain/storage-error.js"
-import { EventStorage } from "../storage/event-storage.js"
+import { EventStorage, type EventStorageError } from "../storage/event-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 
 const toEventStoreError =
   (message: string) =>
-  (error: StorageError): EventStoreError =>
+  (error: EventStorageError): EventStoreError =>
     new EventStoreError({ message, cause: error })
 
 export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | SessionStorage> =

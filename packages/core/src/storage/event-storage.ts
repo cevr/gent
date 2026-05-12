@@ -23,8 +23,48 @@ import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 const LatestEventIdRow = Schema.Struct({ id: Schema.Number })
 const decodeLatestEventIdRow = Schema.decodeUnknownEffect(LatestEventIdRow)
 
-const EventJsonRow = Schema.Struct({ event_json: Schema.String })
+const EventJsonRow = Schema.Struct({ id: EventId, event_json: Schema.String })
 const decodeEventJsonRow = Schema.decodeUnknownEffect(EventJsonRow)
+
+type EventDecodeOperation = "listEvents" | "getLatestEvent"
+
+export class EventDecodeError extends Schema.TaggedErrorClass<EventDecodeError>()(
+  "EventDecodeError",
+  {
+    eventId: EventId,
+    operation: Schema.Literals(["listEvents", "getLatestEvent"]),
+    error: Schema.String,
+  },
+) {}
+
+export type EventStorageError = StorageError | EventDecodeError
+const isEventDecodeError = Schema.is(EventDecodeError)
+
+const decodePersistedEvent = Effect.fn("EventStorage.decodePersistedEvent")(function* (params: {
+  eventId: EventId
+  eventJson: string
+  operation: EventDecodeOperation
+}) {
+  return yield* decodeEvent(params.eventJson).pipe(
+    Effect.tapCause((cause) =>
+      Effect.logWarning("event decode failed").pipe(
+        Effect.annotateLogs({
+          event_id: params.eventId,
+          operation: params.operation,
+          error: String(cause),
+        }),
+      ),
+    ),
+    Effect.mapError(
+      (error) =>
+        new EventDecodeError({
+          eventId: params.eventId,
+          operation: params.operation,
+          error: String(error),
+        }),
+    ),
+  )
+})
 
 class EventTable extends Model.Class<EventTable>("EventTable")({
   id: Model.Generated(EventId),
@@ -45,7 +85,7 @@ export interface EventStorageService {
     sessionId: SessionId
     branchId?: BranchId
     afterId?: number
-  }) => Effect.Effect<ReadonlyArray<EventEnvelope>, StorageError>
+  }) => Effect.Effect<ReadonlyArray<EventEnvelope>, EventStorageError>
   readonly getLatestEventId: (params: {
     sessionId: SessionId
     branchId?: BranchId
@@ -54,7 +94,7 @@ export interface EventStorageService {
     sessionId: SessionId
     branchId: BranchId
     tags: ReadonlyArray<AgentEventTag>
-  }) => Effect.Effect<AgentEvent | undefined, StorageError>
+  }) => Effect.Effect<AgentEvent | undefined, EventStorageError>
 }
 
 export class EventStorage extends Context.Service<EventStorage, EventStorageService>()(
@@ -70,6 +110,8 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
         idColumn: "id",
       })
       const mapError = (message: string) => (cause: unknown) => new StorageError({ message, cause })
+      const mapEventStorageError = (message: string) => (cause: unknown) =>
+        isEventDecodeError(cause) ? cause : mapError(message)(cause)
 
       return {
         appendEvent: Effect.fn("EventStorage.appendEvent")(
@@ -131,23 +173,23 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
                       AND e.id > ${sinceId}
                     ORDER BY e.id ASC`
             const rows = yield* Effect.forEach(rawRows, (row) => decodeEventRow(row))
-            const envelopes: EventEnvelope[] = []
-            for (const row of rows) {
-              const decoded = yield* decodeEvent(row.event_json).pipe(Effect.option)
-              if (decoded._tag === "Some") {
-                envelopes.push(
-                  EventEnvelope.make({
-                    id: row.id,
-                    event: decoded.value,
-                    createdAt: row.created_at,
-                    ...(row.trace_id !== null ? { traceId: row.trace_id } : {}),
-                  }),
-                )
-              }
-            }
-            return envelopes
+            return yield* Effect.forEach(rows, (row) =>
+              Effect.gen(function* () {
+                const decoded = yield* decodePersistedEvent({
+                  eventId: row.id,
+                  eventJson: row.event_json,
+                  operation: "listEvents",
+                })
+                return EventEnvelope.make({
+                  id: row.id,
+                  event: decoded,
+                  createdAt: row.created_at,
+                  ...(row.trace_id !== null ? { traceId: row.trace_id } : {}),
+                })
+              }),
+            )
           },
-          Effect.mapError(mapError("Failed to list events")),
+          Effect.mapError(mapEventStorageError("Failed to list events")),
         ),
 
         getLatestEventId: Effect.fn("EventStorage.getLatestEventId")(
@@ -179,7 +221,7 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
           function* ({ sessionId, branchId, tags }) {
             if (tags.length === 0) return undefined
             const workspaceId = yield* CurrentWorkspaceId
-            const rawRows = yield* sql`SELECT e.event_json
+            const rawRows = yield* sql`SELECT e.id, e.event_json
               FROM events e
               JOIN sessions s ON s.id = e.session_id
               WHERE e.session_id = ${sessionId}
@@ -189,10 +231,13 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
               ORDER BY e.id DESC LIMIT 1`
             if (rawRows[0] === undefined) return undefined
             const row = yield* decodeEventJsonRow(rawRows[0])
-            const decoded = yield* decodeEvent(row.event_json).pipe(Effect.option)
-            return decoded._tag === "Some" ? decoded.value : undefined
+            return yield* decodePersistedEvent({
+              eventId: row.id,
+              eventJson: row.event_json,
+              operation: "getLatestEvent",
+            })
           },
-          Effect.mapError(mapError("Failed to get latest event")),
+          Effect.mapError(mapEventStorageError("Failed to get latest event")),
         ),
       } satisfies EventStorageService
     }),

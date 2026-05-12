@@ -55,7 +55,7 @@ const RowToRecord = InteractionRequestRow.pipe(
   }),
 )
 
-const decodeRow = Schema.decodeSync(RowToRecord)
+const decodeRow = Schema.decodeUnknownEffect(RowToRecord)
 
 const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
 
@@ -153,7 +153,7 @@ export class InteractionStorage extends Context.Service<
                     AND ir.branch_id = ${scope.branchId}
                     AND s.workspace_id = ${workspaceId}
                   ORDER BY ir.created_at ASC`
-            return rows.map((row) => decodeRow(row))
+            return yield* Effect.forEach(rows, (row) => decodeRow(row))
           },
           Effect.mapError(mapError("Failed to list pending interaction requests")),
         ),

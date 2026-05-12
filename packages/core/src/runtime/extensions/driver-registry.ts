@@ -23,7 +23,7 @@ import type {
   ProviderAuthError,
   ProviderAuthInfo,
 } from "../../domain/driver.js"
-import { DriverError, DriverFailureRef } from "../../domain/driver.js"
+import { DriverError, DriverFailureId, DriverFailureRef } from "../../domain/driver.js"
 import { Model } from "../../domain/model.js"
 
 const decodeModelCatalog = Schema.decodeUnknownOption(Schema.Array(Model))
@@ -78,7 +78,7 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
           const decoded = decodeModelCatalog(nextCatalog)
           if (decoded._tag === "None") {
             return yield* new DriverError({
-              driver: DriverFailureRef.cases.model.make({ id: driver.id }),
+              driver: DriverFailureRef.cases.model.make({ id: DriverFailureId.make(driver.id) }),
               reason: `Model driver "${driver.id}" returned an invalid model catalog`,
             })
           }

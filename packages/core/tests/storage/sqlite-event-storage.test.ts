@@ -2,7 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
-import { EventStorage } from "@gent/core-internal/storage/event-storage"
+import { EventDecodeError, EventStorage } from "@gent/core-internal/storage/event-storage"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
@@ -62,7 +62,7 @@ describe("Events", () => {
 
 describe("Event decoding", () => {
   const layer = SqliteStorage.TestWithSql()
-  it.live("listEvents skips events with unknown _tag instead of crashing", () =>
+  it.live("listEvents fails with a tagged decode error for unknown _tag", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
@@ -83,13 +83,15 @@ describe("Event decoding", () => {
       yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: FIXED_NOW }))
       yield* events.appendEvent(SessionStarted.make({ sessionId, branchId }))
       yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, '__test_unknown__', ${unknownEventJson}, ${FIXED_NOW_MILLIS})`
-      yield* events.appendEvent(SessionStarted.make({ sessionId, branchId }))
-      const eventsResult = yield* events.listEvents({ sessionId, branchId })
-      expect(eventsResult.length).toBe(2)
-      expect(eventsResult.every((e) => e.event._tag === "SessionStarted")).toBe(true)
+      const error = yield* events.listEvents({ sessionId, branchId }).pipe(Effect.flip)
+      expect(error._tag).toBe("EventDecodeError")
+      if (error._tag !== "EventDecodeError") return
+      expect(error).toBeInstanceOf(EventDecodeError)
+      expect(error.eventId).toBeDefined()
+      expect(error.operation).toBe("listEvents")
     }).pipe(Effect.provide(layer)),
   )
-  it.live("getLatestEvent returns undefined for undecodable events", () =>
+  it.live("getLatestEvent fails with a tagged decode error for undecodable events", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
@@ -109,12 +111,18 @@ describe("Event decoding", () => {
       )
       yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: FIXED_NOW }))
       yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SessionStarted', ${unknownEventJson}, ${FIXED_NOW_MILLIS})`
-      const latest = yield* events.getLatestEvent({
-        sessionId,
-        branchId,
-        tags: ["SessionStarted"],
-      })
-      expect(latest).toBeUndefined()
+      const error = yield* events
+        .getLatestEvent({
+          sessionId,
+          branchId,
+          tags: ["SessionStarted"],
+        })
+        .pipe(Effect.flip)
+      expect(error._tag).toBe("EventDecodeError")
+      if (error._tag !== "EventDecodeError") return
+      expect(error).toBeInstanceOf(EventDecodeError)
+      expect(error.eventId).toBeDefined()
+      expect(error.operation).toBe("getLatestEvent")
     }).pipe(Effect.provide(layer)),
   )
 })

@@ -21,17 +21,22 @@
 
 import { Effect } from "effect"
 import { BranchId, SessionId } from "../../domain/ids.js"
+import { WorkspaceId } from "../../server/workspace-rpc.js"
 import { AgentLoopError } from "./agent-loop.state.js"
 
 /** Encode `(workspaceId, sessionId, branchId)` into a unique reversible string. */
-export const entityIdOf = (workspaceId: string, sessionId: SessionId, branchId: BranchId): string =>
+export const entityIdOf = (
+  workspaceId: WorkspaceId,
+  sessionId: SessionId,
+  branchId: BranchId,
+): string =>
   `${encodeURIComponent(workspaceId)}:${encodeURIComponent(sessionId)}:${encodeURIComponent(branchId)}`
 
 /** Parse an encoded entity id back into its `(workspaceId, sessionId, branchId)` tuple. */
 export const parseEntityId = (
   entityId: string,
 ): Effect.Effect<
-  { workspaceId: string; sessionId: SessionId; branchId: BranchId },
+  { workspaceId: WorkspaceId; sessionId: SessionId; branchId: BranchId },
   AgentLoopError
 > =>
   Effect.gen(function* () {
@@ -64,7 +69,7 @@ export const parseEntityId = (
       })
     }
     return {
-      workspaceId,
+      workspaceId: WorkspaceId.make(workspaceId),
       sessionId: SessionId.make(sessionRaw),
       branchId: BranchId.make(branchRaw),
     }

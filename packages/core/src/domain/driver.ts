@@ -40,6 +40,9 @@ import type { Message } from "./message.js"
 import type { Model } from "./model.js"
 import type { ProviderError } from "./provider-error.js"
 
+export const DriverFailureId = Schema.String.pipe(Schema.brand("DriverFailureId"))
+export type DriverFailureId = typeof DriverFailureId.Type
+
 // Note: TurnExecutor is defined below alongside the driver primitives — no
 // external import of `TurnExecutor` is needed.
 
@@ -53,10 +56,10 @@ export { DriverRef, ModelDriverRef, ExternalDriverRef } from "./agent.js"
 // ── Failure type ──
 
 const DriverFailureModelStruct = Schema.TaggedStruct("model", {
-  id: Schema.String,
+  id: DriverFailureId,
 })
 const DriverFailureExternalStruct = Schema.TaggedStruct("external", {
-  id: Schema.String,
+  id: DriverFailureId,
 })
 
 /** Failure raised when a driver lookup or dispatch fails. */

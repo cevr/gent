@@ -21,6 +21,9 @@ export type ToolCallId = typeof ToolCallId.Type
 export const ToolId = Schema.String.pipe(branded("ToolId"))
 export type ToolId = typeof ToolId.Type
 
+export const ToolName = Schema.String.pipe(branded("ToolName"))
+export type ToolName = typeof ToolName.Type
+
 export const CommandId = Schema.String.pipe(branded("CommandId"))
 export type CommandId = typeof CommandId.Type
 
