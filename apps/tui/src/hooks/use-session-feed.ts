@@ -8,7 +8,7 @@
 
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { createStore, produce, type SetStoreFunction } from "solid-js/store"
-import { Clock, Effect, Fiber, Random, Stream } from "effect"
+import { Clock, Effect, Fiber, Random, Schedule, Stream } from "effect"
 import type {
   ActiveInteraction,
   AgentEvent,
@@ -34,8 +34,45 @@ import type { AssistantSegment, Message, SessionItem } from "../components/messa
 import type { SessionEvent } from "../components/session-event-label"
 import { formatToolInput } from "../components/message-list-utils"
 import { formatConnectionIssue } from "../utils/format-error"
-import { runWithReconnect } from "../utils/run-with-reconnect"
+import type { ClientLog } from "../utils/client-logger"
 import type { ClientSessionValue, ClientTransportValue } from "../client/context"
+
+interface ReconnectOptions<E> {
+  readonly label?: string
+  readonly log: ClientLog
+  readonly onError?: (error: E) => void
+  readonly waitForRetry: () => Effect.Effect<void>
+}
+
+const reconnectBackoff = Schedule.exponential("1 second", 2).pipe(
+  Schedule.either(Schedule.spaced("30 seconds")),
+)
+
+const runWithReconnect = <E, R>(
+  effectFactory: () => Effect.Effect<void, E, R>,
+  options: ReconnectOptions<E>,
+): Effect.Effect<never, never, R> => {
+  let attempt = 0
+  const label = options.label ?? "unknown"
+  const log = options.log
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
+  return Effect.gen(function* () {
+    attempt++
+    log.info("reconnect.attempt", { label, attempt })
+    yield* effectFactory().pipe(
+      Effect.catchEager((error) =>
+        Effect.sync(() => {
+          log.warn("reconnect.error", { label, attempt, error: String(error) })
+          options.onError?.(error)
+        }),
+      ),
+    )
+    log.info("reconnect.stream-ended", { label, attempt })
+    log.info("reconnect.wait-for-ready", { label, attempt })
+    yield* options.waitForRetry()
+    log.info("reconnect.ready", { label, attempt })
+  }).pipe(Effect.repeat(reconnectBackoff)) as Effect.Effect<never, never, R>
+}
 
 // ── Types ──
 

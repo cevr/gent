@@ -7,7 +7,10 @@ import {
   onCleanup,
   useContext,
 } from "solid-js"
+import { useRenderer } from "@opentui/solid"
 import { Effect, Fiber, Random, Schedule } from "effect"
+import { useEnv } from "../env/context"
+import { shutdownLog } from "../utils/client-logger"
 import type { ActiveInteraction } from "@gent/core-internal/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids.js"
 import type { ReasoningEffort } from "@gent/core-internal/domain/agent.js"
@@ -35,8 +38,6 @@ import { executeSlashCommand } from "../commands/slash-commands"
 import { useCommand } from "../command/context"
 import type { Command } from "../command/types"
 import { useRuntime } from "../hooks/use-runtime"
-import { useExit } from "../hooks/use-exit"
-import { useKeyChain } from "../hooks/use-key-chain"
 import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useRouter } from "../router"
@@ -131,8 +132,43 @@ export function createSessionController(props: {
   const ext = useExtensionUI()
   const router = useRouter()
   const { cast } = useRuntime()
-  const { exit, handleEsc } = useExit()
-  const quitChain = useKeyChain()
+  const renderer = useRenderer()
+  const env = useEnv()
+  const exit = () => {
+    shutdownLog("exit.renderer-destroy")
+    renderer.destroy()
+    shutdownLog("exit.shutdown-signal")
+    env.shutdown()
+  }
+  const ESC_DOUBLE_TAP_MS = 1_000
+  let lastEscTime = 0
+  const handleEsc = (): boolean => {
+    const now = performance.timeOrigin + performance.now()
+    if (now - lastEscTime < ESC_DOUBLE_TAP_MS) {
+      exit()
+      return true
+    }
+    lastEscTime = now
+    return false
+  }
+  const QUIT_CHAIN_WINDOW_MS = 1_000
+  let quitArmed: { id: string; at: number } | null = null
+  const quitChain = {
+    trigger: (id: string, actions?: { first?: () => void; second: () => void }) => {
+      const now = performance.timeOrigin + performance.now()
+      const isSecond = quitArmed?.id === id && now - quitArmed.at < QUIT_CHAIN_WINDOW_MS
+      if (isSecond) {
+        quitArmed = null
+        actions?.second()
+        return
+      }
+      quitArmed = { id, at: now }
+      actions?.first?.()
+    },
+    reset: () => {
+      quitArmed = null
+    },
+  }
   const history = usePromptHistory()
   const tick = useSpinnerClock()
 

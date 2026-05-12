@@ -22,14 +22,38 @@ import {
   type ReasoningEffort,
 } from "@gent/core-internal/domain/agent.js"
 import { type Model, type ModelId } from "@gent/core-internal/domain/model.js"
-import type { EventEnvelope } from "@gent/core-internal/domain/event.js"
+import type { AgentEvent, EventEnvelope } from "@gent/core-internal/domain/event.js"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
 import type { MessageId } from "@gent/core-internal/domain/ids.js"
 import type { ClientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { useWorkspace } from "../workspace/context"
 import { AgentStatus, type AgentState } from "./agent-state"
-import { reduceAgentLifecycle } from "./agent-lifecycle"
+
+export interface AgentLifecycleUpdate {
+  readonly status?: AgentStatus
+  readonly preferredAgent?: AgentName
+}
+
+export const reduceAgentLifecycle = (event: AgentEvent): AgentLifecycleUpdate => {
+  switch (event._tag) {
+    case "StreamStarted":
+      return { status: AgentStatus.cases["streaming"].make({}) }
+    case "TurnCompleted":
+      return { status: AgentStatus.cases["idle"].make({}) }
+    case "ErrorOccurred":
+      return { status: AgentStatus.cases["error"].make({ error: event.error }) }
+    case "AgentSwitched":
+      return { preferredAgent: event.toAgent }
+    case "MessageReceived":
+      if (event.message.role === "user") {
+        return { status: AgentStatus.cases["streaming"].make({}) }
+      }
+      return {}
+    default:
+      return {}
+  }
+}
 
 import type {
   ConnectionState,

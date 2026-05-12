@@ -1,9 +1,37 @@
 import { describe, expect, it } from "effect-bun-test"
+import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer, Schema } from "effect"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { tool } from "@gent/core/extensions/api"
-import { testExtensionRegistryLayer } from "@gent/core-internal/test-utils/reconciled-extensions"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
+import type { FailedExtension, LoadedExtension } from "@gent/core-internal/domain/extension"
+import { reconcileLoadedExtensions } from "@gent/core-internal/runtime/extensions/activation"
+import { DriverRegistry } from "@gent/core-internal/runtime/extensions/driver-registry"
+
+const testExtensionRegistryLayer = (
+  extensions: ReadonlyArray<LoadedExtension>,
+  failedExtensions: ReadonlyArray<FailedExtension> = [],
+  home = "/tmp",
+) =>
+  Layer.unwrap(
+    reconcileLoadedExtensions({
+      extensions,
+      failedExtensions,
+      home,
+      command: undefined,
+    }).pipe(
+      Effect.map((result) => result.resolved),
+      Effect.map((resolved) =>
+        Layer.merge(
+          ExtensionRegistry.fromResolved(resolved),
+          DriverRegistry.fromResolved({
+            modelDrivers: resolved.modelDrivers,
+            externalDrivers: resolved.externalDrivers,
+          }),
+        ),
+      ),
+    ),
+  ).pipe(Layer.provide(BunServices.layer))
 
 describe("reconcileTestExtensions", () => {
   it.live("degrades same-scope collisions before building helper registries", () =>
