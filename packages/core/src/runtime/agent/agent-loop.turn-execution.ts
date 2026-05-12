@@ -39,7 +39,7 @@ import {
   type AssistantResponsePart,
   type ToolResponsePart,
 } from "./turn-persistence.js"
-import { computeStreamEndedCost, type PricingLookup } from "./turn-pricing.js"
+import { computeStreamEndedCost } from "./turn-pricing.js"
 import { resolveTurnContext, type ResolvedTurnContext } from "./turn-resolve.js"
 import { resolveTurnSource, toolCallsFromResponseParts } from "./turn-source.js"
 import { executeToolCalls, ToolInteractionPending } from "./turn-tool-execution.js"
@@ -74,7 +74,6 @@ export type AgentLoopTurnExecutionDeps = {
   readonly messageStorage: MessageStorageService
   readonly eventPublisher: EventPublisherService
   readonly storageTransaction: StorageTransaction
-  readonly getPricing: PricingLookup
   readonly resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile>
   readonly configServiceForRun: ConfigServiceService
   readonly activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
@@ -218,7 +217,6 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
     const streamEndedCost = yield* computeStreamEndedCost({
       modelId: params.resolved.modelId,
       usage: collected.messageProjection.usage,
-      getPricing: deps.getPricing,
     })
     yield* publishEventOrDie(
       StreamEnded.make({

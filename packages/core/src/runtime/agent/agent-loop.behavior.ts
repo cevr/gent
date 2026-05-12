@@ -48,7 +48,7 @@ import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/
 import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
 import { makeExtensionHostPlatform } from "../extensions/host-platform.js"
 import { ToolRunner } from "./tool-runner.js"
-import { ModelRegistry } from "../model-registry.js"
+import type { ModelRegistry } from "../model-registry.js"
 import type { GentPlatform } from "../gent-platform.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { AllowAllPermission, resolveSessionEnvironment } from "../session-runtime-context.js"
@@ -67,7 +67,6 @@ import {
 } from "./agent-loop.state.js"
 import type { QueueSnapshot } from "../../domain/queue.js"
 import { emptyTurnMetrics, type ActiveStreamHandle } from "./turn-response.js"
-import { type PricingLookup } from "./turn-pricing.js"
 import { makeAgentLoopQueue } from "./agent-loop.queue.js"
 import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
 import { makeAgentLoopWorker } from "./agent-loop.worker.js"
@@ -204,21 +203,21 @@ export const makeAgentLoopBehavior = (
     const eventPublisher = yield* EventPublisher
     yield* ToolRunner
     const configServiceForRun = yield* ConfigService
-    const modelRegistryForRun = yield* ModelRegistry
     const host = yield* makeExtensionHostPlatform
     const storageTransaction = yield* makeStorageTransaction
     // Snapshot the layer-build context so behavior methods (declared as
     // `Effect<A, E, never>` in `AgentLoopBehavior`) can resolve Tags that
     // Turn helper modules now yield inside (post-W33-C3.3). Without this, helper
     // requirements like `MessageStorage`, `EventPublisher`, `SqlClient`,
-    // `ModelResolver`, `ToolRunner`, etc. leak into the method R-channels
-    // and break the interface.
+    // `ModelResolver`, `ModelRegistry`, `ToolRunner`, etc. leak into the
+    // method R-channels and break the interface.
     const runtimeContext = yield* Effect.context<
       | SessionStorage
       | MessageStorage
       | EventStorage
       | SqlClient.SqlClient
       | ModelResolver
+      | ModelRegistry
       | ToolRunner
       | EventPublisher
     >()
@@ -234,19 +233,11 @@ export const makeAgentLoopBehavior = (
         | EventStorage
         | SqlClient.SqlClient
         | ModelResolver
+        | ModelRegistry
         | ToolRunner
         | EventPublisher
       >
     > => Effect.provideContext(effect, runtimeContext)
-    const getPricing: PricingLookup = (modelId) =>
-      modelRegistryForRun.list().pipe(
-        Effect.map((models) => models.find((m) => m.id === modelId)?.pricing),
-        Effect.catchEager(() =>
-          Effect.sync(
-            (): { readonly input: number; readonly output: number } | undefined => undefined,
-          ),
-        ),
-      )
 
     const publishEvent = (event: AgentEvent) =>
       eventPublisher.publish(event).pipe(
@@ -327,12 +318,10 @@ export const makeAgentLoopBehavior = (
       readonly eventPublisher: typeof eventPublisher
       readonly storageTransaction: typeof storageTransaction
       readonly provideRuntime: typeof provideRuntime
-      readonly getPricing: PricingLookup
       readonly publishEvent: typeof publishEvent
       readonly resolveTurnProfile: typeof resolveTurnProfile
       readonly hostDeps: typeof hostDeps
       readonly configServiceForRun: typeof configServiceForRun
-      readonly modelRegistryForRun: typeof modelRegistryForRun
       readonly host: typeof host
       readonly extensionRegistry: typeof extensionRegistry
       readonly driverRegistry: typeof driverRegistry
@@ -359,12 +348,10 @@ export const makeAgentLoopBehavior = (
       eventPublisher,
       storageTransaction,
       provideRuntime,
-      getPricing,
       publishEvent,
       resolveTurnProfile,
       hostDeps,
       configServiceForRun,
-      modelRegistryForRun,
       host,
       extensionRegistry,
       driverRegistry,
@@ -451,7 +438,6 @@ export const makeAgentLoopBehavior = (
       messageStorage,
       eventPublisher,
       storageTransaction,
-      getPricing,
       resolveTurnProfile,
       configServiceForRun,
       activeStreamRef,
