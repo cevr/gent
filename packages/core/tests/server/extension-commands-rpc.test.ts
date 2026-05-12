@@ -185,6 +185,29 @@ describe("extension command RPCs", () => {
             expect(extensionRequestEvent?.annotations["branchId"]).toBe(branchId)
             expect(extensionRequestEvent?.annotations["extensionId"]).toBe(greet!.extensionId)
             expect(extensionRequestEvent?.annotations["capabilityId"]).toBe(greet!.capabilityId)
+
+            const missingCapabilityId = "missing-greet"
+            const failed = yield* client.extension
+              .request({
+                sessionId,
+                extensionId: greet!.extensionId,
+                capabilityId: missingCapabilityId,
+                input: "rpc-world",
+                branchId,
+              })
+              .pipe(Effect.exit)
+            expect(failed._tag).toBe("Failure")
+
+            const failedRequestEvent = MutableRef.get(wideEvents).find(
+              (event) =>
+                event.annotations["service"] === "rpc" &&
+                event.annotations["method"] === "extension.request" &&
+                event.annotations["capabilityId"] === missingCapabilityId,
+            )
+            expect(failedRequestEvent).not.toBeUndefined()
+            expect(failedRequestEvent?.annotations["sessionId"]).toBe(sessionId)
+            expect(failedRequestEvent?.annotations["branchId"]).toBe(branchId)
+            expect(failedRequestEvent?.annotations["extensionId"]).toBe(greet!.extensionId)
           }).pipe(Effect.timeout("4 seconds")),
         ),
       )

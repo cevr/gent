@@ -584,6 +584,12 @@ const RpcHandlers = GentRpcs.toLayer(
         branchId,
       }: ExtensionRpcRequestInput) =>
         Effect.gen(function* () {
+          yield* WideEvent.set({
+            sessionId,
+            branchId,
+            extensionId,
+            capabilityId,
+          })
           const scope = yield* resolveExtensionSession({
             extensionId,
             tag: capabilityId,
@@ -636,17 +642,7 @@ const RpcHandlers = GentRpcs.toLayer(
           return yield* capabilityContext !== undefined
             ? request.pipe(Effect.provideContext(capabilityContext))
             : request
-        }).pipe(
-          Effect.tap(() =>
-            WideEvent.set({
-              sessionId,
-              branchId,
-              extensionId,
-              capabilityId,
-            }),
-          ),
-          withWideEvent(rpcBoundary("extension.request")),
-        ),
+        }).pipe(withWideEvent(rpcBoundary("extension.request"))),
 
       "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>
         Effect.gen(function* () {
