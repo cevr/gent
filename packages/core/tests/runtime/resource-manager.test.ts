@@ -82,16 +82,24 @@ describe("ResourceManager", () => {
           const manager = yield* ResourceManager
           const running = yield* Ref.make(0)
           const max = yield* Ref.make(0)
+          const firstHolds = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
           const run = manager.withNeeds(
             [ResourceNeeds.read("fs"), ResourceNeeds.write("fs")],
             Effect.gen(function* () {
               const now = yield* Ref.updateAndGet(running, (n) => n + 1)
               yield* Ref.update(max, (n) => Math.max(n, now))
-              yield* Effect.sleep("5 millis")
+              // First entrant signals it holds the lock; both await `release`.
+              // If exclusion is broken, the second fiber observes `now === 2`.
+              yield* Deferred.succeed(firstHolds, undefined)
+              yield* Deferred.await(release)
               yield* Ref.update(running, (n) => n - 1)
             }),
           )
-          yield* Effect.all([run, run], { concurrency: 2 })
+          const fiber = yield* Effect.forkChild(Effect.all([run, run], { concurrency: 2 }))
+          yield* Deferred.await(firstHolds)
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(fiber)
           return yield* Ref.get(max)
         }),
       )
@@ -105,16 +113,22 @@ describe("ResourceManager", () => {
           const manager = yield* ResourceManager
           const running = yield* Ref.make(0)
           const max = yield* Ref.make(0)
+          const firstHolds = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
           const run = manager.withNeeds(
             [ResourceNeeds.write("fs"), ResourceNeeds.read("fs")],
             Effect.gen(function* () {
               const now = yield* Ref.updateAndGet(running, (n) => n + 1)
               yield* Ref.update(max, (n) => Math.max(n, now))
-              yield* Effect.sleep("5 millis")
+              yield* Deferred.succeed(firstHolds, undefined)
+              yield* Deferred.await(release)
               yield* Ref.update(running, (n) => n - 1)
             }),
           )
-          yield* Effect.all([run, run], { concurrency: 2 })
+          const fiber = yield* Effect.forkChild(Effect.all([run, run], { concurrency: 2 }))
+          yield* Deferred.await(firstHolds)
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(fiber)
           return yield* Ref.get(max)
         }),
       )
