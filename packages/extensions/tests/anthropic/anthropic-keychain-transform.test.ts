@@ -110,10 +110,8 @@ const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServi
       env: {},
     }),
   )
-  const layer = Layer.mergeAll(
-    AnthropicCredentialService.layerFromIO(io),
-    BunServices.layer,
-    platformLayer,
+  const layer = AnthropicCredentialService.layerFromIO(io).pipe(
+    Layer.provide(Layer.merge(BunServices.layer, platformLayer)),
   )
   return runEffectBoundary(
     Layer.build(layer).pipe(
@@ -121,7 +119,7 @@ const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServi
       Effect.map((ctx) => {
         const creds = Context.get(ctx, AnthropicCredentialService)
         return {
-          getFresh: creds.getFresh.pipe(Effect.provideContext(ctx)),
+          getFresh: creds.getFresh,
           invalidate: creds.invalidate,
         }
       }),

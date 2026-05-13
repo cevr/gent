@@ -19,17 +19,11 @@ import {
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 import { Model as AiModel } from "effect/unstable/ai"
 import { FetchHttpClient } from "effect/unstable/http"
-import {
-  makeKeychainClientLayer,
-  transformPayload,
-  type KeychainTransformRequirements,
-} from "./keychain-client.js"
+import { makeKeychainClientLayer } from "./keychain-client.js"
 import {
   AnthropicCredentialService,
   EMPTY_CREDENTIAL_CELL,
   type CredentialCacheCellRef,
-  type AnthropicCredentialServiceShape,
-  type AnthropicCredentialIORequirements,
 } from "./credential-service.js"
 import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-cache.js"
 import { buildKeychainTransformClient } from "./keychain-transform.js"
@@ -135,26 +129,13 @@ const makeOauthAnthropicLayer = (
     Effect.gen(function* () {
       const creds = yield* AnthropicCredentialService
       const cache = yield* AnthropicBetaCache
-      const credentialContext = yield* Effect.context<AnthropicCredentialIORequirements>()
-      const closedCreds: AnthropicCredentialServiceShape = {
-        getFresh: creds.getFresh.pipe(Effect.provideContext(credentialContext)),
-        invalidate: creds.invalidate,
-      }
       return AnthropicClient.layer({
-        transformClient: buildKeychainTransformClient(closedCreds, cache, platform.env),
+        transformClient: buildKeychainTransformClient(creds, cache, platform.env),
       }).pipe(Layer.provide(FetchHttpClient.layer))
     }),
   ).pipe(Layer.provide(credentialLayer), Layer.provide(cacheLayer))
 
-  const keychainClientLayer = Layer.unwrap(
-    Effect.gen(function* () {
-      const keychainContext = yield* Effect.context<KeychainTransformRequirements>()
-      return makeKeychainClientLayer((payload) =>
-        transformPayload(payload).pipe(Effect.provideContext(keychainContext)),
-      )
-    }),
-  )
-  const wrappedClient = keychainClientLayer.pipe(
+  const wrappedClient = makeKeychainClientLayer().pipe(
     Layer.provide(clientLayer),
     Layer.provide(BunGentPlatformLive),
     Layer.provide(Layer.succeed(AnthropicPlatform, platform)),

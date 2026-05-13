@@ -33,10 +33,8 @@ const testPlatformLayer = (): Layer.Layer<AnthropicPlatform> => {
   )
 }
 const credLayer = (...args: Parameters<typeof AnthropicCredentialService.layerFromIO>) =>
-  Layer.mergeAll(
-    AnthropicCredentialService.layerFromIO(...args),
-    BunServices.layer,
-    testPlatformLayer(),
+  AnthropicCredentialService.layerFromIO(...args).pipe(
+    Layer.provide(Layer.merge(BunServices.layer, testPlatformLayer())),
   )
 // ── Helpers ──
 const makeCreds = (label: string, expiresAt: number): ClaudeCredentials => ({

@@ -471,18 +471,20 @@ export const transformStreamEvent = (
 
 type CreateMessageOptions = Parameters<AnthropicClient.Service["createMessage"]>[0]
 type CreateMessageStreamOptions = Parameters<AnthropicClient.Service["createMessageStream"]>[0]
-type ClosedTransformPayload = (
-  payload: Record<string, unknown>,
-) => Effect.Effect<Record<string, unknown>>
 
 /** Wraps an AnthropicClient to apply Claude Code keychain conventions. */
-export const makeKeychainClientLayer = (
-  transformPayloadHere: ClosedTransformPayload,
-): Layer.Layer<AnthropicClient.AnthropicClient, never, AnthropicClient.AnthropicClient> =>
+export const makeKeychainClientLayer = (): Layer.Layer<
+  AnthropicClient.AnthropicClient,
+  never,
+  AnthropicClient.AnthropicClient | KeychainTransformRequirements
+> =>
   Layer.effect(
     AnthropicClient.AnthropicClient,
     Effect.gen(function* () {
       const inner = yield* AnthropicClient.AnthropicClient
+      const transformContext = yield* Effect.context<KeychainTransformRequirements>()
+      const transformPayloadHere = (payload: Record<string, unknown>) =>
+        transformPayload(payload).pipe(Effect.provideContext(transformContext))
 
       const service: AnthropicClient.Service = {
         client: inner.client,

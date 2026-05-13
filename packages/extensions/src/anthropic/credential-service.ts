@@ -81,13 +81,13 @@ const providerAuthErrorFromCause = (cause: Cause.Cause<ProviderAuthError>): Prov
 
 // ── Service interface ──
 
-export interface AnthropicCredentialServiceShape<R = never> {
+export interface AnthropicCredentialServiceShape {
   /**
    * Resolve cached/refreshed Claude Code credentials. Fails with
    * `ProviderAuthError` when keychain has no usable credentials and
    * refresh paths exhausted.
    */
-  readonly getFresh: Effect.Effect<ClaudeCredentials, ProviderAuthError, R>
+  readonly getFresh: Effect.Effect<ClaudeCredentials, ProviderAuthError>
   /** Bust the cache so the next `getFresh` re-reads from keychain or forces a refresh. */
   readonly invalidate: Effect.Effect<void>
 }
@@ -130,7 +130,7 @@ const realIO: AnthropicCredentialIO = {
 
 export class AnthropicCredentialService extends Context.Service<
   AnthropicCredentialService,
-  AnthropicCredentialServiceShape<AnthropicCredentialIORequirements>
+  AnthropicCredentialServiceShape
 >()("@gent/extensions/src/anthropic/credential-service/AnthropicCredentialService") {
   /**
    * Build the credential service for the OAuth path. `authInfo.persist`
@@ -143,7 +143,9 @@ export class AnthropicCredentialService extends Context.Service<
    * so a future audit-grep finds every site that still assumes one
    * account.
    */
-  static layer = (authInfo?: ProviderAuthInfo): Layer.Layer<AnthropicCredentialService> =>
+  static layer = (
+    authInfo?: ProviderAuthInfo,
+  ): Layer.Layer<AnthropicCredentialService, never, AnthropicCredentialIORequirements> =>
     AnthropicCredentialService.layerFromIO(realIO, authInfo)
 
   /**
@@ -154,7 +156,7 @@ export class AnthropicCredentialService extends Context.Service<
   static layerFromRef = (
     cellRef: CredentialCacheCellRef,
     authInfo?: ProviderAuthInfo,
-  ): Layer.Layer<AnthropicCredentialService> =>
+  ): Layer.Layer<AnthropicCredentialService, never, AnthropicCredentialIORequirements> =>
     AnthropicCredentialService.layerFromRefAndIO(cellRef, realIO, authInfo)
 
   /**
@@ -164,7 +166,7 @@ export class AnthropicCredentialService extends Context.Service<
   static layerFromIO = (
     io: AnthropicCredentialIO,
     authInfo?: ProviderAuthInfo,
-  ): Layer.Layer<AnthropicCredentialService> =>
+  ): Layer.Layer<AnthropicCredentialService, never, AnthropicCredentialIORequirements> =>
     Layer.effect(
       AnthropicCredentialService,
       Effect.gen(function* () {
@@ -177,7 +179,7 @@ export class AnthropicCredentialService extends Context.Service<
     cellRef: CredentialCacheCellRef,
     io: AnthropicCredentialIO,
     authInfo?: ProviderAuthInfo,
-  ): Layer.Layer<AnthropicCredentialService> =>
+  ): Layer.Layer<AnthropicCredentialService, never, AnthropicCredentialIORequirements> =>
     Layer.effect(
       AnthropicCredentialService,
       AnthropicCredentialService.buildShape(cellRef, io, authInfo),
@@ -187,8 +189,12 @@ export class AnthropicCredentialService extends Context.Service<
     cellRef: CredentialCacheCellRef,
     io: AnthropicCredentialIO,
     authInfo: ProviderAuthInfo | undefined,
-  ): Effect.Effect<AnthropicCredentialServiceShape<AnthropicCredentialIORequirements>> =>
-    Effect.sync(() => {
+  ): Effect.Effect<AnthropicCredentialServiceShape, never, AnthropicCredentialIORequirements> =>
+    Effect.gen(function* () {
+      const ioContext = yield* Effect.context<AnthropicCredentialIORequirements>()
+      const read = io.read.pipe(Effect.provideContext(ioContext))
+      const refresh = io.refresh.pipe(Effect.provideContext(ioContext))
+
       const persistRefreshed = (
         creds: ClaudeCredentials,
       ): Effect.Effect<void, ProviderAuthError> => {
@@ -212,74 +218,65 @@ export class AnthropicCredentialService extends Context.Service<
         )
       }
 
-      const getFresh: Effect.Effect<
-        ClaudeCredentials,
-        ProviderAuthError,
-        AnthropicCredentialIORequirements
-      > = SynchronizedRef.modifyEffect(
-        cellRef,
-        (
-          cell,
-        ): Effect.Effect<
-          readonly [CredentialResult, CredentialCacheCell],
-          never,
-          AnthropicCredentialIORequirements
-        > =>
-          Effect.gen(function* () {
-            const now = yield* Clock.currentTimeMillis
+      const getFresh: Effect.Effect<ClaudeCredentials, ProviderAuthError> =
+        SynchronizedRef.modifyEffect(
+          cellRef,
+          (cell): Effect.Effect<readonly [CredentialResult, CredentialCacheCell], never> =>
+            Effect.gen(function* () {
+              const now = yield* Clock.currentTimeMillis
 
-            // Cache hit: still warm AND >60s before expiry
-            if (
-              cell.creds !== null &&
-              now - cell.at < CREDENTIAL_CACHE_TTL_MS &&
-              freshEnoughForUse(cell.creds, now)
-            ) {
-              return [successResult(cell.creds), cell]
-            }
+              // Cache hit: still warm AND >60s before expiry
+              if (
+                cell.creds !== null &&
+                now - cell.at < CREDENTIAL_CACHE_TTL_MS &&
+                freshEnoughForUse(cell.creds, now)
+              ) {
+                return [successResult(cell.creds), cell]
+              }
 
-            // Read from keychain. A read failure surfaces as
-            // ProviderAuthError; the catch turns it into a refresh
-            // attempt rather than failing immediately.
-            const fromKeychain = yield* io.read.pipe(
-              Effect.catchTag("ProviderAuthError", () => Effect.succeed(null)),
-            )
+              // Read from keychain. A read failure surfaces as
+              // ProviderAuthError; the catch turns it into a refresh
+              // attempt rather than failing immediately.
+              const fromKeychain = yield* read.pipe(
+                Effect.catchTag("ProviderAuthError", () => Effect.succeed(null)),
+              )
 
-            if (fromKeychain !== null && freshEnoughForUse(fromKeychain, now)) {
-              return [successResult(fromKeychain), { creds: fromKeychain, at: now }]
-            }
+              if (fromKeychain !== null && freshEnoughForUse(fromKeychain, now)) {
+                return [successResult(fromKeychain), { creds: fromKeychain, at: now }]
+              }
 
-            // Either no keychain creds or they're expiring inside the
-            // freshness window. Refresh — use the returned creds
-            // directly; re-reading keychain after refresh would silently
-            // lose direct-OAuth tokens whenever write-back failed.
-            const refreshed = yield* io.refresh.pipe(
-              Effect.catchTag("ProviderAuthError", () => Effect.succeed(null)),
-            )
+              // Either no keychain creds or they're expiring inside the
+              // freshness window. Refresh — use the returned creds
+              // directly; re-reading keychain after refresh would silently
+              // lose direct-OAuth tokens whenever write-back failed.
+              const refreshed = yield* refresh.pipe(
+                Effect.catchTag("ProviderAuthError", () => Effect.succeed(null)),
+              )
 
-            if (refreshed === null || !freshEnoughForUse(refreshed, now)) {
-              return [
-                failureResult(
-                  new ProviderAuthError({
-                    message:
-                      "Claude Code credentials are unavailable or expired. Run `claude` to refresh them.",
-                  }),
-                ),
-                EMPTY_CREDENTIAL_CELL,
-              ]
-            }
+              if (refreshed === null || !freshEnoughForUse(refreshed, now)) {
+                return [
+                  failureResult(
+                    new ProviderAuthError({
+                      message:
+                        "Claude Code credentials are unavailable or expired. Run `claude` to refresh them.",
+                    }),
+                  ),
+                  EMPTY_CREDENTIAL_CELL,
+                ]
+              }
 
-            const persistExit = yield* Effect.exit(persistRefreshed(refreshed))
-            if (persistExit._tag === "Failure") {
-              return [failureResult(providerAuthErrorFromCause(persistExit.cause)), cell]
-            }
+              const persistExit = yield* Effect.exit(persistRefreshed(refreshed))
+              if (persistExit._tag === "Failure") {
+                return [failureResult(providerAuthErrorFromCause(persistExit.cause)), cell]
+              }
 
-            return [successResult(refreshed), { creds: refreshed, at: now }]
-          }),
-      ).pipe(
-        Effect.flatMap((result) =>
-          result.error === undefined ? Effect.succeed(result.creds) : Effect.fail(result.error),
-        ),
-      )
+              return [successResult(refreshed), { creds: refreshed, at: now }]
+            }),
+        ).pipe(
+          Effect.flatMap((result) =>
+            result.error === undefined ? Effect.succeed(result.creds) : Effect.fail(result.error),
+          ),
+        )
 
       const invalidate: Effect.Effect<void> = SynchronizedRef.set(cellRef, EMPTY_CREDENTIAL_CELL)
 
