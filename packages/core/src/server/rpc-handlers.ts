@@ -15,10 +15,7 @@ import {
   type ExtensionRegistryService,
 } from "../runtime/extensions/registry.js"
 import { makeExtensionHostPlatform } from "../runtime/extensions/host-platform.js"
-import {
-  makeAmbientExtensionHostContextDeps,
-  makeExtensionHostContext,
-} from "../runtime/make-extension-host-context.js"
+import { makeAmbientExtensionHostContextProvider } from "../runtime/make-extension-host-context.js"
 import { provideCurrentHostCtx } from "../runtime/agent/current-extension-host-context.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
@@ -610,7 +607,7 @@ const RpcHandlers = GentRpcs.toLayer(
           // (`session.*`, `agent.*`, storage, etc.). Build the full
           // ExtensionHostContext here so handlers use the same boundary as tools.
           const host = yield* makeExtensionHostPlatform
-          const hostDeps = yield* makeAmbientExtensionHostContextDeps({
+          const hostProvider = yield* makeAmbientExtensionHostContextProvider({
             extensionRegistry: registry,
             ...(capabilityContext !== undefined ? { capabilityContext } : {}),
             overrides: {
@@ -620,14 +617,11 @@ const RpcHandlers = GentRpcs.toLayer(
               },
             },
           })
-          const hostCtx = makeExtensionHostContext(
-            {
-              sessionId: scope.sessionId,
-              branchId: scope.branchId,
-              sessionCwd: scope.session.cwd,
-            },
-            hostDeps,
-          )
+          const hostCtx = hostProvider.forRun({
+            sessionId: scope.sessionId,
+            branchId: scope.branchId,
+            sessionCwd: scope.session.cwd,
+          })
           const rpcRegistry = registry.getResolved().rpcRegistry
           const request = rpcRegistry.run(extensionId, RpcId.make(capabilityId), input).pipe(
             provideCurrentHostCtx(hostCtx),

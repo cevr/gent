@@ -11,10 +11,10 @@ import {
   AllowAllPermission,
   resolveSessionEnvironment,
   resolveSessionEnvironmentOrFail,
-  SessionEnvironmentHostDeps,
+  SessionEnvironmentHostProvider,
   type SessionEnvironmentDefaults,
 } from "../../src/runtime/session-runtime-context"
-import { makeAmbientExtensionHostContextDeps } from "../../src/runtime/make-extension-host-context"
+import { makeAmbientExtensionHostContextProvider } from "../../src/runtime/make-extension-host-context"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import {
   SessionProfileCache,
@@ -106,7 +106,7 @@ describe("resolveSessionEnvironment", () => {
               updatedAt: now,
             }),
           )
-          const hostDeps = yield* makeAmbientExtensionHostContextDeps({
+          const hostProvider = yield* makeAmbientExtensionHostContextProvider({
             extensionRegistry,
             overrides: { platform },
           })
@@ -119,7 +119,7 @@ describe("resolveSessionEnvironment", () => {
               permission: AllowAllPermission,
               baseSections: [],
             },
-          }).pipe(Effect.provideService(SessionEnvironmentHostDeps, hostDeps))
+          }).pipe(Effect.provideService(SessionEnvironmentHostProvider, hostProvider))
           expect(resolved.session).toBeDefined()
           expect(resolved.environment.cwd).toBe(secondary)
           expect(resolved.environment.hostCtx.cwd).toBe(secondary)
@@ -158,7 +158,7 @@ describe("resolveSessionEnvironment", () => {
       yield* Effect.gen(function* () {
         const extensionRegistry = yield* ExtensionRegistry
         const platform = yield* RuntimeEnvironment
-        const hostDeps = yield* makeAmbientExtensionHostContextDeps({
+        const hostProvider = yield* makeAmbientExtensionHostContextProvider({
           extensionRegistry,
           overrides: { platform },
         })
@@ -166,7 +166,7 @@ describe("resolveSessionEnvironment", () => {
           sessionId: SessionId.make("missing-session"),
           branchId: BranchId.make("missing-branch"),
           defaults,
-        }).pipe(Effect.provideService(SessionEnvironmentHostDeps, hostDeps))
+        }).pipe(Effect.provideService(SessionEnvironmentHostProvider, hostProvider))
         expect(resolved.session).toBeUndefined()
         expect(resolved.environment.cwd).toBe("/tmp/runtime-context-default")
         expect(resolved.environment.hostCtx.cwd).toBe("/tmp/runtime-context-default")
@@ -200,7 +200,7 @@ describe("resolveSessionEnvironment", () => {
           ...sessionStorage,
           getSession: () => Effect.fail(new StorageError({ message: "lookup failed" })),
         }
-        const hostDeps = yield* makeAmbientExtensionHostContextDeps({
+        const hostProvider = yield* makeAmbientExtensionHostContextProvider({
           extensionRegistry,
           overrides: { platform },
         })
@@ -214,7 +214,7 @@ describe("resolveSessionEnvironment", () => {
               baseSections: [],
             },
           }).pipe(
-            Effect.provideService(SessionEnvironmentHostDeps, hostDeps),
+            Effect.provideService(SessionEnvironmentHostProvider, hostProvider),
             Effect.provideService(SessionStorage, failingSessionStorage),
           ),
         )
@@ -232,7 +232,7 @@ describe("resolveSessionEnvironment", () => {
               baseSections: [],
             },
           }).pipe(
-            Effect.provideService(SessionEnvironmentHostDeps, hostDeps),
+            Effect.provideService(SessionEnvironmentHostProvider, hostProvider),
             Effect.provideService(SessionStorage, failingSessionStorage),
           ),
         )
@@ -316,7 +316,7 @@ describe("resolveSessionEnvironment", () => {
         const fakeProfileCache: SessionProfileCacheService = {
           resolve: () => Effect.succeed(fakeProfile),
         }
-        const hostDeps = yield* makeAmbientExtensionHostContextDeps({
+        const hostProvider = yield* makeAmbientExtensionHostContextProvider({
           extensionRegistry,
           overrides: { platform },
         })
@@ -329,7 +329,7 @@ describe("resolveSessionEnvironment", () => {
             permission: AllowAllPermission,
             baseSections: [],
           },
-        }).pipe(Effect.provideService(SessionEnvironmentHostDeps, hostDeps))
+        }).pipe(Effect.provideService(SessionEnvironmentHostProvider, hostProvider))
         const fromProfile = yield* resolved.environment.driverRegistry.getExternal("profile-driver")
         const fromDefault = yield* defaultDriverRegistry.getExternal("profile-driver")
         expect(resolved.session).toBeDefined()

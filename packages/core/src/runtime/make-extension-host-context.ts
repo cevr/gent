@@ -68,6 +68,25 @@ export interface MakeExtensionHostContextRunInfo {
   readonly sessionCwd?: string
 }
 
+export interface ExtensionHostContextOverrides {
+  readonly extensionRegistry?: ExtensionRegistryService
+  readonly capabilityContext?: Context.Context<never>
+}
+
+export interface ExtensionHostContextProviderService {
+  readonly defaultExtensionRegistry: ExtensionRegistryService
+  readonly defaultCapabilityContext?: Context.Context<never>
+  readonly forRun: (
+    runInfo: MakeExtensionHostContextRunInfo,
+    overrides?: ExtensionHostContextOverrides,
+  ) => ExtensionHostContext
+}
+
+export class ExtensionHostContextProvider extends Context.Service<
+  ExtensionHostContextProvider,
+  ExtensionHostContextProviderService
+>()("@gent/core/src/runtime/make-extension-host-context/ExtensionHostContextProvider") {}
+
 type AmbientHostContextDefaults = Pick<
   MakeExtensionHostContextDeps,
   | "platform"
@@ -393,7 +412,7 @@ export interface MakeAmbientExtensionHostContextDepsInput {
   readonly overrides?: Partial<AmbientHostContextDefaults>
 }
 
-export const makeAmbientExtensionHostContextDeps = (
+const makeAmbientExtensionHostContextDeps = (
   input: MakeAmbientExtensionHostContextDepsInput,
 ): Effect.Effect<MakeExtensionHostContextDeps> =>
   Effect.gen(function* () {
@@ -423,7 +442,31 @@ export const makeAmbientExtensionHostContextDeps = (
     }
   })
 
-export const makeExtensionHostContext = (
+export const makeExtensionHostContextProvider = (
+  deps: MakeExtensionHostContextDeps,
+): ExtensionHostContextProviderService => ({
+  defaultExtensionRegistry: deps.extensionRegistry,
+  ...(deps.capabilityContext !== undefined
+    ? { defaultCapabilityContext: deps.capabilityContext }
+    : {}),
+  forRun: (runInfo, overrides) =>
+    makeExtensionHostContext(runInfo, {
+      ...deps,
+      ...(overrides?.extensionRegistry !== undefined
+        ? { extensionRegistry: overrides.extensionRegistry }
+        : {}),
+      ...(overrides?.capabilityContext !== undefined
+        ? { capabilityContext: overrides.capabilityContext }
+        : {}),
+    }),
+})
+
+export const makeAmbientExtensionHostContextProvider = (
+  input: MakeAmbientExtensionHostContextDepsInput,
+): Effect.Effect<ExtensionHostContextProviderService> =>
+  makeAmbientExtensionHostContextDeps(input).pipe(Effect.map(makeExtensionHostContextProvider))
+
+const makeExtensionHostContext = (
   runInfo: MakeExtensionHostContextRunInfo,
   deps: MakeExtensionHostContextDeps,
 ): ExtensionHostContext => {

@@ -1,4 +1,5 @@
-import { Context, Effect } from "effect"
+import type { Context } from "effect"
+import { Effect } from "effect"
 import type { PermissionService } from "../domain/permission.js"
 import type { PromptSection } from "../domain/prompt.js"
 import type { Branch, Session } from "../domain/message.js"
@@ -10,16 +11,10 @@ import { BranchStorage } from "../storage/branch-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import type { DriverRegistryService } from "./extensions/driver-registry.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
-import {
-  makeExtensionHostContext,
-  type MakeExtensionHostContextDeps,
-} from "./make-extension-host-context.js"
+import { ExtensionHostContextProvider } from "./make-extension-host-context.js"
 import type { SessionProfile, SessionProfileCacheService } from "./session-profile.js"
 
-export class SessionEnvironmentHostDeps extends Context.Service<
-  SessionEnvironmentHostDeps,
-  MakeExtensionHostContextDeps
->()("@gent/core/src/runtime/session-runtime-context/SessionEnvironmentHostDeps") {}
+export const SessionEnvironmentHostProvider = ExtensionHostContextProvider
 
 export interface SessionEnvironmentDefaults {
   readonly driverRegistry: DriverRegistryService
@@ -68,12 +63,12 @@ const resolveSessionProfile = (params: {
 const resolveActiveRuntimeBindings = (params: {
   readonly profile?: SessionProfile
   readonly defaults: SessionEnvironmentDefaults
-}): Effect.Effect<ActiveRuntimeBindings, never, SessionEnvironmentHostDeps> =>
+}): Effect.Effect<ActiveRuntimeBindings, never, ExtensionHostContextProvider> =>
   Effect.gen(function* () {
-    const hostDeps = yield* SessionEnvironmentHostDeps
+    const hostProvider = yield* SessionEnvironmentHostProvider
     return {
-      extensionRegistry: params.profile?.registryService ?? hostDeps.extensionRegistry,
-      capabilityContext: params.profile?.layerContext ?? hostDeps.capabilityContext,
+      extensionRegistry: params.profile?.registryService ?? hostProvider.defaultExtensionRegistry,
+      capabilityContext: params.profile?.layerContext ?? hostProvider.defaultCapabilityContext,
       driverRegistry: params.profile?.driverRegistryService ?? params.defaults.driverRegistry,
       permission: params.profile?.permissionService ?? params.defaults.permission,
       baseSections: params.profile?.baseSections ?? params.defaults.baseSections,
@@ -86,10 +81,10 @@ const buildSessionEnvironment = (params: {
   readonly agentName?: AgentName
   readonly session?: Session
   readonly bindings: ActiveRuntimeBindings
-}): Effect.Effect<SessionEnvironment, never, SessionEnvironmentHostDeps> =>
+}): Effect.Effect<SessionEnvironment, never, ExtensionHostContextProvider> =>
   Effect.gen(function* () {
-    const hostDeps = yield* SessionEnvironmentHostDeps
-    const hostCtx = makeExtensionHostContext(
+    const hostProvider = yield* SessionEnvironmentHostProvider
+    const hostCtx = hostProvider.forRun(
       {
         sessionId: params.sessionId,
         branchId: params.branchId,
@@ -97,7 +92,6 @@ const buildSessionEnvironment = (params: {
         ...(params.session?.cwd !== undefined ? { sessionCwd: params.session.cwd } : {}),
       },
       {
-        ...hostDeps,
         extensionRegistry: params.bindings.extensionRegistry,
         ...(params.bindings.capabilityContext !== undefined
           ? { capabilityContext: params.bindings.capabilityContext }
@@ -132,7 +126,7 @@ interface ResolveSessionEnvironmentParams {
 
 const buildResolvedSessionEnvironment = (
   params: ResolveSessionEnvironmentParams & { readonly session: Session | undefined },
-): Effect.Effect<ResolvedSessionEnvironment, never, SessionEnvironmentHostDeps> =>
+): Effect.Effect<ResolvedSessionEnvironment, never, ExtensionHostContextProvider> =>
   Effect.gen(function* () {
     const profile = yield* resolveSessionProfile({
       session: params.session,
@@ -158,7 +152,11 @@ const buildResolvedSessionEnvironment = (
 
 export const resolveSessionEnvironment = (
   params: ResolveSessionEnvironmentParams,
-): Effect.Effect<ResolvedSessionEnvironment, never, SessionEnvironmentHostDeps | SessionStorage> =>
+): Effect.Effect<
+  ResolvedSessionEnvironment,
+  never,
+  ExtensionHostContextProvider | SessionStorage
+> =>
   Effect.gen(function* () {
     const sessionStorage = yield* SessionStorage
     const session = yield* sessionStorage
@@ -172,7 +170,7 @@ export const resolveSessionEnvironmentOrFail = (
 ): Effect.Effect<
   ResolvedSessionEnvironment,
   StorageError,
-  SessionEnvironmentHostDeps | SessionStorage
+  ExtensionHostContextProvider | SessionStorage
 > =>
   Effect.gen(function* () {
     const sessionStorage = yield* SessionStorage

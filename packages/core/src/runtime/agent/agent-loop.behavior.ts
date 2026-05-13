@@ -33,7 +33,7 @@ import { AgentSwitched, type AgentEvent } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import type { MessageMetadata } from "../../domain/message.js"
 import type { BranchId, InteractionRequestId, SessionId } from "../../domain/ids.js"
-import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
+import { makeAmbientExtensionHostContextProvider } from "../make-extension-host-context.js"
 import type { ConfigService } from "../config-service.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { StorageError } from "../../domain/storage-error.js"
@@ -53,7 +53,7 @@ import { Permission } from "../../domain/permission.js"
 import {
   AllowAllPermission,
   resolveSessionEnvironment,
-  SessionEnvironmentHostDeps,
+  SessionEnvironmentHostProvider,
 } from "../session-runtime-context.js"
 import {
   buildIdleState,
@@ -259,7 +259,7 @@ export const makeAgentLoopBehavior = (
     const sessionProfileCache = yield* Effect.serviceOption(SessionProfileCache)
     const permissionService = yield* Effect.serviceOption(Permission)
 
-    const hostDeps = yield* makeAmbientExtensionHostContextDeps({
+    const hostProvider = yield* makeAmbientExtensionHostContextProvider({
       extensionRegistry,
       overrides: {
         host,
@@ -284,7 +284,7 @@ export const makeAgentLoopBehavior = (
           permission: defaultPermission,
           baseSections,
         },
-      }).pipe(Effect.provideService(SessionEnvironmentHostDeps, hostDeps)),
+      }).pipe(Effect.provideService(SessionEnvironmentHostProvider, hostProvider)),
     ).pipe(
       Effect.map(({ environment }) => ({
         turnExtensionRegistry: environment.extensionRegistry,

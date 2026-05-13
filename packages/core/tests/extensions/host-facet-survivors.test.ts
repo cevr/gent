@@ -11,7 +11,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Layer, Option, Schema } from "effect"
 import {
-  makeExtensionHostContext,
+  makeExtensionHostContextProvider,
   type MakeExtensionHostContextDeps,
 } from "../../src/runtime/make-extension-host-context.js"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
@@ -146,7 +146,10 @@ describe("host facet survivors after C9.5 prune", () => {
       const deps = baseDeps({
         listBranches: (id) => (id === SESSION_ID ? Effect.succeed([branch]) : Effect.succeed([])),
       })
-      const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
+      const ctx = makeExtensionHostContextProvider(deps).forRun({
+        sessionId: SESSION_ID,
+        branchId: BRANCH_ID,
+      })
       const branches = yield* ctx.session.listBranches()
       expect(branches).toHaveLength(1)
       expect(branches[0]!.id).toBe(BRANCH_ID)
