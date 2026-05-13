@@ -468,7 +468,7 @@ describe("Effect-purity locks (compile-time)", () => {
   test("public extension api does not expose host extension-loading helpers", () => {
     // @ts-expect-error — disabled-extension config loading is host UI plumbing
     type _BadReadDisabledExtensions = typeof PublicExtensionApi.readDisabledExtensions
-    // @ts-expect-error — ToolRunner is runtime engine plumbing; external drivers receive ctx.runTool
+    // @ts-expect-error — ToolRunner is runtime engine plumbing; external drivers yield ExternalToolRunner
     type _BadToolRunner = typeof PublicExtensionApi.ToolRunner
     // @ts-expect-error — raw event publishing can forge core runtime events
     type _BadExtensionEventSink = typeof PublicExtensionApi.ExtensionEventSink

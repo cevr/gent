@@ -11,7 +11,7 @@
  * `runAnyEffect(services, effect)` trampoline.
  */
 
-import { Effect, type Context } from "effect"
+import { Effect } from "effect"
 import type { CodemodeConfig } from "./mcp-codemode.js"
 
 /**
@@ -21,14 +21,9 @@ import type { CodemodeConfig } from "./mcp-codemode.js"
  *   `toolRunner.run({ toolCallId, toolName, input }, toolCtx)`
  * — pinned by this function. No other Effect leaves Effect-land here.
  */
-export const makeAcpRunTool = <RunToolContext>(params: {
-  readonly services: Context.Context<RunToolContext>
-  readonly runTool: (
-    toolName: string,
-    args: unknown,
-  ) => Effect.Effect<unknown, never, RunToolContext>
-}): CodemodeConfig["runTool"] => {
-  const runOnRuntime = Effect.runPromiseWith(params.services)
-
-  return (toolName, args) => runOnRuntime(params.runTool(toolName, args))
-}
+export const makeAcpRunTool =
+  (params: {
+    readonly runTool: (toolName: string, args: unknown) => Effect.Effect<unknown>
+  }): CodemodeConfig["runTool"] =>
+  (toolName, args) =>
+    Effect.runPromise(params.runTool(toolName, args))

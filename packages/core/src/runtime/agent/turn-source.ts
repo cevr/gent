@@ -2,7 +2,7 @@ import { Effect, Random, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
-import { type ProviderAuthError, type TurnError } from "../../domain/driver.js"
+import { ExternalToolRunner, type ProviderAuthError, type TurnError } from "../../domain/driver.js"
 import { ErrorOccurred, ProviderRetrying } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { ToolCallId, type BranchId, type SessionId } from "../../domain/ids.js"
@@ -10,7 +10,7 @@ import { ProviderError } from "../../domain/provider-error.js"
 import { toPrompt } from "../../providers/ai-transcript.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
-import type { ExtensionRegistry } from "../extensions/registry.js"
+import { ExtensionRegistry } from "../extensions/registry.js"
 import { retryProviderCall } from "../retry"
 import { providerStreamBoundary, WideEvent, withWideEvent } from "../wide-event-boundary"
 import {
@@ -56,12 +56,10 @@ type ModelTurnSource = {
 type ExternalTurnSource = {
   readonly driverKind: "external"
   readonly driverId?: string
-  readonly stream: Stream.Stream<Response.AnyPart, TurnError, ExternalRunToolContext>
+  readonly stream: Stream.Stream<Response.AnyPart, TurnError>
   readonly formatStreamError: (streamError: TurnError) => string
   readonly collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
-
-type ExternalRunToolContext = ToolRunner | ExtensionRegistry | EventPublisher
 
 export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
   resolved: ResolvedTurnContext
@@ -91,28 +89,40 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       return undefined
     }
 
+    const toolRunner = yield* ToolRunner
+    const extensionRegistry = yield* ExtensionRegistry
+    const eventPublisher = yield* EventPublisher
+    const externalToolRunner = ExternalToolRunner.of({
+      runTool: (toolName, args) =>
+        Effect.gen(function* () {
+          const toolCallId = ToolCallId.make(yield* Random.nextUUIDv4)
+          return yield* toolRunner
+            .run({ toolCallId, toolName, input: args })
+            .pipe(
+              Effect.orDie,
+              provideCurrentHostCtx(hostCtx),
+              Effect.provideService(ExtensionRegistry, extensionRegistry),
+              Effect.provideService(EventPublisher, eventPublisher),
+            )
+        }),
+    })
+
     return {
       driverKind: "external" as const,
       driverId: resolved.driver.id,
-      stream: executor.executeTurn<ExternalRunToolContext>({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        agent: resolved.agent,
-        messages: resolved.messages,
-        tools: resolved.tools,
-        systemPrompt: resolved.systemPrompt,
-        cwd: hostCtx.cwd,
-        abortSignal: params.activeStream.abortSignal,
-        hostCtx,
-        runTool: (toolName, args) =>
-          Effect.gen(function* () {
-            const toolRunner = yield* ToolRunner
-            const toolCallId = ToolCallId.make(yield* Random.nextUUIDv4)
-            return yield* toolRunner
-              .run({ toolCallId, toolName, input: args })
-              .pipe(Effect.orDie, provideCurrentHostCtx(hostCtx))
-          }),
-      }),
+      stream: executor
+        .executeTurn({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          agent: resolved.agent,
+          messages: resolved.messages,
+          tools: resolved.tools,
+          systemPrompt: resolved.systemPrompt,
+          cwd: hostCtx.cwd,
+          abortSignal: params.activeStream.abortSignal,
+          hostCtx,
+        })
+        .pipe(Stream.provideService(ExternalToolRunner, externalToolRunner)),
       formatStreamError: (streamError: unknown) =>
         `External turn executor error: ${formatStreamErrorMessage(streamError)}`,
       collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,

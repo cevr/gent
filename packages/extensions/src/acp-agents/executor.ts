@@ -12,6 +12,7 @@
 import { Deferred, Effect, Schema, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import {
+  ExternalToolRunner,
   TurnError,
   type TurnContext,
   type TurnExecutor,
@@ -242,15 +243,15 @@ export const makeAcpTurnExecutor = (
   config: AcpProtocolAgentConfig,
   manager: AcpSessionManager,
 ): TurnExecutor => ({
-  executeTurn: <RunToolContext>(ctx: TurnContext<RunToolContext>) => {
+  executeTurn: (ctx: TurnContext) => {
     const runTurn = Effect.gen(function* () {
       // SDK boundary: the codemode JS sandbox invokes `runTool` as a
       // Promise-returning function. Adapter built in `executor-boundary.ts`;
-      // core owns actual tool execution through `ctx.runTool`.
-      const services = yield* Effect.context<RunToolContext>()
+      // core owns actual tool execution through ExternalToolRunner.
+      const services = yield* Effect.context<never>()
+      const toolRunner = yield* ExternalToolRunner
       const runTool: CodemodeConfig["runTool"] = makeAcpRunTool({
-        services,
-        runTool: ctx.runTool,
+        runTool: toolRunner.runTool,
       })
 
       const codemodeConfig: CodemodeConfig = {

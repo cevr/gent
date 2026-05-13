@@ -28,6 +28,7 @@
 import { Effect, Exit, Schema, Scope, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import {
+  ExternalToolRunner,
   TurnError,
   type TurnContext,
   type TurnExecutor,
@@ -329,7 +330,7 @@ export interface ClaudeCodeSessionManager {
  * the host shuts down.
  *
  * The SDK service is captured at construction time so the executor only
- * inherits the per-turn tool runner context from `TurnContext.runTool`.
+ * inherits the per-turn tool runner context from `ExternalToolRunner`.
  */
 /** Resolves the Claude Code OAuth token. Defaults to the macOS keychain
  *  reader; tests inject a stub so they can exercise lifecycle/cache
@@ -480,12 +481,11 @@ export const createClaudeCodeSessionManager = (
 // ── Turn Executor Factory ──
 
 export const makeClaudeCodeTurnExecutor = (manager: ClaudeCodeSessionManager): TurnExecutor => ({
-  executeTurn: <RunToolContext>(ctx: TurnContext<RunToolContext>) => {
+  executeTurn: (ctx: TurnContext) => {
     const runTurn = Effect.gen(function* () {
-      const services = yield* Effect.context<RunToolContext>()
+      const toolRunner = yield* ExternalToolRunner
       const runTool: CodemodeConfig["runTool"] = makeAcpRunTool({
-        services,
-        runTool: ctx.runTool,
+        runTool: toolRunner.runTool,
       })
 
       const codemodeConfig: CodemodeConfig | undefined =

@@ -5,7 +5,7 @@
  * codemode proxy dispatch/rejection behavior.
  */
 import { describe, test, expect, it } from "effect-bun-test"
-import { Context, Effect, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
@@ -368,14 +368,10 @@ describe("codemode proxy", () => {
 // The previous block stubs `runTool` directly. This block drives the same
 // dispatch through `makeAcpRunTool`, which is the boundary helper used in
 // production by the ACP executor. A regression that breaks the
-// Effect-runtime crossing (e.g. forgetting to thread services into
-// `Effect.runPromiseWith`, or pulling ToolRunner from the wrong context)
+// Effect-runtime crossing (e.g. leaking Effect requirements into the
+// Promise boundary, or pulling ToolRunner from the wrong context)
 // surfaces here and not in the stubbed test above.
 describe("codemode proxy via makeAcpRunTool", () => {
-  class BoundaryProbe extends Context.Service<BoundaryProbe, { readonly value: string }>()(
-    "@gent/extensions/tests/acp-agents/acp-agents.test/BoundaryProbe",
-  ) {}
-
   it.scopedLive("runs through the boundary helper and reaches core runTool", () =>
     Effect.gen(function* () {
       const calls: Array<{
@@ -383,7 +379,6 @@ describe("codemode proxy via makeAcpRunTool", () => {
         input: unknown
       }> = []
       const runTool = makeAcpRunTool({
-        services: Context.empty(),
         runTool: (toolName, input) => {
           calls.push({ name: toolName, input })
           return Effect.succeed(
@@ -422,23 +417,19 @@ describe("codemode proxy via makeAcpRunTool", () => {
       expect(result).toBeDefined()
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
-  it.scopedLive("provides required services at the runTool boundary", () =>
+  it.scopedLive("uses the closed tool runner service at the Promise boundary", () =>
     Effect.gen(function* () {
       const observed: string[] = []
-      const services = Context.empty().pipe(
-        Context.add(BoundaryProbe, BoundaryProbe.of({ value: "from-boundary-context" })),
-      )
+      const boundaryProbe = { value: "from-boundary-service" }
       const runTool = makeAcpRunTool({
-        services,
         runTool: (toolName) =>
-          Effect.gen(function* () {
-            const probe = yield* BoundaryProbe
-            observed.push(probe.value)
+          Effect.sync(() => {
+            observed.push(boundaryProbe.value)
             return Prompt.toolResultPart({
               id: ToolCallId.make("tc-acp-boundary-context"),
               name: toolName,
               isFailure: false,
-              result: { boundary: probe.value },
+              result: { boundary: boundaryProbe.value },
             })
           }),
       })
@@ -463,13 +454,12 @@ describe("codemode proxy via makeAcpRunTool", () => {
       )
       const result = yield* parseSseResult(response)
       expect(result).toBeDefined()
-      expect(observed).toEqual(["from-boundary-context"])
+      expect(observed).toEqual(["from-boundary-service"])
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
   it.scopedLive("propagates core runTool errors back through the SDK boundary", () =>
     Effect.gen(function* () {
       const runTool = makeAcpRunTool({
-        services: Context.empty(),
         runTool: () => Effect.die("tool runner exploded"),
       })
       const mockTool: ToolCapability = tool({

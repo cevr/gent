@@ -89,6 +89,7 @@ export {
 } from "../domain/extension.js"
 export type { PromptSection } from "../domain/prompt.js"
 export { sectionPatternFor, withSectionMarkers } from "../domain/prompt.js"
+export { ExternalToolRunner } from "../domain/driver.js"
 export type { TurnExecutor, TurnContext, TurnStreamPart } from "../domain/driver.js"
 export { ProviderAuthError, TurnError } from "../domain/driver.js"
 export type {

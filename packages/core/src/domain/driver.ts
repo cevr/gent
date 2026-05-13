@@ -28,7 +28,7 @@
  *
  * @module
  */
-import { Schema, type Effect, type Layer, type Stream } from "effect"
+import { Context, Schema, type Effect, type Layer, type Stream } from "effect"
 import type { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"
 import type { AgentDefinition } from "./agent.js"
@@ -205,7 +205,7 @@ export class TurnError extends Schema.TaggedErrorClass<TurnError>()("TurnError",
 }) {}
 
 /** What an external driver receives per turn. */
-export interface TurnContext<RunToolContext = never> {
+export interface TurnContext {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly agent: AgentDefinition
@@ -215,11 +215,16 @@ export interface TurnContext<RunToolContext = never> {
   readonly cwd: string
   readonly abortSignal: AbortSignal
   readonly hostCtx: ExtensionHostContext
-  readonly runTool: (
-    toolName: string,
-    args: unknown,
-  ) => Effect.Effect<unknown, never, RunToolContext>
 }
+
+export interface ExternalToolRunnerService {
+  readonly runTool: (toolName: string, args: unknown) => Effect.Effect<unknown>
+}
+
+export class ExternalToolRunner extends Context.Service<
+  ExternalToolRunner,
+  ExternalToolRunnerService
+>()("@gent/core/src/domain/driver/ExternalToolRunner") {}
 
 /** Executor interface implemented by external drivers (ACP agents, etc.).
  *
@@ -230,9 +235,9 @@ export interface TurnContext<RunToolContext = never> {
  *  cache key, so it cannot target a specific cached session correctly.
  *  Counsel  — drop the dead optional rather than keep it as a no-op stub. */
 export interface TurnExecutor {
-  readonly executeTurn: <RunToolContext>(
-    ctx: TurnContext<RunToolContext>,
-  ) => Stream.Stream<TurnStreamPart, TurnError, RunToolContext>
+  readonly executeTurn: (
+    ctx: TurnContext,
+  ) => Stream.Stream<TurnStreamPart, TurnError, ExternalToolRunner>
 }
 
 export type TurnToolEventMode = "capture-tool-calls" | "observe-external-tools"
