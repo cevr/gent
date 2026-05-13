@@ -249,21 +249,35 @@ context adapter`).
   current exported surface: `tool(...)`, `request(...)`, `ref`, resources,
   reactions, agents, policies/errors, host facts, and serialization
   helpers.
-- **C14-C17 still open**: loop interception, dynamic registration,
-  request/action identity simplification, and scoped state authoring
-  helpers have not landed yet. C17's documentation-only drift is closed;
-  the scoped state helper design remains open.
+- **C17 complete**: `defineStateResource(...)` adds a low-ceremony
+  `ExtensionState<Value>` service helper that lowers directly to the
+  existing Resource primitive. Stateful extension examples now yield a
+  scoped service Tag instead of teaching module-scope mutable state.
+- **C14-C16 still open**: loop interception, dynamic registration, and
+  request/action identity simplification have not landed yet.
 - Verification:
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/tooling/tests/core-public-exports.test.ts packages/sdk/tests/public-surface.test.ts`
   passed with 10 tests; `bun run lint` and `bun run typecheck` passed.
   `rg -n "\baction\b|actions|action\(" docs/extensions.md` now only
   finds generic English/reaction wording plus the invariant explicitly
   saying unpublished `actions` buckets are not part of authoring.
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/resource-host.test.ts`
+  passed with 10 tests; `bun run typecheck` passed after adding
+  `defineStateResource`.
 - Evidence:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/resource.ts:140`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/resource.ts:160`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/contribution.ts:108`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts:148`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/resource-host.test.ts:75`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/resource-host.test.ts:115`,
+  `/Users/cvr/Developer/personal/gent/examples/extensions/turn-counter.ts:8`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md:69`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md:260`,
   `/Users/cvr/Developer/personal/gent/docs/extensions.md:38`,
   `/Users/cvr/Developer/personal/gent/docs/extensions.md:68`,
   `/Users/cvr/Developer/personal/gent/docs/extensions.md:225`,
-  `/Users/cvr/Developer/personal/gent/docs/extensions.md:337`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md:350`,
   `/Users/cvr/Developer/personal/gent/packages/tooling/src/core-public-exports.ts:22`,
   `/Users/cvr/Developer/personal/gent/packages/tooling/src/core-public-exports.ts:136`,
   `/Users/cvr/Developer/personal/gent/packages/tooling/src/check-guardrails.ts:54`,

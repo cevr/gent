@@ -1,26 +1,36 @@
 /**
  * Example: Stateful extension that counts completed turns.
  *
- * Uses a closure counter incremented by a `turnAfter` reaction and injected
- * by a `systemPrompt` reaction.
- *
- * Cross-bucket shared state is hoisted to module scope so both buckets
- * see the same counter.
+ * Uses process-scoped extension state incremented by a `turnAfter` reaction
+ * and injected by a `systemPrompt` reaction.
  */
-import { Effect } from "effect"
-import { defineExtension } from "@gent/core/extensions/api"
+import { Context, Effect } from "effect"
+import {
+  defineExtension,
+  defineStateResource,
+  type ExtensionState,
+} from "@gent/core/extensions/api"
 
-let turns = 0
+class TurnCounterState extends Context.Service<TurnCounterState, ExtensionState<number>>()(
+  "examples/extensions/turn-counter/TurnCounterState",
+) {}
 
 export default defineExtension({
   id: "turn-counter",
+  resources: [defineStateResource({ tag: TurnCounterState, scope: "process", initial: 0 })],
   reactions: {
     turnAfter: {
       handler: () =>
-        Effect.sync(() => {
-          turns++
+        Effect.gen(function* () {
+          const state = yield* TurnCounterState
+          yield* state.update((turns) => turns + 1)
         }),
     },
-    systemPrompt: (input) => Effect.succeed(`${input.basePrompt}\nThis is turn ${turns + 1}.`),
+    systemPrompt: (input) =>
+      Effect.gen(function* () {
+        const state = yield* TurnCounterState
+        const turns = yield* state.get
+        return `${input.basePrompt}\nThis is turn ${turns + 1}.`
+      }),
   },
 })

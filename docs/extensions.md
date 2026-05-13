@@ -66,7 +66,7 @@ Public authoring surface:
 | --------------- | ---------------------------------------------------------------------------- |
 | Extension shape | `defineExtension`, `GentExtension`, `ExtensionSetupContext`                  |
 | Capabilities    | `tool`, `request`, `ref`                                                     |
-| Resources       | `defineResource`, `resource`, resource scope/schedule types                  |
+| Resources       | `defineResource`, `defineStateResource`, resource scope/schedule types       |
 | Reactions       | Reaction input/output types needed to implement `reactions`                  |
 | Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                      |
 | Stable ids      | `ExtensionId`, `ArtifactId`, `ToolCallId`                                    |
@@ -257,7 +257,8 @@ export default defineExtension({
 
 A Resource declares its scope (lifetime) and carries a service Layer plus
 optional schedule and lifecycle hooks. Extension-owned state should live in
-scoped services/resources; true actor protocols belong at their owning runtime
+scoped services/resources; `defineStateResource(...)` is the low-ceremony state
+cell helper for that case. True actor protocols belong at their owning runtime
 boundary through Effect Entity/RPC, not in extension authoring buckets.
 
 | Scope     | Lifetime        |
@@ -271,21 +272,33 @@ contributions from active registries, and appears in extension health surfaces
 including `gent doctor`.
 
 ```ts
-import { defineExtension, defineResource } from "@gent/core/extensions/api"
+import {
+  defineExtension,
+  defineResource,
+  defineStateResource,
+  type ExtensionState,
+} from "@gent/core/extensions/api"
 import { Context, Layer, Effect } from "effect"
 
-class MyService extends Context.Tag("MyService")<
+class MyService extends Context.Service<
   MyService,
   { readonly getData: () => Effect.Effect<string> }
->() {
+>()("my-service-ext/MyService") {
   static Live = Layer.succeed(MyService, {
     getData: () => Effect.succeed("data"),
   })
 }
 
+class CounterState extends Context.Service<CounterState, ExtensionState<number>>()(
+  "my-service-ext/CounterState",
+) {}
+
 export default defineExtension({
   id: "my-service-ext",
-  resources: [defineResource({ tag: MyService, scope: "process", layer: MyService.Live })],
+  resources: [
+    defineResource({ tag: MyService, scope: "process", layer: MyService.Live }),
+    defineStateResource({ tag: CounterState, scope: "process", initial: 0 }),
+  ],
 })
 ```
 
@@ -338,7 +351,7 @@ builtin).
 - Extension buckets are `tools` and `requests`; older `rpc`, `commands`, and
   unpublished `actions` bucket names are not part of the authoring surface.
 - Prompt shaping and policy derivation live in `reactions.turnProjection`.
-- Long-lived state lives in `defineResource(...)`.
+- Long-lived state lives in `defineResource(...)` or `defineStateResource(...)`.
 - Generic middleware APIs are not part of extension authoring.
 - Bucket names are the discriminator; extension authors do not build flat `_kind` contribution unions.
 - Builtins, user extensions, and project extensions use the same public API.

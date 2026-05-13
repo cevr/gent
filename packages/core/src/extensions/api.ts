@@ -146,6 +146,8 @@ export {
   // Smart constructor — returns a bare leaf value; the bucket it's placed
   // in is the discrimination (no `_kind` field).
   defineResource,
+  defineStateResource,
+  type ExtensionState,
 } from "../domain/contribution.js"
 
 // Typed capability factories. Extension registries dispatch by factory-origin

@@ -18,7 +18,8 @@
  * @module
  */
 
-import type { Context, Effect, Layer } from "effect"
+import { Effect, Layer, Ref } from "effect"
+import type { Context } from "effect"
 
 // ── Scope discriminator + brand mapping ──
 
@@ -135,3 +136,43 @@ export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never, 
 export const defineResource = <A, S extends ResourceScope, R = never, E = never, StartR = never>(
   spec: ResourceSpec<A, S, R, E, StartR>,
 ): ResourceContribution<A, S, R, E, StartR> => ({ ...spec })
+
+export interface ExtensionState<Value> {
+  readonly get: Effect.Effect<Value>
+  readonly set: (value: Value) => Effect.Effect<void>
+  readonly update: (f: (current: Value) => Value) => Effect.Effect<void>
+  readonly modify: <A>(f: (current: Value) => readonly [A, Value]) => Effect.Effect<A>
+}
+
+export type StateInitializer<Value, E = never, R = never> = Value | Effect.Effect<Value, E, R>
+
+export interface StateResourceSpec<A, Value, S extends ResourceScope, R = never, E = never> {
+  readonly tag: Context.Key<A, ExtensionState<Value>>
+  readonly scope: S
+  readonly initial: StateInitializer<Value, E, R>
+}
+
+const resolveStateInitial = <Value, E, R>(
+  initial: StateInitializer<Value, E, R>,
+): Effect.Effect<Value, E, R> => (Effect.isEffect(initial) ? initial : Effect.succeed(initial))
+
+export const defineStateResource = <A, Value, S extends ResourceScope, R = never, E = never>(
+  spec: StateResourceSpec<A, Value, S, R, E>,
+): ResourceContribution<A, S, R, E> =>
+  defineResource({
+    tag: spec.tag,
+    scope: spec.scope,
+    layer: Layer.effect(
+      spec.tag,
+      Effect.gen(function* () {
+        const initial = yield* resolveStateInitial(spec.initial)
+        const ref = yield* Ref.make(initial)
+        return {
+          get: Ref.get(ref),
+          set: (value) => Ref.set(ref, value),
+          update: (f) => Ref.update(ref, f),
+          modify: (f) => Ref.modify(ref, f),
+        } satisfies ExtensionState<Value>
+      }),
+    ),
+  })
