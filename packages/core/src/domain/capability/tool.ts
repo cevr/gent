@@ -17,24 +17,13 @@
 
 import { Context, type Effect, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
-import {
-  type CapabilityCoreContext,
-  type ToolCapability as ToolCapabilityShape,
-} from "../capability.js"
-import { ToolId, type ToolCallId } from "../ids.js"
+import { type ToolCapability as ToolCapabilityShape } from "../capability.js"
+import { ToolId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
 
 const ToolCapabilityBrand: unique symbol = Symbol("@gent/core/ToolCapability")
 declare const ToolCapabilityType: unique symbol
-
-/** Minimal context passed to `tool({...}).execute`. Tools are always invoked from the agent
- *  loop with a real call id; the optional shape on `CapabilityCoreContext`
- *  only exists for the audience-neutral case where no tool call is in flight. */
-export interface ToolCoreContext extends CapabilityCoreContext {
-  readonly toolCallId: ToolCallId
-  readonly capabilityContext?: Context.Context<never>
-}
 
 export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unknown> {
   readonly id: ToolId

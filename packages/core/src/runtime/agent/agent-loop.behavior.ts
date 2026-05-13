@@ -292,6 +292,9 @@ export const makeAgentLoopBehavior = (
         turnPermission: environment.permission,
         turnBaseSections: environment.baseSections,
         turnHostCtx: environment.hostCtx,
+        ...(environment.capabilityContext !== undefined
+          ? { turnCapabilityContext: environment.capabilityContext }
+          : {}),
       })),
     )
 

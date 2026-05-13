@@ -477,7 +477,6 @@ const makeExtensionHostContext = (
     cwd: runInfo.sessionCwd ?? deps.platform.cwd,
     home: deps.platform.home,
     host: deps.host,
-    ...(deps.capabilityContext !== undefined ? { capabilityContext: deps.capabilityContext } : {}),
 
     agent: {
       listAgents: () => Effect.succeed([...deps.extensionRegistry.getResolved().agents.values()]),

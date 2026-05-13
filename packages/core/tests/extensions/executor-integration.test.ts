@@ -679,7 +679,6 @@ describe("Executor runtime lifecycle", () => {
                 branchId: "executor-projection-branch" as never,
                 cwd: "/test",
                 home: "/test-home",
-                capabilityContext: layerContext as Context.Context<never>,
               }),
             }
             const projection = yield* compiled

@@ -19,6 +19,7 @@ import {
   CurrentProjectionReactionContext,
   CurrentReactionHostContext,
 } from "./extension-reaction-context.js"
+import { provideExtensionCapabilityContext } from "./extension-capability-context.js"
 export type { ExtensionReactionContext } from "./extension-reaction-context.js"
 
 export interface CompiledExtensionReactions {
@@ -90,9 +91,7 @@ const provideLifecycleHostContext = <A, E, R>(
   ctx: ExtensionHostContext & { readonly turn?: ProjectionTurnContext["turn"] },
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, Exclude<R, ExtensionContext> | FileSystem.FileSystem | Path.Path> =>
-  ctx.capabilityContext === undefined
-    ? provideExtensionServices(ctx, effect)
-    : provideExtensionServices(ctx, effect).pipe(Effect.provideContext(ctx.capabilityContext))
+  provideExtensionServices(ctx, effect).pipe(provideExtensionCapabilityContext)
 
 const provideProjectionContext = <A, E, R>(
   projection: ProjectionTurnContext,

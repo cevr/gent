@@ -1,4 +1,4 @@
-import { Schema, type Context, type Effect, type PlatformError } from "effect"
+import { Schema, type Effect, type PlatformError } from "effect"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent"
 import type { ExtensionHostPlatform } from "./extension"
 import type { EventStoreError } from "./event"
@@ -39,7 +39,6 @@ export interface ExtensionHostContext {
   readonly agentName?: AgentName
   readonly cwd: string
   readonly home: string
-  readonly capabilityContext?: Context.Context<never>
   readonly host: ExtensionHostPlatform
 
   /** Agent registry + runner */

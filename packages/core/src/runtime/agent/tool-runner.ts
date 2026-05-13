@@ -1,10 +1,5 @@
 import { Context, Effect, Layer, Schema, Sink, Stream } from "effect"
-import {
-  getToolId,
-  getToolMetadata,
-  type ToolCoreContext,
-  type ToolCapability,
-} from "../../domain/capability/tool.js"
+import { getToolId, getToolMetadata, type ToolCapability } from "../../domain/capability/tool.js"
 import { provideExtensionServices } from "../../domain/extension-services.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
@@ -14,7 +9,6 @@ import { EventPublisher } from "../../domain/event-publisher.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { withWideEvent, WideEvent, toolBoundary, ToolError } from "../wide-event-boundary"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
-import { extensionHostFacts } from "../make-extension-host-context.js"
 import { ToolCallId } from "../../domain/ids.js"
 import type * as AiTool from "effect/unstable/ai/Tool"
 import * as Prompt from "effect/unstable/ai/Prompt"
@@ -25,6 +19,7 @@ import {
   provideCurrentHostCtx,
 } from "./current-extension-host-context.js"
 import { provideReactionHostContext } from "../extensions/extension-reaction-context.js"
+import { provideExtensionCapabilityContext } from "../extensions/extension-capability-context.js"
 
 export type ToolCapabilityMap = Record<string, ToolCapability>
 
@@ -41,15 +36,6 @@ type ToolCapabilityContext = ExtensionHostContext & {
 }
 
 type ToolExecutionError = AiError.AiError | InteractionPendingError | Error
-type ToolRuntimeContext = ToolCoreContext
-
-const provideCapabilityContext = <A, E, R>(
-  ctx: ToolCoreContext,
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> =>
-  ctx.capabilityContext === undefined
-    ? effect
-    : effect.pipe(Effect.provideContext(ctx.capabilityContext))
 
 type ToolRunnerToolkit = AiToolkit.WithHandler<ToolCapabilityMap>
 
@@ -62,17 +48,6 @@ export interface ToolRunnerService {
     CurrentExtensionHostContext | ExtensionRegistry | EventPublisher
   >
 }
-
-const deriveToolContext = (ctx: ToolCapabilityContext): ToolRuntimeContext => ({
-  sessionId: ctx.sessionId,
-  branchId: ctx.branchId,
-  ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
-  toolCallId: ctx.toolCallId,
-  cwd: ctx.cwd,
-  home: ctx.home,
-  host: extensionHostFacts(ctx.host),
-  ...(ctx.capabilityContext !== undefined ? { capabilityContext: ctx.capabilityContext } : {}),
-})
 
 const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, message: string) =>
   Prompt.toolResultPart({
@@ -127,18 +102,19 @@ const makeExecutionToolkit = (params: {
     const metadata = getToolMetadata(params.tool)
     const toolkit = convertTools([params.tool])
     const toolName = String(getToolId(params.tool))
-    const toolCtx = deriveToolContext(params.ctx)
 
     const handlerMap: AiToolkit.HandlersFrom<ToolCapabilityMap> = {
       [toolName]: (decodedInput: unknown) =>
         Effect.gen(function* () {
           const executeResult = yield* provideExtensionServices(
             params.ctx,
-            provideCapabilityContext(
-              toolCtx,
-              // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-              metadata.effect(decodedInput).pipe(Effect.mapError(normalizeToolExecutionError)),
-            ),
+            // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+            metadata
+              .effect(decodedInput)
+              .pipe(
+                provideExtensionCapabilityContext,
+                Effect.mapError(normalizeToolExecutionError),
+              ),
           )
 
           return yield* registry.extensionReactions

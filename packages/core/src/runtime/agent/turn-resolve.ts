@@ -157,9 +157,6 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     cwd: hostCtx.cwd,
     home: hostCtx.home,
     sessionCwd: hostCtx.cwd,
-    ...(hostCtx.capabilityContext !== undefined
-      ? { capabilityContext: hostCtx.capabilityContext }
-      : {}),
     turn: turnCtx,
   }
   // Filter out hidden messages — visible in transcript but excluded from LLM context

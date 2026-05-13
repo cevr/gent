@@ -12,6 +12,7 @@ import type { AgentEvent, ToolCallStarted } from "../../src/domain/event"
 import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { provideCurrentHostCtx } from "../../src/runtime/agent/current-extension-host-context"
+import { provideCurrentCapabilityContext } from "../../src/runtime/extensions/extension-capability-context"
 import {
   BranchId,
   ExtensionId,
@@ -499,9 +500,9 @@ describe("tool execution", () => {
               branchId: BranchId.make("branch-context"),
               toolCallId,
               agentName: AgentName.make("cowork"),
-              capabilityContext,
             }),
           ),
+          provideCurrentCapabilityContext(capabilityContext),
         )
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
@@ -561,9 +562,9 @@ describe("tool execution", () => {
               branchId: BranchId.make("branch-read-context"),
               toolCallId,
               agentName: AgentName.make("cowork"),
-              capabilityContext,
             }),
           ),
+          provideCurrentCapabilityContext(capabilityContext),
         )
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)

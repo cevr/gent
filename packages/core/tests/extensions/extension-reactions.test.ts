@@ -12,6 +12,7 @@ import type { ExtensionHostContext } from "@gent/core-internal/domain/extension-
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
+import { provideCurrentCapabilityContext } from "../../src/runtime/extensions/extension-capability-context"
 import {
   provideExtensionReactionContext,
   provideReactionHostContext,
@@ -280,10 +281,7 @@ describe("runtime slots", () => {
           },
         }),
       ])
-      const hostCtx = {
-        ...stubHostCtx,
-        capabilityContext: Context.make(ReactionCounter, counter),
-      } satisfies ExtensionHostContext
+      const hostCtx: ExtensionHostContext = stubHostCtx
 
       yield* slots
         .emitTurnAfter({
@@ -293,7 +291,10 @@ describe("runtime slots", () => {
           agentName: AgentName.make("cowork"),
           interrupted: false,
         } satisfies TurnAfterInput)
-        .pipe(provideReactionHostContext(hostCtx))
+        .pipe(
+          provideReactionHostContext(hostCtx),
+          provideCurrentCapabilityContext(Context.make(ReactionCounter, counter)),
+        )
 
       const count = yield* counter.get
       expect(count).toBe(1)

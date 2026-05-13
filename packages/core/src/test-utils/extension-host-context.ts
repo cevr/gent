@@ -69,9 +69,6 @@ export const testExtensionHostContext = (
       ),
   },
   ...(overrides.agentName !== undefined ? { agentName: overrides.agentName } : {}),
-  ...(overrides.capabilityContext !== undefined
-    ? { capabilityContext: overrides.capabilityContext }
-    : {}),
   agent: { ...defaultAgent(), ...overrides.agent },
   session: { ...defaultSession(), ...overrides.session },
   interaction: { ...defaultInteraction(), ...overrides.interaction },
