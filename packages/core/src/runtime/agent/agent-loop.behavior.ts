@@ -316,64 +316,14 @@ export const makeAgentLoopBehavior = (
     const closed = yield* Deferred.make<void>()
     const startedRef = yield* Ref.make(false)
 
-    type BehaviorDeps = {
-      readonly sessionId: SessionId
-      readonly branchId: BranchId
-      readonly sideMutationSemaphore: Semaphore.Semaphore
-      readonly baseSections: ReadonlyArray<PromptSection>
-      readonly eventPublisher: typeof eventPublisher
-      readonly provideRuntime: typeof provideRuntime
-      readonly publishEvent: typeof publishEvent
-      readonly resolveTurnProfile: typeof resolveTurnProfile
-      readonly hostDeps: typeof hostDeps
-      readonly host: typeof host
-      readonly extensionRegistry: typeof extensionRegistry
-      readonly driverRegistry: typeof driverRegistry
-      readonly loopScope: typeof loopScope
-      readonly turnWorkerQueue: typeof turnWorkerQueue
-      readonly activeStreamRef: typeof activeStreamRef
-      readonly turnMetricsRef: typeof turnMetricsRef
-      readonly interruptedRef: typeof interruptedRef
-      readonly loopRef: typeof loopRef
-      readonly queuePersistenceSemaphore: typeof queuePersistenceSemaphore
-      readonly persistenceFailure: typeof persistenceFailure
-      readonly closed: typeof closed
-      readonly startedRef: typeof startedRef
-    }
-
-    const behaviorDeps = {
-      sessionId,
-      branchId,
-      sideMutationSemaphore,
-      baseSections,
-      eventPublisher,
-      provideRuntime,
-      publishEvent,
-      resolveTurnProfile,
-      hostDeps,
-      host,
-      extensionRegistry,
-      driverRegistry,
-      loopScope,
-      turnWorkerQueue,
-      activeStreamRef,
-      turnMetricsRef,
-      interruptedRef,
-      loopRef,
-      queuePersistenceSemaphore,
-      persistenceFailure,
-      closed,
-      startedRef,
-    } satisfies BehaviorDeps
-
     const queue = yield* makeAgentLoopQueue.pipe(
       Effect.provideService(AgentLoopQueueScope, {
-        sessionId: behaviorDeps.sessionId,
-        branchId: behaviorDeps.branchId,
-        loopRef: behaviorDeps.loopRef,
-        queuePersistenceSemaphore: behaviorDeps.queuePersistenceSemaphore,
-        persistenceFailure: behaviorDeps.persistenceFailure,
-        startedRef: behaviorDeps.startedRef,
+        sessionId,
+        branchId,
+        loopRef,
+        queuePersistenceSemaphore,
+        persistenceFailure,
+        startedRef,
       }),
     )
 
