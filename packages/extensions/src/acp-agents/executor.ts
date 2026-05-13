@@ -30,6 +30,7 @@ import {
   findLastUserMessage,
   renderLiveUserPrompt,
 } from "./transcript.js"
+import { toResponseFinishReason } from "./response-finish.js"
 
 // ── Session Manager Interface (Batch 3 provides implementation) ──
 
@@ -141,22 +142,6 @@ const emptyUsage = (): Response.Usage =>
       reasoning: undefined,
     },
   })
-
-const toResponseFinishReason = (stopReason: string): Response.FinishReason => {
-  switch (stopReason) {
-    case "stop":
-    case "length":
-    case "content-filter":
-    case "tool-calls":
-    case "error":
-    case "pause":
-    case "other":
-    case "unknown":
-      return stopReason
-    default:
-      return "unknown"
-  }
-}
 
 /** Map a tool_call_update to a response part based on status. */
 const mapToolCallUpdate = (

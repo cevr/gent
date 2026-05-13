@@ -337,8 +337,10 @@ column name` / `already exists`) instead of swallowing every ALTER
   command registry. Public hooks and command IDs stay unchanged while the
   oversized route/client modules shed behavior-specific implementation
   detail.
-- **C21 still open**: the remaining non-wrapper trace/composable-method
-  cleanup has not landed yet.
+- **C21 cleanup complete**: actor mailbox handlers no longer wrap
+  simple workspace-provided operations in outer generator shells, ACP
+  executors share one finish-reason normalizer, and workflow helper
+  process output projection is a pure map instead of a flatMap wrapper.
 - Verification:
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/storage/sqlite-session-storage.test.ts`
   passed with 20 tests, the focused interaction/external-turn regression
@@ -347,6 +349,9 @@ column name` / `already exists`) instead of swallowing every ALTER
   passed with 72 tests; `bun run lint`, `bun run typecheck`, and the
   pre-commit gate passed. For C20, focused TUI checks
   `bun test --preload ./packages/tooling/src/test-log-preload.ts --preload ./apps/tui/node_modules/@opentui/solid/scripts/preload.ts apps/tui/tests/client-session-state.test.tsx apps/tui/tests/extension-lifecycle.test.ts apps/tui/tests/composer-render.test.tsx`,
+  `bun run typecheck`, `bun run lint`, and `bun run fmt:check` passed.
+  For C21 cleanup, focused turn/ACP checks
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/runtime/agent-turn-response.test.ts packages/extensions/tests/acp-agents`,
   `bun run typecheck`, `bun run lint`, and `bun run fmt:check` passed.
 - Evidence:
   `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:203`,
@@ -377,7 +382,14 @@ column name` / `already exists`) instead of swallowing every ALTER
   `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx:596`,
   `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-command-registry.ts:76`,
   `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-command-registry.ts:176`,
-  `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-controller.ts:453`.
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-controller.ts:453`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:583`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:613`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:675`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/response-finish.ts:3`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/executor.ts:124`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/claude-code-executor.ts:64`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/workflow-helpers.ts:18`.
 
 ### S1 - Upstream wide-event outcome and boundary API
 
@@ -606,9 +618,15 @@ already open.
   `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-command-registry.ts:76`,
   `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-command-registry.ts:176`,
   `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-controller.ts:453`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:583`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:613`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:675`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-response.ts:176`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-response.ts:361`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/driver-registry.ts:40`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/response-finish.ts:3`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/executor.ts:124`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/claude-code-executor.ts:64`,
   `/Users/cvr/Developer/personal/gent/packages/extensions/src/workflow-helpers.ts:18`.
 
 ## Closing audit

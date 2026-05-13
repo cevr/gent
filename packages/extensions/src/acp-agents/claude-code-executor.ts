@@ -46,6 +46,7 @@ import {
   findLastUserMessage,
   renderLiveUserPrompt,
 } from "./transcript.js"
+import { toResponseFinishReason } from "./response-finish.js"
 
 // ── SDK message → Response part mapping ──
 
@@ -98,22 +99,6 @@ const emptyUsage = (): Response.Usage =>
       reasoning: undefined,
     },
   })
-
-const toResponseFinishReason = (stopReason: string): Response.FinishReason => {
-  switch (stopReason) {
-    case "stop":
-    case "length":
-    case "content-filter":
-    case "tool-calls":
-    case "error":
-    case "pause":
-    case "other":
-    case "unknown":
-      return stopReason
-    default:
-      return "unknown"
-  }
-}
 
 /**
  * Map a full `assistant` message. Text/thinking are emitted via the

@@ -15,7 +15,7 @@ export const runCommand = (cmd: string[]) => {
     const ctx = yield* ExtensionContext
     return yield* ctx.Process.run(head, rest, { cwd: ctx.cwd, stdout: "pipe", stderr: "pipe" })
   }).pipe(
-    Effect.flatMap((r) => Effect.succeed(r.exitCode === 0 ? r.stdout : "")),
+    Effect.map((r) => (r.exitCode === 0 ? r.stdout : "")),
     Effect.catchEager(() => Effect.succeed("")),
   )
 }

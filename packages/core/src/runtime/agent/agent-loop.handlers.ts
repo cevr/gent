@@ -580,19 +580,18 @@ export const buildAgentLoopActorHandlers = (config: {
       Run: Effect.fn("AgentLoop.Run")(({ operation }: HandlerRequest<TurnSubmissionInput>) =>
         runTurn(operation).pipe(provideActorWorkspace),
       ),
-      QueueFollowUp: Effect.fn("AgentLoop.QueueFollowUp")(function* ({
-        operation,
-      }: HandlerRequest<TurnSubmissionInput>) {
-        yield* Effect.gen(function* () {
-          const handle = yield* ensureStarted
-          yield* enqueueMessage(handle, {
-            message: operation.message,
-            agentOverride: operation.agentOverride,
-            runSpec: operation.runSpec,
-            interactive: operation.interactive,
-          })
-        }).pipe(provideActorWorkspace)
-      }),
+      QueueFollowUp: Effect.fn("AgentLoop.QueueFollowUp")(
+        ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
+          Effect.gen(function* () {
+            const handle = yield* ensureStarted
+            yield* enqueueMessage(handle, {
+              message: operation.message,
+              agentOverride: operation.agentOverride,
+              runSpec: operation.runSpec,
+              interactive: operation.interactive,
+            })
+          }).pipe(provideActorWorkspace),
+      ),
       Steer: Effect.fn("AgentLoop.Steer")(({ operation }: HandlerRequest<SteerInput>) =>
         applySteer(operation.commandId, operation.command).pipe(provideActorWorkspace),
       ),
@@ -611,139 +610,130 @@ export const buildAgentLoopActorHandlers = (config: {
         )
         yield* applySteer(operation.commandId, command).pipe(provideActorWorkspace)
       }),
-      RespondInteraction: Effect.fn("AgentLoop.RespondInteraction")(function* ({
-        operation,
-      }: HandlerRequest<RespondInteractionInput>) {
-        yield* Effect.gen(function* () {
-          yield* ensureTarget(operation)
-          yield* markWrite
-          const handle = yield* ensureStarted
-          const projectedState = yield* currentRuntimeState(handle)
-          if (projectedState._tag !== "WaitingForInteraction") {
-            const state = yield* handle.snapshot
-            if (state._tag !== "WaitingForInteraction") {
-              if (state._tag !== "Idle") return
-              const message = yield* latestIncompleteUserTurn
-              if (message === undefined) return
-              const baseline = (yield* handle.readState).stateEpoch
-              yield* handle
-                .startTurn({ message })
-                .pipe(
-                  Effect.catchEager((error) =>
-                    cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-                  ),
+      RespondInteraction: Effect.fn("AgentLoop.RespondInteraction")(
+        ({ operation }: HandlerRequest<RespondInteractionInput>) =>
+          Effect.gen(function* () {
+            yield* ensureTarget(operation)
+            yield* markWrite
+            const handle = yield* ensureStarted
+            const projectedState = yield* currentRuntimeState(handle)
+            if (projectedState._tag !== "WaitingForInteraction") {
+              const state = yield* handle.snapshot
+              if (state._tag !== "WaitingForInteraction") {
+                if (state._tag !== "Idle") return
+                const message = yield* latestIncompleteUserTurn
+                if (message === undefined) return
+                const baseline = (yield* handle.readState).stateEpoch
+                yield* handle
+                  .startTurn({ message })
+                  .pipe(
+                    Effect.catchEager((error) =>
+                      cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                    ),
+                  )
+                yield* Effect.raceFirst(
+                  waitForIdleAfterEpoch(handle, baseline),
+                  waitForTurnFailureAfterEpoch(handle, baseline),
                 )
-              yield* Effect.raceFirst(
-                waitForIdleAfterEpoch(handle, baseline),
-                waitForTurnFailureAfterEpoch(handle, baseline),
-              )
-              return
+                return
+              }
             }
-          }
-          yield* handle
-            .respondInteraction(operation.requestId)
-            .pipe(
-              Effect.catchEager((error) =>
-                cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-              ),
-            )
-        }).pipe(provideActorWorkspace)
-      }),
-      DrainQueue: Effect.fn("AgentLoop.DrainQueue")(function* ({
-        operation,
-      }: HandlerRequest<DrainQueueInput>) {
-        return yield* Effect.gen(function* () {
-          yield* ensureTarget(operation)
-          yield* markWrite
-          const handle = yield* ensureStarted
-          return yield* handle.drainQueue
-        }).pipe(provideActorWorkspace)
-      }),
-      GetQueue: Effect.fn("AgentLoop.GetQueue")(function* ({
-        operation,
-      }: HandlerRequest<GetQueueInput>) {
-        return yield* Effect.gen(function* () {
+            yield* handle
+              .respondInteraction(operation.requestId)
+              .pipe(
+                Effect.catchEager((error) =>
+                  cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                ),
+              )
+          }).pipe(provideActorWorkspace),
+      ),
+      DrainQueue: Effect.fn("AgentLoop.DrainQueue")(
+        ({ operation }: HandlerRequest<DrainQueueInput>) =>
+          Effect.gen(function* () {
+            yield* ensureTarget(operation)
+            yield* markWrite
+            const handle = yield* ensureStarted
+            return yield* handle.drainQueue
+          }).pipe(provideActorWorkspace),
+      ),
+      GetQueue: Effect.fn("AgentLoop.GetQueue")(({ operation }: HandlerRequest<GetQueueInput>) =>
+        Effect.gen(function* () {
           yield* ensureTarget(operation)
           yield* rejectIfTerminated
           const handle = yield* ensureStarted
           return yield* handle.queueSnapshot
-        }).pipe(provideActorWorkspace)
-      }),
-      GetState: Effect.fn("AgentLoop.GetState")(function* ({
-        operation,
-      }: HandlerRequest<GetStateInput>) {
-        return yield* Effect.gen(function* () {
+        }).pipe(provideActorWorkspace),
+      ),
+      GetState: Effect.fn("AgentLoop.GetState")(({ operation }: HandlerRequest<GetStateInput>) =>
+        Effect.gen(function* () {
           yield* ensureTarget(operation)
           yield* rejectIfTerminated
           const handle = yield* ensureStarted
           return yield* handle.runtimeState
-        }).pipe(provideActorWorkspace)
-      }),
-      RecordToolResult: Effect.fn("AgentLoop.RecordToolResult")(function* ({
-        operation,
-      }: HandlerRequest<RecordToolResultInput>) {
-        yield* Effect.gen(function* () {
-          yield* ensureTarget(operation)
-          yield* markWrite
-          const handle = yield* ensureStarted
-          yield* recordToolResult({
-            toolResultMessageId:
-              operation.commandId !== undefined
-                ? toolResultMessageIdForCommand(operation.commandId)
-                : toolResultMessageIdForToolCall(operation.toolCallId),
-            sessionId: operation.sessionId,
-            branchId: operation.branchId,
-            toolCallId: operation.toolCallId,
-            toolName: operation.toolName,
-            output: operation.output,
-            ...(operation.isError !== undefined ? { isError: operation.isError } : {}),
-          }).pipe(handle.withSideMutation)
-        }).pipe(
-          Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
-          provideActorWorkspace,
-        )
-      }),
-      InvokeTool: Effect.fn("AgentLoop.InvokeTool")(function* ({
-        operation,
-      }: HandlerRequest<InvokeToolInput>) {
-        yield* Effect.gen(function* () {
-          yield* ensureTarget(operation)
-          yield* markWrite
-          const handle = yield* ensureStarted
-          yield* Effect.gen(function* () {
-            const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
-            const environment = yield* handle.resolveTurnProfile
-            yield* invokeTool({
-              assistantMessageId: assistantMessageIdForCommand(operation.commandId),
-              toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
-              toolCallId: toolCallIdForCommand(operation.commandId),
-              toolName: operation.toolName,
-              input: operation.input,
+        }).pipe(provideActorWorkspace),
+      ),
+      RecordToolResult: Effect.fn("AgentLoop.RecordToolResult")(
+        ({ operation }: HandlerRequest<RecordToolResultInput>) =>
+          Effect.gen(function* () {
+            yield* ensureTarget(operation)
+            yield* markWrite
+            const handle = yield* ensureStarted
+            yield* recordToolResult({
+              toolResultMessageId:
+                operation.commandId !== undefined
+                  ? toolResultMessageIdForCommand(operation.commandId)
+                  : toolResultMessageIdForToolCall(operation.toolCallId),
               sessionId: operation.sessionId,
               branchId: operation.branchId,
-              currentTurnAgent,
-            }).pipe(provideAgentLoopTurnProfile(environment))
-          }).pipe(handle.withSideMutation)
-        }).pipe(
-          Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
-          provideActorWorkspace,
-        )
-      }),
-      TerminateBranch: Effect.fn("AgentLoop.TerminateBranch")(function* ({
-        operation,
-      }: HandlerRequest<TerminateBranchInput>) {
-        yield* Effect.gen(function* () {
-          yield* ensureTarget(operation)
-          yield* sessionGovernance.markTerminated(workspaceId, sessionId)
-          // Lifecycle stop must not depend on the loop being open. If the
-          // mailbox closed before we got here, `handleRef` may be empty;
-          // skip cleanup in that case rather than triggering a rebuild
-          // via `ensureStarted`.
-          const handle = yield* Ref.get(handleRef)
-          if (handle !== undefined) {
-            yield* cleanupLoop(handle)
-          }
-        }).pipe(provideActorWorkspace)
-      }),
+              toolCallId: operation.toolCallId,
+              toolName: operation.toolName,
+              output: operation.output,
+              ...(operation.isError !== undefined ? { isError: operation.isError } : {}),
+            }).pipe(handle.withSideMutation)
+          }).pipe(
+            Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
+            provideActorWorkspace,
+          ),
+      ),
+      InvokeTool: Effect.fn("AgentLoop.InvokeTool")(
+        ({ operation }: HandlerRequest<InvokeToolInput>) =>
+          Effect.gen(function* () {
+            yield* ensureTarget(operation)
+            yield* markWrite
+            const handle = yield* ensureStarted
+            yield* Effect.gen(function* () {
+              const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
+              const environment = yield* handle.resolveTurnProfile
+              yield* invokeTool({
+                assistantMessageId: assistantMessageIdForCommand(operation.commandId),
+                toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
+                toolCallId: toolCallIdForCommand(operation.commandId),
+                toolName: operation.toolName,
+                input: operation.input,
+                sessionId: operation.sessionId,
+                branchId: operation.branchId,
+                currentTurnAgent,
+              }).pipe(provideAgentLoopTurnProfile(environment))
+            }).pipe(handle.withSideMutation)
+          }).pipe(
+            Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
+            provideActorWorkspace,
+          ),
+      ),
+      TerminateBranch: Effect.fn("AgentLoop.TerminateBranch")(
+        ({ operation }: HandlerRequest<TerminateBranchInput>) =>
+          Effect.gen(function* () {
+            yield* ensureTarget(operation)
+            yield* sessionGovernance.markTerminated(workspaceId, sessionId)
+            // Lifecycle stop must not depend on the loop being open. If the
+            // mailbox closed before we got here, `handleRef` may be empty;
+            // skip cleanup in that case rather than triggering a rebuild
+            // via `ensureStarted`.
+            const handle = yield* Ref.get(handleRef)
+            if (handle !== undefined) {
+              yield* cleanupLoop(handle)
+            }
+          }).pipe(provideActorWorkspace),
+      ),
     })
   })
