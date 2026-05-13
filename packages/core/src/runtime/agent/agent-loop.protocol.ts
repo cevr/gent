@@ -6,6 +6,7 @@ import { QueueSnapshot } from "../../domain/queue.js"
 import {
   ActorCommandId,
   BranchId,
+  ExtensionId,
   InteractionRequestId,
   SessionId,
   ToolCallId,
@@ -100,6 +101,22 @@ const InvokeToolFields = {
   input: Schema.Unknown,
 }
 
+const ExtensionRequestInputEnvelope = Schema.TaggedUnion({
+  Present: { value: Schema.Unknown },
+  Missing: {},
+})
+type ExtensionRequestInputEnvelope = Schema.Schema.Type<typeof ExtensionRequestInputEnvelope>
+
+const RequestExtensionFields = {
+  ...WorkspaceFields,
+  sessionId: SessionId,
+  branchId: BranchId,
+  commandId: ActorCommandId,
+  extensionId: ExtensionId,
+  capabilityId: Schema.String,
+  input: ExtensionRequestInputEnvelope,
+}
+
 /**
  * `TerminateBranch` shuts down a single branch's loop. Distinct from
  * generic `Interrupt` (which only flushes pending mailbox items) because
@@ -183,6 +200,15 @@ export type InvokeToolInput = {
   readonly commandId: ActorCommandId
   readonly toolName: ToolName
   readonly input: unknown
+}
+export type RequestExtensionInput = {
+  readonly workspaceId: WorkspaceId
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly commandId: ActorCommandId
+  readonly extensionId: ExtensionId
+  readonly capabilityId: string
+  readonly input: ExtensionRequestInputEnvelope
 }
 export type TerminateBranchInput = {
   readonly workspaceId: WorkspaceId
@@ -324,6 +350,15 @@ export const AgentLoop = Actor.fromEntity(
       error: AgentLoopError,
       persisted: true,
       id: (p: InvokeToolInput) => ({
+        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
+        primaryKey: p.commandId,
+      }),
+    },
+    RequestExtension: {
+      payload: RequestExtensionFields,
+      success: Schema.Unknown,
+      error: AgentLoopError,
+      id: (p: RequestExtensionInput) => ({
         entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
         primaryKey: p.commandId,
       }),

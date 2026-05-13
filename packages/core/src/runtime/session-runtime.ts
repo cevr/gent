@@ -1,4 +1,16 @@
-import { Cause, Context, DateTime, Effect, Layer, Option, Schema, Stream, type Scope } from "effect"
+import {
+  Cause,
+  Context,
+  DateTime,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+  type FileSystem,
+  type Path,
+  type Scope,
+} from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -11,6 +23,7 @@ import { EventPublisher } from "../domain/event-publisher.js"
 import {
   ActorCommandId,
   BranchId,
+  ExtensionId,
   MessageId,
   RequestId,
   SessionId,
@@ -131,6 +144,15 @@ export const QueueFollowUpPayload = Schema.Struct({
 })
 export type QueueFollowUpPayload = typeof QueueFollowUpPayload.Type
 
+export const ExtensionRequestPayload = Schema.Struct({
+  sessionId: SessionId,
+  branchId: BranchId,
+  extensionId: ExtensionId,
+  capabilityId: Schema.String,
+  input: Schema.Unknown,
+})
+export type ExtensionRequestPayload = typeof ExtensionRequestPayload.Type
+
 export const DrainQueuedMessagesPayload = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
@@ -163,6 +185,8 @@ type SessionRuntimeLayerRequirements =
   | ConfigService
   | AgentLoopSessionGovernance
   | ChildProcessSpawner
+  | FileSystem.FileSystem
+  | Path.Path
   | Scope.Scope
 
 export interface SessionRuntimeService {
@@ -175,6 +199,9 @@ export interface SessionRuntimeService {
   ) => Effect.Effect<void, SessionRuntimeError>
   readonly runPrompt: (input: RunPromptPayload) => Effect.Effect<void, AgentRunError>
   readonly queueFollowUp: (input: QueueFollowUpPayload) => Effect.Effect<void, SessionRuntimeError>
+  readonly requestExtension: (
+    input: ExtensionRequestPayload,
+  ) => Effect.Effect<unknown, SessionRuntimeError>
   readonly drainQueuedMessages: (
     input: DrainQueuedMessagesPayload,
   ) => Effect.Effect<QueueSnapshot, SessionRuntimeError>
@@ -600,6 +627,30 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       requireSessionBranch(input).pipe(
         Effect.flatMap(() => queueFollowUpThroughActor(input)),
         Effect.catchCause((cause) => Effect.fail(wrapError("queueFollowUp failed", cause))),
+      ),
+
+    requestExtension: (input) =>
+      requireSessionBranch(input).pipe(
+        Effect.flatMap(() =>
+          Effect.gen(function* () {
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            return yield* ref.execute(
+              AgentLoopActor.RequestExtension.make({
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                extensionId: input.extensionId,
+                capabilityId: input.capabilityId,
+                input:
+                  input.input === undefined
+                    ? { _tag: "Missing" }
+                    : { _tag: "Present", value: input.input },
+                workspaceId: yield* CurrentWorkspaceId,
+                commandId: ActorCommandId.make(yield* platform.randomId),
+              }),
+            )
+          }),
+        ),
+        Effect.catchCause((cause) => Effect.fail(wrapError("requestExtension failed", cause))),
       ),
 
     drainQueuedMessages: (input) =>

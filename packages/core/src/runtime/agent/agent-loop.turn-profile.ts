@@ -24,7 +24,10 @@ export class CurrentAgentLoopTurnProfile extends Context.Service<
 export const provideAgentLoopTurnProfile =
   (profile: AgentLoopTurnProfile) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(
+    (profile.turnCapabilityContext !== undefined
+      ? effect.pipe(Effect.provideContext(profile.turnCapabilityContext))
+      : effect
+    ).pipe(
       Effect.provideService(CurrentAgentLoopTurnProfile, profile),
       Effect.provideService(ExtensionRegistry, profile.turnExtensionRegistry),
       Effect.provideService(DriverRegistry, profile.turnDriverRegistry),

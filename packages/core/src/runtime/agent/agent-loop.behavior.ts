@@ -42,7 +42,7 @@ import type { MessageStorage } from "../../storage/message-storage.js"
 import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
-import { SessionProfileCache } from "../session-profile.js"
+import type { SessionProfileCacheService } from "../session-profile.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import { makeExtensionHostPlatform } from "../extensions/host-platform.js"
@@ -186,6 +186,7 @@ export const makeAgentLoopBehavior = (
   sideMutationSemaphore: Semaphore.Semaphore,
   baseSections: ReadonlyArray<PromptSection>,
   initialQueue: LoopQueueState = emptyLoopQueueState(),
+  profileCache?: SessionProfileCacheService,
 ): Effect.Effect<
   AgentLoopBehavior,
   never,
@@ -225,7 +226,6 @@ export const makeAgentLoopBehavior = (
             }),
         ),
       )
-    const sessionProfileCache = yield* Effect.serviceOption(SessionProfileCache)
     const permissionService = yield* Effect.serviceOption(Permission)
 
     const hostProvider = yield* makeAmbientExtensionHostContextProvider({
@@ -239,7 +239,6 @@ export const makeAgentLoopBehavior = (
       },
     })
 
-    const profileCache = sessionProfileCache._tag === "Some" ? sessionProfileCache.value : undefined
     const defaultPermission =
       permissionService._tag === "Some" ? permissionService.value : AllowAllPermission
 

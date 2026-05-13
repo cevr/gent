@@ -4,8 +4,7 @@ import type { DriverRef } from "../domain/agent.js"
 import { Auth, AuthApi, AuthGuard } from "../domain/auth.js"
 import { ProviderAuthError } from "../domain/driver.js"
 import { EventId, EventStore, type EventEnvelope } from "../domain/event.js"
-import { RpcId, SessionId, type BranchId, type ExtensionId } from "../domain/ids.js"
-import type { Session } from "../domain/message.js"
+import { SessionId, type BranchId, type ExtensionId } from "../domain/ids.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
@@ -14,9 +13,6 @@ import {
   listSlashCommands,
   type ExtensionRegistryService,
 } from "../runtime/extensions/registry.js"
-import { makeExtensionHostPlatform } from "../runtime/extensions/host-platform.js"
-import { makeAmbientExtensionHostContextProvider } from "../runtime/make-extension-host-context.js"
-import { provideCurrentHostCtx } from "../runtime/agent/current-extension-host-context.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
@@ -126,63 +122,6 @@ const extensionRequestError = (params: {
     tag: params.capabilityId,
     phase: params.phase ?? "request",
     message: params.message,
-  })
-
-const resolveExtensionSession = (params: {
-  readonly extensionId: ExtensionId
-  readonly tag: string
-  readonly phase: "command" | "request"
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-}): Effect.Effect<
-  { readonly sessionId: SessionId; readonly branchId: BranchId; readonly session: Session },
-  ExtensionProtocolError,
-  SessionStorage | BranchStorage
-> =>
-  Effect.gen(function* () {
-    const sessionStorage = yield* SessionStorage
-    const branchStorage = yield* BranchStorage
-    const requestSessionId = params.sessionId
-    const requestBranchId = params.branchId
-    const session = yield* sessionStorage.getSession(requestSessionId).pipe(
-      Effect.mapError((error) =>
-        extensionRequestError({
-          extensionId: params.extensionId,
-          capabilityId: params.tag,
-          phase: params.phase,
-          message: `Session lookup failed: ${error.message}`,
-        }),
-      ),
-    )
-    if (session === undefined) {
-      return yield* extensionRequestError({
-        extensionId: params.extensionId,
-        capabilityId: params.tag,
-        phase: params.phase,
-        message: "Session not found for extension transport",
-      })
-    }
-
-    const branch = yield* branchStorage.getBranch(requestBranchId).pipe(
-      Effect.mapError((error) =>
-        extensionRequestError({
-          extensionId: params.extensionId,
-          capabilityId: params.tag,
-          phase: params.phase,
-          message: `Branch lookup failed: ${error.message}`,
-        }),
-      ),
-    )
-    if (branch === undefined || branch.sessionId !== requestSessionId) {
-      return yield* extensionRequestError({
-        extensionId: params.extensionId,
-        capabilityId: params.tag,
-        phase: params.phase,
-        message: "Branch does not belong to extension transport session",
-      })
-    }
-
-    return { sessionId: requestSessionId, branchId: requestBranchId, session }
   })
 
 // ============================================================================
@@ -612,54 +551,23 @@ const RpcHandlers = GentRpcs.toLayer(
             extensionId,
             capabilityId,
           })
-          const scope = yield* resolveExtensionSession({
-            extensionId,
-            tag: capabilityId,
-            phase: "request",
-            sessionId,
-            branchId,
-          })
-          if (scope.session.cwd === undefined) {
-            return yield* extensionRequestError({
+          return yield* sessionRuntime
+            .requestExtension({
+              sessionId,
+              branchId,
               extensionId,
               capabilityId,
-              message: "Session cwd unavailable for extension request",
+              input,
             })
-          }
-          const { registry, capabilityContext } = yield* resolveProfileServices(scope.session.cwd)
-          // Public write request handlers may ask for the wide host surface
-          // (`session.*`, `agent.*`, storage, etc.). Build the full
-          // ExtensionHostContext here so handlers use the same boundary as tools.
-          const host = yield* makeExtensionHostPlatform
-          const hostProvider = yield* makeAmbientExtensionHostContextProvider({
-            extensionRegistry: registry,
-            ...(capabilityContext !== undefined ? { capabilityContext } : {}),
-            overrides: {
-              host,
-              sessionControl: {
-                queueFollowUp: (input) => sessionRuntime.queueFollowUp(input),
-              },
-            },
-          })
-          const hostCtx = hostProvider.forRun({
-            sessionId: scope.sessionId,
-            branchId: scope.branchId,
-            sessionCwd: scope.session.cwd,
-          })
-          const rpcRegistry = registry.getResolved().rpcRegistry
-          const request = rpcRegistry.run(extensionId, RpcId.make(capabilityId), input).pipe(
-            provideCurrentHostCtx(hostCtx),
-            Effect.mapError((error) =>
-              extensionRequestError({
-                extensionId,
-                capabilityId,
-                message: "reason" in error ? `${error._tag}: ${error.reason}` : error._tag,
-              }),
-            ),
-          )
-          return yield* capabilityContext !== undefined
-            ? request.pipe(Effect.provideContext(capabilityContext))
-            : request
+            .pipe(
+              Effect.mapError((error) =>
+                extensionRequestError({
+                  extensionId,
+                  capabilityId,
+                  message: error.message,
+                }),
+              ),
+            )
         }).pipe(withWideEvent(WideEventBoundary.rpc("extension.request"))),
 
       "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>

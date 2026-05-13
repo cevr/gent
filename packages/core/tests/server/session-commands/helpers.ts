@@ -72,6 +72,7 @@ export const sessionRuntimeLayer = (
     respondInteraction: () => Effect.void,
     runPrompt: () => Effect.void,
     queueFollowUp: () => Effect.void,
+    requestExtension: () => Effect.void,
     drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
     getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
     getMetrics: () =>

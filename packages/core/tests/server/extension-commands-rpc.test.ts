@@ -379,7 +379,7 @@ describe("extension command RPCs", () => {
             if (result._tag === "Failure") {
               expectExtensionProtocolFailure(
                 result.cause,
-                "Session not found for extension transport",
+                "Session not found: missing-extension-request-session",
               )
             }
             expect(invoked).toEqual([])
@@ -414,7 +414,7 @@ describe("extension command RPCs", () => {
             if (result._tag === "Failure") {
               expectExtensionProtocolFailure(
                 result.cause,
-                "Branch does not belong to extension transport session",
+                `Branch not found for session: ${sessionId}/missing-extension-request-branch`,
               )
             }
             expect(invoked).toEqual([])
@@ -452,7 +452,7 @@ describe("extension command RPCs", () => {
           if (result._tag === "Failure") {
             expectExtensionProtocolFailure(
               result.cause,
-              "Branch does not belong to extension transport session",
+              `Branch not found for session: ${first.sessionId}/${second.branchId}`,
             )
           }
           expect(invoked).toEqual([])

@@ -497,6 +497,13 @@ ownership.
   actor-owned context objects. Real Effect requirements still bubble from
   the helper effects; actor-private construction state no longer masquerades
   as Context services.
+- **C9 complete**: public `extension.request` now dispatches through
+  `SessionRuntime.requestExtension` and the branch-local `AgentLoop`
+  `RequestExtension` operation. The actor resolves the turn profile,
+  provides the extension host context and profile resource context, and runs
+  the compiled request registry under actor-owned branch/session authority.
+  The server handler no longer rebuilds extension host context or profile
+  capability layers itself.
 - **Evidence**:
   `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md:152`,
   `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md:376`,
@@ -521,6 +528,16 @@ ownership.
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.worker.ts:42`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.turn-execution.ts:62`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.turn-execution.ts:74`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.protocol.ts:104`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.protocol.ts:110`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:142`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:789`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.turn-profile.ts:24`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:147`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:632`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts:540`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts:370`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts:404`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/make-extension-host-context.ts:46`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/make-extension-host-context.ts:469`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime-context.ts:63`,

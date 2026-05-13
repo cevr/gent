@@ -42,11 +42,18 @@ import { Actor } from "effect-encore"
 import { type AgentName, type RunSpec } from "../../domain/agent.js"
 import type { ModelId } from "../../domain/model.js"
 import { Message, type MessageMetadata } from "../../domain/message.js"
-import { MessageId, type ActorCommandId, type BranchId, type SessionId } from "../../domain/ids.js"
+import {
+  MessageId,
+  RpcId,
+  type ActorCommandId,
+  type BranchId,
+  type SessionId,
+} from "../../domain/ids.js"
 import { SteerCommand } from "../../domain/steer.js"
 import { GentPlatform } from "../gent-platform.js"
 import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
 import type { PromptSection } from "../../domain/prompt.js"
+import { SessionProfileCache } from "../session-profile.js"
 import {
   assistantMessageIdForCommand,
   interjectionMessageIdForCommand,
@@ -91,6 +98,7 @@ import {
   type InvokeToolInput,
   type MessageType,
   type RecordToolResultInput,
+  type RequestExtensionInput,
   type RespondInteractionInput,
   type SteerCommandType,
   type SteerInput,
@@ -131,6 +139,7 @@ export const buildAgentLoopActorHandlers = (config: {
     const messageStorage = yield* MessageStorage
     const queueStorage = yield* AgentLoopQueueStorage
     const eventStorage = yield* EventStorage
+    const sessionProfileCacheOption = yield* Effect.serviceOption(SessionProfileCache)
     const closed = yield* Ref.make(false)
     const operationSeen = yield* Ref.make(false)
 
@@ -351,6 +360,7 @@ export const buildAgentLoopActorHandlers = (config: {
         sideMutationSemaphore,
         config.baseSections,
         initialQueue,
+        sessionProfileCacheOption._tag === "Some" ? sessionProfileCacheOption.value : undefined,
       ).pipe(
         Effect.provideService(AgentLoopFollowUp, {
           enqueue: (input) => reentrantHandle.pipe(Effect.flatMap((h) => enqueueMessage(h, input))),
@@ -770,6 +780,36 @@ export const buildAgentLoopActorHandlers = (config: {
                 branchId: operation.branchId,
                 currentTurnAgent,
               }).pipe(provideAgentLoopTurnProfile(environment))
+            }).pipe(handle.withSideMutation)
+          }).pipe(
+            Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
+            provideActorWorkspace,
+          ),
+      ),
+      RequestExtension: Effect.fn("AgentLoop.RequestExtension")(
+        ({ operation }: HandlerRequest<RequestExtensionInput>) =>
+          Effect.gen(function* () {
+            yield* ensureTarget(operation)
+            const handle = yield* ensureStarted
+            return yield* Effect.gen(function* () {
+              const environment = yield* handle.resolveTurnProfile
+              const rpcRegistry = environment.turnExtensionRegistry.getResolved().rpcRegistry
+              return yield* rpcRegistry
+                .run(
+                  operation.extensionId,
+                  RpcId.make(operation.capabilityId),
+                  operation.input._tag === "Present" ? operation.input.value : undefined,
+                )
+                .pipe(
+                  provideAgentLoopTurnProfile(environment),
+                  Effect.mapError(
+                    (error) =>
+                      new AgentLoopError({
+                        message: "reason" in error ? `${error._tag}: ${error.reason}` : error._tag,
+                        cause: error,
+                      }),
+                  ),
+                )
             }).pipe(handle.withSideMutation)
           }).pipe(
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
