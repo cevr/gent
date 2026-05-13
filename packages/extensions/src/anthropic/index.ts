@@ -24,6 +24,8 @@ import {
   AnthropicCredentialService,
   EMPTY_CREDENTIAL_CELL,
   type CredentialCacheCellRef,
+  type AnthropicCredentialServiceShape,
+  type AnthropicCredentialIORequirements,
 } from "./credential-service.js"
 import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-cache.js"
 import { buildKeychainTransformClient } from "./keychain-transform.js"
@@ -122,15 +124,20 @@ const makeOauthAnthropicLayer = (
       refresh: refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE),
     },
     authInfo,
-  ).pipe(Layer.provide(Layer.succeed(AnthropicPlatform, platform)))
+  )
   const cacheLayer = AnthropicBetaCache.layerFromRef(betaCellRef)
 
   const clientLayer = Layer.unwrap(
     Effect.gen(function* () {
       const creds = yield* AnthropicCredentialService
       const cache = yield* AnthropicBetaCache
+      const credentialContext = yield* Effect.context<AnthropicCredentialIORequirements>()
+      const closedCreds: AnthropicCredentialServiceShape = {
+        getFresh: creds.getFresh.pipe(Effect.provideContext(credentialContext)),
+        invalidate: creds.invalidate,
+      }
       return AnthropicClient.layer({
-        transformClient: buildKeychainTransformClient(creds, cache, platform.env),
+        transformClient: buildKeychainTransformClient(closedCreds, cache, platform.env),
       }).pipe(Layer.provide(FetchHttpClient.layer))
     }),
   ).pipe(Layer.provide(credentialLayer), Layer.provide(cacheLayer))
