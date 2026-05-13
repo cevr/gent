@@ -28,19 +28,21 @@
 
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Deferred, Effect, Fiber, Layer, Ref, Schedule, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Ref, Schedule, Stream } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   finishPart,
   LanguageModelLayers,
   type LanguageModelStreamPart,
 } from "@gent/core-internal/test-utils/language-model"
-import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
-import { EventStore } from "@gent/core-internal/domain/event"
+import { dateFromMillis, Branch, Message, Session } from "@gent/core-internal/domain/message"
+import { EventStore, MessageReceived } from "@gent/core-internal/domain/event"
 import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
-import { ActorCommandId, BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { EventStorage } from "@gent/core-internal/storage/event-storage"
+import { ActorCommandId, BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopTestActor,
@@ -54,8 +56,16 @@ import { ConfigService } from "../../../src/runtime/config-service"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
+import {
+  LoopQueueState,
+  type LoopQueueState as LoopQueueStateType,
+} from "../../../src/runtime/agent/agent-loop.state"
+import { StorageError } from "../../../src/domain/storage-error"
 import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 import { makeExtRegistry } from "../agent-loop/helpers"
+
+const emptyPersistedQueue = (): LoopQueueStateType =>
+  LoopQueueState.make({ steering: [], followUp: [] })
 
 const gatedQueueStorageLayer = <E>(
   reopenGate: Ref.Ref<Deferred.Deferred<void> | undefined>,
@@ -92,6 +102,116 @@ const gatedQueueStorageLayer = <E>(
 }
 
 describe("agent-loop recovery race", () => {
+  it.live(
+    "recovery start failure closes without re-entering startup semaphore",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("recovery-start-fail-session")
+        const branchId = BranchId.make("recovery-start-fail-branch")
+        const storedQueueRef = yield* Ref.make<LoopQueueStateType>(emptyPersistedQueue())
+        const putCount = yield* Ref.make(0)
+
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.succeed(
+            Stream.fromIterable([
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[]),
+          ),
+        )
+        const queueStorageLayer = Layer.succeed(
+          AgentLoopQueueStorage,
+          AgentLoopQueueStorage.of({
+            getQueueState: () => Ref.get(storedQueueRef),
+            putQueueState: (_sessionId, _branchId, queue) =>
+              Effect.gen(function* () {
+                const count = yield* Ref.updateAndGet(putCount, (n) => n + 1)
+                if (count >= 2) {
+                  return yield* new StorageError({
+                    message: "injected recovery start persistence failure",
+                    cause: "test",
+                  })
+                }
+                yield* Ref.set(storedQueueRef, queue)
+              }),
+            clearQueueState: () => Ref.set(storedQueueRef, emptyPersistedQueue()),
+          }),
+        )
+
+        const deps = Layer.mergeAll(
+          SqliteStorage.TestWithSql(),
+          queueStorageLayer,
+          providerLayer,
+          ModelResolver.fromLanguageModel(providerLayer),
+          makeExtRegistry(),
+          RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          ConfigService.Test(),
+          EventStore.Memory,
+          ToolRunner.Test(),
+          BunServices.layer,
+          ModelRegistry.Test(),
+          GentPlatform.Test(),
+        )
+        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
+          ),
+        )
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const sessionStorage = yield* SessionStorage
+            const branchStorage = yield* BranchStorage
+            const eventStorage = yield* EventStorage
+            const actorClientFactory = yield* AgentLoopActor.Context
+            const platform = yield* GentPlatform
+
+            const now = dateFromMillis(1_767_225_600_000)
+            yield* sessionStorage.createSession(
+              new Session({
+                id: sessionId,
+                name: "Recovery Start Failure",
+                createdAt: now,
+                updatedAt: now,
+              }),
+            )
+            yield* branchStorage.createBranch(
+              new Branch({ id: branchId, sessionId, createdAt: now }),
+            )
+            const message = Message.cases.regular.make({
+              id: MessageId.make("recovery-start-failure-message"),
+              sessionId,
+              branchId,
+              role: "user",
+              parts: [Prompt.textPart({ text: "recover and fail" })],
+              createdAt: now,
+            })
+            yield* eventStorage.appendEvent(MessageReceived.make({ message }))
+
+            const ref = yield* actorClientFactory(
+              entityIdOf(DefaultWorkspaceId, sessionId, branchId),
+            )
+            const completed = yield* Effect.exit(
+              ref.execute(
+                AgentLoopActor.GetState.make({
+                  workspaceId: DefaultWorkspaceId,
+                  sessionId,
+                  branchId,
+                  commandId: ActorCommandId.make(yield* platform.randomId),
+                }),
+              ),
+            ).pipe(Effect.timeoutOption("2 seconds"))
+
+            expect(completed._tag).toBe("Some")
+            if (completed._tag === "Some") {
+              expect(Exit.isFailure(completed.value)).toBe(true)
+            }
+          }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+        )
+      }),
+    10000,
+  )
+
   it.live(
     "second op blocks on startup semaphore until first op finishes reopen",
     () =>

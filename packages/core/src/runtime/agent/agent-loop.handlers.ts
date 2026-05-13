@@ -143,19 +143,18 @@ export const buildAgentLoopActorHandlers = (config: {
     const handleRef = yield* Ref.make<AgentLoopBehavior | undefined>(undefined)
     const startupExitRef = yield* Ref.make<Exit.Exit<void, AgentLoopError> | undefined>(undefined)
 
+    const closeBehaviorWithHeldStartupPermit = (loop: AgentLoopBehavior) =>
+      Effect.gen(function* () {
+        if (yield* Ref.get(closed)) return
+        yield* Ref.set(closed, true)
+        yield* loop.close
+      }).pipe(Effect.ignore)
+
     // Holds `startupSemaphore` across the closed-flip + close so a
     // concurrent `openLoop` cannot observe a half-torn-down loop nor
     // publish a fresh handle while the old one is closing.
     const closeBehavior = (loop: AgentLoopBehavior) =>
-      startupSemaphore
-        .withPermits(1)(
-          Effect.gen(function* () {
-            if (yield* Ref.get(closed)) return
-            yield* Ref.set(closed, true)
-            yield* loop.close
-          }),
-        )
-        .pipe(Effect.ignore)
+      startupSemaphore.withPermits(1)(closeBehaviorWithHeldStartupPermit(loop))
 
     const cleanupLoop = (loop: AgentLoopBehavior) => closeBehavior(loop)
 
@@ -210,7 +209,10 @@ export const buildAgentLoopActorHandlers = (config: {
       Effect.map((message) => message !== undefined),
     )
 
-    const startNextQueuedTurnIfIdle = (handle: AgentLoopBehavior) =>
+    const startNextQueuedTurnIfIdle = (
+      handle: AgentLoopBehavior,
+      options?: { readonly startupPermitHeld?: boolean },
+    ) =>
       Effect.gen(function* () {
         const start = yield* handle.takeNextQueuedTurnIfIdle
         if (start !== undefined) {
@@ -218,7 +220,10 @@ export const buildAgentLoopActorHandlers = (config: {
             .startTurn(start)
             .pipe(
               Effect.catchEager((error) =>
-                cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                (options?.startupPermitHeld === true
+                  ? closeBehaviorWithHeldStartupPermit(handle)
+                  : cleanupLoop(handle)
+                ).pipe(Effect.andThen(Effect.fail(error))),
               ),
             )
         }
@@ -367,7 +372,9 @@ export const buildAgentLoopActorHandlers = (config: {
                   .startTurn({ message: incompleteMessage })
                   .pipe(
                     Effect.catchEager((error) =>
-                      cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                      closeBehaviorWithHeldStartupPermit(handle).pipe(
+                        Effect.andThen(Effect.fail(error)),
+                      ),
                     ),
                   )
                 return
@@ -378,7 +385,7 @@ export const buildAgentLoopActorHandlers = (config: {
                 initialQueue.followUp.length > 0
               if (!hasRecoveredQueue) return
               if (yield* hasPriorMessageHistory) {
-                yield* startNextQueuedTurnIfIdle(handle)
+                yield* startNextQueuedTurnIfIdle(handle, { startupPermitHeld: true })
               }
             }),
           ),

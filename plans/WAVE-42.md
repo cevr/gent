@@ -94,7 +94,7 @@ context adapter`).
   `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/session-runtime.test.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-runner.test.ts`.
 
-### S4 status - partial
+### S4 status - complete
 
 - **C10 complete**: external-driver tool execution now preserves
   `InteractionPendingError` as a typed external-turn failure instead of
@@ -117,11 +117,15 @@ context adapter`).
   into the background runner. Delegate keeps the existing child-fiber
   inheritance semantics; the fixed bug class is the closure over the
   whole request `ExtensionContext`, not a new independent scope model.
-- **C13 partial**: stale external tool authority, external interactive
-  tool parking, and background authority scope now have targeted
-  regressions. Recovery-start failure deadlock still needs its specific
-  regression before C13 is complete.
+- **C13 complete**: stale external tool authority, external interactive
+  tool parking, background authority scope, and recovery-start failure
+  deadlock now have targeted regressions. Recovery cleanup now has an
+  already-held-startup-permit path so startup failure cleanup does not
+  re-enter `startupSemaphore`.
 - Verification:
+  For C13 recovery-start failure, `bun run typecheck` passed and
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/runtime/agent-loop/recovery-race.test.ts packages/core/tests/runtime/agent-loop/queue.test.ts`
+  passed.
   For C10, `bun run typecheck` passed and
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/runtime/agent-loop/external-turn.test.ts packages/extensions/tests/acp-agents/acp-agents.test.ts packages/extensions/tests/acp-agents/claude-sdk-lifecycle.test.ts`
   passed.
@@ -130,6 +134,16 @@ context adapter`).
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/extensions/tests/delegate/delegate-background.test.ts packages/extensions/tests/delegate/delegate-tool.test.ts packages/extensions/tests/exec-tools/bash-execution.test.ts`
   passed.
 - Evidence:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:146`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:156`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:212`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:223`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:371`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:388`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop/recovery-race.test.ts:105`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop/recovery-race.test.ts:121`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop/recovery-race.test.ts:126`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop/recovery-race.test.ts:184`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/driver.ts:221`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/driver.ts:241`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts:94`,
