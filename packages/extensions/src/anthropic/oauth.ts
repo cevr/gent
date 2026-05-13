@@ -1,14 +1,14 @@
-import { Clock, Duration, Effect, FileSystem, Path, Schema } from "effect"
+import { Clock, Duration, Effect, Schema, type FileSystem, type Path } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { AnthropicPlatform } from "./platform-adapter.js"
 import {
-  decodeCredentials,
   parseOAuthResponse,
   updateCredentialBlob,
   type ClaudeCredentials,
 } from "./oauth/credentials.js"
+import { readCredentialsFile, writeCredentialsFile } from "./oauth/credentials-file.js"
 import {
   ClaudeKeychainNotFoundError,
   getKeychainAccountName,
@@ -41,49 +41,6 @@ export {
   shouldFallBackToCli,
   shouldFallBackToCredentialsFile,
 } from "./oauth/keychain.js"
-
-// ── Claude Code Keychain Reader ──
-
-const credentialsFilePath = (home: string) =>
-  Effect.gen(function* () {
-    const path = yield* Path.Path
-    return path.join(home, ".claude", ".credentials.json")
-  })
-
-const readCredentialsFile = (): Effect.Effect<
-  ClaudeCredentials,
-  ProviderAuthError,
-  AnthropicPlatform | FileSystem.FileSystem | Path.Path
-> =>
-  Effect.gen(function* () {
-    const platform = yield* AnthropicPlatform
-    const fs = yield* FileSystem.FileSystem
-    const credentialsFile = yield* credentialsFilePath(platform.home)
-    const exists = yield* fs.exists(credentialsFile).pipe(
-      Effect.mapError(
-        (e) =>
-          new ProviderAuthError({
-            message: `Failed to read Claude credentials file: ${e.message}`,
-            cause: e,
-          }),
-      ),
-    )
-    if (!exists) {
-      return yield* new ProviderAuthError({
-        message: `Failed to read Claude credentials file: Credentials file not found: ${credentialsFile}`,
-      })
-    }
-    const raw = yield* fs.readFileString(credentialsFile).pipe(
-      Effect.mapError(
-        (e) =>
-          new ProviderAuthError({
-            message: `Failed to read Claude credentials file: ${e.message}`,
-            cause: e,
-          }),
-      ),
-    )
-    return yield* decodeCredentials(raw)
-  })
 
 /**
  * Read Claude Code credentials for `source` (the keychain service name).
@@ -238,33 +195,7 @@ export const writeBackCredentials = (
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     if (platform.platform !== "darwin") {
-      const fs = yield* FileSystem.FileSystem
-      const credentialsFile = yield* credentialsFilePath(platform.home)
-      const mapFsError = (e: { readonly message: string }) =>
-        new ProviderAuthError({
-          message: `Failed to write Claude credentials file: ${e.message}`,
-          cause: e,
-        })
-      const exists = yield* fs.exists(credentialsFile).pipe(Effect.mapError(mapFsError))
-      const raw = exists
-        ? yield* fs.readFileString(credentialsFile).pipe(Effect.mapError(mapFsError))
-        : '{"claudeAiOauth":{}}'
-      const updated = updateCredentialBlob(raw, creds)
-      if (updated === undefined) return
-      yield* fs.writeFileString(credentialsFile, updated).pipe(Effect.mapError(mapFsError))
-      // Counsel  deep — chmod 0600 after write so the credentials
-      // file isn't world-readable on first creation. Matches the
-      // opencode reference's keychain.ts:297 behavior.
-      yield* platform.runProcess("chmod", ["600", credentialsFile], { stdout: "ignore" }).pipe(
-        Effect.mapError(
-          (e) =>
-            new ProviderAuthError({
-              message: `Failed to write Claude credentials file: ${e.message}`,
-              cause: e,
-            }),
-        ),
-      )
-      return
+      return yield* writeCredentialsFile(creds)
     }
 
     // Counsel  deep — surface the read failure as a typed error
