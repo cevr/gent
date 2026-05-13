@@ -19,6 +19,11 @@ export interface ExtensionsPublicSurfaceFinding {
   readonly message: string
 }
 
+export interface SdkPublicSurfaceFinding {
+  readonly path: string
+  readonly message: string
+}
+
 const publicCoreExports = new Set(["./extensions/api", "./extensions/api.js"])
 const forbiddenCorePathPrefixes = [
   "@gent/core/debug",
@@ -125,5 +130,20 @@ export const findExtensionsPublicExportFindings = (
     })
   }
 
+  return findings
+}
+
+export const findSdkPublicExportFindings = (
+  packageJson: PackageJson,
+): ReadonlyArray<SdkPublicSurfaceFinding> => {
+  const findings: SdkPublicSurfaceFinding[] = []
+  const exportsMap = packageJson.exports ?? {}
+  for (const key of Object.keys(exportsMap)) {
+    if (key === ".") continue
+    findings.push({
+      path: `packages/sdk/package.json exports["${key}"]`,
+      message: "@gent/sdk may only expose the stable root client contract",
+    })
+  }
   return findings
 }

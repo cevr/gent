@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   findCorePublicExportFindings,
   findExtensionsPublicExportFindings,
+  findSdkPublicExportFindings,
 } from "../src/core-public-exports"
 
 describe("core public export guard", () => {
@@ -175,6 +176,34 @@ describe("extensions public export guard", () => {
         path: 'tsconfig.json compilerOptions.paths["@gent/extensions/todo-storage"]',
         message:
           "Do not create public-looking @gent/extensions/* aliases for extension implementation internals",
+      },
+    ])
+  })
+})
+
+describe("sdk public export guard", () => {
+  test("allows only root client contract export", () => {
+    expect(
+      findSdkPublicExportFindings({
+        exports: {
+          ".": "./src/index.ts",
+        },
+      }),
+    ).toEqual([])
+  })
+
+  test("flags internal sdk subpath exports", () => {
+    expect(
+      findSdkPublicExportFindings({
+        exports: {
+          ".": "./src/index.ts",
+          "./rpcs": "./src/rpcs.ts",
+        },
+      }),
+    ).toEqual([
+      {
+        path: 'packages/sdk/package.json exports["./rpcs"]',
+        message: "@gent/sdk may only expose the stable root client contract",
       },
     ])
   })

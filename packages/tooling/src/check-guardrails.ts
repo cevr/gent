@@ -2,6 +2,7 @@ import { findBannedEslintDisableBlocks, findBlanketEslintDisables } from "./blan
 import {
   findCorePublicExportFindings,
   findExtensionsPublicExportFindings,
+  findSdkPublicExportFindings,
 } from "./core-public-exports"
 import { findPlatformDuplicationViolations } from "./platform-duplication-guards"
 import { findSuppressionInventoryFindings } from "./suppression-inventory"
@@ -54,10 +55,12 @@ const packageJson = await Bun.file("packages/core/package.json").json()
 const tsconfigJson = await Bun.file("tsconfig.json").json()
 const coreInternalPackageJson = await Bun.file("packages/core-internal/package.json").json()
 const extensionsPackageJson = await Bun.file("packages/extensions/package.json").json()
+const sdkPackageJson = await Bun.file("packages/sdk/package.json").json()
 
 for (const finding of [
   ...findCorePublicExportFindings(packageJson, tsconfigJson, coreInternalPackageJson),
   ...findExtensionsPublicExportFindings(extensionsPackageJson, tsconfigJson),
+  ...findSdkPublicExportFindings(sdkPackageJson),
 ]) {
   pushFailure(`${finding.path}: ${finding.message}`)
 }

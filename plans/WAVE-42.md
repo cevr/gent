@@ -236,6 +236,29 @@ context adapter`).
   `/Users/cvr/Developer/personal/gent/packages/extensions/tests/delegate/delegate-background.test.ts:8`,
   `/Users/cvr/Developer/personal/gent/packages/extensions/tests/delegate/delegate-tool.test.ts:1`.
 
+### S5 status - partial
+
+- **C18 complete**: SDK package export shape is now guarded by repo
+  lint, and the SDK public-surface test asserts the exact stable runtime
+  value exports. Internal RPC graph/handler/client construction symbols
+  (`GentRpcs`, `RpcHandlersLive`, `makeRpcClient`) remain absent from
+  the public runtime surface.
+- **C14-C17 still open**: loop interception, dynamic registration,
+  request/action identity simplification, and scoped state authoring
+  helpers have not landed yet.
+- Verification:
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/tooling/tests/core-public-exports.test.ts packages/sdk/tests/public-surface.test.ts`
+  passed with 10 tests; `bun run lint` and `bun run typecheck` passed.
+- Evidence:
+  `/Users/cvr/Developer/personal/gent/packages/tooling/src/core-public-exports.ts:22`,
+  `/Users/cvr/Developer/personal/gent/packages/tooling/src/core-public-exports.ts:136`,
+  `/Users/cvr/Developer/personal/gent/packages/tooling/src/check-guardrails.ts:54`,
+  `/Users/cvr/Developer/personal/gent/packages/tooling/src/check-guardrails.ts:60`,
+  `/Users/cvr/Developer/personal/gent/packages/tooling/tests/core-public-exports.test.ts:195`,
+  `/Users/cvr/Developer/personal/gent/packages/sdk/tests/public-surface.test.ts:5`,
+  `/Users/cvr/Developer/personal/gent/packages/sdk/tests/public-surface.test.ts:24`,
+  `/Users/cvr/Developer/personal/gent/packages/sdk/package.json:5`.
+
 ### S6 status - partial
 
 - **C19 complete**: agent-loop queue rows and durable session-operation
