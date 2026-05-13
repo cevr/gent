@@ -25,13 +25,13 @@ import {
   Clock,
   Context,
   Effect,
-  FileSystem,
+  type FileSystem,
   Layer,
   Option,
-  Path,
+  type Path,
   SynchronizedRef,
 } from "effect"
-import { ChildProcessSpawner } from "effect/unstable/process"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
 import {
   freshEnoughForUse,
@@ -40,7 +40,7 @@ import {
   refreshClaudeCodeCredentials,
   type ClaudeCredentials,
 } from "./oauth.js"
-import { AnthropicPlatform } from "./platform-adapter.js"
+import type { AnthropicPlatform } from "./platform-adapter.js"
 
 // ── Cache constants ──
 
@@ -203,10 +203,12 @@ export class AnthropicCredentialService extends Context.Service<
     AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
   > =>
     Effect.gen(function* () {
-      const platform = yield* AnthropicPlatform
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
+      const ioContext = yield* Effect.context<
+        | AnthropicPlatform
+        | ChildProcessSpawner.ChildProcessSpawner
+        | FileSystem.FileSystem
+        | Path.Path
+      >()
       const provideIO = <A, E>(
         effect: Effect.Effect<
           A,
@@ -216,13 +218,7 @@ export class AnthropicCredentialService extends Context.Service<
           | FileSystem.FileSystem
           | Path.Path
         >,
-      ): Effect.Effect<A, E> =>
-        effect.pipe(
-          Effect.provideService(AnthropicPlatform, platform),
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fs),
-          Effect.provideService(Path.Path, path),
-        )
+      ): Effect.Effect<A, E> => effect.pipe(Effect.provideContext(ioContext))
       return yield* Effect.sync(() => {
         const persistRefreshed = (
           creds: ClaudeCredentials,

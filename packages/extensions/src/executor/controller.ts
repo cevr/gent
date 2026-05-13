@@ -9,7 +9,6 @@ import {
   Semaphore,
   TxSubscriptionRef,
 } from "effect"
-import { ChildProcessSpawner } from "effect/unstable/process"
 import { type TurnProjection } from "@gent/core/extensions/api"
 import {
   ExecutorState,
@@ -55,14 +54,13 @@ export const ExecutorControllerLive = (
 ): Layer.Layer<
   ExecutorRuntime | ExecutorRead | ExecutorWrite,
   never,
-  ExecutorSidecar | ExecutorMcpBridge | ChildProcessSpawner.ChildProcessSpawner
+  ExecutorSidecar | ExecutorMcpBridge
 > =>
   Layer.unwrap(
     Effect.gen(function* () {
       const scope = yield* Effect.scope
       const sidecar = yield* ExecutorSidecar
       const bridge = yield* ExecutorMcpBridge
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
       const state = yield* TxSubscriptionRef.make<ExecutorState>(ExecutorState.cases.Idle.make({}))
       const gate = yield* Semaphore.make(1)
       const connection = yield* ScopedRef.fromAcquire(
@@ -84,9 +82,7 @@ export const ExecutorControllerLive = (
 
       const runConnection = (targetCwd: string, expectedGeneration: number) =>
         Effect.gen(function* () {
-          const endpointRaw = yield* sidecar
-            .resolveEndpoint(targetCwd)
-            .pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner))
+          const endpointRaw = yield* sidecar.resolveEndpoint(targetCwd)
           const endpoint = yield* Schema.decodeUnknownEffect(ExecutorEndpoint)(endpointRaw)
           const inspection = yield* bridge.inspect(endpoint.baseUrl).pipe(
             Effect.flatMap((raw) => Schema.decodeUnknownEffect(ExecutorMcpInspection)(raw)),

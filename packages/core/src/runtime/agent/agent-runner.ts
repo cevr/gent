@@ -1,7 +1,7 @@
 import { Cause, Duration, Effect, type FileSystem, Layer, type Path, Schema } from "effect"
-import { ChildProcessSpawner } from "effect/unstable/process"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 import type { SqlClient } from "effect/unstable/sql"
-import { runProcess } from "../../utils/run-process.js"
+import { makeProcessRunner } from "../../utils/run-process.js"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import { AgentSwitched, EventStore, type AgentEvent } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
@@ -266,7 +266,7 @@ export const SubprocessRunner = (
     Effect.gen(function* () {
       const baseEventStore = yield* EventStore
       const extensionRegistry = yield* ExtensionRegistry
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const processRunner = yield* makeProcessRunner
       const durableRuntime = yield* makeDurableAgentRunRuntime
       const metadataRuntime = yield* makeAgentRunMetadataRuntime
       const makeEphemeralAgentRootLayer = yield* makeEphemeralAgentRootLayerFactory
@@ -360,20 +360,21 @@ export const SubprocessRunner = (
                     : {}),
                 }
 
-                const [exitCode, stderrText] = yield* runProcess(binary, args.slice(1), {
-                  cwd: params.cwd,
-                  env,
-                  stdout: "pipe",
-                  stderr: "pipe",
-                }).pipe(
-                  Effect.map(
-                    (result) => [result.exitCode, result.stderr] as readonly [number, string],
-                  ),
-                  Effect.catchTag("ProcessError", () =>
-                    Effect.succeed([1, "Subprocess failed"] as readonly [number, string]),
-                  ),
-                  Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-                )
+                const [exitCode, stderrText] = yield* processRunner
+                  .run(binary, args.slice(1), {
+                    cwd: params.cwd,
+                    env,
+                    stdout: "pipe",
+                    stderr: "pipe",
+                  })
+                  .pipe(
+                    Effect.map(
+                      (result) => [result.exitCode, result.stderr] as readonly [number, string],
+                    ),
+                    Effect.catchTag("ProcessError", () =>
+                      Effect.succeed([1, "Subprocess failed"] as readonly [number, string]),
+                    ),
+                  )
 
                 if (exitCode !== 0) {
                   yield* durableRuntime.publishAgentRunFailed({

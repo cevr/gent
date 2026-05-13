@@ -1,11 +1,11 @@
 import { Effect } from "effect"
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
   ExtensionHostProcessError,
   type ExtensionHostPlatform,
   type ExtensionHostSignal,
 } from "../../domain/extension.js"
-import { runProcess } from "../../utils/run-process.js"
+import { makeProcessRunner } from "../../utils/run-process.js"
 import { GentPlatform } from "../gent-platform.js"
 
 const errorMessage = (error: unknown): string => {
@@ -42,7 +42,7 @@ export const makeExtensionHostPlatform: Effect.Effect<
   ChildProcessSpawner | GentPlatform
 > = Effect.gen(function* () {
   const platform = yield* GentPlatform
-  const spawner = yield* ChildProcessSpawner
+  const processRunner = yield* makeProcessRunner
   const osInfo = yield* platform.osInfo
   const execPath = yield* platform.execPath
   const homeDirectory = yield* platform.homeDirectory
@@ -64,9 +64,6 @@ export const makeExtensionHostPlatform: Effect.Effect<
     signalPid: (pid: number, signal: ExtensionHostSignal) =>
       platform.signal(pid, signal).pipe(Effect.catchEager(() => Effect.void)),
     runProcess: (command, args, options) =>
-      runProcess(command, args, options).pipe(
-        Effect.provideService(ChildProcessSpawner, spawner),
-        Effect.mapError(toHostProcessError(command)),
-      ),
+      processRunner.run(command, args, options).pipe(Effect.mapError(toHostProcessError(command))),
   }
 })

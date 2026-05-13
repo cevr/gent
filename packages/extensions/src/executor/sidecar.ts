@@ -26,7 +26,7 @@ import {
 import { isRecord, type PublicExtensionSetupContext } from "@gent/core/extensions/api"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
-import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { ExecutorPlatform } from "./platform-adapter.js"
 import {
   type ExecutorEndpoint,
@@ -120,13 +120,7 @@ type PortProbe = Schema.Schema.Type<typeof PortProbe>
 // ── Service interface ──
 
 export interface ExecutorSidecarService {
-  readonly resolveEndpoint: (
-    cwd: string,
-  ) => Effect.Effect<
-    ExecutorEndpoint,
-    ExecutorSidecarError,
-    ChildProcessSpawner.ChildProcessSpawner
-  >
+  readonly resolveEndpoint: (cwd: string) => Effect.Effect<ExecutorEndpoint, ExecutorSidecarError>
   readonly stop: (cwd: string) => Effect.Effect<"stopped" | "missing", ExecutorSidecarError>
   readonly find: (cwd: string) => Effect.Effect<ExecutorEndpoint | undefined>
   readonly resolveSettings: (cwd: string) => Effect.Effect<ResolvedExecutorSettings>
@@ -150,6 +144,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         const fs = yield* FileSystem.FileSystem
         const platform = yield* ExecutorPlatform
         const gentPlatform = yield* GentPlatform
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
         const sidecarsByCwd = new Map<string, SidecarRecord>()
         const spawnMutex = yield* Semaphore.make(1)
 
@@ -408,6 +403,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             })
               .asEffect()
               .pipe(
+                Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
                 Scope.provide(handleScope),
                 Effect.catchTag("PlatformError", (e) =>
                   Effect.fail(

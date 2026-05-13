@@ -1,6 +1,5 @@
 import { Effect, Schema, Stream, type Duration } from "effect"
-import type { ChildProcessSpawner } from "effect/unstable/process"
-import { ChildProcess } from "effect/unstable/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
 export class ProcessError extends Schema.TaggedErrorClass<ProcessError>()("ProcessError", {
   command: Schema.String,
@@ -13,6 +12,14 @@ export interface ProcessResult {
   readonly exitCode: number
   readonly stdout: string
   readonly stderr: string
+}
+
+export interface ProcessRunner {
+  readonly run: (
+    command: string,
+    args: ReadonlyArray<string>,
+    options?: RunProcessOptions,
+  ) => Effect.Effect<ProcessResult, ProcessError>
 }
 
 export interface RunProcessOptions {
@@ -89,3 +96,17 @@ export const runProcess = (
       )
     : program
 }
+
+export const makeProcessRunner: Effect.Effect<
+  ProcessRunner,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner
+> = Effect.gen(function* () {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  return {
+    run: (command, args, options) =>
+      runProcess(command, args, options).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      ),
+  }
+})
