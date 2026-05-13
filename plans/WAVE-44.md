@@ -258,3 +258,61 @@ Make the docs teach the shape an author should actually use after W43.
 - `bun run gate` passes.
 - Final W44 audit receipt lists every file reference used to conclude no
   P0/P1 findings.
+
+## Final Audit
+
+### Status
+
+- **Result**: complete; no P0/P1 findings remain across the W44 lanes.
+- **Gate**: `bun run gate` passed after the L4 runtime-feedback fix.
+- **Closure smoke**:
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/authoring-reference.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/extensions/define-extension.test.ts packages/core/tests/server/extension-commands-rpc.test.ts -t "reference|dynamic|state change|duplicate request ids|host authority|private|public"`
+  passed with 19 tests.
+
+### Findings
+
+- **L1 Dogfood Real Extensions**: green. The one-file session notes and
+  dynamic scratchpad reference extensions exercise tools, slash requests,
+  hooks, resources, dynamic registrations, and model-driven tool execution
+  through the public authoring API only.
+- **L2 Ceremony And Naming**: green. `ExtensionContext.Dynamic` now derives the
+  owner extension from runtime context; `registerTool(extensionId, tool)` and
+  `registerRequest(extensionId, request)` are compile-time rejected.
+- **L3 Requirement Ownership In Practice**: green. `ExtensionContext.State`
+  now derives the owner extension from runtime context; extension-owned services
+  notify state changes without passing owner IDs.
+- **L4 Runtime And UX Feedback**: green. Runtime package validation reports the
+  public `requests[...]` bucket name instead of the old `rpc[...]` term.
+- **L5 Architecture Simplification**: green for W44 scope. The wave removed
+  author-supplied owner parameters from dynamic registration and state pulses
+  without adding compatibility shims; runtime owner identity stays at actor/RPC,
+  hook, and tool execution boundaries.
+- **L6 Documentation As Product**: green. `docs/extensions.md` teaches the
+  current owner-derived dynamic and state APIs, and the reference examples
+  import only `@gent/core/extensions/api`.
+
+### Evidence
+
+- `/Users/cvr/Developer/personal/gent/docs/extensions.md`
+- `/Users/cvr/Developer/personal/gent/examples/extensions/session-notes.ts`
+- `/Users/cvr/Developer/personal/gent/examples/extensions/dynamic-scratchpad.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-host-context.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-services.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/dynamic-extension-registry.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-package-shape.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-hooks.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/tool-runner.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/authoring-reference.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/define-extension.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/todo-service.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo-service.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/tests/todo/helpers.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/tests/todo/todo-service.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/tests/todo/todo-storage.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/tooling/src/platform-duplication-guards.ts`
