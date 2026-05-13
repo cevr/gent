@@ -102,7 +102,8 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   const rawMessages = yield* messageStorage
     .listMessages(params.branchId)
     .pipe(Effect.map((items) => [...items]))
-  const agents = yield* extensionRegistry.listAgents()
+  const resolvedExtensions = extensionRegistry.getResolved()
+  const agents = [...resolvedExtensions.agents.values()]
   const agent = agents.find((entry) => entry.name === currentAgent)
   if (agent === undefined) {
     yield* eventPublisher
@@ -139,7 +140,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
       : effectiveAgent
 
   // Derive extension projections from explicit prompt/message slots.
-  const allTools = yield* extensionRegistry.listModelCapabilities()
+  const allTools = [...resolvedExtensions.modelCapabilities.values()]
   const turnCtx = {
     sessionId: params.sessionId,
     branchId: params.branchId,
@@ -196,7 +197,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   // that need to swap or strip a section by id, e.g. codemode replacing
   // `tool-list` / `tool-guidelines` rather than appending a contradicting
   // surface).
-  const allAgents = yield* extensionRegistry.listAgents()
+  const allAgents = [...resolvedExtensions.agents.values()]
   const sections = buildTurnPromptSections(
     params.baseSections,
     effectiveAgent,

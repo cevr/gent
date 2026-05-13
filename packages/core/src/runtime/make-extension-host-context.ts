@@ -437,7 +437,7 @@ export const makeExtensionHostContext = (
     ...(deps.capabilityContext !== undefined ? { capabilityContext: deps.capabilityContext } : {}),
 
     agent: {
-      listAgents: () => deps.extensionRegistry.listAgents(),
+      listAgents: () => Effect.succeed([...deps.extensionRegistry.getResolved().agents.values()]),
       run: (params) =>
         deps.agentRunner.run({
           agent: params.agent,

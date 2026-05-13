@@ -458,7 +458,7 @@ const RpcHandlers = GentRpcs.toLayer(
           const driverRegistry = yield* DriverRegistry
           const models = yield* driverRegistry.listModels()
           const externals = yield* driverRegistry.listExternal()
-          const agents = yield* extensionRegistry.listAgents()
+          const agents = [...extensionRegistry.getResolved().agents.values()]
           const drivers = [
             ...models.map((driver) =>
               DriverInfo.cases.model.make({
@@ -572,7 +572,7 @@ const RpcHandlers = GentRpcs.toLayer(
       "extension.listStatus": ({ sessionId }: OptionalSessionPayload) =>
         Effect.gen(function* () {
           const { registry } = yield* resolveSessionServices(sessionId)
-          const activationStatuses = yield* registry.listExtensionStatuses()
+          const activationStatuses = registry.getResolved().extensionStatuses
           return buildExtensionHealthSnapshot(activationStatuses)
         }),
 

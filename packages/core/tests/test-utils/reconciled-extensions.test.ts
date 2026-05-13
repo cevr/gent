@@ -75,7 +75,7 @@ describe("reconcileTestExtensions", () => {
         )
 
         const registry = yield* Effect.service(ExtensionRegistry).pipe(Effect.provide(context))
-        const tools = yield* registry.listModelCapabilities()
+        const tools = [...registry.getResolved().modelCapabilities.values()]
         const failed = registry.getResolved().failedExtensions
 
         expect(tools).toEqual([])

@@ -19,6 +19,7 @@ import { AgentName } from "../../src/domain/agent.js"
 import { requireAgent, ExtensionContext, ExtensionServiceError } from "@gent/core/extensions/api"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message.js"
 import { testExtensionHostContext, testToolContext } from "../../src/test-utils/index.js"
+import { resolveExtensions } from "../../src/runtime/extensions/registry.js"
 
 const SESSION_ID = SessionId.make("test-session")
 const BRANCH_ID = BranchId.make("test-branch")
@@ -27,7 +28,6 @@ const FIXTURE_DATE = dateFromMillis(0)
 const die = (label: string) => () => Effect.die(`${label} not wired in test`)
 
 const baseDeps = (overrides: {
-  listAgents: MakeExtensionHostContextDeps["extensionRegistry"]["listAgents"]
   listBranches: MakeExtensionHostContextDeps["branchStorage"]["listBranches"]
 }): MakeExtensionHostContextDeps => ({
   platform: {
@@ -49,7 +49,7 @@ const baseDeps = (overrides: {
     review: die("PromptPresenter.review"),
   } as MakeExtensionHostContextDeps["promptPresenter"],
   extensionRegistry: {
-    listAgents: overrides.listAgents,
+    getResolved: () => resolveExtensions([]),
   } as unknown as MakeExtensionHostContextDeps["extensionRegistry"],
   sessionStorage: {
     getSession: die("getSession"),
@@ -144,7 +144,6 @@ describe("host facet survivors after C9.5 prune", () => {
         createdAt: FIXTURE_DATE,
       })
       const deps = baseDeps({
-        listAgents: die("listAgents"),
         listBranches: (id) => (id === SESSION_ID ? Effect.succeed([branch]) : Effect.succeed([])),
       })
       const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)

@@ -329,7 +329,7 @@ describe("ExtensionRegistry", () => {
       const registry = yield* buildRegistry([
         makeExt("a", "builtin", { tools: [makeTool("read")] }),
       ])
-      const tools = yield* registry.listModelCapabilities()
+      const tools = [...registry.getResolved().modelCapabilities.values()]
       const tool = tools.find((capability) => String(getToolId(capability)) === "read")
       expect(String(tool === undefined ? undefined : getToolId(tool))).toBe("read")
     }),
@@ -337,7 +337,7 @@ describe("ExtensionRegistry", () => {
   it.live("unregistered model capability name returns undefined", () =>
     Effect.gen(function* () {
       const registry = yield* buildRegistry([])
-      const tools = yield* registry.listModelCapabilities()
+      const tools = [...registry.getResolved().modelCapabilities.values()]
       const tool = tools.find((capability) => String(getToolId(capability)) === "nonexistent")
       expect(tool).toBeUndefined()
     }),
@@ -347,7 +347,7 @@ describe("ExtensionRegistry", () => {
       const registry = yield* buildRegistry([
         makeExt("a", "builtin", { tools: [makeTool("read"), makeTool("write")] }),
       ])
-      const tools = yield* registry.listModelCapabilities()
+      const tools = [...registry.getResolved().modelCapabilities.values()]
       expect(tools.length).toBe(2)
     }),
   )
@@ -365,9 +365,9 @@ describe("ExtensionRegistry", () => {
           },
         ],
       )
-      const tools = yield* registry.listModelCapabilities()
+      const tools = [...registry.getResolved().modelCapabilities.values()]
       const failed = registry.getResolved().failedExtensions
-      const statuses = yield* registry.listExtensionStatuses()
+      const statuses = registry.getResolved().extensionStatuses
       expect(tools.map((tool) => String(getToolId(tool)))).toEqual(["read"])
       expect(failed).toEqual([
         {
@@ -401,7 +401,7 @@ describe("ExtensionRegistry", () => {
       const registry = yield* buildRegistry([
         makeExt("a", "builtin", { agents: [makeAgent("explore")] }),
       ])
-      const agents = yield* registry.listAgents()
+      const agents = [...registry.getResolved().agents.values()]
       const agent = agents.find((entry) => entry.name === AgentName.make("explore"))
       expect(agent?.name).toBe(AgentName.make("explore"))
     }),
@@ -420,7 +420,7 @@ describe("ExtensionRegistry", () => {
       const registry = yield* buildRegistry([
         makeExt("a", "builtin", { agents: [cowork, explore, deepwork] }),
       ])
-      const agents = yield* registry.listAgents()
+      const agents = [...registry.getResolved().agents.values()]
       expect(agents.length).toBe(3)
       expect(agents.map((a) => a.name)).toContain(AgentName.make("cowork"))
       expect(agents.map((a) => a.name)).toContain(AgentName.make("explore"))
@@ -535,9 +535,9 @@ describe("ExtensionRegistry", () => {
         const driver = yield* DriverRegistry
         return { ext, driver }
       }).pipe(Effect.provide(layer))
-      const tools = yield* registries.ext.listModelCapabilities()
+      const tools = [...registries.ext.getResolved().modelCapabilities.values()]
       expect(tools.length).toBe(0)
-      const agents = yield* registries.ext.listAgents()
+      const agents = [...registries.ext.getResolved().agents.values()]
       expect(agents.length).toBe(0)
       const providers = yield* registries.driver.listModels()
       expect(providers.length).toBe(0)

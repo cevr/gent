@@ -243,7 +243,7 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
    *
    * Composes auth info (`Auth.get`) with registry-derived metadata
    * (`DriverRegistry.listModels`) and per-session routing
-   * (`resolveDualModelPair` + `ExtensionRegistry.listAgents`) to compute
+   * (`resolveDualModelPair` + resolved extension agents) to compute
    * which providers are required *and* present. External-routed
    * agents (driver._tag === "external") own their own auth, so model
    * auth is short-circuited for them.
@@ -262,7 +262,7 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
         const requiredProviders = Effect.fn("AuthGuard.requiredProviders")(function* (
           query: AuthProviderQuery = {},
         ) {
-          const agents = yield* extensionRegistry.listAgents()
+          const agents = [...extensionRegistry.getResolved().agents.values()]
           const modelPairExit = yield* Effect.exit(resolveDualModelPair(agents))
           const providers: ProviderId[] = []
           const seen = new Set<string>()
