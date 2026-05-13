@@ -15,6 +15,11 @@ context adapter`).
   or `effect-encore` forces Gent into workarounds, redesign upstream
   first, add changesets/version flow there, then consume the improved
   API in Gent.
+- **Upstream release rule**: do not manually update upstream package
+  versions. Add a changeset, test Gent against the upstream checkout
+  with `file:..`, merge the generated changeset release PR, wait for
+  npm `latest` to reflect the published version, then consume that
+  published package in Gent.
 - **Batching**: sub-commit by architecture seam. Run gate between
   logical units. Use focused upstream package gates before consuming
   upstream changes in Gent.
@@ -485,6 +490,13 @@ ownership.
   handler owns event-log projection, and `SessionRuntime.getMetrics`
   validates the durable branch boundary before dispatching to the actor
   instead of reading `EventStorage` directly.
+- **C8 complete**: `AgentLoopQueueScope`, `AgentLoopTurnExecutionScope`,
+  and `AgentLoopWorkerScope` were deleted. The actor behavior now owns the
+  refs, semaphores, queues, and branch/session identity directly, then
+  constructs queue, turn execution, and worker helpers with private
+  actor-owned context objects. Real Effect requirements still bubble from
+  the helper effects; actor-private construction state no longer masquerades
+  as Context services.
 - **Evidence**:
   `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md:152`,
   `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md:376`,
@@ -500,9 +512,15 @@ ownership.
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:101`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:142`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts:106`,
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts:369`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts:288`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts:352`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts:362`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.queue.ts:36`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.queue.ts:85`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.worker.ts:18`,
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.turn-execution.ts:61`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.worker.ts:42`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.turn-execution.ts:62`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.turn-execution.ts:74`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/make-extension-host-context.ts:46`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/make-extension-host-context.ts:469`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime-context.ts:63`,

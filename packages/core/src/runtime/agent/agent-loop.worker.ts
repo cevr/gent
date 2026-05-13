@@ -1,4 +1,4 @@
-import { Cause, Clock, Context, Effect, Ref, TxQueue, type Semaphore } from "effect"
+import { Cause, Clock, Effect, Ref, TxQueue, type Semaphore } from "effect"
 import { DEFAULT_AGENT_NAME, type AgentName as AgentNameType } from "../../domain/agent.js"
 import { ErrorOccurred, type AgentEvent } from "../../domain/event.js"
 import type { BranchId, InteractionRequestId, SessionId } from "../../domain/ids.js"
@@ -15,7 +15,7 @@ import { signalActiveStreamInterrupt, type ActiveStreamHandle } from "./turn-res
 import type { TurnOutcome } from "./agent-loop.turn-execution.js"
 import { turnBoundary, withWideEvent } from "../wide-event-boundary.js"
 
-export type AgentLoopWorkerScopeService = {
+export type AgentLoopWorkerContext<E = never, R = never> = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly sideMutationSemaphore: Semaphore.Semaphore
@@ -27,14 +27,9 @@ export type AgentLoopWorkerScopeService = {
   readonly takeNextQueuedTurn: Effect.Effect<QueuedTurnItem | undefined, AgentLoopError>
   readonly recordTurnFailure: (cause: Cause.Cause<unknown>) => Effect.Effect<void>
   readonly publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
-  readonly runTurn: (state: RunningState) => Effect.Effect<TurnOutcome, AgentLoopError>
+  readonly runTurn: (state: RunningState) => Effect.Effect<TurnOutcome, AgentLoopError | E, R>
   readonly switchAgentOnState: (state: LoopState, next: AgentNameType) => Effect.Effect<LoopState>
 }
-
-export class AgentLoopWorkerScope extends Context.Service<
-  AgentLoopWorkerScope,
-  AgentLoopWorkerScopeService
->()("@gent/core/src/runtime/agent/agent-loop.worker/AgentLoopWorkerScope") {}
 
 export const interruptActiveStream = Effect.fn("AgentLoop.interruptActiveStream")(function* (
   activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>,
@@ -44,9 +39,7 @@ export const interruptActiveStream = Effect.fn("AgentLoop.interruptActiveStream"
   yield* signalActiveStreamInterrupt(activeStream)
 })
 
-export const makeAgentLoopWorker = Effect.gen(function* () {
-  const scope = yield* AgentLoopWorkerScope
-
+export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) => {
   const publishPhaseFailure = (cause: Cause.Cause<unknown>) =>
     scope
       .publishEvent(
@@ -248,4 +241,4 @@ export const makeAgentLoopWorker = Effect.gen(function* () {
     withSideMutation: <A, E, R2>(effect: Effect.Effect<A, E, R2>): Effect.Effect<A, E, R2> =>
       effect.pipe(scope.sideMutationSemaphore.withPermits(1)),
   }
-})
+}

@@ -70,12 +70,9 @@ import {
 } from "./agent-loop.state.js"
 import type { QueueSnapshot } from "../../domain/queue.js"
 import { emptyTurnMetrics, type ActiveStreamHandle } from "./turn-response.js"
-import { AgentLoopQueueScope, makeAgentLoopQueue } from "./agent-loop.queue.js"
-import {
-  AgentLoopTurnExecutionScope,
-  makeAgentLoopTurnExecution,
-} from "./agent-loop.turn-execution.js"
-import { AgentLoopWorkerScope, makeAgentLoopWorker } from "./agent-loop.worker.js"
+import { makeAgentLoopQueue } from "./agent-loop.queue.js"
+import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
+import { makeAgentLoopWorker } from "./agent-loop.worker.js"
 import {
   captureAgentLoopRuntimeContext,
   provideAgentLoopRuntimeContext,
@@ -288,16 +285,14 @@ export const makeAgentLoopBehavior = (
     const closed = yield* Deferred.make<void>()
     const startedRef = yield* Ref.make(false)
 
-    const queue = yield* makeAgentLoopQueue.pipe(
-      Effect.provideService(AgentLoopQueueScope, {
-        sessionId,
-        branchId,
-        loopRef,
-        queuePersistenceSemaphore,
-        persistenceFailure,
-        startedRef,
-      }),
-    )
+    const queue = yield* makeAgentLoopQueue({
+      sessionId,
+      branchId,
+      loopRef,
+      queuePersistenceSemaphore,
+      persistenceFailure,
+      startedRef,
+    })
 
     const recordTurnFailure = (cause: Cause.Cause<unknown>) =>
       TxSubscriptionRef.update(loopRef, (s) => ({
@@ -354,35 +349,31 @@ export const makeAgentLoopBehavior = (
         return updateCurrentAgentOnState(state, next)
       }).pipe(Effect.orDie)
 
-    const { runTurn } = yield* makeAgentLoopTurnExecution.pipe(
-      Effect.provideService(AgentLoopTurnExecutionScope, {
-        sessionId,
-        branchId,
-        resolveTurnProfile,
-        activeStreamRef,
-        turnMetricsRef,
-        interruptedRef,
-        clearInFlightTurn,
-      }),
-    )
+    const { runTurn } = yield* makeAgentLoopTurnExecution({
+      sessionId,
+      branchId,
+      resolveTurnProfile,
+      activeStreamRef,
+      turnMetricsRef,
+      interruptedRef,
+      clearInFlightTurn,
+    })
 
-    const worker = yield* makeAgentLoopWorker.pipe(
-      Effect.provideService(AgentLoopWorkerScope, {
-        sessionId,
-        branchId,
-        sideMutationSemaphore,
-        turnWorkerQueue,
-        activeStreamRef,
-        interruptedRef,
-        currentLoopState,
-        saveCheckpoint,
-        takeNextQueuedTurn: takeNextQueuedTurnCommitted,
-        recordTurnFailure,
-        publishEvent,
-        runTurn,
-        switchAgentOnState,
-      }),
-    )
+    const worker = makeAgentLoopWorker({
+      sessionId,
+      branchId,
+      sideMutationSemaphore,
+      turnWorkerQueue,
+      activeStreamRef,
+      interruptedRef,
+      currentLoopState,
+      saveCheckpoint,
+      takeNextQueuedTurn: takeNextQueuedTurnCommitted,
+      recordTurnFailure,
+      publishEvent,
+      runTurn,
+      switchAgentOnState,
+    })
 
     const startTurnWorker = Effect.forkIn(
       provideAgentLoopRuntimeContext(runtimeContext)(worker.turnWorkerLoop),
