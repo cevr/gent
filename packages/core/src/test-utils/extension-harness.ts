@@ -296,8 +296,10 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
   const resolvedFileLock = overrides?.FileLock ?? fileLock
   const resolvedState = overrides?.State ?? state
   const resolvedDynamic = overrides?.Dynamic ?? dynamic
+  const resolvedExtensionId = overrides?.extensionId ?? ExtensionId.make("test-extension")
 
   return {
+    extensionId: resolvedExtensionId,
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
     toolCallId: ToolCallId.make("test-call"),

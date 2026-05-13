@@ -252,7 +252,7 @@ const compileRpcRegistry = (
     }
     const hostCtx = yield* CurrentExtensionHostContext
     return yield* provideExtensionServices(
-      hostCtx,
+      { ...hostCtx, extensionId },
       runExtensionCapability(extensionId, capabilityId, entry.capability, input),
     )
   }),

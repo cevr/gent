@@ -881,7 +881,7 @@ export const buildAgentLoopActorHandlers = (config: {
                       if (dynamic === undefined) return yield* staticRequest
                       const hostCtx = yield* CurrentExtensionHostContext
                       return yield* provideExtensionServices(
-                        hostCtx,
+                        { ...hostCtx, extensionId: dynamic.extensionId },
                         runExtensionCapability(
                           dynamic.extensionId,
                           RpcId.make(operation.capabilityId),

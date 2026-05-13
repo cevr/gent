@@ -1,16 +1,19 @@
 import { Context, Effect, Layer, Schema, Sink, Stream } from "effect"
 import { getToolId, getToolMetadata, type ToolCapability } from "../../domain/capability/tool.js"
 import { provideExtensionServices } from "../../domain/extension-services.js"
-import { ExtensionRegistry } from "../extensions/registry.js"
+import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
-import { DynamicExtensionRegistry } from "../../domain/dynamic-extension-registry.js"
+import {
+  DynamicExtensionRegistry,
+  type DynamicToolEntry,
+} from "../../domain/dynamic-extension-registry.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { withWideEvent, WideEvent, WideEventBoundary } from "../wide-event-boundary"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
-import { ToolCallId } from "../../domain/ids.js"
+import { ToolCallId, type ExtensionId } from "../../domain/ids.js"
 import type * as AiTool from "effect/unstable/ai/Tool"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
@@ -34,6 +37,11 @@ type ToolCall = { toolCallId: ToolCallId; toolName: string; input: unknown }
 
 type ToolCapabilityContext = ExtensionHostContext & {
   readonly toolCallId: ToolCallId
+}
+
+interface ResolvedToolCapability {
+  readonly extensionId: ExtensionId
+  readonly capability: ToolCapability
 }
 
 type ToolExecutionError = AiError.AiError | InteractionPendingError | Error
@@ -194,6 +202,30 @@ const allowAllPermission: PermissionService = {
   check: () => Effect.succeed("allowed"),
 }
 
+const staticToolEntries = (
+  activeRegistry: ExtensionRegistryService,
+): ReadonlyArray<ResolvedToolCapability> => {
+  const resolved = activeRegistry.getResolved()
+  const entries: ResolvedToolCapability[] = []
+  for (const capability of resolved.modelCapabilities.values()) {
+    const extension = resolved.extensions.find((extension) =>
+      (extension.contributions.tools ?? []).includes(capability),
+    )
+    if (extension !== undefined) {
+      entries.push({
+        extensionId: extension.manifest.id,
+        capability,
+      })
+    }
+  }
+  return entries
+}
+
+const dynamicToolEntry = (entry: DynamicToolEntry): ResolvedToolCapability => ({
+  extensionId: entry.extensionId,
+  capability: entry.capability,
+})
+
 export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()(
   "@gent/core/src/runtime/agent/tool-runner/ToolRunner",
 ) {
@@ -212,17 +244,19 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
           yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })
           yield* publishStarted({ ctx, toolCall })
 
-          const capabilities = [...activeRegistry.getResolved().modelCapabilities.values()]
+          const capabilities = staticToolEntries(activeRegistry)
           const dynamicRegistryOption = yield* Effect.serviceOption(DynamicExtensionRegistry)
           const dynamicCapabilities =
             dynamicRegistryOption._tag === "Some"
-              ? yield* dynamicRegistryOption.value.listTools(ctx.sessionId)
+              ? yield* dynamicRegistryOption.value
+                  .listToolEntries(ctx.sessionId)
+                  .pipe(Effect.map((entries) => entries.map(dynamicToolEntry)))
               : []
-          const tool: ToolCapability | undefined =
+          const toolEntry: ResolvedToolCapability | undefined =
             dynamicCapabilities.find(
-              (capability) => String(getToolId(capability)) === toolCall.toolName,
+              (entry) => String(getToolId(entry.capability)) === toolCall.toolName,
             ) ??
-            capabilities.find((capability) => String(getToolId(capability)) === toolCall.toolName)
+            capabilities.find((entry) => String(getToolId(entry.capability)) === toolCall.toolName)
 
           const finish = (result: Prompt.ToolResultPart) =>
             Effect.gen(function* () {
@@ -240,7 +274,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               return result
             })
 
-          if (tool === undefined) {
+          if (toolEntry === undefined) {
             yield* WideEvent.failDomain("unknown", {
               message: `Unknown tool: ${toolCall.toolName}`,
             })
@@ -251,6 +285,10 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               }),
             )
             return yield* finish(errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`))
+          }
+          const toolCtx: ToolCapabilityContext = {
+            ...ctx,
+            extensionId: toolEntry.extensionId,
           }
           const executeKnownTool = Effect.gen(function* () {
             const preflight = yield* activeRegistry.extensionHooks
@@ -305,9 +343,9 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             }
 
             const executionToolkit = yield* makeExecutionToolkit({
-              tool,
+              tool: toolEntry.capability,
               toolCall,
-              ctx,
+              ctx: toolCtx,
             })
             return yield* terminalToolResult(executionToolkit, toolCall)
           })

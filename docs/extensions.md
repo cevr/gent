@@ -282,12 +282,14 @@ state in extension-owned services.
 ```ts
 const install = Effect.gen(function* () {
   const ctx = yield* ExtensionContext
-  const unregisterTool = yield* ctx.Dynamic.registerTool(extensionId, ScratchpadAppendTool)
-  const unregisterRequest = yield* ctx.Dynamic.registerRequest(extensionId, ShowScratchpad)
+  const unregisterTool = yield* ctx.Dynamic.registerTool(ScratchpadAppendTool)
+  const unregisterRequest = yield* ctx.Dynamic.registerRequest(ShowScratchpad)
 })
 ```
 
-The returned effects unregister the dynamic leaves. Keep them when the
+The host supplies the current extension identity, so authors register leaves
+instead of threading extension IDs through dynamic calls. The returned effects
+unregister the dynamic leaves. Keep them when the
 extension owns a lifecycle that should later remove or replace the capability.
 For the complete shape, including state and slash presentation, see
 `examples/extensions/dynamic-scratchpad.ts`.

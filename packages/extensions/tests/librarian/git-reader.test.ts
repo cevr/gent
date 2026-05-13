@@ -2,12 +2,13 @@ import { describe, it, expect } from "effect-bun-test"
 import { beforeAll, afterAll } from "bun:test"
 import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { ExtensionContext } from "@gent/core/extensions/api"
+import { ExtensionContext, ExtensionId } from "@gent/core/extensions/api"
 import { GitReader, GitReaderError } from "../../src/librarian/index.js"
 import { $ } from "bun"
 import { runEffectBoundary } from "../run-effect-boundary.js"
 
 const StubExtensionContext = Layer.succeed(ExtensionContext, {
+  extensionId: ExtensionId.make("@gent/librarian-test"),
   sessionId: "test-session" as never,
   branchId: "test-branch" as never,
   cwd: "/tmp",

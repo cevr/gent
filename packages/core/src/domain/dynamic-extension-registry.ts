@@ -7,7 +7,7 @@ export type DynamicRegistrationScope =
   | { readonly _tag: "process" }
   | { readonly _tag: "session"; readonly sessionId: SessionId }
 
-interface DynamicToolEntry {
+export interface DynamicToolEntry {
   readonly extensionId: ExtensionId
   readonly scope: DynamicRegistrationScope
   readonly capability: ToolCapability
@@ -27,6 +27,7 @@ export interface DynamicExtensionRegistryService {
     entry: DynamicRequestEntry,
   ) => Effect.Effect<Effect.Effect<void>, DynamicRegistrationError>
   readonly listTools: (sessionId: SessionId) => Effect.Effect<ReadonlyArray<ToolCapability>>
+  readonly listToolEntries: (sessionId: SessionId) => Effect.Effect<ReadonlyArray<DynamicToolEntry>>
   readonly listRequests: (sessionId: SessionId) => Effect.Effect<
     ReadonlyArray<{
       readonly extensionId: ExtensionId
@@ -72,15 +73,14 @@ const duplicateError = (kind: "tool" | "request", id: string, scope: DynamicRegi
 const visibleToolWinners = (
   entries: ReadonlyArray<DynamicToolEntry>,
   sessionId: SessionId,
-): ReadonlyArray<ToolCapability> => {
-  const winners = new Map<string, ToolCapability>()
+): ReadonlyArray<DynamicToolEntry> => {
+  const winners = new Map<string, DynamicToolEntry>()
   for (const entry of entries) {
-    if (entry.scope._tag === "process")
-      winners.set(String(getToolId(entry.capability)), entry.capability)
+    if (entry.scope._tag === "process") winners.set(String(getToolId(entry.capability)), entry)
   }
   for (const entry of entries) {
     if (entry.scope._tag === "session" && entry.scope.sessionId === sessionId) {
-      winners.set(String(getToolId(entry.capability)), entry.capability)
+      winners.set(String(getToolId(entry.capability)), entry)
     }
   }
   return [...winners.values()]
@@ -157,6 +157,12 @@ export class DynamicExtensionRegistry extends Context.Service<
             return yield* Effect.succeed(unregisterRequest(entry))
           }),
         listTools: (sessionId) =>
+          Ref.get(tools).pipe(
+            Effect.map((entries) =>
+              visibleToolWinners(entries, sessionId).map((entry) => entry.capability),
+            ),
+          ),
+        listToolEntries: (sessionId) =>
           Ref.get(tools).pipe(Effect.map((entries) => visibleToolWinners(entries, sessionId))),
         listRequests: (sessionId) =>
           Ref.get(requests).pipe(

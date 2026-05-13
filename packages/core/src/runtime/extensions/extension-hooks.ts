@@ -91,8 +91,11 @@ const runHook = <Input>(input: Input, registered: RegisteredHook<Input>) =>
   Effect.gen(function* () {
     const ctx = yield* CurrentHookHostContext
     const exit = yield* exitErasedEffect(() =>
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-      provideLifecycleHostContext(ctx, registered.handler(input)),
+      provideLifecycleHostContext(
+        { ...ctx, extensionId: registered.extensionId },
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+        registered.handler(input),
+      ),
     )
     if (exit._tag === "Success") return
     yield* Effect.logWarning("extension.hook.handler.failed").pipe(
@@ -112,10 +115,12 @@ const provideLifecycleHostContext = <A, E, R>(
 const provideProjectionContext = <A, E, R>(
   projection: ProjectionTurnContext,
   host: ExtensionHostContext,
+  extensionId: ExtensionId,
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, Exclude<R, ExtensionContext> | FileSystem.FileSystem | Path.Path> => {
   const hostCtx: ExtensionHostContext & { readonly turn: ProjectionTurnContext["turn"] } = {
     ...host,
+    extensionId,
     turn: projection.turn,
   }
   return provideLifecycleHostContext(hostCtx, effect)
@@ -140,6 +145,7 @@ const runTurnProjectionHook = (slot: HookTurnProjectionSlot) =>
         return yield* provideProjectionContext(
           projection,
           host,
+          slot.extensionId,
           // @effect-diagnostics-next-line anyUnknownInErrorContext:off
           slot.handler().pipe(
             Effect.map((projection) => ({
@@ -241,7 +247,7 @@ export const compileExtensionHooks = (
           current = yield* sealErasedEffect(
             () =>
               provideLifecycleHostContext(
-                ctx,
+                { ...ctx, extensionId: slot.extensionId },
                 // @effect-diagnostics-next-line anyUnknownInErrorContext:off
                 slot.handler({ ...input, basePrompt: current }),
               ),
@@ -288,7 +294,7 @@ export const compileExtensionHooks = (
           const next = yield* sealErasedEffect(
             () =>
               provideLifecycleHostContext(
-                ctx,
+                { ...ctx, extensionId: slot.extensionId },
                 // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous tool-result slot
                 slot.handler({ ...input, result: current }),
               ),
@@ -322,8 +328,11 @@ export const compileExtensionHooks = (
           const ctx = yield* CurrentHookHostContext
           const decision = yield* sealErasedEffect(
             () =>
-              // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-              provideLifecycleHostContext(ctx, eraseHookEffect(slot.handler(input))),
+              provideLifecycleHostContext(
+                { ...ctx, extensionId: slot.extensionId },
+                // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+                eraseHookEffect(slot.handler(input)),
+              ),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.hook.tool-call.failed").pipe(

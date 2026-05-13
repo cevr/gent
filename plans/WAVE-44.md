@@ -62,10 +62,10 @@ The API should feel:
   state afterward.
 - Updated `docs/extensions.md` so dynamic capabilities are taught as part of
   the authoring product loop instead of only appearing in internal tests.
-- Dogfood finding: dynamic registration still requires authors to thread their
-  own `extensionId` into `ExtensionContext.Dynamic.registerTool/registerRequest`.
-  That is not a P0/P1 because it is explicit and public, but it is real ceremony
-  for L2 to evaluate.
+- Dogfood finding: dynamic registration originally required authors to thread
+  their own `extensionId` into
+  `ExtensionContext.Dynamic.registerTool/registerRequest`. The L2 ceremony batch
+  below removed that authoring cost.
 - Verification:
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/authoring-reference.test.ts packages/core/tests/server/extension-commands-rpc.test.ts -t "dynamic reference|reference dynamic|RPC dynamic|dynamic registrations"`
   passed with 3 tests. `bun run typecheck` passed.
@@ -73,6 +73,38 @@ The API should feel:
   `/Users/cvr/Developer/personal/gent/examples/extensions/dynamic-scratchpad.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/authoring-reference.test.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md`.
+
+### L2 dynamic ownership ceremony batch - complete
+
+- Changed `ExtensionContext.Dynamic.registerTool/registerRequest` so authors
+  pass only the public capability leaf. The runtime supplies the current
+  extension identity from the RPC, hook, or tool execution boundary.
+- Preserved requirement ownership: dynamic registration still fails when the
+  host cannot prove the current extension owner, rather than accepting an
+  author-supplied ID parameter.
+- Updated dynamic request dispatch and tool execution so dynamic leaves run with
+  the owner extension in their `ExtensionContext`. Static tool execution now
+  maps the already-resolved model-visible tool back to its owning extension
+  before providing the authoring facade.
+- Added a compile-time surface lock proving `registerTool(tool)` is accepted
+  and `registerTool(extensionId, tool)` is rejected.
+- Updated the dynamic scratchpad reference and docs to teach the smaller call
+  shape.
+- Verification:
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/extensions/authoring-reference.test.ts packages/core/tests/server/extension-commands-rpc.test.ts packages/core/tests/runtime/tool-runner.test.ts -t "dynamic|Dynamic|reference dynamic|ExtensionContext identity|host authority"`
+  passed with 7 tests. `bun run typecheck` passed.
+- Evidence:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-services.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-host-context.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/dynamic-extension-registry.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-hooks.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/tool-runner.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts`,
+  `/Users/cvr/Developer/personal/gent/examples/extensions/dynamic-scratchpad.ts`,
   `/Users/cvr/Developer/personal/gent/docs/extensions.md`.
 
 ### L1 - Dogfood Real Extensions

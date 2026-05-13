@@ -14,7 +14,7 @@ import { FileLockService } from "./file-lock.js"
 import { ExtensionStatePublisher } from "./event-publisher.js"
 import type { ApprovalDecision, ApprovalRequest } from "./interaction-request.js"
 import { InteractionPendingError } from "./interaction-request.js"
-import type { BranchId, ExtensionId, SessionId, ToolCallId } from "./ids.js"
+import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids.js"
 import type { Branch, Message, MessageMetadata, Session } from "./message.js"
 import type { ExtensionHostContext, ExtensionHostSearchResult } from "./extension-host-context.js"
 import type { RequestCapability } from "./capability/request.js"
@@ -216,18 +216,17 @@ export interface ExtensionStateServiceShape {
 
 export interface ExtensionDynamicRegistrationServiceShape {
   readonly registerTool: (
-    extensionId: ExtensionId,
     capability: ToolCapability,
     options?: { readonly scope?: DynamicRegistrationScope },
   ) => Effect.Effect<Effect.Effect<void>, ExtensionServiceError>
   readonly registerRequest: (
-    extensionId: ExtensionId,
     capability: RequestCapability,
     options?: { readonly scope?: DynamicRegistrationScope },
   ) => Effect.Effect<Effect.Effect<void>, ExtensionServiceError>
 }
 
 export interface ExtensionContextService {
+  readonly extensionId: ExtensionId
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly agentName?: AgentName
@@ -299,6 +298,7 @@ export const extensionServicesFromHostContext = (
     const fileLockOption = yield* Effect.serviceOption(FileLockService)
     const statePublisherOption = yield* Effect.serviceOption(ExtensionStatePublisher)
     const dynamicRegistryOption = yield* Effect.serviceOption(DynamicExtensionRegistry)
+    const currentExtensionId = ctx.extensionId
     const fs = yield* FileSystem.FileSystem
     const pathSvc = yield* Path.Path
 
@@ -369,24 +369,24 @@ export const extensionServicesFromHostContext = (
           }
 
     const Dynamic: ExtensionDynamicRegistrationServiceShape =
-      dynamicRegistryOption._tag === "Some"
+      dynamicRegistryOption._tag === "Some" && currentExtensionId !== undefined
         ? {
-            registerTool: (extensionId, capability, options) =>
+            registerTool: (capability, options) =>
               mapError(
                 "ExtensionDynamic",
                 "registerTool",
                 dynamicRegistryOption.value.registerTool({
-                  extensionId,
+                  extensionId: currentExtensionId,
                   scope: options?.scope ?? { _tag: "session", sessionId: ctx.sessionId },
                   capability,
                 }),
               ),
-            registerRequest: (extensionId, capability, options) =>
+            registerRequest: (capability, options) =>
               mapError(
                 "ExtensionDynamic",
                 "registerRequest",
                 dynamicRegistryOption.value.registerRequest({
-                  extensionId,
+                  extensionId: currentExtensionId,
                   scope: options?.scope ?? { _tag: "session", sessionId: ctx.sessionId },
                   capability,
                 }),
@@ -398,19 +398,32 @@ export const extensionServicesFromHostContext = (
                 serviceError(
                   "ExtensionDynamic",
                   "registerTool",
-                )(new Error("Dynamic extension registry unavailable")),
+                )(
+                  new Error(
+                    currentExtensionId === undefined
+                      ? "Extension id unavailable for dynamic registration"
+                      : "Dynamic extension registry unavailable",
+                  ),
+                ),
               ),
             registerRequest: () =>
               Effect.fail(
                 serviceError(
                   "ExtensionDynamic",
                   "registerRequest",
-                )(new Error("Dynamic extension registry unavailable")),
+                )(
+                  new Error(
+                    currentExtensionId === undefined
+                      ? "Extension id unavailable for dynamic registration"
+                      : "Dynamic extension registry unavailable",
+                  ),
+                ),
               ),
           }
 
     return Context.empty().pipe(
       Context.add(ExtensionContext, {
+        extensionId: currentExtensionId ?? ExtensionId.make("unknown"),
         sessionId: ctx.sessionId,
         branchId: ctx.branchId,
         ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),

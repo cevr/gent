@@ -96,12 +96,8 @@ export const InstallScratchpadRequest = request({
   execute: () =>
     Effect.gen(function* () {
       const ctx = yield* ExtensionContext
-      const unregisterTool = yield* ctx.Dynamic.registerTool(
-        DYNAMIC_SCRATCHPAD_ID,
-        ScratchpadAppendTool,
-      )
+      const unregisterTool = yield* ctx.Dynamic.registerTool(ScratchpadAppendTool)
       const unregisterRequest = yield* ctx.Dynamic.registerRequest(
-        DYNAMIC_SCRATCHPAD_ID,
         DynamicScratchpadRequests.ShowScratchpad,
       )
       void unregisterTool

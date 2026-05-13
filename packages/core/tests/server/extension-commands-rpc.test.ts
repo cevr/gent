@@ -827,14 +827,8 @@ describe("extension command RPCs", () => {
               execute: () =>
                 Effect.gen(function* () {
                   const ctx = yield* ExtensionContext
-                  const unregisterTool = yield* ctx.Dynamic.registerTool(
-                    extensionId,
-                    DynamicEchoTool,
-                  )
-                  const unregisterRequest = yield* ctx.Dynamic.registerRequest(
-                    extensionId,
-                    DynamicEchoRequest,
-                  )
+                  const unregisterTool = yield* ctx.Dynamic.registerTool(DynamicEchoTool)
+                  const unregisterRequest = yield* ctx.Dynamic.registerRequest(DynamicEchoRequest)
                   void unregisterTool
                   void unregisterRequest
                 }).pipe(
