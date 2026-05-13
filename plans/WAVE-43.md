@@ -255,3 +255,8 @@ Start with L1 and L5 together:
   authoring.
 - Run a W43 closing audit against the six lanes. If it finds P0/P1, open W44;
   if not, write `plans/WAVE-43-audit-receipt.md` and close W43.
+
+## Closure
+
+Closed by `plans/WAVE-43-audit-receipt.md`: all six lanes audited green with no
+P0/P1 findings after the final `bun run gate`.
