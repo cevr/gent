@@ -51,7 +51,11 @@ import { ToolRunner } from "./tool-runner.js"
 import type { ModelRegistry } from "../model-registry.js"
 import type { GentPlatform } from "../gent-platform.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
-import { AllowAllPermission, resolveSessionEnvironment } from "../session-runtime-context.js"
+import {
+  AllowAllPermission,
+  resolveSessionEnvironment,
+  SessionEnvironmentHostDeps,
+} from "../session-runtime-context.js"
 import {
   buildIdleState,
   emptyLoopQueueState,
@@ -280,14 +284,13 @@ export const makeAgentLoopBehavior = (
       resolveSessionEnvironment({
         sessionId,
         branchId,
-        hostDeps,
         profileCache,
         defaults: {
           driverRegistry,
           permission: defaultPermission,
           baseSections,
         },
-      }),
+      }).pipe(Effect.provideService(SessionEnvironmentHostDeps, hostDeps)),
     ).pipe(
       Effect.map(({ environment }) => ({
         turnExtensionRegistry: environment.extensionRegistry,

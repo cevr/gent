@@ -11,6 +11,7 @@ import {
   AllowAllPermission,
   resolveSessionEnvironment,
   resolveSessionEnvironmentOrFail,
+  SessionEnvironmentHostDeps,
   type SessionEnvironmentDefaults,
 } from "../../src/runtime/session-runtime-context"
 import { makeAmbientExtensionHostContextDeps } from "../../src/runtime/make-extension-host-context"
@@ -100,20 +101,20 @@ describe("resolveSessionEnvironment", () => {
               updatedAt: now,
             }),
           )
+          const hostDeps = yield* makeAmbientExtensionHostContextDeps({
+            extensionRegistry,
+            overrides: { platform },
+          })
           const resolved = yield* resolveSessionEnvironment({
             sessionId: SessionId.make("session-runtime-context-profile"),
             branchId: BranchId.make("branch-runtime-context-profile"),
             profileCache,
-            hostDeps: yield* makeAmbientExtensionHostContextDeps({
-              extensionRegistry,
-              overrides: { platform },
-            }),
             defaults: {
               driverRegistry: yield* DriverRegistry,
               permission: AllowAllPermission,
               baseSections: [],
             },
-          })
+          }).pipe(Effect.provideService(SessionEnvironmentHostDeps, hostDeps))
           expect(resolved.session).toBeDefined()
           expect(resolved.environment.cwd).toBe(secondary)
           expect(resolved.environment.hostCtx.cwd).toBe(secondary)
@@ -152,15 +153,15 @@ describe("resolveSessionEnvironment", () => {
       yield* Effect.gen(function* () {
         const extensionRegistry = yield* ExtensionRegistry
         const platform = yield* RuntimeEnvironment
+        const hostDeps = yield* makeAmbientExtensionHostContextDeps({
+          extensionRegistry,
+          overrides: { platform },
+        })
         const resolved = yield* resolveSessionEnvironment({
           sessionId: SessionId.make("missing-session"),
           branchId: BranchId.make("missing-branch"),
-          hostDeps: yield* makeAmbientExtensionHostContextDeps({
-            extensionRegistry,
-            overrides: { platform },
-          }),
           defaults,
-        })
+        }).pipe(Effect.provideService(SessionEnvironmentHostDeps, hostDeps))
         expect(resolved.session).toBeUndefined()
         expect(resolved.environment.cwd).toBe("/tmp/runtime-context-default")
         expect(resolved.environment.hostCtx.cwd).toBe("/tmp/runtime-context-default")
@@ -194,20 +195,23 @@ describe("resolveSessionEnvironment", () => {
           ...sessionStorage,
           getSession: () => Effect.fail(new StorageError({ message: "lookup failed" })),
         }
+        const hostDeps = yield* makeAmbientExtensionHostContextDeps({
+          extensionRegistry,
+          overrides: { platform },
+        })
         const exit = yield* Effect.exit(
           resolveSessionEnvironment({
             sessionId: SessionId.make("session-runtime-context-storage-failure"),
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
-            hostDeps: yield* makeAmbientExtensionHostContextDeps({
-              extensionRegistry,
-              overrides: { platform },
-            }),
             defaults: {
               driverRegistry: yield* DriverRegistry,
               permission: AllowAllPermission,
               baseSections: [],
             },
-          }).pipe(Effect.provideService(SessionStorage, failingSessionStorage)),
+          }).pipe(
+            Effect.provideService(SessionEnvironmentHostDeps, hostDeps),
+            Effect.provideService(SessionStorage, failingSessionStorage),
+          ),
         )
         expect(exit._tag).toBe("Success")
         if (exit._tag === "Success") {
@@ -217,16 +221,15 @@ describe("resolveSessionEnvironment", () => {
           resolveSessionEnvironmentOrFail({
             sessionId: SessionId.make("session-runtime-context-storage-failure"),
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
-            hostDeps: yield* makeAmbientExtensionHostContextDeps({
-              extensionRegistry,
-              overrides: { platform },
-            }),
             defaults: {
               driverRegistry: yield* DriverRegistry,
               permission: AllowAllPermission,
               baseSections: [],
             },
-          }).pipe(Effect.provideService(SessionStorage, failingSessionStorage)),
+          }).pipe(
+            Effect.provideService(SessionEnvironmentHostDeps, hostDeps),
+            Effect.provideService(SessionStorage, failingSessionStorage),
+          ),
         )
         expect(strict._tag).toBe("Failure")
         if (strict._tag === "Failure") {
@@ -308,20 +311,20 @@ describe("resolveSessionEnvironment", () => {
         const fakeProfileCache: SessionProfileCacheService = {
           resolve: () => Effect.succeed(fakeProfile),
         }
+        const hostDeps = yield* makeAmbientExtensionHostContextDeps({
+          extensionRegistry,
+          overrides: { platform },
+        })
         const resolved = yield* resolveSessionEnvironment({
           sessionId: SessionId.make("session-runtime-context-driver"),
           branchId: BranchId.make("branch-runtime-context-driver"),
           profileCache: fakeProfileCache,
-          hostDeps: yield* makeAmbientExtensionHostContextDeps({
-            extensionRegistry,
-            overrides: { platform },
-          }),
           defaults: {
             driverRegistry: defaultDriverRegistry,
             permission: AllowAllPermission,
             baseSections: [],
           },
-        })
+        }).pipe(Effect.provideService(SessionEnvironmentHostDeps, hostDeps))
         const fromProfile = yield* resolved.environment.driverRegistry.getExternal("profile-driver")
         const fromDefault = yield* defaultDriverRegistry.getExternal("profile-driver")
         expect(resolved.session).toBeDefined()
