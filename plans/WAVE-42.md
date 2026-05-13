@@ -243,13 +243,27 @@ context adapter`).
   value exports. Internal RPC graph/handler/client construction symbols
   (`GentRpcs`, `RpcHandlersLive`, `makeRpcClient`) remain absent from
   the public runtime surface.
+- **C17 docs subfinding complete**: `docs/extensions.md` no longer
+  teaches the unpublished `action(...)` callable or `actions` bucket as
+  part of the public extension authoring API. The guide now matches the
+  current exported surface: `tool(...)`, `request(...)`, `ref`, resources,
+  reactions, agents, policies/errors, host facts, and serialization
+  helpers.
 - **C14-C17 still open**: loop interception, dynamic registration,
   request/action identity simplification, and scoped state authoring
-  helpers have not landed yet.
+  helpers have not landed yet. C17's documentation-only drift is closed;
+  the scoped state helper design remains open.
 - Verification:
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/tooling/tests/core-public-exports.test.ts packages/sdk/tests/public-surface.test.ts`
   passed with 10 tests; `bun run lint` and `bun run typecheck` passed.
+  `rg -n "\baction\b|actions|action\(" docs/extensions.md` now only
+  finds generic English/reaction wording plus the invariant explicitly
+  saying unpublished `actions` buckets are not part of authoring.
 - Evidence:
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md:38`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md:68`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md:225`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md:337`,
   `/Users/cvr/Developer/personal/gent/packages/tooling/src/core-public-exports.ts:22`,
   `/Users/cvr/Developer/personal/gent/packages/tooling/src/core-public-exports.ts:136`,
   `/Users/cvr/Developer/personal/gent/packages/tooling/src/check-guardrails.ts:54`,

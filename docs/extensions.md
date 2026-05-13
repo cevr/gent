@@ -3,8 +3,7 @@
 ## Overview
 
 Extensions add leaf capabilities to gent: tools for the LLM, typed RPCs between
-extensions, UI actions (slash commands / palette), scoped resources, turn
-reactions, agents, and LLM drivers.
+extensions, scoped resources, turn reactions, agents, and LLM drivers.
 
 Single entry point: `defineExtension({ id, ...buckets })`. Each bucket is a
 typed array of values built with small factories. gent is a library used
@@ -36,18 +35,17 @@ That's it. Save as `~/.gent/extensions/greet.ts` and restart gent.
 
 ## Named Concepts
 
-You need at most 8 concepts to write a complete extension:
+You need at most 7 concepts to write a complete extension:
 
-| #   | Concept           | What it is                                      |
-| --- | ----------------- | ----------------------------------------------- |
-| 1   | `defineExtension` | Extension factory — takes `id` + typed buckets  |
-| 2   | `tool`            | LLM-callable tool (params + execute)            |
-| 3   | `request`         | Extension-to-extension typed RPC                |
-| 4   | `action`          | Human-triggered UI affordance (slash / palette) |
-| 5   | `defineResource`  | Scoped service/lifecycle/schedule declaration   |
-| 6   | `reactions`       | Turn/message/tool-result hooks                  |
-| 7   | `defineAgent`     | Spawnable subagent                              |
-| 8   | `PermissionRule`  | Allow/deny rule for tool patterns               |
+| #   | Concept           | What it is                                     |
+| --- | ----------------- | ---------------------------------------------- |
+| 1   | `defineExtension` | Extension factory — takes `id` + typed buckets |
+| 2   | `tool`            | LLM-callable tool (params + execute)           |
+| 3   | `request`         | Extension-to-extension typed RPC               |
+| 4   | `defineResource`  | Scoped service/lifecycle/schedule declaration  |
+| 5   | `reactions`       | Turn/message/tool-result hooks                 |
+| 6   | `defineAgent`     | Spawnable subagent                             |
+| 7   | `PermissionRule`  | Allow/deny rule for tool patterns              |
 
 Extensions import authoring primitives from one path:
 `@gent/core/extensions/api`.
@@ -67,7 +65,7 @@ Public authoring surface:
 | Area            | Public exports                                                               |
 | --------------- | ---------------------------------------------------------------------------- |
 | Extension shape | `defineExtension`, `GentExtension`, `ExtensionSetupContext`                  |
-| Capabilities    | `tool`, `request`, `ref`, `action`                                           |
+| Capabilities    | `tool`, `request`, `ref`                                                     |
 | Resources       | `defineResource`, `resource`, resource scope/schedule types                  |
 | Reactions       | Reaction input/output types needed to implement `reactions`                  |
 | Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                      |
@@ -224,33 +222,11 @@ Request handlers receive params only. Host authority comes from
 services; authors import the smallest service Tag they need rather than
 declaring capability labels.
 
-### action — human-triggered UI affordance
-
-```ts
-import { defineExtension, action } from "@gent/core/extensions/api"
-import { Effect, Schema } from "effect"
-
-const DeployAction = action({
-  id: "deploy",
-  name: "/deploy",
-  description: "Deploy the current branch",
-  surface: "slash", // "slash" | "palette" | "both"
-  input: Schema.Struct({}),
-  output: Schema.Void,
-  execute: () => Effect.logInfo("deploy requested"),
-})
-
-export default defineExtension({
-  id: "deploy-ext",
-  actions: [DeployAction],
-})
-```
-
 ## Reactions (turn-time derivation)
 
 Use `reactions.turnProjection` for prompt shaping and tool-policy derivation.
 Reaction handlers receive their event input only. Host authority follows the
-same authoring model as tools, requests, and actions: `yield* ExtensionContext`
+same authoring model as tools and requests: `yield* ExtensionContext`
 or the smallest extension-owned service Tag needed.
 
 ```ts
@@ -358,9 +334,9 @@ builtin).
 
 ## Surface Invariants
 
-- Extension callables are `tool(...)`, `request(...)`, and `action(...)`.
-- Extension buckets are `tools`, `requests`, and `actions`; older `rpc` and
-  `commands` bucket names are not part of the authoring surface.
+- Extension callables are `tool(...)` and `request(...)`.
+- Extension buckets are `tools` and `requests`; older `rpc`, `commands`, and
+  unpublished `actions` bucket names are not part of the authoring surface.
 - Prompt shaping and policy derivation live in `reactions.turnProjection`.
 - Long-lived state lives in `defineResource(...)`.
 - Generic middleware APIs are not part of extension authoring.
