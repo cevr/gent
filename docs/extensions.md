@@ -3,7 +3,7 @@
 ## Overview
 
 Extensions add leaf capabilities to gent: tools for the LLM, typed RPCs between
-extensions, scoped resources, turn reactions, agents, and LLM drivers.
+extensions, scoped resources, lifecycle hooks, agents, and LLM drivers.
 
 Single entry point: `defineExtension({ id, ...buckets })`. Each bucket is a
 typed array of values built with small factories. gent is a library used
@@ -51,7 +51,7 @@ You need at most 7 concepts to write a complete extension:
 | 2   | `tool`            | LLM-callable tool (params + execute)           |
 | 3   | `request`         | Extension-to-extension typed RPC               |
 | 4   | `defineResource`  | Scoped service/lifecycle/schedule declaration  |
-| 5   | `reactions`       | Turn/message/tool-result hooks                 |
+| 5   | `hook`            | Turn/message/tool-result lifecycle hooks       |
 | 6   | `defineAgent`     | Spawnable subagent                             |
 | 7   | `PermissionRule`  | Allow/deny rule for tool patterns              |
 
@@ -75,7 +75,7 @@ Public authoring surface:
 | Extension shape | `defineExtension`, `GentExtension`, `ExtensionSetupContext`                  |
 | Capabilities    | `tool`, `request`, `ref`                                                     |
 | Resources       | `defineResource`, `defineStateResource`, resource scope/schedule types       |
-| Reactions       | Reaction input/output types needed to implement `reactions`                  |
+| Hooks           | `hook` factories and hook input/output types                                 |
 | Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                      |
 | Stable ids      | `ExtensionId`, `ArtifactId`, `ToolCallId`                                    |
 | Policies/errors | `PermissionRule`, capability/provider-auth/agent-run author-facing errors    |
@@ -230,36 +230,41 @@ once. Client-only protocol modules that export refs before server setup can use
 `defineRequests(extensionId, { ...requests })` to bind a whole request map with
 one id.
 
-## Reactions (turn-time derivation)
+## Hooks (turn-time derivation)
 
-Use `reactions.turnProjection` for prompt shaping and tool-policy derivation.
-Reaction handlers receive their event input only. Host authority follows the
-same authoring model as tools and requests: `yield* ExtensionContext`
-or the smallest extension-owned service Tag needed.
+Use `hooks: [hook.turnProjection(...)]` for prompt shaping and tool-policy
+derivation. Hook handlers receive their event input only. Host authority follows
+the same authoring model as tools and requests: `yield* ExtensionContext` or the
+smallest extension-owned service Tag needed.
 
 ```ts
-import { defineExtension, ExtensionContext } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionContext, hook } from "@gent/core/extensions/api"
 import { Effect } from "effect"
 
 export default defineExtension({
   id: "status-ext",
-  reactions: {
-    turnProjection: () =>
+  hooks: [
+    hook.turnProjection(() =>
       Effect.succeed({
         promptSections: [{ id: "status", content: "ready", priority: 0 }],
         toolPolicy: { include: ["status"] },
       }),
-    turnAfter: {
-      failureMode: "isolate",
-      handler: () =>
-        Effect.gen(function* () {
-          const ctx = yield* ExtensionContext
-          yield* ctx.Session.queueFollowUp({ sourceId: "status-ext", content: "status updated" })
-        }),
-    },
-  },
+    ),
+    hook.turnAfter(() =>
+      Effect.gen(function* () {
+        const ctx = yield* ExtensionContext
+        yield* ctx.Session.queueFollowUp({ sourceId: "status-ext", content: "status updated" })
+      }),
+    ),
+  ],
 })
 ```
+
+`reactions` remains a lower-level lifecycle bag used by older in-tree/shipped
+extensions and tests. It is not a separate authority model and it should not be
+the first shape shown to authors. New authoring examples should use
+`hook.systemPrompt`, `hook.turnProjection`, `hook.turnAfter`, `hook.toolCall`,
+or `hook.toolResult`.
 
 ## Resource (long-lived state)
 
@@ -350,8 +355,8 @@ builtin).
 | --------------------------------------- | -------------------------------------------- |
 | `packages/extensions/src/session-tools` | `tool` + explicit prompt/policy integration  |
 | `packages/extensions/src/todo`          | `tool` + `request` + scoped storage resource |
-| `packages/extensions/src/memory`        | `tool` + reaction + `defineResource`         |
-| `packages/extensions/src/auto/index.ts` | `reactions:` + scoped workflow services      |
+| `packages/extensions/src/memory`        | `tool` + shipped reaction + `defineResource` |
+| `packages/extensions/src/auto/index.ts` | shipped reactions + scoped workflow services |
 | `examples/extensions/session-notes.ts`  | one-file tool + slash request + state + hook |
 
 ## Surface Invariants
@@ -359,7 +364,7 @@ builtin).
 - Extension callables are `tool(...)` and `request(...)`.
 - Extension buckets are `tools` and `requests`; older `rpc`, `commands`, and
   unpublished `actions` bucket names are not part of the authoring surface.
-- Prompt shaping and policy derivation live in `reactions.turnProjection`.
+- Prompt shaping and policy derivation live in `hook.turnProjection`.
 - Long-lived state lives in `defineResource(...)` or `defineStateResource(...)`.
 - Generic middleware APIs are not part of extension authoring.
 - Bucket names are the discriminator; extension authors do not build flat `_kind` contribution unions.

@@ -99,6 +99,26 @@ systems:
   `/Users/cvr/Developer/personal/gent/packages/tooling/src/platform-duplication-guards.ts`,
   `/Users/cvr/Developer/personal/gent/packages/tooling/tests/platform-duplication-guards.test.ts`.
 
+### L3 authoring language batch - complete
+
+- Audited the remaining public docs/examples after the dynamic batch and found
+  the authoring guide still teaching `reactions.turnProjection` while the
+  reference extension and public factory path now use `hooks`.
+- Updated examples under `examples/extensions/` to teach `hook.systemPrompt`
+  and `hook.turnAfter` instead of direct `reactions:` bags.
+- Updated `docs/extensions.md` so `hook` is the named authoring concept,
+  prompt/tool-policy derivation points at `hook.turnProjection`, and
+  `reactions` is documented as a lower-level compatibility/shipped-extension
+  lifecycle bag rather than a second authority model.
+- Verification:
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/authoring-reference.test.ts packages/tooling/tests/platform-duplication-guards.test.ts`
+  passed with 37 tests. `bun run typecheck` passed.
+- Evidence:
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md`,
+  `/Users/cvr/Developer/personal/gent/examples/extensions/turn-counter.ts`,
+  `/Users/cvr/Developer/personal/gent/examples/extensions/prompt-rules.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts:217`.
+
 ### L1 - Authoring Happy Path
 
 Make the first extension experience obvious and runnable.
