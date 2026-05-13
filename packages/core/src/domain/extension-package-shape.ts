@@ -48,7 +48,7 @@ const validateCapabilities = (contribs: ExtensionContributions): string | undefi
   const toolErr = checkToolDescriptions(tools)
   if (toolErr !== undefined) return toolErr
   const capIds = new Map<string, string>()
-  return checkBucketIds("tools", tools, capIds) ?? checkBucketIds("rpc", rpc, capIds)
+  return checkBucketIds("tools", tools, capIds) ?? checkBucketIds("requests", rpc, capIds)
 }
 
 const validateAgents = (contribs: ExtensionContributions): string | undefined => {

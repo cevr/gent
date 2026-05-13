@@ -356,6 +356,32 @@ describe("defineExtension", () => {
       }
     }))
 
+  test("duplicate request ids report the public bucket name", () =>
+    Effect.gen(function* () {
+      const duplicate = (id: string) =>
+        request({
+          id,
+          extensionId: ExtensionId.make("duplicate-requests"),
+          input: Schema.Struct({}),
+          output: Schema.String,
+          execute: () => Effect.succeed("ok"),
+        })
+
+      const exit = yield* validateExtensionPackageShape(
+        { id: ExtensionId.make("duplicate-requests") },
+        {
+          requests: [duplicate("same"), duplicate("same")],
+        },
+      ).pipe(Effect.exit)
+
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const rendered = Cause.pretty(exit.cause)
+        expect(rendered).toContain("requests[1] (same)")
+        expect(rendered).not.toContain("rpc[")
+      }
+    }))
+
   test("defineExtension preserves contribution buckets", () =>
     Effect.gen(function* () {
       const readSnapshot = request({

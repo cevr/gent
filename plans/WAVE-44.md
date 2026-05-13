@@ -132,6 +132,20 @@ The API should feel:
   `/Users/cvr/Developer/personal/gent/packages/extensions/tests/todo/todo-service.test.ts`,
   `/Users/cvr/Developer/personal/gent/docs/extensions.md`.
 
+### L4 package-shape feedback batch - complete
+
+- Audited extension setup/package validation and found one author-facing
+  migration term: duplicate request ID errors rendered the bucket as `rpc[...]`
+  even though the public authoring surface is `requests`.
+- Changed the validation message to report `requests[...]` and added a focused
+  regression so the old runtime term does not reappear.
+- Verification:
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/define-extension.test.ts -t "duplicate request ids|unknown.*bucket|tool metadata"`
+  passed with 3 tests. `bun run typecheck` passed.
+- Evidence:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-package-shape.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/define-extension.test.ts`.
+
 ### L1 - Dogfood Real Extensions
 
 Build or port representative extensions using only
