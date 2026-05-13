@@ -33,6 +33,14 @@ export default defineExtension({
 
 That's it. Save as `~/.gent/extensions/greet.ts` and restart gent.
 
+For the smallest complete product loop, see
+`examples/extensions/session-notes.ts`. It is still one file, but covers the
+real shape an author reaches for after the first tool: process-scoped state,
+a model-callable tool, a slash-presented request, and a turn projection hook.
+Its regression test loads the file through the public package path and executes
+the contributed tool and hook under the real resource layer while checking the
+slash request through the registry surface.
+
 ## Named Concepts
 
 You need at most 7 concepts to write a complete extension:
@@ -344,6 +352,7 @@ builtin).
 | `packages/extensions/src/todo`          | `tool` + `request` + scoped storage resource |
 | `packages/extensions/src/memory`        | `tool` + reaction + `defineResource`         |
 | `packages/extensions/src/auto/index.ts` | `reactions:` + scoped workflow services      |
+| `examples/extensions/session-notes.ts`  | one-file tool + slash request + state + hook |
 
 ## Surface Invariants
 

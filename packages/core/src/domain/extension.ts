@@ -210,25 +210,30 @@ export type ExtensionHookSlot<E = never, R = never> =
 
 export type AnyExtensionHook = ExtensionHookSlot<never, never>
 
+const eraseHookSlot = <E, R>(slot: ExtensionHookSlot<E, R>): ExtensionHookSlot<never, never> =>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- hook factories erase author E/R at the public bucket boundary; runtime reseals failures and provides extension services at invocation.
+  slot as ExtensionHookSlot<never, never>
+
 export const hook = {
   systemPrompt: <E = never, R = never>(
     handler: (input: SystemPromptInput) => Effect.Effect<string, E, R>,
-  ): ExtensionHookSlot<E, R> => ({ kind: "systemPrompt", hook: { handler } }),
+  ): AnyExtensionHook => eraseHookSlot({ kind: "systemPrompt", hook: { handler } }),
   turnProjection: <E = never, R = never>(
     handler: () => Effect.Effect<TurnProjection, E, R>,
-  ): ExtensionHookSlot<E, R> => ({
-    kind: "turnProjection",
-    hook: { handler: () => handler() },
-  }),
+  ): AnyExtensionHook =>
+    eraseHookSlot({
+      kind: "turnProjection",
+      hook: { handler: () => handler() },
+    }),
   turnAfter: <E = never, R = never>(
     handler: (input: TurnAfterInput) => Effect.Effect<void, E, R>,
-  ): ExtensionHookSlot<E, R> => ({ kind: "turnAfter", hook: { handler } }),
+  ): AnyExtensionHook => eraseHookSlot({ kind: "turnAfter", hook: { handler } }),
   toolCall: <E = never, R = never>(
     handler: (input: ToolCallInput) => Effect.Effect<ToolCallPreflightResult, E, R>,
-  ): ExtensionHookSlot<E, R> => ({ kind: "toolCall", hook: { handler } }),
+  ): AnyExtensionHook => eraseHookSlot({ kind: "toolCall", hook: { handler } }),
   toolResult: <E = never, R = never>(
     handler: (input: ToolResultInput) => Effect.Effect<unknown, E, R>,
-  ): ExtensionHookSlot<E, R> => ({ kind: "toolResult", hook: { handler } }),
+  ): AnyExtensionHook => eraseHookSlot({ kind: "toolResult", hook: { handler } }),
 }
 
 /**

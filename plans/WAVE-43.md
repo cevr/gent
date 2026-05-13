@@ -38,6 +38,34 @@ systems:
 
 ## Lanes
 
+## Progress
+
+### L1/L5 initial batch - complete
+
+- Added `examples/extensions/session-notes.ts` as the one-file authoring
+  reference for tool + slash request + state resource + hook.
+- Added `packages/core/tests/extensions/authoring-reference.test.ts` to load
+  that reference extension from the public authoring API, execute its
+  contributed tool/hook under the real resource layer, check the slash request
+  through the registry surface, and assert the source imports no Gent
+  internals.
+- Fixed the public hook bucket path so `defineExtension({ hooks })` is accepted
+  by package-shape validation and hook factories erase author E/R at the public
+  bucket boundary while runtime invocation still reseals failures.
+- Updated `docs/extensions.md` so the guide points authors from the minimal
+  greeting tool to the complete one-file product loop.
+- Verification:
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/authoring-reference.test.ts`.
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/authoring-reference.test.ts packages/core/tests/extensions/define-extension.test.ts packages/core/tests/extensions/extension-reactions.test.ts packages/core/tests/runtime/tool-runner.test.ts`
+  passed with 36 tests. `bun run typecheck` and `bun run gate` passed.
+- Evidence:
+  `/Users/cvr/Developer/personal/gent/examples/extensions/session-notes.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/authoring-reference.test.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-package-shape.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md:36`.
+
 ### L1 - Authoring Happy Path
 
 Make the first extension experience obvious and runnable.

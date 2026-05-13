@@ -85,6 +85,7 @@ const allowedContributionBuckets = new Set([
   "tools",
   "requests",
   "agents",
+  "hooks",
   "reactions",
   "modelDrivers",
   "externalDrivers",
