@@ -16,6 +16,7 @@ import {
   defineResource,
   ExtensionSetupContext,
   getToolId,
+  hook,
   type PublicExtensionSetupContext,
   ref,
   request,
@@ -29,8 +30,8 @@ import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
 import { PermissionRule } from "@gent/core-internal/domain/permission"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
-import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
-import { provideExtensionReactionContext } from "../../src/runtime/extensions/extension-reaction-context"
+import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
+import { provideExtensionHookContext } from "../../src/runtime/extensions/extension-hook-context"
 import { testExtensionHostContext, testSetupCtx } from "@gent/core-internal/test-utils"
 import { AgentName } from "@gent/core-internal/domain/agent"
 
@@ -67,7 +68,7 @@ describe("defineExtension", () => {
       expect(contributions.modelDrivers ?? []).toEqual([])
       expect(contributions.resources ?? []).toEqual([])
       expect(contributions.externalDrivers ?? []).toEqual([])
-      expect(contributions.reactions).toBeUndefined()
+      expect(contributions.hooks).toBeUndefined()
     }))
 
   test("each kind round-trips into its corresponding bucket", () =>
@@ -88,9 +89,7 @@ describe("defineExtension", () => {
         id: "all-kinds",
         tools: [myTool],
         agents: [getBuiltinAgent("cowork")!],
-        reactions: {
-          systemPrompt: (input) => Effect.succeed(`${input.basePrompt} [suffix]`),
-        },
+        hooks: [hook.systemPrompt((input) => Effect.succeed(`${input.basePrompt} [suffix]`))],
         resources: [
           defineResource({
             scope: "process",
@@ -113,7 +112,7 @@ describe("defineExtension", () => {
       expect(modelCapMetadata?.permissionRules?.[0]?.tool).toBe("echo")
       expect(modelCapMetadata?.prompt?.id).toBe("rules")
       expect((contributions.agents ?? [])[0]?.name).toBe(AgentName.make("cowork"))
-      expect(contributions.reactions?.systemPrompt).toBeDefined()
+      expect(contributions.hooks?.[0]?.kind).toBe("systemPrompt")
       const resources = contributions.resources ?? []
       expect(resources).toHaveLength(1)
       expect(contributions.scheduledJobs?.[0]?.id).toBe("test-job")
@@ -237,9 +236,7 @@ describe("defineExtension", () => {
       const ext = defineExtension({
         id: "wired",
         tools: [myTool],
-        reactions: {
-          systemPrompt: (input) => Effect.succeed(`${input.basePrompt}!!`),
-        },
+        hooks: [hook.systemPrompt((input) => Effect.succeed(`${input.basePrompt}!!`))],
       })
       const contributions = yield* setupOf(ext)
       const loaded = {
@@ -257,10 +254,10 @@ describe("defineExtension", () => {
         ),
       ).toBe("from-define")
 
-      const compiled = compileExtensionReactions([loaded])
+      const compiled = compileExtensionHooks([loaded])
       const result = yield* compiled
         .resolveSystemPrompt({ basePrompt: "yo", agent: getBuiltinAgent("cowork")! })
-        .pipe(provideExtensionReactionContext({ projection: stubProjectionCtx, host: stubHostCtx }))
+        .pipe(provideExtensionHookContext({ projection: stubProjectionCtx, host: stubHostCtx }))
       expect(result).toBe("yo!!")
     }))
 

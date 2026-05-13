@@ -4,6 +4,7 @@ import {
   defineExtension,
   ExtensionContext,
   ExtensionId,
+  hook,
   tool,
 } from "@gent/core/extensions/api"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -82,12 +83,13 @@ export const NetworkToolsExtension = defineExtension({
 export const SessionToolsExtension = defineExtension({
   id: "@gent/session-tools",
   tools: [SearchSessionsTool, ReadSessionTool, RenameSessionTool],
-  reactions: {
-    systemPrompt: (input) =>
+  hooks: [
+    hook.systemPrompt((input) =>
       Effect.succeed(
         input.interactive === false ? input.basePrompt : input.basePrompt + NAMING_INSTRUCTION,
       ),
-  },
+    ),
+  ],
 })
 
 export const INTERACTION_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/interaction-tools")

@@ -388,9 +388,7 @@ describe("tool execution", () => {
               scope: "builtin",
               sourcePath: "test",
               contributions: {
-                reactions: {
-                  toolResult: () => Effect.succeed({ ok: "bad" }),
-                },
+                hooks: [hook.toolResult(() => Effect.succeed({ ok: "bad" }))],
               },
             },
           ]),

@@ -18,7 +18,7 @@ import { SessionStorage } from "../../storage/session-storage.js"
 import { ConfigService } from "../config-service.js"
 import { DynamicExtensionRegistry } from "../../domain/dynamic-extension-registry.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
-import { provideExtensionReactionContext } from "../extensions/extension-reaction-context.js"
+import { provideExtensionHookContext } from "../extensions/extension-hook-context.js"
 import { compileToolPolicy, ExtensionRegistry } from "../extensions/registry.js"
 import type { ResolvedTurn } from "./agent-loop.state.js"
 import { buildTurnPromptSections, resolveReasoning } from "./agent-loop.utils.js"
@@ -181,13 +181,13 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   // Filter out hidden messages — visible in transcript but excluded from LLM context
   const messages = rawMessages.filter((m) => m.metadata?.hidden !== true)
 
-  const reactionCtx = {
+  const hookCtx = {
     projection: projectionCtx,
     host: hostCtx,
   }
-  const projEval = yield* extensionRegistry.extensionReactions
+  const projEval = yield* extensionRegistry.extensionHooks
     .resolveTurnProjection()
-    .pipe(provideExtensionReactionContext(reactionCtx))
+    .pipe(provideExtensionHookContext(hookCtx))
   const extensionProjections = [
     ...projEval.policyFragments.map((p) => ({ toolPolicy: p })),
     ...(projEval.promptSections.length > 0 ? [{ promptSections: projEval.promptSections }] : []),
@@ -224,7 +224,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   )
   const turnPrompt = compileSystemPrompt(sections)
   const driverToolSurface = yield* resolveDriverToolSurface(dispatchAgent)
-  const systemPrompt = yield* extensionRegistry.extensionReactions
+  const systemPrompt = yield* extensionRegistry.extensionHooks
     .resolveSystemPrompt({
       basePrompt: turnPrompt,
       agent: dispatchAgent,
@@ -234,7 +234,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
       ...(driverToolSurface !== undefined ? { driverToolSurface } : {}),
       sections,
     })
-    .pipe(provideExtensionReactionContext(reactionCtx))
+    .pipe(provideExtensionHookContext(hookCtx))
   const session = yield* sessionStorage
     .getSession(params.sessionId)
     .pipe(Effect.catchEager(() => Effect.void))

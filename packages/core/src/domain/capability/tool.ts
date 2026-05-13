@@ -140,7 +140,7 @@ export interface ToolInput<
   readonly params: Params
   /** Schema for successful `execute` output. Effect AI owns result encoding
    *  through this schema, and Gent stores the same schema in metadata for
-   *  lifecycle reactions and direct tool-runner invocation. */
+   *  lifecycle hooks and direct tool-runner invocation. */
   readonly output: Output
   /** One-liner for the system prompt tool list (distinct from `description`,
    *  which is sent to the LLM as part of the tool schema). */
@@ -153,7 +153,7 @@ export interface ToolInput<
   /** Permission allow/deny rules gating execution. */
   readonly permissionRules?: ReadonlyArray<PermissionRule>
   /** Static system-prompt section bundled with this tool. For dynamic
-   *  prompt fragments resolved per-turn from services, use a turn projection reaction. */
+   *  prompt fragments resolved per-turn from services, use a turn projection hook. */
   readonly prompt?: PromptSection
   /** The tool body. Receives decoded `params`; host capabilities are imported
    *  as constrained Effect services such as `ExtensionContext`. */

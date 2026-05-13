@@ -3,7 +3,7 @@
  *
  * Two surfaces:
  *
- *   1. `projectMemoryVaultTurn` — a turn projection reaction that queries
+ *   1. `projectMemoryVaultTurn` — a turn projection hook that queries
  *      `MemoryVault` directly from disk for prompt entries grouped by scope
  *      (project/global).
  *      No actor, no mirror. `derive-do-not-create-states`: disk is truth.
@@ -75,7 +75,7 @@ interface VaultProjectionValue {
 
 /**
  * Reads the on-disk vault index per evaluation and derives prompt from it.
- * The reaction reads through `MemoryVaultReadOnly`, keeping `ensureDirs` /
+ * The hook reads through `MemoryVaultReadOnly`, keeping `ensureDirs` /
  * `write` / `remove` / `rebuildIndex` out of the service surface.
  *
  * Performance: scopes the disk walk to the relevant slice (global + the

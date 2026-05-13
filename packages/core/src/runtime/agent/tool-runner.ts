@@ -19,7 +19,7 @@ import {
   CurrentExtensionHostContext,
   provideCurrentHostCtx,
 } from "./current-extension-host-context.js"
-import { provideReactionHostContext } from "../extensions/extension-reaction-context.js"
+import { provideHookHostContext } from "../extensions/extension-hook-context.js"
 import { provideExtensionCapabilityContext } from "../extensions/extension-capability-context.js"
 
 export type ToolCapabilityMap = Record<string, ToolCapability>
@@ -118,7 +118,7 @@ const makeExecutionToolkit = (params: {
               ),
           )
 
-          return yield* registry.extensionReactions
+          return yield* registry.extensionHooks
             .transformToolResult({
               toolCallId: params.toolCall.toolCallId,
               toolName: params.toolCall.toolName,
@@ -129,9 +129,9 @@ const makeExecutionToolkit = (params: {
               branchId: params.ctx.branchId,
             })
             .pipe(
-              provideReactionHostContext(params.ctx),
+              provideHookHostContext(params.ctx),
               Effect.catchEager((e) =>
-                Effect.logWarning("extension.reaction.tool-result.failed").pipe(
+                Effect.logWarning("extension.hook.tool-result.failed").pipe(
                   Effect.annotateLogs({ error: String(e) }),
                   Effect.as(executeResult),
                 ),
@@ -253,7 +253,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             return yield* finish(errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`))
           }
           const executeKnownTool = Effect.gen(function* () {
-            const preflight = yield* activeRegistry.extensionReactions
+            const preflight = yield* activeRegistry.extensionHooks
               .preflightToolCall({
                 toolCallId: toolCall.toolCallId,
                 toolName: toolCall.toolName,
@@ -262,7 +262,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                 sessionId: ctx.sessionId,
                 branchId: ctx.branchId,
               })
-              .pipe(provideReactionHostContext(ctx))
+              .pipe(provideHookHostContext(ctx))
             if (preflight?._tag === "deny") {
               yield* WideEvent.failDomain("preflight_denied", { message: preflight.message })
               return Prompt.toolResultPart({

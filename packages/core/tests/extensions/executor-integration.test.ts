@@ -50,8 +50,8 @@ import { defineResource } from "@gent/core-internal/domain/contribution"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
-import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
-import { provideExtensionReactionContext } from "../../src/runtime/extensions/extension-reaction-context"
+import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
+import { provideExtensionHookContext } from "../../src/runtime/extensions/extension-hook-context"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import { AgentName } from "@gent/core-internal/domain/agent"
 // Tool execution now flows through Gent metadata on the native Effect tool.
@@ -642,11 +642,11 @@ describe("Executor runtime lifecycle", () => {
               manifest: ExecutorExtension.manifest,
               contributions: {
                 ...runtimeExtension.contributions,
-                reactions: contributions.reactions,
+                hooks: contributions.hooks,
               },
             }
             const layerContext = yield* Layer.build(makeRuntimeLayer(extension))
-            const compiled = compileExtensionReactions([extension])
+            const compiled = compileExtensionHooks([extension])
             yield* waitFor(
               Context.get(layerContext, ExecutorRead)
                 .snapshot()
@@ -660,7 +660,7 @@ describe("Executor runtime lifecycle", () => {
               "built-in executor ready",
             )
 
-            const reactionCtx = {
+            const hookCtx = {
               projection: {
                 sessionId: "executor-projection-session" as never,
                 branchId: "executor-projection-branch" as never,
@@ -683,10 +683,7 @@ describe("Executor runtime lifecycle", () => {
             }
             const projection = yield* compiled
               .resolveTurnProjection()
-              .pipe(
-                provideExtensionReactionContext(reactionCtx),
-                Effect.provideContext(layerContext),
-              )
+              .pipe(provideExtensionHookContext(hookCtx), Effect.provideContext(layerContext))
 
             expect(projection.promptSections.map((section) => section.id)).toContain(
               "executor-guidance",

@@ -12,7 +12,7 @@ import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { ConfigService } from "../config-service.js"
-import { provideReactionHostContext } from "../extensions/extension-reaction-context.js"
+import { provideHookHostContext } from "../extensions/extension-hook-context.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { WideEvent } from "../wide-event-boundary.js"
 import type { AgentLoopError, QueuedTurnItem, RunningState } from "./agent-loop.state.js"
@@ -290,7 +290,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       yield* eventPublisher.deliver(envelope)
 
       yield* Effect.logDebug("finalize.turn-after.start")
-      yield* extensionRegistry.extensionReactions
+      yield* extensionRegistry.extensionHooks
         .emitTurnAfter({
           sessionId: scope.sessionId,
           branchId: scope.branchId,
@@ -298,7 +298,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           agentName: params.currentAgent,
           interrupted: params.turnInterrupted,
         })
-        .pipe(provideReactionHostContext(hostCtx))
+        .pipe(provideHookHostContext(hostCtx))
       yield* Effect.logDebug("finalize.turn-after.done")
 
       yield* Effect.logInfo("turn.completed").pipe(

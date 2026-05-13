@@ -20,6 +20,7 @@ import {
   ExtensionContext,
   ExtensionId,
   ExtensionSetupContext,
+  hook,
   makeRunSpec,
   request,
   tool,
@@ -307,44 +308,59 @@ describe("Effect-purity locks (compile-time)", () => {
             ),
         }),
       ],
-      reactions: {
-        turnAfter: {
-          handler: (_input: PublicExtensionApi.TurnAfterInput) =>
-            Effect.gen(function* () {
-              const ctx = yield* ExtensionContext
-              void ctx.Session.listMessages
-              void ctx.Session.queueFollowUp
-            }),
-        },
-      },
+      hooks: [
+        hook.turnAfter((_input: PublicExtensionApi.TurnAfterInput) =>
+          Effect.gen(function* () {
+            const ctx = yield* ExtensionContext
+            void ctx.Session.listMessages
+            void ctx.Session.queueFollowUp
+          }),
+        ),
+      ],
     })
 
     expect(true).toBe(true)
   })
 
-  test("removed reaction slots are not part of the public reactions bag", () => {
-    type Reactions = NonNullable<Parameters<typeof defineExtension>[0]["reactions"]>
-    // @ts-expect-error — messageInput reaction was removed; mutations belong in tools/requests
-    type _MessageInput = Reactions["messageInput"]
-    // @ts-expect-error — contextMessages reaction was removed; turnProjection composes prompt context
-    type _ContextMessages = Reactions["contextMessages"]
-    // @ts-expect-error — permissionCheck reaction was removed; permission policy is host-owned
-    type _PermissionCheck = Reactions["permissionCheck"]
-    // @ts-expect-error — toolExecute reaction was removed; tools own their effect
-    type _ToolExecute = Reactions["toolExecute"]
-    // @ts-expect-error — turnBefore reaction was removed; turnProjection runs at turn start
-    type _TurnBefore = Reactions["turnBefore"]
-    // @ts-expect-error — messageOutput reaction was removed; assistant parts persist directly
-    type _MessageOutput = Reactions["messageOutput"]
+  test("removed hook slots are not part of the public hooks bag", () => {
+    type HookKind = PublicExtensionApi.AnyExtensionHook["kind"]
+    // @ts-expect-error — messageInput hook was removed; mutations belong in tools/requests
+    const messageInput: HookKind = "messageInput"
+    // @ts-expect-error — contextMessages hook was removed; turnProjection composes prompt context
+    const contextMessages: HookKind = "contextMessages"
+    // @ts-expect-error — permissionCheck hook was removed; permission policy is host-owned
+    const permissionCheck: HookKind = "permissionCheck"
+    // @ts-expect-error — toolExecute hook was removed; tools own their effect
+    const toolExecute: HookKind = "toolExecute"
+    // @ts-expect-error — turnBefore hook was removed; turnProjection runs at turn start
+    const turnBefore: HookKind = "turnBefore"
+    // @ts-expect-error — messageOutput hook was removed; assistant parts persist directly
+    const messageOutput: HookKind = "messageOutput"
+    void messageInput
+    void contextMessages
+    void permissionCheck
+    void toolExecute
+    void turnBefore
+    void messageOutput
     expect(true).toBe(true)
   })
 
-  test("reaction handler field shape is locked to handler-only", () => {
-    type TurnAfterSlot = NonNullable<
-      NonNullable<Parameters<typeof defineExtension>[0]["reactions"]>["turnAfter"]
+  test("reactions bucket is not part of the public extension input", () => {
+    defineExtension({
+      id: "deleted-reactions-bucket-lock",
+      // @ts-expect-error — lifecycle authoring uses hooks; reactions was deleted
+      reactions: {},
+    })
+    expect(true).toBe(true)
+  })
+
+  test("hook handler field shape is locked to handler-only", () => {
+    type TurnAfterSlot = Extract<
+      PublicExtensionApi.AnyExtensionHook,
+      { readonly kind: "turnAfter" }
     >
-    // @ts-expect-error — failureMode field was removed; runtime always isolates reaction failures
-    type _FailureMode = TurnAfterSlot["failureMode"]
+    // @ts-expect-error — failureMode field was removed; runtime always isolates hook failures
+    type _FailureMode = TurnAfterSlot["hook"]["failureMode"]
     expect(true).toBe(true)
   })
 
@@ -380,15 +396,13 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("reaction handlers receive event input only", () => {
+  test("hook handlers receive event input only", () => {
     defineExtension({
-      id: "reaction-handler-params-lock",
-      reactions: {
-        turnAfter: {
-          // @ts-expect-error — host authority comes from ExtensionContext, not a ctx parameter
-          handler: (_input: PublicExtensionApi.TurnAfterInput, _ctx: unknown) => Effect.void,
-        },
-      },
+      id: "hook-handler-params-lock",
+      hooks: [
+        // @ts-expect-error — host authority comes from ExtensionContext, not a ctx parameter
+        hook.turnAfter((_input: PublicExtensionApi.TurnAfterInput, _ctx: unknown) => Effect.void),
+      ],
     })
     expect(true).toBe(true)
   })
@@ -396,7 +410,7 @@ describe("Effect-purity locks (compile-time)", () => {
   test("private host and storage shapes stay out of the public API", () => {
     // @ts-expect-error — raw host context is runtime plumbing; authors use typed handlers
     type _BadHostContext = PublicExtensionApi.ExtensionHostContext
-    // @ts-expect-error — projection runtime ctx is host plumbing; reactions yield ExtensionContext
+    // @ts-expect-error — projection runtime ctx is host plumbing; hooks yield ExtensionContext
     type _BadProjectionTurnContext = PublicExtensionApi.ProjectionTurnContext
     // @ts-expect-error — storage-layer errors are not public extension authoring API
     type _BadStorageError = PublicExtensionApi.StorageError
@@ -494,7 +508,7 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadSectionStartMarker = typeof PublicExtensionApi.sectionStartMarker
     // @ts-expect-error — raw marker helpers are prompt internals; use withSectionMarkers
     type _BadSectionEndMarker = typeof PublicExtensionApi.sectionEndMarker
-    // @ts-expect-error — turn context internals are expressed through reaction input shapes
+    // @ts-expect-error — turn context internals are expressed through hook input shapes
     type _BadExtensionTurnContext = PublicExtensionApi.ExtensionTurnContext
     // @ts-expect-error — host-context errors are runtime internals, not authoring API
     type _BadExtensionHostError = typeof PublicExtensionApi.ExtensionHostError
@@ -605,29 +619,27 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("reactions.systemPrompt MUST return Effect — Promise handler rejected", () => {
+  test("hooks.systemPrompt MUST return Effect — Promise handler rejected", () => {
     const promiseString = Bun.file("/dev/null").text()
     defineExtension({
-      id: "bad-prompt-reaction",
-      reactions: {
+      id: "bad-prompt-hook",
+      hooks: [
         // @ts-expect-error — Promise handler must not be assignable to Effect-returning systemPrompt
-        systemPrompt: () => promiseString,
-      },
+        hook.systemPrompt(() => promiseString),
+      ],
     })
     expect(true).toBe(true)
   })
 
-  test("extension reactions and lifecycle hooks reject Promise handlers", () => {
+  test("extension hooks and lifecycle hooks reject Promise handlers", () => {
     // gent/no-sleep: allow source a `Promise<void>` value purely for type-level assignability check below
     const promiseVoid = Bun.sleep(0)
     defineExtension({
-      id: "purity-reaction",
-      reactions: {
-        turnAfter: {
-          // @ts-expect-error — Promise handler must not be assignable to Effect-returning extension reaction
-          handler: () => promiseVoid,
-        },
-      },
+      id: "purity-hook",
+      hooks: [
+        // @ts-expect-error — Promise handler must not be assignable to Effect-returning extension hook
+        hook.turnAfter(() => promiseVoid),
+      ],
     })
     defineResource({
       scope: "process",
@@ -656,12 +668,10 @@ describe("Effect-purity locks (compile-time)", () => {
           execute: () => Effect.succeed("ok"),
         }),
       ],
-      reactions: {
-        systemPrompt: (input) => Effect.succeed(`${input.basePrompt}suffix`),
-        turnAfter: {
-          handler: () => Effect.void,
-        },
-      },
+      hooks: [
+        hook.systemPrompt((input) => Effect.succeed(`${input.basePrompt}suffix`)),
+        hook.turnAfter(() => Effect.void),
+      ],
       resources: [
         defineResource({
           scope: "process",

@@ -99,7 +99,7 @@ Core rule: let it crash inside the owned boundary, then recover at the boundary 
 
 Extensions do not get a parallel local actor substrate. Extension state lives in
 declared resources/services and crosses the runtime through explicit slots:
-capabilities, RPC requests, reactions, drivers, and scheduled resources.
+capabilities, RPC requests, hooks, drivers, and scheduled resources.
 
 ## Persistence
 

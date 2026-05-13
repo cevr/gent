@@ -3,7 +3,7 @@
  *
  * Composition:
  *   - Tools (memory_remember / memory_recall / memory_forget) for the LLM
- *   - `reactions.turnProjection` derives the on-disk vault index + project
+ *   - `hook.turnProjection` derives the on-disk vault index + project
  *     key on demand. No actor mirror; vault files are the durable store.
  *   - Reflect/Meditate agents — system agents
  *   - Scheduled dream jobs — durable background memory promotion jobs
@@ -20,6 +20,7 @@ import {
   defineResource,
   ExtensionId,
   ExtensionSetupContext,
+  hook,
   ModelId,
   type ScheduledJobContribution,
 } from "@gent/core/extensions/api"
@@ -135,9 +136,7 @@ export const MemoryExtension = defineExtension({
   id: MEMORY_EXTENSION_ID,
   tools: [...MemoryTools],
   agents: [MemoryReflectAgent, MemoryMeditateAgent],
-  reactions: {
-    turnProjection: () => projectMemoryVaultTurn(),
-  },
+  hooks: [hook.turnProjection(() => projectMemoryVaultTurn())],
   scheduledJobs: MemoryDreamJobs,
   resources: () =>
     Effect.gen(function* () {

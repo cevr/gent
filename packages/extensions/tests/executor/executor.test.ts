@@ -117,7 +117,7 @@ describe("Executor state machine", () => {
 //
 // Prompt/policy come from `viewForState(state)` — a pure function of
 // `ExecutorState` sampled by the process-scoped ExecutorRuntime turn
-// projection reaction. We test the pure projection directly.
+// projection hook. We test the pure projection directly.
 
 describe("executor viewForState — prompt + tool policy", () => {
   test("Idle: excludes execute + resume, no prompt section", () => {

@@ -11,29 +11,24 @@ import { Effect } from "effect"
 import { SessionToolsExtension } from "../src/index.js"
 import { getBuiltinAgent } from "./helpers/builtin-agents.js"
 import type { SystemPromptInput } from "@gent/core/extensions/api"
-import { testExtensionHostContext, provideTestSetupContext } from "@gent/core-internal/test-utils"
-
-const stubHostCtx = testExtensionHostContext()
+import { provideTestSetupContext } from "@gent/core-internal/test-utils"
 
 const getSystemPrompt = Effect.gen(function* () {
   const contributions = yield* SessionToolsExtension.setup.pipe(provideTestSetupContext())
-  const systemPrompt = contributions.reactions?.systemPrompt
-  if (systemPrompt === undefined) throw new Error("expected session tools systemPrompt reaction")
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test owns this concrete extension handler
-  return systemPrompt as unknown as (
-    input: SystemPromptInput,
-    ctx: typeof stubHostCtx,
-  ) => Effect.Effect<string>
+  const systemPrompt = contributions.hooks?.find((slot) => slot.kind === "systemPrompt")
+  if (systemPrompt === undefined) throw new Error("expected session tools systemPrompt hook")
+  return systemPrompt.hook.handler
 })
 
 describe("SessionToolsExtension", () => {
   it.live("injects naming instruction for interactive prompts", () =>
     Effect.gen(function* () {
       const systemPrompt = yield* getSystemPrompt
-      const prompt = yield* systemPrompt(
-        { basePrompt: "base", agent: getBuiltinAgent("cowork")!, interactive: true },
-        stubHostCtx,
-      )
+      const prompt = yield* systemPrompt({
+        basePrompt: "base",
+        agent: getBuiltinAgent("cowork")!,
+        interactive: true,
+      } satisfies SystemPromptInput)
       expect(prompt).toContain("## Session naming")
       expect(prompt.startsWith("base")).toBe(true)
     }),
@@ -41,10 +36,11 @@ describe("SessionToolsExtension", () => {
   it.live("non-interactive prompts pass through unchanged", () =>
     Effect.gen(function* () {
       const systemPrompt = yield* getSystemPrompt
-      const prompt = yield* systemPrompt(
-        { basePrompt: "base", agent: getBuiltinAgent("cowork")!, interactive: false },
-        stubHostCtx,
-      )
+      const prompt = yield* systemPrompt({
+        basePrompt: "base",
+        agent: getBuiltinAgent("cowork")!,
+        interactive: false,
+      } satisfies SystemPromptInput)
       expect(prompt).toBe("base")
     }),
   )

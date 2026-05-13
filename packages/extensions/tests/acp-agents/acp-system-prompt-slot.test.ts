@@ -16,7 +16,7 @@ import {
 } from "@gent/core-internal/domain/agent"
 import { tool, type SystemPromptInput, type ToolCapability } from "@gent/core/extensions/api"
 import { withSectionMarkers } from "@gent/core-internal/domain/prompt"
-import { testExtensionHostContext, provideTestSetupContext } from "@gent/core-internal/test-utils"
+import { provideTestSetupContext } from "@gent/core-internal/test-utils"
 const baseAgent = AgentDefinition.make({
   name: "cowork" as never,
 })
@@ -27,7 +27,6 @@ const fakeTool: ToolCapability = tool({
   output: Schema.Struct({ ok: Schema.Boolean }),
   execute: () => Effect.succeed({ ok: true }),
 })
-const stubHostCtx = testExtensionHostContext()
 const spawnerLayer = BunChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
 )
@@ -41,13 +40,9 @@ const getSystemPrompt = Effect.gen(function* () {
       }),
     )
     .pipe(Effect.provide(spawnerLayer))
-  const systemPrompt = contributions.reactions?.systemPrompt
-  if (systemPrompt === undefined) throw new Error("expected ACP systemPrompt reaction")
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test owns this concrete extension handler
-  return systemPrompt as unknown as (
-    input: SystemPromptInput,
-    ctx: typeof stubHostCtx,
-  ) => Effect.Effect<string>
+  const systemPrompt = contributions.hooks?.find((slot) => slot.kind === "systemPrompt")
+  if (systemPrompt === undefined) throw new Error("expected ACP systemPrompt hook")
+  return systemPrompt.hook.handler
 })
 const runHandler = (input: {
   readonly basePrompt: string
@@ -58,7 +53,7 @@ const runHandler = (input: {
 }) =>
   Effect.gen(function* () {
     const systemPrompt = yield* getSystemPrompt
-    return yield* systemPrompt(input, stubHostCtx)
+    return yield* systemPrompt(input satisfies SystemPromptInput)
   })
 describe("ACP systemPrompt slot", () => {
   it.live("appends codemode section when driverToolSurface is codemode", () =>

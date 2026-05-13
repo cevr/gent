@@ -46,7 +46,7 @@ import { ExtensionLoadError } from "../domain/extension.js"
 import { sealRuntimeLoadedEffect } from "../domain/extension-load-boundary.js"
 import type { AnyExtensionHook, GentExtension, ExtensionManifest } from "../domain/extension.js"
 import type { ExtensionSetupContext } from "../domain/extension-setup-context.js"
-import type { ExtensionContributions, ExtensionReactions } from "../domain/contribution.js"
+import type { ExtensionContributions } from "../domain/contribution.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import type { RequestCapability } from "../domain/capability/request.js"
 import { bindRequestCapabilityExtension } from "../domain/capability/request.js"
@@ -149,7 +149,6 @@ export {
 export { PermissionRule, type PermissionResult } from "../domain/permission.js"
 export {
   type ExtensionContributions,
-  type ExtensionReactions,
   // Smart constructor — returns a bare leaf value; the bucket it's placed
   // in is the discrimination (no `_kind` field).
   defineResource,
@@ -231,12 +230,6 @@ interface DefineExtensionInput<R = never> {
   readonly requests?: FieldSpec<RequestCapability, R>
   readonly agents?: FieldSpec<AgentDefinition, R>
   readonly hooks?: FieldSpec<AnyExtensionHook, R>
-  /**
-   * Lifecycle reactions: `systemPrompt` / `turnProjection` / `turnAfter` /
-   * `toolResult` handlers run by the runtime. Per-extension, per-session.
-   * Compiled by `compileExtensionReactions`.
-   */
-  readonly reactions?: ExtensionReactions
   readonly modelDrivers?: FieldSpec<ModelDriverContribution, R>
   readonly externalDrivers?: FieldSpec<ExternalDriverContribution, R>
 }
@@ -369,7 +362,6 @@ export function defineExtension<R>(
         ...(requests.length > 0 ? { requests } : {}),
         ...(agents.length > 0 ? { agents } : {}),
         ...(hooks.length > 0 ? { hooks } : {}),
-        ...(params.reactions !== undefined ? { reactions: params.reactions } : {}),
         ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
         ...(externalDrivers.length > 0 ? { externalDrivers } : {}),
       }

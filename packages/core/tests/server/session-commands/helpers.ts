@@ -1,5 +1,5 @@
 import { Deferred, Effect, Layer, Stream } from "effect"
-import { ExtensionContext } from "@gent/core/extensions/api"
+import { ExtensionContext, hook } from "@gent/core/extensions/api"
 import { textStep } from "@gent/core-internal/debug/provider"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
@@ -334,8 +334,8 @@ export const parentToolCallProbeExtension: LoadedExtension = {
   scope: "builtin",
   sourcePath: "test",
   contributions: {
-    reactions: {
-      turnProjection: () =>
+    hooks: [
+      hook.turnProjection(() =>
         Effect.gen(function* () {
           const ctx = yield* ExtensionContext
           return {
@@ -351,6 +351,7 @@ export const parentToolCallProbeExtension: LoadedExtension = {
                   ],
           }
         }),
-    },
+      ),
+    ],
   },
 }

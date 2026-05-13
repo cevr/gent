@@ -40,13 +40,13 @@ describe("SkillsExtension via RPC", () => {
       Effect.gen(function* () {
         const contributions = yield* SkillsExtension.setup.pipe(provideTestSetupContext())
 
-        const reactions = contributions.reactions as
-          | { readonly turnProjection?: () => Effect.Effect<TurnProjection, never, Skills> }
-          | undefined
-        const turnProjection = reactions?.turnProjection
+        const turnProjection = contributions.hooks?.find((slot) => slot.kind === "turnProjection")
         if (turnProjection === undefined) throw new Error("expected skills turn projection")
         const result = yield* narrowR(
-          turnProjection().pipe(Effect.provide(Skills.Test(testSkills)), Effect.orDie),
+          (turnProjection.hook.handler() as Effect.Effect<TurnProjection, never, Skills>).pipe(
+            Effect.provide(Skills.Test(testSkills)),
+            Effect.orDie,
+          ),
         )
 
         const section = (result.promptSections ?? []).find((s) => s.id === "skills")

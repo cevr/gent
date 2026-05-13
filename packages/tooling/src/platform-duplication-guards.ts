@@ -96,6 +96,10 @@ const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
     message: "Bun.randomUUIDv7 is adapter-only; use GentPlatform.randomId",
   },
   {
+    pattern: /\breactions\s*:/,
+    message: "Extension lifecycle authoring uses hooks; the reactions bucket is deleted",
+  },
+  {
     pattern: /\bprocess\.(?:platform|pid|execPath|kill)\b/,
     message: "Host process facts are adapter-only; use GentPlatform",
   },

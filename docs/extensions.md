@@ -260,11 +260,9 @@ export default defineExtension({
 })
 ```
 
-`reactions` remains a lower-level lifecycle bag used by older in-tree/shipped
-extensions and tests. It is not a separate authority model and it should not be
-the first shape shown to authors. New authoring examples should use
+Lifecycle extension points are hook values, not keyed middleware bags. Use
 `hook.systemPrompt`, `hook.turnProjection`, `hook.turnAfter`, `hook.toolCall`,
-or `hook.toolResult`.
+or `hook.toolResult` inside `defineExtension({ hooks: [...] })`.
 
 ## Resource (long-lived state)
 
@@ -351,13 +349,13 @@ builtin).
 
 ## In-tree Examples
 
-| Extension                               | Demonstrates                                 |
-| --------------------------------------- | -------------------------------------------- |
-| `packages/extensions/src/session-tools` | `tool` + explicit prompt/policy integration  |
-| `packages/extensions/src/todo`          | `tool` + `request` + scoped storage resource |
-| `packages/extensions/src/memory`        | `tool` + shipped reaction + `defineResource` |
-| `packages/extensions/src/auto/index.ts` | shipped reactions + scoped workflow services |
-| `examples/extensions/session-notes.ts`  | one-file tool + slash request + state + hook |
+| Extension                               | Demonstrates                                     |
+| --------------------------------------- | ------------------------------------------------ |
+| `packages/extensions/src/session-tools` | `tool` + explicit prompt/policy integration      |
+| `packages/extensions/src/todo`          | `tool` + `request` + scoped storage resource     |
+| `packages/extensions/src/memory`        | `tool` + turn projection hook + `defineResource` |
+| `packages/extensions/src/auto/index.ts` | turn/tool hooks + scoped workflow services       |
+| `examples/extensions/session-notes.ts`  | one-file tool + slash request + state + hook     |
 
 ## Surface Invariants
 

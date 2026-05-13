@@ -18,10 +18,10 @@ import type { ExtensionContributions, LoadedExtension } from "../../src/domain/e
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
-import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
-import { provideExtensionReactionContext } from "../../src/runtime/extensions/extension-reaction-context"
+import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
+import { provideExtensionHookContext } from "../../src/runtime/extensions/extension-hook-context"
 import { PermissionRule } from "@gent/core-internal/domain/permission"
-import { tool, type ToolCapability } from "@gent/core/extensions/api"
+import { hook, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { runToolWithCtx, testExtensionHostContext } from "@gent/core-internal/test-utils"
 import type { AgentDefinition } from "@gent/core-internal/domain/agent"
 import { AgentName } from "@gent/core-internal/domain/agent"
@@ -218,13 +218,11 @@ describe("scope precedence", () => {
     test("systemPrompt rewrite order follows scope precedence", () => {
       const make = (id: string, scope: "builtin" | "user" | "project") =>
         ext(id, scope, {
-          reactions: {
-            systemPrompt: (input) => Effect.succeed(`${input.basePrompt}[${scope}]`),
-          },
+          hooks: [hook.systemPrompt((input) => Effect.succeed(`${input.basePrompt}[${scope}]`))],
         })
 
       // Pass out of order to prove sorting, not insertion
-      const compiled = compileExtensionReactions([
+      const compiled = compileExtensionHooks([
         make("p", "project"),
         make("a", "builtin"),
         make("u", "user"),
@@ -233,7 +231,7 @@ describe("scope precedence", () => {
       return compiled
         .resolveSystemPrompt({ basePrompt: "x", agent: getBuiltinAgent("cowork")! })
         .pipe(
-          provideExtensionReactionContext({ projection: stubProjectionCtx, host: stubCtx }),
+          provideExtensionHookContext({ projection: stubProjectionCtx, host: stubCtx }),
           Effect.tap((result) =>
             Effect.sync(() => expect(result).toBe("x[builtin][user][project]")),
           ),

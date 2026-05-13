@@ -2,7 +2,7 @@
  * System prompt construction via ordered sections.
  *
  * Static prompt sections are bundled on capability leaf `prompt`. Dynamic
- * content resolved per-turn from services lives on extension reactions.
+ * content resolved per-turn from services lives on extension hooks.
  */
 export interface PromptSection {
   readonly id: string

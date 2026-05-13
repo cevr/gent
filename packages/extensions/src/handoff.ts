@@ -5,6 +5,7 @@ import {
   defineResource,
   estimateContextPercent,
   ExtensionContext,
+  hook,
   type Message,
   type TurnAfterInput,
   messagePartsTextLines,
@@ -75,7 +76,7 @@ export class HandoffCooldown extends Context.Service<HandoffCooldown, HandoffCoo
   )
 }
 
-// ── turn.after reaction — auto-handoff at context-fill threshold ──
+// ── turn.after hook — auto-handoff at context-fill threshold ──
 
 const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
   const recentText = messages
@@ -145,9 +146,5 @@ export const HandoffExtension = defineExtension({
   resources: [
     defineResource({ tag: HandoffCooldown, scope: "process", layer: HandoffCooldown.Live }),
   ],
-  reactions: {
-    turnAfter: {
-      handler: autoHandoffImpl,
-    },
-  },
+  hooks: [hook.turnAfter(autoHandoffImpl)],
 })

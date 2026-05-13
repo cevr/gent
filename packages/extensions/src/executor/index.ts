@@ -7,6 +7,7 @@ import {
   defineExtension,
   defineResource,
   ExtensionSetupContext,
+  hook,
   type GentExtension,
 } from "@gent/core/extensions/api"
 import { EXECUTOR_EXTENSION_ID } from "./domain.js"
@@ -46,11 +47,12 @@ export const ExecutorExtension: GentExtension = defineExtension({
     }),
   tools: [ExecuteTool, ResumeTool],
   requests: [ExecutorRpc.Start, ExecutorRpc.Stop, ExecutorRpc.GetSnapshot],
-  reactions: {
-    turnProjection: () =>
+  hooks: [
+    hook.turnProjection(() =>
       Effect.gen(function* () {
         const executor = yield* ExecutorRuntime
         return yield* executor.turnProjection()
       }),
-  },
+    ),
+  ],
 })

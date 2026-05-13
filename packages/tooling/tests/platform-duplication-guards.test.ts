@@ -806,6 +806,21 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
+  test("flags deleted extension reactions bucket in active source", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/extensions/src/example.ts",
+        "export const Ext = defineExtension({ id: 'x', reactions: {} })",
+      ),
+    ).toEqual([
+      {
+        file: "packages/extensions/src/example.ts",
+        line: 1,
+        message: "Extension lifecycle authoring uses hooks; the reactions bucket is deleted",
+      },
+    ])
+  })
+
   test("flags host process and OS facts outside the platform adapter", () => {
     expect(
       findPlatformDuplicationViolations(

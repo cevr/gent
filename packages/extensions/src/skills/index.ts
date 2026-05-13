@@ -7,7 +7,12 @@
  */
 
 import { Effect } from "effect"
-import { defineExtension, defineResource, ExtensionSetupContext } from "@gent/core/extensions/api"
+import {
+  defineExtension,
+  defineResource,
+  ExtensionSetupContext,
+  hook,
+} from "@gent/core/extensions/api"
 import { formatSkillsForPrompt, Skills } from "./skills.js"
 import { SkillsTool } from "./skills-tool.js"
 import { SearchSkillsTool } from "./search-skills.js"
@@ -28,8 +33,8 @@ export const SkillsExtension = defineExtension({
         }),
       ]
     }),
-  reactions: {
-    turnProjection: () =>
+  hooks: [
+    hook.turnProjection(() =>
       Effect.gen(function* () {
         const service = yield* Skills
         const skills = yield* service.list()
@@ -37,7 +42,8 @@ export const SkillsExtension = defineExtension({
           promptSections: [{ id: "skills", priority: 80, content: formatSkillsForPrompt(skills) }],
         }
       }),
-  },
+    ),
+  ],
   requests: [SkillsRpc.ListSkills, SkillsRpc.GetSkillContent],
   tools: [SkillsTool, SearchSkillsTool],
 })

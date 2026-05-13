@@ -2,7 +2,7 @@
  * Auto loop modality extension — one generic iteration driver.
  *
  * The loop is process-local workflow state. Public commands/readers are typed
- * request capabilities backed by `AutoRead` / `AutoWrite`; turn/tool reactions
+ * request capabilities backed by `AutoRead` / `AutoWrite`; turn/tool hooks
  * yield the same services directly instead of routing through an actor mailbox.
  */
 
@@ -13,6 +13,7 @@ import {
   estimateContextPercent,
   ExtensionContext,
   ExtensionSetupContext,
+  hook,
   isRecord,
   tool,
   type ToolResultInput,
@@ -282,13 +283,11 @@ export const AutoExtension = defineExtension({
     AutoRpc.IsActive,
     AutoRpc.GetSnapshot,
   ],
-  reactions: {
-    turnProjection,
-    toolResult: onToolResult,
-    turnAfter: {
-      handler: autoHandoffImpl,
-    },
-  },
+  hooks: [
+    hook.turnProjection(turnProjection),
+    hook.toolResult(onToolResult),
+    hook.turnAfter(autoHandoffImpl),
+  ],
   resources: () =>
     Effect.gen(function* () {
       const ctx = yield* ExtensionSetupContext

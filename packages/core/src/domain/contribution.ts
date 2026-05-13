@@ -25,15 +25,7 @@ import type { ToolCapability } from "./capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { AnyResourceContribution } from "./resource.js"
 import type { ScheduledJobContribution } from "./scheduled-job.js"
-import type { AnyExtensionHook, ExtensionReactions as ExtensionReactionsType } from "./extension.js"
-
-/**
- * Re-export for the bucket boundary. The native definition lives in
- * `domain/extension.ts` next to the lifecycle inputs the reactions consume.
- * Erased to `unknown`/`unknown` at the bucket leaf — handlers close their
- * own E/R at the declaration site (e.g. `Effect.provide(Layer)`).
- */
-export type ExtensionReactions = ExtensionReactionsType<unknown, unknown>
+import type { AnyExtensionHook } from "./extension.js"
 
 // ── Typed buckets ──
 
@@ -66,12 +58,6 @@ export interface ExtensionContributions {
   readonly requests?: ReadonlyArray<RequestCapability>
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly hooks?: ReadonlyArray<AnyExtensionHook>
-  /**
-   * Lifecycle reactions: turn-before / turn-after / message-output /
-   * tool-result handlers. Per-extension, per-session — fired by the runtime
-   * at the corresponding seams. Compiled by `compileExtensionReactions`.
-   */
-  readonly reactions?: ExtensionReactions
   readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
   readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
 }

@@ -58,7 +58,7 @@ export const projectSnapshot = (state: ExecutorState): ExecutorSnapshotReply => 
 // ── Turn projection (prompt + tool policy) ──
 //
 // Pure derivation from `ExecutorState`, sampled by ExecutorRuntime's
-// turnProjection reaction. When state is `Ready` and an `executorPrompt`
+// turnProjection hook. When state is `Ready` and an `executorPrompt`
 // is present, contribute the executor-guidance prompt section; otherwise
 // exclude `execute`/`resume` from the active policy until the connection
 // is up.

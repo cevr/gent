@@ -8,7 +8,7 @@
  *   1. Same inputs → same resolved extensions (extension ids, scope precedence).
  *   2. `buildExtensionLayers` actually wires `ExtensionRegistry` from the
  *      resolved data (not just exported as a helper).
- *   3. turn-projection reactions resolve services contributed via
+ *   3. turn-projection hooks resolve services contributed via
  *      `defineResource`.
  *   4. Server-style and per-cwd-style assemblies produce equivalent observable
  *      output (same registry contents, same merged sections). If the per-cwd
@@ -22,7 +22,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, Layer, Path, Schema as S } from "effect"
 import { BunFileSystem, BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
-import { defineExtension, defineResource, tool, AgentName } from "@gent/core/extensions/api"
+import { AgentName, defineExtension, defineResource, hook, tool } from "@gent/core/extensions/api"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 import { ConfigService } from "../../src/runtime/config-service"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
@@ -33,7 +33,7 @@ import {
   resolveProfileRuntime,
   resolveRuntimeProfile,
 } from "../../src/runtime/profile"
-import { provideExtensionReactionContext } from "../../src/runtime/extensions/extension-reaction-context"
+import { provideExtensionHookContext } from "../../src/runtime/extensions/extension-hook-context"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { ProcessRunnerLive } from "../../src/utils/run-process"
 
@@ -64,9 +64,9 @@ const sectionExtension = defineExtension({
   tools: [sectionTool],
 })
 
-// Dynamic prompt section: the reaction Effect yields a service from the
+// Dynamic prompt section: the hook Effect yields a service from the
 // extension's Resource layer. The service Tag is `ReadOnly`-branded so the
-// prompt reaction only receives a read surface.
+// prompt hook only receives a read surface.
 interface FakeProviderShape {
   readonly text: () => string
 }
@@ -81,15 +81,16 @@ const fakeProviderLive = Layer.succeed(FakeProvider, {
 const dynamicExtension = defineExtension({
   id: "@gent/test-runtime-profile-dynamic",
   resources: [defineResource({ tag: FakeProvider, scope: "process", layer: fakeProviderLive })],
-  reactions: {
-    turnProjection: () =>
+  hooks: [
+    hook.turnProjection(() =>
       Effect.gen(function* () {
         const fp = yield* FakeProvider
         return {
           promptSections: [{ id: "rp-dynamic-section", priority: 60, content: fp.text() }],
         }
       }),
-  },
+    ),
+  ],
 })
 
 describe("resolveRuntimeProfile", () => {
@@ -198,7 +199,7 @@ describe("resolveRuntimeProfile", () => {
           Effect.map((ctx) => Context.get(ctx, ExtensionRegistry)),
         )
 
-        const reactionCtx = {
+        const hookCtx = {
           projection: {
             sessionId: "s" as never,
             branchId: "b" as never,
@@ -219,9 +220,9 @@ describe("resolveRuntimeProfile", () => {
             home: "/tmp",
           }),
         }
-        const result = yield* registryService.extensionReactions
+        const result = yield* registryService.extensionHooks
           .resolveTurnProjection()
-          .pipe(provideExtensionReactionContext(reactionCtx), Effect.provide(layer))
+          .pipe(provideExtensionHookContext(hookCtx), Effect.provide(layer))
 
         expect(result.promptSections).toContainEqual({
           id: "rp-dynamic-section",

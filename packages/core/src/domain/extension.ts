@@ -24,7 +24,7 @@ export interface LoadedExtension {
   readonly sourcePath: string
   /**
    * Typed contribution buckets produced by the extension's setup function.
-   * Consumers (registries, workflow runtime, scheduler, turn reactions,
+   * Consumers (registries, workflow runtime, scheduler, lifecycle hooks,
    * etc.) read each bucket directly — `contributions.tools`,
    * `contributions.requests`, `contributions.resources`, etc. The bucket name IS the discrimination;
    * there is no `_kind` discriminator and no `filterByKind`.
@@ -77,7 +77,7 @@ export class ExtensionLoadError extends Schema.TaggedErrorClass<ExtensionLoadErr
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
-/** Failure raised by a turn projection reaction. Carries slot id + cause for diagnostics. */
+/** Failure raised by a turn projection hook. Carries slot id + cause for diagnostics. */
 export class ProjectionError extends Schema.TaggedErrorClass<ProjectionError>()("ProjectionError", {
   projectionId: Schema.String,
   reason: Schema.String,
@@ -97,7 +97,7 @@ export interface RunContext {
 }
 
 // Turn-scoped input shapes for the explicit runtime seams. Prompt/context
-// shaping, turn/message hooks, and tool-result enrichment live on reactions.
+// shaping, turn/message hooks, and tool-result enrichment live on hooks.
 
 export interface SystemPromptInput {
   readonly basePrompt: string
@@ -170,17 +170,12 @@ export type ToolCallPreflightResult = void | {
   readonly result?: unknown
 }
 
-// ── Lifecycle reactions ──
+// ── Lifecycle hooks ──
 //
-// Per-extension, per-session handlers run by the runtime at the
-// `turnAfter` / `toolResult` seams.  Authored on
-// `defineExtension({ reactions })`. Failures are always isolated: the
-// runtime logs a warning and lets later reactions still fire.
-
-/** Single reaction handler. Failures are isolated (logged, then swallowed). */
-export type ExtensionReaction<Input, E = never, R = never> = {
-  readonly handler: (input: Input) => Effect.Effect<void, E, R>
-}
+// Per-extension, per-session handlers run by the runtime at prompt, turn,
+// tool-call, and tool-result seams. Authored on `defineExtension({ hooks })`.
+// Failures are always isolated: the runtime logs a warning and lets later hooks
+// still fire.
 
 export type ExtensionHook<Input, Output, E = never, R = never> = {
   readonly handler: (input: Input) => Effect.Effect<Output, E, R>
@@ -236,43 +231,12 @@ export const hook = {
   ): AnyExtensionHook => eraseHookSlot({ kind: "toolResult", hook: { handler } }),
 }
 
-/**
- * The full reactions bag accepted by `defineExtension({ reactions })`. Every
- * field is optional; an extension that listens to nothing returns `{}` (or
- * omits the field).
- *
- * Type parameters `E`/`R` are erased to `unknown` at the bucket boundary —
- * the runtime reseals the failure channel at `runReaction` and the R channel
- * is closed at the declaration site (e.g. `Effect.provide(Layer)`).
- */
-export interface ExtensionReactions<E = never, R = never> {
-  /**
-   * System-prompt rewrite. Receives the prompt string after static sections
-   * and turn projections have been compiled, and returns the prompt to send
-   * to the driver.
-   */
-  readonly systemPrompt?: (input: SystemPromptInput) => Effect.Effect<string, E, R>
-  /**
-   * Turn-scoped prompt/tool-policy contribution. Use for read-only runtime
-   * derivations that need current turn metadata plus services.
-   */
-  readonly turnProjection?: () => Effect.Effect<TurnProjection, E, R>
-  readonly turnAfter?: ExtensionReaction<TurnAfterInput, E, R>
-  /**
-   * Tool-result rewrite. The handler receives the current result and returns
-   * the next result; runs after the tool produces output and before downstream
-   * consumers see it. Used for journaling, redaction, and structured-result
-   * enrichment.
-   */
-  readonly toolResult?: (input: ToolResultInput) => Effect.Effect<unknown, E, R>
-}
-
 export interface ExtensionTurnContext extends RunContext {
   readonly agent: AgentDefinition
   readonly allTools: ReadonlyArray<ToolCapability>
 }
 
-/** Turn-scoped host + agent context used by prompt/tool-policy reactions. */
+/** Turn-scoped host + agent context used by prompt/tool-policy hooks. */
 export interface ProjectionTurnContext {
   readonly sessionId: SessionId
   readonly branchId?: BranchId
@@ -398,4 +362,4 @@ export interface GentExtension<R = ChildProcessSpawner> {
 }
 
 // Legacy keyed middleware primitives are gone. Prompt/context shaping,
-// turn/message hooks, and tool-result enrichment live on reactions.
+// turn/message hooks, and tool-result enrichment live on hooks.

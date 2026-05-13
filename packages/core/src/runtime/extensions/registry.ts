@@ -26,10 +26,7 @@ import {
   isToolCapability,
   type ToolCapability,
 } from "../../domain/capability/tool.js"
-import {
-  compileExtensionReactions,
-  type CompiledExtensionReactions,
-} from "./extension-reactions.js"
+import { compileExtensionHooks, type CompiledExtensionHooks } from "./extension-hooks.js"
 import { sealErasedEffect } from "./extension-effect-membrane.js"
 import { CurrentExtensionHostContext } from "../agent/current-extension-host-context.js"
 
@@ -62,7 +59,7 @@ export interface ResolvedExtensions {
   readonly promptSections: ReadonlyMap<string, PromptSection>
   readonly permissionRules: ReadonlyArray<PermissionRule>
   readonly slashCommands: ReadonlyArray<SlashCommand>
-  readonly extensionReactions: CompiledExtensionReactions
+  readonly extensionHooks: CompiledExtensionHooks
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions: ReadonlyArray<FailedExtension>
   readonly extensionStatuses: ReadonlyArray<ExtensionStatusInfo>
@@ -332,7 +329,7 @@ export const resolveExtensions = (
   // not raw extractions. Otherwise a higher-scope capability shadowing a
   // lower-scope tool would still inherit the loser's prompt — defeating the
   // shadow. Last scope wins by section id.
-  // (Dynamic prompt content is assembled per-turn by ExtensionReactions, not here.)
+  // (Dynamic prompt content is assembled per-turn by ExtensionHooks, not here.)
   const promptSectionsMap = new Map<string, PromptSection>()
   for (const { capability: cap } of capabilityWinners.values()) {
     const prompt = isToolCapability(cap) ? getToolMetadata(cap).prompt : cap.prompt
@@ -350,7 +347,7 @@ export const resolveExtensions = (
   }
   const slashCommands = compileSlashCommands(capabilityWinners)
 
-  const extensionReactions = compileExtensionReactions(sorted)
+  const extensionHooks = compileExtensionHooks(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
     ...sorted.map((ext) => ({
       manifest: ext.manifest,
@@ -379,7 +376,7 @@ export const resolveExtensions = (
     promptSections: promptSectionsMap,
     permissionRules,
     slashCommands,
-    extensionReactions,
+    extensionHooks,
     extensions: sorted,
     failedExtensions: mergedFailures,
     extensionStatuses,
@@ -466,7 +463,7 @@ export const compileToolPolicy = (
 // Extension Registry Service
 
 export interface ExtensionRegistryService {
-  readonly extensionReactions: CompiledExtensionReactions
+  readonly extensionHooks: CompiledExtensionHooks
 
   // Raw resolved data — needed for rebuilding extension services in child runtimes
   readonly getResolved: () => ResolvedExtensions
@@ -478,7 +475,7 @@ export class ExtensionRegistry extends Context.Service<
 >()("@gent/core/src/runtime/extensions/registry/ExtensionRegistry") {
   static fromResolved = (resolved: ResolvedExtensions): Layer.Layer<ExtensionRegistry> =>
     Layer.succeed(ExtensionRegistry, {
-      extensionReactions: resolved.extensionReactions,
+      extensionHooks: resolved.extensionHooks,
       getResolved: () => resolved,
     })
 

@@ -77,7 +77,7 @@ export interface RuntimeProfileInputs {
  * builtin).
  *
  * Use `compileBaseSections(profile)` to get the merged static section array.
- * (Dynamic sections are assembled per-turn by extension reactions, not here.)
+ * (Dynamic sections are assembled per-turn by extension hooks, not here.)
  */
 export interface RuntimeProfile {
   readonly cwd: string
@@ -248,7 +248,7 @@ export const resolveRuntimeProfile = (
 
     // Extension prompt sections come pre-merged in scope-precedence order from
     // `resolveExtensions` (project > user > builtin). Dynamic sections are
-    // assembled per-turn by extension reactions.
+    // assembled per-turn by extension hooks.
     const extensionSectionInputs = [...reconciled.resolved.promptSections.values()]
 
     return {

@@ -28,6 +28,7 @@ import {
   defineResource,
   ExtensionSetupContext,
   ExternalDriverRef,
+  hook,
   ProviderAuthError,
   sectionPatternFor,
   type ExtensionContributions,
@@ -290,9 +291,7 @@ export const makeAcpAgentsExtension = (
   return defineExtension({
     id: "@gent/acp-agents",
     agents: [claudeCodeAgent, ...protocolAgents],
-    reactions: {
-      systemPrompt: rewriteCodemodeSystemPrompt,
-    },
+    hooks: [hook.systemPrompt(rewriteCodemodeSystemPrompt)],
     resources: () => setupArtifacts.pipe(Effect.map((a) => a.resources ?? [])),
     externalDrivers: () => setupArtifacts.pipe(Effect.map((a) => a.externalDrivers ?? [])),
   })
