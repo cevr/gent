@@ -330,16 +330,24 @@ column name` / `already exists`) instead of swallowing every ALTER
   `withX(...)(innerCall(...))` now fail custom lint, and existing
   pipeable call sites were migrated to `.pipe(...)`. Non-pipe adapter
   factories such as `withWideEvent(boundaryFactory(...))` stay allowed.
-- **C20/C21 still open**: TUI context/controller cohesion and the
-  remaining non-wrapper trace/composable-method cleanup have not landed
-  yet.
+- **C20 client/controller split complete**: `ClientProvider` now
+  delegates session/extension event subscriber fan-out to a focused
+  client event hub, and the session route controller delegates builtin,
+  extension-command, and slash-autocomplete registration to a focused
+  command registry. Public hooks and command IDs stay unchanged while the
+  oversized route/client modules shed behavior-specific implementation
+  detail.
+- **C21 still open**: the remaining non-wrapper trace/composable-method
+  cleanup has not landed yet.
 - Verification:
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/storage/sqlite-session-storage.test.ts`
   passed with 20 tests, the focused interaction/external-turn regression
   files passed with 20 tests, and `bun run gate` passed. For C21,
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/tooling/tests/fixtures.test.ts packages/core/tests/utils/run-process.test.ts packages/extensions/tests/research/research-tool.test.ts packages/sdk/tests/server-lock.test.ts packages/extensions/tests/exec-tools/bash-execution.test.ts`
   passed with 72 tests; `bun run lint`, `bun run typecheck`, and the
-  pre-commit gate passed.
+  pre-commit gate passed. For C20, focused TUI checks
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts --preload ./apps/tui/node_modules/@opentui/solid/scripts/preload.ts apps/tui/tests/client-session-state.test.tsx apps/tui/tests/extension-lifecycle.test.ts apps/tui/tests/composer-render.test.tsx`,
+  `bun run typecheck`, `bun run lint`, and `bun run fmt:check` passed.
 - Evidence:
   `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:203`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:219`,
@@ -361,7 +369,15 @@ column name` / `already exists`) instead of swallowing every ALTER
   `/Users/cvr/Developer/personal/gent/packages/tooling/fixtures/no-with-wrapper-call.invalid.ts:1`,
   `/Users/cvr/Developer/personal/gent/packages/tooling/fixtures/no-with-wrapper-call.valid.ts:1`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.worker.ts:127`,
-  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/message-storage.ts:113`.
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/message-storage.ts:113`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/client/event-hub.ts:14`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/client/event-hub.ts:32`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx:328`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx:557`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx:596`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-command-registry.ts:76`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-command-registry.ts:176`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-controller.ts:453`.
 
 ### S1 - Upstream wide-event outcome and boundary API
 
@@ -584,10 +600,12 @@ already open.
   `/Users/cvr/Developer/personal/gent/packages/core/src/storage/session-operation-storage.ts:93`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-commands.ts:218`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-commands.ts:243`,
-  `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx:114`,
-  `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx:906`,
-  `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-controller.ts:77`,
-  `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-controller.ts:713`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/client/event-hub.ts:14`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx:328`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx:557`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-command-registry.ts:76`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-command-registry.ts:176`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/src/routes/session-controller.ts:453`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-response.ts:176`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-response.ts:361`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/driver-registry.ts:40`,

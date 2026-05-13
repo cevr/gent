@@ -29,6 +29,7 @@ import type { ClientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { useWorkspace } from "../workspace/context"
 import { AgentStatus, type AgentState } from "./agent-state"
+import { createClientEventHub } from "./event-hub"
 
 export interface AgentLifecycleUpdate {
   readonly status?: AgentStatus
@@ -324,19 +325,7 @@ export function ClientProvider(props: ClientProviderProps) {
     runtime.cast(effect)
   }
 
-  // Extension state-change pulse subscribers — registered by widgets
-  // through `ClientTransport.onExtensionStateChanged`. Fires once per
-  // `ExtensionStateChanged` event seen on the active session for each
-  // subscriber. The pulse carries no payload — consumers refetch via
-  // the extension's typed `client.extension.request(...)`.
-  type ExtensionPulseCallback = (s: {
-    sessionId: SessionId
-    branchId: BranchId
-    extensionId: string
-  }) => void
-  const extensionStateChangedSubscribers = new Set<ExtensionPulseCallback>()
-  type SessionEventCallback = (envelope: EventEnvelope) => void
-  const sessionEventSubscribers = new Set<SessionEventCallback>()
+  const eventHub = createClientEventHub(log)
 
   const [sessionState, setSessionState] = createSignal<SessionState>(
     props.initialSession !== undefined
@@ -466,40 +455,6 @@ export function ClientProvider(props: ClientProviderProps) {
     ),
   )
 
-  const notifyExtensionStateChanged = (event: EventEnvelope["event"]): void => {
-    if (event._tag !== "ExtensionStateChanged") return
-    if (extensionStateChangedSubscribers.size === 0) return
-    const pulse = {
-      sessionId: event.sessionId,
-      branchId: event.branchId,
-      extensionId: event.extensionId,
-    }
-    for (const cb of extensionStateChangedSubscribers) {
-      try {
-        cb(pulse)
-      } catch (err) {
-        log.warn("client.extensionStateChanged.subscriber.threw", {
-          extensionId: event.extensionId,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
-    }
-  }
-
-  const notifySessionEvent = (envelope: EventEnvelope): void => {
-    if (sessionEventSubscribers.size === 0) return
-    for (const cb of sessionEventSubscribers) {
-      try {
-        cb(envelope)
-      } catch (err) {
-        log.warn("client.sessionEvent.subscriber.threw", {
-          tag: envelope.event._tag,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
-    }
-  }
-
   const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
     const currentSession = session()
     if (
@@ -601,8 +556,8 @@ export function ClientProvider(props: ClientProviderProps) {
 
   const applySessionEvent = (envelope: EventEnvelope): void => {
     const event = envelope.event
-    notifySessionEvent(envelope)
-    notifyExtensionStateChanged(event)
+    eventHub.notifySessionEvent(envelope)
+    eventHub.notifyExtensionStateChanged(event)
     if (event._tag === "StreamEnded" && event.usage !== undefined) refreshSessionMetrics()
     if (event._tag === "ErrorOccurred") {
       log.error("agent.error", { error: event.error, eventId: envelope.id })
@@ -613,10 +568,10 @@ export function ClientProvider(props: ClientProviderProps) {
 
   const applyBufferedSessionEvent = (envelope: EventEnvelope): void => {
     const event = envelope.event
-    notifySessionEvent(envelope)
+    eventHub.notifySessionEvent(envelope)
     // Snapshot replay owns lifecycle, metadata, and metrics; buffered events
     // may still invalidate extension subscribers, which must stay idempotent.
-    notifyExtensionStateChanged(event)
+    eventHub.notifyExtensionStateChanged(event)
   }
 
   const transportValue: ClientTransportValue = {
@@ -638,18 +593,8 @@ export function ClientProvider(props: ClientProviderProps) {
     },
     connectionIssue,
     setConnectionIssue,
-    onExtensionStateChanged: (cb) => {
-      extensionStateChangedSubscribers.add(cb)
-      return () => {
-        extensionStateChangedSubscribers.delete(cb)
-      }
-    },
-    onSessionEvent: (cb) => {
-      sessionEventSubscribers.add(cb)
-      return () => {
-        sessionEventSubscribers.delete(cb)
-      }
-    },
+    onExtensionStateChanged: eventHub.onExtensionStateChanged,
+    onSessionEvent: eventHub.onSessionEvent,
     applySessionSnapshot,
     applySessionEvent,
     applyBufferedSessionEvent,

@@ -13,7 +13,6 @@ import { useEnv } from "../env/context"
 import { shutdownLog } from "../utils/client-logger"
 import type { ActiveInteraction } from "@gent/core-internal/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids.js"
-import type { ReasoningEffort } from "@gent/core-internal/domain/agent.js"
 import type { Message, SessionItem } from "../components/message-list"
 import {
   ComposerInteractionEvent,
@@ -36,7 +35,6 @@ import {
 } from "../client/index"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { useCommand } from "../command/context"
-import type { Command } from "../command/types"
 import { useRuntime } from "../hooks/use-runtime"
 import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useScopedKeyboard } from "../keyboard/context"
@@ -73,6 +71,7 @@ import {
   defaultActivityDecor,
   pickActivityDecor,
 } from "./session-controller-activity"
+import { createSessionCommandRegistry } from "./session-command-registry"
 
 export interface SessionController {
   client: ClientContextValue
@@ -451,180 +450,19 @@ export function createSessionController(props: {
     dispatchSessionUi(SessionUiEvent.cases.OpenFork.make({}))
   }
 
-  // ── Session builtin commands ──
-  // Routes through the shared `createSession` helper (generates a `requestId`
-  // and updates the client-side session machine), so retry semantics and
-  // dedup match every other create path instead of bypassing them with a
-  // raw RPC call.
-  const newSessionCmd = () => {
-    client.createSession((sessionId, branchId) => {
+  createSessionCommandRegistry({
+    client,
+    command,
+    ext,
+    cast,
+    navigateToCreatedSession: (sessionId, branchId) => {
       router.navigateToSession(sessionId, branchId)
-    })
-  }
-
-  const sessionBuiltins: Command[] = [
-    {
-      id: "session.new",
-      title: "New Session",
-      category: "Session",
-      slash: "new",
-      aliases: ["clear"],
-      slashPriority: 0,
-      onSelect: newSessionCmd,
     },
-    {
-      id: "session.sessions",
-      title: "Open Sessions",
-      category: "Session",
-      slash: "sessions",
-      slashPriority: 0,
-      onSelect: () => command.openPalette(),
-    },
-    {
-      id: "session.branch",
-      title: "Create Branch",
-      category: "Session",
-      slash: "branch",
-      slashPriority: 0,
-      onSelect: () => {
-        cast(
-          client.createBranch().pipe(
-            Effect.asVoid,
-            Effect.catchEager((error) =>
-              Effect.sync(() => {
-                client.setError(formatError(error))
-              }),
-            ),
-          ),
-        )
-      },
-    },
-    {
-      id: "session.tree",
-      title: "Browse Branch Tree",
-      category: "Session",
-      slash: "tree",
-      slashPriority: 0,
-      onSelect: openSessionTree,
-    },
-    {
-      id: "session.fork",
-      title: "Fork from Message",
-      category: "Session",
-      slash: "fork",
-      slashPriority: 0,
-      onSelect: openForkPicker,
-    },
-    {
-      id: "session.think",
-      title: "Set Reasoning Level",
-      category: "Session",
-      slash: "think",
-      slashPriority: 0,
-      onSelect: () => {
-        client.setError("Usage: /think <off|low|medium|high|xhigh>")
-      },
-      onSlash: (args) => {
-        const level = args.trim().toLowerCase()
-        const validLevels = ["off", "low", "medium", "high", "xhigh"]
-        if (level === "" || !validLevels.includes(level)) {
-          client.setError(`Usage: /think <${validLevels.join("|")}>`)
-          return
-        }
-        cast(
-          client
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
-            .updateSessionReasoningLevel(level === "off" ? undefined : (level as ReasoningEffort))
-            .pipe(
-              Effect.catchEager((error) =>
-                Effect.sync(() => {
-                  client.setError(formatError(error))
-                }),
-              ),
-            ),
-        )
-      },
-    },
-    {
-      id: "session.permissions",
-      title: "View/Edit Permissions",
-      category: "Session",
-      slash: "permissions",
-      slashPriority: 0,
-      onSelect: () => dispatchSessionUi(SessionUiEvent.cases.OpenPermissions.make({})),
-    },
-    {
-      id: "session.auth",
-      title: "Manage API Keys",
-      category: "Session",
-      slash: "auth",
-      slashPriority: 0,
-      onSelect: () => dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: false })),
-    },
-  ]
-
-  // Register session builtins + extension commands, and derive / autocomplete
-  {
-    const unsubBuiltins = command.register(sessionBuiltins)
-    let unsubExtCommands: (() => void) | undefined
-    createEffect(() => {
-      unsubExtCommands?.()
-      const cmds = ext.commands()
-      if (cmds.length > 0) {
-        unsubExtCommands = command.register([...cmds])
-      }
-    })
-
-    // Derive / autocomplete from the full command registry
-    createEffect(() => {
-      const allCommands = command.commands()
-      ext.setDynamicAutocomplete([
-        {
-          prefix: "/",
-          title: "Commands",
-          items: (filter: string) => {
-            const lowerFilter = filter.toLowerCase()
-            const hasFilter = lowerFilter.length > 0
-            const items: Array<{ id: string; label: string; description?: string }> = []
-            for (const c of allCommands) {
-              if (c.slash === undefined) continue
-              // Primary name always shown if it matches (or no filter)
-              if (
-                !hasFilter ||
-                c.slash.toLowerCase().includes(lowerFilter) ||
-                c.title.toLowerCase().includes(lowerFilter)
-              ) {
-                items.push({
-                  id: c.slash,
-                  label: `/${c.slash}`,
-                  description: c.description ?? c.title,
-                })
-              }
-              // Aliases only shown when filter matches them specifically
-              if (hasFilter) {
-                for (const alias of c.aliases ?? []) {
-                  if (alias.toLowerCase().includes(lowerFilter)) {
-                    items.push({
-                      id: alias,
-                      label: `/${alias}`,
-                      description: c.description ?? c.title,
-                    })
-                  }
-                }
-              }
-            }
-            return items
-          },
-        },
-      ])
-    })
-
-    onCleanup(() => {
-      unsubBuiltins()
-      unsubExtCommands?.()
-      ext.setDynamicAutocomplete([])
-    })
-  }
+    openSessionTree,
+    openForkPicker,
+    openPermissions: () => dispatchSessionUi(SessionUiEvent.cases.OpenPermissions.make({})),
+    openAuth: () => dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: false })),
+  })
 
   const onRestoreQueue = () => {
     cast(
