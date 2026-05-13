@@ -33,6 +33,9 @@
  * - no-sleep: bans `.sleep(...)` calls in test files. Opt out per-site with
  *   `// gent/no-sleep: allow <reason>` (retries, debounce probes, real-clock
  *   timing tests, deliberate fiber-pacing pauses in PTY/server fixtures).
+ * - no-with-wrapper-call: bans `withX(otherCall(...))` and
+ *   `withX(...)(otherCall(...))` wrapper-call style; pipe the inner Effect/value
+ *   through the adapter instead.
  */
 
 import type { Plugin } from "#oxlint/plugins"
@@ -199,6 +202,50 @@ const runPromiseMethodName = (node: AstNode): string | undefined => {
 }
 
 const isRunPromiseReference = (node: AstNode): boolean => runPromiseMethodName(node) !== undefined
+
+const wrapperFunctionName = (node: AstNode | undefined): string | undefined => {
+  if (node === undefined) return undefined
+  if (node.type === "Identifier") {
+    const name = getStringField(node, "name")
+    return name !== undefined && /^with[A-Z]/.test(name) ? name : undefined
+  }
+  if (node.type === "MemberExpression") {
+    const prop = getNodeField(node, "property")
+    if (prop?.type !== "Identifier") return undefined
+    const name = getStringField(prop, "name")
+    return name !== undefined && /^with[A-Z]/.test(name) ? name : undefined
+  }
+  return undefined
+}
+
+const callExpressionArgs = (node: AstNode): ReadonlyArray<AstNode> => {
+  const args = node.arguments
+  if (!Array.isArray(args)) return []
+  return args.filter(isAstNode)
+}
+
+const unaryCallExpressionArg = (node: AstNode): AstNode | undefined => {
+  const args = callExpressionArgs(node)
+  if (args.length !== 1) return undefined
+  const [arg] = args
+  return arg?.type === "CallExpression" ? arg : undefined
+}
+
+const withWrapperCallName = (node: AstNode): string | undefined => {
+  if (node.type !== "CallExpression") return undefined
+  const callee = getNodeField(node, "callee")
+  const directName = wrapperFunctionName(callee)
+  // `withWideEvent(boundaryFactory(...))` is an adapter factory used inside
+  // `.pipe(...)`, not a wrapper around the Effect being transformed.
+  if (directName !== undefined && directName !== "withWideEvent" && unaryCallExpressionArg(node)) {
+    return directName
+  }
+
+  if (callee?.type !== "CallExpression") return undefined
+  const higherOrderName = wrapperFunctionName(getNodeField(callee, "callee"))
+  if (higherOrderName !== undefined && unaryCallExpressionArg(node)) return higherOrderName
+  return undefined
+}
 
 const isPromiseConstructor = (node: AstNode): boolean => {
   if (node.type !== "NewExpression") return false
@@ -509,6 +556,28 @@ const plugin: Plugin = {
 
             context.report({
               message: `Don't pass error as second arg to \`Effect.${node.callee.property.name}\`. Use \`.pipe(Effect.annotateLogs({ error: String(e) }))\` instead.`,
+              node,
+            })
+          },
+        }
+      },
+    },
+
+    /**
+     * Flags `withX(otherCall(...))` and `withX(...)(otherCall(...))`.
+     *
+     * The wrapper form hides the value/function being transformed behind the
+     * adapter. Prefer `otherCall(...).pipe(withX)` or `otherCall(...).pipe(withX(...))`
+     * so the transformation order reads left-to-right.
+     */
+    "no-with-wrapper-call": {
+      create(context) {
+        return {
+          CallExpression(node) {
+            const name = withWrapperCallName(node)
+            if (name === undefined) return
+            context.report({
+              message: `Avoid \`${name}(...innerCall)\` wrapper style. Pipe the inner call through \`${name}\` instead.`,
               node,
             })
           },

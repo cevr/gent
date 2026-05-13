@@ -186,6 +186,13 @@ const CASES: ReadonlyArray<RuleCase> = [
     // 4 unguarded sleeps + 1 malformed-carveout sleep
     expectedCount: 5,
   },
+  {
+    rule: "gent/no-with-wrapper-call",
+    invalid: "no-with-wrapper-call.invalid.ts",
+    valid: "no-with-wrapper-call.valid.ts",
+    // Direct withX(innerCall()) + higher-order withX(...)(innerCall())
+    expectedCount: 2,
+  },
 ]
 
 const assertProcessed = (run: OxlintRun, fixtureFile: string): void => {

@@ -248,12 +248,20 @@ context adapter`).
   helpers now catch only known already-applied SQLite cases (`duplicate
 column name` / `already exists`) instead of swallowing every ALTER
   failure.
+- **C21 wrapper-call guardrail complete**: `withX(innerCall(...))` and
+  `withX(...)(innerCall(...))` now fail custom lint, and existing
+  pipeable call sites were migrated to `.pipe(...)`. Non-pipe adapter
+  factories such as `withWideEvent(boundaryFactory(...))` stay allowed.
 - **C20/C21 still open**: TUI context/controller cohesion and the
-  remaining trace/composable-method cleanup have not landed yet.
+  remaining non-wrapper trace/composable-method cleanup have not landed
+  yet.
 - Verification:
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/storage/sqlite-session-storage.test.ts`
   passed with 20 tests, the focused interaction/external-turn regression
-  files passed with 20 tests, and `bun run gate` passed.
+  files passed with 20 tests, and `bun run gate` passed. For C21,
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/tooling/tests/fixtures.test.ts packages/core/tests/utils/run-process.test.ts packages/extensions/tests/research/research-tool.test.ts packages/sdk/tests/server-lock.test.ts packages/extensions/tests/exec-tools/bash-execution.test.ts`
+  passed with 72 tests; `bun run lint`, `bun run typecheck`, and the
+  pre-commit gate passed.
 - Evidence:
   `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:203`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:219`,
@@ -265,7 +273,17 @@ column name` / `already exists`) instead of swallowing every ALTER
   `/Users/cvr/Developer/personal/gent/packages/core/src/storage/session-operation-storage.ts:138`,
   `/Users/cvr/Developer/personal/gent/packages/core/tests/storage/sqlite-session-storage.test.ts:202`,
   `/Users/cvr/Developer/personal/gent/packages/core/tests/storage/sqlite-session-storage.test.ts:268`,
-  `/Users/cvr/Developer/personal/gent/packages/core/tests/storage/sqlite-session-storage.test.ts:302`.
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/storage/sqlite-session-storage.test.ts:302`,
+  `/Users/cvr/Developer/personal/gent/lint/no-direct-env.ts:206`,
+  `/Users/cvr/Developer/personal/gent/lint/no-direct-env.ts:234`,
+  `/Users/cvr/Developer/personal/gent/lint/no-direct-env.ts:573`,
+  `/Users/cvr/Developer/personal/gent/.oxlintrc.json:41`,
+  `/Users/cvr/Developer/personal/gent/packages/tooling/fixtures/.oxlintrc.json:24`,
+  `/Users/cvr/Developer/personal/gent/packages/tooling/tests/fixtures.test.ts:190`,
+  `/Users/cvr/Developer/personal/gent/packages/tooling/fixtures/no-with-wrapper-call.invalid.ts:1`,
+  `/Users/cvr/Developer/personal/gent/packages/tooling/fixtures/no-with-wrapper-call.valid.ts:1`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.worker.ts:127`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/message-storage.ts:113`.
 
 ### S1 - Upstream wide-event outcome and boundary API
 

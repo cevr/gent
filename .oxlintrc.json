@@ -37,6 +37,8 @@
     "gent/no-hand-rolled-tagged-union": "error",
     // Custom — .sleep(...) banned in tests; carve out with `// gent/no-sleep: allow <reason>`
     "gent/no-sleep": "error",
+    // Custom — no `withX(innerCall(...))`; pipe the inner call through the adapter
+    "gent/no-with-wrapper-call": "error",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
     // TypeScript - flag unsafe type assertions (as X)
