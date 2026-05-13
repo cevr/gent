@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { ExtensionId, request } from "@gent/core/extensions/api"
+import { defineRequests, ExtensionId, request } from "@gent/core/extensions/api"
 import { SkillLevel, Skills } from "./skills.js"
 
 export const SKILLS_EXTENSION_ID = ExtensionId.make("@gent/skills")
@@ -13,10 +13,9 @@ export const SkillEntry = Schema.Struct({
 })
 export type SkillEntry = typeof SkillEntry.Type
 
-export const SkillsRpc = {
+export const SkillsRpc = defineRequests(SKILLS_EXTENSION_ID, {
   ListSkills: request({
     id: "skills-list",
-    extensionId: SKILLS_EXTENSION_ID,
     description: "List loaded skills",
     input: Schema.Struct({}),
     output: Schema.Array(SkillEntry),
@@ -27,7 +26,6 @@ export const SkillsRpc = {
   }),
   GetSkillContent: request({
     id: "skills-get-content",
-    extensionId: SKILLS_EXTENSION_ID,
     description: "Read one loaded skill by name",
     input: Schema.Struct({ name: Schema.String }),
     output: Schema.NullOr(SkillEntry),
@@ -36,4 +34,4 @@ export const SkillsRpc = {
       return (yield* skills.get(name)) ?? null
     }),
   }),
-}
+})

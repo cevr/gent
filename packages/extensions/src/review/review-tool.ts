@@ -381,7 +381,6 @@ export const ReviewExtension = defineExtension({
   requests: [
     request({
       id: "review-command",
-      extensionId: REVIEW_EXTENSION_ID,
       description: "Run adversarial dual-model code review",
       slash: {
         trigger: "review",

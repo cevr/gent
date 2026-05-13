@@ -253,8 +253,17 @@ context adapter`).
   `ExtensionState<Value>` service helper that lowers directly to the
   existing Resource primitive. Stateful extension examples now yield a
   scoped service Tag instead of teaching module-scope mutable state.
-- **C14-C16 still open**: loop interception, dynamic registration, and
-  request/action identity simplification have not landed yet.
+- **C16 complete for request identity**: `request(...)` no longer
+  requires authors to repeat `extensionId`; `defineExtension({ id })`
+  binds request refs to the enclosing extension during setup while
+  preserving stable exported refs captured before setup. Client-only
+  protocol modules that need refs before server setup use
+  `defineRequests(extensionId, requestMap)`, so the id is still written
+  once per request group rather than once per request.
+- **C14-C15 still open**: loop interception and dynamic registration
+  have not landed yet. The simple UI action half of C16 remains folded
+  into C15's dynamic command/action design because there is no exported
+  action primitive today.
 - Verification:
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/tooling/tests/core-public-exports.test.ts packages/sdk/tests/public-surface.test.ts`
   passed with 10 tests; `bun run lint` and `bun run typecheck` passed.
@@ -264,7 +273,25 @@ context adapter`).
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/resource-host.test.ts`
   passed with 10 tests; `bun run typecheck` passed after adding
   `defineStateResource`.
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/domain/capability-ref.test.ts packages/core/tests/extensions/define-extension.test.ts packages/extensions/tests/auto/auto-rpc.test.ts packages/extensions/tests/artifacts/artifacts.test.ts packages/extensions/tests/todo/todo-rpc.test.ts packages/extensions/tests/executor/executor-rpc.test.ts packages/extensions/tests/skills/skills-rpc.test.ts`
+  passed with 43 tests;
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts --preload ./apps/tui/node_modules/@opentui/solid/scripts/preload.ts apps/tui/tests/extension-lifecycle.test.ts`
+  passed with 11 tests; `bun run typecheck`, `bun run lint`, and
+  `bun run fmt:check` passed after request identity binding.
 - Evidence:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/request.ts:37`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/request.ts:66`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/request.ts:122`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/request.ts:155`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/request.ts:165`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts:344`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/domain/capability-ref.test.ts:111`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/define-extension.test.ts:207`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/auto/protocol.ts:36`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo/requests.ts:228`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md:196`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md:219`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md:221`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/resource.ts:140`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/resource.ts:160`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/contribution.ts:108`,

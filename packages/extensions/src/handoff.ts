@@ -18,7 +18,6 @@ const EXTENSION_ID = ExtensionId.make("@gent/handoff")
 
 const HandoffCommand = request({
   id: "handoff-command",
-  extensionId: EXTENSION_ID,
   description: "Distill context into new session",
   slash: {
     trigger: "handoff",

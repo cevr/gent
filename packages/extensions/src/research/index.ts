@@ -38,7 +38,6 @@ export const ResearchExtension = defineExtension({
   requests: [
     request({
       id: "research-command",
-      extensionId: RESEARCH_EXTENSION_ID,
       description: "Research external repositories",
       slash: {
         trigger: "research",

@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test"
 import { Context, Effect, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
-import { getToolId, ref, request, tool } from "@gent/core/extensions/api"
+import { defineRequests, getToolId, ref, request, tool } from "@gent/core/extensions/api"
 import { getToolMetadata, isToolCapability } from "@gent/core-internal/domain/capability/tool"
 import type { RpcId, ToolId } from "@gent/core-internal/domain/ids"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
@@ -106,6 +106,20 @@ describe("ref(capability)", () => {
     // behavior at the dispatcher boundary.
     expect(r.input).toBe(inputSchema)
     expect(r.output).toBe(outputSchema)
+  })
+
+  test("defineRequests binds exported protocol refs without per-request extension ids", () => {
+    const rpc = defineRequests(ExtensionId.make("protocol-ext"), {
+      Read: request({
+        id: "protocol.read",
+        input: Schema.Struct({ q: Schema.String }),
+        output: Schema.String,
+        execute: ({ q }) => Effect.succeed(q),
+      }),
+    })
+
+    expect(String(ref(rpc.Read).extensionId)).toBe("protocol-ext")
+    expect(String(ref(rpc.Read).capabilityId)).toBe("protocol.read")
   })
 
   test("ref accessor only accepts request capabilities", () => {

@@ -31,7 +31,6 @@ const auditPrompt = (input: string) =>
 
 const PlanCommand = request({
   id: "plan-command",
-  extensionId: PLAN_EXTENSION_ID,
   description: "Create an adversarial implementation plan",
   slash: {
     trigger: "plan",
@@ -60,7 +59,6 @@ const PlanCommand = request({
 
 const AuditCommand = request({
   id: "audit-command",
-  extensionId: PLAN_EXTENSION_ID,
   description: "Detect, audit, fix code issues",
   slash: {
     trigger: "audit",

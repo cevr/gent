@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { ExtensionContext, request } from "@gent/core/extensions/api"
+import { defineRequests, ExtensionContext, request } from "@gent/core/extensions/api"
 import { ExecutorRead, ExecutorWrite } from "./controller.js"
 import { EXECUTOR_EXTENSION_ID } from "./domain.js"
 
@@ -15,10 +15,9 @@ export const ExecutorSnapshotReply = Schema.Struct({
 })
 export type ExecutorSnapshotReply = typeof ExecutorSnapshotReply.Type
 
-export const ExecutorRpc = {
+export const ExecutorRpc = defineRequests(EXECUTOR_EXTENSION_ID, {
   Start: request({
     id: "executor-start",
-    extensionId: EXECUTOR_EXTENSION_ID,
     slash: {
       name: "Executor: Start",
       description: "Connect to the configured Executor endpoint.",
@@ -34,7 +33,6 @@ export const ExecutorRpc = {
   }),
   Stop: request({
     id: "executor-stop",
-    extensionId: EXECUTOR_EXTENSION_ID,
     slash: { name: "Executor: Stop", description: "Disconnect from the Executor sidecar." },
     description: "Disconnect from the Executor sidecar.",
     input: Schema.String,
@@ -46,7 +44,6 @@ export const ExecutorRpc = {
   }),
   GetSnapshot: request({
     id: "executor.snapshot",
-    extensionId: EXECUTOR_EXTENSION_ID,
     input: Schema.Struct({}),
     output: ExecutorSnapshotReply,
     execute: Effect.fn("ExecutorRpc.GetSnapshot")(function* () {
@@ -54,4 +51,4 @@ export const ExecutorRpc = {
       return yield* executor.snapshot()
     }),
   }),
-}
+})

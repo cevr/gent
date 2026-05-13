@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { CapabilityError, ExtensionId, request } from "@gent/core/extensions/api"
+import { CapabilityError, defineRequests, ExtensionId, request } from "@gent/core/extensions/api"
 import { AutoRead, AutoWrite } from "./controller.js"
 
 export const AUTO_EXTENSION_ID = ExtensionId.make("@gent/auto")
@@ -32,10 +32,9 @@ export const AutoSnapshotReply = Schema.Struct({
 })
 export type AutoSnapshotReply = typeof AutoSnapshotReply.Type
 
-export const AutoRpc = {
+export const AutoRpc = defineRequests(AUTO_EXTENSION_ID, {
   StartAuto: request({
     id: "auto.start",
-    extensionId: AUTO_EXTENSION_ID,
     input: Schema.Struct({
       goal: Schema.String,
       maxIterations: Schema.optional(Schema.Number),
@@ -49,7 +48,6 @@ export const AutoRpc = {
   }),
   RequestHandoff: request({
     id: "auto.request-handoff",
-    extensionId: AUTO_EXTENSION_ID,
     input: Schema.Struct({ content: Schema.String }),
     output: Schema.Void,
     execute: (input) =>
@@ -60,7 +58,6 @@ export const AutoRpc = {
   }),
   CancelAuto: request({
     id: "auto.cancel",
-    extensionId: AUTO_EXTENSION_ID,
     input: Schema.Struct({}),
     output: Schema.Void,
     execute: () =>
@@ -71,7 +68,6 @@ export const AutoRpc = {
   }),
   ToggleAuto: request({
     id: "auto.toggle",
-    extensionId: AUTO_EXTENSION_ID,
     input: Schema.Struct({
       goal: Schema.optional(Schema.String),
       maxIterations: Schema.optional(Schema.Number),
@@ -85,7 +81,6 @@ export const AutoRpc = {
   }),
   IsActive: request({
     id: "auto.is-active",
-    extensionId: AUTO_EXTENSION_ID,
     input: Schema.Struct({}),
     output: Schema.Boolean,
     execute: () =>
@@ -99,7 +94,6 @@ export const AutoRpc = {
    *  expose state through typed requests, not the UI snapshot pipe. */
   GetSnapshot: request({
     id: "auto.snapshot",
-    extensionId: AUTO_EXTENSION_ID,
     input: Schema.Struct({}),
     output: AutoSnapshotReply,
     execute: () =>
@@ -108,4 +102,4 @@ export const AutoRpc = {
         return yield* auto.snapshot()
       }).pipe(Effect.mapError((cause) => capabilityError("auto.snapshot", cause))),
   }),
-}
+})

@@ -1,7 +1,7 @@
 /**
  * `request(...)` — typed factory for extension-to-extension Capabilities.
  *
- * Authors call `request({ id, extensionId, input, output, execute })`.
+ * Authors call `request({ id, input, output, execute })`.
  *
  * Extension registries dispatch by factory-origin metadata; authors never
  * write an audience array or read/write intent marker.
@@ -14,7 +14,7 @@
  */
 
 import { type Effect, type Schema } from "effect"
-import { RpcId, type ExtensionId } from "../ids.js"
+import { ExtensionId, RpcId, type ExtensionId as ExtensionIdType } from "../ids.js"
 import {
   type RequestCapability as RequestCapabilityShape,
   type ErasedCapabilityEffect,
@@ -30,8 +30,17 @@ import type { PromptSection } from "../prompt.js"
  * leaves (`tool`) cannot be slotted into `requests:`.
  */
 const REQUEST_REF: unique symbol = Symbol("@gent/core/request/ref")
+const REQUEST_REF_STATE: unique symbol = Symbol("@gent/core/request/ref-state")
 const RequestCapabilityBrand: unique symbol = Symbol("@gent/core/RequestCapability")
 declare const RequestCapabilityType: unique symbol
+
+interface RequestRefState<Input = unknown, Output = unknown> {
+  extensionId: ExtensionIdType | undefined
+  readonly capabilityId: RpcId
+  readonly input: Schema.Schema<Input>
+  readonly output: Schema.Schema<Output>
+}
+
 export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabilityShape & {
   readonly [RequestCapabilityBrand]: true
   readonly [RequestCapabilityType]?: {
@@ -47,15 +56,16 @@ export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabi
   readonly output: Schema.Schema<Output>
   readonly effect: ErasedCapabilityEffect<CapabilityError>
   readonly [REQUEST_REF]: CapabilityRef<Input, Output>
+  readonly [REQUEST_REF_STATE]: RequestRefState<Input, Output>
 }
 
 /** Author-facing input to `request({...})`. */
 export interface RequestInput<Input = unknown, Output = unknown, R = never> {
   /** Stable id (capability-local). Used for routing. */
   readonly id: string
-  /** Owning extension id. Embedded into the typed `CapabilityRef` attached
-   *  to the returned capability so callers do not re-state it. */
-  readonly extensionId: ExtensionId
+  /** Optional legacy override. Omit inside `defineExtension({ id, requests })`;
+   *  the extension factory binds refs to the enclosing extension id. */
+  readonly extensionId?: ExtensionIdType
   /** Schema for validating `input` at the boundary. */
   readonly input: Schema.Schema<Input>
   /** Schema for validating `output` at the boundary. */
@@ -88,7 +98,7 @@ export function request<Input, Output, R = never>(
 ): RequestCapability<Input, Output>
 export function request(input: {
   readonly id: string
-  readonly extensionId: ExtensionId
+  readonly extensionId?: ExtensionIdType
   readonly input: Schema.Schema<unknown>
   readonly output: Schema.Schema<unknown>
   readonly prompt?: PromptSection
@@ -97,6 +107,12 @@ export function request(input: {
   readonly execute: (input: unknown) => Effect.Effect<unknown, CapabilityError, unknown>
 }): RequestCapability {
   const rpcId = RpcId.make(input.id)
+  const refState: RequestRefState = {
+    extensionId: input.extensionId,
+    capabilityId: rpcId,
+    input: input.input,
+    output: input.output,
+  }
   // CapabilityRef requires `Schema.Decoder<X, never>` for sync decoding at the
   // dispatcher boundary. Author-supplied schemas always satisfy this — the
   // overload signatures (above) constrain Input/Output to `Schema.Schema<X>`
@@ -104,10 +120,17 @@ export function request(input: {
   // signature only; type-safety is restored by the public overloads.
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- implementation-signature widening; overload signatures preserve typed ref
   const refValue = {
-    extensionId: input.extensionId,
-    capabilityId: rpcId,
-    input: input.input,
-    output: input.output,
+    get extensionId() {
+      if (refState.extensionId === undefined) {
+        throw new Error(
+          `request "${String(rpcId)}" is not bound to an extension; include it in defineExtension({ id, requests }) before reading ref(...)`,
+        )
+      }
+      return refState.extensionId
+    },
+    capabilityId: refState.capabilityId,
+    input: refState.input,
+    output: refState.output,
   } as unknown as CapabilityRef
   const capability: RequestCapabilityShape = {
     _tag: "request",
@@ -125,7 +148,29 @@ export function request(input: {
   return Object.assign(capability, {
     [RequestCapabilityBrand]: true as const,
     [REQUEST_REF]: refValue,
+    [REQUEST_REF_STATE]: refState,
   }) as unknown as RequestCapability
+}
+
+export const bindRequestCapabilityExtension = <Input, Output>(
+  capability: RequestCapability<Input, Output>,
+  extensionId: ExtensionIdType,
+): RequestCapability<Input, Output> => {
+  capability[REQUEST_REF_STATE].extensionId = extensionId
+  return capability
+}
+
+type RequestCapabilityMap = Record<string, RequestCapability>
+
+export const defineRequests = <T extends RequestCapabilityMap>(
+  extensionId: ExtensionIdType | string,
+  requests: T,
+): T => {
+  const boundExtensionId = ExtensionId.make(extensionId)
+  for (const capability of Object.values(requests)) {
+    bindRequestCapabilityExtension(capability, boundExtensionId)
+  }
+  return requests
 }
 
 export const ref = <Input, Output>(

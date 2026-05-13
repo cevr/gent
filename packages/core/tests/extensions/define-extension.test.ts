@@ -17,6 +17,7 @@ import {
   ExtensionSetupContext,
   getToolId,
   type PublicExtensionSetupContext,
+  ref,
   request,
   tool,
   type GentExtension,
@@ -201,6 +202,27 @@ describe("defineExtension", () => {
       expect("runProcess" in (captured?.host ?? {})).toBe(false)
       expect(captured?.Process.parentEnv).toBeDefined()
       expect(captured?.Process.runProcess).toBeDefined()
+    }))
+
+  test("requests derive their ref extension id from defineExtension", () =>
+    Effect.gen(function* () {
+      const capability = request({
+        id: "derived-request",
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.String,
+        execute: (input) => Effect.succeed(input.value),
+      })
+      const capabilityRef = ref(capability)
+      expect(() => capabilityRef.extensionId).toThrow("not bound to an extension")
+
+      const ext = defineExtension({
+        id: "derived-extension",
+        requests: [capability],
+      })
+      yield* setupOf(ext)
+
+      expect(String(capabilityRef.extensionId)).toBe("derived-extension")
+      expect(String(capabilityRef.capabilityId)).toBe("derived-request")
     }))
 
   test("defineExtension result wires through ExtensionRegistry + explicit prompt slots", () =>

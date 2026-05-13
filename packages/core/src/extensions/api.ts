@@ -49,6 +49,7 @@ import type { ExtensionSetupContext } from "../domain/extension-setup-context.js
 import type { ExtensionContributions, ExtensionReactions } from "../domain/contribution.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import type { RequestCapability } from "../domain/capability/request.js"
+import { bindRequestCapabilityExtension } from "../domain/capability/request.js"
 import type { ToolCapability } from "../domain/capability/tool.js"
 import {
   validateExtensionPackageShape,
@@ -162,6 +163,7 @@ export {
   type ToolCapability,
 } from "../domain/capability/tool.js"
 export {
+  defineRequests,
   ref,
   request,
   type RequestInput,
@@ -340,7 +342,9 @@ export function defineExtension<R>(
       const resources = yield* resolveField(manifest, "resources", params.resources)
       const scheduledJobs = yield* resolveField(manifest, "scheduledJobs", params.scheduledJobs)
       const tools = yield* resolveField(manifest, "tools", params.tools)
-      const requests = yield* resolveField(manifest, "requests", params.requests)
+      const requests = (yield* resolveField(manifest, "requests", params.requests)).map((cap) =>
+        bindRequestCapabilityExtension(cap, manifest.id),
+      )
       const agents = yield* resolveField(manifest, "agents", params.agents)
       const modelDrivers = yield* resolveField(manifest, "modelDrivers", params.modelDrivers)
       const externalDrivers = yield* resolveField(

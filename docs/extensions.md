@@ -190,14 +190,11 @@ extension-owned service.
 ### request — extension-to-extension RPC
 
 ```ts
-import { defineExtension, ExtensionId, request } from "@gent/core/extensions/api"
+import { defineExtension, request } from "@gent/core/extensions/api"
 import { Effect, Schema } from "effect"
-
-const StatusExtensionId = ExtensionId.make("status-ext")
 
 const GetStatus = request({
   id: "get-status",
-  extensionId: StatusExtensionId,
   input: Schema.Struct({ key: Schema.String }),
   output: Schema.String,
   execute: (input) => Effect.succeed(`status for ${input.key}`),
@@ -205,14 +202,13 @@ const GetStatus = request({
 
 const SetStatus = request({
   id: "set-status",
-  extensionId: StatusExtensionId,
   input: Schema.Struct({ key: Schema.String, value: Schema.String }),
   output: Schema.Void,
   execute: (input) => Effect.succeed(void 0),
 })
 
 export default defineExtension({
-  id: String(StatusExtensionId),
+  id: "status-ext",
   requests: [GetStatus, SetStatus],
 })
 ```
@@ -220,7 +216,11 @@ export default defineExtension({
 Request handlers receive params only. Host authority comes from
 `yield* ExtensionContext`, and extension-owned services are ordinary Effect
 services; authors import the smallest service Tag they need rather than
-declaring capability labels.
+declaring capability labels. `request(...)` refs derive their `extensionId`
+from the enclosing `defineExtension({ id })`, so the extension id is written
+once. Client-only protocol modules that export refs before server setup can use
+`defineRequests(extensionId, { ...requests })` to bind a whole request map with
+one id.
 
 ## Reactions (turn-time derivation)
 

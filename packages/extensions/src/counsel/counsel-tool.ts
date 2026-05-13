@@ -122,7 +122,6 @@ export const CounselExtension = defineExtension({
   requests: [
     request({
       id: "counsel-command",
-      extensionId: COUNSEL_EXTENSION_ID,
       description: "Get a cross-vendor second opinion",
       slash: {
         trigger: "counsel",
