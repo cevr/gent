@@ -108,10 +108,9 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
           Effect.gen(function* () {
             const toolRunner = yield* ToolRunner
             const toolCallId = ToolCallId.make(yield* Random.nextUUIDv4)
-            const toolHostCtx = { ...hostCtx, toolCallId }
             return yield* toolRunner
-              .run({ toolCallId, toolName, input: args }, toolHostCtx)
-              .pipe(Effect.orDie, provideCurrentHostCtx(toolHostCtx))
+              .run({ toolCallId, toolName, input: args })
+              .pipe(Effect.orDie, provideCurrentHostCtx(hostCtx))
           }),
       }),
       formatStreamError: (streamError: unknown) =>

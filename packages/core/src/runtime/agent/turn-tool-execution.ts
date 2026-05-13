@@ -33,20 +33,17 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
     params.toolCalls,
     (toolCall) =>
       Effect.gen(function* () {
-        const ctx = {
+        const toolHostCtx = {
           ...hostCtx,
           agentName: params.currentTurnAgent,
           toolCallId: ToolCallId.make(toolCall.id),
         }
         return yield* toolRunner
-          .run(
-            {
-              toolCallId: ToolCallId.make(toolCall.id),
-              toolName: toolCall.name,
-              input: toolCall.params,
-            },
-            ctx,
-          )
+          .run({
+            toolCallId: ToolCallId.make(toolCall.id),
+            toolName: toolCall.name,
+            input: toolCall.params,
+          })
           .pipe(
             Effect.mapError(
               (e) =>
@@ -55,7 +52,7 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
                   toolCallId: ToolCallId.make(toolCall.id),
                 }),
             ),
-            provideCurrentHostCtx(ctx),
+            provideCurrentHostCtx(toolHostCtx),
           )
       }),
     { concurrency: Math.max(1, TOOL_CONCURRENCY) },

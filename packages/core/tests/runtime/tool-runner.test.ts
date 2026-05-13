@@ -11,6 +11,7 @@ import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import type { AgentEvent, ToolCallStarted } from "../../src/domain/event"
 import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import { provideCurrentHostCtx } from "../../src/runtime/agent/current-extension-host-context"
 import {
   BranchId,
   ExtensionId,
@@ -79,15 +80,19 @@ describe("tool execution", () => {
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
-        return yield* runner.run(
-          { toolCallId: ToolCallId.make("tc1"), toolName: "echo", input: { message: "hello" } },
-          testToolContext({
-            sessionId: SessionId.make("s"),
-            branchId: BranchId.make("b"),
-            toolCallId: ToolCallId.make("tc1"),
-            agentName: AgentName.make("cowork"),
-          }),
-        )
+        const toolCallId = ToolCallId.make("tc1")
+        return yield* runner
+          .run({ toolCallId, toolName: "echo", input: { message: "hello" } })
+          .pipe(
+            provideCurrentHostCtx(
+              testToolContext({
+                sessionId: SessionId.make("s"),
+                branchId: BranchId.make("b"),
+                toolCallId,
+                agentName: AgentName.make("cowork"),
+              }),
+            ),
+          )
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ echoed: "hello" })
@@ -144,16 +149,16 @@ describe("tool execution", () => {
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
+        const toolCallId = ToolCallId.make("tc-probe")
         const ctx = testToolContext({
           sessionId: SessionId.make("s"),
           branchId: BranchId.make("b"),
-          toolCallId: ToolCallId.make("tc-probe"),
+          toolCallId,
           agentName: AgentName.make("cowork"),
         })
-        return yield* runner.run(
-          { toolCallId: ToolCallId.make("tc-probe"), toolName: "probe", input: {} },
-          ctx,
-        )
+        return yield* runner
+          .run({ toolCallId, toolName: "probe", input: {} })
+          .pipe(provideCurrentHostCtx(ctx))
       }).pipe(Effect.provide(layer))
 
       expect(result.isFailure).toBe(false)
@@ -196,14 +201,16 @@ describe("tool execution", () => {
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
-        return yield* runner.run(
-          { toolCallId: ToolCallId.make("tc1"), toolName: "fail", input: {} },
-          testToolContext({
-            sessionId: SessionId.make("s"),
-            branchId: BranchId.make("b"),
-            toolCallId: ToolCallId.make("tc1"),
-            agentName: AgentName.make("cowork"),
-          }),
+        const toolCallId = ToolCallId.make("tc1")
+        return yield* runner.run({ toolCallId, toolName: "fail", input: {} }).pipe(
+          provideCurrentHostCtx(
+            testToolContext({
+              sessionId: SessionId.make("s"),
+              branchId: BranchId.make("b"),
+              toolCallId,
+              agentName: AgentName.make("cowork"),
+            }),
+          ),
         )
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(true)
@@ -244,14 +251,16 @@ describe("tool execution", () => {
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
-        return yield* runner.run(
-          { toolCallId: ToolCallId.make("tc1"), toolName: "strict", input: { path: 42 } },
-          testToolContext({
-            sessionId: SessionId.make("s"),
-            branchId: BranchId.make("b"),
-            toolCallId: ToolCallId.make("tc1"),
-            agentName: AgentName.make("cowork"),
-          }),
+        const toolCallId = ToolCallId.make("tc1")
+        return yield* runner.run({ toolCallId, toolName: "strict", input: { path: 42 } }).pipe(
+          provideCurrentHostCtx(
+            testToolContext({
+              sessionId: SessionId.make("s"),
+              branchId: BranchId.make("b"),
+              toolCallId,
+              agentName: AgentName.make("cowork"),
+            }),
+          ),
         )
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(true)
@@ -303,14 +312,16 @@ describe("tool execution", () => {
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
-        return yield* runner.run(
-          { toolCallId: ToolCallId.make("tc-output"), toolName: "strict_output", input: {} },
-          testToolContext({
-            sessionId: SessionId.make("s"),
-            branchId: BranchId.make("b"),
-            toolCallId: ToolCallId.make("tc-output"),
-            agentName: AgentName.make("cowork"),
-          }),
+        const toolCallId = ToolCallId.make("tc-output")
+        return yield* runner.run({ toolCallId, toolName: "strict_output", input: {} }).pipe(
+          provideCurrentHostCtx(
+            testToolContext({
+              sessionId: SessionId.make("s"),
+              branchId: BranchId.make("b"),
+              toolCallId,
+              agentName: AgentName.make("cowork"),
+            }),
+          ),
         )
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(true)
@@ -356,14 +367,16 @@ describe("tool execution", () => {
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
-        return yield* runner.run(
-          { toolCallId: ToolCallId.make("tc1"), toolName: "safe", input: {} },
-          testToolContext({
-            sessionId: SessionId.make("s"),
-            branchId: BranchId.make("b"),
-            toolCallId: ToolCallId.make("tc1"),
-            agentName: AgentName.make("cowork"),
-          }),
+        const toolCallId = ToolCallId.make("tc1")
+        return yield* runner.run({ toolCallId, toolName: "safe", input: {} }).pipe(
+          provideCurrentHostCtx(
+            testToolContext({
+              sessionId: SessionId.make("s"),
+              branchId: BranchId.make("b"),
+              toolCallId,
+              agentName: AgentName.make("cowork"),
+            }),
+          ),
         )
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(true)
@@ -418,16 +431,18 @@ describe("tool execution", () => {
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
-        return yield* runner.run(
-          { toolCallId: ToolCallId.make("tc-inspect"), toolName: "inspect", input: {} },
-          testToolContext({
-            sessionId: SessionId.make("session-inspect"),
-            branchId: BranchId.make("branch-inspect"),
-            toolCallId: ToolCallId.make("tc-inspect"),
-            agentName: AgentName.make("deepwork"),
-            cwd: "/runtime/cwd",
-            home: "/runtime/home",
-          }),
+        const toolCallId = ToolCallId.make("tc-inspect")
+        return yield* runner.run({ toolCallId, toolName: "inspect", input: {} }).pipe(
+          provideCurrentHostCtx(
+            testToolContext({
+              sessionId: SessionId.make("session-inspect"),
+              branchId: BranchId.make("branch-inspect"),
+              toolCallId,
+              agentName: AgentName.make("deepwork"),
+              cwd: "/runtime/cwd",
+              home: "/runtime/home",
+            }),
+          ),
         )
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
@@ -476,15 +491,17 @@ describe("tool execution", () => {
       }) as Context.Context<never>
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
-        return yield* runner.run(
-          { toolCallId: ToolCallId.make("tc-context"), toolName: "context_tool", input: {} },
-          testToolContext({
-            sessionId: SessionId.make("session-context"),
-            branchId: BranchId.make("branch-context"),
-            toolCallId: ToolCallId.make("tc-context"),
-            agentName: AgentName.make("cowork"),
-            capabilityContext,
-          }),
+        const toolCallId = ToolCallId.make("tc-context")
+        return yield* runner.run({ toolCallId, toolName: "context_tool", input: {} }).pipe(
+          provideCurrentHostCtx(
+            testToolContext({
+              sessionId: SessionId.make("session-context"),
+              branchId: BranchId.make("branch-context"),
+              toolCallId,
+              agentName: AgentName.make("cowork"),
+              capabilityContext,
+            }),
+          ),
         )
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
@@ -536,19 +553,17 @@ describe("tool execution", () => {
       ) as Context.Context<never>
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
-        return yield* runner.run(
-          {
-            toolCallId: ToolCallId.make("tc-read-context"),
-            toolName: "read_context_tool",
-            input: {},
-          },
-          testToolContext({
-            sessionId: SessionId.make("session-read-context"),
-            branchId: BranchId.make("branch-read-context"),
-            toolCallId: ToolCallId.make("tc-read-context"),
-            agentName: AgentName.make("cowork"),
-            capabilityContext,
-          }),
+        const toolCallId = ToolCallId.make("tc-read-context")
+        return yield* runner.run({ toolCallId, toolName: "read_context_tool", input: {} }).pipe(
+          provideCurrentHostCtx(
+            testToolContext({
+              sessionId: SessionId.make("session-read-context"),
+              branchId: BranchId.make("branch-read-context"),
+              toolCallId,
+              agentName: AgentName.make("cowork"),
+              capabilityContext,
+            }),
+          ),
         )
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
@@ -607,19 +622,19 @@ describe("tool execution", () => {
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
-        return yield* runner.run(
-          {
-            toolCallId: ToolCallId.make("tc-read-extension-context"),
-            toolName: "read_extension_context",
-            input: {},
-          },
-          testToolContext({
-            sessionId: SessionId.make("session-read-extension-context"),
-            branchId: BranchId.make("branch-read-extension-context"),
-            toolCallId: ToolCallId.make("tc-read-extension-context"),
-            agentName: AgentName.make("cowork"),
-          }),
-        )
+        const toolCallId = ToolCallId.make("tc-read-extension-context")
+        return yield* runner
+          .run({ toolCallId, toolName: "read_extension_context", input: {} })
+          .pipe(
+            provideCurrentHostCtx(
+              testToolContext({
+                sessionId: SessionId.make("session-read-extension-context"),
+                branchId: BranchId.make("branch-read-extension-context"),
+                toolCallId,
+                agentName: AgentName.make("cowork"),
+              }),
+            ),
+          )
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({
@@ -678,15 +693,17 @@ describe("tool execution", () => {
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
+        const toolCallId = ToolCallId.make("tc-pending")
         return yield* Effect.flip(
-          runner.run(
-            { toolCallId: ToolCallId.make("tc-pending"), toolName: "pending", input: {} },
-            testToolContext({
-              sessionId: SessionId.make("session-pending"),
-              branchId: BranchId.make("branch-pending"),
-              toolCallId: ToolCallId.make("tc-pending"),
-              agentName: AgentName.make("cowork"),
-            }),
+          runner.run({ toolCallId, toolName: "pending", input: {} }).pipe(
+            provideCurrentHostCtx(
+              testToolContext({
+                sessionId: SessionId.make("session-pending"),
+                branchId: BranchId.make("branch-pending"),
+                toolCallId,
+                agentName: AgentName.make("cowork"),
+              }),
+            ),
           ),
         )
       }).pipe(Effect.provide(layer))

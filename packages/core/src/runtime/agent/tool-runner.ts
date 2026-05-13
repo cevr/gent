@@ -20,6 +20,10 @@ import type * as AiTool from "effect/unstable/ai/Tool"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
+import {
+  CurrentExtensionHostContext,
+  provideCurrentHostCtx,
+} from "./current-extension-host-context.js"
 
 export type ToolCapabilityMap = Record<string, ToolCapability>
 
@@ -51,11 +55,10 @@ type ToolRunnerToolkit = AiToolkit.WithHandler<ToolCapabilityMap>
 export interface ToolRunnerService {
   readonly run: (
     toolCall: ToolCall,
-    ctx: ToolCapabilityContext,
   ) => Effect.Effect<
     Prompt.ToolResultPart,
     InteractionPendingError,
-    ExtensionRegistry | EventPublisher
+    CurrentExtensionHostContext | ExtensionRegistry | EventPublisher
   >
 }
 
@@ -224,7 +227,9 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
   static Live: Layer.Layer<ToolRunner> = Layer.succeed(
     ToolRunner,
     ToolRunner.of({
-      run: Effect.fn("ToolRunner.run")(function* (toolCall, ctx) {
+      run: Effect.fn("ToolRunner.run")(function* (toolCall) {
+        const hostCtx = yield* CurrentExtensionHostContext
+        const ctx: ToolCapabilityContext = { ...hostCtx, toolCallId: toolCall.toolCallId }
         const activeRegistry = yield* ExtensionRegistry
         const basePermissionOpt = yield* Effect.serviceOption(Permission)
         const activePermission: PermissionService =
@@ -336,15 +341,20 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
           }
 
           return yield* finish(executeResult.success)
-        }).pipe(withWideEvent(toolBoundary(toolCall.toolName, toolCall.toolCallId)))
+        }).pipe(
+          provideCurrentHostCtx(ctx),
+          withWideEvent(toolBoundary(toolCall.toolName, toolCall.toolCallId)),
+        )
       }),
     }),
   )
 
   static Test = (): Layer.Layer<ToolRunner> =>
     Layer.succeed(ToolRunner, {
-      run: (toolCall, ctx) =>
+      run: (toolCall) =>
         Effect.gen(function* () {
+          const hostCtx = yield* CurrentExtensionHostContext
+          const ctx: ToolCapabilityContext = { ...hostCtx, toolCallId: toolCall.toolCallId }
           yield* publishStarted({ ctx, toolCall })
           const result = Prompt.toolResultPart({
             id: toolCall.toolCallId,
