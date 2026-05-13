@@ -22,6 +22,7 @@ import {
   PermissionRule,
   OutputBuffer,
   saveFullOutput,
+  type ExtensionContextService,
   type SessionId,
   ToolCallId,
 } from "@gent/core/extensions/api"
@@ -157,6 +158,16 @@ interface BackgroundBashJob {
   readonly cwd: string | undefined
 }
 
+interface BackgroundBashTarget {
+  readonly sessionId: SessionId
+  readonly branchId: ExtensionContextService["branchId"]
+  readonly toolCallId: ToolCallId
+  readonly Session: Pick<
+    ExtensionContextService["Session"],
+    "getSession" | "listBranches" | "queueFollowUp"
+  >
+}
+
 /**
  * Detect `cd dir && cmd` or `cd dir; cmd` and split into cwd + command.
  * Models often emit this despite instructions to use the cwd param.
@@ -217,18 +228,13 @@ const runBashCommand = (command: string, cwd: string | undefined) =>
     }
   })
 
-const backgroundJobKey = Effect.gen(function* () {
-  const ctx = yield* ExtensionContext
-  return `${ctx.sessionId}:${ctx.branchId}:${ctx.toolCallId ?? "unknown"}` as BackgroundBashJobKey
-})
+const backgroundJobKey = (target: BackgroundBashTarget) =>
+  `${target.sessionId}:${target.branchId}:${target.toolCallId}` as BackgroundBashJobKey
 
-const backgroundJobKeyFields = Effect.gen(function* () {
-  const ctx = yield* ExtensionContext
-  return {
-    sessionId: ctx.sessionId,
-    branchId: ctx.branchId,
-    toolCallId: ctx.toolCallId ?? ToolCallId.make("unknown"),
-  } satisfies BackgroundBashJobKeyFields
+const backgroundJobKeyFields = (target: BackgroundBashTarget): BackgroundBashJobKeyFields => ({
+  sessionId: target.sessionId,
+  branchId: target.branchId,
+  toolCallId: target.toolCallId,
 })
 
 const markJobCompleted = (state: BackgroundBashState, key: BackgroundBashJobKey) => {
@@ -239,39 +245,43 @@ const markJobCompleted = (state: BackgroundBashState, key: BackgroundBashJobKey)
   return { active, completed } satisfies BackgroundBashState
 }
 
-const targetStillExists = Effect.gen(function* () {
-  const ctx = yield* ExtensionContext
-  const session = yield* ctx.Session.getSession().pipe(Effect.orElseSucceed(() => undefined))
-  if (session === undefined) return false
-  const branches = yield* ctx.Session.listBranches().pipe(Effect.orElseSucceed(() => []))
-  return branches.some((branch) => branch.id === ctx.branchId)
-})
-
-const queueBackgroundFollowUp = (params: { readonly sourceId: string; readonly content: string }) =>
+const targetStillExists = (target: BackgroundBashTarget) =>
   Effect.gen(function* () {
-    if (!(yield* targetStillExists)) return
-    const ctx = yield* ExtensionContext
-    yield* ctx.Session.queueFollowUp({
+    const session = yield* target.Session.getSession().pipe(Effect.orElseSucceed(() => undefined))
+    if (session === undefined) return false
+    const branches = yield* target.Session.listBranches().pipe(Effect.orElseSucceed(() => []))
+    return branches.some((branch) => branch.id === target.branchId)
+  })
+
+const queueBackgroundFollowUp = (params: {
+  readonly target: BackgroundBashTarget
+  readonly sourceId: string
+  readonly content: string
+}) =>
+  Effect.gen(function* () {
+    if (!(yield* targetStillExists(params.target))) return
+    yield* params.target.Session.queueFollowUp({
       sourceId: params.sourceId,
       content: params.content,
     }).pipe(Effect.catchEager(() => Effect.void))
   })
 
-const queueTerminalFollowUp = (state: BackgroundBashTerminalState) =>
+const queueTerminalFollowUp = (target: BackgroundBashTarget, state: BackgroundBashTerminalState) =>
   Effect.gen(function* () {
-    const ctx = yield* ExtensionContext
     const command = state.command
     const message = state.message ?? ""
     if (state.status === "completed") {
       const exitCode = state.exitCode ?? 0
       yield* queueBackgroundFollowUp({
-        sourceId: `bash:${ctx.toolCallId}:complete`,
+        target,
+        sourceId: `bash:${target.toolCallId}:complete`,
         content: `Background command completed (exit code ${exitCode}):\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
       })
       return
     }
     yield* queueBackgroundFollowUp({
-      sourceId: `bash:${ctx.toolCallId}:failure`,
+      target,
+      sourceId: `bash:${target.toolCallId}:failure`,
       content: `Background command failed:\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
     })
   })
@@ -309,6 +319,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
 
     const runBackgroundJob = Effect.fn("BackgroundBashSupervisor.runBackgroundJob")(function* (
       job: BackgroundBashJob,
+      target: BackgroundBashTarget,
     ) {
       const bgResult = yield* runBashCommand(job.command, job.cwd).pipe(
         Effect.scoped,
@@ -338,12 +349,12 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         }
       }
 
-      const keyFields = yield* backgroundJobKeyFields
+      const keyFields = backgroundJobKeyFields(target)
       yield* storage.markCompleted(keyFields, {
         exitCode: bgResult.exitCode,
         message: outputText,
       })
-      yield* queueTerminalFollowUp({
+      yield* queueTerminalFollowUp(target, {
         status: "completed",
         command: job.command,
         exitCode: bgResult.exitCode,
@@ -351,12 +362,12 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
       })
     })
 
-    const queueFailure = (job: BackgroundBashJob, message: string) =>
+    const queueFailure = (job: BackgroundBashJob, target: BackgroundBashTarget, message: string) =>
       Effect.gen(function* () {
-        const keyFields = yield* backgroundJobKeyFields
+        const keyFields = backgroundJobKeyFields(target)
         yield* storage.markFailed(keyFields, message).pipe(
           Effect.andThen(
-            queueTerminalFollowUp({ status: "failed", command: job.command, message }),
+            queueTerminalFollowUp(target, { status: "failed", command: job.command, message }),
           ),
           Effect.catchTag("BackgroundBashStorageError", () => Effect.void),
         )
@@ -365,8 +376,15 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
     const start = (job: BackgroundBashJob) =>
       gate.withPermits(1)(
         Effect.gen(function* () {
-          const key = yield* backgroundJobKey
-          const keyFields = yield* backgroundJobKeyFields
+          const ctx = yield* ExtensionContext
+          const target: BackgroundBashTarget = {
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            toolCallId: ctx.toolCallId ?? ToolCallId.make("unknown"),
+            Session: ctx.Session,
+          }
+          const key = backgroundJobKey(target)
+          const keyFields = backgroundJobKeyFields(target)
           const current = yield* Ref.get(state)
           if (current.completed.has(key) || current.active.has(key)) return
           const claim = yield* storage.claimStart({
@@ -376,17 +394,14 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
           })
           if (claim._tag === "AlreadyRunning") return
           if (claim._tag === "Terminal") {
-            yield* queueTerminalFollowUp(claim.state)
+            yield* queueTerminalFollowUp(target, claim.state)
             yield* Ref.update(state, (s) => markJobCompleted(s, key))
             return
           }
 
           const started = yield* Deferred.make<void>()
           const fullContext = yield* Effect.context<
-            | ChildProcessSpawner.ChildProcessSpawner
-            | FileSystem.FileSystem
-            | Path.Path
-            | ExtensionContext
+            ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
           >()
           // forkIn inherits the parent fiber's full context, and provideContext
           // would only merge on top — request-scoped tags carried by the caller
@@ -397,24 +412,20 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
             ChildProcessSpawner.ChildProcessSpawner,
             FileSystem.FileSystem,
             Path.Path,
-            ExtensionContext,
           )(fullContext)
           const fiber = yield* Deferred.await(started).pipe(
-            Effect.andThen(runBackgroundJob(job)),
-            Effect.catchTag("BashError", (e) => queueFailure(job, e.message)),
+            Effect.andThen(runBackgroundJob(job, target)),
+            Effect.catchTag("BashError", (e) => queueFailure(job, target, e.message)),
             Effect.catchCause((cause) =>
               Cause.hasInterruptsOnly(cause)
                 ? Effect.void
-                : queueFailure(job, `Internal error: ${Cause.pretty(cause)}`),
+                : queueFailure(job, target, `Internal error: ${Cause.pretty(cause)}`),
             ),
             Effect.ensuring(Ref.update(state, (s) => markJobCompleted(s, key))),
             Effect.updateContext(
               (
                 _: Context.Context<
-                  | ChildProcessSpawner.ChildProcessSpawner
-                  | FileSystem.FileSystem
-                  | Path.Path
-                  | ExtensionContext
+                  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
                 >,
               ) => jobContext,
             ),

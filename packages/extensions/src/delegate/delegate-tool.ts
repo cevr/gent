@@ -8,6 +8,7 @@ import {
   defineExtension,
   getDurableAgentRunSessionId,
   makeRunSpec,
+  type ExtensionContextService,
   type SessionId,
 } from "@gent/core/extensions/api"
 import { TodoService } from "../todo-service.js"
@@ -15,6 +16,66 @@ import type { Todo, TodoId } from "../todo/domain.js"
 
 const MAX_PARALLEL_TODOS = 8
 const MAX_CONCURRENCY = 4
+
+interface BackgroundDelegateTarget {
+  readonly toolCallId: ExtensionContextService["toolCallId"]
+  readonly Agent: Pick<ExtensionContextService["Agent"], "run">
+}
+
+type BackgroundDelegateAgent = Parameters<ExtensionContextService["Agent"]["run"]>[0]["agent"]
+
+const isTodoStillActive = (todoId: TodoId) =>
+  Effect.gen(function* () {
+    const todoService = yield* TodoService
+    const todo = yield* todoService.get(todoId)
+    return todo !== undefined && todo.status !== "stopped" && todo.status !== "failed"
+  }).pipe(Effect.catchEager(() => Effect.succeed(false)))
+
+const runBackgroundDelegateTodo = Effect.fn("DelegateTool.runBackgroundDelegateTodo")(function* (
+  todo: Todo,
+  agent: BackgroundDelegateAgent,
+  target: BackgroundDelegateTarget,
+) {
+  const todoService = yield* TodoService
+  yield* todoService
+    .update(todo.id, { status: "in_progress" })
+    .pipe(Effect.catchEager(() => Effect.void))
+
+  // Background todos need durable sessions so users can navigate to them
+  // via the stored childSessionId after the run completes.
+  const result = yield* target.Agent.run({
+    agent,
+    prompt: todo.prompt ?? todo.subject,
+    runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: target.toolCallId }),
+  })
+
+  const active = yield* isTodoStillActive(todo.id)
+  if (!active) return
+
+  if (result._tag === "success") {
+    yield* todoService
+      .update(todo.id, {
+        status: "completed",
+        owner: result.sessionId,
+        metadata: {
+          ...(typeof todo.metadata === "object" && todo.metadata !== null ? todo.metadata : {}),
+          childSessionId: result.sessionId,
+        },
+      })
+      .pipe(Effect.catchEager(() => Effect.void))
+    return
+  }
+
+  yield* todoService
+    .update(todo.id, {
+      status: "failed",
+      metadata: {
+        ...(typeof todo.metadata === "object" && todo.metadata !== null ? todo.metadata : {}),
+        error: result.error,
+      },
+    })
+    .pipe(Effect.catchEager(() => Effect.void))
+})
 
 const DelegateItem = Schema.Struct({
   agent: AgentName,
@@ -107,73 +168,17 @@ export const DelegateTool = tool({
       return `${todo.slice(0, 60)}…`
     }
 
-    /** Check if todo is still in a non-terminal state before writing completion */
-    const isTodoStillActive = (todoId: TodoId) =>
+    const startBackgroundTodo = (todo: Todo, agent: BackgroundDelegateAgent) =>
       Effect.gen(function* () {
-        const todoService = yield* TodoService
-        const todo = yield* todoService.get(todoId)
-        return todo !== undefined && todo.status !== "stopped" && todo.status !== "failed"
-      }).pipe(Effect.catchEager(() => Effect.succeed(false)))
-
-    const spawnBackgroundTodo = (todo: Todo, agent: { name: AgentName }) =>
-      Effect.gen(function* () {
-        const todoService = yield* TodoService
-        // Set todo to in_progress
-        yield* todoService
-          .update(todo.id, { status: "in_progress" })
-          .pipe(Effect.catchEager(() => Effect.void))
-
-        const agents = yield* ctx.Agent.listAgents()
-        const resolvedAgent = agents.find((a) => a.name === agent.name)
-        if (resolvedAgent === undefined) {
-          yield* todoService
-            .update(todo.id, {
-              status: "failed",
-              metadata: { error: `Unknown agent: ${agent.name}` },
-            })
-            .pipe(Effect.catchEager(() => Effect.void))
-          return
+        const target: BackgroundDelegateTarget = {
+          toolCallId: ctx.toolCallId,
+          Agent: { run: ctx.Agent.run },
         }
-
-        // Background todos need durable sessions so users can navigate to them
-        // via the stored childSessionId after the run completes.
-        const result = yield* ctx.Agent.run({
-          agent: resolvedAgent,
-          prompt: todo.prompt ?? todo.subject,
-          runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: ctx.toolCallId }),
-        })
-
-        // Guard: if todo was stopped/failed while running, don't overwrite terminal state
-        const active = yield* isTodoStillActive(todo.id)
-        if (!active) return
-
-        if (result._tag === "success") {
-          yield* todoService
-            .update(todo.id, {
-              status: "completed",
-              owner: result.sessionId,
-              metadata: {
-                ...(typeof todo.metadata === "object" && todo.metadata !== null
-                  ? todo.metadata
-                  : {}),
-                childSessionId: result.sessionId,
-              },
-            })
-            .pipe(Effect.catchEager(() => Effect.void))
-        } else {
-          yield* todoService
-            .update(todo.id, {
-              status: "failed",
-              metadata: {
-                ...(typeof todo.metadata === "object" && todo.metadata !== null
-                  ? todo.metadata
-                  : {}),
-                error: result.error,
-              },
-            })
-            .pipe(Effect.catchEager(() => Effect.void))
-        }
-      }).pipe(Effect.catchEager(() => Effect.void))
+        yield* runBackgroundDelegateTodo(todo, agent, target).pipe(
+          Effect.catchEager(() => Effect.void),
+          Effect.forkChild,
+        )
+      })
 
     const backgroundSingle = Effect.fn("DelegateTool.backgroundSingle")(function* () {
       const resolved = yield* resolveAgent(params.agent ?? "")
@@ -196,7 +201,7 @@ export const DelegateTool = tool({
       if (todo === undefined)
         return { error: "Background todos unavailable — todo extension is disabled" }
 
-      yield* Effect.forkChild(spawnBackgroundTodo(todo, resolved.agent))
+      yield* startBackgroundTodo(todo, resolved.agent)
       return { todoId: todo.id, status: "running" as const }
     })
 
@@ -227,7 +232,7 @@ export const DelegateTool = tool({
         if (todo === undefined) {
           return { error: "Background todos unavailable — todo extension is disabled" }
         }
-        yield* Effect.forkChild(spawnBackgroundTodo(todo, resolved.agent))
+        yield* startBackgroundTodo(todo, resolved.agent)
         todoIds.push(todo.id)
       }
       return { todoIds, status: "running" as const, count: todoIds.length }

@@ -101,8 +101,19 @@ context adapter`).
   codemode MCP server now reads a mutable `CodemodeConfig` per request,
   and both session managers refresh that config on cache hits before
   reusing the external session.
+- **C12 complete for captured authority**: background bash jobs now
+  capture a narrow target (`sessionId`, `branchId`, `toolCallId`, and
+  the specific `Session` methods they need) and run the long-lived fork
+  under an explicitly replaced process/filesystem context. Background
+  delegate jobs now move the durable todo runner out of the tool closure
+  and pass only the resolved agent plus `toolCallId`/`Agent.run` target
+  into the background runner. Delegate keeps the existing child-fiber
+  inheritance semantics; the fixed bug class is the closure over the
+  whole request `ExtensionContext`, not a new independent scope model.
 - Verification:
   `bun run typecheck` passed; `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/extensions/tests/acp-agents/acp-agents.test.ts packages/extensions/tests/acp-agents/claude-sdk-lifecycle.test.ts`
+  passed for C11. For C12, `bun run typecheck` passed and
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/extensions/tests/delegate/delegate-background.test.ts packages/extensions/tests/delegate/delegate-tool.test.ts packages/extensions/tests/exec-tools/bash-execution.test.ts`
   passed.
 - Evidence:
   `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/mcp-codemode.ts:41`,
@@ -111,7 +122,29 @@ context adapter`).
   `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/mcp-codemode.ts:279`,
   `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/session-manager.ts:127`,
   `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/claude-code-executor.ts:378`,
-  `/Users/cvr/Developer/personal/gent/packages/extensions/tests/acp-agents/acp-agents.test.ts:342`.
+  `/Users/cvr/Developer/personal/gent/packages/extensions/tests/acp-agents/acp-agents.test.ts:342`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/exec-tools/bash.ts:161`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/exec-tools/bash.ts:228`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/exec-tools/bash.ts:245`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/exec-tools/bash.ts:266`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/exec-tools/bash.ts:317`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/exec-tools/bash.ts:376`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/exec-tools/bash.ts:400`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/exec-tools/bash.ts:408`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/exec-tools/bash.ts:413`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/delegate/delegate-tool.ts:20`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/delegate/delegate-tool.ts:34`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/delegate/delegate-tool.ts:44`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/delegate/delegate-tool.ts:169`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/delegate/delegate-tool.ts:175`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/tests/exec-tools/bash-execution.test.ts:165`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/tests/exec-tools/bash-execution.test.ts:210`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/tests/exec-tools/bash-execution.test.ts:257`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/tests/exec-tools/bash-execution.test.ts:286`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/tests/exec-tools/bash-execution.test.ts:363`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/tests/exec-tools/bash-execution.test.ts:419`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/tests/delegate/delegate-background.test.ts:8`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/tests/delegate/delegate-tool.test.ts:1`.
 
 ### S1 - Upstream wide-event outcome and boundary API
 
