@@ -1,5 +1,17 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Context, Effect, Exit, FileSystem, Layer, MutableRef, Option, Schema } from "effect"
+import {
+  Cause,
+  Context,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  MutableRef,
+  Option,
+  Schema,
+  Stream,
+} from "effect"
 import { MinimumLogLevel } from "effect/References"
 import { narrowR } from "../helpers/effect"
 import {
@@ -7,7 +19,7 @@ import {
   type GentExtension,
   type LoadedExtension,
 } from "../../src/domain/extension.js"
-import { textStep } from "@gent/core-internal/debug/provider"
+import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import {
   ExtensionRegistry,
@@ -37,6 +49,7 @@ import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids
 import { ConfigService } from "../../src/runtime/config-service"
 import { TodoStorage } from "../../../extensions/src/todo-storage.js"
 import { WideEventLogger, type LogEvent } from "../../src/runtime/wide-event-boundary"
+import DynamicScratchpadExtension from "../../../../examples/extensions/dynamic-scratchpad.js"
 class ProfileToken extends Context.Service<
   ProfileToken,
   {
@@ -884,6 +897,73 @@ describe("extension command RPCs", () => {
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
+  )
+  it.live("reference dynamic extension registers session tools and slash requests", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          {
+            ...toolCallStep("scratchpad_append", { text: "from the model" }),
+            assertOptions: (options) => {
+              expect(options.tools.map((entry) => entry.name)).toContain("scratchpad_append")
+            },
+          },
+          textStep("noted"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensionInputs: [...e2ePreset.extensionInputs, DynamicScratchpadExtension],
+          cwd: "/tmp/gent-dynamic-scratchpad",
+        })
+        const extensionId = ExtensionId.make("dynamic-scratchpad")
+
+        const installResult = yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId,
+          capabilityId: "scratchpad-install",
+          input: {},
+        })
+        expect(installResult).toEqual({
+          tool: "scratchpad_append",
+          request: "scratchpad-show",
+        })
+
+        const commands = yield* client.extension.listSlashCommands({ sessionId })
+        const commandNames = commands.map((command) => command.name)
+        expect(commandNames).toContain("scratchpad-install")
+        expect(commandNames).toContain("scratchpad")
+
+        const toolEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter(
+            (envelope) =>
+              envelope.event._tag === "ToolCallSucceeded" &&
+              (envelope.event as { readonly toolName?: string }).toolName === "scratchpad_append",
+          ),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
+
+        yield* client.message.send({
+          sessionId,
+          branchId,
+          content: "store the scratchpad note",
+        })
+        const toolEvents = Array.from(yield* Fiber.join(toolEventFiber))
+        expect(toolEvents).toHaveLength(1)
+
+        const scratchpad = yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId,
+          capabilityId: "scratchpad-show",
+          input: {},
+        })
+        expect(scratchpad).toBe("1. from the model")
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
   )
   it.live("RPC listSlashCommands omits lower-scope slash request shadowed by project request", () =>
     Effect.gen(function* () {

@@ -45,6 +45,36 @@ The API should feel:
 
 ## Lanes
 
+## Progress
+
+### L1/L6 dynamic dogfood batch - complete
+
+- Added `examples/extensions/dynamic-scratchpad.ts` as the stateful/dynamic
+  reference extension. It uses only `@gent/core/extensions/api`, owns
+  process-scoped state with `defineStateResource`, exposes one installer slash
+  request, and registers a session-scoped tool plus slash request through
+  `ExtensionContext.Dynamic`.
+- Added public-import coverage for the dynamic example to
+  `packages/core/tests/extensions/authoring-reference.test.ts`.
+- Added an RPC acceptance path proving the dynamic example updates slash
+  commands, exposes the dynamic tool to the model, runs that tool through a
+  real model turn, and lets the dynamic request read the same extension-owned
+  state afterward.
+- Updated `docs/extensions.md` so dynamic capabilities are taught as part of
+  the authoring product loop instead of only appearing in internal tests.
+- Dogfood finding: dynamic registration still requires authors to thread their
+  own `extensionId` into `ExtensionContext.Dynamic.registerTool/registerRequest`.
+  That is not a P0/P1 because it is explicit and public, but it is real ceremony
+  for L2 to evaluate.
+- Verification:
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/authoring-reference.test.ts packages/core/tests/server/extension-commands-rpc.test.ts -t "dynamic reference|reference dynamic|RPC dynamic|dynamic registrations"`
+  passed with 3 tests. `bun run typecheck` passed.
+- Evidence:
+  `/Users/cvr/Developer/personal/gent/examples/extensions/dynamic-scratchpad.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/authoring-reference.test.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md`.
+
 ### L1 - Dogfood Real Extensions
 
 Build or port representative extensions using only

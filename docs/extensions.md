@@ -41,6 +41,13 @@ Its regression test loads the file through the public package path and executes
 the contributed tool and hook under the real resource layer while checking the
 slash request through the registry surface.
 
+For capabilities that should appear only after a runtime decision, see
+`examples/extensions/dynamic-scratchpad.ts`. It starts with one slash-presented
+installer request, then uses `ExtensionContext.Dynamic` to register a
+session-scoped tool and slash request. Its RPC acceptance test proves the
+dynamic slash command appears, the model sees the dynamic tool, and the dynamic
+request reads the same extension-owned state.
+
 ## Named Concepts
 
 You need at most 7 concepts to write a complete extension:
@@ -263,6 +270,27 @@ export default defineExtension({
 Lifecycle extension points are hook values, not keyed middleware bags. Use
 `hook.systemPrompt`, `hook.turnProjection`, `hook.turnAfter`, `hook.toolCall`,
 or `hook.toolResult` inside `defineExtension({ hooks: [...] })`.
+
+## Dynamic Capabilities
+
+Use `ExtensionContext.Dynamic` when an extension needs to register tools or
+requests for the current session after setup. Dynamic registration is still
+ordinary Effect code: the installing request or hook yields `ExtensionContext`,
+registers public `tool(...)` / `request(...)` leaves, and stores any private
+state in extension-owned services.
+
+```ts
+const install = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  const unregisterTool = yield* ctx.Dynamic.registerTool(extensionId, ScratchpadAppendTool)
+  const unregisterRequest = yield* ctx.Dynamic.registerRequest(extensionId, ShowScratchpad)
+})
+```
+
+The returned effects unregister the dynamic leaves. Keep them when the
+extension owns a lifecycle that should later remove or replace the capability.
+For the complete shape, including state and slash presentation, see
+`examples/extensions/dynamic-scratchpad.ts`.
 
 ## Resource (long-lived state)
 

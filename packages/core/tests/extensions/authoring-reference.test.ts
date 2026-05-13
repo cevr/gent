@@ -3,6 +3,7 @@ import { Effect, Layer, Schema } from "effect"
 import SessionNotesExtension, {
   AddNoteTool,
 } from "../../../../examples/extensions/session-notes.js"
+import DynamicScratchpadExtension from "../../../../examples/extensions/dynamic-scratchpad.js"
 import { ExtensionSetupContext, getToolId, type GentExtension } from "@gent/core/extensions/api"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { publicSetupContext } from "../../src/domain/extension-setup-context"
@@ -14,6 +15,10 @@ import { testSetupCtx } from "@gent/core-internal/test-utils"
 
 const sessionNotesSourceUrl = new URL(
   "../../../../examples/extensions/session-notes.ts",
+  import.meta.url,
+)
+const dynamicScratchpadSourceUrl = new URL(
+  "../../../../examples/extensions/dynamic-scratchpad.ts",
   import.meta.url,
 )
 
@@ -76,6 +81,16 @@ describe("extension authoring reference", () => {
   it.live("reference example source imports only the public extension API", () =>
     Effect.gen(function* () {
       const source = yield* Effect.promise(() => Bun.file(sessionNotesSourceUrl).text())
+      expect(source).toContain('from "@gent/core/extensions/api"')
+      expect(source).not.toContain("@gent/core-internal")
+      expect(source).not.toContain("@gent/core/src")
+    }),
+  )
+
+  it.live("dynamic reference example source imports only the public extension API", () =>
+    Effect.gen(function* () {
+      const source = yield* Effect.promise(() => Bun.file(dynamicScratchpadSourceUrl).text())
+      expect(String(DynamicScratchpadExtension.manifest.id)).toBe("dynamic-scratchpad")
       expect(source).toContain('from "@gent/core/extensions/api"')
       expect(source).not.toContain("@gent/core-internal")
       expect(source).not.toContain("@gent/core/src")
