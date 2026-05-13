@@ -359,8 +359,8 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "// @effect-diagnostics-next-line strictEffectProvide:off",
   },
   {
-    file: "packages/extensions/src/anthropic/oauth.ts",
-    line: 569,
+    file: "packages/extensions/src/anthropic/oauth/refresh.ts",
+    line: 69,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line strictEffectProvide:off",
   },
