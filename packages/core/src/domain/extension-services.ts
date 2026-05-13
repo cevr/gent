@@ -17,6 +17,12 @@ import { InteractionPendingError } from "./interaction-request.js"
 import type { BranchId, ExtensionId, SessionId, ToolCallId } from "./ids.js"
 import type { Branch, Message, MessageMetadata, Session } from "./message.js"
 import type { ExtensionHostContext, ExtensionHostSearchResult } from "./extension-host-context.js"
+import type { RequestCapability } from "./capability/request.js"
+import type { ToolCapability } from "./capability/tool.js"
+import {
+  DynamicExtensionRegistry,
+  type DynamicRegistrationScope,
+} from "./dynamic-extension-registry.js"
 
 export class ExtensionServiceError extends Schema.TaggedErrorClass<ExtensionServiceError>()(
   "@gent/core/src/domain/extension-services/ExtensionServiceError",
@@ -208,6 +214,19 @@ export interface ExtensionStateServiceShape {
   }) => Effect.Effect<void, ExtensionServiceError>
 }
 
+export interface ExtensionDynamicRegistrationServiceShape {
+  readonly registerTool: (
+    extensionId: ExtensionId,
+    capability: ToolCapability,
+    options?: { readonly scope?: DynamicRegistrationScope },
+  ) => Effect.Effect<Effect.Effect<void>, ExtensionServiceError>
+  readonly registerRequest: (
+    extensionId: ExtensionId,
+    capability: RequestCapability,
+    options?: { readonly scope?: DynamicRegistrationScope },
+  ) => Effect.Effect<Effect.Effect<void>, ExtensionServiceError>
+}
+
 export interface ExtensionContextService {
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -223,6 +242,7 @@ export interface ExtensionContextService {
   readonly Files: ExtensionFilesService
   readonly FileLock: ExtensionFileLockServiceShape
   readonly State: ExtensionStateServiceShape
+  readonly Dynamic: ExtensionDynamicRegistrationServiceShape
 }
 
 export class ExtensionContext extends Context.Service<ExtensionContext, ExtensionContextService>()(
@@ -278,6 +298,7 @@ export const extensionServicesFromHostContext = (
     const fileIndexOption = yield* Effect.serviceOption(FileIndex)
     const fileLockOption = yield* Effect.serviceOption(FileLockService)
     const statePublisherOption = yield* Effect.serviceOption(ExtensionStatePublisher)
+    const dynamicRegistryOption = yield* Effect.serviceOption(DynamicExtensionRegistry)
     const fs = yield* FileSystem.FileSystem
     const pathSvc = yield* Path.Path
 
@@ -347,6 +368,47 @@ export const extensionServicesFromHostContext = (
             changed: () => Effect.void,
           }
 
+    const Dynamic: ExtensionDynamicRegistrationServiceShape =
+      dynamicRegistryOption._tag === "Some"
+        ? {
+            registerTool: (extensionId, capability, options) =>
+              mapError(
+                "ExtensionDynamic",
+                "registerTool",
+                dynamicRegistryOption.value.registerTool({
+                  extensionId,
+                  scope: options?.scope ?? { _tag: "session", sessionId: ctx.sessionId },
+                  capability,
+                }),
+              ),
+            registerRequest: (extensionId, capability, options) =>
+              mapError(
+                "ExtensionDynamic",
+                "registerRequest",
+                dynamicRegistryOption.value.registerRequest({
+                  extensionId,
+                  scope: options?.scope ?? { _tag: "session", sessionId: ctx.sessionId },
+                  capability,
+                }),
+              ),
+          }
+        : {
+            registerTool: () =>
+              Effect.fail(
+                serviceError(
+                  "ExtensionDynamic",
+                  "registerTool",
+                )(new Error("Dynamic extension registry unavailable")),
+              ),
+            registerRequest: () =>
+              Effect.fail(
+                serviceError(
+                  "ExtensionDynamic",
+                  "registerRequest",
+                )(new Error("Dynamic extension registry unavailable")),
+              ),
+          }
+
     return Context.empty().pipe(
       Context.add(ExtensionContext, {
         sessionId: ctx.sessionId,
@@ -363,6 +425,7 @@ export const extensionServicesFromHostContext = (
         Files,
         FileLock,
         State,
+        Dynamic,
       }),
     )
   })

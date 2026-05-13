@@ -26,6 +26,7 @@ const StubExtensionContext = Layer.succeed(ExtensionContext, {
   Files: {} as never,
   FileLock: {} as never,
   State: {} as never,
+  Dynamic: {} as never,
 })
 // ---------------------------------------------------------------------------
 // Fixture: create a real git repo with nested files

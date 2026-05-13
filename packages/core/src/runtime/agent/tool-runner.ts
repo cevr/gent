@@ -6,6 +6,7 @@ import { Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
+import { DynamicExtensionRegistry } from "../../domain/dynamic-extension-registry.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { withWideEvent, WideEvent, WideEventBoundary } from "../wide-event-boundary"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
@@ -212,9 +213,18 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
           yield* publishStarted({ ctx, toolCall })
 
           const capabilities = [...activeRegistry.getResolved().modelCapabilities.values()]
-          const tool: ToolCapability | undefined = capabilities.find(
-            (capability) => String(getToolId(capability)) === toolCall.toolName,
-          )
+          const dynamicRegistryOption = yield* Effect.serviceOption(DynamicExtensionRegistry)
+          const dynamicCapabilities =
+            dynamicRegistryOption._tag === "Some"
+              ? yield* dynamicRegistryOption.value.listTools(ctx.sessionId)
+              : []
+          const tool: ToolCapability | undefined =
+            capabilities.find(
+              (capability) => String(getToolId(capability)) === toolCall.toolName,
+            ) ??
+            dynamicCapabilities.find(
+              (capability) => String(getToolId(capability)) === toolCall.toolName,
+            )
 
           const finish = (result: Prompt.ToolResultPart) =>
             Effect.gen(function* () {
@@ -245,6 +255,26 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             return yield* finish(errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`))
           }
           const executeKnownTool = Effect.gen(function* () {
+            const preflight = yield* activeRegistry.extensionReactions
+              .preflightToolCall({
+                toolCallId: toolCall.toolCallId,
+                toolName: toolCall.toolName,
+                input: toolCall.input,
+                agentName: ctx.agentName,
+                sessionId: ctx.sessionId,
+                branchId: ctx.branchId,
+              })
+              .pipe(provideReactionHostContext(ctx))
+            if (preflight?._tag === "deny") {
+              yield* WideEvent.failDomain("preflight_denied", { message: preflight.message })
+              return Prompt.toolResultPart({
+                id: toolCall.toolCallId,
+                name: toolCall.toolName,
+                isFailure: true,
+                result: preflight.result ?? { error: preflight.message },
+              })
+            }
+
             const permCheckResult = yield* activePermission
               .check(toolCall.toolName, toolCall.input)
               .pipe(

@@ -284,6 +284,10 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
   const state: ExtensionContextService["State"] = {
     changed: () => Effect.void,
   }
+  const dynamic: ExtensionContextService["Dynamic"] = {
+    registerTool: () => Effect.succeed(Effect.void),
+    registerRequest: () => Effect.succeed(Effect.void),
+  }
   const resolvedAgent = overrides?.Agent ?? agent
   const resolvedSession = overrides?.Session ?? session
   const resolvedInteraction = overrides?.Interaction ?? interaction
@@ -291,6 +295,7 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
   const resolvedFiles = overrides?.Files ?? files
   const resolvedFileLock = overrides?.FileLock ?? fileLock
   const resolvedState = overrides?.State ?? state
+  const resolvedDynamic = overrides?.Dynamic ?? dynamic
 
   return {
     sessionId: SessionId.make("test-session"),
@@ -309,6 +314,7 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
     Files: resolvedFiles,
     FileLock: resolvedFileLock,
     State: resolvedState,
+    Dynamic: resolvedDynamic,
     ...overrides,
   }
 }

@@ -6,8 +6,10 @@ import type {
   ExtensionContributions,
   LoadedExtension,
   SystemPromptInput,
+  ToolCallInput,
   TurnAfterInput,
 } from "../../src/domain/extension.js"
+import { hook } from "../../src/domain/extension.js"
 import type { ExtensionHostContext } from "@gent/core-internal/domain/extension-host-context"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
@@ -174,6 +176,55 @@ describe("runtime slots", () => {
       .pipe(
         provideReactionHostContext(stubHostCtx),
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("base-builtin-explicit"))),
+      )
+  })
+
+  test("toolCall hook returns first deny decision in scope order", () => {
+    const slots = compileExtensionReactions([
+      makeExt("builtin", "builtin", {
+        hooks: [
+          hook.toolCall(() => Effect.undefined),
+          hook.toolCall(() =>
+            Effect.succeed({
+              _tag: "deny" as const,
+              message: "blocked by hook",
+              result: { error: "blocked" },
+            }),
+          ),
+        ],
+      }),
+      makeExt("project", "project", {
+        hooks: [
+          hook.toolCall(() =>
+            Effect.succeed({
+              _tag: "deny" as const,
+              message: "project should not run",
+            }),
+          ),
+        ],
+      }),
+    ])
+
+    return slots
+      .preflightToolCall({
+        toolCallId: ToolCallId.make("tc-1"),
+        toolName: "echo",
+        input: {},
+        sessionId: SessionId.make("test-session"),
+        branchId: BranchId.make("test-branch"),
+        agentName: AgentName.make("cowork"),
+      } satisfies ToolCallInput)
+      .pipe(
+        provideReactionHostContext(stubHostCtx),
+        Effect.tap((result) =>
+          Effect.sync(() =>
+            expect(result).toEqual({
+              _tag: "deny",
+              message: "blocked by hook",
+              result: { error: "blocked" },
+            }),
+          ),
+        ),
       )
   })
 

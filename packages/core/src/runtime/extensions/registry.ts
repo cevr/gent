@@ -182,7 +182,7 @@ const resolveCapabilityEntry = (
   return undefined
 }
 
-const runExtensionCapability = (
+export const runExtensionCapability = (
   extensionId: ExtensionId,
   capabilityId: RpcId | string,
   capability: RequestCapability,
@@ -270,7 +270,10 @@ const sortExtensionsByScope = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-const capabilityToCommand = (extensionId: ExtensionId, cap: RequestCapability): SlashCommand => {
+export const capabilityToCommand = (
+  extensionId: ExtensionId,
+  cap: RequestCapability,
+): SlashCommand => {
   const slash = cap.slash
   const description = slash?.description ?? cap.description
   const displayName = slash?.name

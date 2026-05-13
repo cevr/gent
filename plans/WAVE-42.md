@@ -265,10 +265,18 @@ context adapter`).
   protocol modules that need refs before server setup use
   `defineRequests(extensionId, requestMap)`, so the id is still written
   once per request group rather than once per request.
-- **C14-C15 still open**: loop interception and dynamic registration
-  have not landed yet. The simple UI action half of C16 remains folded
-  into C15's dynamic command/action design because there is no exported
-  action primitive today.
+- **C14 complete**: loop interception is now a first-class hook model.
+  `defineExtension({ hooks })` accepts typed `hook.systemPrompt`,
+  `hook.turnProjection`, `hook.turnAfter`, `hook.toolCall`, and
+  `hook.toolResult` slots. Existing named `reactions` remain sugar over
+  the same compiler path. Tool-call preflight now runs before permission
+  and execution, and can deny a call with a structured tool result.
+- **C15 complete**: `DynamicExtensionRegistry` plus
+  `ExtensionContext.Dynamic` gives extension code a session/process-scoped
+  runtime registration facet for tools and slash/RPC requests. Tool
+  execution includes session dynamic tools, `extension.listSlashCommands`
+  includes dynamic slash requests, and `extension.request` can dispatch to
+  dynamic requests under the same branch-local host context.
 - Verification:
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/tooling/tests/core-public-exports.test.ts packages/sdk/tests/public-surface.test.ts`
   passed with 10 tests; `bun run lint` and `bun run typecheck` passed.
@@ -283,6 +291,9 @@ context adapter`).
   `bun test --preload ./packages/tooling/src/test-log-preload.ts --preload ./apps/tui/node_modules/@opentui/solid/scripts/preload.ts apps/tui/tests/extension-lifecycle.test.ts`
   passed with 11 tests; `bun run typecheck`, `bun run lint`, and
   `bun run fmt:check` passed after request identity binding.
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/extension-reactions.test.ts packages/core/tests/runtime/tool-runner.test.ts`
+  passed with 20 tests; `bun run typecheck`, `bun run lint`, and
+  `bun run fmt:check` passed after hook/dynamic registration wiring.
 - Evidence:
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/request.ts:37`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/request.ts:66`,
@@ -627,10 +638,26 @@ surfaces explicit.
 - **Evidence**:
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts:179`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts:199`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts:158`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts:189`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts:213`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/dynamic-extension-registry.ts:22`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/dynamic-extension-registry.ts:48`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-services.ts:212`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-services.ts:362`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:156`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:274`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:28`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:207`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts:338`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/tool-runner.ts:215`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/tool-runner.ts:258`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:867`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts:575`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts:332`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts:359`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-reactions.test.ts:182`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/tool-runner.test.ts:92`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/request.ts:52`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/request.ts:78`,
   `/Users/cvr/Developer/personal/gent/docs/extensions.md:39`,

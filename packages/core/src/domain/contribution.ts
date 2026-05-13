@@ -25,7 +25,7 @@ import type { ToolCapability } from "./capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { AnyResourceContribution } from "./resource.js"
 import type { ScheduledJobContribution } from "./scheduled-job.js"
-import type { ExtensionReactions as ExtensionReactionsType } from "./extension.js"
+import type { AnyExtensionHook, ExtensionReactions as ExtensionReactionsType } from "./extension.js"
 
 /**
  * Re-export for the bucket boundary. The native definition lives in
@@ -65,6 +65,7 @@ export interface ExtensionContributions {
    */
   readonly requests?: ReadonlyArray<RequestCapability>
   readonly agents?: ReadonlyArray<AgentDefinition>
+  readonly hooks?: ReadonlyArray<AnyExtensionHook>
   /**
    * Lifecycle reactions: turn-before / turn-after / message-output /
    * tool-result handlers. Per-extension, per-session — fired by the runtime

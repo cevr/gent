@@ -44,7 +44,7 @@ import { Effect } from "effect"
 import { ExtensionId } from "../domain/ids.js"
 import { ExtensionLoadError } from "../domain/extension.js"
 import { sealRuntimeLoadedEffect } from "../domain/extension-load-boundary.js"
-import type { GentExtension, ExtensionManifest } from "../domain/extension.js"
+import type { AnyExtensionHook, GentExtension, ExtensionManifest } from "../domain/extension.js"
 import type { ExtensionSetupContext } from "../domain/extension-setup-context.js"
 import type { ExtensionContributions, ExtensionReactions } from "../domain/contribution.js"
 import type { AgentDefinition } from "../domain/agent.js"
@@ -85,8 +85,14 @@ export {
   type GentExtension,
   type TurnProjection,
   type SystemPromptInput,
+  type ToolCallInput,
+  type ToolCallPreflightResult,
   type TurnAfterInput,
   type ToolResultInput,
+  hook,
+  type AnyExtensionHook,
+  type ExtensionHook,
+  type ExtensionHookSlot,
 } from "../domain/extension.js"
 export type { PromptSection } from "../domain/prompt.js"
 export { sectionPatternFor, withSectionMarkers } from "../domain/prompt.js"
@@ -179,6 +185,8 @@ export {
   ExtensionServiceError,
   type ExtensionContextService,
 } from "../domain/extension-services.js"
+export { DynamicExtensionRegistry } from "../domain/dynamic-extension-registry.js"
+export type { DynamicRegistrationScope } from "../domain/dynamic-extension-registry.js"
 export { isRecord, isRecordArray } from "../domain/guards.js"
 export { OutputBuffer, headTailChars, saveFullOutput } from "../domain/output-buffer.js"
 // ── Public API ──
@@ -222,6 +230,7 @@ interface DefineExtensionInput<R = never> {
    */
   readonly requests?: FieldSpec<RequestCapability, R>
   readonly agents?: FieldSpec<AgentDefinition, R>
+  readonly hooks?: FieldSpec<AnyExtensionHook, R>
   /**
    * Lifecycle reactions: `systemPrompt` / `turnProjection` / `turnAfter` /
    * `toolResult` handlers run by the runtime. Per-extension, per-session.
@@ -346,6 +355,7 @@ export function defineExtension<R>(
         bindRequestCapabilityExtension(cap, manifest.id),
       )
       const agents = yield* resolveField(manifest, "agents", params.agents)
+      const hooks = yield* resolveField(manifest, "hooks", params.hooks)
       const modelDrivers = yield* resolveField(manifest, "modelDrivers", params.modelDrivers)
       const externalDrivers = yield* resolveField(
         manifest,
@@ -358,6 +368,7 @@ export function defineExtension<R>(
         ...(tools.length > 0 ? { tools } : {}),
         ...(requests.length > 0 ? { requests } : {}),
         ...(agents.length > 0 ? { agents } : {}),
+        ...(hooks.length > 0 ? { hooks } : {}),
         ...(params.reactions !== undefined ? { reactions: params.reactions } : {}),
         ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
         ...(externalDrivers.length > 0 ? { externalDrivers } : {}),

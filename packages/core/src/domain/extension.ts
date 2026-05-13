@@ -155,6 +155,21 @@ export interface ToolResultInput {
   readonly branchId: BranchId
 }
 
+export interface ToolCallInput {
+  readonly toolCallId: ToolCallId
+  readonly toolName: string
+  readonly input: unknown
+  readonly agentName?: AgentName
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}
+
+export type ToolCallPreflightResult = void | {
+  readonly _tag: "deny"
+  readonly message: string
+  readonly result?: unknown
+}
+
 // ── Lifecycle reactions ──
 //
 // Per-extension, per-session handlers run by the runtime at the
@@ -165,6 +180,55 @@ export interface ToolResultInput {
 /** Single reaction handler. Failures are isolated (logged, then swallowed). */
 export type ExtensionReaction<Input, E = never, R = never> = {
   readonly handler: (input: Input) => Effect.Effect<void, E, R>
+}
+
+export type ExtensionHook<Input, Output, E = never, R = never> = {
+  readonly handler: (input: Input) => Effect.Effect<Output, E, R>
+}
+
+export type ExtensionHookSlot<E = never, R = never> =
+  | {
+      readonly kind: "systemPrompt"
+      readonly hook: ExtensionHook<SystemPromptInput, string, E, R>
+    }
+  | {
+      readonly kind: "turnProjection"
+      readonly hook: ExtensionHook<void, TurnProjection, E, R>
+    }
+  | {
+      readonly kind: "turnAfter"
+      readonly hook: ExtensionHook<TurnAfterInput, void, E, R>
+    }
+  | {
+      readonly kind: "toolCall"
+      readonly hook: ExtensionHook<ToolCallInput, ToolCallPreflightResult, E, R>
+    }
+  | {
+      readonly kind: "toolResult"
+      readonly hook: ExtensionHook<ToolResultInput, unknown, E, R>
+    }
+
+export type AnyExtensionHook = ExtensionHookSlot<never, never>
+
+export const hook = {
+  systemPrompt: <E = never, R = never>(
+    handler: (input: SystemPromptInput) => Effect.Effect<string, E, R>,
+  ): ExtensionHookSlot<E, R> => ({ kind: "systemPrompt", hook: { handler } }),
+  turnProjection: <E = never, R = never>(
+    handler: () => Effect.Effect<TurnProjection, E, R>,
+  ): ExtensionHookSlot<E, R> => ({
+    kind: "turnProjection",
+    hook: { handler: () => handler() },
+  }),
+  turnAfter: <E = never, R = never>(
+    handler: (input: TurnAfterInput) => Effect.Effect<void, E, R>,
+  ): ExtensionHookSlot<E, R> => ({ kind: "turnAfter", hook: { handler } }),
+  toolCall: <E = never, R = never>(
+    handler: (input: ToolCallInput) => Effect.Effect<ToolCallPreflightResult, E, R>,
+  ): ExtensionHookSlot<E, R> => ({ kind: "toolCall", hook: { handler } }),
+  toolResult: <E = never, R = never>(
+    handler: (input: ToolResultInput) => Effect.Effect<unknown, E, R>,
+  ): ExtensionHookSlot<E, R> => ({ kind: "toolResult", hook: { handler } }),
 }
 
 /**

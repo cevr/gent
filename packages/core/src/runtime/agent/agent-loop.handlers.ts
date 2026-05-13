@@ -77,11 +77,15 @@ import {
 import { MessageStorage } from "../../storage/message-storage.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
+import { DynamicExtensionRegistry } from "../../domain/dynamic-extension-registry.js"
+import { provideExtensionServices } from "../../domain/extension-services.js"
 import { parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { recordToolResult } from "./turn-persistence.js"
 import { invokeTool } from "./turn-tool-execution.js"
 import { provideAgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
+import { CurrentExtensionHostContext } from "./current-extension-host-context.js"
+import { runExtensionCapability } from "../extensions/registry.js"
 import {
   buildQueuedTurnItem,
   failIfTurnFailedAfterEpoch,
@@ -141,6 +145,7 @@ export const buildAgentLoopActorHandlers = (config: {
     const queueStorage = yield* AgentLoopQueueStorage
     const eventStorage = yield* EventStorage
     const eventStore = yield* EventStore
+    const dynamicRegistryOption = yield* Effect.serviceOption(DynamicExtensionRegistry)
     const sessionProfileCacheOption = yield* Effect.serviceOption(SessionProfileCache)
     const closed = yield* Ref.make(false)
     const operationSeen = yield* Ref.make(false)
@@ -859,22 +864,43 @@ export const buildAgentLoopActorHandlers = (config: {
             return yield* Effect.gen(function* () {
               const environment = yield* handle.resolveTurnProfile
               const rpcRegistry = environment.turnExtensionRegistry.getResolved().rpcRegistry
-              return yield* rpcRegistry
-                .run(
-                  operation.extensionId,
-                  RpcId.make(operation.capabilityId),
-                  operation.input._tag === "Present" ? operation.input.value : undefined,
-                )
-                .pipe(
-                  provideAgentLoopTurnProfile(environment),
-                  Effect.mapError(
-                    (error) =>
-                      new AgentLoopError({
-                        message: "reason" in error ? `${error._tag}: ${error.reason}` : error._tag,
-                        cause: error,
-                      }),
-                  ),
-                )
+              const input = operation.input._tag === "Present" ? operation.input.value : undefined
+              const staticRequest = rpcRegistry.run(
+                operation.extensionId,
+                RpcId.make(operation.capabilityId),
+                input,
+              )
+              const dynamicRequest =
+                dynamicRegistryOption._tag === "Some"
+                  ? Effect.gen(function* () {
+                      const dynamic = yield* dynamicRegistryOption.value.findRequest({
+                        sessionId: operation.sessionId,
+                        extensionId: operation.extensionId,
+                        capabilityId: operation.capabilityId,
+                      })
+                      if (dynamic === undefined) return yield* staticRequest
+                      const hostCtx = yield* CurrentExtensionHostContext
+                      return yield* provideExtensionServices(
+                        hostCtx,
+                        runExtensionCapability(
+                          dynamic.extensionId,
+                          RpcId.make(operation.capabilityId),
+                          dynamic.capability,
+                          input,
+                        ),
+                      )
+                    })
+                  : staticRequest
+              return yield* dynamicRequest.pipe(
+                provideAgentLoopTurnProfile(environment),
+                Effect.mapError(
+                  (error) =>
+                    new AgentLoopError({
+                      message: "reason" in error ? `${error._tag}: ${error.reason}` : error._tag,
+                      cause: error,
+                    }),
+                ),
+              )
             }).pipe(handle.withSideMutation)
           }).pipe(
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),

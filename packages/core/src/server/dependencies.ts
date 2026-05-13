@@ -6,6 +6,7 @@ import { ChildProcessSpawner as ProcessSpawner } from "effect/unstable/process"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { AgentRunnerService } from "../domain/agent.js"
 import { Auth, AuthGuard } from "../domain/auth.js"
+import { DynamicExtensionRegistry } from "../domain/dynamic-extension-registry.js"
 import { EventStore, EventStoreError } from "../domain/event.js"
 import { EventPublisherLive, type EventPublisher } from "../domain/event-publisher.js"
 import type { PromptSection } from "../domain/prompt.js"
@@ -419,6 +420,7 @@ export const createDependencies = (config: DependenciesConfig) => {
       configServiceLive,
       Layer.provide(modelRegistryLive, FetchHttpClient.layer),
       extensionRegistryLive,
+      DynamicExtensionRegistry.Live,
       fileLockServiceLive,
       AgentLoopSessionGovernance.Live,
       modelResolverLive,

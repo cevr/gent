@@ -3,8 +3,9 @@ import { Context, Effect, Exit, Layer, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
-import { tool, ExtensionContext } from "@gent/core/extensions/api"
+import { hook, tool, ExtensionContext } from "@gent/core/extensions/api"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
+import { DynamicExtensionRegistry } from "../../src/domain/dynamic-extension-registry"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core-internal/domain/permission"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
@@ -97,6 +98,96 @@ describe("tool execution", () => {
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ echoed: "hello" })
+    }))
+
+  test("runs session dynamic tools and honors tool-call preflight hooks", () =>
+    Effect.gen(function* () {
+      const DynamicTool = tool({
+        id: "dynamic_echo",
+        description: "Echo input",
+        params: Schema.Struct({ message: Schema.String }),
+        output: Schema.Struct({ echoed: Schema.String }),
+        execute: ({ message }) => Effect.succeed({ echoed: message }),
+      })
+      const deps = Layer.mergeAll(
+        ExtensionRegistry.fromResolved(
+          resolveExtensions([
+            {
+              manifest: { id: ExtensionId.make("policy") },
+              scope: "builtin",
+              sourcePath: "policy",
+              contributions: {
+                hooks: [
+                  hook.toolCall((input) =>
+                    input.toolName === "dynamic_echo" &&
+                    typeof input.input === "object" &&
+                    input.input !== null &&
+                    "message" in input.input &&
+                    input.input.message === "blocked"
+                      ? Effect.succeed({ _tag: "deny" as const, message: "blocked" })
+                      : Effect.undefined,
+                  ),
+                ],
+              },
+            },
+          ]),
+        ),
+        DynamicExtensionRegistry.Live,
+        Permission.Test(),
+        EventPublisher.Test(),
+        ApprovalService.Test(),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      )
+      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
+      const layer = Layer.mergeAll(deps, runnerLayer)
+      const { allowed, denied } = yield* Effect.gen(function* () {
+        const dynamic = yield* DynamicExtensionRegistry
+        const unregister = yield* dynamic.registerTool({
+          extensionId: ExtensionId.make("dynamic"),
+          scope: { _tag: "session", sessionId: SessionId.make("s") },
+          capability: DynamicTool,
+        })
+        void unregister
+        const runner = yield* ToolRunner
+        const toolCallId = ToolCallId.make("tc-dynamic")
+        const allowed = yield* runner
+          .run({
+            toolCallId,
+            toolName: "dynamic_echo",
+            input: { message: "hello" },
+          })
+          .pipe(
+            provideCurrentHostCtx(
+              testToolContext({
+                sessionId: SessionId.make("s"),
+                branchId: BranchId.make("b"),
+                toolCallId,
+                agentName: AgentName.make("cowork"),
+              }),
+            ),
+          )
+        const denied = yield* runner
+          .run({
+            toolCallId: ToolCallId.make("tc-dynamic-denied"),
+            toolName: "dynamic_echo",
+            input: { message: "blocked" },
+          })
+          .pipe(
+            provideCurrentHostCtx(
+              testToolContext({
+                sessionId: SessionId.make("s"),
+                branchId: BranchId.make("b"),
+                toolCallId: ToolCallId.make("tc-dynamic-denied"),
+                agentName: AgentName.make("cowork"),
+              }),
+            ),
+          )
+        return { allowed, denied }
+      }).pipe(Effect.provide(layer))
+      expect(allowed.isFailure).toBe(false)
+      expect(allowed.result).toEqual({ echoed: "hello" })
+      expect(denied.isFailure).toBe(true)
+      expect(denied.result).toEqual({ error: "blocked" })
     }))
   test("provides host authority through ExtensionContext service", () =>
     Effect.gen(function* () {
