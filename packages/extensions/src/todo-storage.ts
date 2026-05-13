@@ -164,12 +164,10 @@ const resetIncompatibleTodoTables = Effect.fn("TodoStorage.resetIncompatibleTodo
     yield* Effect.acquireUseRelease(
       sql.unsafe(`PRAGMA foreign_keys = OFF`),
       () =>
-        sql.withTransaction(
-          Effect.gen(function* () {
-            yield* sql.unsafe(`DROP TABLE IF EXISTS todo_edges`)
-            yield* sql.unsafe(`DROP TABLE IF EXISTS todos`)
-          }),
-        ),
+        Effect.gen(function* () {
+          yield* sql.unsafe(`DROP TABLE IF EXISTS todo_edges`)
+          yield* sql.unsafe(`DROP TABLE IF EXISTS todos`)
+        }).pipe(sql.withTransaction),
       () => sql.unsafe(`PRAGMA foreign_keys = ON`),
     )
   },
@@ -452,39 +450,35 @@ const makeTodoStorageService: Effect.Effect<
               : yield* encodeTodoMetadata(fields.metadata)
         }
 
-        return yield* sql.withTransaction(
-          Effect.gen(function* () {
-            const existing = yield* selectTodoById(id)
-            if (existing === undefined) return undefined
-            if (fields.parentId !== undefined && fields.parentId !== null) {
-              yield* ensureNoParentCycle(id, fields.parentId)
-            }
-            if (
-              fields.status !== undefined &&
-              !isValidTodoTransition(existing.status, fields.status)
-            ) {
-              return yield* new TodoTransitionError({
-                message: `Invalid todo transition: ${existing.status} → ${fields.status}`,
-                from: existing.status,
-                to: fields.status,
-              })
-            }
-            yield* sql`UPDATE todos SET ${sql.update(updates)} WHERE id = ${id}`
-            return yield* selectTodoById(id)
-          }),
-        )
+        return yield* Effect.gen(function* () {
+          const existing = yield* selectTodoById(id)
+          if (existing === undefined) return undefined
+          if (fields.parentId !== undefined && fields.parentId !== null) {
+            yield* ensureNoParentCycle(id, fields.parentId)
+          }
+          if (
+            fields.status !== undefined &&
+            !isValidTodoTransition(existing.status, fields.status)
+          ) {
+            return yield* new TodoTransitionError({
+              message: `Invalid todo transition: ${existing.status} → ${fields.status}`,
+              from: existing.status,
+              to: fields.status,
+            })
+          }
+          yield* sql`UPDATE todos SET ${sql.update(updates)} WHERE id = ${id}`
+          return yield* selectTodoById(id)
+        }).pipe(sql.withTransaction)
       },
       Effect.mapError(mapUpdateError("Failed to update todo")),
     ),
 
     deleteTodo: Effect.fn("TodoStorage.deleteTodo")(
       function* (id) {
-        yield* sql.withTransaction(
-          Effect.gen(function* () {
-            yield* sql`DELETE FROM todo_edges WHERE todo_id = ${id} OR blocked_by_id = ${id}`
-            yield* sql`DELETE FROM todos WHERE id = ${id}`
-          }),
-        )
+        yield* Effect.gen(function* () {
+          yield* sql`DELETE FROM todo_edges WHERE todo_id = ${id} OR blocked_by_id = ${id}`
+          yield* sql`DELETE FROM todos WHERE id = ${id}`
+        }).pipe(sql.withTransaction)
       },
       Effect.mapError(mapError("Failed to delete todo")),
     ),

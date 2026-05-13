@@ -103,116 +103,176 @@ describe("BashTool execution", () => {
   it.live(
     "runs a command and returns stdout",
     () =>
-      withProcessTimeout(
-        Effect.gen(function* () {
-          const result = yield* provideBun(
-            runToolWithCtx(BashTool, { command: "echo hello" }, stubCtx),
-          )
+      Effect.gen(function* () {
+        const result = yield* provideBun(
+          runToolWithCtx(BashTool, { command: "echo hello" }, stubCtx),
+        )
 
-          expect(result.stdout.trim()).toBe("hello")
-          expect(result.exitCode).toBe(0)
-        }),
-      ),
+        expect(result.stdout.trim()).toBe("hello")
+        expect(result.exitCode).toBe(0)
+      }).pipe(withProcessTimeout),
     processTestTimeout,
   )
 
   it.live(
     "captures nonzero exit code",
     () =>
-      withProcessTimeout(
-        Effect.gen(function* () {
-          const result = yield* provideBun(runToolWithCtx(BashTool, { command: "exit 2" }, stubCtx))
+      Effect.gen(function* () {
+        const result = yield* provideBun(runToolWithCtx(BashTool, { command: "exit 2" }, stubCtx))
 
-          expect(result.exitCode).toBe(2)
-        }),
-      ),
+        expect(result.exitCode).toBe(2)
+      }).pipe(withProcessTimeout),
     processTestTimeout,
   )
 
   it.live(
     "respects cwd parameter",
     () =>
-      withProcessTimeout(
-        Effect.gen(function* () {
-          const result = yield* provideBun(
-            runToolWithCtx(BashTool, { command: "pwd", cwd: "/tmp" }, stubCtx),
-          )
+      Effect.gen(function* () {
+        const result = yield* provideBun(
+          runToolWithCtx(BashTool, { command: "pwd", cwd: "/tmp" }, stubCtx),
+        )
 
-          expect(result.stdout.trim()).toMatch(/\/tmp$/)
-          expect(result.exitCode).toBe(0)
-        }),
-      ),
+        expect(result.stdout.trim()).toMatch(/\/tmp$/)
+        expect(result.exitCode).toBe(0)
+      }).pipe(withProcessTimeout),
     processTestTimeout,
   )
 
   it.live(
     "splits cd + command into cwd and executes",
     () =>
-      withProcessTimeout(
-        Effect.gen(function* () {
-          const result = yield* provideBun(
-            runToolWithCtx(BashTool, { command: "cd /tmp && pwd" }, stubCtx),
-          )
+      Effect.gen(function* () {
+        const result = yield* provideBun(
+          runToolWithCtx(BashTool, { command: "cd /tmp && pwd" }, stubCtx),
+        )
 
-          expect(result.stdout.trim()).toMatch(/\/tmp$/)
-          expect(result.exitCode).toBe(0)
-        }),
-      ),
+        expect(result.stdout.trim()).toMatch(/\/tmp$/)
+        expect(result.exitCode).toBe(0)
+      }).pipe(withProcessTimeout),
     processTestTimeout,
   )
 
   it.live(
     "background mode queues a follow-up on completion",
     () =>
-      withProcessTimeout(
-        Effect.gen(function* () {
-          const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-          const ctx = withSession(stubCtx, {
-            ...stubCtx.Session,
-            getSession: () =>
-              Effect.succeed(
-                new Session({
-                  id: stubCtx.sessionId,
-                  activeBranchId: stubCtx.branchId,
-                  createdAt: now,
-                  updatedAt: now,
-                }),
-              ),
-            listBranches: () =>
-              Effect.succeed([
-                new Branch({
-                  id: stubCtx.branchId,
-                  sessionId: stubCtx.sessionId,
-                  createdAt: now,
-                }),
-              ]),
-            queueFollowUp: (params) => Deferred.succeed(sent, params),
-          })
-          const result = yield* runToolWithCtx(
-            BashTool,
-            { command: "printf background-finished", run_in_background: true },
-            ctx,
-          )
+      Effect.gen(function* () {
+        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        const ctx = withSession(stubCtx, {
+          ...stubCtx.Session,
+          getSession: () =>
+            Effect.succeed(
+              new Session({
+                id: stubCtx.sessionId,
+                activeBranchId: stubCtx.branchId,
+                createdAt: now,
+                updatedAt: now,
+              }),
+            ),
+          listBranches: () =>
+            Effect.succeed([
+              new Branch({
+                id: stubCtx.branchId,
+                sessionId: stubCtx.sessionId,
+                createdAt: now,
+              }),
+            ]),
+          queueFollowUp: (params) => Deferred.succeed(sent, params),
+        })
+        const result = yield* runToolWithCtx(
+          BashTool,
+          { command: "printf background-finished", run_in_background: true },
+          ctx,
+        )
 
-          expect(result.exitCode).toBe(0)
-          expect(result.stdout).toContain("Command started in background")
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).toContain("Command started in background")
 
-          const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
-          expect(message.sourceId).toBe("bash:tc-1:complete")
-          expect(message.content).toContain("Background command completed (exit code 0)")
-          expect(message.content).toContain("$ printf background-finished")
-        }).pipe(provideBun),
-      ),
+        const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
+        expect(message.sourceId).toBe("bash:tc-1:complete")
+        expect(message.content).toContain("Background command completed (exit code 0)")
+        expect(message.content).toContain("$ printf background-finished")
+      }).pipe(provideBun, withProcessTimeout),
     processTestTimeout,
   )
 
   it.live(
     "background process is cancelled with the supervisor scope",
     () =>
-      withProcessTimeout(
-        Effect.gen(function* () {
-          const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-          const ctx = withSession(stubCtx, {
+      Effect.gen(function* () {
+        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        const ctx = withSession(stubCtx, {
+          ...stubCtx.Session,
+          getSession: () =>
+            Effect.succeed(
+              new Session({
+                id: stubCtx.sessionId,
+                activeBranchId: stubCtx.branchId,
+                createdAt: now,
+                updatedAt: now,
+              }),
+            ),
+          listBranches: () =>
+            Effect.succeed([
+              new Branch({
+                id: stubCtx.branchId,
+                sessionId: stubCtx.sessionId,
+                createdAt: now,
+              }),
+            ]),
+          queueFollowUp: (params) => Deferred.succeed(sent, params),
+        })
+        const scope = yield* Scope.make()
+        const context = yield* Layer.buildWithScope(makePlatformLayer(), scope)
+        const result = yield* runToolWithCtx(
+          BashTool,
+          { command: "sleep 2; printf should-not-arrive", run_in_background: true },
+          ctx,
+        ).pipe(Effect.provideContext(context))
+
+        expect(result.exitCode).toBe(0)
+        yield* Scope.close(scope, Exit.void)
+
+        const followUp = yield* Effect.exit(Deferred.await(sent).pipe(Effect.timeout("250 millis")))
+        expect(followUp._tag).toBe("Failure")
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
+  it.live(
+    "background completion is dropped when the session disappeared",
+    () =>
+      Effect.gen(function* () {
+        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        const ctx = withSession(stubCtx, {
+          ...stubCtx.Session,
+          getSession: () => Effect.sync((): Session | undefined => undefined),
+          listBranches: () => Effect.succeed([]),
+          queueFollowUp: (params) => Deferred.succeed(sent, params),
+        })
+
+        const result = yield* runToolWithCtx(
+          BashTool,
+          { command: "printf stale-session", run_in_background: true },
+          ctx,
+        ).pipe(provideBun)
+
+        expect(result.exitCode).toBe(0)
+        const followUp = yield* Effect.exit(Deferred.await(sent).pipe(Effect.timeout("250 millis")))
+        expect(followUp._tag).toBe("Failure")
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
+  it.live(
+    "terminal background job retries replay durable completion instead of spawning work",
+    () =>
+      Effect.gen(function* () {
+        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        const toolCallId = ToolCallId.make("tc-terminal-retry")
+        const ctx = withSession(
+          { ...stubCtx, toolCallId },
+          {
             ...stubCtx.Session,
             getSession: () =>
               Effect.succeed(
@@ -232,252 +292,166 @@ describe("BashTool execution", () => {
                 }),
               ]),
             queueFollowUp: (params) => Deferred.succeed(sent, params),
+          },
+        )
+        const millis = yield* Clock.currentTimeMillis
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `/tmp/gent-background-bash-terminal-${millis}.db`,
+        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+
+        yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          const claim = yield* storage.claimStart({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            toolCallId,
+            command: "printf stored-terminal",
+            cwd: ctx.cwd,
           })
-          const scope = yield* Scope.make()
-          const context = yield* Layer.buildWithScope(makePlatformLayer(), scope)
-          const result = yield* runToolWithCtx(
-            BashTool,
-            { command: "sleep 2; printf should-not-arrive", run_in_background: true },
-            ctx,
-          ).pipe(Effect.provideContext(context))
-
-          expect(result.exitCode).toBe(0)
-          yield* Scope.close(scope, Exit.void)
-
-          const followUp = yield* Effect.exit(
-            Deferred.await(sent).pipe(Effect.timeout("250 millis")),
+          expect(claim._tag).toBe("Started")
+          yield* storage.markCompleted(
+            { sessionId: ctx.sessionId, branchId: ctx.branchId, toolCallId },
+            { exitCode: 0, message: "stored output" },
           )
-          expect(followUp._tag).toBe("Failure")
-        }),
-      ),
-    processTestTimeout,
-  )
-
-  it.live(
-    "background completion is dropped when the session disappeared",
-    () =>
-      withProcessTimeout(
-        Effect.gen(function* () {
-          const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-          const ctx = withSession(stubCtx, {
-            ...stubCtx.Session,
-            getSession: () => Effect.sync((): Session | undefined => undefined),
-            listBranches: () => Effect.succeed([]),
-            queueFollowUp: (params) => Deferred.succeed(sent, params),
-          })
-
-          const result = yield* runToolWithCtx(
-            BashTool,
-            { command: "printf stale-session", run_in_background: true },
-            ctx,
-          ).pipe(provideBun)
-
-          expect(result.exitCode).toBe(0)
-          const followUp = yield* Effect.exit(
-            Deferred.await(sent).pipe(Effect.timeout("250 millis")),
-          )
-          expect(followUp._tag).toBe("Failure")
-        }),
-      ),
-    processTestTimeout,
-  )
-
-  it.live(
-    "terminal background job retries replay durable completion instead of spawning work",
-    () =>
-      withProcessTimeout(
-        Effect.gen(function* () {
-          const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-          const toolCallId = ToolCallId.make("tc-terminal-retry")
-          const ctx = withSession(
-            { ...stubCtx, toolCallId },
-            {
-              ...stubCtx.Session,
-              getSession: () =>
-                Effect.succeed(
-                  new Session({
-                    id: stubCtx.sessionId,
-                    activeBranchId: stubCtx.branchId,
-                    createdAt: now,
-                    updatedAt: now,
-                  }),
-                ),
-              listBranches: () =>
-                Effect.succeed([
-                  new Branch({
-                    id: stubCtx.branchId,
-                    sessionId: stubCtx.sessionId,
-                    createdAt: now,
-                  }),
-                ]),
-              queueFollowUp: (params) => Deferred.succeed(sent, params),
-            },
-          )
-          const millis = yield* Clock.currentTimeMillis
-          const storageLayer = SqliteStorage.LiveWithSql(
-            `/tmp/gent-background-bash-terminal-${millis}.db`,
-          ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
-
-          yield* Effect.gen(function* () {
-            const storage = yield* BackgroundBashStorage
-            const claim = yield* storage.claimStart({
-              sessionId: ctx.sessionId,
-              branchId: ctx.branchId,
-              toolCallId,
-              command: "printf stored-terminal",
-              cwd: ctx.cwd,
-            })
-            expect(claim._tag).toBe("Started")
-            yield* storage.markCompleted(
-              { sessionId: ctx.sessionId, branchId: ctx.branchId, toolCallId },
-              { exitCode: 0, message: "stored output" },
-            )
-          }).pipe(
-            Effect.provide(
-              Layer.mergeAll(
-                storageLayer,
-                BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer)),
-              ),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              storageLayer,
+              BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer)),
             ),
-          )
+          ),
+        )
 
-          const retried = yield* runToolWithCtx(
-            BashTool,
-            { command: "printf should-not-run", run_in_background: true },
-            ctx,
-          ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
-          expect(retried.exitCode).toBe(0)
+        const retried = yield* runToolWithCtx(
+          BashTool,
+          { command: "printf should-not-run", run_in_background: true },
+          ctx,
+        ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+        expect(retried.exitCode).toBe(0)
 
-          const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
-          expect(message.sourceId).toBe("bash:tc-terminal-retry:complete")
-          expect(message.content).toContain("Background command completed (exit code 0)")
-          expect(message.content).toContain("$ printf stored-terminal")
-          expect(message.content).toContain("stored output")
-          expect(message.content).not.toContain("should-not-run")
-        }),
-      ),
+        const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
+        expect(message.sourceId).toBe("bash:tc-terminal-retry:complete")
+        expect(message.content).toContain("Background command completed (exit code 0)")
+        expect(message.content).toContain("$ printf stored-terminal")
+        expect(message.content).toContain("stored output")
+        expect(message.content).not.toContain("should-not-run")
+      }).pipe(withProcessTimeout),
     processTestTimeout,
   )
 
   it.live(
     "failed background job does not notify before failure state is durable",
     () =>
-      withProcessTimeout(
-        Effect.gen(function* () {
-          const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-          const toolCallId = ToolCallId.make("tc-failed-terminal-durability")
-          const ctx = withSession(
-            { ...stubCtx, toolCallId },
-            {
-              ...stubCtx.Session,
-              getSession: () =>
-                Effect.succeed(
-                  new Session({
-                    id: stubCtx.sessionId,
-                    activeBranchId: stubCtx.branchId,
-                    createdAt: now,
-                    updatedAt: now,
-                  }),
-                ),
-              listBranches: () =>
-                Effect.succeed([
-                  new Branch({
-                    id: stubCtx.branchId,
-                    sessionId: stubCtx.sessionId,
-                    createdAt: now,
-                  }),
-                ]),
-              queueFollowUp: (params) => Deferred.succeed(sent, params),
-            },
-          )
-          const millis = yield* Clock.currentTimeMillis
-          const storageLayer = SqliteStorage.LiveWithSql(
-            `/tmp/gent-background-bash-failure-${millis}.db`,
-          ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+      Effect.gen(function* () {
+        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        const toolCallId = ToolCallId.make("tc-failed-terminal-durability")
+        const ctx = withSession(
+          { ...stubCtx, toolCallId },
+          {
+            ...stubCtx.Session,
+            getSession: () =>
+              Effect.succeed(
+                new Session({
+                  id: stubCtx.sessionId,
+                  activeBranchId: stubCtx.branchId,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+              ),
+            listBranches: () =>
+              Effect.succeed([
+                new Branch({
+                  id: stubCtx.branchId,
+                  sessionId: stubCtx.sessionId,
+                  createdAt: now,
+                }),
+              ]),
+            queueFollowUp: (params) => Deferred.succeed(sent, params),
+          },
+        )
+        const millis = yield* Clock.currentTimeMillis
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `/tmp/gent-background-bash-failure-${millis}.db`,
+        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
 
-          const result = yield* runToolWithCtx(
-            BashTool,
-            {
-              command: "printf should-not-run",
-              cwd: "/tmp/gent-missing-cwd",
-              run_in_background: true,
-            },
-            ctx,
-          ).pipe(Effect.provide(makeProcessLayerWithFailingMarkFailed(storageLayer)))
-          expect(result.exitCode).toBe(0)
+        const result = yield* runToolWithCtx(
+          BashTool,
+          {
+            command: "printf should-not-run",
+            cwd: "/tmp/gent-missing-cwd",
+            run_in_background: true,
+          },
+          ctx,
+        ).pipe(Effect.provide(makeProcessLayerWithFailingMarkFailed(storageLayer)))
+        expect(result.exitCode).toBe(0)
 
-          const followUp = yield* Effect.exit(
-            Deferred.await(sent).pipe(Effect.timeout("250 millis")),
-          )
-          expect(followUp._tag).toBe("Failure")
-        }),
-      ),
+        const followUp = yield* Effect.exit(Deferred.await(sent).pipe(Effect.timeout("250 millis")))
+        expect(followUp._tag).toBe("Failure")
+      }).pipe(withProcessTimeout),
     processTestTimeout,
   )
 
   it.live(
     "background job interrupted by restart is reconciled once",
     () =>
-      withProcessTimeout(
-        Effect.gen(function* () {
-          const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
-          const ctx = withSession(
-            { ...stubCtx, toolCallId: ToolCallId.make("tc-restart") },
-            {
-              ...stubCtx.Session,
-              getSession: () =>
-                Effect.succeed(
-                  new Session({
-                    id: stubCtx.sessionId,
-                    activeBranchId: stubCtx.branchId,
-                    createdAt: now,
-                    updatedAt: now,
-                  }),
-                ),
-              listBranches: () =>
-                Effect.succeed([
-                  new Branch({
-                    id: stubCtx.branchId,
-                    sessionId: stubCtx.sessionId,
-                    createdAt: now,
-                  }),
-                ]),
-              queueFollowUp: (params) => Deferred.succeed(sent, params),
-            },
-          )
-          const scope = yield* Scope.make()
-          const millis = yield* Clock.currentTimeMillis
-          const storageLayer = SqliteStorage.LiveWithSql(
-            `/tmp/gent-background-bash-${millis}.db`,
-          ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
-          const processLayer = makeProcessLayer(storageLayer)
-          const firstContext = yield* Layer.buildWithScope(processLayer, scope)
-          const started = yield* runToolWithCtx(
-            BashTool,
-            { command: "sleep 2; printf should-not-arrive", run_in_background: true },
-            ctx,
-          ).pipe(Effect.provideContext(firstContext))
-          expect(started.exitCode).toBe(0)
-          yield* Scope.close(scope, Exit.void)
+      Effect.gen(function* () {
+        const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
+        const ctx = withSession(
+          { ...stubCtx, toolCallId: ToolCallId.make("tc-restart") },
+          {
+            ...stubCtx.Session,
+            getSession: () =>
+              Effect.succeed(
+                new Session({
+                  id: stubCtx.sessionId,
+                  activeBranchId: stubCtx.branchId,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+              ),
+            listBranches: () =>
+              Effect.succeed([
+                new Branch({
+                  id: stubCtx.branchId,
+                  sessionId: stubCtx.sessionId,
+                  createdAt: now,
+                }),
+              ]),
+            queueFollowUp: (params) => Deferred.succeed(sent, params),
+          },
+        )
+        const scope = yield* Scope.make()
+        const millis = yield* Clock.currentTimeMillis
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `/tmp/gent-background-bash-${millis}.db`,
+        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const processLayer = makeProcessLayer(storageLayer)
+        const firstContext = yield* Layer.buildWithScope(processLayer, scope)
+        const started = yield* runToolWithCtx(
+          BashTool,
+          { command: "sleep 2; printf should-not-arrive", run_in_background: true },
+          ctx,
+        ).pipe(Effect.provideContext(firstContext))
+        expect(started.exitCode).toBe(0)
+        yield* Scope.close(scope, Exit.void)
 
-          yield* Effect.gen(function* () {
-            const storage = yield* BackgroundBashStorage
-            yield* storage.reconcileInterrupted()
-          }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))))
+        yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          yield* storage.reconcileInterrupted()
+        }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))))
 
-          const retried = yield* runToolWithCtx(
-            BashTool,
-            { command: "printf should-not-run", run_in_background: true },
-            ctx,
-          ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
-          expect(retried.exitCode).toBe(0)
+        const retried = yield* runToolWithCtx(
+          BashTool,
+          { command: "printf should-not-run", run_in_background: true },
+          ctx,
+        ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+        expect(retried.exitCode).toBe(0)
 
-          const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
-          expect(message.sourceId).toBe("bash:tc-restart:failure")
-          expect(message.content).toContain("Background command interrupted by server restart")
-          expect(message.content).not.toContain("Background command completed")
-        }),
-      ),
+        const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
+        expect(message.sourceId).toBe("bash:tc-restart:failure")
+        expect(message.content).toContain("Background command interrupted by server restart")
+        expect(message.content).not.toContain("Background command completed")
+      }).pipe(withProcessTimeout),
     processTestTimeout,
   )
 })

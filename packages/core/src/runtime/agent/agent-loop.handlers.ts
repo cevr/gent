@@ -154,7 +154,7 @@ export const buildAgentLoopActorHandlers = (config: {
     // concurrent `openLoop` cannot observe a half-torn-down loop nor
     // publish a fresh handle while the old one is closing.
     const closeBehavior = (loop: AgentLoopBehavior) =>
-      startupSemaphore.withPermits(1)(closeBehaviorWithHeldStartupPermit(loop))
+      closeBehaviorWithHeldStartupPermit(loop).pipe(startupSemaphore.withPermits(1))
 
     const cleanupLoop = (loop: AgentLoopBehavior) => closeBehavior(loop)
 
@@ -413,24 +413,22 @@ export const buildAgentLoopActorHandlers = (config: {
     // published; `ensureStarted` then reads them inside the same permit
     // window and returns the handle directly so callers cannot read a
     // post-rebuild stale handle.
-    const ensureStarted = startupSemaphore.withPermits(1)(
-      Effect.gen(function* () {
-        if (yield* Ref.get(closed)) {
-          yield* openLoop.pipe(provideActorWorkspace)
+    const ensureStarted = Effect.gen(function* () {
+      if (yield* Ref.get(closed)) {
+        yield* openLoop.pipe(provideActorWorkspace)
+      }
+      const exit = yield* Ref.get(startupExitRef)
+      if (exit === undefined || Exit.isSuccess(exit)) {
+        const handle = yield* Ref.get(handleRef)
+        if (handle === undefined) {
+          return yield* new AgentLoopError({
+            message: `AgentLoop handle unavailable for ${sessionId}/${branchId}`,
+          })
         }
-        const exit = yield* Ref.get(startupExitRef)
-        if (exit === undefined || Exit.isSuccess(exit)) {
-          const handle = yield* Ref.get(handleRef)
-          if (handle === undefined) {
-            return yield* new AgentLoopError({
-              message: `AgentLoop handle unavailable for ${sessionId}/${branchId}`,
-            })
-          }
-          return handle
-        }
-        return yield* causeToAgentLoopError(exit.cause)
-      }),
-    )
+        return handle
+      }
+      return yield* causeToAgentLoopError(exit.cause)
+    }).pipe(startupSemaphore.withPermits(1))
 
     const currentRegisteredState = Effect.gen(function* () {
       yield* rejectIfTerminated
@@ -688,20 +686,18 @@ export const buildAgentLoopActorHandlers = (config: {
           yield* ensureTarget(operation)
           yield* markWrite
           const handle = yield* ensureStarted
-          yield* handle.withSideMutation(
-            recordToolResult({
-              toolResultMessageId:
-                operation.commandId !== undefined
-                  ? toolResultMessageIdForCommand(operation.commandId)
-                  : toolResultMessageIdForToolCall(operation.toolCallId),
-              sessionId: operation.sessionId,
-              branchId: operation.branchId,
-              toolCallId: operation.toolCallId,
-              toolName: operation.toolName,
-              output: operation.output,
-              ...(operation.isError !== undefined ? { isError: operation.isError } : {}),
-            }),
-          )
+          yield* recordToolResult({
+            toolResultMessageId:
+              operation.commandId !== undefined
+                ? toolResultMessageIdForCommand(operation.commandId)
+                : toolResultMessageIdForToolCall(operation.toolCallId),
+            sessionId: operation.sessionId,
+            branchId: operation.branchId,
+            toolCallId: operation.toolCallId,
+            toolName: operation.toolName,
+            output: operation.output,
+            ...(operation.isError !== undefined ? { isError: operation.isError } : {}),
+          }).pipe(handle.withSideMutation)
         }).pipe(
           Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
           provideActorWorkspace,
@@ -714,22 +710,20 @@ export const buildAgentLoopActorHandlers = (config: {
           yield* ensureTarget(operation)
           yield* markWrite
           const handle = yield* ensureStarted
-          yield* handle.withSideMutation(
-            Effect.gen(function* () {
-              const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
-              const environment = yield* handle.resolveTurnProfile
-              yield* invokeTool({
-                assistantMessageId: assistantMessageIdForCommand(operation.commandId),
-                toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
-                toolCallId: toolCallIdForCommand(operation.commandId),
-                toolName: operation.toolName,
-                input: operation.input,
-                sessionId: operation.sessionId,
-                branchId: operation.branchId,
-                currentTurnAgent,
-              }).pipe(provideAgentLoopTurnProfile(environment))
-            }),
-          )
+          yield* Effect.gen(function* () {
+            const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
+            const environment = yield* handle.resolveTurnProfile
+            yield* invokeTool({
+              assistantMessageId: assistantMessageIdForCommand(operation.commandId),
+              toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
+              toolCallId: toolCallIdForCommand(operation.commandId),
+              toolName: operation.toolName,
+              input: operation.input,
+              sessionId: operation.sessionId,
+              branchId: operation.branchId,
+              currentTurnAgent,
+            }).pipe(provideAgentLoopTurnProfile(environment))
+          }).pipe(handle.withSideMutation)
         }).pipe(
           Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
           provideActorWorkspace,

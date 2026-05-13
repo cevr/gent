@@ -110,23 +110,21 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
             function* (message) {
               yield* ensureMessageWorkspace(message)
               const { partJsons, metadataJson } = yield* encodeStoredMessage(message)
-              yield* sql.withTransaction(
-                Effect.gen(function* () {
-                  yield* messageRepository.insertVoid({
-                    id: message.id,
-                    session_id: message.sessionId,
-                    branch_id: message.branchId,
-                    kind: message._tag,
-                    role: message.role,
-                    created_at: message.createdAt.getTime(),
-                    turn_duration_ms: message.turnDurationMs ?? null,
-                    metadata: metadataJson,
-                  })
-                  yield* insertContent(message.id, partJsons)
-                  yield* indexSearch(message)
-                  yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId} AND workspace_id = ${yield* CurrentWorkspaceId}`
-                }),
-              )
+              yield* Effect.gen(function* () {
+                yield* messageRepository.insertVoid({
+                  id: message.id,
+                  session_id: message.sessionId,
+                  branch_id: message.branchId,
+                  kind: message._tag,
+                  role: message.role,
+                  created_at: message.createdAt.getTime(),
+                  turn_duration_ms: message.turnDurationMs ?? null,
+                  metadata: metadataJson,
+                })
+                yield* insertContent(message.id, partJsons)
+                yield* indexSearch(message)
+                yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId} AND workspace_id = ${yield* CurrentWorkspaceId}`
+              }).pipe(sql.withTransaction)
               return message
             },
             Effect.mapError(mapError("Failed to create message")),
@@ -136,19 +134,17 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
             function* (message) {
               yield* ensureMessageWorkspace(message)
               const { partJsons, metadataJson } = yield* encodeStoredMessage(message)
-              yield* sql.withTransaction(
-                Effect.gen(function* () {
-                  yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message._tag}, ${message.role}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
-                  const rows = yield* sql<{
-                    changed: number
-                  }>`SELECT changes() as changed`
-                  if ((rows[0]?.changed ?? 0) > 0) {
-                    yield* insertContent(message.id, partJsons)
-                    yield* indexSearch(message)
-                    yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId} AND workspace_id = ${yield* CurrentWorkspaceId}`
-                  }
-                }),
-              )
+              yield* Effect.gen(function* () {
+                yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message._tag}, ${message.role}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
+                const rows = yield* sql<{
+                  changed: number
+                }>`SELECT changes() as changed`
+                if ((rows[0]?.changed ?? 0) > 0) {
+                  yield* insertContent(message.id, partJsons)
+                  yield* indexSearch(message)
+                  yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId} AND workspace_id = ${yield* CurrentWorkspaceId}`
+                }
+              }).pipe(sql.withTransaction)
               return message
             },
             Effect.mapError(mapError("Failed to create message if absent")),
@@ -214,45 +210,43 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
           deleteMessages: Effect.fn("MessageStorage.deleteMessages")(
             function* (branchId, afterMessageId) {
               const workspaceId = yield* CurrentWorkspaceId
-              yield* sql.withTransaction(
-                Effect.gen(function* () {
-                  const messageIds: MessageId[] = []
-                  if (afterMessageId !== undefined) {
-                    const msgs = yield* sql<{
-                      id: MessageId
-                      created_at: number
-                    }>`SELECT m.id, m.created_at
+              yield* Effect.gen(function* () {
+                const messageIds: MessageId[] = []
+                if (afterMessageId !== undefined) {
+                  const msgs = yield* sql<{
+                    id: MessageId
+                    created_at: number
+                  }>`SELECT m.id, m.created_at
                     FROM messages m
                     JOIN sessions s ON s.id = m.session_id
                     WHERE m.id = ${afterMessageId} AND s.workspace_id = ${workspaceId}`
-                    const msg = msgs[0]
-                    if (msg !== undefined) {
-                      const rows = yield* sql<{
-                        id: MessageId
-                      }>`SELECT m.id
+                  const msg = msgs[0]
+                  if (msg !== undefined) {
+                    const rows = yield* sql<{
+                      id: MessageId
+                    }>`SELECT m.id
                       FROM messages m
                       JOIN sessions s ON s.id = m.session_id
                       WHERE m.branch_id = ${branchId}
                         AND s.workspace_id = ${workspaceId}
                         AND (m.created_at > ${msg.created_at} OR (m.created_at = ${msg.created_at} AND m.id > ${msg.id}))`
-                      messageIds.push(...rows.map((row) => row.id))
-                    }
-                  } else {
-                    const rows = yield* sql<{
-                      id: MessageId
-                    }>`SELECT m.id
+                    messageIds.push(...rows.map((row) => row.id))
+                  }
+                } else {
+                  const rows = yield* sql<{
+                    id: MessageId
+                  }>`SELECT m.id
                     FROM messages m
                     JOIN sessions s ON s.id = m.session_id
                     WHERE m.branch_id = ${branchId} AND s.workspace_id = ${workspaceId}`
-                    messageIds.push(...rows.map((row) => row.id))
-                  }
-                  if (messageIds.length === 0) return
-                  yield* sql`DELETE FROM messages_fts WHERE message_id IN ${sql.in(messageIds)}`
-                  yield* sql`DELETE FROM message_chunks WHERE message_id IN ${sql.in(messageIds)}`
-                  yield* sql`DELETE FROM messages WHERE id IN ${sql.in(messageIds)}`
-                  yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
-                }),
-              )
+                  messageIds.push(...rows.map((row) => row.id))
+                }
+                if (messageIds.length === 0) return
+                yield* sql`DELETE FROM messages_fts WHERE message_id IN ${sql.in(messageIds)}`
+                yield* sql`DELETE FROM message_chunks WHERE message_id IN ${sql.in(messageIds)}`
+                yield* sql`DELETE FROM messages WHERE id IN ${sql.in(messageIds)}`
+                yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
+              }).pipe(sql.withTransaction)
             },
             Effect.mapError(mapError("Failed to delete messages")),
           ),

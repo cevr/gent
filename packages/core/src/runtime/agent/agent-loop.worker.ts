@@ -125,8 +125,9 @@ export const makeAgentLoopWorker = Effect.gen(function* () {
     })
 
   const runTurnWorker = (startState: RunningState) =>
-    scope.sideMutationSemaphore.withPermits(1)(
-      scope.runTurn(startState).pipe(
+    scope
+      .runTurn(startState)
+      .pipe(
         Effect.annotateLogs({ sessionId: scope.sessionId, branchId: scope.branchId }),
         Effect.withSpan("AgentLoop.turn"),
         withWideEvent(
@@ -146,8 +147,8 @@ export const makeAgentLoopWorker = Effect.gen(function* () {
             .pipe(Effect.andThen(publishPhaseFailure(cause)), Effect.ignore),
         ),
         Effect.ignore,
-      ),
-    )
+      )
+      .pipe(scope.sideMutationSemaphore.withPermits(1))
 
   const turnWorkerLoop = TxQueue.take(scope.turnWorkerQueue).pipe(
     Effect.flatMap(runTurnWorker),
@@ -163,11 +164,65 @@ export const makeAgentLoopWorker = Effect.gen(function* () {
       yield* interruptActiveStream(scope.activeStreamRef)
       return
     }
-    yield* scope.sideMutationSemaphore.withPermits(1)(
+    yield* Effect.gen(function* () {
+      const state = yield* scope.currentLoopState
+      if (state._tag !== "WaitingForInteraction") return
+      yield* Ref.set(scope.interruptedRef, true)
+      const resumed = buildRunningState(
+        { currentAgent: state.currentAgent },
+        {
+          message: state.message,
+          ...(state.agentOverride !== undefined ? { agentOverride: state.agentOverride } : {}),
+          ...(state.runSpec !== undefined ? { runSpec: state.runSpec } : {}),
+          ...(state.interactive !== undefined ? { interactive: state.interactive } : {}),
+        },
+        { startedAtMs: state.startedAtMs },
+      )
+      yield* scope.saveCheckpoint(resumed)
+      yield* enqueueTurnWorker(resumed)
+    }).pipe(scope.sideMutationSemaphore.withPermits(1))
+  }).pipe(Effect.withSpan("AgentLoop.interrupt"))
+
+  const startTurn = Effect.fn("AgentLoop.startTurn")((item: QueuedTurnItem) =>
+    Effect.gen(function* () {
+      const state = yield* scope.currentLoopState
+      if (state._tag !== "Idle") return
+      yield* Ref.set(scope.interruptedRef, false)
+      const startedAtMs = yield* Clock.currentTimeMillis
+      const next = buildRunningState(state, item, { startedAtMs })
+      yield* scope.saveCheckpoint(next)
+      yield* enqueueTurnWorker(next)
+    }).pipe(scope.sideMutationSemaphore.withPermits(1)),
+  )
+
+  const switchAgent = Effect.fn("AgentLoop.switchAgent")((agent: AgentNameType) =>
+    Effect.gen(function* () {
+      const state = yield* scope.currentLoopState
+      const next = yield* scope.switchAgentOnState(state, agent)
+      if (next === state) return
+      yield* scope.saveCheckpoint(next)
+    }).pipe(scope.sideMutationSemaphore.withPermits(1)),
+  )
+
+  const respondInteraction = Effect.fn("AgentLoop.respondInteraction")(
+    (requestId: InteractionRequestId) =>
       Effect.gen(function* () {
         const state = yield* scope.currentLoopState
         if (state._tag !== "WaitingForInteraction") return
-        yield* Ref.set(scope.interruptedRef, true)
+        if (requestId !== state.pendingRequestId) {
+          yield* Effect.logWarning(
+            "Ignoring stale interaction response for non-pending request",
+          ).pipe(
+            Effect.annotateLogs({
+              sessionId: state.message.sessionId,
+              branchId: state.message.branchId,
+              expectedRequestId: state.pendingRequestId,
+              actualRequestId: requestId,
+            }),
+          )
+          return
+        }
+        yield* Ref.set(scope.interruptedRef, false)
         const resumed = buildRunningState(
           { currentAgent: state.currentAgent },
           {
@@ -180,69 +235,7 @@ export const makeAgentLoopWorker = Effect.gen(function* () {
         )
         yield* scope.saveCheckpoint(resumed)
         yield* enqueueTurnWorker(resumed)
-      }),
-    )
-  }).pipe(Effect.withSpan("AgentLoop.interrupt"))
-
-  const startTurn = Effect.fn("AgentLoop.startTurn")((item: QueuedTurnItem) =>
-    scope.sideMutationSemaphore.withPermits(1)(
-      Effect.gen(function* () {
-        const state = yield* scope.currentLoopState
-        if (state._tag !== "Idle") return
-        yield* Ref.set(scope.interruptedRef, false)
-        const startedAtMs = yield* Clock.currentTimeMillis
-        const next = buildRunningState(state, item, { startedAtMs })
-        yield* scope.saveCheckpoint(next)
-        yield* enqueueTurnWorker(next)
-      }),
-    ),
-  )
-
-  const switchAgent = Effect.fn("AgentLoop.switchAgent")((agent: AgentNameType) =>
-    scope.sideMutationSemaphore.withPermits(1)(
-      Effect.gen(function* () {
-        const state = yield* scope.currentLoopState
-        const next = yield* scope.switchAgentOnState(state, agent)
-        if (next === state) return
-        yield* scope.saveCheckpoint(next)
-      }),
-    ),
-  )
-
-  const respondInteraction = Effect.fn("AgentLoop.respondInteraction")(
-    (requestId: InteractionRequestId) =>
-      scope.sideMutationSemaphore.withPermits(1)(
-        Effect.gen(function* () {
-          const state = yield* scope.currentLoopState
-          if (state._tag !== "WaitingForInteraction") return
-          if (requestId !== state.pendingRequestId) {
-            yield* Effect.logWarning(
-              "Ignoring stale interaction response for non-pending request",
-            ).pipe(
-              Effect.annotateLogs({
-                sessionId: state.message.sessionId,
-                branchId: state.message.branchId,
-                expectedRequestId: state.pendingRequestId,
-                actualRequestId: requestId,
-              }),
-            )
-            return
-          }
-          yield* Ref.set(scope.interruptedRef, false)
-          const resumed = buildRunningState(
-            { currentAgent: state.currentAgent },
-            {
-              message: state.message,
-              ...(state.agentOverride !== undefined ? { agentOverride: state.agentOverride } : {}),
-              ...(state.runSpec !== undefined ? { runSpec: state.runSpec } : {}),
-              ...(state.interactive !== undefined ? { interactive: state.interactive } : {}),
-            },
-            { startedAtMs: state.startedAtMs },
-          )
-          yield* scope.saveCheckpoint(resumed)
-          yield* enqueueTurnWorker(resumed)
-        }),
-      ),
+      }).pipe(scope.sideMutationSemaphore.withPermits(1)),
   )
 
   return {
@@ -253,6 +246,6 @@ export const makeAgentLoopWorker = Effect.gen(function* () {
     switchAgent,
     respondInteraction,
     withSideMutation: <A, E, R2>(effect: Effect.Effect<A, E, R2>): Effect.Effect<A, E, R2> =>
-      scope.sideMutationSemaphore.withPermits(1)(effect),
+      effect.pipe(scope.sideMutationSemaphore.withPermits(1)),
   }
 })

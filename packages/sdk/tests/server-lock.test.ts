@@ -327,9 +327,10 @@ describe("signalIfIdentityOwned", () => {
 
   it.scopedLive("skips when probe says identity does not match", () =>
     Effect.gen(function* () {
-      const { result, signals } = yield* withSignalTrap(
-        signalIfIdentityOwned(makeEntry({ pid: process.pid }), () => Effect.succeed(false)),
-      )
+      const { result, signals } = yield* signalIfIdentityOwned(
+        makeEntry({ pid: process.pid }),
+        () => Effect.succeed(false),
+      ).pipe(withSignalTrap)
       expect(result).toBe("skipped")
       expect(signals).toEqual([])
     }).pipe(Effect.provide(PlatformLayer)),
@@ -337,9 +338,10 @@ describe("signalIfIdentityOwned", () => {
 
   it.scopedLive("signals when probe confirms identity", () =>
     Effect.gen(function* () {
-      const { result, signals } = yield* withSignalTrap(
-        signalIfIdentityOwned(makeEntry({ pid: process.pid }), () => Effect.succeed(true)),
-      )
+      const { result, signals } = yield* signalIfIdentityOwned(
+        makeEntry({ pid: process.pid }),
+        () => Effect.succeed(true),
+      ).pipe(withSignalTrap)
       expect(result).toBe("signaled")
       expect(signals).toEqual(["SIGTERM"])
     }).pipe(Effect.provide(PlatformLayer)),
@@ -347,9 +349,10 @@ describe("signalIfIdentityOwned", () => {
 
   it.scopedLive("skips when probe fails", () =>
     Effect.gen(function* () {
-      const { result, signals } = yield* withSignalTrap(
-        signalIfIdentityOwned(makeEntry({ pid: process.pid }), () => Effect.fail("probe boom")),
-      )
+      const { result, signals } = yield* signalIfIdentityOwned(
+        makeEntry({ pid: process.pid }),
+        () => Effect.fail("probe boom"),
+      ).pipe(withSignalTrap)
       expect(result).toBe("skipped")
       expect(signals).toEqual([])
     }).pipe(Effect.provide(PlatformLayer)),

@@ -146,19 +146,18 @@ export class BackgroundBashStorage extends Context.Service<
         return {
           claimStart: Effect.fn("BackgroundBashStorage.claimStart")(
             function* (input) {
-              return yield* sql.withTransaction(
-                Effect.gen(function* () {
-                  const existing = yield* selectJob(input)
-                  if (existing !== undefined) {
-                    if (existing.status === "running")
-                      return BackgroundBashClaim.cases.AlreadyRunning.make({})
-                    return BackgroundBashClaim.cases.Terminal.make({
-                      state: terminalState(existing),
-                    })
-                  }
+              return yield* Effect.gen(function* () {
+                const existing = yield* selectJob(input)
+                if (existing !== undefined) {
+                  if (existing.status === "running")
+                    return BackgroundBashClaim.cases.AlreadyRunning.make({})
+                  return BackgroundBashClaim.cases.Terminal.make({
+                    state: terminalState(existing),
+                  })
+                }
 
-                  const startedAt = (yield* DateTime.nowAsDate).getTime()
-                  yield* sql`
+                const startedAt = (yield* DateTime.nowAsDate).getTime()
+                yield* sql`
                   INSERT INTO background_bash_jobs (
                     session_id,
                     branch_id,
@@ -178,9 +177,8 @@ export class BackgroundBashStorage extends Context.Service<
                     ${startedAt}
                   )
                 `
-                  return BackgroundBashClaim.cases.Started.make({})
-                }),
-              )
+                return BackgroundBashClaim.cases.Started.make({})
+              }).pipe(sql.withTransaction)
             },
             Effect.mapError(mapError("Failed to claim background bash job")),
           ),

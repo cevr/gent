@@ -122,32 +122,30 @@ export const makeAgentLoopQueue: Effect.Effect<
       readonly persist: boolean
     },
   ): Effect.Effect<A, AgentLoopError> =>
-    scope.queuePersistenceSemaphore.withPermits(1)(
-      Effect.gen(function* () {
-        const base = yield* TxSubscriptionRef.get(scope.loopRef)
-        const next = decide(base)
-        const committed = next.persist
-          ? {
-              ...next.next,
-              stateEpoch: next.next.stateEpoch + 1,
-            }
-          : next.next
-        const decision = { ...next, next: committed }
-        if (decision.persist) {
-          yield* persistCommittedQueue(decision.next.queue, operation).pipe(
-            Effect.tapError(recordPersistenceFailure),
-          )
-        }
-        yield* TxSubscriptionRef.update(scope.loopRef, (current) =>
-          mergeConcurrentLoopMetadata(base, current, decision.next),
+    Effect.gen(function* () {
+      const base = yield* TxSubscriptionRef.get(scope.loopRef)
+      const next = decide(base)
+      const committed = next.persist
+        ? {
+            ...next.next,
+            stateEpoch: next.next.stateEpoch + 1,
+          }
+        : next.next
+      const decision = { ...next, next: committed }
+      if (decision.persist) {
+        yield* persistCommittedQueue(decision.next.queue, operation).pipe(
+          Effect.tapError(recordPersistenceFailure),
         )
-        return decision.value
-      }),
-    )
+      }
+      yield* TxSubscriptionRef.update(scope.loopRef, (current) =>
+        mergeConcurrentLoopMetadata(base, current, decision.next),
+      )
+      return decision.value
+    }).pipe(scope.queuePersistenceSemaphore.withPermits(1))
 
   const persistRuntimeState = (state: LoopState) =>
-    scope.queuePersistenceSemaphore.withPermits(1)(
-      TxSubscriptionRef.get(scope.loopRef).pipe(
+    TxSubscriptionRef.get(scope.loopRef)
+      .pipe(
         Effect.flatMap((s) =>
           queueStorage.putQueueState(scope.sessionId, scope.branchId, s.queue).pipe(
             Effect.mapError(
@@ -168,8 +166,8 @@ export const makeAgentLoopQueue: Effect.Effect<
             ),
           ),
         ),
-      ),
-    )
+      )
+      .pipe(scope.queuePersistenceSemaphore.withPermits(1))
 
   const currentLoopState = TxSubscriptionRef.get(scope.loopRef).pipe(Effect.map((s) => s.state))
   const readState = TxSubscriptionRef.get(scope.loopRef)

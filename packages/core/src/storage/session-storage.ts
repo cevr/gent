@@ -144,9 +144,8 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
         deleteSession: Effect.fn("SessionStorage.deleteSession")(
           function* (id) {
             const workspaceId = yield* CurrentWorkspaceId
-            return yield* sql.withTransaction(
-              Effect.gen(function* () {
-                const descendantRows = yield* sql<{ id: SessionId }>`
+            return yield* Effect.gen(function* () {
+              const descendantRows = yield* sql<{ id: SessionId }>`
                   WITH RECURSIVE descendants(id) AS (
                     SELECT id FROM sessions WHERE id = ${id} AND workspace_id = ${workspaceId}
                     UNION
@@ -157,15 +156,14 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
                   )
                   SELECT id FROM descendants
                 `
-                const cascadedIds = descendantRows.map((row) => row.id)
-                if (cascadedIds.length === 0) return cascadedIds
-                yield* sql`DELETE FROM messages_fts WHERE session_id IN ${sql.in(cascadedIds)}`
-                yield* sql`DELETE FROM agent_loop_queues WHERE session_id IN ${sql.in(cascadedIds)}`
-                yield* sql`DELETE FROM sessions WHERE id IN ${sql.in(cascadedIds)}`
-                yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
-                return cascadedIds
-              }),
-            )
+              const cascadedIds = descendantRows.map((row) => row.id)
+              if (cascadedIds.length === 0) return cascadedIds
+              yield* sql`DELETE FROM messages_fts WHERE session_id IN ${sql.in(cascadedIds)}`
+              yield* sql`DELETE FROM agent_loop_queues WHERE session_id IN ${sql.in(cascadedIds)}`
+              yield* sql`DELETE FROM sessions WHERE id IN ${sql.in(cascadedIds)}`
+              yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
+              return cascadedIds
+            }).pipe(sql.withTransaction)
           },
           Effect.mapError(mapError("Failed to delete session")),
         ),

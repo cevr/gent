@@ -53,13 +53,12 @@ describe("ResearchTool", () => {
     })
 
     return narrowR(
-      withRepoFixtures(
-        runToolWithCtx(
-          ResearchTool,
-          { question: "How does Effect handle concurrency?", repos: ["effect-ts/effect"] },
-          ctx,
-        ),
+      runToolWithCtx(
+        ResearchTool,
+        { question: "How does Effect handle concurrency?", repos: ["effect-ts/effect"] },
+        ctx,
       ).pipe(
+        withRepoFixtures,
         Effect.map((result) => {
           expect(result.response).toContain("Effect uses fibers")
           expect(result.repos).toEqual(["effect-ts/effect"])
@@ -100,16 +99,15 @@ describe("ResearchTool", () => {
     })
 
     return narrowR(
-      withRepoFixtures(
-        runToolWithCtx(
-          ResearchTool,
-          {
-            question: "Compare concurrency models",
-            repos: ["effect-ts/effect", "zio/zio"],
-          },
-          ctx,
-        ),
+      runToolWithCtx(
+        ResearchTool,
+        {
+          question: "Compare concurrency models",
+          repos: ["effect-ts/effect", "zio/zio"],
+        },
+        ctx,
       ).pipe(
+        withRepoFixtures,
         Effect.map((result) => {
           expect(result.response).toContain("Comparative analysis")
           expect(result.repoCount).toBe(2)
@@ -138,17 +136,16 @@ describe("ResearchTool", () => {
     })
 
     return narrowR(
-      withRepoFixtures(
-        runToolWithCtx(
-          ResearchTool,
-          {
-            question: "How does the scheduler work?",
-            repos: ["effect-ts/effect"],
-            focus: "src/internal/scheduler",
-          },
-          ctx,
-        ),
+      runToolWithCtx(
+        ResearchTool,
+        {
+          question: "How does the scheduler work?",
+          repos: ["effect-ts/effect"],
+          focus: "src/internal/scheduler",
+        },
+        ctx,
       ).pipe(
+        withRepoFixtures,
         Effect.map(() => {
           expect(capturedPrompt).toContain("src/internal/scheduler")
           expect(capturedPrompt).toContain("How does the scheduler work?")
@@ -160,13 +157,12 @@ describe("ResearchTool", () => {
 
   it.live("rejects empty repos", () =>
     narrowR(
-      withRepoFixtures(
-        runToolWithCtx(
-          ResearchTool,
-          { question: "test", repos: [] },
-          makeCtx({ agentRun: () => Effect.die("unreachable") }),
-        ),
+      runToolWithCtx(
+        ResearchTool,
+        { question: "test", repos: [] },
+        makeCtx({ agentRun: () => Effect.die("unreachable") }),
       ).pipe(
+        withRepoFixtures,
         Effect.map((result) => {
           expect(result.error).toBe("At least one repository spec required")
         }),
@@ -177,13 +173,12 @@ describe("ResearchTool", () => {
 
   it.live("rejects too many repos", () =>
     narrowR(
-      withRepoFixtures(
-        runToolWithCtx(
-          ResearchTool,
-          { question: "test", repos: ["a/1", "a/2", "a/3", "a/4", "a/5", "a/6"] },
-          makeCtx({ agentRun: () => Effect.die("unreachable") }),
-        ),
+      runToolWithCtx(
+        ResearchTool,
+        { question: "test", repos: ["a/1", "a/2", "a/3", "a/4", "a/5", "a/6"] },
+        makeCtx({ agentRun: () => Effect.die("unreachable") }),
       ).pipe(
+        withRepoFixtures,
         Effect.map((result) => {
           expect(result.error).toBe("Too many repos (max 5)")
         }),

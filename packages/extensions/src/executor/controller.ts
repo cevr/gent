@@ -71,14 +71,12 @@ export const ExecutorControllerLive = (
       const snapshot = () => TxSubscriptionRef.get(state).pipe(Effect.map(projectSnapshot))
 
       const setIfCurrent = (expectedGeneration: number, next: ExecutorState) =>
-        gate.withPermits(1)(
-          Effect.gen(function* () {
-            const currentGeneration = yield* Ref.get(generation)
-            const current = yield* TxSubscriptionRef.get(state)
-            if (currentGeneration !== expectedGeneration || current._tag !== "Connecting") return
-            yield* TxSubscriptionRef.set(state, next)
-          }),
-        )
+        Effect.gen(function* () {
+          const currentGeneration = yield* Ref.get(generation)
+          const current = yield* TxSubscriptionRef.get(state)
+          if (currentGeneration !== expectedGeneration || current._tag !== "Connecting") return
+          yield* TxSubscriptionRef.set(state, next)
+        }).pipe(gate.withPermits(1))
 
       const runConnection = (targetCwd: string, expectedGeneration: number) =>
         Effect.gen(function* () {
@@ -119,31 +117,27 @@ export const ExecutorControllerLive = (
         )
 
       const connect = (targetCwd: string) =>
-        gate.withPermits(1)(
-          Effect.gen(function* () {
-            const current = yield* TxSubscriptionRef.get(state)
-            const next = transitionConnect(current, targetCwd)
-            if (next === current) return
-            const nextGeneration = yield* Ref.updateAndGet(generation, (n) => n + 1)
-            yield* TxSubscriptionRef.set(state, next)
-            yield* ScopedRef.set(
-              connection,
-              runConnection(targetCwd, nextGeneration).pipe(Effect.forkScoped),
-            )
-          }),
-        )
+        Effect.gen(function* () {
+          const current = yield* TxSubscriptionRef.get(state)
+          const next = transitionConnect(current, targetCwd)
+          if (next === current) return
+          const nextGeneration = yield* Ref.updateAndGet(generation, (n) => n + 1)
+          yield* TxSubscriptionRef.set(state, next)
+          yield* ScopedRef.set(
+            connection,
+            runConnection(targetCwd, nextGeneration).pipe(Effect.forkScoped),
+          )
+        }).pipe(gate.withPermits(1))
 
       const disconnect = () =>
-        gate.withPermits(1)(
-          Effect.gen(function* () {
-            const current = yield* TxSubscriptionRef.get(state)
-            const next = transitionDisconnect(current)
-            if (next === current) return
-            yield* Ref.update(generation, (n) => n + 1)
-            yield* ScopedRef.set(connection, Effect.succeed(null))
-            yield* TxSubscriptionRef.set(state, next)
-          }),
-        )
+        Effect.gen(function* () {
+          const current = yield* TxSubscriptionRef.get(state)
+          const next = transitionDisconnect(current)
+          if (next === current) return
+          yield* Ref.update(generation, (n) => n + 1)
+          yield* ScopedRef.set(connection, Effect.succeed(null))
+          yield* TxSubscriptionRef.set(state, next)
+        }).pipe(gate.withPermits(1))
 
       const runtime = {
         snapshot,

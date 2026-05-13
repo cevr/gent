@@ -533,52 +533,50 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           })
 
         const ensureSidecar = (cwd: string) =>
-          spawnMutex.withPermits(1)(
-            Effect.gen(function* () {
-              const normalized = path.resolve(cwd)
+          Effect.gen(function* () {
+            const normalized = path.resolve(cwd)
 
-              const running = yield* findRunning(normalized)
-              if (running) return running
+            const running = yield* findRunning(normalized)
+            if (running) return running
 
-              const scan = yield* scanPorts(normalized)
-              if (scan.freePort === undefined) {
-                return yield* new ExecutorSidecarError({
-                  code: "PORT_EXHAUSTED",
-                  message: `No free port in ${DEFAULT_PORT_SEED}-${DEFAULT_PORT_SEED + PORT_SCAN_LIMIT - 1}`,
-                })
-              }
-
-              const record = yield* spawnSidecar(normalized, scan.freePort)
-              sidecarsByCwd.set(normalized, record)
-
-              const scope = yield* pollHealth(record.baseUrl, normalized, STARTUP_TIMEOUT_MS).pipe(
-                Effect.catchEager((e: ExecutorSidecarError) =>
-                  killRecord(record).pipe(Effect.andThen(Effect.fail(e))),
-                ),
-              )
-
-              if (scope.dir !== normalized) {
-                yield* killRecord(record)
-                return yield* new ExecutorSidecarError({
-                  code: "SCOPE_MISMATCH",
-                  message: `Sidecar scope dir ${scope.dir} doesn't match ${normalized}`,
-                })
-              }
-
-              const updated = SidecarRecord.cases.owned.make({
-                cwd: record.cwd,
-                port: record.port,
-                baseUrl: record.baseUrl,
-                pid: record.pid,
-                handle: record.handle,
-                handleScope: record.handleScope,
-                scope,
+            const scan = yield* scanPorts(normalized)
+            if (scan.freePort === undefined) {
+              return yield* new ExecutorSidecarError({
+                code: "PORT_EXHAUSTED",
+                message: `No free port in ${DEFAULT_PORT_SEED}-${DEFAULT_PORT_SEED + PORT_SCAN_LIMIT - 1}`,
               })
-              sidecarsByCwd.set(normalized, updated)
-              yield* registerSidecar(updated)
-              return updated
-            }),
-          )
+            }
+
+            const record = yield* spawnSidecar(normalized, scan.freePort)
+            sidecarsByCwd.set(normalized, record)
+
+            const scope = yield* pollHealth(record.baseUrl, normalized, STARTUP_TIMEOUT_MS).pipe(
+              Effect.catchEager((e: ExecutorSidecarError) =>
+                killRecord(record).pipe(Effect.andThen(Effect.fail(e))),
+              ),
+            )
+
+            if (scope.dir !== normalized) {
+              yield* killRecord(record)
+              return yield* new ExecutorSidecarError({
+                code: "SCOPE_MISMATCH",
+                message: `Sidecar scope dir ${scope.dir} doesn't match ${normalized}`,
+              })
+            }
+
+            const updated = SidecarRecord.cases.owned.make({
+              cwd: record.cwd,
+              port: record.port,
+              baseUrl: record.baseUrl,
+              pid: record.pid,
+              handle: record.handle,
+              handleScope: record.handleScope,
+              scope,
+            })
+            sidecarsByCwd.set(normalized, updated)
+            yield* registerSidecar(updated)
+            return updated
+          }).pipe(spawnMutex.withPermits(1))
 
         const toEndpoint = (record: SidecarRecord): ExecutorEndpoint => ({
           mode: "local",

@@ -374,72 +374,70 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
       })
 
     const start = (job: BackgroundBashJob) =>
-      gate.withPermits(1)(
-        Effect.gen(function* () {
-          const ctx = yield* ExtensionContext
-          const target: BackgroundBashTarget = {
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            toolCallId: ctx.toolCallId ?? ToolCallId.make("unknown"),
-            Session: ctx.Session,
-          }
-          const key = backgroundJobKey(target)
-          const keyFields = backgroundJobKeyFields(target)
-          const current = yield* Ref.get(state)
-          if (current.completed.has(key) || current.active.has(key)) return
-          const claim = yield* storage.claimStart({
-            ...keyFields,
-            command: job.command,
-            cwd: job.cwd,
-          })
-          if (claim._tag === "AlreadyRunning") return
-          if (claim._tag === "Terminal") {
-            yield* queueTerminalFollowUp(target, claim.state)
-            yield* Ref.update(state, (s) => markJobCompleted(s, key))
-            return
-          }
+      Effect.gen(function* () {
+        const ctx = yield* ExtensionContext
+        const target: BackgroundBashTarget = {
+          sessionId: ctx.sessionId,
+          branchId: ctx.branchId,
+          toolCallId: ctx.toolCallId ?? ToolCallId.make("unknown"),
+          Session: ctx.Session,
+        }
+        const key = backgroundJobKey(target)
+        const keyFields = backgroundJobKeyFields(target)
+        const current = yield* Ref.get(state)
+        if (current.completed.has(key) || current.active.has(key)) return
+        const claim = yield* storage.claimStart({
+          ...keyFields,
+          command: job.command,
+          cwd: job.cwd,
+        })
+        if (claim._tag === "AlreadyRunning") return
+        if (claim._tag === "Terminal") {
+          yield* queueTerminalFollowUp(target, claim.state)
+          yield* Ref.update(state, (s) => markJobCompleted(s, key))
+          return
+        }
 
-          const started = yield* Deferred.make<void>()
-          const fullContext = yield* Effect.context<
-            ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-          >()
-          // forkIn inherits the parent fiber's full context, and provideContext
-          // would only merge on top — request-scoped tags carried by the caller
-          // (e.g., CurrentInteraction) would leak into the long-lived background
-          // fork. updateContext replaces the forked fiber's context outright,
-          // pinning it to the explicit slice the background helpers need.
-          const jobContext = Context.pick(
-            ChildProcessSpawner.ChildProcessSpawner,
-            FileSystem.FileSystem,
-            Path.Path,
-          )(fullContext)
-          const fiber = yield* Deferred.await(started).pipe(
-            Effect.andThen(runBackgroundJob(job, target)),
-            Effect.catchTag("BashError", (e) => queueFailure(job, target, e.message)),
-            Effect.catchCause((cause) =>
-              Cause.hasInterruptsOnly(cause)
-                ? Effect.void
-                : queueFailure(job, target, `Internal error: ${Cause.pretty(cause)}`),
-            ),
-            Effect.ensuring(Ref.update(state, (s) => markJobCompleted(s, key))),
-            Effect.updateContext(
-              (
-                _: Context.Context<
-                  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-                >,
-              ) => jobContext,
-            ),
-            Effect.forkIn(scope),
-          )
+        const started = yield* Deferred.make<void>()
+        const fullContext = yield* Effect.context<
+          ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+        >()
+        // forkIn inherits the parent fiber's full context, and provideContext
+        // would only merge on top — request-scoped tags carried by the caller
+        // (e.g., CurrentInteraction) would leak into the long-lived background
+        // fork. updateContext replaces the forked fiber's context outright,
+        // pinning it to the explicit slice the background helpers need.
+        const jobContext = Context.pick(
+          ChildProcessSpawner.ChildProcessSpawner,
+          FileSystem.FileSystem,
+          Path.Path,
+        )(fullContext)
+        const fiber = yield* Deferred.await(started).pipe(
+          Effect.andThen(runBackgroundJob(job, target)),
+          Effect.catchTag("BashError", (e) => queueFailure(job, target, e.message)),
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.void
+              : queueFailure(job, target, `Internal error: ${Cause.pretty(cause)}`),
+          ),
+          Effect.ensuring(Ref.update(state, (s) => markJobCompleted(s, key))),
+          Effect.updateContext(
+            (
+              _: Context.Context<
+                ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+              >,
+            ) => jobContext,
+          ),
+          Effect.forkIn(scope),
+        )
 
-          yield* Ref.update(state, (s) => {
-            const active = new Map(s.active)
-            active.set(key, fiber)
-            return { ...s, active }
-          })
-          yield* Deferred.succeed(started, undefined)
-        }),
-      )
+        yield* Ref.update(state, (s) => {
+          const active = new Map(s.active)
+          active.set(key, fiber)
+          return { ...s, active }
+        })
+        yield* Deferred.succeed(started, undefined)
+      }).pipe(gate.withPermits(1))
 
     return { start }
   }),

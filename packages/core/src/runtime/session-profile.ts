@@ -164,20 +164,18 @@ export class SessionProfileCache extends Context.Service<
             if (existing._tag === "Some") return existing.value
 
             // Serialize initialization to prevent duplicate profiles for same cwd
-            return yield* initSemaphore.withPermits(1)(
-              Effect.gen(function* () {
-                // Re-check inside critical section
-                const current = yield* TxRef.get(cacheRef)
-                const found = HashMap.get(current, canonicalCwd)
-                if (found._tag === "Some") return found.value
+            return yield* Effect.gen(function* () {
+              // Re-check inside critical section
+              const current = yield* TxRef.get(cacheRef)
+              const found = HashMap.get(current, canonicalCwd)
+              if (found._tag === "Some") return found.value
 
-                const profile = yield* initProfile(canonicalCwd)
+              const profile = yield* initProfile(canonicalCwd)
 
-                yield* TxRef.update(cacheRef, (m) => HashMap.set(m, canonicalCwd, profile))
+              yield* TxRef.update(cacheRef, (m) => HashMap.set(m, canonicalCwd, profile))
 
-                return profile
-              }),
-            )
+              return profile
+            }).pipe(initSemaphore.withPermits(1))
           })
 
         return { resolve }
