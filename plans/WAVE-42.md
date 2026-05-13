@@ -57,30 +57,39 @@ context adapter`).
   `Actor.toTestLayer`, mirrored in v3. Gent now reads/watches/list actor
   state through `AgentLoopActor.State` instead of reconstructing
   `ActorAddressResolver | ActorStateRegistry | ActorClientService`.
-- **C4 still open**: Gent still has
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.runtime-context.ts`
-  and still wraps actor construction in `provideLayerBuildContext`.
-  Upstream `Actor.toLayer` needs a first-class build-context/child
-  override design before that adapter can be deleted.
+- **C4 complete for the Gent-local workaround**: `effect-encore@0.12.3`
+  published and consumed. Encore now exposes `Actor.provideLayerBuildContext`,
+  mirrored in v3, so Gent deleted its local `provideLayerBuildContext`
+  helper and uses the upstream API at actor construction.
+- **C6 still open**: actor identity and dual storage tags remain split
+  across Gent/Encore. The next upstream question is whether Encore should
+  declare entity identity once and hide cluster storage plus Encore message
+  storage behind one actor runtime storage layer.
 - Verification:
   `bun run gate` in `/Users/cvr/Developer/personal/effect-encore`
-  passed before publish; GitHub Release run `25802698340` succeeded;
-  `npm view effect-encore version --json` returned `"0.12.2"`;
-  Gent `bun run typecheck`, `bun run lint`, and
+  passed before each publish; GitHub Release runs `25802698340` and
+  `25803441319` succeeded; `npm view effect-encore version --json`
+  returned `"0.12.3"`; Gent `bun run typecheck`, `bun run lint`, and
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/runtime/session-runtime.test.ts packages/core/tests/runtime/agent-runner.test.ts`
-  passed after consuming the package.
+  passed after consuming `0.12.2`; Gent `bun run typecheck` passed after
+  consuming `0.12.3`.
 - Evidence:
   `/Users/cvr/Developer/personal/effect-encore/src/actor.ts`,
   `/Users/cvr/Developer/personal/effect-encore/src/index.ts`,
   `/Users/cvr/Developer/personal/effect-encore/test/actor-state.test.ts`,
   `/Users/cvr/Developer/personal/effect-encore/test/types.test.ts`,
+  `/Users/cvr/Developer/personal/effect-encore/test/actor-with-scope.test.ts`,
   `/Users/cvr/Developer/personal/effect-encore/v3/src/actor.ts`,
   `/Users/cvr/Developer/personal/effect-encore/v3/src/index.ts`,
   `/Users/cvr/Developer/personal/effect-encore/v3/test/actor-state.test.ts`,
   `/Users/cvr/Developer/personal/effect-encore/v3/test/types.test.ts`,
+  `/Users/cvr/Developer/personal/effect-encore/v3/test/actor-with-scope.test.ts`,
+  `/Users/cvr/Developer/personal/effect-encore/CHANGELOG.md`,
   `/Users/cvr/Developer/personal/gent/package.json`,
   `/Users/cvr/Developer/personal/gent/bun.lock`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.runtime-context.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/session-runtime.test.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-runner.test.ts`.
@@ -121,7 +130,7 @@ Fix `effect-encore` so Gent does not rebuild or snapshot actor runtime
 internals.
 
 - **C4**: Redesign `Actor.toLayer` around first-class entity build
-  dependencies and child override semantics. Delete Gent's
+  dependencies and child override semantics. Delete Gent's local
   `provideLayerBuildContext` workaround after the upstream API lands.
 - **C5**: Expose a bound actor state facade/client from `Actor.toLayer`
   so Gent can watch/read/redeliver through the actor surface, not by
@@ -131,10 +140,10 @@ internals.
   definition and hiding dual cluster/Encore storage tags behind one
   actor runtime storage layer.
 - **Evidence**:
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.runtime-context.ts:46`,
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.runtime-context.ts:69`,
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts:11`,
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts:39`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.runtime-context.ts:24`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.runtime-context.ts:30`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts:14`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts:30`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:255`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:456`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.entity-id.ts:1`,
@@ -149,6 +158,10 @@ internals.
   `/Users/cvr/Developer/personal/effect-encore/src/actor.ts:1328`,
   `/Users/cvr/Developer/personal/effect-encore/src/actor.ts:1404`,
   `/Users/cvr/Developer/personal/effect-encore/src/actor.ts:1414`,
+  `/Users/cvr/Developer/personal/effect-encore/src/actor.ts:419`,
+  `/Users/cvr/Developer/personal/effect-encore/src/actor.ts:425`,
+  `/Users/cvr/Developer/personal/effect-encore/test/actor-with-scope.test.ts:52`,
+  `/Users/cvr/Developer/personal/effect-encore/test/actor-with-scope.test.ts:91`,
   `/Users/cvr/Developer/personal/effect-encore/src/actor-state.ts:35`,
   `/Users/cvr/Developer/personal/effect-encore/src/actor-state.ts:84`,
   `/Users/cvr/Developer/personal/effect-encore/src/storage.ts:1`,

@@ -186,7 +186,7 @@
     "@types/picomatch": "^4.0.3",
     "effect": "4.0.0-beta.64",
     "effect-bun-test": "0.3.0",
-    "effect-encore": "0.12.2",
+    "effect-encore": "0.12.3",
     "effect-wide-event": "0.3.0",
     "msgpackr": "^2.0.1",
     "multipasta": "^0.2.7",
@@ -682,7 +682,7 @@
 
     "effect-bun-test": ["effect-bun-test@0.3.0", "", { "peerDependencies": { "bun": "*", "effect": ">=3.19.0" } }, "sha512-P2xZ4HBZg4bFw2ePY4E5UB6EZ2d1L/HO13+KdoprTYFuc8B1uTpdn7V4UU6qyYiYsqTY9DZ1TFB94Ekx2YLA4g=="],
 
-    "effect-encore": ["effect-encore@0.12.2", "", { "peerDependencies": { "@effect/cluster": "*", "@effect/rpc": "*", "@effect/sql": "*", "@effect/workflow": "*", "effect": ">=4.0.0-beta.66" }, "optionalPeers": ["@effect/cluster", "@effect/rpc", "@effect/sql", "@effect/workflow"] }, "sha512-GNgWHD3eHgrMRCudauRDKMUfWHC4wtxH8fJCb6cBLQ91c0WPGWs3kLSM4sHnr2GmeUX76YUZr789wh9m41ztNA=="],
+    "effect-encore": ["effect-encore@0.12.3", "", { "peerDependencies": { "@effect/cluster": "*", "@effect/rpc": "*", "@effect/sql": "*", "@effect/workflow": "*", "effect": ">=4.0.0-beta.66" }, "optionalPeers": ["@effect/cluster", "@effect/rpc", "@effect/sql", "@effect/workflow"] }, "sha512-nbMUVnyw4Eq7KgL/nTvFUmbIVC3X/dRgBupJ4O1W4LwW0BGVCqRiedzJV88iVenF9ZmCCapza99KRyEGKE55Zg=="],
 
     "effect-wide-event": ["effect-wide-event@0.3.0", "", { "peerDependencies": { "effect": ">=4.0.0-beta.66" } }, "sha512-C6GZKU+Nz1Cf4k7Qwfg47CH+8POLZy+jue/0eILiagjXDOWgSGzzUmtGepjWaeu2zsBJd7wNc1xVxUwE9YcaDA=="],
 
