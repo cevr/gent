@@ -397,7 +397,7 @@ export const makeAgentLoopBehavior = (
       }),
     )
 
-    const worker = yield* makeAgentLoopWorker(runTurn).pipe(
+    const worker = yield* makeAgentLoopWorker.pipe(
       Effect.provideService(AgentLoopWorkerScope, {
         sessionId,
         branchId,
@@ -410,6 +410,7 @@ export const makeAgentLoopBehavior = (
         takeNextQueuedTurn: takeNextQueuedTurnCommitted,
         recordTurnFailure,
         publishEvent,
+        runTurn,
         switchAgentOnState,
       }),
     )
