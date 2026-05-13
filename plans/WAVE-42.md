@@ -724,3 +724,11 @@ After S6 lands and all touched upstream packages have published/consumed
 changes, run the same 9-lane audit from W41 against fresh HEAD. The
 wave closes only when the closing audit reports no P0/P1. Any P2s become
 the next ride-along bucket.
+
+### Result - complete
+
+- Closing audit receipt:
+  `/Users/cvr/Developer/personal/gent/plans/WAVE-42-audit-receipt.md`.
+- Audit HEAD: `a56c50d48b3520f6382a9eda5c51485162f0e487`.
+- Result: no P0/P1/P2 findings across the nine lanes.
+- Final verification: `bun run gate` passed at W42 HEAD.
