@@ -13,7 +13,7 @@
 
 import { Effect, Layer, Stream } from "effect"
 import { isRecord, isRecordArray } from "@gent/core/extensions/api"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 
 export { SYSTEM_IDENTITY_PREFIX } from "./oauth.js"
@@ -21,6 +21,8 @@ import { SYSTEM_IDENTITY_PREFIX, getBillingHeaderInputs } from "./oauth.js"
 import { AnthropicPlatform } from "./platform-adapter.js"
 import { buildBillingHeaderValue } from "./signing.js"
 import { getModelOverride } from "./model-config.js"
+
+export type KeychainTransformRequirements = GentPlatform | AnthropicPlatform
 
 // ── Constants ──
 
@@ -240,7 +242,7 @@ const partitionSystemBlocks = (
  */
 const buildSystemArray = (
   finalMessages: ReadonlyArray<Record<string, unknown>>,
-): Effect.Effect<ReadonlyArray<Record<string, unknown>>, never, GentPlatform | AnthropicPlatform> =>
+): Effect.Effect<ReadonlyArray<Record<string, unknown>>, never, KeychainTransformRequirements> =>
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     const { version, entrypoint } = getBillingHeaderInputs(platform.env)
@@ -396,7 +398,7 @@ const stripHaikuEffort = (payload: Record<string, unknown>): Record<string, unkn
  */
 export const transformPayload = (
   payload: Record<string, unknown>,
-): Effect.Effect<Record<string, unknown>, never, GentPlatform | AnthropicPlatform> =>
+): Effect.Effect<Record<string, unknown>, never, KeychainTransformRequirements> =>
   Effect.gen(function* () {
     let result: Record<string, unknown> = { ...payload }
 
@@ -469,76 +471,70 @@ export const transformStreamEvent = (
 
 type CreateMessageOptions = Parameters<AnthropicClient.Service["createMessage"]>[0]
 type CreateMessageStreamOptions = Parameters<AnthropicClient.Service["createMessageStream"]>[0]
+type ClosedTransformPayload = (
+  payload: Record<string, unknown>,
+) => Effect.Effect<Record<string, unknown>>
 
 /** Wraps an AnthropicClient to apply Claude Code keychain conventions. */
-export const keychainClient: Layer.Layer<
-  AnthropicClient.AnthropicClient,
-  never,
-  AnthropicClient.AnthropicClient | GentPlatform | AnthropicPlatform
-> = Layer.effect(
-  AnthropicClient.AnthropicClient,
-  Effect.gen(function* () {
-    const inner = yield* AnthropicClient.AnthropicClient
-    const platform = yield* GentPlatform
-    const anthropicPlatform = yield* AnthropicPlatform
+export const makeKeychainClientLayer = (
+  transformPayloadHere: ClosedTransformPayload,
+): Layer.Layer<AnthropicClient.AnthropicClient, never, AnthropicClient.AnthropicClient> =>
+  Layer.effect(
+    AnthropicClient.AnthropicClient,
+    Effect.gen(function* () {
+      const inner = yield* AnthropicClient.AnthropicClient
 
-    const transformPayloadHere = (payload: Record<string, unknown>) =>
-      transformPayload(payload).pipe(
-        Effect.provideService(GentPlatform, platform),
-        Effect.provideService(AnthropicPlatform, anthropicPlatform),
-      )
+      const service: AnthropicClient.Service = {
+        client: inner.client,
+        streamRequest: inner.streamRequest,
 
-    const service: AnthropicClient.Service = {
-      client: inner.client,
-      streamRequest: inner.streamRequest,
-
-      createMessage: (options: CreateMessageOptions) =>
-        Effect.gen(function* () {
-          const transformed = yield* transformPayloadHere(
-            options.payload as Record<string, unknown>,
-          )
-          return yield* inner.createMessage({
-            ...options,
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-            payload: transformed as typeof options.payload,
-          })
-        }).pipe(
-          Effect.map(([body, response]) => {
-            const b = body as Record<string, unknown>
-            const content = b["content"]
-            if (isRecordArray(content)) {
-              const transformed = {
-                ...b,
-                content: transformResponseContent(content),
-              }
+        createMessage: (options: CreateMessageOptions) =>
+          Effect.gen(function* () {
+            const transformed = yield* transformPayloadHere(
+              options.payload as Record<string, unknown>,
+            )
+            return yield* inner.createMessage({
+              ...options,
               // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-              return [transformed as typeof body, response] as [typeof body, typeof response]
-            }
-            return [body, response] as [typeof body, typeof response]
-          }),
-        ),
-
-      createMessageStream: (options: CreateMessageStreamOptions) =>
-        Effect.gen(function* () {
-          const transformed = yield* transformPayloadHere(
-            options.payload as Record<string, unknown>,
-          )
-          return yield* inner.createMessageStream({
-            ...options,
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-            payload: transformed as typeof options.payload,
-          })
-        }).pipe(
-          Effect.map(
-            ([response, stream]) =>
-              [response, stream.pipe(Stream.map(transformStreamEvent))] as [
-                typeof response,
-                typeof stream,
-              ],
+              payload: transformed as typeof options.payload,
+            })
+          }).pipe(
+            Effect.map(([body, response]) => {
+              const b = body as Record<string, unknown>
+              const content = b["content"]
+              if (isRecordArray(content)) {
+                const transformed = {
+                  ...b,
+                  content: transformResponseContent(content),
+                }
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
+                return [transformed as typeof body, response] as [typeof body, typeof response]
+              }
+              return [body, response] as [typeof body, typeof response]
+            }),
           ),
-        ),
-    }
 
-    return service
-  }),
-)
+        createMessageStream: (options: CreateMessageStreamOptions) =>
+          Effect.gen(function* () {
+            const transformed = yield* transformPayloadHere(
+              options.payload as Record<string, unknown>,
+            )
+            return yield* inner.createMessageStream({
+              ...options,
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
+              payload: transformed as typeof options.payload,
+            })
+          }).pipe(
+            Effect.map(
+              ([response, stream]) =>
+                [response, stream.pipe(Stream.map(transformStreamEvent))] as [
+                  typeof response,
+                  typeof stream,
+                ],
+            ),
+          ),
+      }
+
+      return service
+    }),
+  )
