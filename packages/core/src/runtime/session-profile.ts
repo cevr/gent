@@ -106,26 +106,16 @@ export class SessionProfileCache extends Context.Service<
         // Capture server scope — extension lifecycle (onShutdown) ties to this
         const serverScope = yield* Scope.Scope
 
-        // Capture platform services as a layer so initProfile can use functions
-        // that require FileSystem | Path | ChildProcessSpawner | ConfigService from
-        // the Effect context (profile resolution loads instructions via ConfigService).
-        const platformLayer = Layer.mergeAll(
-          Layer.succeed(FileSystem.FileSystem, fs),
-          Layer.succeed(Path.Path, pathSvc),
-          Layer.succeed(ChildProcessSpawner, spawner),
-          Layer.succeed(ConfigService, configService),
-          Layer.succeed(GentPlatform, platform),
+        const platformContext = Context.empty().pipe(
+          Context.add(FileSystem.FileSystem, fs),
+          Context.add(Path.Path, pathSvc),
+          Context.add(ChildProcessSpawner, spawner),
+          Context.add(ConfigService, configService),
+          Context.add(GentPlatform, platform),
         )
 
         const initProfile = (cwd: string) =>
           Effect.gen(function* () {
-            // Build the platform layer into serverScope so its services
-            // (FileSystem, Path, ChildProcessSpawner, ConfigService,
-            // GentPlatform) survive across all profile inits. Equivalent to
-            // Effect.provide(platformLayer), but built explicitly to keep
-            // scope lifetimes obvious here rather than at an entry point.
-            const platformContext = yield* Layer.buildWithScope(platformLayer, serverScope)
-
             const runtime = yield* resolveProfileRuntime({
               cwd,
               home: config.home,
