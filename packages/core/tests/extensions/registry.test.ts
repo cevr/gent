@@ -14,6 +14,7 @@ import {
 } from "@gent/core/extensions/api"
 import { getToolMetadata } from "@gent/core-internal/domain/capability/tool"
 import {
+  compileToolPolicy,
   ExtensionRegistry,
   listSlashCommands,
   resolveExtensions,
@@ -32,6 +33,17 @@ const makeTool = (name: string): ToolCapability =>
     output: Schema.Void,
     execute: () => Effect.void,
   })
+const compileRegistryPolicy = (
+  registry: ExtensionRegistry["Service"],
+  agent: AgentDefinition,
+  projections: Parameters<typeof compileToolPolicy>[3] = [],
+) =>
+  compileToolPolicy(
+    [...registry.getResolved().modelCapabilities.values()],
+    agent,
+    runCtx,
+    projections,
+  )
 const makeAgent = (
   name: string,
   options?: Partial<ConstructorParameters<typeof AgentDefinition>[0]>,
@@ -438,7 +450,7 @@ describe("ExtensionRegistry", () => {
       const registry = yield* buildRegistry([
         makeExt("a", "builtin", { tools: [readTool, bashTool], agents: [agent] }),
       ])
-      const { tools } = yield* registry.resolveToolPolicy(agent, runCtx, [])
+      const { tools } = compileRegistryPolicy(registry, agent)
       expect(tools.length).toBe(1)
       expect(String(tools[0] === undefined ? undefined : getToolId(tools[0]))).toBe("read")
     }),
@@ -455,7 +467,7 @@ describe("ExtensionRegistry", () => {
       const registry = yield* buildRegistry([
         makeExt("a", "builtin", { tools: [readTool, bashTool, editTool], agents: [agent] }),
       ])
-      const { tools } = yield* registry.resolveToolPolicy(agent, runCtx, [])
+      const { tools } = compileRegistryPolicy(registry, agent)
       const names = tools.map((t) => String(getToolId(t)))
       expect(names).toContain("read")
       expect(names).toContain("bash")
@@ -473,7 +485,7 @@ describe("ExtensionRegistry", () => {
       const registry = yield* buildRegistry([
         makeExt("a", "builtin", { tools: [readTool, writeTool], agents: [agent] }),
       ])
-      const { tools } = yield* registry.resolveToolPolicy(agent, runCtx, [])
+      const { tools } = compileRegistryPolicy(registry, agent)
       const names = tools.map((t) => String(getToolId(t)))
       expect(names).toContain("read")
       expect(names).not.toContain("write")
@@ -491,7 +503,7 @@ describe("ExtensionRegistry", () => {
         makeExt("core", "builtin", { tools: [readTool, secretTool] }),
       ])
       // Try to force-include via projection
-      const { tools } = yield* registry.resolveToolPolicy(agent, runCtx, [
+      const { tools } = compileRegistryPolicy(registry, agent, [
         { toolPolicy: { include: ["secret"] } },
       ])
       expect(tools.map((t) => String(getToolId(t)))).not.toContain("secret")

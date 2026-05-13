@@ -483,13 +483,6 @@ export const compileToolPolicy = (
 // Extension Registry Service
 
 export interface ExtensionRegistryService {
-  /** Resolve tools + prompt sections for an agent turn, applying extension projections. */
-  readonly resolveToolPolicy: (
-    agent: AgentDefinition,
-    runContext: RunContext,
-    extensionProjections: ReadonlyArray<TurnProjection>,
-  ) => Effect.Effect<CompiledToolPolicy>
-
   readonly extensionReactions: CompiledExtensionReactions
 
   // Raw resolved data — needed for rebuilding extension services in child runtimes
@@ -502,15 +495,6 @@ export class ExtensionRegistry extends Context.Service<
 >()("@gent/core/src/runtime/extensions/registry/ExtensionRegistry") {
   static fromResolved = (resolved: ResolvedExtensions): Layer.Layer<ExtensionRegistry> =>
     Layer.succeed(ExtensionRegistry, {
-      resolveToolPolicy: (agent, runContext, extensionProjections) =>
-        Effect.succeed(
-          compileToolPolicy(
-            [...resolved.modelCapabilities.values()],
-            agent,
-            runContext,
-            extensionProjections,
-          ),
-        ),
       extensionReactions: resolved.extensionReactions,
       getResolved: () => resolved,
     })

@@ -18,7 +18,7 @@ import { SessionStorage } from "../../storage/session-storage.js"
 import { ConfigService } from "../config-service.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import { provideExtensionReactionContext } from "../extensions/extension-reaction-context.js"
-import { ExtensionRegistry } from "../extensions/registry.js"
+import { compileToolPolicy, ExtensionRegistry } from "../extensions/registry.js"
 import type { ResolvedTurn } from "./agent-loop.state.js"
 import { buildTurnPromptSections, resolveReasoning } from "./agent-loop.utils.js"
 import { CurrentExtensionHostContext } from "./current-extension-host-context.js"
@@ -178,7 +178,8 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   ]
 
   // Resolve tools + extension prompt sections via ToolPolicy compiler
-  const { tools, promptSections: extensionSections } = yield* extensionRegistry.resolveToolPolicy(
+  const { tools, promptSections: extensionSections } = compileToolPolicy(
+    allTools,
     effectiveAgent,
     {
       sessionId: params.sessionId,
