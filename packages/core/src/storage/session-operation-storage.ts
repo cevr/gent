@@ -108,6 +108,7 @@ export class SessionOperationStorage extends Context.Service<
         requestId: string,
         result: A,
         encode: (value: A) => Effect.Effect<string, unknown>,
+        subject: { readonly sessionId: SessionId; readonly branchId: BranchId },
       ) {
         const workspaceId = yield* CurrentWorkspaceId
         const resultJson = yield* encode(result)
@@ -118,6 +119,8 @@ export class SessionOperationStorage extends Context.Service<
             operation,
             request_id,
             result_json,
+            subject_session_id,
+            subject_branch_id,
             created_at
           )
           VALUES (
@@ -125,9 +128,32 @@ export class SessionOperationStorage extends Context.Service<
             ${operation},
             ${requestId},
             ${resultJson},
+            ${subject.sessionId},
+            ${subject.branchId},
             ${createdAt}
           )
         `
+      })
+
+      const sessionIdForBranch = Effect.fn("SessionOperationStorage.sessionIdForBranch")(function* (
+        branchId: BranchId,
+      ) {
+        const workspaceId = yield* CurrentWorkspaceId
+        const rows = yield* sql<{ session_id: SessionId }>`
+          SELECT b.session_id
+          FROM branches b
+          JOIN sessions s ON s.id = b.session_id
+          WHERE b.id = ${branchId}
+            AND s.workspace_id = ${workspaceId}
+          LIMIT 1
+        `
+        const row = rows[0]
+        if (row === undefined) {
+          return yield* new StorageError({
+            message: `Cannot persist durable operation for missing branch: ${branchId}`,
+          })
+        }
+        return row.session_id
       })
 
       return {
@@ -149,6 +175,7 @@ export class SessionOperationStorage extends Context.Service<
               requestId,
               result,
               encodeStoredCreateSessionResult,
+              { sessionId: result.sessionId, branchId: result.branchId },
             )
           },
           Effect.mapError(mapError("Failed to save create-session operation result")),
@@ -163,11 +190,13 @@ export class SessionOperationStorage extends Context.Service<
 
         saveCreateBranch: Effect.fn("SessionOperationStorage.saveCreateBranch")(
           function* (requestId, result) {
+            const sessionId = yield* sessionIdForBranch(result.branchId)
             yield* saveOperation(
               CREATE_BRANCH_OPERATION,
               requestId,
               result,
               encodeStoredBranchResult,
+              { sessionId, branchId: result.branchId },
             )
           },
           Effect.mapError(mapError("Failed to save create-branch operation result")),
@@ -182,7 +211,17 @@ export class SessionOperationStorage extends Context.Service<
 
         saveForkBranch: Effect.fn("SessionOperationStorage.saveForkBranch")(
           function* (requestId, result) {
-            yield* saveOperation(FORK_BRANCH_OPERATION, requestId, result, encodeStoredBranchResult)
+            const sessionId = yield* sessionIdForBranch(result.branchId)
+            yield* saveOperation(
+              FORK_BRANCH_OPERATION,
+              requestId,
+              result,
+              encodeStoredBranchResult,
+              {
+                sessionId,
+                branchId: result.branchId,
+              },
+            )
           },
           Effect.mapError(mapError("Failed to save fork-branch operation result")),
         ),
@@ -205,6 +244,7 @@ export class SessionOperationStorage extends Context.Service<
               requestId,
               result,
               encodeStoredSwitchBranchResult,
+              { sessionId: result.sessionId, branchId: result.toBranchId },
             )
           },
           Effect.mapError(mapError("Failed to save switch-branch operation result")),

@@ -3,9 +3,9 @@ import { BunServices } from "@effect/platform-bun"
 import { Clock, Duration, Effect, Layer, Ref, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
-import type {
+import {
   AgentLoopError,
-  SessionRuntimeState,
+  type SessionRuntimeState,
 } from "../../../src/runtime/agent/agent-loop.state"
 import type { SteerCommand } from "../../../src/domain/steer"
 import {
@@ -47,8 +47,8 @@ import { ApprovalService } from "../../../src/runtime/approval-service"
 import type { EventPublisher } from "@gent/core-internal/domain/event-publisher"
 import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
 import { SqliteStorage, type StorageError } from "@gent/core-internal/storage/sqlite-storage"
-import type { BranchStorage } from "@gent/core-internal/storage/branch-storage"
-import type { SessionStorage } from "@gent/core-internal/storage/session-storage"
+import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
+import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import {
   RecordingEventStore,
   SequenceRecorder,
@@ -96,6 +96,19 @@ export const makeMessage = (sessionId: SessionId, branchId: BranchId, text: stri
     parts: [Prompt.textPart({ text })],
     createdAt: dateFromMillis(1_767_225_600_000),
   })
+const ensureAgentLoopStorageParents = (input: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}) =>
+  ensureStorageParents(input).pipe(
+    Effect.mapError(
+      (cause) =>
+        new AgentLoopError({
+          message: `Failed to ensure storage parents for ${input.sessionId}/${input.branchId}`,
+          cause,
+        }),
+    ),
+  )
 export interface AgentLoopService {
   readonly runOnce: (input: {
     readonly sessionId: SessionId
@@ -117,8 +130,22 @@ export interface AgentLoopService {
 export const makeAgentLoopService = Effect.gen(function* () {
   const actorClientFactory = yield* AgentLoopActor.Context
   const platform = yield* GentPlatform
+  const sessionStorage = yield* SessionStorage
+  const branchStorage = yield* BranchStorage
   const refFor = (sessionId: SessionId, branchId: BranchId) =>
     actorClientFactory(entityIdOf(DefaultWorkspaceId, sessionId, branchId))
+  const ensureParents = (input: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
+    ensureStorageParents(input).pipe(
+      Effect.provideService(SessionStorage, sessionStorage),
+      Effect.provideService(BranchStorage, branchStorage),
+      Effect.mapError(
+        (cause) =>
+          new AgentLoopError({
+            message: `Failed to ensure storage parents for ${input.sessionId}/${input.branchId}`,
+            cause,
+          }),
+      ),
+    )
   return {
     runOnce: (input) =>
       Effect.gen(function* () {
@@ -144,6 +171,7 @@ export const makeAgentLoopService = Effect.gen(function* () {
       }),
     getQueue: (input) =>
       Effect.gen(function* () {
+        yield* ensureParents(input)
         const ref = yield* refFor(input.sessionId, input.branchId)
         return yield* ref.execute(
           AgentLoopActor.GetQueue.make({
@@ -155,6 +183,7 @@ export const makeAgentLoopService = Effect.gen(function* () {
       }),
     getState: (input) =>
       Effect.gen(function* () {
+        yield* ensureParents(input)
         const ref = yield* refFor(input.sessionId, input.branchId)
         return yield* ref.execute(
           AgentLoopActor.GetState.make({
@@ -224,6 +253,7 @@ export const submitAgentLoop = (
   )
 export const steerAgentLoop = (command: SteerCommand) =>
   Effect.gen(function* () {
+    yield* ensureAgentLoopStorageParents(command)
     const actorClientFactory = yield* AgentLoopActor.Context
     const ref = yield* actorClientFactory(
       entityIdOf(DefaultWorkspaceId, command.sessionId, command.branchId),
@@ -242,6 +272,7 @@ export const respondAgentLoopInteraction = (input: {
   readonly requestId: InteractionRequestId
 }) =>
   Effect.gen(function* () {
+    yield* ensureAgentLoopStorageParents(input)
     const actorClientFactory = yield* AgentLoopActor.Context
     const ref = yield* actorClientFactory(
       entityIdOf(DefaultWorkspaceId, input.sessionId, input.branchId),

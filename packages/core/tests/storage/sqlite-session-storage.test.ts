@@ -9,11 +9,13 @@ import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
 import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
+import { AgentLoopQueueStorage } from "@gent/core-internal/storage/agent-loop-queue-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
+import { SessionOperationStorage } from "@gent/core-internal/storage/session-operation-storage"
 import { Branch, dateFromMillis, Message, Session } from "@gent/core-internal/domain/message"
 import { AgentSwitched } from "@gent/core-internal/domain/event"
 import { AgentName } from "@gent/core-internal/domain/agent"
-import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
+import { BranchId, MessageId, RequestId, SessionId } from "@gent/core-internal/domain/ids"
 
 const FIXED_NOW_MILLIS = 1_767_225_600_000
 const FIXED_NOW = dateFromMillis(FIXED_NOW_MILLIS)
@@ -204,6 +206,8 @@ describe("Sessions", () => {
           "agent_loop_queue_workspace",
           "interaction_decision",
           "durable_operations",
+          "durable_operation_integrity",
+          "agent_loop_queue_integrity",
         ])
       }).pipe(Effect.provide(layer))
 
@@ -223,6 +227,8 @@ describe("Sessions", () => {
           "agent_loop_queue_workspace",
           "interaction_decision",
           "durable_operations",
+          "durable_operation_integrity",
+          "agent_loop_queue_integrity",
         ])
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.provide(BunServices.layer)),
@@ -259,7 +265,7 @@ describe("Sessions", () => {
       }
     }).pipe(Effect.provide(BunServices.layer)),
   )
-  it.live("rejects orphan branch, message, and event rows", () =>
+  it.live("rejects orphan branch, message, event, queue, and durable operation rows", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const sql = yield* SqlClient.SqlClient
@@ -283,6 +289,59 @@ describe("Sessions", () => {
         sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${"missing-session"}, NULL, ${"SessionStarted"}, ${"{}"}, ${now})`,
       )
       expect(eventExit._tag).toBe("Failure")
+      const queueExit = yield* Effect.exit(
+        sql`INSERT INTO agent_loop_queues (workspace_id, session_id, branch_id, queue_json, updated_at) VALUES (${"default"}, ${"fk-session"}, ${"missing-branch"}, ${`{"steering":[],"followUp":[]}`}, ${now})`,
+      )
+      expect(queueExit._tag).toBe("Failure")
+      const durableExit = yield* Effect.exit(
+        sql`INSERT INTO durable_operations (workspace_id, operation, request_id, result_json, subject_session_id, subject_branch_id, created_at) VALUES (${"default"}, ${"session.create"}, ${"orphan-durable"}, ${"{}"}, ${"fk-session"}, ${"missing-branch"}, ${now})`,
+      )
+      expect(durableExit._tag).toBe("Failure")
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+  )
+  it.live("cascades queue and durable operation projections when deleting a session", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const queues = yield* AgentLoopQueueStorage
+      const operations = yield* SessionOperationStorage
+      const sql = yield* SqlClient.SqlClient
+      const now = FIXED_NOW
+      const sessionId = SessionId.make("projection-cascade-session")
+      const branchId = BranchId.make("projection-cascade-branch")
+      yield* sessions.createSession(new Session({ id: sessionId, createdAt: now, updatedAt: now }))
+      yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+      yield* queues.putQueueState(sessionId, branchId, {
+        steering: [],
+        followUp: [
+          {
+            message: Message.cases.regular.make({
+              id: MessageId.make("projection-cascade-message"),
+              sessionId,
+              branchId,
+              role: "user",
+              parts: [Prompt.textPart({ text: "follow up" })],
+              createdAt: now,
+            }),
+          },
+        ],
+      })
+      yield* operations.saveCreateSession(RequestId.make("projection-cascade-request"), {
+        sessionId,
+        branchId,
+        name: "Projection cascade",
+      })
+
+      yield* sessions.deleteSession(sessionId)
+
+      const queueRows = yield* sql<{ count: number }>`
+        SELECT COUNT(*) as count FROM agent_loop_queues
+      `
+      const operationRows = yield* sql<{ count: number }>`
+        SELECT COUNT(*) as count FROM durable_operations
+      `
+      expect(queueRows[0]?.count).toBe(0)
+      expect(operationRows[0]?.count).toBe(0)
     }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
   )
   it.live("rejects invalid session parent and active branch relationships", () =>

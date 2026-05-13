@@ -206,27 +206,37 @@ const agentLoopQueueMigration = Effect.gen(function* () {
       branch_id TEXT NOT NULL,
       queue_json TEXT NOT NULL,
       updated_at INTEGER NOT NULL,
-      PRIMARY KEY (session_id, branch_id)
+      PRIMARY KEY (session_id, branch_id),
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
 })
 
+const sqliteMessageIncludes = (error: unknown, expected: string) =>
+  String(error).toLowerCase().includes(expected.toLowerCase())
+
+const isAlreadyAppliedSqliteError = (error: unknown) =>
+  sqliteMessageIncludes(error, "duplicate column name") ||
+  sqliteMessageIncludes(error, "already exists")
+
+const ignoreAlreadyAppliedSqliteError =
+  (migration: string, operation: string) =>
+  <E, R>(effect: Effect.Effect<void, E, R>): Effect.Effect<void, E, R> =>
+    effect.pipe(
+      Effect.catchIf(isAlreadyAppliedSqliteError, () =>
+        Effect.logWarning(`${migration}: ${operation} skipped because it is already applied`),
+      ),
+    )
+
 const sessionWorkspaceMigration = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
 
-  // Idempotent: re-applying must not brick the DB if migration tracking
-  // is ever corrupted or manually replayed. SQLite throws "duplicate
-  // column name" on re-add and "index already exists" on re-create.
   yield* sql
     .unsafe(
       `ALTER TABLE sessions ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '${DefaultWorkspaceId}'`,
     )
-    .pipe(
-      Effect.ignore({
-        log: "Warn",
-        message: "003_session_workspace: ADD COLUMN skipped (column likely exists)",
-      }),
-    )
+    .pipe(ignoreAlreadyAppliedSqliteError("003_session_workspace", "ADD COLUMN workspace_id"))
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id, updated_at)`,
   )
@@ -242,7 +252,9 @@ const agentLoopQueueWorkspaceMigration = Effect.gen(function* () {
       branch_id TEXT NOT NULL,
       queue_json TEXT NOT NULL,
       updated_at INTEGER NOT NULL,
-      PRIMARY KEY (workspace_id, session_id, branch_id)
+      PRIMARY KEY (workspace_id, session_id, branch_id),
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
   yield* sql.unsafe(`
@@ -257,14 +269,9 @@ const agentLoopQueueWorkspaceMigration = Effect.gen(function* () {
 const interactionDecisionMigration = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
 
-  // Idempotent: SQLite throws "duplicate column name" on re-add. See
-  // sessionWorkspaceMigration for rationale.
-  yield* sql.unsafe(`ALTER TABLE interaction_requests ADD COLUMN decision_json TEXT`).pipe(
-    Effect.ignore({
-      log: "Warn",
-      message: "005_interaction_decision: ADD COLUMN skipped (column likely exists)",
-    }),
-  )
+  yield* sql
+    .unsafe(`ALTER TABLE interaction_requests ADD COLUMN decision_json TEXT`)
+    .pipe(ignoreAlreadyAppliedSqliteError("005_interaction_decision", "ADD COLUMN decision_json"))
 })
 
 const durableOperationsMigration = Effect.gen(function* () {
@@ -276,11 +283,91 @@ const durableOperationsMigration = Effect.gen(function* () {
       operation TEXT NOT NULL,
       request_id TEXT NOT NULL,
       result_json TEXT NOT NULL,
+      subject_session_id TEXT,
+      subject_branch_id TEXT,
       created_at INTEGER NOT NULL,
       PRIMARY KEY (workspace_id, operation, request_id)
     )
   `)
   yield* sql.unsafe(`CREATE INDEX idx_durable_operations_created ON durable_operations(created_at)`)
+})
+
+const durableOperationIntegrityMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  yield* sql.unsafe(`
+    CREATE TABLE durable_operations_next (
+      workspace_id TEXT NOT NULL DEFAULT '${DefaultWorkspaceId}',
+      operation TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      subject_session_id TEXT NOT NULL,
+      subject_branch_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (workspace_id, operation, request_id),
+      FOREIGN KEY (subject_session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (subject_branch_id, subject_session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
+    )
+  `)
+  yield* sql.unsafe(`
+    INSERT INTO durable_operations_next (
+      workspace_id,
+      operation,
+      request_id,
+      result_json,
+      subject_session_id,
+      subject_branch_id,
+      created_at
+    )
+    SELECT
+      durable_operations.workspace_id,
+      durable_operations.operation,
+      durable_operations.request_id,
+      durable_operations.result_json,
+      CASE durable_operations.operation
+        WHEN 'session.create' THEN json_extract(durable_operations.result_json, '$.sessionId')
+        WHEN 'branch.switch' THEN json_extract(durable_operations.result_json, '$.sessionId')
+        ELSE branches.session_id
+      END AS subject_session_id,
+      CASE durable_operations.operation
+        WHEN 'branch.switch' THEN json_extract(durable_operations.result_json, '$.toBranchId')
+        ELSE json_extract(durable_operations.result_json, '$.branchId')
+      END AS subject_branch_id,
+      durable_operations.created_at
+    FROM durable_operations
+    LEFT JOIN branches
+      ON branches.id = json_extract(durable_operations.result_json, '$.branchId')
+    WHERE subject_session_id IS NOT NULL
+      AND subject_branch_id IS NOT NULL
+  `)
+  yield* sql.unsafe(`DROP TABLE durable_operations`)
+  yield* sql.unsafe(`ALTER TABLE durable_operations_next RENAME TO durable_operations`)
+  yield* sql.unsafe(`CREATE INDEX idx_durable_operations_created ON durable_operations(created_at)`)
+})
+
+const agentLoopQueueIntegrityMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  yield* sql.unsafe(`
+    CREATE TABLE agent_loop_queues_next (
+      workspace_id TEXT NOT NULL DEFAULT '${DefaultWorkspaceId}',
+      session_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      queue_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (workspace_id, session_id, branch_id),
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
+    )
+  `)
+  yield* sql.unsafe(`
+    INSERT INTO agent_loop_queues_next (workspace_id, session_id, branch_id, queue_json, updated_at)
+    SELECT q.workspace_id, q.session_id, q.branch_id, q.queue_json, q.updated_at
+    FROM agent_loop_queues q
+    JOIN branches b ON b.id = q.branch_id AND b.session_id = q.session_id
+  `)
+  yield* sql.unsafe(`DROP TABLE agent_loop_queues`)
+  yield* sql.unsafe(`ALTER TABLE agent_loop_queues_next RENAME TO agent_loop_queues`)
 })
 
 const wrapMigrationError = (error: unknown): StorageError =>
@@ -312,6 +399,8 @@ const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient>
       "004_agent_loop_queue_workspace": agentLoopQueueWorkspaceMigration,
       "005_interaction_decision": interactionDecisionMigration,
       "006_durable_operations": durableOperationsMigration,
+      "007_durable_operation_integrity": durableOperationIntegrityMigration,
+      "008_agent_loop_queue_integrity": agentLoopQueueIntegrityMigration,
     }),
     table: "gent_storage_migrations",
   }).pipe(

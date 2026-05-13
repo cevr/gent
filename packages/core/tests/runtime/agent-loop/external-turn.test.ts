@@ -366,6 +366,7 @@ describe("external turn execution", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
+          yield* ensureStorageParents({ sessionId, branchId })
           const fiber = yield* Effect.forkChild(
             runAgentLoop(agentLoop, makeMessage("park externally"), {
               agentOverride: AgentName.make("test-external"),

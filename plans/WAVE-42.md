@@ -236,6 +236,37 @@ context adapter`).
   `/Users/cvr/Developer/personal/gent/packages/extensions/tests/delegate/delegate-background.test.ts:8`,
   `/Users/cvr/Developer/personal/gent/packages/extensions/tests/delegate/delegate-tool.test.ts:1`.
 
+### S6 status - partial
+
+- **C19 complete**: agent-loop queue rows and durable session-operation
+  rows now participate in SQLite referential integrity. Queue rows carry
+  session/branch foreign keys and cascade with the owning branch/session.
+  Durable operation rows now persist the subject session/branch alongside
+  result JSON and cascade when the subject is deleted, so idempotency
+  replay cannot resurrect deleted session results.
+- **C19 migration hardening complete**: the two idempotent `ALTER TABLE`
+  helpers now catch only known already-applied SQLite cases (`duplicate
+column name` / `already exists`) instead of swallowing every ALTER
+  failure.
+- **C20/C21 still open**: TUI context/controller cohesion and the
+  remaining trace/composable-method cleanup have not landed yet.
+- Verification:
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/storage/sqlite-session-storage.test.ts`
+  passed with 20 tests, the focused interaction/external-turn regression
+  files passed with 20 tests, and `bun run gate` passed.
+- Evidence:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:203`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:219`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:223`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:248`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:295`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/schema.ts:348`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/session-operation-storage.ts:106`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/storage/session-operation-storage.ts:138`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/storage/sqlite-session-storage.test.ts:202`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/storage/sqlite-session-storage.test.ts:268`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/storage/sqlite-session-storage.test.ts:302`.
+
 ### S1 - Upstream wide-event outcome and boundary API
 
 Fix `effect-wide-event` so Gent stops hand-modeling domain outcomes and
