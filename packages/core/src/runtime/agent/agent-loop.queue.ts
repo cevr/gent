@@ -1,5 +1,6 @@
 import {
   Clock,
+  Context,
   DateTime,
   Deferred,
   Effect,
@@ -11,7 +12,7 @@ import {
 } from "effect"
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import type { QueueSnapshot } from "../../domain/queue.js"
-import type { AgentLoopQueueStorageService } from "../../storage/agent-loop-queue-storage.js"
+import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import {
   AgentLoopError,
   appendFollowUpQueueState,
@@ -33,15 +34,19 @@ import {
 
 const FOLLOW_UP_QUEUE_MAX = 10
 
-export type AgentLoopQueueDeps = {
+export type AgentLoopQueueScopeService = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly queueStorage: AgentLoopQueueStorageService
   readonly loopRef: TxSubscriptionRef.TxSubscriptionRef<AgentLoopState>
   readonly queuePersistenceSemaphore: Semaphore.Semaphore
   readonly persistenceFailure: Deferred.Deferred<void, AgentLoopError>
   readonly startedRef: Ref.Ref<boolean>
 }
+
+export class AgentLoopQueueScope extends Context.Service<
+  AgentLoopQueueScope,
+  AgentLoopQueueScopeService
+>()("@gent/core/src/runtime/agent/agent-loop.queue/AgentLoopQueueScope") {}
 
 export type AgentLoopQueue = {
   readonly readState: Effect.Effect<AgentLoopState>
@@ -83,15 +88,22 @@ const mergeConcurrentLoopMetadata = (
   turnFailure: current.turnFailure !== base.turnFailure ? current.turnFailure : next.turnFailure,
 })
 
-export const makeAgentLoopQueue = (deps: AgentLoopQueueDeps): AgentLoopQueue => {
+export const makeAgentLoopQueue: Effect.Effect<
+  AgentLoopQueue,
+  never,
+  AgentLoopQueueScope | AgentLoopQueueStorage
+> = Effect.gen(function* () {
+  const scope = yield* AgentLoopQueueScope
+  const queueStorage = yield* AgentLoopQueueStorage
+
   const persistCommittedQueue = (queue: LoopQueueState, operation: string) =>
-    Effect.flatMap(Ref.get(deps.startedRef), (started) =>
+    Effect.flatMap(Ref.get(scope.startedRef), (started) =>
       started
-        ? deps.queueStorage.putQueueState(deps.sessionId, deps.branchId, queue).pipe(
+        ? queueStorage.putQueueState(scope.sessionId, scope.branchId, queue).pipe(
             Effect.mapError(
               (cause) =>
                 new AgentLoopError({
-                  message: `Failed to persist ${operation} for ${deps.sessionId}/${deps.branchId}`,
+                  message: `Failed to persist ${operation} for ${scope.sessionId}/${scope.branchId}`,
                   cause,
                 }),
             ),
@@ -100,7 +112,7 @@ export const makeAgentLoopQueue = (deps: AgentLoopQueueDeps): AgentLoopQueue => 
     )
 
   const recordPersistenceFailure = (error: AgentLoopError) =>
-    Deferred.fail(deps.persistenceFailure, error).pipe(Effect.catchEager(() => Effect.void))
+    Deferred.fail(scope.persistenceFailure, error).pipe(Effect.catchEager(() => Effect.void))
 
   const commitQueueTransaction = <A>(
     operation: string,
@@ -110,9 +122,9 @@ export const makeAgentLoopQueue = (deps: AgentLoopQueueDeps): AgentLoopQueue => 
       readonly persist: boolean
     },
   ): Effect.Effect<A, AgentLoopError> =>
-    deps.queuePersistenceSemaphore.withPermits(1)(
+    scope.queuePersistenceSemaphore.withPermits(1)(
       Effect.gen(function* () {
-        const base = yield* TxSubscriptionRef.get(deps.loopRef)
+        const base = yield* TxSubscriptionRef.get(scope.loopRef)
         const next = decide(base)
         const committed = next.persist
           ? {
@@ -126,7 +138,7 @@ export const makeAgentLoopQueue = (deps: AgentLoopQueueDeps): AgentLoopQueue => 
             Effect.tapError(recordPersistenceFailure),
           )
         }
-        yield* TxSubscriptionRef.update(deps.loopRef, (current) =>
+        yield* TxSubscriptionRef.update(scope.loopRef, (current) =>
           mergeConcurrentLoopMetadata(base, current, decision.next),
         )
         return decision.value
@@ -134,19 +146,19 @@ export const makeAgentLoopQueue = (deps: AgentLoopQueueDeps): AgentLoopQueue => 
     )
 
   const persistRuntimeState = (state: LoopState) =>
-    deps.queuePersistenceSemaphore.withPermits(1)(
-      TxSubscriptionRef.get(deps.loopRef).pipe(
+    scope.queuePersistenceSemaphore.withPermits(1)(
+      TxSubscriptionRef.get(scope.loopRef).pipe(
         Effect.flatMap((s) =>
-          deps.queueStorage.putQueueState(deps.sessionId, deps.branchId, s.queue).pipe(
+          queueStorage.putQueueState(scope.sessionId, scope.branchId, s.queue).pipe(
             Effect.mapError(
               (cause) =>
                 new AgentLoopError({
-                  message: `Failed to persist loop queue for ${deps.sessionId}/${deps.branchId}`,
+                  message: `Failed to persist loop queue for ${scope.sessionId}/${scope.branchId}`,
                   cause,
                 }),
             ),
             Effect.andThen(
-              TxSubscriptionRef.update(deps.loopRef, (current) => ({
+              TxSubscriptionRef.update(scope.loopRef, (current) => ({
                 ...current,
                 state,
                 queue: current.queue,
@@ -159,9 +171,9 @@ export const makeAgentLoopQueue = (deps: AgentLoopQueueDeps): AgentLoopQueue => 
       ),
     )
 
-  const currentLoopState = TxSubscriptionRef.get(deps.loopRef).pipe(Effect.map((s) => s.state))
-  const readState = TxSubscriptionRef.get(deps.loopRef)
-  const stateChanges = TxSubscriptionRef.changesStream(deps.loopRef)
+  const currentLoopState = TxSubscriptionRef.get(scope.loopRef).pipe(Effect.map((s) => s.state))
+  const readState = TxSubscriptionRef.get(scope.loopRef)
+  const stateChanges = TxSubscriptionRef.changesStream(scope.loopRef)
   const runtimeState: Effect.Effect<SessionRuntimeState> = readState.pipe(
     Effect.map(projectRuntimeState),
   )
@@ -171,7 +183,7 @@ export const makeAgentLoopQueue = (deps: AgentLoopQueueDeps): AgentLoopQueue => 
   )
 
   const setStartingState = Effect.fn("AgentLoop.setStartingState")((state: RunningState) =>
-    TxSubscriptionRef.update(deps.loopRef, (s) => ({
+    TxSubscriptionRef.update(scope.loopRef, (s) => ({
       ...s,
       startingState: state,
     })),
@@ -268,7 +280,7 @@ export const makeAgentLoopQueue = (deps: AgentLoopQueueDeps): AgentLoopQueue => 
   )
 
   const refreshRuntimeState = Effect.gen(function* () {
-    if (!(yield* Ref.get(deps.startedRef))) return
+    if (!(yield* Ref.get(scope.startedRef))) return
     yield* persistRuntimeState(yield* currentLoopState)
   }).pipe(Effect.withSpan("AgentLoop.refreshRuntimeState"))
 
@@ -318,7 +330,7 @@ export const makeAgentLoopQueue = (deps: AgentLoopQueueDeps): AgentLoopQueue => 
   const saveCheckpoint = (next: LoopState): Effect.Effect<void, AgentLoopError> =>
     persistRuntimeState(next).pipe(
       Effect.catchEager((error) =>
-        Deferred.fail(deps.persistenceFailure, error).pipe(
+        Deferred.fail(scope.persistenceFailure, error).pipe(
           Effect.asVoid,
           Effect.andThen(Effect.fail(error)),
         ),
@@ -344,4 +356,4 @@ export const makeAgentLoopQueue = (deps: AgentLoopQueueDeps): AgentLoopQueue => 
     drainQueue,
     saveCheckpoint,
   }
-}
+})

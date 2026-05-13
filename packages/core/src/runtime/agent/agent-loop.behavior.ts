@@ -40,7 +40,7 @@ import type { PromptSection } from "../../domain/prompt.js"
 import type { StorageError } from "../../domain/storage-error.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
-import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
+import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
@@ -68,7 +68,7 @@ import {
 } from "./agent-loop.state.js"
 import type { QueueSnapshot } from "../../domain/queue.js"
 import { emptyTurnMetrics, type ActiveStreamHandle } from "./turn-response.js"
-import { makeAgentLoopQueue } from "./agent-loop.queue.js"
+import { AgentLoopQueueScope, makeAgentLoopQueue } from "./agent-loop.queue.js"
 import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
 import { makeAgentLoopWorker } from "./agent-loop.worker.js"
 
@@ -206,7 +206,6 @@ export const makeAgentLoopBehavior = (
 > =>
   Effect.gen(function* () {
     const messageStorage = yield* MessageStorage
-    const queueStorage = yield* AgentLoopQueueStorage
     yield* ModelResolver
     const extensionRegistry = yield* ExtensionRegistry
     const driverRegistry = yield* DriverRegistry
@@ -324,7 +323,6 @@ export const makeAgentLoopBehavior = (
       readonly sideMutationSemaphore: Semaphore.Semaphore
       readonly baseSections: ReadonlyArray<PromptSection>
       readonly messageStorage: typeof messageStorage
-      readonly queueStorage: typeof queueStorage
       readonly eventPublisher: typeof eventPublisher
       readonly storageTransaction: typeof storageTransaction
       readonly provideRuntime: typeof provideRuntime
@@ -353,7 +351,6 @@ export const makeAgentLoopBehavior = (
       sideMutationSemaphore,
       baseSections,
       messageStorage,
-      queueStorage,
       eventPublisher,
       storageTransaction,
       provideRuntime,
@@ -376,15 +373,16 @@ export const makeAgentLoopBehavior = (
       startedRef,
     } satisfies BehaviorDeps
 
-    const queue = makeAgentLoopQueue({
-      sessionId: behaviorDeps.sessionId,
-      branchId: behaviorDeps.branchId,
-      queueStorage: behaviorDeps.queueStorage,
-      loopRef: behaviorDeps.loopRef,
-      queuePersistenceSemaphore: behaviorDeps.queuePersistenceSemaphore,
-      persistenceFailure: behaviorDeps.persistenceFailure,
-      startedRef: behaviorDeps.startedRef,
-    })
+    const queue = yield* makeAgentLoopQueue.pipe(
+      Effect.provideService(AgentLoopQueueScope, {
+        sessionId: behaviorDeps.sessionId,
+        branchId: behaviorDeps.branchId,
+        loopRef: behaviorDeps.loopRef,
+        queuePersistenceSemaphore: behaviorDeps.queuePersistenceSemaphore,
+        persistenceFailure: behaviorDeps.persistenceFailure,
+        startedRef: behaviorDeps.startedRef,
+      }),
+    )
 
     const recordTurnFailure = (cause: Cause.Cause<unknown>) =>
       TxSubscriptionRef.update(loopRef, (s) => ({
