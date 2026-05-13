@@ -5,8 +5,6 @@ import { messagePartsSearchText } from "../../domain/message-part-projection.js"
 import { AgentEvent, EventId } from "../../domain/event.js"
 import { BranchId, MessageId, SessionId } from "../../domain/ids.js"
 import { ReasoningEffort } from "../../domain/agent.js"
-import { GentPlatform } from "../../runtime/gent-platform.js"
-import { SqlClient } from "effect/unstable/sql"
 
 // Schema decoders - Effect-based (no sync throws)
 export const StoredPromptPart = Schema.Union([
@@ -184,32 +182,3 @@ export const groupMessageChunkRows = (rows: ReadonlyArray<MessageChunkRow>) => {
     partJsons: entry.parts.sort((a, b) => a.ordinal - b.ordinal).map((part) => part.json),
   }))
 }
-
-export const insertMessageContent = Effect.fn("Storage.insertMessageContent")(function* (
-  messageId: MessageId,
-  partJsons: ReadonlyArray<string>,
-) {
-  const sql = yield* SqlClient.SqlClient
-  const platform = yield* GentPlatform
-  yield* sql`DELETE FROM message_chunks WHERE message_id = ${messageId}`
-  yield* Effect.forEach(
-    partJsons,
-    (partJson, ordinal) =>
-      Effect.gen(function* () {
-        const chunkId = platform.hash("sha256", partJson)
-        const part = yield* decodeStoredPromptPart(partJson)
-        yield* sql`INSERT OR IGNORE INTO content_chunks (id, part_type, part_json) VALUES (${chunkId}, ${part.type}, ${partJson})`
-        yield* sql`INSERT INTO message_chunks (message_id, ordinal, chunk_id) VALUES (${messageId}, ${ordinal}, ${chunkId})`
-      }),
-    { discard: true },
-  )
-  yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
-})
-
-export const indexMessageSearch = Effect.fn("Storage.indexMessageSearch")(function* (
-  message: Pick<Message, "id" | "sessionId" | "branchId" | "role" | "parts">,
-) {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql`DELETE FROM messages_fts WHERE message_id = ${message.id}`
-  yield* sql`INSERT INTO messages_fts(content, message_id, session_id, branch_id, role) VALUES (${messageSearchText(message.parts)}, ${message.id}, ${message.sessionId}, ${message.branchId}, ${message.role})`
-})

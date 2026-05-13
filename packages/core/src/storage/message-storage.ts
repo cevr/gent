@@ -12,11 +12,11 @@ import { StorageError } from "../domain/storage-error.js"
 import { SqlClient, SqlModel } from "effect/unstable/sql"
 import {
   decodeMessageChunkRow,
+  decodeStoredPromptPart,
   decodeStoredMessage,
   encodeStoredMessage,
   groupMessageChunkRows,
-  indexMessageSearch,
-  insertMessageContent,
+  messageSearchText,
 } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
@@ -63,14 +63,31 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
         })
         const mapError = (message: string) => (cause: unknown) =>
           new StorageError({ message, cause })
-        const insertContent = (messageId: MessageId, partJsons: ReadonlyArray<string>) =>
-          insertMessageContent(messageId, partJsons).pipe(
-            Effect.provideService(SqlClient.SqlClient, sql),
-            Effect.provideService(GentPlatform, platform),
+        const insertContent = Effect.fn("MessageStorage.insertContent")(function* (
+          messageId: MessageId,
+          partJsons: ReadonlyArray<string>,
+        ) {
+          yield* sql`DELETE FROM message_chunks WHERE message_id = ${messageId}`
+          yield* Effect.forEach(
+            partJsons,
+            (partJson, ordinal) =>
+              Effect.gen(function* () {
+                const chunkId = platform.hash("sha256", partJson)
+                const part = yield* decodeStoredPromptPart(partJson)
+                yield* sql`INSERT OR IGNORE INTO content_chunks (id, part_type, part_json) VALUES (${chunkId}, ${part.type}, ${partJson})`
+                yield* sql`INSERT INTO message_chunks (message_id, ordinal, chunk_id) VALUES (${messageId}, ${ordinal}, ${chunkId})`
+              }),
+            { discard: true },
           )
+          yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
+        })
         const indexSearch = (
           message: Pick<Message, "id" | "sessionId" | "branchId" | "role" | "parts">,
-        ) => indexMessageSearch(message).pipe(Effect.provideService(SqlClient.SqlClient, sql))
+        ) =>
+          Effect.gen(function* () {
+            yield* sql`DELETE FROM messages_fts WHERE message_id = ${message.id}`
+            yield* sql`INSERT INTO messages_fts(content, message_id, session_id, branch_id, role) VALUES (${messageSearchText(message.parts)}, ${message.id}, ${message.sessionId}, ${message.branchId}, ${message.role})`
+          })
         const ensureMessageWorkspace = Effect.fn("MessageStorage.ensureMessageWorkspace")(
           function* (message: Pick<Message, "sessionId" | "branchId">) {
             const workspaceId = yield* CurrentWorkspaceId
