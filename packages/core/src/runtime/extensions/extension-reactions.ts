@@ -15,25 +15,27 @@ import type { ExtensionHostContext } from "../../domain/extension-host-context.j
 import type { PromptSection } from "../../domain/prompt.js"
 import { type ExtensionContext, provideExtensionServices } from "../../domain/extension-services.js"
 import { exitErasedEffect, sealErasedEffect } from "./extension-effect-membrane.js"
-
-export interface ExtensionReactionContext {
-  readonly projection: ProjectionTurnContext
-  readonly host: ExtensionHostContext
-}
+import {
+  CurrentProjectionReactionContext,
+  CurrentReactionHostContext,
+} from "./extension-reaction-context.js"
+export type { ExtensionReactionContext } from "./extension-reaction-context.js"
 
 export interface CompiledExtensionReactions {
   readonly resolveSystemPrompt: (
     input: SystemPromptInput,
-    ctx: ExtensionReactionContext,
-  ) => Effect.Effect<string>
-  readonly resolveTurnProjection: (
-    ctx: ExtensionReactionContext,
-  ) => Effect.Effect<ExtensionTurnProjection>
+  ) => Effect.Effect<string, never, CurrentReactionHostContext>
+  readonly resolveTurnProjection: () => Effect.Effect<
+    ExtensionTurnProjection,
+    never,
+    CurrentReactionHostContext | CurrentProjectionReactionContext
+  >
   readonly transformToolResult: (
     input: ToolResultInput,
-    ctx: ExtensionHostContext,
-  ) => Effect.Effect<unknown>
-  readonly emitTurnAfter: (input: TurnAfterInput, ctx: ExtensionHostContext) => Effect.Effect<void>
+  ) => Effect.Effect<unknown, never, CurrentReactionHostContext>
+  readonly emitTurnAfter: (
+    input: TurnAfterInput,
+  ) => Effect.Effect<void, never, CurrentReactionHostContext>
 }
 
 export interface ExtensionTurnProjection {
@@ -68,12 +70,9 @@ const sortExtensions = (extensions: ReadonlyArray<LoadedExtension>) =>
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-const runReaction = <Input>(
-  input: Input,
-  ctx: ExtensionHostContext,
-  reaction: RegisteredReaction<Input>,
-) =>
+const runReaction = <Input>(input: Input, reaction: RegisteredReaction<Input>) =>
   Effect.gen(function* () {
+    const ctx = yield* CurrentReactionHostContext
     const exit = yield* exitErasedEffect(() =>
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off
       provideLifecycleHostContext(ctx, reaction.slot.handler(input)),
@@ -96,12 +95,13 @@ const provideLifecycleHostContext = <A, E, R>(
     : provideExtensionServices(ctx, effect).pipe(Effect.provideContext(ctx.capabilityContext))
 
 const provideProjectionContext = <A, E, R>(
-  ctx: ExtensionReactionContext,
+  projection: ProjectionTurnContext,
+  host: ExtensionHostContext,
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, Exclude<R, ExtensionContext> | FileSystem.FileSystem | Path.Path> => {
   const hostCtx: ExtensionHostContext & { readonly turn: ProjectionTurnContext["turn"] } = {
-    ...ctx.host,
-    turn: ctx.projection.turn,
+    ...host,
+    turn: projection.turn,
   }
   return provideLifecycleHostContext(hostCtx, effect)
 }
@@ -116,22 +116,24 @@ const collectTurnProjection = (
   for (const fragment of projection.policyFragments) policyFragments.push(fragment)
 }
 
-const runTurnProjectionReaction = (
-  slot: ReactionTurnProjectionSlot,
-  ctx: ExtensionReactionContext,
-) =>
+const runTurnProjectionReaction = (slot: ReactionTurnProjectionSlot) =>
   sealErasedEffect(
     () =>
-      provideProjectionContext(
-        ctx,
-        // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-        slot.handler().pipe(
-          Effect.map((projection) => ({
-            promptSections: projection.promptSections ?? [],
-            policyFragments: projection.toolPolicy !== undefined ? [projection.toolPolicy] : [],
-          })),
-        ),
-      ),
+      Effect.gen(function* () {
+        const projection = yield* CurrentProjectionReactionContext
+        const host = yield* CurrentReactionHostContext
+        return yield* provideProjectionContext(
+          projection,
+          host,
+          // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+          slot.handler().pipe(
+            Effect.map((projection) => ({
+              promptSections: projection.promptSections ?? [],
+              policyFragments: projection.toolPolicy !== undefined ? [projection.toolPolicy] : [],
+            })),
+          ),
+        )
+      }),
     {
       onFailure: (error) =>
         Effect.logWarning("extension.reaction.turn-projection.failed").pipe(
@@ -185,14 +187,15 @@ export const compileExtensionReactions = (
   }
 
   return {
-    resolveSystemPrompt: (input, ctx) =>
+    resolveSystemPrompt: (input) =>
       Effect.gen(function* () {
+        const ctx = yield* CurrentReactionHostContext
         let current = input.basePrompt
         for (const slot of systemPromptSlots) {
           current = yield* sealErasedEffect(
             () =>
               provideLifecycleHostContext(
-                ctx.host,
+                ctx,
                 // @effect-diagnostics-next-line anyUnknownInErrorContext:off
                 slot.handler({ ...input, basePrompt: current }),
               ),
@@ -217,16 +220,16 @@ export const compileExtensionReactions = (
           )
         }
         return current
-      }) as Effect.Effect<string>,
+      }),
 
-    resolveTurnProjection: (ctx) =>
+    resolveTurnProjection: () =>
       Effect.gen(function* () {
         const sectionsById = new Map<string, PromptSection>()
         const policyFragments: ToolPolicyFragment[] = []
 
         for (const slot of turnProjectionSlots) {
           collectTurnProjection(
-            yield* runTurnProjectionReaction(slot, ctx),
+            yield* runTurnProjectionReaction(slot),
             sectionsById,
             policyFragments,
           )
@@ -235,8 +238,9 @@ export const compileExtensionReactions = (
         return { promptSections: [...sectionsById.values()], policyFragments }
       }),
 
-    transformToolResult: (input, ctx) =>
+    transformToolResult: (input) =>
       Effect.gen(function* () {
+        const ctx = yield* CurrentReactionHostContext
         let current: unknown = input.result
         for (const slot of toolResultSlots) {
           const next = yield* sealErasedEffect(
@@ -268,11 +272,11 @@ export const compileExtensionReactions = (
           current = next
         }
         return current
-      }) as Effect.Effect<unknown>,
+      }),
 
-    emitTurnAfter: (input, ctx) =>
+    emitTurnAfter: (input) =>
       Effect.gen(function* () {
-        for (const slot of turnAfterSlots) yield* runReaction(input, ctx, slot)
+        for (const slot of turnAfterSlots) yield* runReaction(input, slot)
       }),
   }
 }

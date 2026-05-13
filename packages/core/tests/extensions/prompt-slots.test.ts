@@ -5,6 +5,7 @@ import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agent
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
+import { provideExtensionReactionContext } from "../../src/runtime/extensions/extension-reaction-context"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 import { AgentName } from "@gent/core-internal/domain/agent"
 
@@ -50,20 +51,18 @@ describe("prompt slots", () => {
     ])
 
     return compiled
-      .resolveSystemPrompt(
-        { basePrompt: "x", agent: getBuiltinAgent("cowork")! },
-        { projection: stubProjectionCtx, host: stubHostCtx },
-      )
+      .resolveSystemPrompt({ basePrompt: "x", agent: getBuiltinAgent("cowork")! })
       .pipe(
+        provideExtensionReactionContext({ projection: stubProjectionCtx, host: stubHostCtx }),
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("x[builtin][user][project]"))),
       )
   })
 
   test("empty turn reactions are a no-op", () =>
     compileExtensionReactions([])
-      .resolveSystemPrompt(
-        { basePrompt: "x", agent: getBuiltinAgent("cowork")! },
-        { projection: stubProjectionCtx, host: stubHostCtx },
-      )
-      .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("x")))))
+      .resolveSystemPrompt({ basePrompt: "x", agent: getBuiltinAgent("cowork")! })
+      .pipe(
+        provideExtensionReactionContext({ projection: stubProjectionCtx, host: stubHostCtx }),
+        Effect.tap((result) => Effect.sync(() => expect(result).toBe("x"))),
+      ))
 })

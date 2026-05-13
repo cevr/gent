@@ -51,6 +51,7 @@ import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
+import { provideExtensionReactionContext } from "../../src/runtime/extensions/extension-reaction-context"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import { AgentName } from "@gent/core-internal/domain/agent"
 // Tool execution now flows through Gent metadata on the native Effect tool.
@@ -659,30 +660,34 @@ describe("Executor runtime lifecycle", () => {
               "built-in executor ready",
             )
 
-            const projection = yield* compiled
-              .resolveTurnProjection({
-                projection: {
+            const reactionCtx = {
+              projection: {
+                sessionId: "executor-projection-session" as never,
+                branchId: "executor-projection-branch" as never,
+                cwd: "/test",
+                home: "/test-home",
+                turn: {
                   sessionId: "executor-projection-session" as never,
                   branchId: "executor-projection-branch" as never,
-                  cwd: "/test",
-                  home: "/test-home",
-                  turn: {
-                    sessionId: "executor-projection-session" as never,
-                    branchId: "executor-projection-branch" as never,
-                    agent: getBuiltinAgent("cowork")!,
-                    allTools: [],
-                    agentName: AgentName.make("cowork"),
-                  },
+                  agent: getBuiltinAgent("cowork")!,
+                  allTools: [],
+                  agentName: AgentName.make("cowork"),
                 },
-                host: testExtensionHostContext({
-                  sessionId: "executor-projection-session" as never,
-                  branchId: "executor-projection-branch" as never,
-                  cwd: "/test",
-                  home: "/test-home",
-                  capabilityContext: layerContext as Context.Context<never>,
-                }),
-              })
-              .pipe(Effect.provideContext(layerContext))
+              },
+              host: testExtensionHostContext({
+                sessionId: "executor-projection-session" as never,
+                branchId: "executor-projection-branch" as never,
+                cwd: "/test",
+                home: "/test-home",
+                capabilityContext: layerContext as Context.Context<never>,
+              }),
+            }
+            const projection = yield* compiled
+              .resolveTurnProjection()
+              .pipe(
+                provideExtensionReactionContext(reactionCtx),
+                Effect.provideContext(layerContext),
+              )
 
             expect(projection.promptSections.map((section) => section.id)).toContain(
               "executor-guidance",

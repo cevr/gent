@@ -19,6 +19,7 @@ import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids
 
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
+import { provideExtensionReactionContext } from "../../src/runtime/extensions/extension-reaction-context"
 import { PermissionRule } from "@gent/core-internal/domain/permission"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import { runToolWithCtx, testExtensionHostContext } from "@gent/core-internal/test-utils"
@@ -230,11 +231,9 @@ describe("scope precedence", () => {
       ])
 
       return compiled
-        .resolveSystemPrompt(
-          { basePrompt: "x", agent: getBuiltinAgent("cowork")! },
-          { projection: stubProjectionCtx, host: stubCtx },
-        )
+        .resolveSystemPrompt({ basePrompt: "x", agent: getBuiltinAgent("cowork")! })
         .pipe(
+          provideExtensionReactionContext({ projection: stubProjectionCtx, host: stubCtx }),
           Effect.tap((result) =>
             Effect.sync(() => expect(result).toBe("x[builtin][user][project]")),
           ),

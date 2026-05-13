@@ -29,6 +29,7 @@ import { PermissionRule } from "@gent/core-internal/domain/permission"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
+import { provideExtensionReactionContext } from "../../src/runtime/extensions/extension-reaction-context"
 import { testExtensionHostContext, testSetupCtx } from "@gent/core-internal/test-utils"
 import { AgentName } from "@gent/core-internal/domain/agent"
 
@@ -235,10 +236,9 @@ describe("defineExtension", () => {
       ).toBe("from-define")
 
       const compiled = compileExtensionReactions([loaded])
-      const result = yield* compiled.resolveSystemPrompt(
-        { basePrompt: "yo", agent: getBuiltinAgent("cowork")! },
-        { projection: stubProjectionCtx, host: stubHostCtx },
-      )
+      const result = yield* compiled
+        .resolveSystemPrompt({ basePrompt: "yo", agent: getBuiltinAgent("cowork")! })
+        .pipe(provideExtensionReactionContext({ projection: stubProjectionCtx, host: stubHostCtx }))
       expect(result).toBe("yo!!")
     }))
 

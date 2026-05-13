@@ -24,6 +24,7 @@ import {
   CurrentExtensionHostContext,
   provideCurrentHostCtx,
 } from "./current-extension-host-context.js"
+import { provideReactionHostContext } from "../extensions/extension-reaction-context.js"
 
 export type ToolCapabilityMap = Record<string, ToolCapability>
 
@@ -141,19 +142,17 @@ const makeExecutionToolkit = (params: {
           )
 
           return yield* registry.extensionReactions
-            .transformToolResult(
-              {
-                toolCallId: params.toolCall.toolCallId,
-                toolName: params.toolCall.toolName,
-                input: decodedInput,
-                result: executeResult,
-                agentName: params.ctx.agentName,
-                sessionId: params.ctx.sessionId,
-                branchId: params.ctx.branchId,
-              },
-              params.ctx,
-            )
+            .transformToolResult({
+              toolCallId: params.toolCall.toolCallId,
+              toolName: params.toolCall.toolName,
+              input: decodedInput,
+              result: executeResult,
+              agentName: params.ctx.agentName,
+              sessionId: params.ctx.sessionId,
+              branchId: params.ctx.branchId,
+            })
             .pipe(
+              provideReactionHostContext(params.ctx),
               Effect.catchEager((e) =>
                 Effect.logWarning("extension.reaction.tool-result.failed").pipe(
                   Effect.annotateLogs({ error: String(e) }),

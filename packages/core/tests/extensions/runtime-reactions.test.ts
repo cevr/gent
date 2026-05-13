@@ -10,6 +10,7 @@ import type {
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
+import { provideReactionHostContext } from "../../src/runtime/extensions/extension-reaction-context"
 import { AgentName } from "@gent/core-internal/domain/agent"
 
 const stubCtx = testExtensionHostContext()
@@ -69,7 +70,9 @@ describe("runtime reactions", () => {
         }),
       ])
 
-      const exit = yield* Effect.exit(compiled.emitTurnAfter(stubEvent, stubCtx))
+      const exit = yield* Effect.exit(
+        compiled.emitTurnAfter(stubEvent).pipe(provideReactionHostContext(stubCtx)),
+      )
       expect(Exit.isSuccess(exit)).toBe(true)
       expect(calls).toEqual(["failing", "after"])
     }))
@@ -90,7 +93,7 @@ describe("runtime reactions", () => {
         ext("m-user", "user", { reactions: make("user") }),
       ])
 
-      yield* compiled.emitTurnAfter(stubEvent, stubCtx)
+      yield* compiled.emitTurnAfter(stubEvent).pipe(provideReactionHostContext(stubCtx))
       expect(calls).toEqual(["builtin", "user", "project"])
     }))
 })

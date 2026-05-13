@@ -12,6 +12,10 @@ import type { ExtensionHostContext } from "@gent/core-internal/domain/extension-
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { compileExtensionReactions } from "../../src/runtime/extensions/extension-reactions"
+import {
+  provideExtensionReactionContext,
+  provideReactionHostContext,
+} from "../../src/runtime/extensions/extension-reaction-context"
 import { AgentName } from "@gent/core-internal/domain/agent"
 import { ExtensionContext } from "../../src/domain/extension-services.js"
 
@@ -76,11 +80,12 @@ describe("runtime slots", () => {
     const slots = compileExtensionReactions(extensions)
 
     return slots
-      .resolveSystemPrompt(
-        { basePrompt: "base", agent: getBuiltinAgent("cowork")! } satisfies SystemPromptInput,
-        { projection: stubProjectionCtx, host: stubHostCtx },
-      )
+      .resolveSystemPrompt({
+        basePrompt: "base",
+        agent: getBuiltinAgent("cowork")!,
+      } satisfies SystemPromptInput)
       .pipe(
+        provideExtensionReactionContext({ projection: stubProjectionCtx, host: stubHostCtx }),
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("base[builtin][project]"))),
       )
   })
@@ -102,11 +107,12 @@ describe("runtime slots", () => {
     const slots = compileExtensionReactions(extensions)
 
     return slots
-      .resolveSystemPrompt(
-        { basePrompt: "base", agent: getBuiltinAgent("cowork")! } satisfies SystemPromptInput,
-        { projection: stubProjectionCtx, host: stubHostCtx },
-      )
+      .resolveSystemPrompt({
+        basePrompt: "base",
+        agent: getBuiltinAgent("cowork")!,
+      } satisfies SystemPromptInput)
       .pipe(
+        provideExtensionReactionContext({ projection: stubProjectionCtx, host: stubHostCtx }),
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("base[builtin-reaction]"))),
       )
   })
@@ -127,16 +133,12 @@ describe("runtime slots", () => {
         }),
       ])
 
-      const result = yield* slots.resolveSystemPrompt(
-        {
+      const result = yield* slots
+        .resolveSystemPrompt({
           basePrompt: "base",
           agent: getBuiltinAgent("cowork")!,
-        },
-        {
-          projection: stubProjectionCtx,
-          host: stubHostCtx,
-        },
-      )
+        })
+        .pipe(provideExtensionReactionContext({ projection: stubProjectionCtx, host: stubHostCtx }))
 
       expect(result).toBe("readonly")
       expect(yield* Ref.get(sawProcessAuthority)).toBe(true)
@@ -159,19 +161,19 @@ describe("runtime slots", () => {
     const slots = compileExtensionReactions(extensions)
 
     return slots
-      .transformToolResult(
-        {
-          toolCallId: ToolCallId.make("tc-1"),
-          toolName: "echo",
-          input: { text: "hello" },
-          result: "base",
-          sessionId: SessionId.make("test-session"),
-          branchId: BranchId.make("test-branch"),
-          agentName: AgentName.make("cowork"),
-        },
-        stubHostCtx,
+      .transformToolResult({
+        toolCallId: ToolCallId.make("tc-1"),
+        toolName: "echo",
+        input: { text: "hello" },
+        result: "base",
+        sessionId: SessionId.make("test-session"),
+        branchId: BranchId.make("test-branch"),
+        agentName: AgentName.make("cowork"),
+      })
+      .pipe(
+        provideReactionHostContext(stubHostCtx),
+        Effect.tap((result) => Effect.sync(() => expect(result).toBe("base-builtin-explicit"))),
       )
-      .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("base-builtin-explicit"))))
   })
 
   test("turnAfter isolates failing reactions; all handlers still run", () => {
@@ -213,16 +215,15 @@ describe("runtime slots", () => {
 
     return Effect.gen(function* () {
       const exit = yield* Effect.exit(
-        slots.emitTurnAfter(
-          {
+        slots
+          .emitTurnAfter({
             sessionId: SessionId.make("test-session"),
             branchId: BranchId.make("test-branch"),
             durationMs: 10,
             agentName: AgentName.make("cowork"),
             interrupted: false,
-          } satisfies TurnAfterInput,
-          stubHostCtx,
-        ),
+          } satisfies TurnAfterInput)
+          .pipe(provideReactionHostContext(stubHostCtx)),
       )
       expect(Exit.isSuccess(exit)).toBe(true)
       expect(calls).toEqual(["first", "second", "third"])
@@ -246,16 +247,15 @@ describe("runtime slots", () => {
         }),
       ])
 
-      yield* slots.emitTurnAfter(
-        {
+      yield* slots
+        .emitTurnAfter({
           sessionId: SessionId.make("test-session"),
           branchId: BranchId.make("test-branch"),
           durationMs: 10,
           agentName: AgentName.make("cowork"),
           interrupted: false,
-        } satisfies TurnAfterInput,
-        stubHostCtx,
-      )
+        } satisfies TurnAfterInput)
+        .pipe(provideReactionHostContext(stubHostCtx))
 
       expect(yield* Ref.get(sawProcessAuthority)).toBe(true)
     }))
@@ -285,16 +285,15 @@ describe("runtime slots", () => {
         capabilityContext: Context.make(ReactionCounter, counter),
       } satisfies ExtensionHostContext
 
-      yield* slots.emitTurnAfter(
-        {
+      yield* slots
+        .emitTurnAfter({
           sessionId: SessionId.make("test-session"),
           branchId: BranchId.make("test-branch"),
           durationMs: 10,
           agentName: AgentName.make("cowork"),
           interrupted: false,
-        } satisfies TurnAfterInput,
-        hostCtx,
-      )
+        } satisfies TurnAfterInput)
+        .pipe(provideReactionHostContext(hostCtx))
 
       const count = yield* counter.get
       expect(count).toBe(1)

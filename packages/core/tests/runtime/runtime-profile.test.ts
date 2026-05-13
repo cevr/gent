@@ -33,6 +33,7 @@ import {
   resolveProfileRuntime,
   resolveRuntimeProfile,
 } from "../../src/runtime/profile"
+import { provideExtensionReactionContext } from "../../src/runtime/extensions/extension-reaction-context"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
 
 const fsLayer = Layer.mergeAll(
@@ -194,29 +195,30 @@ describe("resolveRuntimeProfile", () => {
           Effect.map((ctx) => Context.get(ctx, ExtensionRegistry)),
         )
 
-        const result = yield* registryService.extensionReactions
-          .resolveTurnProjection({
-            projection: {
+        const reactionCtx = {
+          projection: {
+            sessionId: "s" as never,
+            branchId: "b" as never,
+            cwd: "/tmp",
+            home: "/tmp",
+            turn: {
               sessionId: "s" as never,
               branchId: "b" as never,
-              cwd: "/tmp",
-              home: "/tmp",
-              turn: {
-                sessionId: "s" as never,
-                branchId: "b" as never,
-                agent: getBuiltinAgent("cowork")!,
-                agentName: AgentName.make("cowork"),
-                allTools: [],
-              },
+              agent: getBuiltinAgent("cowork")!,
+              agentName: AgentName.make("cowork"),
+              allTools: [],
             },
-            host: testExtensionHostContext({
-              sessionId: "s" as never,
-              branchId: "b" as never,
-              cwd: "/tmp",
-              home: "/tmp",
-            }),
-          })
-          .pipe(Effect.provide(layer))
+          },
+          host: testExtensionHostContext({
+            sessionId: "s" as never,
+            branchId: "b" as never,
+            cwd: "/tmp",
+            home: "/tmp",
+          }),
+        }
+        const result = yield* registryService.extensionReactions
+          .resolveTurnProjection()
+          .pipe(provideExtensionReactionContext(reactionCtx), Effect.provide(layer))
 
         expect(result.promptSections).toContainEqual({
           id: "rp-dynamic-section",

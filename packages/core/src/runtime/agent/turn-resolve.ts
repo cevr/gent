@@ -17,6 +17,7 @@ import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"
 import { ConfigService } from "../config-service.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
+import { provideExtensionReactionContext } from "../extensions/extension-reaction-context.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import type { ResolvedTurn } from "./agent-loop.state.js"
 import { buildTurnPromptSections, resolveReasoning } from "./agent-loop.utils.js"
@@ -163,10 +164,13 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   // Filter out hidden messages — visible in transcript but excluded from LLM context
   const messages = rawMessages.filter((m) => m.metadata?.hidden !== true)
 
-  const projEval = yield* extensionRegistry.extensionReactions.resolveTurnProjection({
+  const reactionCtx = {
     projection: projectionCtx,
     host: hostCtx,
-  })
+  }
+  const projEval = yield* extensionRegistry.extensionReactions
+    .resolveTurnProjection()
+    .pipe(provideExtensionReactionContext(reactionCtx))
   const extensionProjections = [
     ...projEval.policyFragments.map((p) => ({ toolPolicy: p })),
     ...(projEval.promptSections.length > 0 ? [{ promptSections: projEval.promptSections }] : []),
@@ -202,8 +206,8 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   )
   const turnPrompt = compileSystemPrompt(sections)
   const driverToolSurface = yield* resolveDriverToolSurface(dispatchAgent)
-  const systemPrompt = yield* extensionRegistry.extensionReactions.resolveSystemPrompt(
-    {
+  const systemPrompt = yield* extensionRegistry.extensionReactions
+    .resolveSystemPrompt({
       basePrompt: turnPrompt,
       agent: dispatchAgent,
       interactive: params.interactive,
@@ -211,9 +215,8 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
       tools,
       ...(driverToolSurface !== undefined ? { driverToolSurface } : {}),
       sections,
-    },
-    { projection: projectionCtx, host: hostCtx },
-  )
+    })
+    .pipe(provideExtensionReactionContext(reactionCtx))
   const session = yield* sessionStorage
     .getSession(params.sessionId)
     .pipe(Effect.catchEager(() => Effect.void))

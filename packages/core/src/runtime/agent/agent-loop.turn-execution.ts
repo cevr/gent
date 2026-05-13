@@ -15,6 +15,7 @@ import { MessageStorage } from "../../storage/message-storage.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { ConfigService } from "../config-service.js"
 import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
+import { provideReactionHostContext } from "../extensions/extension-reaction-context.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { WideEvent } from "../wide-event-boundary.js"
 import type { AgentLoopError, QueuedTurnItem, RunningState } from "./agent-loop.state.js"
@@ -304,16 +305,15 @@ export const makeAgentLoopTurnExecution = Effect.gen(function* () {
     yield* eventPublisher.deliver(envelope)
 
     yield* Effect.logDebug("finalize.turn-after.start")
-    yield* extensionRegistry.extensionReactions.emitTurnAfter(
-      {
+    yield* extensionRegistry.extensionReactions
+      .emitTurnAfter({
         sessionId: scope.sessionId,
         branchId: scope.branchId,
         durationMs: Number(turnDurationMs),
         agentName: params.currentAgent,
         interrupted: params.turnInterrupted,
-      },
-      hostCtx,
-    )
+      })
+      .pipe(provideReactionHostContext(hostCtx))
     yield* Effect.logDebug("finalize.turn-after.done")
 
     yield* Effect.logInfo("turn.completed").pipe(
