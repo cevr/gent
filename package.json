@@ -56,7 +56,7 @@
     "@effect/platform-bun": "4.0.0-beta.64",
     "@effect/sql-pg": "4.0.0-beta.64",
     "@effect/sql-sqlite-bun": "4.0.0-beta.64",
-    "effect-encore": "0.12.0",
+    "effect-encore": "0.12.2",
     "effect-wide-event": "0.3.0",
     "msgpackr": "^2.0.1",
     "multipasta": "^0.2.7",

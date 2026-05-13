@@ -21,6 +21,70 @@ context adapter`).
 
 ## Spines
 
+## Progress
+
+### S1 status - complete
+
+- `effect-wide-event@0.3.0` published and consumed. Gent now uses
+  upstream semantic outcomes plus `WideEventBoundary.rpc/tool/provider`
+  instead of local boundary/result metadata conventions.
+- Verification:
+  `bun run gate` in `/Users/cvr/Developer/personal/effect-wide-event`
+  passed before publish; GitHub Release run `25801820614` succeeded;
+  `npm view effect-wide-event version --json` returned `"0.3.0"`;
+  Gent `bun run gate` passed after consuming the package.
+- Evidence:
+  `/Users/cvr/Developer/personal/effect-wide-event/src/wide-event.ts`,
+  `/Users/cvr/Developer/personal/effect-wide-event/src/boundary.ts`,
+  `/Users/cvr/Developer/personal/effect-wide-event/v3/src/wide-event.ts`,
+  `/Users/cvr/Developer/personal/effect-wide-event/v3/src/boundary.ts`,
+  `/Users/cvr/Developer/personal/effect-wide-event/test/wide-event.test.ts`,
+  `/Users/cvr/Developer/personal/effect-wide-event/v3/test/wide-event.test.ts`,
+  `/Users/cvr/Developer/personal/effect-wide-event/.changeset/tall-walls-serve.md`,
+  `/Users/cvr/Developer/personal/gent/package.json`,
+  `/Users/cvr/Developer/personal/gent/bun.lock`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/wide-event-boundary.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/tool-runner.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-source.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/wide-event-boundary.test.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/tooling/tests/platform-duplication-guards.test.ts`.
+
+### S2 status - partial
+
+- **C5 complete**: `effect-encore@0.12.2` published and consumed. Encore
+  now exposes actor-specific `State` services from `Actor.toLayer` and
+  `Actor.toTestLayer`, mirrored in v3. Gent now reads/watches/list actor
+  state through `AgentLoopActor.State` instead of reconstructing
+  `ActorAddressResolver | ActorStateRegistry | ActorClientService`.
+- **C4 still open**: Gent still has
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.runtime-context.ts`
+  and still wraps actor construction in `provideLayerBuildContext`.
+  Upstream `Actor.toLayer` needs a first-class build-context/child
+  override design before that adapter can be deleted.
+- Verification:
+  `bun run gate` in `/Users/cvr/Developer/personal/effect-encore`
+  passed before publish; GitHub Release run `25802698340` succeeded;
+  `npm view effect-encore version --json` returned `"0.12.2"`;
+  Gent `bun run typecheck`, `bun run lint`, and
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/runtime/session-runtime.test.ts packages/core/tests/runtime/agent-runner.test.ts`
+  passed after consuming the package.
+- Evidence:
+  `/Users/cvr/Developer/personal/effect-encore/src/actor.ts`,
+  `/Users/cvr/Developer/personal/effect-encore/src/index.ts`,
+  `/Users/cvr/Developer/personal/effect-encore/test/actor-state.test.ts`,
+  `/Users/cvr/Developer/personal/effect-encore/test/types.test.ts`,
+  `/Users/cvr/Developer/personal/effect-encore/v3/src/actor.ts`,
+  `/Users/cvr/Developer/personal/effect-encore/v3/src/index.ts`,
+  `/Users/cvr/Developer/personal/effect-encore/v3/test/actor-state.test.ts`,
+  `/Users/cvr/Developer/personal/effect-encore/v3/test/types.test.ts`,
+  `/Users/cvr/Developer/personal/gent/package.json`,
+  `/Users/cvr/Developer/personal/gent/bun.lock`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/session-runtime.test.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-runner.test.ts`.
+
 ### S1 - Upstream wide-event outcome and boundary API
 
 Fix `effect-wide-event` so Gent stops hand-modeling domain outcomes and

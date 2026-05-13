@@ -80,6 +80,7 @@ import {
   waitForTurnFailureAfterEpoch,
 } from "./agent-loop.actor-state.js"
 import {
+  AgentLoop,
   type DrainQueueInput,
   type GetQueueInput,
   type GetStateInput,
@@ -563,7 +564,7 @@ export const buildAgentLoopActorHandlers = (config: {
       }
     })
 
-    return {
+    return AgentLoop.of({
       Submit: Effect.fn("AgentLoop.Submit")(({ operation }: HandlerRequest<TurnSubmissionInput>) =>
         submitTurn(operation).pipe(provideActorWorkspace),
       ),
@@ -743,5 +744,5 @@ export const buildAgentLoopActorHandlers = (config: {
           }
         }).pipe(provideActorWorkspace)
       }),
-    }
+    })
   })
