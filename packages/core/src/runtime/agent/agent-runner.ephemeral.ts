@@ -33,7 +33,7 @@ import type { AgentRunnerConfig } from "./agent-runner.config.js"
 import { type DurableAgentRunRuntime } from "./agent-runner.durable.js"
 import { loadAgentRunSuccessData, type AgentRunMetadataRuntime } from "./agent-runner.metadata.js"
 import { handleAgentRunFailure } from "./agent-runner.run-spec.js"
-import type { EphemeralAgentRootLayerFactory } from "./ephemeral-root.js"
+import { EphemeralAgentRootLayerFactoryService } from "./ephemeral-root.js"
 
 const reparentEphemeralChildEvent = (
   event: AgentEvent,
@@ -83,7 +83,6 @@ const reparentEphemeralChildEvent = (
 
 export const runEphemeralAgent = (params: {
   runnerConfig: AgentRunnerConfig
-  makeEphemeralAgentRootLayer: EphemeralAgentRootLayerFactory
   durableRuntime: DurableAgentRunRuntime
   metadataRuntime: AgentRunMetadataRuntime
   parentSessionId: SessionId
@@ -109,11 +108,6 @@ export const runEphemeralAgent = (params: {
     "ToolCallSucceeded",
     "ToolCallFailed",
   ])
-  const ephemeralLayer = params.makeEphemeralAgentRootLayer({
-    config: params.runnerConfig,
-    extensionRegistry: params.extensionRegistry,
-  })
-
   const runWithTimeout = <R>(effect: Effect.Effect<void, AgentRunError, R>) =>
     params.runnerConfig.timeoutMs === undefined
       ? effect
@@ -248,6 +242,12 @@ export const runEphemeralAgent = (params: {
   })
 
   const run = Effect.gen(function* () {
+    const makeEphemeralAgentRootLayer = yield* EphemeralAgentRootLayerFactoryService
+    const ephemeralLayer = makeEphemeralAgentRootLayer({
+      config: params.runnerConfig,
+      extensionRegistry: params.extensionRegistry,
+    })
+
     yield* WideEvent.set({ childSessionId: sessionId })
 
     yield* params.durableRuntime.publishAgentRunSpawned({

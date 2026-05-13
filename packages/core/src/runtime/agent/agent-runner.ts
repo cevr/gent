@@ -32,7 +32,10 @@ import type { ModelRegistry } from "../model-registry.js"
 import type { AgentRunnerConfig } from "./agent-runner.config.js"
 import { makeDurableAgentRunRuntime } from "./agent-runner.durable.js"
 import { runEphemeralAgent } from "./agent-runner.ephemeral.js"
-import { makeEphemeralAgentRootLayerFactory } from "./ephemeral-root.js"
+import {
+  EphemeralAgentRootLayerFactoryService,
+  makeEphemeralAgentRootLayerFactory,
+} from "./ephemeral-root.js"
 import { makeAgentRunMetadataRuntime } from "./agent-runner.metadata.js"
 import { normalizeRunSpec, handleAgentRunFailure } from "./agent-runner.run-spec.js"
 export type { AgentRunnerConfig } from "./agent-runner.config.js"
@@ -126,7 +129,6 @@ export const InProcessRunner = (
             const branchId = BranchId.make(yield* platform.randomId)
             return yield* runEphemeralAgent({
               runnerConfig,
-              makeEphemeralAgentRootLayer,
               durableRuntime,
               metadataRuntime,
               parentSessionId: params.parentSessionId,
@@ -142,7 +144,12 @@ export const InProcessRunner = (
               sessionId,
               branchId,
               extensionRegistry,
-            })
+            }).pipe(
+              Effect.provideService(
+                EphemeralAgentRootLayerFactoryService,
+                makeEphemeralAgentRootLayer,
+              ),
+            )
           }
 
           return yield* durableRuntime.createDurableAgentRunSession({ ...params, toolCallId }).pipe(
@@ -276,7 +283,6 @@ export const SubprocessRunner = (
             const branchId = BranchId.make(yield* platform.randomId)
             return yield* runEphemeralAgent({
               runnerConfig: config,
-              makeEphemeralAgentRootLayer,
               durableRuntime,
               metadataRuntime,
               parentSessionId: params.parentSessionId,
@@ -292,7 +298,12 @@ export const SubprocessRunner = (
               sessionId,
               branchId,
               extensionRegistry,
-            })
+            }).pipe(
+              Effect.provideService(
+                EphemeralAgentRootLayerFactoryService,
+                makeEphemeralAgentRootLayer,
+              ),
+            )
           }
 
           return yield* durableRuntime.createDurableAgentRunSession({ ...params, toolCallId }).pipe(

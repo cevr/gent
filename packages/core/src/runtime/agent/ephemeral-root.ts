@@ -78,6 +78,11 @@ export type EphemeralAgentRootLayerFactory = (params: {
   readonly extensionRegistry: ExtensionRegistryService
 }) => Layer.Layer<EphemeralOverrideProvides, EphemeralOverrideError, never>
 
+export class EphemeralAgentRootLayerFactoryService extends Context.Service<
+  EphemeralAgentRootLayerFactoryService,
+  EphemeralAgentRootLayerFactory
+>()("@gent/core/src/runtime/agent/ephemeral-root/EphemeralAgentRootLayerFactoryService") {}
+
 interface EphemeralRuntimeOverrides {
   readonly storage: Layer.Layer<EphemeralStorageProvides, StorageError, never>
   readonly eventStore: Layer.Layer<EventStore, EphemeralOverrideError, never>
