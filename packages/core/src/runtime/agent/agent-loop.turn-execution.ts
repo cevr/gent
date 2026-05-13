@@ -1,4 +1,4 @@
-import { DateTime, Effect, Ref, Schema } from "effect"
+import { Context, DateTime, Effect, Ref, Schema } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import {
   AgentName,
@@ -6,14 +6,14 @@ import {
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
 import { StreamEnded, StreamStarted, TurnCompleted } from "../../domain/event.js"
-import { EventPublisher, type EventPublisherService } from "../../domain/event-publisher.js"
+import { EventPublisher } from "../../domain/event-publisher.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { InteractionRequestId, type BranchId, type SessionId } from "../../domain/ids.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import type { PromptSection } from "../../domain/prompt.js"
-import type { MessageStorageService } from "../../storage/message-storage.js"
-import type { StorageTransaction } from "../../storage/sqlite-storage.js"
-import { ConfigService, type ConfigServiceService } from "../config-service.js"
+import { MessageStorage } from "../../storage/message-storage.js"
+import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
+import { ConfigService } from "../config-service.js"
 import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { WideEvent } from "../wide-event-boundary.js"
@@ -68,14 +68,10 @@ export type AgentLoopTurnProfile = {
   readonly turnHostCtx: ExtensionHostContext
 }
 
-export type AgentLoopTurnExecutionDeps = {
+export type AgentLoopTurnExecutionScopeService = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly messageStorage: MessageStorageService
-  readonly eventPublisher: EventPublisherService
-  readonly storageTransaction: StorageTransaction
   readonly resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile>
-  readonly configServiceForRun: ConfigServiceService
   readonly activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
   readonly turnMetricsRef: Ref.Ref<TurnMetrics>
   readonly interruptedRef: Ref.Ref<boolean>
@@ -84,7 +80,18 @@ export type AgentLoopTurnExecutionDeps = {
   ) => Effect.Effect<void, AgentLoopError>
 }
 
-export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => {
+export class AgentLoopTurnExecutionScope extends Context.Service<
+  AgentLoopTurnExecutionScope,
+  AgentLoopTurnExecutionScopeService
+>()("@gent/core/src/runtime/agent/agent-loop.turn-execution/AgentLoopTurnExecutionScope") {}
+
+export const makeAgentLoopTurnExecution = Effect.gen(function* () {
+  const scope = yield* AgentLoopTurnExecutionScope
+  const messageStorage = yield* MessageStorage
+  const eventPublisher = yield* EventPublisher
+  const storageTransaction = yield* makeStorageTransaction
+  const configServiceForRun = yield* ConfigService
+
   const executeTools = Effect.fn("AgentLoop.executeTools")(function* (params: {
     messageId: RunningState["message"]["id"]
     step: number
@@ -94,18 +101,18 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
     if (params.toolCalls.length === 0) return
 
     const toolResultMessageId = toolResultMessageIdForTurn(params.messageId, params.step)
-    const existing = yield* deps.messageStorage.getMessage(toolResultMessageId)
+    const existing = yield* messageStorage.getMessage(toolResultMessageId)
     if (existing !== undefined) return
 
     const toolResults = yield* executeToolCalls({
       toolCalls: params.toolCalls,
-      sessionId: deps.sessionId,
-      branchId: deps.branchId,
+      sessionId: scope.sessionId,
+      branchId: scope.branchId,
       currentTurnAgent: params.currentTurnAgent,
     })
     yield* persistToolParts({
-      sessionId: deps.sessionId,
-      branchId: deps.branchId,
+      sessionId: scope.sessionId,
+      branchId: scope.branchId,
       messageId: toolResultMessageId,
       parts: toolResults,
     })
@@ -122,8 +129,8 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
       createdAt?: Date,
     ) =>
       persistAssistantParts({
-        sessionId: deps.sessionId,
-        branchId: deps.branchId,
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
         messageId: assistantMessageIdForTurn(params.messageId, params.step),
         parts,
         createdAt,
@@ -132,8 +139,8 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
 
     const persistToolPartsLocal = (parts: ReadonlyArray<ToolResponsePart>, createdAt?: Date) =>
       persistToolParts({
-        sessionId: deps.sessionId,
-        branchId: deps.branchId,
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
         messageId: toolResultMessageIdForTurn(params.messageId, params.step),
         parts,
         createdAt,
@@ -141,8 +148,8 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
 
     const source = yield* resolveTurnSource({
       resolved: params.resolved,
-      sessionId: deps.sessionId,
-      branchId: deps.branchId,
+      sessionId: scope.sessionId,
+      branchId: scope.branchId,
       activeStream: params.activeStream,
     })
 
@@ -161,7 +168,7 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
       eventPublisher.publish(event).pipe(Effect.orDie)
 
     yield* publishEventOrDie(
-      StreamStarted.make({ sessionId: deps.sessionId, branchId: deps.branchId }),
+      StreamStarted.make({ sessionId: scope.sessionId, branchId: scope.branchId }),
     )
 
     yield* Effect.logInfo("turn-stream.start").pipe(
@@ -178,8 +185,8 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
         ? yield* source.collect(
             collectModelTurnResponse({
               turnStream: source.stream,
-              sessionId: deps.sessionId,
-              branchId: deps.branchId,
+              sessionId: scope.sessionId,
+              branchId: scope.branchId,
               modelId: params.resolved.modelId,
               activeStream: params.activeStream,
               formatStreamError: source.formatStreamError,
@@ -189,8 +196,8 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
         : yield* source.collect(
             collectExternalTurnResponse({
               turnStream: source.stream,
-              sessionId: deps.sessionId,
-              branchId: deps.branchId,
+              sessionId: scope.sessionId,
+              branchId: scope.branchId,
               activeStream: params.activeStream,
               formatStreamError: source.formatStreamError,
             }),
@@ -199,8 +206,8 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
     if (collected.interrupted) {
       yield* publishEventOrDie(
         StreamEnded.make({
-          sessionId: deps.sessionId,
-          branchId: deps.branchId,
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
           interrupted: true,
         }),
       )
@@ -220,8 +227,8 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
     })
     yield* publishEventOrDie(
       StreamEnded.make({
-        sessionId: deps.sessionId,
-        branchId: deps.branchId,
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
         ...(collected.messageProjection.usage !== undefined
           ? { usage: collected.messageProjection.usage }
           : {}),
@@ -238,7 +245,7 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
       }),
     )
 
-    yield* Ref.update(deps.turnMetricsRef, (m) => ({
+    yield* Ref.update(scope.turnMetricsRef, (m) => ({
       ...m,
       agent: params.resolved.currentTurnAgent,
       model: params.resolved.modelId,
@@ -262,17 +269,17 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
   }) {
     const extensionRegistry = yield* ExtensionRegistry
     const hostCtx = yield* CurrentExtensionHostContext
-    const existingMessage = yield* deps.messageStorage.getMessage(params.messageId)
+    const existingMessage = yield* messageStorage.getMessage(params.messageId)
     if (existingMessage?.turnDurationMs !== undefined) {
       const envelope = yield* findPersistedEvent({
-        sessionId: deps.sessionId,
-        branchId: deps.branchId,
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
         match: (candidate) =>
           candidate.event._tag === "TurnCompleted" &&
           candidate.event.messageId === params.messageId,
       })
       if (envelope !== undefined) {
-        yield* deps.eventPublisher.deliver(envelope)
+        yield* eventPublisher.deliver(envelope)
       }
       return
     }
@@ -280,13 +287,13 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
     const turnEndTime = yield* DateTime.now
     const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
 
-    const envelope = yield* deps.storageTransaction(
+    const envelope = yield* storageTransaction(
       Effect.gen(function* () {
-        yield* deps.messageStorage.updateMessageTurnDuration(params.messageId, turnDurationMs)
-        return yield* deps.eventPublisher.append(
+        yield* messageStorage.updateMessageTurnDuration(params.messageId, turnDurationMs)
+        return yield* eventPublisher.append(
           TurnCompleted.make({
-            sessionId: deps.sessionId,
-            branchId: deps.branchId,
+            sessionId: scope.sessionId,
+            branchId: scope.branchId,
             messageId: params.messageId,
             durationMs: Number(turnDurationMs),
             ...(params.turnInterrupted ? { interrupted: true } : {}),
@@ -294,13 +301,13 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
         )
       }),
     )
-    yield* deps.eventPublisher.deliver(envelope)
+    yield* eventPublisher.deliver(envelope)
 
     yield* Effect.logDebug("finalize.turn-after.start")
     yield* extensionRegistry.extensionReactions.emitTurnAfter(
       {
-        sessionId: deps.sessionId,
-        branchId: deps.branchId,
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
         durationMs: Number(turnDurationMs),
         agentName: params.currentAgent,
         interrupted: params.turnInterrupted,
@@ -316,7 +323,7 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
       }),
     )
 
-    const metrics = yield* Ref.get(deps.turnMetricsRef)
+    const metrics = yield* Ref.get(scope.turnMetricsRef)
     yield* WideEvent.set({
       actor: metrics.agent,
       model: metrics.model,
@@ -329,7 +336,7 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
   })
 
   const runTurn = Effect.fn("AgentLoop.runTurn")(function* (state: RunningState) {
-    yield* Ref.set(deps.turnMetricsRef, emptyTurnMetrics())
+    yield* Ref.set(scope.turnMetricsRef, emptyTurnMetrics())
 
     const {
       turnExtensionRegistry,
@@ -337,31 +344,31 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
       turnPermission,
       turnBaseSections,
       turnHostCtx,
-    } = yield* deps.resolveTurnProfile
+    } = yield* scope.resolveTurnProfile
 
     const provideTurnContext = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(
         Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
         Effect.provideService(DriverRegistry, turnDriverRegistry),
         Effect.provideService(Permission, turnPermission),
-        Effect.provideService(ConfigService, deps.configServiceForRun),
+        Effect.provideService(ConfigService, configServiceForRun),
         provideCurrentHostCtx(turnHostCtx),
       )
 
     return yield* Effect.gen(function* () {
       let step = 0
-      let interrupted = yield* Ref.get(deps.interruptedRef)
+      let interrupted = yield* Ref.get(scope.interruptedRef)
       let streamFailed = false
       let currentTurnAgent: AgentNameType = state.currentAgent ?? DEFAULT_AGENT_NAME
 
       const resumeStep = 1
-      const existingAssistant = yield* deps.messageStorage
+      const existingAssistant = yield* messageStorage
         .getMessage(assistantMessageIdForTurn(state.message.id, resumeStep))
         .pipe(Effect.orElseSucceed(() => undefined))
       if (existingAssistant !== undefined && !interrupted) {
         const toolCalls = assistantDraftFromMessage(existingAssistant).toolCalls
         if (toolCalls.length > 0) {
-          const existingResults = yield* deps.messageStorage
+          const existingResults = yield* messageStorage
             .getMessage(toolResultMessageIdForTurn(state.message.id, resumeStep))
             .pipe(Effect.orElseSucceed(() => undefined))
           if (existingResults === undefined) {
@@ -398,20 +405,20 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
           break
         }
 
-        if (yield* Ref.get(deps.interruptedRef)) {
+        if (yield* Ref.get(scope.interruptedRef)) {
           interrupted = true
           break
         }
 
         yield* persistMessageReceived({ message: state.message })
-        yield* deps.clearInFlightTurn(state.message.id)
+        yield* scope.clearInFlightTurn(state.message.id)
 
         const resolved = yield* resolveTurnContext({
           agentOverride: state.agentOverride,
           runSpec: state.runSpec,
           currentAgent: state.currentAgent,
-          branchId: deps.branchId,
-          sessionId: deps.sessionId,
+          branchId: scope.branchId,
+          sessionId: scope.sessionId,
           baseSections: turnBaseSections,
           interactive: state.interactive,
         })
@@ -419,14 +426,14 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
 
         currentTurnAgent = resolved.currentTurnAgent
         if (step === 1) {
-          yield* Ref.update(deps.turnMetricsRef, (m) => ({
+          yield* Ref.update(scope.turnMetricsRef, (m) => ({
             ...m,
             agent: resolved.currentTurnAgent,
             model: resolved.modelId,
           }))
         }
 
-        if (yield* Ref.get(deps.interruptedRef)) {
+        if (yield* Ref.get(scope.interruptedRef)) {
           interrupted = true
           break
         }
@@ -434,14 +441,14 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
         const collected = yield* Effect.scoped(
           Effect.gen(function* () {
             const activeStream = yield* makeActiveStreamHandle()
-            yield* Ref.set(deps.activeStreamRef, activeStream)
+            yield* Ref.set(scope.activeStreamRef, activeStream)
             return yield* collectTurnStream({
               messageId: state.message.id,
               step,
               resolved,
               activeStream,
             })
-          }).pipe(Effect.ensuring(Ref.set(deps.activeStreamRef, undefined))),
+          }).pipe(Effect.ensuring(Ref.set(scope.activeStreamRef, undefined))),
         )
 
         if (collected.interrupted) {
@@ -491,4 +498,4 @@ export const makeAgentLoopTurnExecution = (deps: AgentLoopTurnExecutionDeps) => 
   })
 
   return { runTurn }
-}
+})

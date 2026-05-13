@@ -35,13 +35,12 @@ import type { MessageMetadata } from "../../domain/message.js"
 import type { BranchId, InteractionRequestId, SessionId } from "../../domain/ids.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
-import { ConfigService } from "../config-service.js"
+import type { ConfigService } from "../config-service.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { StorageError } from "../../domain/storage-error.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
-import { MessageStorage } from "../../storage/message-storage.js"
+import type { MessageStorage } from "../../storage/message-storage.js"
 import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
-import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import { SessionProfileCache } from "../session-profile.js"
@@ -69,7 +68,10 @@ import {
 import type { QueueSnapshot } from "../../domain/queue.js"
 import { emptyTurnMetrics, type ActiveStreamHandle } from "./turn-response.js"
 import { AgentLoopQueueScope, makeAgentLoopQueue } from "./agent-loop.queue.js"
-import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
+import {
+  AgentLoopTurnExecutionScope,
+  makeAgentLoopTurnExecution,
+} from "./agent-loop.turn-execution.js"
 import { makeAgentLoopWorker } from "./agent-loop.worker.js"
 
 export const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(function* (params: {
@@ -205,16 +207,13 @@ export const makeAgentLoopBehavior = (
   | GentPlatform
 > =>
   Effect.gen(function* () {
-    const messageStorage = yield* MessageStorage
     yield* ModelResolver
     const extensionRegistry = yield* ExtensionRegistry
     const driverRegistry = yield* DriverRegistry
     const eventPublisher = yield* EventPublisher
     yield* ToolRunner
-    const configServiceForRun = yield* ConfigService
     const followUp = yield* AgentLoopFollowUp
     const host = yield* makeExtensionHostPlatform
-    const storageTransaction = yield* makeStorageTransaction
     // Snapshot the layer-build context so behavior methods (declared as
     // `Effect<A, E, never>` in `AgentLoopBehavior`) can resolve Tags that
     // Turn helper modules now yield inside (post-W33-C3.3). Without this, helper
@@ -322,14 +321,11 @@ export const makeAgentLoopBehavior = (
       readonly branchId: BranchId
       readonly sideMutationSemaphore: Semaphore.Semaphore
       readonly baseSections: ReadonlyArray<PromptSection>
-      readonly messageStorage: typeof messageStorage
       readonly eventPublisher: typeof eventPublisher
-      readonly storageTransaction: typeof storageTransaction
       readonly provideRuntime: typeof provideRuntime
       readonly publishEvent: typeof publishEvent
       readonly resolveTurnProfile: typeof resolveTurnProfile
       readonly hostDeps: typeof hostDeps
-      readonly configServiceForRun: typeof configServiceForRun
       readonly host: typeof host
       readonly extensionRegistry: typeof extensionRegistry
       readonly driverRegistry: typeof driverRegistry
@@ -350,14 +346,11 @@ export const makeAgentLoopBehavior = (
       branchId,
       sideMutationSemaphore,
       baseSections,
-      messageStorage,
       eventPublisher,
-      storageTransaction,
       provideRuntime,
       publishEvent,
       resolveTurnProfile,
       hostDeps,
-      configServiceForRun,
       host,
       extensionRegistry,
       driverRegistry,
@@ -439,19 +432,17 @@ export const makeAgentLoopBehavior = (
         return updateCurrentAgentOnState(state, next)
       }).pipe(Effect.orDie)
 
-    const { runTurn } = makeAgentLoopTurnExecution({
-      sessionId,
-      branchId,
-      messageStorage,
-      eventPublisher,
-      storageTransaction,
-      resolveTurnProfile,
-      configServiceForRun,
-      activeStreamRef,
-      turnMetricsRef,
-      interruptedRef,
-      clearInFlightTurn,
-    })
+    const { runTurn } = yield* makeAgentLoopTurnExecution.pipe(
+      Effect.provideService(AgentLoopTurnExecutionScope, {
+        sessionId,
+        branchId,
+        resolveTurnProfile,
+        activeStreamRef,
+        turnMetricsRef,
+        interruptedRef,
+        clearInFlightTurn,
+      }),
+    )
 
     const worker = makeAgentLoopWorker({
       sessionId,
