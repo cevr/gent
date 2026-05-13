@@ -76,6 +76,10 @@ import {
   makeAgentLoopTurnExecution,
 } from "./agent-loop.turn-execution.js"
 import { AgentLoopWorkerScope, makeAgentLoopWorker } from "./agent-loop.worker.js"
+import {
+  captureAgentLoopRuntimeContext,
+  provideAgentLoopRuntimeContext,
+} from "./agent-loop.runtime-context.js"
 import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 
 export const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(function* (params: {
@@ -212,39 +216,7 @@ export const makeAgentLoopBehavior = (
     yield* ToolRunner
     const followUp = yield* AgentLoopFollowUp
     const host = yield* makeExtensionHostPlatform
-    // Snapshot the layer-build context so behavior methods (declared as
-    // `Effect<A, E, never>` in `AgentLoopBehavior`) can resolve Tags that
-    // Turn helper modules now yield inside (post-W33-C3.3). Without this, helper
-    // requirements like `MessageStorage`, `EventPublisher`, `SqlClient`,
-    // `ModelResolver`, `ModelRegistry`, `ToolRunner`, etc. leak into the
-    // method R-channels and break the interface.
-    const runtimeContext = yield* Effect.context<
-      | SessionStorage
-      | MessageStorage
-      | EventStorage
-      | SqlClient.SqlClient
-      | ModelResolver
-      | ModelRegistry
-      | ToolRunner
-      | EventPublisher
-    >()
-    const provideRuntime = <A, E, R>(
-      effect: Effect.Effect<A, E, R>,
-    ): Effect.Effect<
-      A,
-      E,
-      Exclude<
-        R,
-        | SessionStorage
-        | MessageStorage
-        | EventStorage
-        | SqlClient.SqlClient
-        | ModelResolver
-        | ModelRegistry
-        | ToolRunner
-        | EventPublisher
-      >
-    > => Effect.provideContext(effect, runtimeContext)
+    const runtimeContext = yield* captureAgentLoopRuntimeContext
 
     const publishEvent = (event: AgentEvent) =>
       eventPublisher.publish(event).pipe(
@@ -274,7 +246,7 @@ export const makeAgentLoopBehavior = (
     const defaultPermission =
       permissionService._tag === "Some" ? permissionService.value : AllowAllPermission
 
-    const resolveTurnProfile = provideRuntime(
+    const resolveTurnProfile = provideAgentLoopRuntimeContext(runtimeContext)(
       resolveSessionEnvironment({
         sessionId,
         branchId,
@@ -412,9 +384,13 @@ export const makeAgentLoopBehavior = (
       }),
     )
 
-    const startTurnWorker = Effect.forkIn(provideRuntime(worker.turnWorkerLoop), loopScope, {
-      startImmediately: true,
-    }).pipe(Effect.asVoid)
+    const startTurnWorker = Effect.forkIn(
+      provideAgentLoopRuntimeContext(runtimeContext)(worker.turnWorkerLoop),
+      loopScope,
+      {
+        startImmediately: true,
+      },
+    ).pipe(Effect.asVoid)
 
     const start = Effect.gen(function* () {
       if (yield* Ref.getAndSet(startedRef, true)) return

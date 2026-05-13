@@ -65,13 +65,9 @@ import {
   causeToAgentLoopError,
   makeAgentLoopBehavior,
 } from "./agent-loop.behavior.js"
-import type { EventPublisher } from "../../domain/event-publisher.js"
-import type { ToolRunner } from "./tool-runner.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
-import type { SessionStorage } from "../../storage/session-storage.js"
-import type { SqlClient } from "effect/unstable/sql"
 import { parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { recordToolResult } from "./turn-persistence.js"
@@ -749,53 +745,3 @@ export const buildAgentLoopActorHandlers = (config: {
       }),
     }
   })
-
-/**
- * Layer-level services that the per-entity build effect needs from the
- * ephemeral layer-build context (NOT from Sharding's per-entity context).
- *
- * Excluded: services Sharding adds per-entity (`Actor.CurrentAddress`) and
- * `ActorStateRegistry` provided via outer `Layer.provideMerge` — those resolve
- * from Sharding's captured services context correctly.
- */
-type AgentLoopBuildContext =
-  | SessionStorage
-  | MessageStorage
-  | AgentLoopQueueStorage
-  | EventStorage
-  | SqlClient.SqlClient
-  | EventPublisher
-  | ToolRunner
-  | AgentLoopSessionGovernance
-  | GentPlatform
-
-/**
- * Snapshots the layer-build-time `AgentLoopBuildContext` slice and provides
- * it into the per-entity build effect.
- *
- * Why: `Actor.toLayer(actor, build, opts)` does NOT propagate `build`'s
- * R-channel to the resulting layer. Sharding captures its `services` context
- * at registerEntity time and provides it into `build` per-entity. In an
- * ephemeral runtime composed with `Layer.provideMerge(child, parent)`, the
- * Sharding-captured context may resolve services from the parent layer
- * (closure-bound at Sharding-build time), bypassing the child layer's
- * overrides (e.g. ephemeral SQLite). Snapshotting the *current* layer-build
- * context for the storage/event-publisher/etc. slice and providing it into
- * the build via `Effect.provideContext` (which merges) makes every
- * `yield* Tag` for those slices resolve against this ephemeral context,
- * while per-entity services (`CurrentAddress`, `ActorStateRegistry`) still
- * come from Sharding's per-entity context.
- */
-export const provideLayerBuildContext = <A, E, R>(
-  build: Effect.Effect<A, E, R>,
-): Effect.Effect<
-  Effect.Effect<A, E, Exclude<R, AgentLoopBuildContext>>,
-  never,
-  AgentLoopBuildContext
-> =>
-  Effect.context<AgentLoopBuildContext>().pipe(
-    Effect.map(
-      (ctx) =>
-        Effect.provideContext(build, ctx) as Effect.Effect<A, E, Exclude<R, AgentLoopBuildContext>>,
-    ),
-  )
