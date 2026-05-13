@@ -4,7 +4,7 @@
 
 - **Status**: closed.
 - **Severity result**: no P0/P1 findings.
-- **Range audited**: `2092bfe9..9f4a55e2`.
+- **Range audited**: `2092bfe9..e41371f7`.
 - **North star audited**: a good extension author can build useful Gent
   behavior quickly without learning core internals, passing host requirements as
   parameters, or guessing which runtime surfaces are stable.
@@ -36,8 +36,9 @@ importing private Gent internals.
 
 ### L3 - Hooks And Dynamic Registrations
 
-**Green.** Hooks are the public authoring shape; `reactions` is documented as a
-lower-level compatibility/shipped-extension bag. Dynamic registrations are
+**Green.** Hooks are the only lifecycle authoring shape. The old keyed
+lifecycle bucket is deleted from the public API, domain contribution shape,
+runtime compiler, and shipped extensions. Dynamic registrations are
 session-coherent, conflict-diagnosed, visible to prompt/tool resolution, visible
 to slash listing, and dispatchable through RPC.
 
@@ -45,6 +46,11 @@ to slash listing, and dispatchable through RPC.
 - `/Users/cvr/Developer/personal/gent/docs/extensions.md:263`
 - `/Users/cvr/Developer/personal/gent/examples/extensions/turn-counter.ts:22`
 - `/Users/cvr/Developer/personal/gent/examples/extensions/prompt-rules.ts:10`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/contribution.ts:1`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts:214`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-hooks.ts:206`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-hooks.test.ts:55`
+- `/Users/cvr/Developer/personal/gent/packages/tooling/src/platform-duplication-guards.ts:99`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/domain/dynamic-extension-registry.ts:57`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/domain/dynamic-extension-registry.ts:72`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/domain/dynamic-extension-registry.ts:136`
@@ -97,7 +103,4 @@ the client boundary.
 
 ## Residual Notes
 
-- `reactions` still exists for shipped/legacy lifecycle wiring. That is not a
-  P0/P1 because docs now make `hook.*` the author-facing shape and explicitly
-  demote `reactions` from the first authoring path.
 - No W44 is opened from this audit.

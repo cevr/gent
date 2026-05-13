@@ -56,14 +56,14 @@ systems:
   greeting tool to the complete one-file product loop.
 - Verification:
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/authoring-reference.test.ts`.
-  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/authoring-reference.test.ts packages/core/tests/extensions/define-extension.test.ts packages/core/tests/extensions/extension-reactions.test.ts packages/core/tests/runtime/tool-runner.test.ts`
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/authoring-reference.test.ts packages/core/tests/extensions/define-extension.test.ts packages/core/tests/extensions/extension-hooks.test.ts packages/core/tests/runtime/tool-runner.test.ts`
   passed with 36 tests. `bun run typecheck` and `bun run gate` passed.
 - Evidence:
   `/Users/cvr/Developer/personal/gent/examples/extensions/session-notes.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/authoring-reference.test.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-package-shape.ts`,
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-hooks.ts`,
   `/Users/cvr/Developer/personal/gent/docs/extensions.md:36`.
 
 ### L2/L3 dynamic reference batch - complete
@@ -102,14 +102,13 @@ systems:
 ### L3 authoring language batch - complete
 
 - Audited the remaining public docs/examples after the dynamic batch and found
-  the authoring guide still teaching `reactions.turnProjection` while the
+  the authoring guide still teaching lifecycle hook behavior through an old
+  keyed bucket while the
   reference extension and public factory path now use `hooks`.
 - Updated examples under `examples/extensions/` to teach `hook.systemPrompt`
-  and `hook.turnAfter` instead of direct `reactions:` bags.
+  and `hook.turnAfter` instead of direct keyed lifecycle bags.
 - Updated `docs/extensions.md` so `hook` is the named authoring concept,
-  prompt/tool-policy derivation points at `hook.turnProjection`, and
-  `reactions` is documented as a lower-level compatibility/shipped-extension
-  lifecycle bag rather than a second authority model.
+  prompt/tool-policy derivation points at `hook.turnProjection`.
 - Verification:
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/authoring-reference.test.ts packages/tooling/tests/platform-duplication-guards.test.ts`
   passed with 37 tests. `bun run typecheck` passed.
@@ -118,6 +117,29 @@ systems:
   `/Users/cvr/Developer/personal/gent/examples/extensions/turn-counter.ts`,
   `/Users/cvr/Developer/personal/gent/examples/extensions/prompt-rules.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts:217`.
+
+### L3 no-compat rearchitecture batch - complete
+
+- Deleted the `reactions` contribution bucket from the public API, domain
+  shape, package-shape validator, runtime compiler, and shipped extension
+  authoring surface.
+- Migrated shipped extensions and runtime tests to `defineExtension({
+hooks: [hook.*(...)] })`; lifecycle handlers now share one explicit hook
+  compiler with no legacy compatibility path.
+- Added a guardrail that rejects reintroducing `reactions:` in active source.
+- Updated extension docs, actor docs, package-local agent guidance, and
+  suppression inventory to point at hooks-only lifecycle authoring.
+- Verification:
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/extension-hooks.test.ts packages/core/tests/extensions/runtime-hooks.test.ts packages/core/tests/extensions/define-extension.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/tooling/tests/platform-duplication-guards.test.ts packages/extensions/tests/session-tools.test.ts packages/extensions/tests/acp-agents/acp-system-prompt-slot.test.ts packages/extensions/tests/skills/skills-rpc.test.ts`
+  passed with 106 tests. `bun run gate` passed.
+- Evidence:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/contribution.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-hooks.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-hooks.test.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/auto/index.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/tooling/src/platform-duplication-guards.ts`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md`.
 
 ### L1 - Authoring Happy Path
 
@@ -163,9 +185,8 @@ surface.
 Make hooks and dynamic tools/requests expressive without becoming generic
 middleware.
 
-- **C7**: Decide whether `reactions` and `hooks` should remain two authoring
-  names or collapse into one public concept. If both remain, document the
-  product distinction and enforce it with tests.
+- **C7**: Collapse lifecycle authoring to one public concept: hook factories
+  in the `hooks` bucket. Do not keep a compatibility bucket.
 - **C8**: Prove dynamic tool and slash request registration refreshes prompt,
   slash list, and dispatch behavior through the same actor/session boundary.
 - **C9**: Add author-facing diagnostics for dynamic registration conflicts and
@@ -173,9 +194,9 @@ middleware.
 - **Evidence**:
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts:189`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/domain/dynamic-extension-registry.ts`,
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-hooks.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/tool-runner.ts`,
-  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-reactions.test.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-hooks.test.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/tool-runner.test.ts`,
   `/Users/cvr/.cache/repo/anomalyco/opencode/packages/plugin/src/index.ts:222`,
   `/Users/cvr/.cache/repo/badlogic/pi-mono/packages/coding-agent/test/agent-session-dynamic-tools.test.ts:37`.
