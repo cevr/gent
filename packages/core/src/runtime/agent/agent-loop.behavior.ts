@@ -33,7 +33,6 @@ import { AgentSwitched, type AgentEvent } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import type { MessageMetadata } from "../../domain/message.js"
 import type { BranchId, InteractionRequestId, SessionId } from "../../domain/ids.js"
-import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
 import type { ConfigService } from "../config-service.js"
 import type { PromptSection } from "../../domain/prompt.js"
@@ -44,13 +43,13 @@ import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-stora
 import { EventStorage } from "../../storage/event-storage.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import { SessionProfileCache } from "../session-profile.js"
-import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
+import { ExtensionRegistry } from "../extensions/registry.js"
+import { DriverRegistry } from "../extensions/driver-registry.js"
 import { makeExtensionHostPlatform } from "../extensions/host-platform.js"
 import { ToolRunner } from "./tool-runner.js"
 import type { ModelRegistry } from "../model-registry.js"
 import type { GentPlatform } from "../gent-platform.js"
-import { Permission, type PermissionService } from "../../domain/permission.js"
+import { Permission } from "../../domain/permission.js"
 import {
   AllowAllPermission,
   resolveSessionEnvironment,
@@ -77,6 +76,7 @@ import {
   makeAgentLoopTurnExecution,
 } from "./agent-loop.turn-execution.js"
 import { AgentLoopWorkerScope, makeAgentLoopWorker } from "./agent-loop.worker.js"
+import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 
 export const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(function* (params: {
   sessionId: SessionId
@@ -122,13 +122,7 @@ export type AgentLoopBehavior = {
   takeNextQueuedTurn: Effect.Effect<QueuedTurnItem | undefined, AgentLoopError>
   appendSteering: (item: QueuedTurnItem) => Effect.Effect<LoopState, AgentLoopError>
   drainQueue: Effect.Effect<QueueSnapshot, AgentLoopError>
-  resolveTurnProfile: Effect.Effect<{
-    turnExtensionRegistry: ExtensionRegistryService
-    turnDriverRegistry: DriverRegistryService
-    turnPermission: PermissionService
-    turnBaseSections: ReadonlyArray<PromptSection>
-    turnHostCtx: ExtensionHostContext
-  }>
+  resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile>
   persistState: (state: LoopState) => Effect.Effect<void, AgentLoopError>
   refreshRuntimeState: Effect.Effect<void, AgentLoopError>
   /** Read the current FSM state. Replaces effect-machine `actor.snapshot`. */

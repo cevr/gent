@@ -7,16 +7,12 @@ import {
 } from "../../domain/agent.js"
 import { StreamEnded, StreamStarted, TurnCompleted } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
-import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { InteractionRequestId, type BranchId, type SessionId } from "../../domain/ids.js"
-import { Permission, type PermissionService } from "../../domain/permission.js"
-import type { PromptSection } from "../../domain/prompt.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { ConfigService } from "../config-service.js"
-import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
 import { provideReactionHostContext } from "../extensions/extension-reaction-context.js"
-import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
+import { ExtensionRegistry } from "../extensions/registry.js"
 import { WideEvent } from "../wide-event-boundary.js"
 import type { AgentLoopError, QueuedTurnItem, RunningState } from "./agent-loop.state.js"
 import {
@@ -44,10 +40,11 @@ import { computeStreamEndedCost } from "./turn-pricing.js"
 import { resolveTurnContext, type ResolvedTurnContext } from "./turn-resolve.js"
 import { resolveTurnSource, toolCallsFromResponseParts } from "./turn-source.js"
 import { executeToolCalls, ToolInteractionPending } from "./turn-tool-execution.js"
+import { CurrentExtensionHostContext } from "./current-extension-host-context.js"
 import {
-  CurrentExtensionHostContext,
-  provideCurrentHostCtx,
-} from "./current-extension-host-context.js"
+  provideAgentLoopTurnProfile,
+  type AgentLoopTurnProfile,
+} from "./agent-loop.turn-profile.js"
 
 const MAX_TURN_STEPS = 200
 
@@ -60,14 +57,6 @@ export const TurnOutcome = Schema.TaggedUnion({
   },
 })
 export type TurnOutcome = Schema.Schema.Type<typeof TurnOutcome>
-
-export type AgentLoopTurnProfile = {
-  readonly turnExtensionRegistry: ExtensionRegistryService
-  readonly turnDriverRegistry: DriverRegistryService
-  readonly turnPermission: PermissionService
-  readonly turnBaseSections: ReadonlyArray<PromptSection>
-  readonly turnHostCtx: ExtensionHostContext
-}
 
 export type AgentLoopTurnExecutionScopeService = {
   readonly sessionId: SessionId
@@ -338,21 +327,12 @@ export const makeAgentLoopTurnExecution = Effect.gen(function* () {
   const runTurn = Effect.fn("AgentLoop.runTurn")(function* (state: RunningState) {
     yield* Ref.set(scope.turnMetricsRef, emptyTurnMetrics())
 
-    const {
-      turnExtensionRegistry,
-      turnDriverRegistry,
-      turnPermission,
-      turnBaseSections,
-      turnHostCtx,
-    } = yield* scope.resolveTurnProfile
+    const turnProfile = yield* scope.resolveTurnProfile
 
     const provideTurnContext = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(
-        Effect.provideService(ExtensionRegistry, turnExtensionRegistry),
-        Effect.provideService(DriverRegistry, turnDriverRegistry),
-        Effect.provideService(Permission, turnPermission),
         Effect.provideService(ConfigService, configServiceForRun),
-        provideCurrentHostCtx(turnHostCtx),
+        provideAgentLoopTurnProfile(turnProfile),
       )
 
     return yield* Effect.gen(function* () {
@@ -419,7 +399,7 @@ export const makeAgentLoopTurnExecution = Effect.gen(function* () {
           currentAgent: state.currentAgent,
           branchId: scope.branchId,
           sessionId: scope.sessionId,
-          baseSections: turnBaseSections,
+          baseSections: turnProfile.turnBaseSections,
           interactive: state.interactive,
         })
         if (resolved === undefined) break

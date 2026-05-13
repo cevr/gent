@@ -74,11 +74,9 @@ import type { SessionStorage } from "../../storage/session-storage.js"
 import type { SqlClient } from "effect/unstable/sql"
 import { parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
-import { ExtensionRegistry } from "../extensions/registry.js"
-import { Permission } from "../../domain/permission.js"
 import { recordToolResult } from "./turn-persistence.js"
 import { invokeTool } from "./turn-tool-execution.js"
-import { provideCurrentHostCtx } from "./current-extension-host-context.js"
+import { provideAgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import {
   buildQueuedTurnItem,
   failIfTurnFailedAfterEpoch,
@@ -725,11 +723,7 @@ export const buildAgentLoopActorHandlers = (config: {
                 sessionId: operation.sessionId,
                 branchId: operation.branchId,
                 currentTurnAgent,
-              }).pipe(
-                Effect.provideService(ExtensionRegistry, environment.turnExtensionRegistry),
-                Effect.provideService(Permission, environment.turnPermission),
-                provideCurrentHostCtx(environment.turnHostCtx),
-              )
+              }).pipe(provideAgentLoopTurnProfile(environment))
             }),
           )
         }).pipe(
