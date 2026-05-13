@@ -1,8 +1,20 @@
-import { Clock, Duration, Effect, FileSystem, Option, Path, Schema } from "effect"
+import { Clock, Duration, Effect, FileSystem, Path, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { AnthropicPlatform } from "./platform-adapter.js"
+import {
+  decodeCredentials,
+  parseOAuthResponse,
+  updateCredentialBlob,
+  type ClaudeCredentials,
+} from "./oauth/credentials.js"
+export {
+  freshEnoughForUse,
+  parseOAuthResponse,
+  updateCredentialBlob,
+  type ClaudeCredentials,
+} from "./oauth/credentials.js"
 
 // ── Claude Code Keychain Reader ──
 
@@ -19,57 +31,6 @@ const credentialsFilePath = (home: string) =>
     const path = yield* Path.Path
     return path.join(home, ".claude", ".credentials.json")
   })
-
-const ClaudeCredentials = Schema.Struct({
-  accessToken: Schema.String,
-  refreshToken: Schema.String,
-  expiresAt: Schema.Number,
-})
-
-const ClaudeCredentialsWrapper = Schema.Struct({
-  claudeAiOauth: ClaudeCredentials,
-})
-
-const CredentialBlobSchema = Schema.Record(Schema.String, Schema.Unknown)
-const decodeCredentialBlob = Schema.decodeUnknownOption(Schema.fromJsonString(CredentialBlobSchema))
-
-const OAuthTokenResponseSchema = Schema.Struct({
-  access_token: Schema.optional(Schema.String),
-  refresh_token: Schema.optional(Schema.String),
-  expires_in: Schema.optional(Schema.Number),
-})
-const decodeOAuthTokenResponse = Schema.decodeUnknownOption(
-  Schema.fromJsonString(OAuthTokenResponseSchema),
-)
-
-export type ClaudeCredentials = typeof ClaudeCredentials.Type
-
-/**
- * A credential is "fresh enough to use" if it expires more than 60s
- * from now. Below that, callers should refresh before sending it on
- * the wire — the Anthropic auth gate rejects a token in its last
- * minute and a refresh round-trip can take that long.
- */
-const FRESH_ENOUGH_MS = 60_000
-
-export const freshEnoughForUse = (creds: ClaudeCredentials, now: number): boolean =>
-  creds.expiresAt > now + FRESH_ENOUGH_MS
-
-const decodeCredentials = (raw: string): Effect.Effect<ClaudeCredentials, ProviderAuthError> =>
-  Schema.decodeUnknownEffect(Schema.fromJsonString(ClaudeCredentialsWrapper))(raw).pipe(
-    Effect.map((w) => w.claudeAiOauth),
-    Effect.catchEager(() =>
-      Schema.decodeUnknownEffect(Schema.fromJsonString(ClaudeCredentials))(raw).pipe(
-        Effect.mapError(
-          (e) =>
-            new ProviderAuthError({
-              message: "Invalid Claude credentials JSON",
-              cause: e,
-            }),
-        ),
-      ),
-    ),
-  )
 
 const readCredentialsFile = (): Effect.Effect<
   ClaudeCredentials,
@@ -379,33 +340,6 @@ const writeKeychainEntry = (
   })
 
 /**
- * Splice fresh credentials into an existing keychain blob, preserving
- * any other fields (e.g. `subscriptionType`, `mcpOAuth`) so a write-back
- * doesn't blow away CLI state. Returns `undefined` if the blob isn't
- * valid JSON. Exported for testing.
- *
- * @internal
- */
-export const updateCredentialBlob = (
-  existingJson: string,
-  newCreds: ClaudeCredentials,
-): string | undefined => {
-  const decoded = decodeCredentialBlob(existingJson)
-  if (Option.isNone(decoded)) return undefined
-  const parsed = decoded.value
-  const wrapperValue = parsed["claudeAiOauth"]
-  const wrapper = isRecord(wrapperValue) ? wrapperValue : undefined
-  const target = wrapper ?? parsed
-  target["accessToken"] = newCreds.accessToken
-  target["refreshToken"] = newCreds.refreshToken
-  target["expiresAt"] = newCreds.expiresAt
-  return JSON.stringify(parsed)
-}
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-
-/**
  * Persist refreshed credentials back to the keychain entry named by
  * `source` (or `~/.claude/.credentials.json` on non-darwin). Without
  * this, every direct OAuth refresh is wasted — the next read pulls
@@ -491,31 +425,6 @@ export const writeBackCredentials = (
  */
 const OAUTH_TOKEN_URL = "https://claude.ai/v1/oauth/token"
 const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-
-/**
- * Parse a raw OAuth refresh response body into `ClaudeCredentials`.
- * Returns `undefined` if the body is not valid JSON, not an object,
- * or missing `access_token`. Defaults `expires_in` to 36 000s (10h) per
- * Anthropic's observed token lifetime. Exported for testing.
- *
- * @internal
- */
-export const parseOAuthResponse = (
-  raw: string,
-  fallbackRefreshToken: string,
-  now: number = 0,
-): ClaudeCredentials | undefined => {
-  const decoded = decodeOAuthTokenResponse(raw)
-  if (Option.isNone(decoded)) return undefined
-  const data = decoded.value
-  if (data.access_token === undefined) return undefined
-  const expiresIn = data.expires_in ?? 36_000
-  return {
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token ?? fallbackRefreshToken,
-    expiresAt: now + expiresIn * 1000,
-  }
-}
 
 /**
  * Refresh the OAuth token by POSTing directly to Anthropic's OAuth
