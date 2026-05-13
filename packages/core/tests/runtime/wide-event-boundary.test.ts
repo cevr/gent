@@ -9,12 +9,10 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, MutableRef, References } from "effect"
 import {
   WideEvent,
+  WideEventBoundary,
   withWideEvent,
   WideEventLogger,
   turnBoundary,
-  toolBoundary,
-  providerStreamBoundary,
-  rpcBoundary,
   agentRunBoundary,
 } from "../../src/runtime/wide-event-boundary"
 import type { LogEvent } from "../../src/runtime/wide-event-boundary"
@@ -66,30 +64,40 @@ describe("wide-event-boundary", () => {
       }),
     )
 
-    it.live("toolBoundary produces tool-runner context", () =>
+    it.live("tool boundary produces upstream tool context", () =>
       Effect.gen(function* () {
         const ref = captured()
 
         yield* captureWideEvents(
           ref,
-          Effect.void.pipe(withWideEvent(toolBoundary("bash", ToolCallId.make("tc-123")))),
+          Effect.void.pipe(
+            withWideEvent(
+              WideEventBoundary.tool("bash", {
+                envelope: { toolCallId: ToolCallId.make("tc-123") },
+              }),
+            ),
+          ),
         )
 
         const a = getAnnotations(ref)
-        expect(a["service"]).toBe("tool-runner")
+        expect(a["service"]).toBe("tool")
         expect(a["method"]).toBe("bash")
         expect(a["toolCallId"]).toBe("tc-123")
       }),
     )
 
-    it.live("providerStreamBoundary produces provider context", () =>
+    it.live("provider boundary produces provider context", () =>
       Effect.gen(function* () {
         const ref = captured()
 
         yield* captureWideEvents(
           ref,
           WideEvent.set({ inputTokens: 100, outputTokens: 50 }).pipe(
-            withWideEvent(providerStreamBoundary("claude-opus-4-6")),
+            withWideEvent(
+              WideEventBoundary.provider("stream", {
+                envelope: { model: "claude-opus-4-6" },
+              }),
+            ),
           ),
         )
 
@@ -102,14 +110,14 @@ describe("wide-event-boundary", () => {
       }),
     )
 
-    it.live("rpcBoundary produces rpc context", () =>
+    it.live("rpc boundary produces rpc context", () =>
       Effect.gen(function* () {
         const ref = captured()
 
         yield* captureWideEvents(
           ref,
           WideEvent.set({ sessionId: SessionId.make("sess-1") }).pipe(
-            withWideEvent(rpcBoundary("sendMessage")),
+            withWideEvent(WideEventBoundary.rpc("sendMessage")),
           ),
         )
 
@@ -183,7 +191,11 @@ describe("wide-event-boundary", () => {
             yield* WideEvent.set({ agent: "cowork" })
 
             yield* WideEvent.set({ toolResult: "ok" }).pipe(
-              withWideEvent(toolBoundary("read", ToolCallId.make("tc-1"))),
+              withWideEvent(
+                WideEventBoundary.tool("read", {
+                  envelope: { toolCallId: ToolCallId.make("tc-1") },
+                }),
+              ),
             )
           }).pipe(
             withWideEvent(
@@ -201,7 +213,7 @@ describe("wide-event-boundary", () => {
 
         // Tool emits first (inner boundary)
         const toolEvent = events[0]!.annotations
-        expect(toolEvent["service"]).toBe("tool-runner")
+        expect(toolEvent["service"]).toBe("tool")
         expect(toolEvent["method"]).toBe("read")
 
         // Turn emits second (outer boundary)

@@ -187,7 +187,7 @@
     "effect": "4.0.0-beta.64",
     "effect-bun-test": "0.3.0",
     "effect-encore": "0.12.0",
-    "effect-wide-event": "0.2.1",
+    "effect-wide-event": "0.3.0",
     "msgpackr": "^2.0.1",
     "multipasta": "^0.2.7",
     "picomatch": "^4.0.4",
@@ -684,7 +684,7 @@
 
     "effect-encore": ["effect-encore@0.12.0", "", { "peerDependencies": { "@effect/cluster": "*", "@effect/rpc": "*", "@effect/sql": "*", "@effect/workflow": "*", "effect": ">=4.0.0-beta.64" }, "optionalPeers": ["@effect/cluster", "@effect/rpc", "@effect/sql", "@effect/workflow"] }, "sha512-2UkI7NFCDsB8jiwBnXIWIt0gbeNOBY3k/TvDNcSGs0TWndWa9kJHFJyZStPkwoAGYOinQsJ/mKJbiKF4vtgCdQ=="],
 
-    "effect-wide-event": ["effect-wide-event@0.2.1", "", { "dependencies": { "effect": "4.0.0-beta.64" } }, "sha512-MrlWF0W49mEG8qNvrY1n+kilGHjfzMlJ1yekeUw5sB7CuDepIYYPs8MXdUsJGgE7MZSCEWK8bOQOS6TOLYNrsA=="],
+    "effect-wide-event": ["effect-wide-event@0.3.0", "", { "peerDependencies": { "effect": ">=4.0.0-beta.66" } }, "sha512-C6GZKU+Nz1Cf4k7Qwfg47CH+8POLZy+jue/0eILiagjXDOWgSGzzUmtGepjWaeu2zsBJd7wNc1xVxUwE9YcaDA=="],
 
     "electron-to-chromium": ["electron-to-chromium@1.5.353", "", {}, "sha512-kOrWphBi8TOZyiJZqsgqIle0lw+tzmnQK83pV9dZUd01Nm2POECSyFQMAuarzZdYqQW7FH9RaYOuaRo3h+bQ3w=="],
 

@@ -7,7 +7,7 @@ import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
-import { withWideEvent, WideEvent, toolBoundary, ToolError } from "../wide-event-boundary"
+import { withWideEvent, WideEvent, WideEventBoundary } from "../wide-event-boundary"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { ToolCallId } from "../../domain/ids.js"
 import type * as AiTool from "effect/unstable/ai/Tool"
@@ -160,10 +160,7 @@ const terminalToolResult = (toolkit: ToolRunnerToolkit, toolCall: ToolCall) =>
     )
     if (terminal._tag === "None") {
       const message = "Tool handler did not produce a final result"
-      yield* WideEvent.set({
-        toolError: ToolError.ExecutionFailed,
-        errorMessage: message,
-      })
+      yield* WideEvent.failDomain("execution_failed", { message })
       return errorResult(toolCall, message)
     }
     return Prompt.toolResultPart({
@@ -236,7 +233,9 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             })
 
           if (tool === undefined) {
-            yield* WideEvent.set({ toolError: ToolError.Unknown })
+            yield* WideEvent.failDomain("unknown", {
+              message: `Unknown tool: ${toolCall.toolName}`,
+            })
             yield* Effect.logInfo("tool.unknown").pipe(
               Effect.annotateLogs({
                 toolName: toolCall.toolName,
@@ -250,9 +249,8 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               .check(toolCall.toolName, toolCall.input)
               .pipe(
                 Effect.catchEager((e) =>
-                  WideEvent.set({
-                    toolError: ToolError.PermissionCheckFailed,
-                    errorMessage: String(e),
+                  WideEvent.failDomain("permission_check_failed", {
+                    message: String(e),
                   }).pipe(Effect.as("interceptor_failed" as const)),
                 ),
               )
@@ -268,7 +266,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             }
 
             if (permCheckResult === "denied") {
-              yield* WideEvent.set({ toolError: ToolError.PermissionDenied })
+              yield* WideEvent.failDomain("permission_denied", { message: "Permission denied" })
               yield* Effect.logInfo("tool.permission.denied").pipe(
                 Effect.annotateLogs({
                   toolName: toolCall.toolName,
@@ -295,13 +293,12 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             }
 
             const message = errorMessageFromAiError(toolCall.toolName, failure)
-            yield* WideEvent.set({
-              toolError:
-                AiError.isAiError(failure) && failure.reason._tag === "ToolParameterValidationError"
-                  ? ToolError.SchemaDecode
-                  : ToolError.ExecutionFailed,
-              errorMessage: message,
-            })
+            yield* WideEvent.failDomain(
+              AiError.isAiError(failure) && failure.reason._tag === "ToolParameterValidationError"
+                ? "schema_decode"
+                : "execution_failed",
+              { message },
+            )
             yield* Effect.logWarning(
               AiError.isAiError(failure) && failure.reason._tag === "ToolParameterValidationError"
                 ? "tool.schema.failed"
@@ -318,7 +315,11 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
           return yield* finish(executeResult.success)
         }).pipe(
           provideCurrentHostCtx(ctx),
-          withWideEvent(toolBoundary(toolCall.toolName, toolCall.toolCallId)),
+          withWideEvent(
+            WideEventBoundary.tool(toolCall.toolName, {
+              envelope: { toolCallId: toolCall.toolCallId },
+            }),
+          ),
         )
       }),
     }),

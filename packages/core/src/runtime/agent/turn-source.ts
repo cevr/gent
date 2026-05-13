@@ -12,7 +12,7 @@ import { ModelResolver } from "../../providers/model-resolver.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { retryProviderCall } from "../retry"
-import { providerStreamBoundary, WideEvent, withWideEvent } from "../wide-event-boundary"
+import { WideEvent, WideEventBoundary, withWideEvent } from "../wide-event-boundary"
 import {
   CurrentExtensionHostContext,
   provideCurrentHostCtx,
@@ -209,7 +209,11 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
             streamFailed: collected.streamFailed,
           }),
         ),
-        withWideEvent(providerStreamBoundary(resolved.modelId)),
+        withWideEvent(
+          WideEventBoundary.provider("stream", {
+            envelope: { model: resolved.modelId },
+          }),
+        ),
       ),
   } satisfies ModelTurnSource
 })

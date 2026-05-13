@@ -21,7 +21,7 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
-import { WideEvent, rpcBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
+import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
@@ -268,7 +268,11 @@ const RpcHandlers = GentRpcs.toLayer(
           })
           .pipe(
             Effect.tap((result) => WideEvent.set({ sessionId: result.sessionId })),
-            withWideEvent(rpcBoundary("session.create", input.requestId)),
+            withWideEvent(
+              WideEventBoundary.rpc("session.create", {
+                ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+              }),
+            ),
           ),
 
       "session.list": () => sessionStorage.listSessions(),
@@ -279,7 +283,7 @@ const RpcHandlers = GentRpcs.toLayer(
       "session.delete": ({ sessionId }: SessionIdPayload) =>
         commands.deleteSession(sessionId).pipe(
           Effect.tap(() => WideEvent.set({ sessionId })),
-          withWideEvent(rpcBoundary("session.delete")),
+          withWideEvent(WideEventBoundary.rpc("session.delete")),
         ),
 
       "session.getChildren": ({ parentSessionId }: ParentSessionPayload) =>
@@ -288,13 +292,13 @@ const RpcHandlers = GentRpcs.toLayer(
       "session.getTree": ({ sessionId }: SessionIdPayload) =>
         queries.getSessionTree(sessionId).pipe(
           Effect.tap(() => WideEvent.set({ sessionId })),
-          withWideEvent(rpcBoundary("session.getTree")),
+          withWideEvent(WideEventBoundary.rpc("session.getTree")),
         ),
 
       "session.getSnapshot": ({ sessionId, branchId }: GetSessionSnapshotInput) =>
         queries.getSessionSnapshot({ sessionId, branchId }).pipe(
           Effect.tap(() => WideEvent.set({ sessionId, branchId })),
-          withWideEvent(rpcBoundary("session.getSnapshot")),
+          withWideEvent(WideEventBoundary.rpc("session.getSnapshot")),
         ),
 
       "session.updateReasoningLevel": ({
@@ -303,7 +307,7 @@ const RpcHandlers = GentRpcs.toLayer(
       }: UpdateSessionReasoningLevelInput) =>
         commands.updateSessionReasoningLevel({ sessionId, reasoningLevel }).pipe(
           Effect.tap(() => WideEvent.set({ sessionId, reasoningLevel })),
-          withWideEvent(rpcBoundary("session.updateReasoningLevel")),
+          withWideEvent(WideEventBoundary.rpc("session.updateReasoningLevel")),
         ),
 
       "session.events": ({ sessionId, branchId, after }: SubscribeEventsInput) =>
@@ -328,7 +332,11 @@ const RpcHandlers = GentRpcs.toLayer(
           })
           .pipe(
             Effect.tap((result) => WideEvent.set({ sessionId, branchId: result.branchId })),
-            withWideEvent(rpcBoundary("branch.create", requestId)),
+            withWideEvent(
+              WideEventBoundary.rpc("branch.create", {
+                ...(requestId !== undefined ? { requestId } : {}),
+              }),
+            ),
           ),
 
       "branch.getTree": ({ sessionId }: SessionIdPayload) => getBranchTree(sessionId),
@@ -350,7 +358,11 @@ const RpcHandlers = GentRpcs.toLayer(
           })
           .pipe(
             Effect.tap(() => WideEvent.set({ sessionId, fromBranchId, toBranchId })),
-            withWideEvent(rpcBoundary("branch.switch", requestId)),
+            withWideEvent(
+              WideEventBoundary.rpc("branch.switch", {
+                ...(requestId !== undefined ? { requestId } : {}),
+              }),
+            ),
           ),
 
       "branch.fork": ({ sessionId, fromBranchId, atMessageId, name, requestId }: ForkBranchInput) =>
@@ -366,7 +378,11 @@ const RpcHandlers = GentRpcs.toLayer(
             Effect.tap((result) =>
               WideEvent.set({ sessionId, fromBranchId, branchId: result.branchId }),
             ),
-            withWideEvent(rpcBoundary("branch.fork", requestId)),
+            withWideEvent(
+              WideEventBoundary.rpc("branch.fork", {
+                ...(requestId !== undefined ? { requestId } : {}),
+              }),
+            ),
           ),
 
       "message.send": ({
@@ -388,7 +404,11 @@ const RpcHandlers = GentRpcs.toLayer(
           })
           .pipe(
             Effect.tap(() => WideEvent.set({ sessionId, branchId })),
-            withWideEvent(rpcBoundary("message.send", requestId)),
+            withWideEvent(
+              WideEventBoundary.rpc("message.send", {
+                ...(requestId !== undefined ? { requestId } : {}),
+              }),
+            ),
           ),
 
       "message.list": ({ branchId }: BranchPayload) => messageStorage.listMessages(branchId),
@@ -402,21 +422,25 @@ const RpcHandlers = GentRpcs.toLayer(
               steerTag: command._tag,
             }),
           ),
-          withWideEvent(rpcBoundary("steer.command")),
+          withWideEvent(WideEventBoundary.rpc("steer.command")),
         ),
 
       "queue.drain": ({ sessionId, branchId, requestId }: QueueDrainInput) =>
         sessionRuntime.drainQueuedMessages({ sessionId, branchId, requestId }).pipe(
           Effect.withSpan("SessionCommands.drainQueuedMessages"),
           Effect.tap(() => WideEvent.set({ sessionId, branchId })),
-          withWideEvent(rpcBoundary("queue.drain", requestId)),
+          withWideEvent(
+            WideEventBoundary.rpc("queue.drain", {
+              ...(requestId !== undefined ? { requestId } : {}),
+            }),
+          ),
         ),
 
       "queue.get": ({ sessionId, branchId }: QueueTarget) =>
         sessionRuntime.getQueuedMessages({ sessionId, branchId }).pipe(
           Effect.withSpan("SessionQueries.getQueuedMessages"),
           Effect.tap(() => WideEvent.set({ sessionId, branchId })),
-          withWideEvent(rpcBoundary("queue.get")),
+          withWideEvent(WideEventBoundary.rpc("queue.get")),
         ),
 
       "interaction.respondInteraction": ({
@@ -436,7 +460,7 @@ const RpcHandlers = GentRpcs.toLayer(
           })
           .pipe(
             Effect.tap(() => WideEvent.set({ sessionId, branchId, requestId, approved })),
-            withWideEvent(rpcBoundary("interaction.respondInteraction")),
+            withWideEvent(WideEventBoundary.rpc("interaction.respondInteraction")),
           ),
 
       // ----------------------------------------------------------------------
@@ -636,7 +660,7 @@ const RpcHandlers = GentRpcs.toLayer(
           return yield* capabilityContext !== undefined
             ? request.pipe(Effect.provideContext(capabilityContext))
             : request
-        }).pipe(withWideEvent(rpcBoundary("extension.request"))),
+        }).pipe(withWideEvent(WideEventBoundary.rpc("extension.request"))),
 
       "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>
         Effect.gen(function* () {

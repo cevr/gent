@@ -218,7 +218,7 @@ describe("platform duplication guards", () => {
         [
           "yield* run.pipe(",
           "  Effect.tap(() => WideEvent.set({ sessionId, branchId })),",
-          "  withWideEvent(rpcBoundary('message.send', requestId)),",
+          "  withWideEvent(WideEventBoundary.rpc('message.send', { requestId })),",
           ")",
         ].join("\n"),
       ),
@@ -275,7 +275,7 @@ describe("platform duplication guards", () => {
     expect(
       findPlatformDuplicationViolations(
         "packages/core/src/runtime/example.ts",
-        "yield* effect.pipe(withWideEvent(rpcBoundary('message.send')), Effect.tap(() => log()))",
+        "yield* effect.pipe(withWideEvent(WideEventBoundary.rpc('message.send')), Effect.tap(() => log()))",
       ),
     ).toEqual([])
   })
