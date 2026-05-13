@@ -2,16 +2,12 @@ import { Context, Effect, type FileSystem, Layer, type Path, Schema } from "effe
 import type { AgentDefinition } from "../../domain/agent.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../../domain/driver.js"
 import type { ExtensionId, RpcId } from "../../domain/ids.js"
-import type {
-  CapabilityCoreContext,
-  CapabilityError,
-  CapabilityNotFoundError,
-} from "../../domain/capability.js"
+import type { CapabilityError, CapabilityNotFoundError } from "../../domain/capability.js"
 import {
   CapabilityError as CapabilityErrorClass,
   CapabilityNotFoundError as CapabilityNotFoundErrorClass,
 } from "../../domain/capability.js"
-import { type ExtensionContext, provideExtensionServices } from "../../domain/extension-services.js"
+import { provideExtensionServices } from "../../domain/extension-services.js"
 import {
   SCOPE_PRECEDENCE,
   type ExtensionStatusInfo,
@@ -21,7 +17,6 @@ import {
   type RunContext,
   type ScheduledJobFailureInfo,
 } from "../../domain/extension.js"
-import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { type PromptSection } from "../../domain/prompt.js"
 import type { PermissionRule } from "../../domain/permission.js"
 import type { RequestCapability } from "../../domain/capability/request.js"
@@ -36,6 +31,7 @@ import {
   type CompiledExtensionReactions,
 } from "./extension-reactions.js"
 import { sealErasedEffect } from "./extension-effect-membrane.js"
+import { CurrentExtensionHostContext } from "../agent/current-extension-host-context.js"
 
 // SlashCommand — public-facing slash entry. Built from `requests:` bucket
 // winners that carry a `slash:` presentation block. The slash block is the
@@ -91,11 +87,10 @@ export interface CompiledRpcRegistry {
     extensionId: ExtensionId,
     capabilityId: RpcId | string,
     input: unknown,
-    ctx: CapabilityCoreContext,
   ) => Effect.Effect<
     unknown,
     CapabilityError | CapabilityNotFoundError,
-    FileSystem.FileSystem | Path.Path
+    CurrentExtensionHostContext | FileSystem.FileSystem | Path.Path
   >
 }
 
@@ -250,32 +245,17 @@ const runExtensionCapability = (
     return output
   })
 
-const hasExtensionServices = (ctx: CapabilityCoreContext): ctx is ExtensionHostContext =>
-  "session" in ctx && "agent" in ctx && "interaction" in ctx
-
-const provideExtensionServicesIfAvailable = <A, E, R>(
-  ctx: CapabilityCoreContext,
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, Exclude<R, ExtensionContext> | FileSystem.FileSystem | Path.Path> =>
-  hasExtensionServices(ctx)
-    ? provideExtensionServices(ctx, effect)
-    : // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- fallback branch: ctx lacks host services, so effect's ExtensionContext requirement (if any) propagates upward unresolved; caller is responsible
-      (effect as Effect.Effect<
-        A,
-        E,
-        Exclude<R, ExtensionContext> | FileSystem.FileSystem | Path.Path
-      >)
-
 const compileRpcRegistry = (
   entries: ReadonlyArray<RegisteredCapabilityEntry>,
 ): CompiledRpcRegistry => ({
-  run: Effect.fn("CompiledRpcRegistry.run")(function* (extensionId, capabilityId, input, ctx) {
+  run: Effect.fn("CompiledRpcRegistry.run")(function* (extensionId, capabilityId, input) {
     const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)
     if (entry === undefined || entry.kind !== "rpc") {
       return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
     }
-    return yield* provideExtensionServicesIfAvailable(
-      ctx,
+    const hostCtx = yield* CurrentExtensionHostContext
+    return yield* provideExtensionServices(
+      hostCtx,
       runExtensionCapability(extensionId, capabilityId, entry.capability, input),
     )
   }),

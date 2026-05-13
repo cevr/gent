@@ -8,11 +8,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Exit, type FileSystem, type Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import {
-  type CapabilityCoreContext,
-  CapabilityError,
-  CapabilityNotFoundError,
-} from "@gent/core-internal/domain/capability"
+import { CapabilityError, CapabilityNotFoundError } from "@gent/core-internal/domain/capability"
 import {
   ExtensionContext,
   request,
@@ -21,17 +17,15 @@ import {
   type ToolCapability,
 } from "@gent/core/extensions/api"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
+import { provideCurrentHostCtx } from "../../src/runtime/agent/current-extension-host-context"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 
 const extensionId = ExtensionId.make("@test/c")
-const ctx: CapabilityCoreContext = {
+const ctx = testExtensionHostContext({
   sessionId: SessionId.make("s"),
   branchId: BranchId.make("b"),
-  cwd: "/tmp",
-  home: "/tmp",
-  host: testExtensionHostContext().host,
-}
+})
 const extWith = (
   scope: "builtin" | "user" | "project",
   requests: ReadonlyArray<RequestCapability>,
@@ -86,6 +80,13 @@ const expectRpcFailure = (
     return reason.error
   })
 
+const runRpc = (
+  registry: ReturnType<typeof resolveExtensions>["rpcRegistry"],
+  capabilityId: string,
+  input: unknown,
+  hostCtx = ctx,
+) => registry.run(extensionId, capabilityId, input).pipe(provideCurrentHostCtx(hostCtx))
+
 describe("extension capability registries", () => {
   const test = it.live.layer(BunServices.layer)
 
@@ -93,7 +94,7 @@ describe("extension capability registries", () => {
     Effect.gen(function* () {
       const cap = echoRequest()
       const resolved = resolveExtensions([extWith("builtin", [cap])])
-      const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx)
+      const result = yield* runRpc(resolved.rpcRegistry, cap.id, { value: "hi" })
       expect(result).toEqual({ value: "hi" })
     }))
 
@@ -128,8 +129,8 @@ describe("extension capability registries", () => {
           }),
       })
       const resolved = resolveExtensions([extWith("builtin", [cap])])
-      const result = yield* resolved.rpcRegistry.run(
-        extensionId,
+      const result = yield* runRpc(
+        resolved.rpcRegistry,
         cap.id,
         {},
         testExtensionHostContext({
@@ -165,7 +166,7 @@ describe("extension capability registries", () => {
         contributions: { requests: [cap] },
       }
       const resolved = resolveExtensions([ext])
-      const result = yield* resolved.rpcRegistry.run(extensionId, cap.id, { value: "hi" }, ctx)
+      const result = yield* runRpc(resolved.rpcRegistry, cap.id, { value: "hi" })
       expect(result).toEqual({ value: "hi" })
     }))
 
@@ -190,8 +191,8 @@ describe("extension capability registries", () => {
         contributions: { requests: [cap] },
       }
       const resolved = resolveExtensions([ext])
-      const result = yield* resolved.rpcRegistry.run(
-        extensionId,
+      const result = yield* runRpc(
+        resolved.rpcRegistry,
         cap.id,
         {},
         testExtensionHostContext({
@@ -234,7 +235,7 @@ describe("extension capability registries", () => {
           contributions: { requests: [project] },
         },
       ])
-      const result = yield* resolved.rpcRegistry.run(extensionId, project.id, { value: "hi" }, ctx)
+      const result = yield* runRpc(resolved.rpcRegistry, project.id, { value: "hi" })
       expect(result).toEqual({ value: "hi" })
     }))
 
@@ -256,7 +257,7 @@ describe("extension capability registries", () => {
           contributions: { requests: [project] },
         },
       ])
-      const result = yield* resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx)
+      const result = yield* runRpc(resolved.rpcRegistry, builtin.id, { value: "hi" })
       expect(result).toEqual({ value: "project-request" })
     }))
 
@@ -279,7 +280,7 @@ describe("extension capability registries", () => {
         },
       ])
       const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx),
+        runRpc(resolved.rpcRegistry, builtin.id, { value: "hi" }),
       )
       expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
     }))
@@ -303,7 +304,7 @@ describe("extension capability registries", () => {
         },
       ])
       const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, builtin.id, { value: "hi" }, ctx),
+        runRpc(resolved.rpcRegistry, builtin.id, { value: "hi" }),
       )
       expect(Schema.is(CapabilityNotFoundError)(result)).toBe(true)
     }))
@@ -316,7 +317,7 @@ describe("extension capability registries", () => {
         extWith("builtin", [builtin]),
         extWith("project", [project]),
       ])
-      const result = yield* resolved.rpcRegistry.run(extensionId, project.id, { value: "x" }, ctx)
+      const result = yield* runRpc(resolved.rpcRegistry, project.id, { value: "x" })
       expect(result).toEqual({ value: "project" })
     }))
 
@@ -341,7 +342,7 @@ describe("extension capability registries", () => {
         extWith("project", [higherCap]),
       ])
 
-      const readResult = yield* resolved.rpcRegistry.run(extensionId, higherCap.id, null, ctx)
+      const readResult = yield* runRpc(resolved.rpcRegistry, higherCap.id, null)
       expect(readResult).toBe("project-read")
     }))
 
@@ -349,9 +350,7 @@ describe("extension capability registries", () => {
     Effect.gen(function* () {
       const cap = echoRequest()
       const resolved = resolveExtensions([extWith("builtin", [cap])])
-      const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, cap.id, { value: 42 }, ctx),
-      )
+      const result = yield* expectRpcFailure(runRpc(resolved.rpcRegistry, cap.id, { value: 42 }))
       expect(Schema.is(CapabilityError)(result)).toBe(true)
       if (!Schema.is(CapabilityError)(result)) return
       expect(result.reason).toMatch(/input decode failed/)
@@ -367,9 +366,7 @@ describe("extension capability registries", () => {
         execute: () => Effect.succeed({ value: 42 } as unknown as { value: string }),
       })
       const resolved = resolveExtensions([extWith("builtin", [cap])])
-      const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, cap.id, { value: "x" }, ctx),
-      )
+      const result = yield* expectRpcFailure(runRpc(resolved.rpcRegistry, cap.id, { value: "x" }))
       expect(Schema.is(CapabilityError)(result)).toBe(true)
       if (!Schema.is(CapabilityError)(result)) return
       expect(result.reason).toMatch(/output validation failed/)
@@ -385,9 +382,7 @@ describe("extension capability registries", () => {
         execute: () => Effect.die("boom"),
       })
       const resolved = resolveExtensions([extWith("builtin", [cap])])
-      const result = yield* expectRpcFailure(
-        resolved.rpcRegistry.run(extensionId, cap.id, { value: "x" }, ctx),
-      )
+      const result = yield* expectRpcFailure(runRpc(resolved.rpcRegistry, cap.id, { value: "x" }))
       expect(Schema.is(CapabilityError)(result)).toBe(true)
       if (!Schema.is(CapabilityError)(result)) return
       expect(result.reason).toMatch(/handler defect/)

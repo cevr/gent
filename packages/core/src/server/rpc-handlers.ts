@@ -19,6 +19,7 @@ import {
   makeAmbientExtensionHostContextDeps,
   makeExtensionHostContext,
 } from "../runtime/make-extension-host-context.js"
+import { provideCurrentHostCtx } from "../runtime/agent/current-extension-host-context.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
@@ -628,17 +629,16 @@ const RpcHandlers = GentRpcs.toLayer(
             hostDeps,
           )
           const rpcRegistry = registry.getResolved().rpcRegistry
-          const request = rpcRegistry
-            .run(extensionId, RpcId.make(capabilityId), input, hostCtx)
-            .pipe(
-              Effect.mapError((error) =>
-                extensionRequestError({
-                  extensionId,
-                  capabilityId,
-                  message: "reason" in error ? `${error._tag}: ${error.reason}` : error._tag,
-                }),
-              ),
-            )
+          const request = rpcRegistry.run(extensionId, RpcId.make(capabilityId), input).pipe(
+            provideCurrentHostCtx(hostCtx),
+            Effect.mapError((error) =>
+              extensionRequestError({
+                extensionId,
+                capabilityId,
+                message: "reason" in error ? `${error._tag}: ${error.reason}` : error._tag,
+              }),
+            ),
+          )
           return yield* capabilityContext !== undefined
             ? request.pipe(Effect.provideContext(capabilityContext))
             : request

@@ -28,6 +28,7 @@ import { SessionStorage } from "@gent/core-internal/storage/session-storage.js"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage.js"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
 import { ExtensionRegistry } from "@gent/core-internal/runtime/extensions/registry.js"
+import { provideCurrentHostCtx } from "@gent/core-internal/runtime/agent/current-extension-host-context.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment.js"
 import type {
@@ -618,6 +619,25 @@ const runTodoLifecycle = (params: DebugScenarioParams) =>
             }),
           ),
       },
+      agent: {
+        listAgents: () => Effect.succeed([]),
+        run: () => Effect.die("debug scenario agent.run unavailable"),
+      },
+      session: {
+        listMessages: () => Effect.succeed([]),
+        getSession: () => Effect.sync(() => undefined),
+        getDetail: () => Effect.die("debug scenario session.getDetail unavailable"),
+        renameCurrent: () => Effect.succeed({ renamed: false }),
+        search: () => Effect.succeed([]),
+        queueFollowUp: () => Effect.sync(() => undefined),
+        listBranches: () => Effect.succeed([]),
+      },
+      interaction: {
+        approve: () => Effect.die("debug scenario interaction.approve unavailable"),
+        present: () => Effect.sync(() => undefined),
+        confirm: () => Effect.succeed("no" as const),
+        review: () => Effect.die("debug scenario interaction.review unavailable"),
+      },
     }
 
     const invoke = <T>(
@@ -627,12 +647,9 @@ const runTodoLifecycle = (params: DebugScenarioParams) =>
       },
       input: unknown,
     ): Effect.Effect<T, CapabilityError | CapabilityNotFoundError> => {
-      const e = rpcRegistry.run(
-        ExtensionId.make(ref.extensionId),
-        RpcId.make(ref.capabilityId),
-        input,
-        ctx,
-      )
+      const e = rpcRegistry
+        .run(ExtensionId.make(ref.extensionId), RpcId.make(ref.capabilityId), input)
+        .pipe(provideCurrentHostCtx(ctx))
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
       return e as Effect.Effect<T, CapabilityError | CapabilityNotFoundError>
     }
