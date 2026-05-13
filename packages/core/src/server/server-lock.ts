@@ -8,9 +8,9 @@
  */
 
 import { Effect, FileSystem, Path, Schema } from "effect"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { GentPlatform } from "../runtime/gent-platform.js"
 
-export { BuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
+export { BuildFingerprint } from "./build-fingerprint.js"
 
 export class ServerLockEntry extends Schema.Class<ServerLockEntry>("ServerLockEntry")({
   serverId: Schema.String,

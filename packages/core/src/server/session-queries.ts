@@ -1,4 +1,4 @@
-import { Cause, Effect, Layer, Context } from "effect"
+import { Effect, Layer, Context } from "effect"
 import type { SessionId } from "../domain/ids.js"
 import type { Session, SessionTreeNode } from "../domain/message.js"
 import { projectMessagesWithToolInteractions } from "../domain/message-part-projection.js"
@@ -10,11 +10,6 @@ import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { makeStorageTransaction } from "../storage/sqlite-storage.js"
 import { InvalidStateError, NotFoundError, type GentRpcError } from "./errors.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
-import { AgentLoop as AgentLoopActor } from "../runtime/agent/agent-loop.actor.js"
-import { entityIdOf } from "../runtime/agent/agent-loop.entity-id.js"
-import { ActorCommandId } from "../domain/ids.js"
-import { GentPlatform } from "../runtime/gent-platform.js"
-import { CurrentWorkspaceId } from "./workspace-rpc.js"
 import { SessionSnapshot } from "./transport-contract.js"
 import type { GetSessionSnapshotInput } from "./transport-contract.js"
 
@@ -40,8 +35,6 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       const relationshipStorage = yield* RelationshipStorage
       const storageTransaction = yield* makeStorageTransaction
       const sessionRuntime = yield* SessionRuntime
-      const actorClientFactory = yield* AgentLoopActor.Context
-      const platform = yield* GentPlatform
 
       const buildSessionTreeNode = (
         session: Session,
@@ -93,32 +86,15 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           }),
         )
 
-        // Fetch current runtime state. The actor returns Idle for cold sessions;
-        // failures here mean the runtime state read itself failed.
-        const workspaceId = yield* CurrentWorkspaceId
-        const actorRef = yield* actorClientFactory(
-          entityIdOf(workspaceId, input.sessionId, input.branchId),
+        const runtime = yield* sessionRuntime.getState(input).pipe(
+          Effect.mapError(
+            (cause) =>
+              new InvalidStateError({
+                operation: "session.getSnapshot",
+                message: `Failed to read session runtime state: ${cause.message}`,
+              }),
+          ),
         )
-        const commandUuid = yield* platform.randomId
-        const runtime = yield* actorRef
-          .execute(
-            AgentLoopActor.GetState.make({
-              workspaceId,
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              commandId: ActorCommandId.make(commandUuid),
-            }),
-          )
-          .pipe(
-            Effect.catchCause((cause) =>
-              Effect.fail(
-                new InvalidStateError({
-                  operation: "session.getSnapshot",
-                  message: `Failed to read session runtime state: ${Cause.pretty(cause).split("\n")[0] ?? "unknown error"}`,
-                }),
-              ),
-            ),
-          )
 
         // Cumulative metrics (turns, cost, last-model) are the authority for
         // client HUD displays. Keeping them on the snapshot means the TUI

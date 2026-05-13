@@ -1,6 +1,12 @@
 import { Effect, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Message, Branch, MessageMetadata, Session, dateFromMillis } from "../../domain/message.js"
+import {
+  Message,
+  Branch,
+  MessageMetadata,
+  Session,
+  decodeDateFromMillis,
+} from "../../domain/message.js"
 import { messagePartsSearchText } from "../../domain/message-part-projection.js"
 import { AgentEvent, EventId } from "../../domain/event.js"
 import { BranchId, MessageId, SessionId } from "../../domain/ids.js"
@@ -92,39 +98,48 @@ export const SESSION_PARENT_BRANCH_CHECK =
 export const isReasoningEffort = Schema.is(ReasoningEffort)
 
 const rowToSession = (row: SessionRow) =>
-  new Session({
-    id: row.id,
-    name: row.name ?? undefined,
-    cwd: row.cwd ?? undefined,
-    reasoningLevel:
-      row.reasoning_level !== null && isReasoningEffort(row.reasoning_level)
-        ? row.reasoning_level
-        : undefined,
-    activeBranchId: row.active_branch_id ?? undefined,
-    parentSessionId: row.parent_session_id ?? undefined,
-    parentBranchId: row.parent_branch_id ?? undefined,
-    createdAt: dateFromMillis(row.created_at),
-    updatedAt: dateFromMillis(row.updated_at),
+  Effect.gen(function* () {
+    const createdAt = yield* decodeDateFromMillis(row.created_at)
+    const updatedAt = yield* decodeDateFromMillis(row.updated_at)
+    return new Session({
+      id: row.id,
+      name: row.name ?? undefined,
+      cwd: row.cwd ?? undefined,
+      reasoningLevel:
+        row.reasoning_level !== null && isReasoningEffort(row.reasoning_level)
+          ? row.reasoning_level
+          : undefined,
+      activeBranchId: row.active_branch_id ?? undefined,
+      parentSessionId: row.parent_session_id ?? undefined,
+      parentBranchId: row.parent_branch_id ?? undefined,
+      createdAt,
+      updatedAt,
+    })
   })
 
 const decodeSessionRow = Schema.decodeUnknownEffect(SessionRow)
 
-export const sessionFromRow = (row: SessionRow) => Effect.map(decodeSessionRow(row), rowToSession)
+export const sessionFromRow = (row: SessionRow) =>
+  decodeSessionRow(row).pipe(Effect.flatMap(rowToSession))
 
 const rowToBranch = (row: BranchRow) =>
-  new Branch({
-    id: row.id,
-    sessionId: row.session_id,
-    parentBranchId: row.parent_branch_id ?? undefined,
-    parentMessageId: row.parent_message_id ?? undefined,
-    name: row.name ?? undefined,
-    summary: row.summary ?? undefined,
-    createdAt: dateFromMillis(row.created_at),
+  Effect.gen(function* () {
+    const createdAt = yield* decodeDateFromMillis(row.created_at)
+    return new Branch({
+      id: row.id,
+      sessionId: row.session_id,
+      parentBranchId: row.parent_branch_id ?? undefined,
+      parentMessageId: row.parent_message_id ?? undefined,
+      name: row.name ?? undefined,
+      summary: row.summary ?? undefined,
+      createdAt,
+    })
   })
 
 const decodeBranchRow = Schema.decodeUnknownEffect(BranchRow)
 
-export const branchFromRow = (row: BranchRow) => Effect.map(decodeBranchRow(row), rowToBranch)
+export const branchFromRow = (row: BranchRow) =>
+  decodeBranchRow(row).pipe(Effect.flatMap(rowToBranch))
 
 export const decodeStoredMessage = (row: MessageRow, partJsons: ReadonlyArray<string>) =>
   Effect.gen(function* () {
@@ -136,7 +151,7 @@ export const decodeStoredMessage = (row: MessageRow, partJsons: ReadonlyArray<st
       branchId: row.branch_id,
       role: row.role,
       parts,
-      createdAt: dateFromMillis(row.created_at),
+      createdAt: yield* decodeDateFromMillis(row.created_at),
       turnDurationMs: row.turn_duration_ms ?? undefined,
       metadata,
     }

@@ -8,7 +8,7 @@ import { TodoStorage } from "../../src/todo-storage.js"
 import { FIXTURE_DATE, layer, narrowR, setup, withTodoWrite } from "./helpers.js"
 
 describe("TodoStorage metadata boundary", () => {
-  it.live("decodes invalid stored metadata to undefined instead of crashing", () =>
+  it.live("fails loudly for invalid stored metadata", () =>
     narrowR(
       Effect.gen(function* () {
         yield* setup
@@ -24,11 +24,35 @@ describe("TodoStorage metadata boundary", () => {
 
         yield* sql`UPDATE todos SET metadata = ${"{not-json"} WHERE id = ${created.id}`
 
-        const loaded = yield* todoStorage.getTodo(created.id)
-        const listed = yield* todoStorage.listTodos(SessionId.make("s1"))
+        const loaded = yield* Effect.exit(todoStorage.getTodo(created.id))
+        const listed = yield* Effect.exit(todoStorage.listTodos(SessionId.make("s1")))
 
-        expect(loaded?.metadata).toBeUndefined()
-        expect(listed[0]?.metadata).toBeUndefined()
+        expect(loaded._tag).toBe("Failure")
+        expect(listed._tag).toBe("Failure")
+      }).pipe(withTodoWrite, Effect.provide(layer)),
+    ),
+  )
+
+  it.live("fails loudly for invalid stored status", () =>
+    narrowR(
+      Effect.gen(function* () {
+        yield* setup
+        const todoService = yield* TodoService
+        const todoStorage = yield* TodoStorage
+        const sql = yield* SqlClient.SqlClient
+        const created = yield* todoService.create({
+          sessionId: SessionId.make("s1"),
+          branchId: BranchId.make("b1"),
+          subject: "Status decode",
+        })
+
+        yield* sql`UPDATE todos SET status = ${"surprise"} WHERE id = ${created.id}`
+
+        const loaded = yield* Effect.exit(todoStorage.getTodo(created.id))
+        const listed = yield* Effect.exit(todoStorage.listTodos(SessionId.make("s1")))
+
+        expect(loaded._tag).toBe("Failure")
+        expect(listed._tag).toBe("Failure")
       }).pipe(withTodoWrite, Effect.provide(layer)),
     ),
   )

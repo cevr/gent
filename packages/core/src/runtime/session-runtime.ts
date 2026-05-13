@@ -205,6 +205,9 @@ export interface SessionRuntimeService {
   readonly getMetrics: (
     input: SessionRuntimeTarget,
   ) => Effect.Effect<SessionRuntimeMetrics, SessionRuntimeError>
+  readonly getState: (
+    input: SessionRuntimeTarget,
+  ) => Effect.Effect<SessionRuntimeState, SessionRuntimeError>
   readonly watchState: (
     input: SessionRuntimeTarget,
   ) => Effect.Effect<Stream.Stream<SessionRuntimeState, SessionRuntimeError>, SessionRuntimeError>
@@ -692,6 +695,23 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
           ...(lastModelId !== undefined ? { lastModelId } : {}),
         } satisfies SessionRuntimeMetrics
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getMetrics failed", cause)))),
+
+    getState: (input) =>
+      requireSessionBranch(input).pipe(
+        Effect.flatMap(() =>
+          Effect.gen(function* () {
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            return yield* ref.execute(
+              AgentLoopActor.GetState.make({
+                ...input,
+                workspaceId: yield* CurrentWorkspaceId,
+                commandId: ActorCommandId.make(yield* platform.randomId),
+              }),
+            )
+          }),
+        ),
+        Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause))),
+      ),
 
     watchState: (input) =>
       Effect.gen(function* () {

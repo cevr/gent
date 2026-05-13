@@ -66,7 +66,7 @@ import {
   getLocalHostname,
   signalIfIdentityOwned,
   type ServerLockEntry,
-} from "@gent/sdk/server-lock"
+} from "@gent/core-internal/server/server-lock.js"
 import { builtinClientModules } from "./extensions/builtins/index"
 import { loadExtensionUi } from "./services/extension-context-boundary"
 import { makeClientTransportLayer } from "./extensions/client-transport"

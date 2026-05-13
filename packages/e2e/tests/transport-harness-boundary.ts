@@ -9,10 +9,11 @@ import {
   LanguageModelLayers,
   type SignalLanguageModelControls,
 } from "@gent/core-internal/test-utils/language-model.js"
+import type { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
 import type { StorageError } from "@gent/core-internal/storage/sqlite-storage.js"
 import { AllBuiltinAgents } from "../../extensions/tests/helpers/builtin-agents.js"
 import { GitReader } from "../../extensions/src/librarian/index.js"
-import { Gent, type GentClientBundle, type RpcHandlersContext } from "@gent/sdk"
+import { Gent, type GentClientBundle } from "@gent/sdk"
 export { waitFor } from "@gent/core-internal/test-utils/fixtures"
 
 export class TestFailure extends Schema.TaggedErrorClass<TestFailure>()(
@@ -33,6 +34,8 @@ type HarnessLayerError =
   | Config.ConfigError
   | PlatformError.PlatformError
   | StorageError
+type LayerContext<T> = T extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
+type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
 export const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-scripted") =>
   _baseLocalLayer(defaultConfig, providerMode) satisfies Layer.Layer<
     RpcHandlersContext,

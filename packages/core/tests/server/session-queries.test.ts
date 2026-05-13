@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Deferred, Effect, Layer, Ref, Stream } from "effect"
+import { Deferred, Effect, Layer, Ref, Stream } from "effect"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
@@ -7,13 +7,13 @@ import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
-import { AgentLoop as AgentLoopActor } from "../../src/runtime/agent/agent-loop.actor"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message"
 import { SessionStorage } from "../../src/storage/session-storage"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SessionQueries } from "../../src/server/session-queries"
+import { SessionRuntimeError } from "../../src/runtime/session-runtime"
 import { sessionRuntimeLayer } from "./session-commands/helpers"
 
 const makeClient = (reply = "ok") =>
@@ -40,19 +40,14 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
     return values
   })
 
-const failingActorClientLayer = Layer.succeed(AgentLoopActor.Context, () =>
-  Effect.succeed({
-    execute: () => Effect.die(new Error("injected actor state failure")),
-    send: () => Effect.die("unused actor send in session snapshot test"),
-  }),
-)
-
 const sessionQueriesActorFailureLayer = (() => {
   const base = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     GentPlatform.Test(),
-    sessionRuntimeLayer(),
-    failingActorClientLayer,
+    sessionRuntimeLayer({
+      getState: () =>
+        Effect.fail(new SessionRuntimeError({ message: "injected runtime state failure" })),
+    }),
   )
   return Layer.mergeAll(base, Layer.provide(SessionQueries.Live, base))
 })()
@@ -146,9 +141,8 @@ describe("session queries", () => {
 
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
-        const fail = exit.cause.reasons.find(Cause.isFailReason)
-        expect(fail?.error._tag).toBe("InvalidStateError")
-        expect(String(fail?.error.message)).toContain("Failed to read session runtime state")
+        expect(String(exit.cause)).toContain("InvalidStateError")
+        expect(String(exit.cause)).toContain("Failed to read session runtime state")
       }
     }).pipe(Effect.timeout("4 seconds"), Effect.provide(sessionQueriesActorFailureLayer)),
   )

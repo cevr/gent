@@ -3,8 +3,7 @@
   "version": "0.0.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./server-lock": "./src/server-lock.ts"
+    ".": "./src/index.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",

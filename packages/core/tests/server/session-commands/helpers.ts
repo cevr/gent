@@ -4,6 +4,7 @@ import { textStep } from "@gent/core-internal/debug/provider"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
+import { AgentName } from "@gent/core-internal/domain/agent"
 import { emptyQueueSnapshot } from "@gent/core-internal/domain/queue"
 import { EventStore, EventStoreError } from "@gent/core-internal/domain/event"
 import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
@@ -82,6 +83,12 @@ export const sessionRuntimeLayer = (
         durationMs: 0,
         costUsd: 0,
         lastInputTokens: 0,
+      }),
+    getState: () =>
+      Effect.succeed({
+        _tag: "Idle",
+        agent: AgentName.make("cowork"),
+        queue: emptyQueueSnapshot(),
       }),
     watchState: () => Effect.succeed(Stream.empty),
     terminateSession: () => Effect.void,

@@ -7,8 +7,8 @@
  * Owns its own DDL — no dependency on host Storage service.
  */
 
-import { Clock, Context, Effect, Layer, Option, Schema } from "effect"
-import { AgentName, SessionId, dateFromMillis, type BranchId } from "@gent/core/extensions/api"
+import { Clock, Context, Effect, Layer, Schema } from "effect"
+import { AgentName, DateFromNumber, SessionId, type BranchId } from "@gent/core/extensions/api"
 import { SqlClient } from "effect/unstable/sql"
 import {
   Todo,
@@ -27,29 +27,31 @@ export class TodoStorageError extends Schema.TaggedErrorClass<TodoStorageError>(
 ) {}
 
 const MetadataJson = Schema.fromJsonString(Schema.Unknown)
-const decodeMetadataJson = Schema.decodeUnknownOption(MetadataJson)
+const decodeMetadataJson = Schema.decodeUnknownEffect(MetadataJson)
 const encodeMetadataJson = Schema.encodeSync(MetadataJson)
+const decodeTodoDate = Schema.decodeUnknownEffect(DateFromNumber)
 
 const mapError = (message: string) => (e: unknown) => new TodoStorageError({ message, cause: e })
 
-interface TodoRow {
-  id: TodoId
-  session_id: SessionId
-  branch_id: BranchId
-  parent_id: TodoId | null
-  subject: string
-  description: string | null
-  status: string
-  owner: string | null
-  agent_type: string | null
-  prompt: string | null
-  cwd: string | null
-  metadata: string | null
-  created_at: number
-  updated_at: number
-}
+const TodoRow = Schema.Struct({
+  id: Todo.fields.id,
+  session_id: SessionId,
+  branch_id: Todo.fields.branchId,
+  parent_id: Schema.NullOr(Todo.fields.id),
+  subject: Schema.String,
+  description: Schema.NullOr(Schema.String),
+  status: TodoStatus,
+  owner: Schema.NullOr(Schema.String),
+  agent_type: Schema.NullOr(Schema.String),
+  prompt: Schema.NullOr(Schema.String),
+  cwd: Schema.NullOr(Schema.String),
+  metadata: Schema.NullOr(Schema.String),
+  created_at: Schema.Number,
+  updated_at: Schema.Number,
+})
+type TodoRow = typeof TodoRow.Type
+const decodeTodoRow = Schema.decodeUnknownEffect(TodoRow)
 
-const isTodoStatus = Schema.is(TodoStatus)
 const encodeTodoMetadata = (metadata: unknown) =>
   Effect.try({
     try: () => encodeMetadataJson(metadata),
@@ -60,7 +62,7 @@ const mapUpdateError = (message: string) => (e: unknown) =>
   Schema.is(TodoTransitionError)(e) ? e : mapError(message)(e)
 
 const decodeTodoMetadata = (metadata: string | null) =>
-  metadata === null ? undefined : Option.getOrUndefined(decodeMetadataJson(metadata))
+  metadata === null ? Effect.void : decodeMetadataJson(metadata)
 
 const requiredTodoColumns = [
   "id",
@@ -81,22 +83,28 @@ const requiredTodoColumns = [
 
 const requiredTodoEdgeColumns = ["todo_id", "blocked_by_id"] as const
 
-const todoFromRow = (row: TodoRow) =>
-  Todo.make({
-    id: row.id,
-    sessionId: row.session_id,
-    branchId: row.branch_id,
-    parentId: row.parent_id ?? undefined,
-    subject: row.subject,
-    description: row.description ?? undefined,
-    status: isTodoStatus(row.status) ? row.status : "pending",
-    owner: row.owner !== null ? SessionId.make(row.owner) : undefined,
-    agentType: row.agent_type !== null ? AgentName.make(row.agent_type) : undefined,
-    prompt: row.prompt ?? undefined,
-    cwd: row.cwd ?? undefined,
-    metadata: decodeTodoMetadata(row.metadata),
-    createdAt: dateFromMillis(row.created_at),
-    updatedAt: dateFromMillis(row.updated_at),
+const todoFromRow = (input: TodoRow) =>
+  Effect.gen(function* () {
+    const row = yield* decodeTodoRow(input)
+    const metadata = yield* decodeTodoMetadata(row.metadata)
+    const createdAt = yield* decodeTodoDate(row.created_at)
+    const updatedAt = yield* decodeTodoDate(row.updated_at)
+    return Todo.make({
+      id: row.id,
+      sessionId: row.session_id,
+      branchId: row.branch_id,
+      parentId: row.parent_id ?? undefined,
+      subject: row.subject,
+      description: row.description ?? undefined,
+      status: row.status,
+      owner: row.owner !== null ? SessionId.make(row.owner) : undefined,
+      agentType: row.agent_type !== null ? AgentName.make(row.agent_type) : undefined,
+      prompt: row.prompt ?? undefined,
+      cwd: row.cwd ?? undefined,
+      metadata,
+      createdAt,
+      updatedAt,
+    })
   })
 
 const tableColumns = Effect.fn("TodoStorage.tableColumns")(function* (
@@ -233,9 +241,9 @@ const makeTodoStorageService: Effect.Effect<
 
   const selectTodoById = (id: TodoId) =>
     sql<TodoRow>`SELECT id, session_id, branch_id, parent_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM todos WHERE id = ${id}`.pipe(
-      Effect.map((rows) => {
+      Effect.flatMap((rows) => {
         const row = rows[0]
-        return row === undefined ? undefined : todoFromRow(row)
+        return row === undefined ? Effect.sync((): Todo | undefined => undefined) : todoFromRow(row)
       }),
     )
 
@@ -412,7 +420,7 @@ const makeTodoStorageService: Effect.Effect<
           branchId !== undefined
             ? yield* sql<TodoRow>`SELECT id, session_id, branch_id, parent_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM todos WHERE session_id = ${sessionId} AND branch_id = ${branchId} ORDER BY created_at ASC`
             : yield* sql<TodoRow>`SELECT id, session_id, branch_id, parent_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM todos WHERE session_id = ${sessionId} ORDER BY created_at ASC`
-        return rows.map(todoFromRow)
+        return yield* Effect.forEach(rows, todoFromRow)
       },
       Effect.mapError(mapError("Failed to list todos")),
     ),

@@ -13,6 +13,8 @@ export const DateFromNumber = Schema.DateTimeUtcFromMillis.pipe(
   }),
 )
 
+export const decodeDateFromMillis = Schema.decodeUnknownEffect(DateFromNumber)
+
 export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteraction")({
   id: ToolCallId,
   toolName: Schema.String,

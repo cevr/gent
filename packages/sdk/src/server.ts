@@ -33,7 +33,7 @@ import {
   ServerLockEntry,
   serverLockIdentityOf,
   signalIfIdentityOwned,
-} from "./server-lock.js"
+} from "@gent/core-internal/server/server-lock.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { buildServerRoot } from "@gent/core-internal/server/server-root.js"

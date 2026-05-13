@@ -16,7 +16,7 @@ import {
   serverLockIdentityOf,
   canSignalServerLockEntry,
   signalIfIdentityOwned,
-} from "../src/server-lock"
+} from "@gent/core-internal/server/server-lock.js"
 
 const PlatformBaseLayer = Layer.mergeAll(BunServices.layer, BunGentPlatformLive)
 const PlatformLayer = Layer.merge(

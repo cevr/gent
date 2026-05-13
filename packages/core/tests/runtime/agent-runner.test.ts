@@ -214,6 +214,7 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
             costUsd: 0,
             lastInputTokens: 0,
           }),
+        getState: () => SubscriptionRef.get(runtimeState),
         watchState: () => Effect.succeed(SubscriptionRef.changes(runtimeState)),
         terminateSession: () => Effect.void,
       } satisfies SessionRuntimeService
