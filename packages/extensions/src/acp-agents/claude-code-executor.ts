@@ -25,10 +25,11 @@
  *
  * @module
  */
-import { Effect, Exit, Schema, Scope, Stream } from "effect"
+import { Effect, Exit, Ref, Schema, Scope, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import {
   ExternalToolRunner,
+  InteractionPendingError,
   TurnError,
   type TurnContext,
   type TurnExecutor,
@@ -37,7 +38,7 @@ import {
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { ClaudeSdkError, type ClaudeSdkServiceShape, type ClaudeSdkSession } from "./claude-sdk.js"
 import { startCodemodeServer, type CodemodeConfig, type CodemodeServer } from "./mcp-codemode.js"
-import { makeAcpRunTool } from "./executor-boundary.js"
+import { makeAcpInteractionPendingNotifier, makeAcpRunTool } from "./executor-boundary.js"
 import { CLAUDE_CODE_AGENT_NAME } from "./config.js"
 import type { ExternalSessionKey } from "./executor.js"
 import {
@@ -486,13 +487,24 @@ export const createClaudeCodeSessionManager = (
 export const makeClaudeCodeTurnExecutor = (manager: ClaudeCodeSessionManager): TurnExecutor => ({
   executeTurn: (ctx: TurnContext) => {
     const runTurn = Effect.gen(function* () {
+      const services = yield* Effect.context<never>()
       const toolRunner = yield* ExternalToolRunner
+      const pendingInteraction = yield* Ref.make<InteractionPendingError | undefined>(undefined)
       const runTool: CodemodeConfig["runTool"] = makeAcpRunTool({
         runTool: toolRunner.runTool,
       })
 
       const codemodeConfig: CodemodeConfig | undefined =
-        ctx.tools.length > 0 ? { tools: ctx.tools, runTool } : undefined
+        ctx.tools.length > 0
+          ? {
+              tools: ctx.tools,
+              runTool,
+              onInteractionPending: makeAcpInteractionPendingNotifier({
+                services,
+                notify: (pending) => Ref.set(pendingInteraction, pending),
+              }),
+            }
+          : undefined
 
       // Driver id is hardcoded to the contribution registered in
       // `acp-agents/index.ts`; matches the value used in the
@@ -525,9 +537,18 @@ export const makeClaudeCodeTurnExecutor = (manager: ClaudeCodeSessionManager): T
       const stream = mapSdkMessageStream(managed.session.prompt(promptText, ctx.abortSignal)).pipe(
         Stream.tapError(() => manager.invalidate(key)),
       )
-      return stream
+      const pendingCheck = Stream.fromEffect(
+        Ref.get(pendingInteraction).pipe(
+          Effect.flatMap((pending) => (pending === undefined ? Effect.void : Effect.fail(pending))),
+        ),
+      ).pipe(Stream.flatMap(() => Stream.empty))
+      return Stream.concat(stream, pendingCheck)
     }).pipe(
-      Effect.mapError((e) => (Schema.is(TurnError)(e) ? e : new TurnError({ message: String(e) }))),
+      Effect.mapError((e) =>
+        Schema.is(TurnError)(e) || Schema.is(InteractionPendingError)(e)
+          ? e
+          : new TurnError({ message: String(e) }),
+      ),
     )
     return Stream.unwrap(runTurn)
   },

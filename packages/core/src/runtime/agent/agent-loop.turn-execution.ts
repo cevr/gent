@@ -8,6 +8,7 @@ import {
 import { StreamEnded, StreamStarted, TurnCompleted } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { InteractionRequestId, type BranchId, type SessionId } from "../../domain/ids.js"
+import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { ConfigService } from "../config-service.js"
@@ -418,7 +419,7 @@ export const makeAgentLoopTurnExecution = Effect.gen(function* () {
           break
         }
 
-        const collected = yield* Effect.scoped(
+        const collectedOrPending = yield* Effect.scoped(
           Effect.gen(function* () {
             const activeStream = yield* makeActiveStreamHandle()
             yield* Ref.set(scope.activeStreamRef, activeStream)
@@ -429,7 +430,22 @@ export const makeAgentLoopTurnExecution = Effect.gen(function* () {
               activeStream,
             })
           }).pipe(Effect.ensuring(Ref.set(scope.activeStreamRef, undefined))),
+        ).pipe(
+          Effect.map((collected) => ({ _tag: "collected" as const, collected })),
+          Effect.catchIf(Schema.is(InteractionPendingError), (pending) =>
+            Effect.succeed({ _tag: "interaction-pending" as const, pending }),
+          ),
         )
+
+        if (collectedOrPending._tag === "interaction-pending") {
+          return TurnOutcome.cases.InteractionRequested.make({
+            pendingRequestId: collectedOrPending.pending.requestId,
+            pendingToolCallId: "external",
+            currentTurnAgent: resolved.currentTurnAgent,
+          })
+        }
+
+        const { collected } = collectedOrPending
 
         if (collected.interrupted) {
           interrupted = true

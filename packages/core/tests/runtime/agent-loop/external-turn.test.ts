@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Clock, Effect, Layer, Ref, Schema, Stream } from "effect"
+import { Clock, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import type { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
@@ -36,17 +36,21 @@ import {
   type RunSpec,
 } from "@gent/core-internal/domain/agent"
 import type { TurnExecutor, TurnContext, TurnStreamPart } from "@gent/core-internal/domain/driver"
-import { TurnError } from "@gent/core-internal/domain/driver"
+import { ExternalToolRunner, TurnError } from "@gent/core-internal/domain/driver"
 import type { AgentEvent } from "@gent/core-internal/domain/event"
 import { EventEnvelope, EventId, EventStore } from "@gent/core-internal/domain/event"
 import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
+import { Permission } from "@gent/core-internal/domain/permission"
+import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
 import { SqliteStorage, type StorageError } from "@gent/core-internal/storage/sqlite-storage"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import type { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import type { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import {
   BranchId,
+  ActorCommandId,
   ExtensionId,
+  InteractionRequestId,
   MessageId,
   SessionId,
   ToolCallId,
@@ -55,8 +59,10 @@ import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents.js"
+import { ApprovalService } from "../../../src/runtime/approval-service"
 import { ensureStorageParents } from "@gent/core-internal/test-utils"
-import { getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
+import { waitFor } from "@gent/core-internal/test-utils/fixtures"
+import { ExtensionContext, getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 // ── Helpers ──
 const sessionId = SessionId.make("test-session")
@@ -272,6 +278,7 @@ const makeLayerWithEvents = (
   eventsRef: Ref.Ref<AgentEvent[]>,
   options?: {
     readonly tools?: ReadonlyArray<ToolCapability>
+    readonly liveToolRunner?: boolean
   },
 ) => {
   // Dummy provider — external turns don't use it but AgentLoop requires it
@@ -285,8 +292,10 @@ const makeLayerWithEvents = (
     makeExtRegistry(executor, options?.tools),
     makeDriverRegistry(executor, options?.tools),
     makeCountingEventStore(eventsRef),
-    ToolRunner.Test(),
+    options?.liveToolRunner === true ? ToolRunner.Live : ToolRunner.Test(),
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ApprovalService.Test(),
+    Permission.Live([], "allow"),
     BunServices.layer,
     ModelRegistry.Test(),
     ConfigService.Test(),
@@ -319,6 +328,66 @@ describe("external turn execution", () => {
           expect(tags).toContain("StreamStarted")
           expect(tags).toContain("StreamChunk")
           expect(tags).toContain("TurnCompleted")
+        }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
+      )
+    }),
+  )
+  it.live("external tool InteractionPendingError parks the agent loop", () =>
+    Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      const pendingTool: ToolCapability = tool({
+        id: "context_probe",
+        description: "Probe tool context",
+        params: Schema.Struct({ value: Schema.String }),
+        output: Schema.Struct({ ok: Schema.Boolean }),
+        execute: () =>
+          Effect.gen(function* () {
+            const ctx = yield* ExtensionContext
+            return yield* new InteractionPendingError({
+              requestId: InteractionRequestId.make("req-external-pending"),
+              sessionId: ctx.sessionId,
+              branchId: ctx.branchId,
+            })
+          }),
+      })
+      const executor: TurnExecutor = {
+        executeTurn: () =>
+          Stream.fromEffect(
+            Effect.gen(function* () {
+              const runner = yield* ExternalToolRunner
+              return yield* runner.runTool("context_probe", { value: "park" })
+            }),
+          ).pipe(Stream.flatMap(() => Stream.fromIterable([finish()]))),
+      }
+      const layer = makeLayerWithEvents(executor, eventsRef, {
+        tools: [pendingTool],
+        liveToolRunner: true,
+      })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* makeAgentLoopService
+          const fiber = yield* Effect.forkChild(
+            runAgentLoop(agentLoop, makeMessage("park externally"), {
+              agentOverride: AgentName.make("test-external"),
+            }),
+          )
+          const actorClientFactory = yield* AgentLoopActor.Context
+          const ref = yield* actorClientFactory(entityIdOf(DefaultWorkspaceId, sessionId, branchId))
+          const state = yield* waitFor(
+            ref.execute(
+              AgentLoopActor.GetState.make({
+                workspaceId: DefaultWorkspaceId,
+                sessionId,
+                branchId,
+                commandId: ActorCommandId.make("external-pending-state"),
+              }),
+            ),
+            (snapshot) => snapshot._tag === "WaitingForInteraction",
+            4_000,
+            "external interaction pending state",
+          )
+          expect(state._tag).toBe("WaitingForInteraction")
+          yield* Fiber.interrupt(fiber)
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),

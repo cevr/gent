@@ -11,7 +11,8 @@
  * `runAnyEffect(services, effect)` trampoline.
  */
 
-import { Effect } from "effect"
+import { Effect, type Context } from "effect"
+import type { InteractionPendingError } from "@gent/core/extensions/api"
 import type { CodemodeConfig } from "./mcp-codemode.js"
 
 /**
@@ -23,7 +24,18 @@ import type { CodemodeConfig } from "./mcp-codemode.js"
  */
 export const makeAcpRunTool =
   (params: {
-    readonly runTool: (toolName: string, args: unknown) => Effect.Effect<unknown>
+    readonly runTool: (
+      toolName: string,
+      args: unknown,
+    ) => Effect.Effect<unknown, InteractionPendingError>
   }): CodemodeConfig["runTool"] =>
   (toolName, args) =>
     Effect.runPromise(params.runTool(toolName, args))
+
+export const makeAcpInteractionPendingNotifier =
+  (params: {
+    readonly services: Context.Context<never>
+    readonly notify: (pending: InteractionPendingError) => Effect.Effect<void>
+  }): CodemodeConfig["onInteractionPending"] =>
+  (pending) =>
+    Effect.runPromiseWith(params.services)(params.notify(pending))

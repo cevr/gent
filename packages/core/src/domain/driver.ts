@@ -36,6 +36,7 @@ import type { AuthAuthorizationMethod, AuthMethod } from "./auth.js"
 import type { ToolCapability } from "./capability/tool.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 import type { BranchId, SessionId } from "./ids.js"
+import type { InteractionPendingError } from "./interaction-request.js"
 import type { Message } from "./message.js"
 import type { Model } from "./model.js"
 import type { ProviderError } from "./provider-error.js"
@@ -218,7 +219,10 @@ export interface TurnContext {
 }
 
 export interface ExternalToolRunnerService {
-  readonly runTool: (toolName: string, args: unknown) => Effect.Effect<unknown>
+  readonly runTool: (
+    toolName: string,
+    args: unknown,
+  ) => Effect.Effect<unknown, InteractionPendingError>
 }
 
 export class ExternalToolRunner extends Context.Service<
@@ -237,7 +241,7 @@ export class ExternalToolRunner extends Context.Service<
 export interface TurnExecutor {
   readonly executeTurn: (
     ctx: TurnContext,
-  ) => Stream.Stream<TurnStreamPart, TurnError, ExternalToolRunner>
+  ) => Stream.Stream<TurnStreamPart, TurnError | InteractionPendingError, ExternalToolRunner>
 }
 
 export type TurnToolEventMode = "capture-tool-calls" | "observe-external-tools"
@@ -245,7 +249,10 @@ export type TurnToolEventMode = "capture-tool-calls" | "observe-external-tools"
 export interface TurnSource {
   readonly driverKind: "model" | "external"
   readonly driverId?: string
-  readonly stream: Stream.Stream<Response.AnyPart, ProviderError | TurnError>
+  readonly stream: Stream.Stream<
+    Response.AnyPart,
+    ProviderError | TurnError | InteractionPendingError
+  >
   readonly toolEventMode: TurnToolEventMode
   readonly formatStreamError: (streamError: ProviderError | TurnError) => string
   readonly collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>

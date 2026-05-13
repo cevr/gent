@@ -9,10 +9,11 @@
  *
  * @module
  */
-import { Deferred, Effect, Schema, Stream } from "effect"
+import { Deferred, Effect, Ref, Schema, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import {
   ExternalToolRunner,
+  InteractionPendingError,
   TurnError,
   type TurnContext,
   type TurnExecutor,
@@ -23,7 +24,7 @@ import type { AcpConnection } from "./protocol.js"
 import { AcpClosedError, AcpError } from "./protocol.js"
 import type { SessionNotification } from "./schema.js"
 import type { CodemodeConfig } from "./mcp-codemode.js"
-import { makeAcpRunTool } from "./executor-boundary.js"
+import { makeAcpInteractionPendingNotifier, makeAcpRunTool } from "./executor-boundary.js"
 import {
   composePromptWithTranscript,
   findLastUserMessage,
@@ -250,6 +251,7 @@ export const makeAcpTurnExecutor = (
       // core owns actual tool execution through ExternalToolRunner.
       const services = yield* Effect.context<never>()
       const toolRunner = yield* ExternalToolRunner
+      const pendingInteraction = yield* Ref.make<InteractionPendingError | undefined>(undefined)
       const runTool: CodemodeConfig["runTool"] = makeAcpRunTool({
         runTool: toolRunner.runTool,
       })
@@ -257,6 +259,10 @@ export const makeAcpTurnExecutor = (
       const codemodeConfig: CodemodeConfig = {
         tools: ctx.tools,
         runTool,
+        onInteractionPending: makeAcpInteractionPendingNotifier({
+          services,
+          notify: (pending) => Ref.set(pendingInteraction, pending),
+        }),
       }
 
       const key: ExternalSessionKey = {
@@ -338,15 +344,28 @@ export const makeAcpTurnExecutor = (
       )
 
       // After updates drain, emit the terminal finish part.
-      const finishedStream: Stream.Stream<TurnStreamPart, TurnError> = Stream.fromEffect(
-        Deferred.await(promptDone).pipe(
-          Effect.map((stopReason): TurnStreamPart => finishPart(stopReason)),
-        ),
-      )
+      const finishedStream: Stream.Stream<TurnStreamPart, TurnError | InteractionPendingError> =
+        Stream.fromEffect(
+          Deferred.await(promptDone).pipe(
+            Effect.flatMap((stopReason) =>
+              Ref.get(pendingInteraction).pipe(
+                Effect.flatMap((pending) =>
+                  pending === undefined
+                    ? Effect.succeed(finishPart(stopReason))
+                    : Effect.fail(pending),
+                ),
+              ),
+            ),
+          ),
+        )
 
       return Stream.concat(updateStream, finishedStream)
     }).pipe(
-      Effect.mapError((e) => (Schema.is(TurnError)(e) ? e : new TurnError({ message: String(e) }))),
+      Effect.mapError((e) =>
+        Schema.is(TurnError)(e) || Schema.is(InteractionPendingError)(e)
+          ? e
+          : new TurnError({ message: String(e) }),
+      ),
     )
 
     return Stream.unwrap(runTurn)

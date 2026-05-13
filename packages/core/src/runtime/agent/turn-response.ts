@@ -13,6 +13,7 @@ import {
 } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { ToolCallId, type BranchId, type SessionId } from "../../domain/ids.js"
+import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import { hasMessage } from "../../domain/guards.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
 import {
@@ -359,7 +360,7 @@ const collectExternalResponsePart = (params: {
 }
 
 export const collectExternalTurnResponse = <R>(params: {
-  turnStream: Stream.Stream<Response.AnyPart, TurnError, R>
+  turnStream: Stream.Stream<Response.AnyPart, TurnError | InteractionPendingError, R>
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle

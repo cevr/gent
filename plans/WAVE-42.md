@@ -96,6 +96,13 @@ context adapter`).
 
 ### S4 status - partial
 
+- **C10 complete**: external-driver tool execution now preserves
+  `InteractionPendingError` as a typed external-turn failure instead of
+  dying or becoming a generic MCP tool error. `ExternalToolRunner.runTool`
+  exposes the pending error, the agent loop converts it to
+  `InteractionRequested`, and both ACP protocol and Claude Code codemode
+  executors record pending interactions across the Promise/MCP boundary
+  before failing their external stream.
 - **C11 complete**: cached ACP and Claude Code codemode sessions no
   longer retain the first turn's `runTool` callback authority. The
   codemode MCP server now reads a mutable `CodemodeConfig` per request,
@@ -110,12 +117,38 @@ context adapter`).
   into the background runner. Delegate keeps the existing child-fiber
   inheritance semantics; the fixed bug class is the closure over the
   whole request `ExtensionContext`, not a new independent scope model.
+- **C13 partial**: stale external tool authority, external interactive
+  tool parking, and background authority scope now have targeted
+  regressions. Recovery-start failure deadlock still needs its specific
+  regression before C13 is complete.
 - Verification:
+  For C10, `bun run typecheck` passed and
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/runtime/agent-loop/external-turn.test.ts packages/extensions/tests/acp-agents/acp-agents.test.ts packages/extensions/tests/acp-agents/claude-sdk-lifecycle.test.ts`
+  passed.
   `bun run typecheck` passed; `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/extensions/tests/acp-agents/acp-agents.test.ts packages/extensions/tests/acp-agents/claude-sdk-lifecycle.test.ts`
   passed for C11. For C12, `bun run typecheck` passed and
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/extensions/tests/delegate/delegate-background.test.ts packages/extensions/tests/delegate/delegate-tool.test.ts packages/extensions/tests/exec-tools/bash-execution.test.ts`
   passed.
 - Evidence:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/driver.ts:221`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/driver.ts:241`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts:94`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-source.ts:96`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-source.ts:100`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-response.ts:362`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-response.ts:395`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.turn-execution.ts:441`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/mcp-codemode.ts:51`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/mcp-codemode.ts:134`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/executor-boundary.ts:25`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/executor.ts:252`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/executor.ts:259`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/executor.ts:345`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/claude-code-executor.ts:490`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/claude-code-executor.ts:497`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/claude-code-executor.ts:538`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop/external-turn.test.ts:335`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/tests/acp-agents/acp-agents.test.ts:538`,
   `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/mcp-codemode.ts:41`,
   `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/mcp-codemode.ts:233`,
   `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/mcp-codemode.ts:244`,

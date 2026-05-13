@@ -7,9 +7,14 @@
 import { describe, test, expect, it } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { tool, type ToolCapability } from "@gent/core/extensions/api"
+import { InteractionPendingError, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import { SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import {
+  BranchId,
+  InteractionRequestId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core-internal/domain/ids"
 import {
   makeAcpResponsePartMapper,
   mapAcpUpdateToResponsePart,
@@ -528,6 +533,45 @@ describe("codemode proxy via makeAcpRunTool", () => {
       // the Effect die-cause crash the codemode server.
       const result = (yield* parseSseResult(response)) as Record<string, unknown> | undefined
       expect(result?.["isError"]).toBe(true)
+    }).pipe(Effect.provide(BunGentPlatformLive)),
+  )
+  it.scopedLive("notifies the turn executor when an interaction parks at the boundary", () =>
+    Effect.gen(function* () {
+      const pending = new InteractionPendingError({
+        requestId: InteractionRequestId.make("req-acp-boundary"),
+        sessionId: SessionId.make("s-acp-boundary"),
+        branchId: BranchId.make("b-acp-boundary"),
+      })
+      const observed: InteractionPendingError[] = []
+      const runTool = makeAcpRunTool({
+        runTool: () => Effect.fail(pending),
+      })
+      const mockTool: ToolCapability = tool({
+        id: "echo",
+        description: "echo",
+        params: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({ echoed: Schema.Boolean }),
+        execute: () => Effect.succeed({ echoed: true }),
+      })
+      const server = yield* startCodemodeServer({
+        tools: [mockTool],
+        runTool,
+        onInteractionPending: (error) => observed.push(error),
+      })
+      const response = yield* Effect.promise(() =>
+        callMcp(server.url, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "execute",
+            arguments: { code: 'return gent.echo({ text: "park" })' },
+          },
+        }),
+      )
+      const result = (yield* parseSseResult(response)) as Record<string, unknown> | undefined
+      expect(result?.["isError"]).toBe(true)
+      expect(observed).toEqual([pending])
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
 })

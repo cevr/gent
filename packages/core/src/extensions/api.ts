@@ -92,6 +92,7 @@ export { sectionPatternFor, withSectionMarkers } from "../domain/prompt.js"
 export { ExternalToolRunner } from "../domain/driver.js"
 export type { TurnExecutor, TurnContext, TurnStreamPart } from "../domain/driver.js"
 export { ProviderAuthError, TurnError } from "../domain/driver.js"
+export { InteractionPendingError } from "../domain/interaction-request.js"
 export type {
   ExternalDriverContribution,
   ModelDriverContribution,

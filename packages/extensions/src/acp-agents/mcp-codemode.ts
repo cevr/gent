@@ -16,7 +16,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import * as AiTool from "effect/unstable/ai/Tool"
 import { BunHttpServer } from "@effect/platform-bun"
 import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { getToolId, type ToolCapability } from "@gent/core/extensions/api"
+import { getToolId, InteractionPendingError, type ToolCapability } from "@gent/core/extensions/api"
 
 export class McpCodemodeUnknownToolError extends Schema.TaggedErrorClass<McpCodemodeUnknownToolError>()(
   "McpCodemodeUnknownToolError",
@@ -50,6 +50,7 @@ export interface CodemodeConfig {
    *  parent Effect runtime — full permission checks, interceptors, and
    *  result enrichment apply. Returns the tool result value. */
   readonly runTool: (toolName: string, args: unknown) => unknown
+  readonly onInteractionPending?: (pending: InteractionPendingError) => unknown
 }
 
 // ── Tool description generator ──
@@ -112,6 +113,7 @@ export const generateToolDescription = (tools: ReadonlyArray<ToolCapability>): s
 const makeGentProxy = (
   tools: ReadonlyArray<ToolCapability>,
   runTool: CodemodeConfig["runTool"],
+  onInteractionPending: CodemodeConfig["onInteractionPending"],
 ) => {
   const toolNames = new Set(tools.map((tool) => String(getToolId(tool))))
 
@@ -125,7 +127,15 @@ const makeGentProxy = (
           }
         }
 
-        return (args: unknown) => runTool(toolName, args)
+        return (args: unknown) =>
+          Promise.resolve()
+            .then(() => runTool(toolName, args))
+            .catch((error: unknown) => {
+              if (Schema.is(InteractionPendingError)(error)) {
+                onInteractionPending?.(error)
+              }
+              throw error
+            })
       },
     },
   )
@@ -245,7 +255,11 @@ export const startCodemodeServer = (
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- BunServerRequest.source is the underlying Request
         const rawRequest = request.source as Request
         const mcpServer = createMcpServerForRequest(
-          makeGentProxy(currentConfig.tools, currentConfig.runTool),
+          makeGentProxy(
+            currentConfig.tools,
+            currentConfig.runTool,
+            currentConfig.onInteractionPending,
+          ),
           generateToolDescription(currentConfig.tools),
         )
         const transport = new WebStandardStreamableHTTPServerTransport({

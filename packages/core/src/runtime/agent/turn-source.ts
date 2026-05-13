@@ -6,6 +6,7 @@ import { ExternalToolRunner, type ProviderAuthError, type TurnError } from "../.
 import { ErrorOccurred, ProviderRetrying } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { ToolCallId, type BranchId, type SessionId } from "../../domain/ids.js"
+import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import { ProviderError } from "../../domain/provider-error.js"
 import { toPrompt } from "../../providers/ai-transcript.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
@@ -56,7 +57,7 @@ type ModelTurnSource = {
 type ExternalTurnSource = {
   readonly driverKind: "external"
   readonly driverId?: string
-  readonly stream: Stream.Stream<Response.AnyPart, TurnError>
+  readonly stream: Stream.Stream<Response.AnyPart, TurnError | InteractionPendingError>
   readonly formatStreamError: (streamError: TurnError) => string
   readonly collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
@@ -99,7 +100,6 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
           return yield* toolRunner
             .run({ toolCallId, toolName, input: args })
             .pipe(
-              Effect.orDie,
               provideCurrentHostCtx(hostCtx),
               Effect.provideService(ExtensionRegistry, extensionRegistry),
               Effect.provideService(EventPublisher, eventPublisher),
