@@ -94,6 +94,25 @@ context adapter`).
   `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/session-runtime.test.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-runner.test.ts`.
 
+### S4 status - partial
+
+- **C11 complete**: cached ACP and Claude Code codemode sessions no
+  longer retain the first turn's `runTool` callback authority. The
+  codemode MCP server now reads a mutable `CodemodeConfig` per request,
+  and both session managers refresh that config on cache hits before
+  reusing the external session.
+- Verification:
+  `bun run typecheck` passed; `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/extensions/tests/acp-agents/acp-agents.test.ts packages/extensions/tests/acp-agents/claude-sdk-lifecycle.test.ts`
+  passed.
+- Evidence:
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/mcp-codemode.ts:41`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/mcp-codemode.ts:233`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/mcp-codemode.ts:244`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/mcp-codemode.ts:279`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/session-manager.ts:127`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/acp-agents/claude-code-executor.ts:378`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/tests/acp-agents/acp-agents.test.ts:342`.
+
 ### S1 - Upstream wide-event outcome and boundary API
 
 Fix `effect-wide-event` so Gent stops hand-modeling domain outcomes and

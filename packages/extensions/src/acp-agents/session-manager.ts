@@ -125,6 +125,9 @@ export const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, Ch
         if (existingOpt._tag === "Some") {
           const existing = existingOpt.value
           if (existing.fingerprint === fingerprint) {
+            if (existing.codemode !== undefined && codemodeConfig !== undefined) {
+              yield* existing.codemode.updateConfig(codemodeConfig)
+            }
             return {
               conn: existing.conn,
               acpSessionId: existing.acpSessionId,

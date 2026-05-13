@@ -9,7 +9,7 @@
  *
  * @module
  */
-import { Context, Effect, Layer, Schema, type Scope } from "effect"
+import { Context, Effect, Layer, Ref, Schema, type Scope } from "effect"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
@@ -41,6 +41,7 @@ export class McpCodemodeServerError extends Schema.TaggedErrorClass<McpCodemodeS
 export interface CodemodeServer {
   readonly url: string
   readonly port: number
+  readonly updateConfig: (config: CodemodeConfig) => Effect.Effect<void>
 }
 
 export interface CodemodeConfig {
@@ -229,9 +230,7 @@ export const startCodemodeServer = (
   config: CodemodeConfig,
 ): Effect.Effect<CodemodeServer, McpCodemodeServerError, Scope.Scope> =>
   Effect.gen(function* () {
-    const { tools, runTool } = config
-    const proxy = makeGentProxy(tools, runTool)
-    const toolDescription = generateToolDescription(tools)
+    const configRef = yield* Ref.make(config)
 
     // Stateless: fresh Server+Transport per request. MCP SDK's Server.connect()
     // can only be called once per instance, so we create a new server for each
@@ -242,9 +241,13 @@ export const startCodemodeServer = (
       "/mcp",
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
+        const currentConfig = yield* Ref.get(configRef)
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- BunServerRequest.source is the underlying Request
         const rawRequest = request.source as Request
-        const mcpServer = createMcpServerForRequest(proxy, toolDescription)
+        const mcpServer = createMcpServerForRequest(
+          makeGentProxy(currentConfig.tools, currentConfig.runTool),
+          generateToolDescription(currentConfig.tools),
+        )
         const transport = new WebStandardStreamableHTTPServerTransport({
           sessionIdGenerator: undefined,
         })
@@ -273,5 +276,6 @@ export const startCodemodeServer = (
     return {
       url: `http://127.0.0.1:${port}`,
       port,
+      updateConfig: (nextConfig) => Ref.set(configRef, nextConfig),
     } satisfies CodemodeServer
   })

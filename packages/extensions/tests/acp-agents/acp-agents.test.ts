@@ -339,6 +339,48 @@ describe("codemode proxy", () => {
       expect(result).toBeDefined()
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
+  it.scopedLive("refreshes runTool authority without restarting the codemode server", () =>
+    Effect.gen(function* () {
+      const calls: string[] = []
+      const mockTool: ToolCapability = tool({
+        id: "echo",
+        description: "echo tool",
+        params: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({ echoed: Schema.Boolean }),
+        execute: () => Effect.succeed({ echoed: true }),
+      })
+      const server = yield* startCodemodeServer({
+        tools: [mockTool],
+        runTool: () => {
+          calls.push("first")
+          return { result: "first" }
+        },
+      })
+
+      const callEcho = () =>
+        callMcp(server.url, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "execute",
+            arguments: { code: 'return gent.echo({ text: "hello" })' },
+          },
+        })
+
+      yield* Effect.promise(callEcho).pipe(Effect.flatMap(parseSseResult))
+      yield* server.updateConfig({
+        tools: [mockTool],
+        runTool: () => {
+          calls.push("second")
+          return { result: "second" }
+        },
+      })
+      yield* Effect.promise(callEcho).pipe(Effect.flatMap(parseSseResult))
+
+      expect(calls).toEqual(["first", "second"])
+    }).pipe(Effect.provide(BunGentPlatformLive)),
+  )
   it.scopedLive("rejects unknown tool in proxy", () =>
     Effect.gen(function* () {
       const server = yield* startCodemodeServer({

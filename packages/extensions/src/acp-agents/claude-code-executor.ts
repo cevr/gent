@@ -376,6 +376,9 @@ export const createClaudeCodeSessionManager = (
       const existing = sessions.get(k)
       if (existing !== undefined) {
         if (existing.fingerprint === fingerprint) {
+          if (existing.codemode !== undefined && codemodeConfig !== undefined) {
+            yield* existing.codemode.updateConfig(codemodeConfig)
+          }
           return { session: existing.session, created: false }
         }
         sessions.delete(k)
