@@ -8,6 +8,9 @@ import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
+import { ProcessRunnerLive } from "../../src/utils/run-process"
+
+const processRunnerLive = ProcessRunnerLive.pipe(Layer.provide(BunServices.layer))
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
@@ -63,6 +66,7 @@ describe("session profile resolution", () => {
         Layer.provide(
           Layer.mergeAll(
             BunServices.layer,
+            processRunnerLive,
             configServiceLive,
             SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
           ),
@@ -117,6 +121,7 @@ describe("session profile resolution", () => {
         Layer.provide(
           Layer.mergeAll(
             BunServices.layer,
+            processRunnerLive,
             configServiceLive,
             SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
           ),

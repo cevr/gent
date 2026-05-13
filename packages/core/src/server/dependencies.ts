@@ -41,6 +41,7 @@ import {
   type SessionProfile,
 } from "../runtime/session-profile.js"
 import { FileIndexLive, type FileIndex } from "../runtime/file-index/index.js"
+import { ProcessRunnerLive } from "../utils/run-process.js"
 
 export interface DependencyOverrides {
   readonly eventStoreMode?: "default" | "storage-backed" | "memory"
@@ -123,14 +124,19 @@ const makeBaseEventStoreLayer = (
   return persistenceMode === "memory" ? EventStore.Memory : EventStoreLive
 }
 
-const platformServicesLive = Layer.mergeAll(
-  Layer.effect(FileSystem.FileSystem, Effect.service(FileSystem.FileSystem)),
-  Layer.effect(Path.Path, Effect.service(Path.Path)),
-  Layer.effect(
-    ProcessSpawner.ChildProcessSpawner,
-    Effect.service(ProcessSpawner.ChildProcessSpawner),
+const childProcessSpawnerLive = Layer.effect(
+  ProcessSpawner.ChildProcessSpawner,
+  Effect.service(ProcessSpawner.ChildProcessSpawner),
+)
+
+const platformServicesLive = Layer.provideMerge(
+  Layer.mergeAll(
+    Layer.effect(FileSystem.FileSystem, Effect.service(FileSystem.FileSystem)),
+    Layer.effect(Path.Path, Effect.service(Path.Path)),
+    ProcessRunnerLive,
+    Layer.effect(GentPlatform, Effect.service(GentPlatform)),
   ),
-  Layer.effect(GentPlatform, Effect.service(GentPlatform)),
+  childProcessSpawnerLive,
 )
 
 const makeStorageLayer = (config: DependenciesConfig, persistenceMode: "disk" | "memory") =>
@@ -380,7 +386,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   // single owner.
   const extensionRegistryLive = makeProfileLayers(
     config,
-    Layer.mergeAll(configServiceLive, runtimeEnvironmentLive),
+    Layer.mergeAll(configServiceLive, runtimeEnvironmentLive, platformServicesLive),
     (runtime) => {
       const profile = sessionProfileFromRuntime(runtime)
       launchSessionProfileSeed = profile

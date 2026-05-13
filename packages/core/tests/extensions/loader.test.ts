@@ -6,12 +6,15 @@ import { ExtensionSetupContext } from "../../src/domain/extension-setup-context.
 import { discoverExtensions, setupExtension } from "../../src/runtime/extensions/loader"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
+import { ProcessRunnerLive } from "../../src/utils/run-process"
 
-const fsLayer = Layer.mergeAll(
-  BunFileSystem.layer,
-  Path.layer,
-  BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
-  BunGentPlatformLive,
+const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
+  Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
+)
+
+const fsLayer = Layer.provideMerge(
+  Layer.mergeAll(BunFileSystem.layer, Path.layer, ProcessRunnerLive, BunGentPlatformLive),
+  childProcessSpawnerLive,
 )
 
 describe("setupExtension", () => {

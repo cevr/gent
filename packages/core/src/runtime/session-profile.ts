@@ -34,6 +34,7 @@ import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-
 import { ConfigService } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/resource-host/schedule-engine.js"
 import { resolveProfileRuntime, type RuntimeProfile } from "./profile.js"
+import { ProcessRunner } from "../utils/run-process.js"
 
 const allowAllPermission: PermissionService = {
   check: () => Effect.succeed("allowed"),
@@ -96,6 +97,7 @@ export class SessionProfileCache extends Context.Service<
         const pathSvc = yield* Path.Path
         const spawner = yield* ChildProcessSpawner
         const platform = yield* GentPlatform
+        const processRunner = yield* ProcessRunner
         const initialCache = HashMap.fromIterable(
           (config.initialProfiles ?? []).map(
             (profile) => [pathSvc.resolve(profile.cwd), profile] as const,
@@ -112,6 +114,7 @@ export class SessionProfileCache extends Context.Service<
           Context.add(ChildProcessSpawner, spawner),
           Context.add(ConfigService, configService),
           Context.add(GentPlatform, platform),
+          Context.add(ProcessRunner, processRunner),
         )
 
         const initProfile = (cwd: string) =>

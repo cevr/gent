@@ -35,12 +35,15 @@ import {
 } from "../../src/runtime/profile"
 import { provideExtensionReactionContext } from "../../src/runtime/extensions/extension-reaction-context"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
+import { ProcessRunnerLive } from "../../src/utils/run-process"
 
-const fsLayer = Layer.mergeAll(
-  BunFileSystem.layer,
-  Path.layer,
-  BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
-  BunGentPlatformLive,
+const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
+  Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
+)
+
+const fsLayer = Layer.provideMerge(
+  Layer.mergeAll(BunFileSystem.layer, Path.layer, ProcessRunnerLive, BunGentPlatformLive),
+  childProcessSpawnerLive,
 )
 
 const sharedLayer = Layer.mergeAll(fsLayer, ConfigService.Test(), SqliteStorage.TestWithSql())

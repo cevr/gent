@@ -1,4 +1,4 @@
-import { Effect, Schema, Stream, type Duration } from "effect"
+import { Context, Effect, Layer, Schema, Stream, type Duration } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
 export class ProcessError extends Schema.TaggedErrorClass<ProcessError>()("ProcessError", {
@@ -14,7 +14,7 @@ export interface ProcessResult {
   readonly stderr: string
 }
 
-export interface ProcessRunner {
+export interface ProcessRunnerService {
   readonly run: (
     command: string,
     args: ReadonlyArray<string>,
@@ -30,6 +30,13 @@ export interface RunProcessOptions {
   readonly stdout?: "pipe" | "ignore" | "inherit"
   readonly stderr?: "pipe" | "ignore" | "inherit"
 }
+
+export const ProcessRunner: Context.Reference<ProcessRunnerService> =
+  Context.Reference<ProcessRunnerService>("@gent/core/src/utils/run-process/ProcessRunner", {
+    defaultValue: () => ({
+      run: (command) => Effect.die(new Error(`ProcessRunner unavailable for command: ${command}`)),
+    }),
+  })
 
 const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
   const decoder = new TextDecoder()
@@ -98,7 +105,7 @@ export const runProcess = (
 }
 
 export const makeProcessRunner: Effect.Effect<
-  ProcessRunner,
+  ProcessRunnerService,
   never,
   ChildProcessSpawner.ChildProcessSpawner
 > = Effect.gen(function* () {
@@ -110,3 +117,5 @@ export const makeProcessRunner: Effect.Effect<
       ),
   }
 })
+
+export const ProcessRunnerLive = Layer.effect(ProcessRunner, makeProcessRunner)

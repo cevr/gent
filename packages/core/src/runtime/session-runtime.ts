@@ -717,13 +717,11 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
 ) {
   static Live = (config: {
     readonly baseSections: ReadonlyArray<PromptSection>
-  }): Layer.Layer<SessionRuntime, never, SessionRuntimeLayerRequirements> => {
-    const live = Layer.effect(SessionRuntime, makeLiveSessionRuntime).pipe(
+  }): Layer.Layer<SessionRuntime, never, SessionRuntimeLayerRequirements> =>
+    Layer.effect(SessionRuntime, makeLiveSessionRuntime).pipe(
       // Keep actor support services in the live context. `SessionRuntime`
       // captures actor clients, but the AgentLoop entity manager must remain
       // scoped for those clients to make progress.
       Layer.provideMerge(AgentLoopLiveActor(config)),
     )
-    return live as Layer.Layer<SessionRuntime, never, SessionRuntimeLayerRequirements>
-  }
 }

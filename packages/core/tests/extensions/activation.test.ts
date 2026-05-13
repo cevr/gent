@@ -21,12 +21,15 @@ import { tool } from "@gent/core/extensions/api"
 import { GentToolMetadataTag, getToolMetadata } from "@gent/core-internal/domain/capability/tool"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
 import type { PromptSection } from "@gent/core-internal/domain/prompt"
+import { ProcessRunnerLive } from "../../src/utils/run-process"
 
-const fsLayer = Layer.mergeAll(
-  BunFileSystem.layer,
-  Path.layer,
-  BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
-  BunGentPlatformLive,
+const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
+  Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
+)
+
+const fsLayer = Layer.provideMerge(
+  Layer.mergeAll(BunFileSystem.layer, Path.layer, ProcessRunnerLive, BunGentPlatformLive),
+  childProcessSpawnerLive,
 )
 
 const makeBuiltin = (

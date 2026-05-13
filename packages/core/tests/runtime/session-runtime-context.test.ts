@@ -28,6 +28,10 @@ import {
   type SessionStorageService,
 } from "@gent/core-internal/storage/session-storage"
 import type { ExternalDriverContribution } from "@gent/core-internal/domain/driver"
+import { ProcessRunnerLive } from "../../src/utils/run-process"
+
+const processRunnerLive = ProcessRunnerLive.pipe(Layer.provide(BunServices.layer))
+
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 const emptyDriverRegistryLayer = DriverRegistry.fromResolved({
@@ -74,6 +78,7 @@ describe("resolveSessionEnvironment", () => {
           Layer.provide(
             Layer.mergeAll(
               BunServices.layer,
+              processRunnerLive,
               configServiceLive,
               SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
             ),
