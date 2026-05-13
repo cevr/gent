@@ -1,0 +1,159 @@
+# Wave 44 plan
+
+## Frame
+
+- **Product direction**: extension authoring is the product loop, now with no
+  compatibility lifecycle bucket.
+- **Source**: W43 closed the hooks-only rearchitecture with no P0/P1 findings.
+- **Start HEAD**: `8e719c07` (`docs(plan): close wave 43 without compatibility`).
+- **W43 status**: closed; no W44 was opened by the W43 audit itself.
+- **North star**: a good extension author can build useful Gent behavior
+  quickly without learning core internals, passing host requirements as
+  parameters, or guessing which runtime surfaces are stable.
+- **Rule**: dogfood the public extension API through real extension-building
+  pressure. Improve the product surface where real authoring feels ceremonial,
+  leaky, or under-diagnosed.
+- **Requirement ownership rule**: handlers receive product input only. Host
+  authority is yielded through public facades or extension-owned service Tags.
+  Service-owned hidden requirements remain valid when the owning service
+  captures and internally provides them.
+- **Design rule**: redesign from first principles. Do not keep compatibility
+  shims or migration-shaped names for existing extensions.
+- **External reference points**:
+  `/Users/cvr/.cache/repo/anomalyco/opencode/packages/plugin/src/index.ts:222`,
+  `/Users/cvr/.cache/repo/anomalyco/opencode/packages/plugin/src/tool.ts:40`,
+  `/Users/cvr/.cache/repo/badlogic/pi-mono/packages/coding-agent/src/core/extensions/types.ts:1084`,
+  `/Users/cvr/.cache/repo/badlogic/pi-mono/packages/coding-agent/src/core/extensions/runner.ts:266`,
+  `/Users/cvr/.cache/repo/badlogic/pi-mono/packages/coding-agent/test/agent-session-dynamic-tools.test.ts:37`.
+
+## Product Thesis
+
+W44 tests whether the hooks-only API is enough to build real extension
+products, not just pass API shape tests.
+
+The API should feel:
+
+- **Expressive**: tools, requests, hooks, resources, agents, and dynamic
+  registrations combine without private imports.
+- **Composable**: extension-owned services hide their requirements internally,
+  while runtime authority comes from public `ExtensionContext` facets.
+- **Simple**: the first working version should be small; advanced behavior
+  should grow by adding explicit leaves, not by learning runtime plumbing.
+- **Actor-native**: extension behavior crosses runtime boundaries through
+  declared capabilities and hooks, not local callback substrates or hidden
+  side channels.
+
+## Lanes
+
+### L1 - Dogfood Real Extensions
+
+Build or port representative extensions using only
+`@gent/core/extensions/api`, then let the friction drive API changes.
+
+- **C1**: Pick one small extension and one stateful/dynamic extension as W44
+  dogfood targets.
+- **C2**: Add or update reference acceptance tests that load those extensions
+  through the real setup/runtime boundary.
+- **C3**: Capture authoring friction as code changes or explicit findings;
+  do not leave vague notes.
+- **Evidence targets**:
+  `/Users/cvr/Developer/personal/gent/examples/extensions/session-notes.ts`,
+  `/Users/cvr/Developer/personal/gent/examples/extensions/turn-counter.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/authoring-reference.test.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts`.
+
+### L2 - Ceremony And Naming
+
+Audit the public extension surface for ceremony that an author pays before the
+behavior itself is clear.
+
+- **C4**: Review `defineExtension`, `tool`, `request`, `hook`, `defineResource`,
+  dynamic registration, and ref derivation as one authoring language.
+- **C5**: Collapse redundant names/concepts where the product can be simpler
+  without hiding requirements.
+- **C6**: Add compile-time or runtime locks for any simplification so the
+  authoring surface does not drift back.
+- **Evidence targets**:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/tool.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability/request.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts`.
+
+### L3 - Requirement Ownership In Practice
+
+Prove the no-context-params rule works for real extensions with private state,
+runtime authority, and dynamic behavior.
+
+- **C7**: Audit shipped extensions for any remaining host facts, implicit
+  runtime authority, or private core Tags crossing into extension code.
+- **C8**: Prefer extension-owned services/resources that internally provide
+  their dependencies over parameter threading.
+- **C9**: Add a guard or test when a leak pattern is likely to recur.
+- **Evidence targets**:
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/auto/index.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/memory/index.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/executor/index.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/index.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/tooling/src/platform-duplication-guards.ts`.
+
+### L4 - Runtime And UX Feedback
+
+Make extension failures and lifecycle state feel like product feedback, not
+implementation leakage.
+
+- **C10**: Exercise setup, validation, resource startup, dynamic registration,
+  hook failure, and extension status surfaces from an author perspective.
+- **C11**: Improve diagnostics where an author cannot tell what to change.
+- **C12**: Keep UI/runtime status language product-facing and free of deleted
+  lifecycle or migration terminology.
+- **Evidence targets**:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/activation.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-package-shape.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/server/extension-commands.ts`,
+  `/Users/cvr/Developer/personal/gent/apps/tui/tests/extension-lifecycle.test.ts`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md`.
+
+### L5 - Architecture Simplification
+
+Use the dogfood findings to remove concepts and LOC while preserving the actor
+model north star.
+
+- **C13**: Look for extension/runtime seams that exist only because of past API
+  shape, not current product needs.
+- **C14**: Collapse local adapter layers or duplicate concepts when the owner
+  boundary is clear.
+- **C15**: Verify every simplification through runtime or RPC acceptance tests,
+  not only unit tests.
+- **Evidence targets**:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-hooks.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-resolve.ts`,
+  `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`.
+
+### L6 - Documentation As Product
+
+Make the docs teach the shape an author should actually use after W43.
+
+- **C16**: Ensure `docs/extensions.md` has one coherent progression from
+  hello tool to stateful/dynamic extension.
+- **C17**: Keep all examples hooks-only and public-API-only.
+- **C18**: Add exact commands for validating a local extension authoring
+  change.
+- **Evidence targets**:
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md`,
+  `/Users/cvr/Developer/personal/gent/examples/extensions/hello-tool.ts`,
+  `/Users/cvr/Developer/personal/gent/examples/extensions/session-notes.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/tooling/tests/platform-duplication-guards.test.ts`.
+
+## Completion Criteria
+
+- At least one real authoring dogfood path is implemented or audited deeply
+  enough to produce code changes.
+- No W43 compatibility surface is reintroduced.
+- No extension authoring path requires private Gent imports.
+- No handler receives host authority as a parameter.
+- `bun run gate` passes.
+- Final W44 audit receipt lists every file reference used to conclude no
+  P0/P1 findings.
