@@ -72,7 +72,7 @@ import {
   AgentLoopTurnExecutionScope,
   makeAgentLoopTurnExecution,
 } from "./agent-loop.turn-execution.js"
-import { makeAgentLoopWorker } from "./agent-loop.worker.js"
+import { AgentLoopWorkerScope, makeAgentLoopWorker } from "./agent-loop.worker.js"
 
 export const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(function* (params: {
   sessionId: SessionId
@@ -444,21 +444,22 @@ export const makeAgentLoopBehavior = (
       }),
     )
 
-    const worker = makeAgentLoopWorker({
-      sessionId,
-      branchId,
-      sideMutationSemaphore,
-      turnWorkerQueue,
-      activeStreamRef,
-      interruptedRef,
-      currentLoopState,
-      saveCheckpoint,
-      takeNextQueuedTurn: takeNextQueuedTurnCommitted,
-      recordTurnFailure,
-      publishEvent,
-      runTurn,
-      switchAgentOnState,
-    })
+    const worker = yield* makeAgentLoopWorker(runTurn).pipe(
+      Effect.provideService(AgentLoopWorkerScope, {
+        sessionId,
+        branchId,
+        sideMutationSemaphore,
+        turnWorkerQueue,
+        activeStreamRef,
+        interruptedRef,
+        currentLoopState,
+        saveCheckpoint,
+        takeNextQueuedTurn: takeNextQueuedTurnCommitted,
+        recordTurnFailure,
+        publishEvent,
+        switchAgentOnState,
+      }),
+    )
 
     const startTurnWorker = Effect.forkIn(provideRuntime(worker.turnWorkerLoop), loopScope, {
       startImmediately: true,
