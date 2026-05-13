@@ -782,6 +782,109 @@ describe("extension command RPCs", () => {
       )
     }),
   )
+  it.live("RPC dynamic registrations update slash, request, and model tool surfaces", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/dynamic-authoring")
+      const DynamicEchoTool = tool({
+        id: "dynamic_echo",
+        description: "Dynamic echo",
+        params: Schema.Struct({ text: Schema.String }),
+        output: Schema.String,
+        execute: ({ text }) => Effect.succeed(`tool:${text}`),
+      })
+      const DynamicEchoRequest = request({
+        id: "dynamic-echo",
+        extensionId,
+        slash: { name: "dynamic-echo", description: "Dynamic echo" },
+        description: "Dynamic echo",
+        input: Schema.String,
+        output: Schema.String,
+        execute: (input) => Effect.succeed(`request:${input}`),
+      })
+      const ext: GentExtension = {
+        manifest: { id: extensionId },
+        setup: Effect.succeed({
+          requests: [
+            request({
+              id: "install-dynamic",
+              extensionId,
+              description: "Install dynamic capabilities",
+              input: Schema.Void,
+              output: Schema.Void,
+              execute: () =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  const unregisterTool = yield* ctx.Dynamic.registerTool(
+                    extensionId,
+                    DynamicEchoTool,
+                  )
+                  const unregisterRequest = yield* ctx.Dynamic.registerRequest(
+                    extensionId,
+                    DynamicEchoRequest,
+                  )
+                  void unregisterTool
+                  void unregisterRequest
+                }).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new CapabilityError({
+                        extensionId,
+                        capabilityId: "install-dynamic",
+                        reason: cause.message,
+                      }),
+                  ),
+                ),
+            }),
+          ],
+        }),
+      }
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            {
+              ...textStep("dynamic registered"),
+              assertOptions: (options) => {
+                expect(options.tools.map((entry) => entry.name)).toContain("dynamic_echo")
+              },
+            },
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [...e2ePreset.extensionInputs, ext],
+            cwd: "/tmp/gent-dynamic-authoring",
+          })
+
+          yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId,
+            capabilityId: "install-dynamic",
+            input: undefined,
+          })
+
+          const commands = yield* client.extension.listSlashCommands({ sessionId })
+          expect(commands.map((command) => command.name)).toContain("dynamic-echo")
+
+          const requestResult = yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId,
+            capabilityId: "dynamic-echo",
+            input: "hello",
+          })
+          expect(requestResult).toBe("request:hello")
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "use the dynamic tool",
+          })
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }),
+  )
   it.live("RPC listSlashCommands omits lower-scope slash request shadowed by project request", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/public-rpc-shadow")

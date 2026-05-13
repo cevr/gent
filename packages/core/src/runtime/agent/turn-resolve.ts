@@ -8,7 +8,7 @@ import {
   type AgentRunOverrides,
   type RunSpec,
 } from "../../domain/agent.js"
-import { type ToolCapability } from "../../domain/capability/tool.js"
+import { getToolId, type ToolCapability } from "../../domain/capability/tool.js"
 import { ErrorOccurred } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { type BranchId, type SessionId } from "../../domain/ids.js"
@@ -16,6 +16,7 @@ import { compileSystemPrompt, type PromptSection } from "../../domain/prompt.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"
 import { ConfigService } from "../config-service.js"
+import { DynamicExtensionRegistry } from "../../domain/dynamic-extension-registry.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import { provideExtensionReactionContext } from "../extensions/extension-reaction-context.js"
 import { compileToolPolicy, ExtensionRegistry } from "../extensions/registry.js"
@@ -53,6 +54,16 @@ const hasAgentOverrides = (overrides: AgentRunOverrides | undefined) =>
   overrides?.deniedTools !== undefined ||
   overrides?.reasoningEffort !== undefined ||
   overrides?.systemPromptAddendum !== undefined
+
+const mergeStaticAndDynamicTools = (
+  staticTools: ReadonlyArray<ToolCapability>,
+  dynamicTools: ReadonlyArray<ToolCapability>,
+): ReadonlyArray<ToolCapability> => {
+  const winners = new Map<string, ToolCapability>()
+  for (const tool of staticTools) winners.set(String(getToolId(tool)), tool)
+  for (const tool of dynamicTools) winners.set(String(getToolId(tool)), tool)
+  return [...winners.values()]
+}
 
 const mergeSystemPromptAddendum = (
   base: string | undefined,
@@ -140,7 +151,15 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
       : effectiveAgent
 
   // Derive extension projections from explicit prompt/message slots.
-  const allTools = [...resolvedExtensions.modelCapabilities.values()]
+  const dynamicRegistryOption = yield* Effect.serviceOption(DynamicExtensionRegistry)
+  const dynamicTools =
+    dynamicRegistryOption._tag === "Some"
+      ? yield* dynamicRegistryOption.value.listTools(params.sessionId)
+      : []
+  const allTools = mergeStaticAndDynamicTools(
+    [...resolvedExtensions.modelCapabilities.values()],
+    dynamicTools,
+  )
   const turnCtx = {
     sessionId: params.sessionId,
     branchId: params.branchId,

@@ -219,12 +219,10 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               ? yield* dynamicRegistryOption.value.listTools(ctx.sessionId)
               : []
           const tool: ToolCapability | undefined =
-            capabilities.find(
-              (capability) => String(getToolId(capability)) === toolCall.toolName,
-            ) ??
             dynamicCapabilities.find(
               (capability) => String(getToolId(capability)) === toolCall.toolName,
-            )
+            ) ??
+            capabilities.find((capability) => String(getToolId(capability)) === toolCall.toolName)
 
           const finish = (result: Prompt.ToolResultPart) =>
             Effect.gen(function* () {

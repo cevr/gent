@@ -11,6 +11,50 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
+  test("flags private imports in reference extension examples", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "examples/extensions/example.ts",
+        [
+          'import { AgentLoop } from "@gent/core-internal/runtime/agent-loop"',
+          'import { Secret } from "@gent/core/src/domain/secret"',
+          'import { Builtin } from "@gent/extensions/src/todo"',
+          'import { helper } from "../../packages/core/src/domain/helper"',
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "examples/extensions/example.ts",
+        line: 1,
+        message: "Reference extensions must use @gent/core/extensions/api, not core internals",
+      },
+      {
+        file: "examples/extensions/example.ts",
+        line: 2,
+        message: "Reference extensions must import the public extension API, not core source files",
+      },
+      {
+        file: "examples/extensions/example.ts",
+        line: 3,
+        message:
+          "Reference extensions must stand alone instead of importing shipped extension internals",
+      },
+      {
+        file: "examples/extensions/example.ts",
+        line: 4,
+        message:
+          "Reference extensions must not reach out of examples/extensions with relative imports",
+      },
+    ])
+
+    expect(
+      findPlatformDuplicationViolations(
+        "examples/extensions/session-notes.ts",
+        'import { defineExtension } from "@gent/core/extensions/api"',
+      ),
+    ).toEqual([])
+  })
+
   test("flags deleted runtime bridge names in active source", () => {
     expect(
       findPlatformDuplicationViolations(

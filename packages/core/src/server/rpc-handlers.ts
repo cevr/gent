@@ -582,7 +582,11 @@ const RpcHandlers = GentRpcs.toLayer(
                   .filter((entry) => entry.capability.slash !== undefined)
                   .map((entry) => capabilityToCommand(entry.extensionId, entry.capability))
               : []
-          return [...listSlashCommands(registry.getResolved()), ...dynamicCommands].map(
+          const commandsByName = new Map(
+            listSlashCommands(registry.getResolved()).map((command) => [command.name, command]),
+          )
+          for (const command of dynamicCommands) commandsByName.set(command.name, command)
+          return [...commandsByName.values()].map(
             (command) =>
               new SlashCommandInfo({
                 name: command.name,

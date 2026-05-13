@@ -9,13 +9,19 @@ interface BannedPattern {
   readonly message: string
 }
 
-const activeSourceFile = (file: string): boolean =>
-  /^(?:packages|apps)\//.test(file) &&
+const sourceFile = (file: string): boolean =>
+  /^(?:packages|apps|examples\/extensions)\//.test(file) &&
   /\.(?:[cm]?[jt]sx?)$/.test(file) &&
   file !== "packages/tooling/src/platform-duplication-guards.ts" &&
   !file.includes("/tests/") &&
   !file.includes("/fixtures/") &&
   !file.includes("/dist/")
+
+const activeSourceFile = (file: string): boolean =>
+  /^(?:packages|apps)\//.test(file) && sourceFile(file)
+
+const referenceExtensionFile = (file: string): boolean =>
+  file.startsWith("examples/extensions/") && sourceFile(file)
 
 const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
   {
@@ -134,6 +140,26 @@ const bannedAgentRunnerCompositionPatterns: ReadonlyArray<BannedPattern> = [
     pattern:
       /\b(?:SqliteStorage\.MemoryWithSql|SingleRunner\.layer|SessionRuntime\.Live|ResourceManagerLive|buildExtensionLayers|PromptPresenterLive|EventStoreLive)\b/,
     message: "AgentRunner must use the ephemeral child root preset",
+  },
+]
+
+const bannedReferenceExtensionPatterns: ReadonlyArray<BannedPattern> = [
+  {
+    pattern: /@gent\/core-internal\//,
+    message: "Reference extensions must use @gent/core/extensions/api, not core internals",
+  },
+  {
+    pattern: /@gent\/core\/src\//,
+    message: "Reference extensions must import the public extension API, not core source files",
+  },
+  {
+    pattern: /@gent\/extensions\/src\//,
+    message:
+      "Reference extensions must stand alone instead of importing shipped extension internals",
+  },
+  {
+    pattern: /(?:^|\s)from\s+["'](?:\.\.\/){2,}/,
+    message: "Reference extensions must not reach out of examples/extensions with relative imports",
   },
 ]
 
@@ -329,7 +355,7 @@ export const findPlatformDuplicationViolations = (
 ): ReadonlyArray<PlatformDuplicationFinding> => {
   const findings: PlatformDuplicationFinding[] = []
 
-  if (!activeSourceFile(file)) return findings
+  if (!sourceFile(file)) return findings
 
   for (const pathPattern of bannedPathPatterns) {
     if (pathPattern.pattern.test(file)) {
@@ -337,7 +363,10 @@ export const findPlatformDuplicationViolations = (
     }
   }
 
-  const patterns = patternsForFile(file)
+  const patterns = [
+    ...(activeSourceFile(file) ? patternsForFile(file) : []),
+    ...(referenceExtensionFile(file) ? bannedReferenceExtensionPatterns : []),
+  ]
   const lines = text.split("\n")
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index] ?? ""

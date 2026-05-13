@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref } from "effect"
+import { Context, Effect, Layer, Ref, Schema } from "effect"
 import type { RequestCapability } from "./capability/request.js"
 import { getToolId, type ToolCapability } from "./capability/tool.js"
 import type { ExtensionId, SessionId } from "./ids.js"
@@ -20,8 +20,12 @@ interface DynamicRequestEntry {
 }
 
 export interface DynamicExtensionRegistryService {
-  readonly registerTool: (entry: DynamicToolEntry) => Effect.Effect<Effect.Effect<void>>
-  readonly registerRequest: (entry: DynamicRequestEntry) => Effect.Effect<Effect.Effect<void>>
+  readonly registerTool: (
+    entry: DynamicToolEntry,
+  ) => Effect.Effect<Effect.Effect<void>, DynamicRegistrationError>
+  readonly registerRequest: (
+    entry: DynamicRequestEntry,
+  ) => Effect.Effect<Effect.Effect<void>, DynamicRegistrationError>
   readonly listTools: (sessionId: SessionId) => Effect.Effect<ReadonlyArray<ToolCapability>>
   readonly listRequests: (sessionId: SessionId) => Effect.Effect<
     ReadonlyArray<{
@@ -42,8 +46,75 @@ export interface DynamicExtensionRegistryService {
   >
 }
 
-const scopeMatches = (scope: DynamicRegistrationScope, sessionId: SessionId) =>
-  scope._tag === "process" || scope.sessionId === sessionId
+const scopeLabel = (scope: DynamicRegistrationScope) =>
+  scope._tag === "process" ? "process" : `session ${scope.sessionId}`
+
+const sameScope = (left: DynamicRegistrationScope, right: DynamicRegistrationScope) =>
+  left._tag === "process"
+    ? right._tag === "process"
+    : right._tag === "session" && left.sessionId === right.sessionId
+
+export class DynamicRegistrationError extends Schema.TaggedErrorClass<DynamicRegistrationError>(
+  "@gent/core/src/domain/dynamic-extension-registry/DynamicRegistrationError",
+)("DynamicRegistrationError", {
+  kind: Schema.Literals(["tool", "request"]),
+  id: Schema.String,
+  message: Schema.String,
+}) {}
+
+const duplicateError = (kind: "tool" | "request", id: string, scope: DynamicRegistrationScope) =>
+  new DynamicRegistrationError({
+    kind,
+    id,
+    message: `dynamic ${kind} "${id}" is already registered for ${scopeLabel(scope)}; call the unregister finalizer before registering a replacement`,
+  })
+
+const visibleToolWinners = (
+  entries: ReadonlyArray<DynamicToolEntry>,
+  sessionId: SessionId,
+): ReadonlyArray<ToolCapability> => {
+  const winners = new Map<string, ToolCapability>()
+  for (const entry of entries) {
+    if (entry.scope._tag === "process")
+      winners.set(String(getToolId(entry.capability)), entry.capability)
+  }
+  for (const entry of entries) {
+    if (entry.scope._tag === "session" && entry.scope.sessionId === sessionId) {
+      winners.set(String(getToolId(entry.capability)), entry.capability)
+    }
+  }
+  return [...winners.values()]
+}
+
+const visibleRequestWinners = (
+  entries: ReadonlyArray<DynamicRequestEntry>,
+  sessionId: SessionId,
+): ReadonlyArray<{
+  readonly extensionId: ExtensionId
+  readonly capability: RequestCapability
+}> => {
+  const winners = new Map<
+    string,
+    { readonly extensionId: ExtensionId; readonly capability: RequestCapability }
+  >()
+  for (const entry of entries) {
+    if (entry.scope._tag === "process") {
+      winners.set(String(entry.capability.id), {
+        extensionId: entry.extensionId,
+        capability: entry.capability,
+      })
+    }
+  }
+  for (const entry of entries) {
+    if (entry.scope._tag === "session" && entry.scope.sessionId === sessionId) {
+      winners.set(String(entry.capability.id), {
+        extensionId: entry.extensionId,
+        capability: entry.capability,
+      })
+    }
+  }
+  return [...winners.values()]
+}
 
 export class DynamicExtensionRegistry extends Context.Service<
   DynamicExtensionRegistry,
@@ -63,51 +134,43 @@ export class DynamicExtensionRegistry extends Context.Service<
 
       return DynamicExtensionRegistry.of({
         registerTool: (entry) =>
-          Ref.update(tools, (entries) => [...entries, entry]).pipe(
-            Effect.as(unregisterTool(entry)),
-          ),
+          Effect.gen(function* () {
+            const id = String(getToolId(entry.capability))
+            const existing = (yield* Ref.get(tools)).find(
+              (candidate) =>
+                String(getToolId(candidate.capability)) === id &&
+                sameScope(candidate.scope, entry.scope),
+            )
+            if (existing !== undefined) return yield* duplicateError("tool", id, entry.scope)
+            yield* Ref.update(tools, (entries) => [...entries, entry])
+            return yield* Effect.succeed(unregisterTool(entry))
+          }),
         registerRequest: (entry) =>
-          Ref.update(requests, (entries) => [...entries, entry]).pipe(
-            Effect.as(unregisterRequest(entry)),
-          ),
+          Effect.gen(function* () {
+            const id = String(entry.capability.id)
+            const existing = (yield* Ref.get(requests)).find(
+              (candidate) =>
+                String(candidate.capability.id) === id && sameScope(candidate.scope, entry.scope),
+            )
+            if (existing !== undefined) return yield* duplicateError("request", id, entry.scope)
+            yield* Ref.update(requests, (entries) => [...entries, entry])
+            return yield* Effect.succeed(unregisterRequest(entry))
+          }),
         listTools: (sessionId) =>
-          Ref.get(tools).pipe(
-            Effect.map((entries) => {
-              const winners = new Map<string, ToolCapability>()
-              for (const entry of entries) {
-                if (scopeMatches(entry.scope, sessionId)) {
-                  winners.set(String(getToolId(entry.capability)), entry.capability)
-                }
-              }
-              return [...winners.values()]
-            }),
-          ),
+          Ref.get(tools).pipe(Effect.map((entries) => visibleToolWinners(entries, sessionId))),
         listRequests: (sessionId) =>
           Ref.get(requests).pipe(
-            Effect.map((entries) =>
-              entries.flatMap((entry) =>
-                scopeMatches(entry.scope, sessionId)
-                  ? [{ extensionId: entry.extensionId, capability: entry.capability }]
-                  : [],
-              ),
-            ),
+            Effect.map((entries) => visibleRequestWinners(entries, sessionId)),
           ),
         findRequest: (params) =>
           Ref.get(requests).pipe(
-            Effect.map((entries) => {
-              for (let i = entries.length - 1; i >= 0; i--) {
-                const entry = entries[i]
-                if (
-                  entry !== undefined &&
-                  scopeMatches(entry.scope, params.sessionId) &&
+            Effect.map((entries) =>
+              visibleRequestWinners(entries, params.sessionId).find(
+                (entry) =>
                   entry.extensionId === params.extensionId &&
-                  String(entry.capability.id) === params.capabilityId
-                ) {
-                  return { extensionId: entry.extensionId, capability: entry.capability }
-                }
-              }
-              return undefined
-            }),
+                  String(entry.capability.id) === params.capabilityId,
+              ),
+            ),
           ),
       })
     }),

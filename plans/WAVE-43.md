@@ -66,6 +66,39 @@ systems:
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/extension-reactions.ts`,
   `/Users/cvr/Developer/personal/gent/docs/extensions.md:36`.
 
+### L2/L3 dynamic reference batch - complete
+
+- Made dynamic registrations session-coherent: session scoped tools/requests
+  now shadow process scoped entries for that session, dynamic model tools are
+  merged into turn resolution, tool execution prefers dynamic tools over
+  static tools with the same id, and slash command listing gives dynamic
+  commands the same shadow semantics.
+- Added author-facing duplicate diagnostics for same-scope dynamic
+  registrations. Authors get a `DynamicRegistrationError` that names the
+  dynamic kind, id, and scope and tells them to run the unregister finalizer
+  before replacing a capability.
+- Added RPC acceptance coverage proving an extension request can yield
+  `ExtensionContext`, dynamically register a tool and slash request, refresh
+  slash command listing, dispatch the dynamic request, and expose the dynamic
+  tool to the next model call.
+- Added a guardrail for reference extension examples so they cannot import
+  `@gent/core-internal/*`, core source files, shipped extension internals, or
+  out-of-tree relative internals.
+- Verification:
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/domain/dynamic-extension-registry.test.ts packages/core/tests/server/extension-commands-rpc.test.ts packages/core/tests/runtime/tool-runner.test.ts`
+  passed with 32 tests.
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/tooling/tests/platform-duplication-guards.test.ts`
+  passed with 34 tests. `bun run typecheck` passed.
+- Evidence:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/dynamic-extension-registry.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/turn-resolve.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/tool-runner.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/domain/dynamic-extension-registry.test.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/tooling/src/platform-duplication-guards.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/tooling/tests/platform-duplication-guards.test.ts`.
+
 ### L1 - Authoring Happy Path
 
 Make the first extension experience obvious and runnable.
