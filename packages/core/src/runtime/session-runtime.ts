@@ -18,8 +18,8 @@ import type { SqlClient } from "effect/unstable/sql"
 import { ActorAddressResolver } from "effect-encore"
 import { AgentName, AgentRunError, RunSpecSchema, type RunSpec } from "../domain/agent.js"
 import type { QueueSnapshot } from "../domain/queue.js"
-import { AgentRestarted, ErrorOccurred, EventStore } from "../domain/event.js"
-import { EventPublisher } from "../domain/event-publisher.js"
+import type { EventStore } from "../domain/event.js"
+import type { EventPublisher } from "../domain/event-publisher.js"
 import {
   ActorCommandId,
   BranchId,
@@ -274,8 +274,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     })
   const sharding = yield* Sharding.Sharding
   const clusterMessageStorage = yield* ClusterMessageStorage.MessageStorage
-  const eventStore = yield* EventStore
-  const eventPublisher = yield* EventPublisher
   const agentLoopSessionGovernance = yield* AgentLoopSessionGovernance
   const platform = yield* GentPlatform
   const storageContext = yield* Effect.context<SessionStorage | BranchStorage>()
@@ -310,31 +308,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
           message: "AgentLoop state unavailable",
           cause: error,
         })
-  const waitForTurnCompleted = (target: SessionRuntimeTarget & { readonly messageId: MessageId }) =>
-    eventStore.subscribe({ sessionId: target.sessionId, branchId: target.branchId }).pipe(
-      Stream.filter(
-        (envelope) =>
-          envelope.event._tag === "TurnCompleted" && envelope.event.messageId === target.messageId,
-      ),
-      Stream.runHead,
-      Effect.flatMap((completed) =>
-        Option.isSome(completed)
-          ? Effect.void
-          : Effect.fail(
-              new SessionRuntimeError({
-                message: `Turn completion stream ended: ${target.sessionId}/${target.branchId}/${target.messageId}`,
-              }),
-            ),
-      ),
-      Effect.mapError((cause) =>
-        Schema.is(SessionRuntimeError)(cause)
-          ? cause
-          : new SessionRuntimeError({
-              message: "Failed to wait for turn completion",
-              cause,
-            }),
-      ),
-    )
   const runPromptThroughActor = Effect.fn("SessionRuntime.runPromptThroughActor")(function* (
     input: RunPromptInput,
   ) {
@@ -482,58 +455,10 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       runSpec: input.runSpec,
     }
     const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-    const reportSubmissionFailure = (cause: Cause.Cause<unknown>) => {
-      if (Cause.hasInterruptsOnly(cause)) return Effect.void
-      return Effect.gen(function* () {
-        if (Cause.hasDies(cause)) {
-          yield* eventPublisher.publish(
-            AgentRestarted.make({
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              attempt: 0,
-              error: Cause.pretty(cause),
-            }),
-          )
-        }
-        yield* eventPublisher.publish(
-          ErrorOccurred.make({
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            error: Cause.pretty(cause),
-          }),
-        )
-        yield* Effect.logWarning("agent loop submission failed").pipe(
-          Effect.annotateLogs({ error: Cause.pretty(cause) }),
-        )
-      }).pipe(
-        Effect.catchCause((diagnosticCause) =>
-          Effect.logWarning("agent loop submission failure diagnostics failed").pipe(
-            Effect.annotateLogs({
-              error: Cause.pretty(diagnosticCause),
-              originalError: Cause.pretty(cause),
-            }),
-            Effect.catchEager(() => Effect.void),
-          ),
-        ),
-      )
-    }
     if (shouldHoldCompletion) {
-      yield* provideActorProtocolServices(ref.execute(AgentLoopActor.Submit.make(payload))).pipe(
-        Effect.andThen(
-          waitForTurnCompleted({
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            messageId,
-          }),
-        ),
-        Effect.tapCause(reportSubmissionFailure),
-      )
+      yield* provideActorProtocolServices(ref.execute(AgentLoopActor.SubmitAndWait.make(payload)))
     } else {
-      yield* provideActorProtocolServices(
-        ref
-          .execute(AgentLoopActor.Submit.make(payload))
-          .pipe(Effect.tapCause(reportSubmissionFailure)),
-      )
+      yield* provideActorProtocolServices(ref.execute(AgentLoopActor.Submit.make(payload)))
     }
     yield* Effect.logInfo("session-runtime.message.submitted").pipe(
       Effect.annotateLogs({

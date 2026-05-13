@@ -490,6 +490,15 @@ ownership.
   handler owns event-log projection, and `SessionRuntime.getMetrics`
   validates the durable branch boundary before dispatching to the actor
   instead of reading `EventStorage` directly.
+- **C7 complete**: `SessionRuntime` is now a boundary validator plus actor
+  gateway for the remaining runtime operations. State, metrics, queue reads,
+  queue drains, extension requests, branch termination, redelivery, and turn
+  completion all run through `AgentLoop` actor operations or generated actor
+  client/state/control facades. `sendUserMessage` no longer subscribes to the
+  event log or publishes submission diagnostics itself; request/command-id
+  sends use `AgentLoop.SubmitAndWait`, whose handler waits for the submitted
+  message's `TurnCompleted` event or actor failure inside the branch-local
+  actor boundary.
 - **C8 complete**: `AgentLoopQueueScope`, `AgentLoopTurnExecutionScope`,
   and `AgentLoopWorkerScope` were deleted. The actor behavior now owns the
   refs, semaphores, queues, and branch/session identity directly, then
@@ -508,14 +517,22 @@ ownership.
   `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md:152`,
   `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md:376`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:166`,
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:255`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:261`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:292`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:323`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:374`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:424`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:458`,
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:660`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:646`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.state.ts:326`,
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.protocol.ts:76`,
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.protocol.ts:296`,
-  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:677`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.protocol.ts:235`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.protocol.ts:323`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.protocol.ts:332`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.protocol.ts:366`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.protocol.ts:377`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:492`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:520`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:649`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:101`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:142`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts:106`,

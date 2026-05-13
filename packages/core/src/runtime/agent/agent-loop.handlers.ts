@@ -36,11 +36,12 @@
  * @module
  */
 
-import { DateTime, Effect, Exit, Ref, Schema, Stream, Semaphore } from "effect"
+import { DateTime, Effect, Exit, Option, Ref, Schema, Stream, Semaphore } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Actor } from "effect-encore"
 import { type AgentName, type RunSpec } from "../../domain/agent.js"
 import type { ModelId } from "../../domain/model.js"
+import { EventStore } from "../../domain/event.js"
 import { Message, type MessageMetadata } from "../../domain/message.js"
 import {
   MessageId,
@@ -139,6 +140,7 @@ export const buildAgentLoopActorHandlers = (config: {
     const messageStorage = yield* MessageStorage
     const queueStorage = yield* AgentLoopQueueStorage
     const eventStorage = yield* EventStorage
+    const eventStore = yield* EventStore
     const sessionProfileCacheOption = yield* Effect.serviceOption(SessionProfileCache)
     const closed = yield* Ref.make(false)
     const operationSeen = yield* Ref.make(false)
@@ -487,6 +489,65 @@ export const buildAgentLoopActorHandlers = (config: {
       }
     })
 
+    const waitForMessageTurnCompleted = Effect.fn("AgentLoopActor.waitForMessageTurnCompleted")(
+      function* (messageId: MessageId) {
+        const existingMessage = yield* messageStorage
+          .getMessage(messageId)
+          .pipe(Effect.catchEager(() => Effect.undefined))
+        if (existingMessage?.turnDurationMs !== undefined) return
+
+        const completed = yield* eventStore.subscribe({ sessionId, branchId }).pipe(
+          Stream.filter(
+            (envelope) =>
+              envelope.event._tag === "TurnCompleted" && envelope.event.messageId === messageId,
+          ),
+          Stream.runHead,
+          Effect.mapError(
+            (cause) =>
+              new AgentLoopError({
+                message: `Failed to wait for turn completion: ${sessionId}/${branchId}/${messageId}`,
+                cause,
+              }),
+          ),
+        )
+        if (Option.isSome(completed)) return
+        return yield* new AgentLoopError({
+          message: `Turn completion stream ended: ${sessionId}/${branchId}/${messageId}`,
+        })
+      },
+    )
+
+    const submitTurnAndWait = Effect.fn("AgentLoopActor.submitTurnAndWait")(function* (
+      operation: TurnSubmissionInput,
+    ) {
+      const handle = yield* ensureStarted
+      const failureBaseline = (yield* handle.readState).turnFailure?.epoch ?? 0
+      yield* ensureTarget(operation.message)
+      yield* markWrite
+      const item = buildQueuedTurnItem(operation)
+      const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
+        coldQueueOnly: false,
+      })
+      if (reservedStart !== undefined) {
+        yield* handle
+          .startTurn(item)
+          .pipe(
+            Effect.catchEager((error) =>
+              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+            ),
+          )
+      }
+      yield* Effect.raceFirst(
+        waitForMessageTurnCompleted(operation.message.id),
+        Effect.raceFirst(
+          waitForTurnFailureAfterEpoch(handle, failureBaseline),
+          handle.persistenceFailure,
+        ),
+      ).pipe(
+        Effect.catchEager((error) => cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error)))),
+      )
+    })
+
     const runTurn = Effect.fn("AgentLoopActor.runTurn")(function* (operation: TurnSubmissionInput) {
       const handle = yield* ensureStarted
       yield* ensureTarget(operation.message)
@@ -584,6 +645,10 @@ export const buildAgentLoopActorHandlers = (config: {
     return AgentLoop.of({
       Submit: Effect.fn("AgentLoop.Submit")(({ operation }: HandlerRequest<TurnSubmissionInput>) =>
         submitTurn(operation).pipe(provideActorWorkspace),
+      ),
+      SubmitAndWait: Effect.fn("AgentLoop.SubmitAndWait")(
+        ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
+          submitTurnAndWait(operation).pipe(provideActorWorkspace),
       ),
       SubmitDurable: Effect.fn("AgentLoop.SubmitDurable")(
         ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
