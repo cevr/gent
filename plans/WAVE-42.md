@@ -480,6 +480,11 @@ ownership.
   ownership. The actor owns `(workspaceId, sessionId, branchId, agent)`
   and profile, so host context should not be rebuilt by an external
   runtime facade.
+- **C7 progress**: Runtime metrics now flow through an `AgentLoop.GetMetrics`
+  actor operation. The metrics schema lives with runtime state, the actor
+  handler owns event-log projection, and `SessionRuntime.getMetrics`
+  validates the durable branch boundary before dispatching to the actor
+  instead of reading `EventStorage` directly.
 - **Evidence**:
   `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md:152`,
   `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md:376`,
@@ -487,6 +492,11 @@ ownership.
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:255`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:292`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:458`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:660`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.state.ts:326`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.protocol.ts:76`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.protocol.ts:296`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:677`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:101`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts:142`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.behavior.ts:106`,

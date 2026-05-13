@@ -20,10 +20,9 @@ import { Message, MessageMetadata } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
 import type { AgentLoopQueueStorage } from "../storage/agent-loop-queue-storage.js"
 import type { BranchStorage } from "../storage/branch-storage.js"
-import { EventStorage } from "../storage/event-storage.js"
+import type { EventStorage } from "../storage/event-storage.js"
 import type { MessageStorage } from "../storage/message-storage.js"
 import type { SessionStorage } from "../storage/session-storage.js"
-import { ModelId } from "../domain/model.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
 import { entityIdOf, parseEntityId } from "./agent/agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
@@ -37,12 +36,13 @@ import type { ConfigService } from "./config-service.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 import type { SteerCommand as SteerCommandType } from "../domain/steer.js"
 import { resolveExistingSessionBranch } from "./session-runtime-context.js"
-import {
-  AgentLoopError,
+import { AgentLoopError } from "./agent/agent-loop.state.js"
+import type { SessionRuntimeMetrics, SessionRuntimeState } from "./agent/agent-loop.state.js"
+export {
+  SessionRuntimeMetrics,
   SessionRuntimeStateSchema,
   type SessionRuntimeState,
 } from "./agent/agent-loop.state.js"
-export { SessionRuntimeStateSchema, type SessionRuntimeState }
 
 export class SessionRuntimeError extends Schema.TaggedErrorClass<SessionRuntimeError>()(
   "SessionRuntimeError",
@@ -142,26 +142,6 @@ export const SessionRuntimeSessionTarget = Schema.Struct({
   sessionId: SessionId,
 })
 export type SessionRuntimeSessionTarget = typeof SessionRuntimeSessionTarget.Type
-
-export const SessionRuntimeMetrics = Schema.Struct({
-  turns: Schema.Number,
-  tokens: Schema.Number,
-  toolCalls: Schema.Number,
-  retries: Schema.Number,
-  durationMs: Schema.Number,
-  /** Cumulative USD cost: sum of `StreamEnded.costUsd` across the session's
-   * event log. Cost is frozen into each event at emit time against the
-   * pricing snapshot available then, so replays always sum to the same
-   * total regardless of later registry refreshes. */
-  costUsd: Schema.Number,
-  /** Input-tokens reported by the most recent `StreamEnded` (for "how close
-   * to the context window are we right now" — sums don't answer that). */
-  lastInputTokens: Schema.Number,
-  /** Model id reported by the most recent `StreamEnded` (drives the model
-   * name label in the TUI). `undefined` until the first stream ends. */
-  lastModelId: Schema.optional(ModelId),
-})
-export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
 type SessionRuntimeLayerRequirements =
   | Sharding.Sharding
@@ -267,7 +247,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     })
   const sharding = yield* Sharding.Sharding
   const clusterMessageStorage = yield* ClusterMessageStorage.MessageStorage
-  const eventStorage = yield* EventStorage
   const eventStore = yield* EventStore
   const eventPublisher = yield* EventPublisher
   const agentLoopSessionGovernance = yield* AgentLoopSessionGovernance
@@ -672,56 +651,21 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       ),
 
     getMetrics: (input) =>
-      Effect.gen(function* () {
-        yield* requireSessionBranch(input)
-        const envelopes = yield* eventStorage
-          .listEvents({ sessionId: input.sessionId, branchId: input.branchId })
-          .pipe(Effect.catchEager(() => Effect.succeed([])))
-        let turns = 0
-        let tokens = 0
-        let toolCalls = 0
-        let retries = 0
-        let durationMs = 0
-        let costUsd = 0
-        let lastInputTokens = 0
-        let lastModelId: ModelId | undefined
-        for (const { event } of envelopes) {
-          switch (event._tag) {
-            case "TurnCompleted":
-              turns++
-              durationMs += event.durationMs
-              break
-            case "StreamEnded":
-              if (event.usage !== undefined) {
-                tokens += event.usage.inputTokens + event.usage.outputTokens
-                lastInputTokens = event.usage.inputTokens
-              }
-              if (event.costUsd !== undefined) {
-                costUsd += event.costUsd
-              }
-              if (event.model !== undefined) {
-                lastModelId = event.model
-              }
-              break
-            case "ToolCallStarted":
-              toolCalls++
-              break
-            case "ProviderRetrying":
-              retries++
-              break
-          }
-        }
-        return {
-          turns,
-          tokens,
-          toolCalls,
-          retries,
-          durationMs,
-          costUsd,
-          lastInputTokens,
-          ...(lastModelId !== undefined ? { lastModelId } : {}),
-        } satisfies SessionRuntimeMetrics
-      }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getMetrics failed", cause)))),
+      requireSessionBranch(input).pipe(
+        Effect.flatMap(() =>
+          Effect.gen(function* () {
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            return yield* ref.execute(
+              AgentLoopActor.GetMetrics.make({
+                ...input,
+                workspaceId: yield* CurrentWorkspaceId,
+                commandId: ActorCommandId.make(yield* platform.randomId),
+              }),
+            )
+          }),
+        ),
+        Effect.catchCause((cause) => Effect.fail(wrapError("getMetrics failed", cause))),
+      ),
 
     getState: (input) =>
       requireSessionBranch(input).pipe(

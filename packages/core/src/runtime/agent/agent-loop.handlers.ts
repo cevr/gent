@@ -40,6 +40,7 @@ import { DateTime, Effect, Exit, Ref, Schema, Stream, Semaphore } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Actor } from "effect-encore"
 import { type AgentName, type RunSpec } from "../../domain/agent.js"
+import type { ModelId } from "../../domain/model.js"
 import { Message, type MessageMetadata } from "../../domain/message.js"
 import { MessageId, type ActorCommandId, type BranchId, type SessionId } from "../../domain/ids.js"
 import { SteerCommand } from "../../domain/steer.js"
@@ -82,6 +83,7 @@ import {
 import {
   AgentLoop,
   type DrainQueueInput,
+  type GetMetricsInput,
   type GetQueueInput,
   type GetStateInput,
   type HandlerRequest,
@@ -671,6 +673,60 @@ export const buildAgentLoopActorHandlers = (config: {
           const handle = yield* ensureStarted
           return yield* handle.runtimeState
         }).pipe(provideActorWorkspace),
+      ),
+      GetMetrics: Effect.fn("AgentLoop.GetMetrics")(
+        ({ operation }: HandlerRequest<GetMetricsInput>) =>
+          Effect.gen(function* () {
+            yield* ensureTarget(operation)
+            yield* rejectIfTerminated
+            const envelopes = yield* eventStorage
+              .listEvents({ sessionId: operation.sessionId, branchId: operation.branchId })
+              .pipe(Effect.catchEager(() => Effect.succeed([])))
+            let turns = 0
+            let tokens = 0
+            let toolCalls = 0
+            let retries = 0
+            let durationMs = 0
+            let costUsd = 0
+            let lastInputTokens = 0
+            let lastModelId: ModelId | undefined
+            for (const { event } of envelopes) {
+              switch (event._tag) {
+                case "TurnCompleted":
+                  turns++
+                  durationMs += event.durationMs
+                  break
+                case "StreamEnded":
+                  if (event.usage !== undefined) {
+                    tokens += event.usage.inputTokens + event.usage.outputTokens
+                    lastInputTokens = event.usage.inputTokens
+                  }
+                  if (event.costUsd !== undefined) {
+                    costUsd += event.costUsd
+                  }
+                  if (event.model !== undefined) {
+                    lastModelId = event.model
+                  }
+                  break
+                case "ToolCallStarted":
+                  toolCalls++
+                  break
+                case "ProviderRetrying":
+                  retries++
+                  break
+              }
+            }
+            return {
+              turns,
+              tokens,
+              toolCalls,
+              retries,
+              durationMs,
+              costUsd,
+              lastInputTokens,
+              ...(lastModelId !== undefined ? { lastModelId } : {}),
+            }
+          }).pipe(provideActorWorkspace),
       ),
       RecordToolResult: Effect.fn("AgentLoop.RecordToolResult")(
         ({ operation }: HandlerRequest<RecordToolResultInput>) =>

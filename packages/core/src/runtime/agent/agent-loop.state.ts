@@ -12,7 +12,7 @@ import {
   type ReasoningEffort as ReasoningEffortType,
 } from "../../domain/agent.js"
 import { Message } from "../../domain/message.js"
-import type { ModelId as ModelIdType } from "../../domain/model.js"
+import { ModelId, type ModelId as ModelIdType } from "../../domain/model.js"
 import {
   FollowUpQueueEntryInfo,
   QueueSnapshot,
@@ -322,6 +322,26 @@ export const SessionRuntimeStateSchema = Schema.TaggedUnion({
   },
 })
 export type SessionRuntimeState = Schema.Schema.Type<typeof SessionRuntimeStateSchema>
+
+export const SessionRuntimeMetrics = Schema.Struct({
+  turns: Schema.Number,
+  tokens: Schema.Number,
+  toolCalls: Schema.Number,
+  retries: Schema.Number,
+  durationMs: Schema.Number,
+  /** Cumulative USD cost: sum of `StreamEnded.costUsd` across the session's
+   * event log. Cost is frozen into each event at emit time against the
+   * pricing snapshot available then, so replays always sum to the same
+   * total regardless of later registry refreshes. */
+  costUsd: Schema.Number,
+  /** Input-tokens reported by the most recent `StreamEnded` (for "how close
+   * to the context window are we right now" — sums don't answer that). */
+  lastInputTokens: Schema.Number,
+  /** Model id reported by the most recent `StreamEnded` (drives the model
+   * name label in the TUI). `undefined` until the first stream ends. */
+  lastModelId: Schema.optional(ModelId),
+})
+export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
 // ── State builders ──
 

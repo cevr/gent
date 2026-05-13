@@ -14,7 +14,11 @@ import {
 import { SteerCommand } from "../../domain/steer.js"
 import { WorkspaceId } from "../../server/workspace-rpc.js"
 import { entityIdOf } from "./agent-loop.entity-id.js"
-import { AgentLoopError, SessionRuntimeStateSchema } from "./agent-loop.state.js"
+import {
+  AgentLoopError,
+  SessionRuntimeMetrics,
+  SessionRuntimeStateSchema,
+} from "./agent-loop.state.js"
 
 const WorkspaceFields = {
   workspaceId: WorkspaceId,
@@ -63,6 +67,13 @@ const GetQueueFields = {
 }
 
 const GetStateFields = {
+  ...WorkspaceFields,
+  sessionId: SessionId,
+  branchId: BranchId,
+  commandId: ActorCommandId,
+}
+
+const GetMetricsFields = {
   ...WorkspaceFields,
   sessionId: SessionId,
   branchId: BranchId,
@@ -144,6 +155,12 @@ export type GetQueueInput = {
   readonly commandId: ActorCommandId
 }
 export type GetStateInput = {
+  readonly workspaceId: WorkspaceId
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly commandId: ActorCommandId
+}
+export type GetMetricsInput = {
   readonly workspaceId: WorkspaceId
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -273,6 +290,15 @@ export const AgentLoop = Actor.fromEntity(
       success: SessionRuntimeStateSchema,
       error: AgentLoopError,
       id: (p: GetStateInput) => ({
+        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
+        primaryKey: p.commandId,
+      }),
+    },
+    GetMetrics: {
+      payload: GetMetricsFields,
+      success: SessionRuntimeMetrics,
+      error: AgentLoopError,
+      id: (p: GetMetricsInput) => ({
         entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
         primaryKey: p.commandId,
       }),
