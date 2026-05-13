@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect"
 import { ShardingConfig } from "effect/unstable/cluster"
-import { Actor, ActorStateRegistry } from "effect-encore"
+import { Actor } from "effect-encore"
 import type { PromptSection } from "../../domain/prompt.js"
 import { buildAgentLoopActorHandlers } from "./agent-loop.handlers.js"
 import { AgentLoop } from "./agent-loop.protocol.js"
@@ -18,7 +18,7 @@ export const AgentLoopLiveActor = (config: {
           // `concurrency: "unbounded"` keeps short ops (RecordToolResult,
           // RespondInteraction, Steer) from waiting on unrelated mailbox handlers.
           concurrency: "unbounded",
-        }).pipe(Layer.provideMerge(ActorStateRegistry.Live)),
+        }),
       ),
     ),
   )
@@ -32,10 +32,7 @@ export const AgentLoopTestActor = (config: {
         Actor.toTestLayer(AgentLoop, build, {
           // Match the production mailbox behavior used by AgentLoopLiveActor.
           concurrency: "unbounded",
-        }).pipe(
-          Layer.provideMerge(ActorStateRegistry.Live),
-          Layer.provide(ShardingConfig.layerDefaults),
-        ),
+        }).pipe(Layer.provide(ShardingConfig.layerDefaults)),
       ),
     ),
   )

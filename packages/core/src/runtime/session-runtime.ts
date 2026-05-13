@@ -4,7 +4,7 @@ import { MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstab
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { SqlClient } from "effect/unstable/sql"
 import { ActorAddressResolver } from "effect-encore"
-import { AgentRunError, RunSpecSchema, type RunSpec, AgentName } from "../domain/agent.js"
+import { AgentName, AgentRunError, RunSpecSchema, type RunSpec } from "../domain/agent.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import { AgentRestarted, ErrorOccurred, EventStore } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
@@ -257,6 +257,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   // instead of the `OperationHandle.execute(payload)` form (which would
   // re-introduce the actor client requirement at each call site).
   const actorClientFactory = yield* AgentLoopActor.Context
+  const actorControl = yield* AgentLoopActor.Control
   const actorState = yield* AgentLoopActor.State
   const actorAddressResolver = yield* ActorAddressResolver
   const agentLoopActorRefFor = (sessionId: SessionId, branchId: BranchId) =>
@@ -272,6 +273,14 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const agentLoopSessionGovernance = yield* AgentLoopSessionGovernance
   const platform = yield* GentPlatform
   const storageContext = yield* Effect.context<SessionStorage | BranchStorage>()
+  const actorContext = Context.empty().pipe(
+    Context.add(ActorAddressResolver, actorAddressResolver),
+    Context.add(AgentLoopActor.Context, actorClientFactory),
+    Context.add(ClusterMessageStorage.MessageStorage, clusterMessageStorage),
+    Context.add(Sharding.Sharding, sharding),
+  )
+  const provideActorProtocolServices = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.provide(effect, actorContext)
   // Every public session-scoped boundary (writes + reads) MUST validate the
   // durable `(sessionId, branchId)` target before proceeding. In-memory
   // tombstones do not survive restart, and branch ids are globally addressable
@@ -288,14 +297,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       Effect.provideContext(storageContext),
     )
 
-  const actorContext = Context.empty().pipe(
-    Context.add(ActorAddressResolver, actorAddressResolver),
-    Context.add(AgentLoopActor.Context, actorClientFactory),
-    Context.add(ClusterMessageStorage.MessageStorage, clusterMessageStorage),
-    Context.add(Sharding.Sharding, sharding),
-  )
-  const provideActorProtocolServices = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.provide(effect, actorContext)
   const toAgentLoopError = (error: unknown) =>
     Schema.is(AgentLoopError)(error)
       ? error
@@ -444,8 +445,8 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const redeliverPendingActorMessages = (target: SessionRuntimeTarget) =>
     Effect.gen(function* () {
       const workspaceId = yield* CurrentWorkspaceId
-      yield* AgentLoopActor.redeliver(entityIdOf(workspaceId, target.sessionId, target.branchId))
-    }).pipe(provideActorProtocolServices, Effect.ignore)
+      yield* actorControl.redeliver(entityIdOf(workspaceId, target.sessionId, target.branchId))
+    }).pipe(Effect.ignore)
 
   const sendUserMessage = Effect.fn("SessionRuntime.sendUserMessage")(function* (
     input: SendUserMessagePayload,
@@ -511,17 +512,15 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       )
     }
     if (shouldHoldCompletion) {
-      yield* provideActorProtocolServices(
-        ref.execute(AgentLoopActor.SubmitDurable.make(payload)).pipe(
-          Effect.andThen(
-            waitForTurnCompleted({
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              messageId,
-            }),
-          ),
-          Effect.tapCause(reportSubmissionFailure),
+      yield* provideActorProtocolServices(ref.execute(AgentLoopActor.Submit.make(payload))).pipe(
+        Effect.andThen(
+          waitForTurnCompleted({
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            messageId,
+          }),
         ),
+        Effect.tapCause(reportSubmissionFailure),
       )
     } else {
       yield* provideActorProtocolServices(
@@ -579,14 +578,38 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       requireSessionBranch(input).pipe(
         Effect.flatMap(() =>
           Effect.gen(function* () {
+            const workspaceId = yield* CurrentWorkspaceId
+            const entityId = entityIdOf(workspaceId, input.sessionId, input.branchId)
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
             const payload = AgentLoopActor.RespondInteraction.make({
               ...input,
-              workspaceId: yield* CurrentWorkspaceId,
+              workspaceId,
             })
             yield* ref.send(payload)
             yield* redeliverPendingActorMessages(input)
-            yield* provideActorProtocolServices(AgentLoopActor.RespondInteraction.waitFor(payload))
+            yield* provideActorProtocolServices(
+              ref.execute(
+                AgentLoopActor.GetState.make({
+                  ...input,
+                  workspaceId,
+                  commandId: ActorCommandId.make(yield* platform.randomId),
+                }),
+              ),
+            ).pipe(
+              Effect.timeoutOption("500 millis"),
+              Effect.catchCause(() => Effect.void),
+            )
+            const completed = yield* provideActorProtocolServices(
+              AgentLoopActor.RespondInteraction.waitFor(payload),
+            ).pipe(Effect.timeoutOption("500 millis"))
+            if (Option.isNone(completed)) {
+              yield* actorState
+                .get(entityId, { materialize: redeliverPendingActorMessages(input) })
+                .pipe(Effect.catchCause(() => Effect.void))
+              yield* provideActorProtocolServices(
+                AgentLoopActor.RespondInteraction.waitFor(payload),
+              ).pipe(Effect.timeoutOption("500 millis"), Effect.asVoid)
+            }
           }),
         ),
         Effect.catchCause((cause) => Effect.fail(wrapError("respondInteraction failed", cause))),
@@ -606,12 +629,24 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
           Effect.gen(function* () {
             const commandId = ActorCommandId.make(input.requestId)
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            return yield* ref.execute(
-              AgentLoopActor.DrainQueue.make({
-                ...input,
-                workspaceId: yield* CurrentWorkspaceId,
-                commandId,
-              }),
+            const workspaceId = yield* CurrentWorkspaceId
+            yield* provideActorProtocolServices(
+              ref.execute(
+                AgentLoopActor.GetQueue.make({
+                  ...input,
+                  workspaceId,
+                  commandId: ActorCommandId.make(yield* platform.randomId),
+                }),
+              ),
+            )
+            return yield* provideActorProtocolServices(
+              ref.execute(
+                AgentLoopActor.DrainQueue.make({
+                  ...input,
+                  workspaceId,
+                  commandId,
+                }),
+              ),
             )
           }),
         ),

@@ -50,7 +50,7 @@ context adapter`).
   `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/wide-event-boundary.test.ts`,
   `/Users/cvr/Developer/personal/gent/packages/tooling/tests/platform-duplication-guards.test.ts`.
 
-### S2 status - partial
+### S2 status - complete
 
 - **C5 complete**: `effect-encore@0.12.2` published and consumed. Encore
   now exposes actor-specific `State` services from `Actor.toLayer` and
@@ -61,10 +61,25 @@ context adapter`).
   published and consumed. Encore now exposes `Actor.provideLayerBuildContext`,
   mirrored in v3, so Gent deleted its local `provideLayerBuildContext`
   helper and uses the upstream API at actor construction.
-- **C6 still open**: actor identity and dual storage tags remain split
-  across Gent/Encore. The next upstream question is whether Encore should
-  declare entity identity once and hide cluster storage plus Encore message
-  storage behind one actor runtime storage layer.
+- **C6 complete after the requirement-leak correction**:
+  `effect-encore@0.12.7` is published and consumed. The upstream bug was
+  caller actor context precedence, not a need for Gent to pass cluster
+  protocol services as public parameters. Encore now preserves caller
+  services over actor-layer services in both v4 and v3; Gent verifies this
+  through local `file:../effect-encore` first, then consumes the published
+  package.
+- **Changed finding**: service-owned hidden requirements are allowed when
+  the service itself captures and internally provides the actor protocol
+  context. `SessionRuntime` now captures `ActorAddressResolver`,
+  `AgentLoopActor.Context`, cluster `MessageStorage`, and `Sharding` once
+  at construction and provides that internal context only around actor
+  protocol operations. That keeps public `SessionRuntime` methods clean
+  without forcing callers to pass requirements as parameters.
+- **Rejected upstream direction**: cold persisted actor commands are durable,
+  but they do not by themselves guarantee local actor assignment/startup for
+  synchronous result delivery. Gent therefore warms/materializes the actor
+  where synchronous observation is required instead of asking Encore to make
+  every persisted send behave like a direct in-memory execute.
 - Verification:
   `bun run gate` in `/Users/cvr/Developer/personal/effect-encore`
   passed before each publish; GitHub Release runs `25802698340` and
@@ -72,7 +87,13 @@ context adapter`).
   returned `"0.12.3"`; Gent `bun run typecheck`, `bun run lint`, and
   `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/runtime/session-runtime.test.ts packages/core/tests/runtime/agent-runner.test.ts`
   passed after consuming `0.12.2`; Gent `bun run typecheck` passed after
-  consuming `0.12.3`.
+  consuming `0.12.3`. For `0.12.7`, upstream `bun run gate` passed before
+  release, release PR #29 (`changeset-release/main`) was merged, GitHub CI
+  run `25810527884` and Release run `25810532320` both passed, and
+  `npm view effect-encore version` returned `0.12.7`. Gent verified the
+  published package with
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/runtime/session-runtime.test.ts packages/core/tests/runtime/agent-loop/actor-command.test.ts packages/core/tests/runtime/agent-loop/recovery-race.test.ts`
+  (17 pass) and `bun run gate` (pass).
 - Evidence:
   `/Users/cvr/Developer/personal/effect-encore/src/actor.ts`,
   `/Users/cvr/Developer/personal/effect-encore/src/index.ts`,
@@ -92,7 +113,29 @@ context adapter`).
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.runtime-context.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.handlers.ts`,
   `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/session-runtime.test.ts`,
-  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-runner.test.ts`.
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-runner.test.ts`,
+  `/Users/cvr/Developer/personal/effect-encore/src/actor.ts:1816`,
+  `/Users/cvr/Developer/personal/effect-encore/v3/src/actor.ts:1877`,
+  `/Users/cvr/Developer/personal/effect-encore/test/actor-with-scope.test.ts:119`,
+  `/Users/cvr/Developer/personal/effect-encore/test/actor-with-scope.test.ts:123`,
+  `/Users/cvr/Developer/personal/effect-encore/v3/test/actor-with-scope.test.ts:121`,
+  `/Users/cvr/Developer/personal/effect-encore/v3/test/actor-with-scope.test.ts:125`,
+  `/Users/cvr/Developer/personal/gent/package.json:59`,
+  `/Users/cvr/Developer/personal/gent/bun.lock:685`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:254`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:276`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:282`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:514`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:577`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts:626`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts:10`,
+  `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.actor.ts:26`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop/actor-command.test.ts:242`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop/actor-command.test.ts:255`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop/actor-command.test.ts:287`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop/actor-command.test.ts:305`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop/actor-command.test.ts:353`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop/actor-command.test.ts:369`.
 
 ### S4 status - complete
 

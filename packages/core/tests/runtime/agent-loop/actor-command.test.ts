@@ -1,10 +1,15 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
-import { Cause, Clock, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Cause, Clock, Context, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { narrowR } from "../../helpers/effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { SingleRunner } from "effect/unstable/cluster"
+import {
+  MessageStorage as ClusterMessageStorage,
+  Sharding,
+  SingleRunner,
+} from "effect/unstable/cluster"
+import { ActorAddressResolver, type PeekResult } from "effect-encore"
 import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
 import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
 import type { QueueSnapshot } from "@gent/core-internal/domain/queue"
@@ -234,6 +239,35 @@ const eventTags = (calls: ReadonlyArray<CallRecord>) =>
     .filter((call) => call.service === "EventStore" && call.method === "append")
     .map((call) => (call.args as { _tag?: string } | undefined)?._tag)
 
+const actorProtocolContext = Effect.gen(function* () {
+  const resolver = yield* ActorAddressResolver
+  const actorClientFactory = yield* AgentLoopActor.Context
+  const clusterMessageStorage = yield* ClusterMessageStorage.MessageStorage
+  const sharding = yield* Sharding.Sharding
+  return Context.empty().pipe(
+    Context.add(ActorAddressResolver, resolver),
+    Context.add(AgentLoopActor.Context, actorClientFactory),
+    Context.add(ClusterMessageStorage.MessageStorage, clusterMessageStorage),
+    Context.add(Sharding.Sharding, sharding),
+  )
+})
+
+const materializeActorCommand = <A, E>(result: PeekResult<A, E>): Effect.Effect<A, E> => {
+  switch (result._tag) {
+    case "Success":
+      return Effect.succeed(result.value)
+    case "Failure":
+      return Effect.fail(result.error)
+    case "Interrupted":
+      return Effect.interrupt
+    case "Defect":
+      return Effect.die(result.cause)
+    case "Pending":
+    case "Suspended":
+      return Effect.die(new Error(`Actor command did not reach a terminal state: ${result._tag}`))
+  }
+}
+
 describe("agent-loop actor commands", () => {
   it.live("InvokeTool actor command dedupes by commandId", () =>
     Effect.gen(function* () {
@@ -246,7 +280,20 @@ describe("agent-loop actor commands", () => {
           const recorder = yield* SequenceRecorder
           const { sessionId, branchId } = yield* createSessionBranch
           const actorClientFactory = yield* AgentLoopActor.Context
-          const ref = yield* actorClientFactory(entityIdOf(DefaultWorkspaceId, sessionId, branchId))
+          const actorControl = yield* AgentLoopActor.Control
+          const entityId = entityIdOf(DefaultWorkspaceId, sessionId, branchId)
+          const ref = yield* actorClientFactory(entityId)
+          const protocolContext = yield* actorProtocolContext
+          yield* ref
+            .execute(
+              AgentLoopActor.GetState.make({
+                workspaceId: DefaultWorkspaceId,
+                sessionId,
+                branchId,
+                commandId: ActorCommandId.make("invoke-tool-warm-state"),
+              }),
+            )
+            .pipe(Effect.provide(protocolContext))
           const invokePayload = AgentLoopActor.InvokeTool.make({
             workspaceId: DefaultWorkspaceId,
             sessionId,
@@ -255,8 +302,18 @@ describe("agent-loop actor commands", () => {
             toolName: ToolName.make("read"),
             input: {},
           })
-          yield* ref.execute(invokePayload)
-          yield* ref.execute(invokePayload)
+          yield* ref.send(invokePayload)
+          yield* actorControl.redeliver(entityId)
+          yield* AgentLoopActor.InvokeTool.waitFor(invokePayload).pipe(
+            Effect.provide(protocolContext),
+            Effect.flatMap(materializeActorCommand),
+          )
+          yield* ref.send(invokePayload)
+          yield* actorControl.redeliver(entityId)
+          yield* AgentLoopActor.InvokeTool.waitFor(invokePayload).pipe(
+            Effect.provide(protocolContext),
+            Effect.flatMap(materializeActorCommand),
+          )
           const messages = yield* waitFor(
             messageStorage.listMessages(branchId),
             (current) => current.length === 2,
@@ -289,17 +346,34 @@ describe("agent-loop actor commands", () => {
             branchId: BranchId.make("interrupt-invalid-command-branch"),
           })
           const actorClientFactory = yield* AgentLoopActor.Context
-          const ref = yield* actorClientFactory(entityIdOf(DefaultWorkspaceId, sessionId, branchId))
-          const exit = yield* ref
+          const actorControl = yield* AgentLoopActor.Control
+          const entityId = entityIdOf(DefaultWorkspaceId, sessionId, branchId)
+          const ref = yield* actorClientFactory(entityId)
+          const protocolContext = yield* actorProtocolContext
+          yield* ref
             .execute(
-              AgentLoopActor.Interrupt.make({
+              AgentLoopActor.GetState.make({
                 workspaceId: DefaultWorkspaceId,
                 sessionId,
                 branchId,
-                commandId: ActorCommandId.make("x".repeat(129)),
+                commandId: ActorCommandId.make("interrupt-warm-state"),
               }),
             )
-            .pipe(Effect.exit)
+            .pipe(Effect.provide(protocolContext))
+          const interruptPayload = AgentLoopActor.Interrupt.make({
+            workspaceId: DefaultWorkspaceId,
+            sessionId,
+            branchId,
+            commandId: ActorCommandId.make("x".repeat(129)),
+          })
+          const exit = yield* Effect.gen(function* () {
+            yield* ref.send(interruptPayload)
+            yield* actorControl.redeliver(entityId)
+            const result = yield* AgentLoopActor.Interrupt.waitFor(interruptPayload).pipe(
+              Effect.provide(protocolContext),
+            )
+            return yield* materializeActorCommand(result)
+          }).pipe(Effect.exit)
 
           expect(exit._tag).toBe("Failure")
           if (exit._tag !== "Failure") return
