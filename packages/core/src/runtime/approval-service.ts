@@ -11,77 +11,30 @@
 import { Context, Effect, Layer } from "effect"
 import { isRecord } from "../domain/guards.js"
 import { EventPublisher } from "../domain/event-publisher.js"
-import { InteractionPresented, type EventStoreError } from "../domain/event.js"
-import type { BranchId, InteractionRequestId, SessionId } from "../domain/ids.js"
+import { InteractionPresented } from "../domain/event.js"
+import type { InteractionRequestId } from "../domain/ids.js"
 import {
   makeInteractionService,
   type ApprovalDecision,
-  type ApprovalRequest,
-  type InteractionPendingError,
   type InteractionService,
   type InteractionStorageConfig,
 } from "../domain/interaction-request.js"
 import type { GentPlatform } from "./gent-platform.js"
 
-export interface ApprovalServiceShape {
-  /** Present an approval request to the user. Throws InteractionPendingError on first call (cold). */
-  readonly present: (
-    params: ApprovalRequest,
-    ctx: { sessionId: SessionId; branchId: BranchId },
-  ) => Effect.Effect<ApprovalDecision, EventStoreError | InteractionPendingError>
-  readonly pendingRequestId: (ctx: {
-    sessionId: SessionId
-    branchId: BranchId
-  }) => Effect.Effect<InteractionRequestId | undefined>
-  /** Store a resolution for cold-mode resumption */
-  readonly storeResolution: (
-    requestId: InteractionRequestId,
-    decision: ApprovalDecision,
-  ) => Effect.Effect<void, EventStoreError>
-  /** Mark a request as resolved in storage */
-  readonly respond: (requestId: InteractionRequestId) => Effect.Effect<void, EventStoreError>
-  /** Re-publish event for a persisted pending request (recovery after restart) */
-  readonly rehydrate: (
-    requestId: InteractionRequestId,
-    params: ApprovalRequest,
-    ctx: { sessionId: SessionId; branchId: BranchId },
-    decision?: ApprovalDecision,
-  ) => Effect.Effect<void, EventStoreError>
-}
+export interface ApprovalServiceShape extends InteractionService {}
 
 export class ApprovalService extends Context.Service<ApprovalService, ApprovalServiceShape>()(
   "@gent/core/src/runtime/approval-service/ApprovalService",
 ) {
   static Live: Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform> = Layer.effect(
     ApprovalService,
-    Effect.gen(function* () {
-      const interaction = yield* makeApprovalInteractionService()
-      return {
-        present: interaction.present,
-        pendingRequestId: interaction.pendingRequestId,
-        storeResolution: interaction.storeResolution,
-        respond: interaction.respond,
-        rehydrate: interaction.rehydrate,
-      }
-    }),
+    makeApprovalInteractionService(),
   )
 
   static LiveWithStorage = (
     storage: InteractionStorageConfig,
   ): Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform> =>
-    Layer.effect(
-      ApprovalService,
-      Effect.gen(function* () {
-        const interaction = yield* makeApprovalInteractionService(storage)
-        return {
-          present: interaction.present,
-          pendingRequestId: interaction.pendingRequestId,
-          storeResolution: interaction.storeResolution,
-          respond: interaction.respond,
-          rehydrate: interaction.rehydrate,
-        }
-      }),
-    )
+    Layer.effect(ApprovalService, makeApprovalInteractionService(storage))
 
   /** Auto-resolves all approval requests without human interaction.
    *  - ask-user requests → cancelled (don't fabricate user answers)
@@ -113,10 +66,10 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
   }
 }
 
-const makeApprovalInteractionService = (
+function makeApprovalInteractionService(
   storage?: InteractionStorageConfig,
-): Effect.Effect<InteractionService, never, EventPublisher | GentPlatform> =>
-  Effect.gen(function* () {
+): Effect.Effect<InteractionService, never, EventPublisher | GentPlatform> {
+  return Effect.gen(function* () {
     const eventPublisher = yield* EventPublisher
     return yield* makeInteractionService({
       onPresent: (requestId, params, ctx) =>
@@ -132,3 +85,4 @@ const makeApprovalInteractionService = (
       storage,
     })
   })
+}
