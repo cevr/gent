@@ -107,6 +107,31 @@ The API should feel:
   `/Users/cvr/Developer/personal/gent/examples/extensions/dynamic-scratchpad.ts`,
   `/Users/cvr/Developer/personal/gent/docs/extensions.md`.
 
+### L3 state ownership batch - complete
+
+- Removed the extension ID parameter from `ExtensionContext.State.changed(...)`.
+  Extension-owned services now notify state changes with session/branch facts
+  only; runtime host context supplies the owning extension identity.
+- Updated `TodoService` so the extension-owned service no longer imports its
+  own extension ID just to publish state pulses. The todo test harness now
+  installs the todo owner into `ExtensionContext`, matching production runtime
+  ownership instead of parameter threading.
+- Added a compile-time surface lock proving `State.changed({ sessionId })` is
+  accepted and `State.changed({ extensionId })` is rejected.
+- Updated docs to spell out that `State` follows the same ownership rule as
+  dynamic registration.
+- Verification:
+  `bun test --preload ./packages/tooling/src/test-log-preload.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/runtime/todo-service.test.ts packages/extensions/tests/todo/todo-service.test.ts packages/extensions/tests/todo/todo-storage.test.ts -t "state change|todo|Todo|dynamic registration"`
+  passed with 14 tests. `bun run typecheck` passed.
+- Evidence:
+  `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-services.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/extension-surface-locks.test.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/src/todo-service.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/tests/todo/helpers.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/todo-service.test.ts`,
+  `/Users/cvr/Developer/personal/gent/packages/extensions/tests/todo/todo-service.test.ts`,
+  `/Users/cvr/Developer/personal/gent/docs/extensions.md`.
+
 ### L1 - Dogfood Real Extensions
 
 Build or port representative extensions using only

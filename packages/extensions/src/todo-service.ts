@@ -5,13 +5,7 @@ import {
   type BranchId,
   type SessionId,
 } from "@gent/core/extensions/api"
-import {
-  Todo,
-  TodoId,
-  TODO_EXTENSION_ID,
-  type TodoStatus,
-  type TodoTransitionError,
-} from "./todo/domain.js"
+import { Todo, TodoId, type TodoStatus, type TodoTransitionError } from "./todo/domain.js"
 import { TodoStorage, type TodoStorageError } from "./todo-storage.js"
 
 // Extension-owned todo service. Present only when @gent/todo is loaded.
@@ -140,7 +134,6 @@ export class TodoService extends Context.Service<TodoService, TodoServiceApi>()(
         yield* ctx.State.changed({
           sessionId: params.sessionId,
           branchId: params.branchId,
-          extensionId: TODO_EXTENSION_ID,
         }).pipe(Effect.catchEager(() => Effect.void))
         return todo
       }),
@@ -170,7 +163,6 @@ export class TodoService extends Context.Service<TodoService, TodoServiceApi>()(
           yield* ctx.State.changed({
             sessionId: updated.sessionId,
             branchId: updated.branchId,
-            extensionId: TODO_EXTENSION_ID,
           }).pipe(Effect.catchEager(() => Effect.void))
         }
         return updated
@@ -191,7 +183,6 @@ export class TodoService extends Context.Service<TodoService, TodoServiceApi>()(
         yield* ctx.State.changed({
           sessionId: existing.sessionId,
           branchId: existing.branchId,
-          extensionId: TODO_EXTENSION_ID,
         }).pipe(Effect.catchEager(() => Effect.void))
       }),
 

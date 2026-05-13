@@ -208,7 +208,6 @@ export interface ExtensionFileLockServiceShape {
 
 export interface ExtensionStateServiceShape {
   readonly changed: (params: {
-    readonly extensionId: ExtensionId
     readonly sessionId?: SessionId
     readonly branchId?: BranchId
   }) => Effect.Effect<void, ExtensionServiceError>
@@ -350,23 +349,32 @@ export const extensionServicesFromHostContext = (
             withLock: (_path, effect) => effect,
           }
 
-    const State: ExtensionStateServiceShape =
-      statePublisherOption._tag === "Some"
-        ? {
-            changed: (params) =>
-              mapError(
+    const State: ExtensionStateServiceShape = (() => {
+      if (statePublisherOption._tag !== "Some") return { changed: () => Effect.void }
+      if (currentExtensionId === undefined) {
+        return {
+          changed: () =>
+            Effect.fail(
+              serviceError(
                 "ExtensionState",
                 "changed",
-                statePublisherOption.value.changed({
-                  extensionId: params.extensionId,
-                  sessionId: params.sessionId ?? ctx.sessionId,
-                  branchId: params.branchId ?? ctx.branchId,
-                }),
-              ),
-          }
-        : {
-            changed: () => Effect.void,
-          }
+              )(new Error("Extension id unavailable for state change notification")),
+            ),
+        }
+      }
+      return {
+        changed: (params) =>
+          mapError(
+            "ExtensionState",
+            "changed",
+            statePublisherOption.value.changed({
+              extensionId: currentExtensionId,
+              sessionId: params.sessionId ?? ctx.sessionId,
+              branchId: params.branchId ?? ctx.branchId,
+            }),
+          ),
+      }
+    })()
 
     const Dynamic: ExtensionDynamicRegistrationServiceShape =
       dynamicRegistryOption._tag === "Some" && currentExtensionId !== undefined

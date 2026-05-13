@@ -23,6 +23,7 @@ import {
   hook,
   makeRunSpec,
   request,
+  SessionId,
   tool,
   ToolCallId,
   type RequestInput,
@@ -119,6 +120,19 @@ describe("Capability factory-shape locks (compile-time)", () => {
 
     // @ts-expect-error — extension identity is supplied by ExtensionContext, not a parameter
     const bad: Parameters<RegisterTool> = [ExtensionId.make("surface-locks"), DynamicLockTool]
+
+    void good
+    void bad
+    expect(true).toBe(true)
+  })
+
+  test("state change notifications use the current ExtensionContext identity", () => {
+    type StateChanged = PublicExtensionApi.ExtensionContextService["State"]["changed"]
+
+    const good: Parameters<StateChanged> = [{ sessionId: SessionId.make("surface-session") }]
+
+    // @ts-expect-error — extension identity is supplied by ExtensionContext, not a parameter
+    const bad: Parameters<StateChanged> = [{ extensionId: ExtensionId.make("surface-locks") }]
 
     void good
     void bad

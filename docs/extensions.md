@@ -115,7 +115,9 @@ interaction, process, file index, file lock, and state-pulse accessors
 plus stable invocation facts such as `sessionId`, `branchId`, `cwd`, and
 `home`. The `Files` / `FileLock` / `State` facets wrap the host-internal
 `FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so authors
-never reach into runtime Tags. If an extension needs private state, it
+never reach into runtime Tags. `ctx.State.changed(...)` uses the current
+extension identity supplied by the host; do not pass an extension ID. If an
+extension needs private state, it
 should import its own service Tag from a `defineResource(...)` layer and
 yield that service directly. Do not add ctx parameters, private builtin APIs,
 capability labels, or read/write metadata when ordinary Effect service access
