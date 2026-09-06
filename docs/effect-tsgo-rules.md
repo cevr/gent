@@ -14,6 +14,10 @@ plugin entry in `tsconfig.json`. Gent runs every rule as an error except
 same catalog, with `strictEffectProvide` disabled through an override because
 test layers intentionally provide partial worlds.
 
+The repository uses stable TypeScript 7 patched by `effect-tsgo patch`.
+Package typecheck scripts invoke `tsc --noEmit`; the unpatched preview `tsgo`
+binary is not part of the compiler path.
+
 ## Correctness
 
 | Rule                          | Severity |

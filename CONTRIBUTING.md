@@ -11,7 +11,7 @@ bun install
 ## Commands
 
 ```bash
-bun run typecheck  # tsgo + @effect/language-service, must pass clean
+bun run typecheck  # patched TypeScript 7 + Effect diagnostics, must pass clean
 bun run lint       # oxlint (gent custom rules + oxlint-tsgolint type-aware lints)
 bun run test       # product behavior tests, ~2-4s
 bun run gate       # typecheck + lint + fmt + build + test

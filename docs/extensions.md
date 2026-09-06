@@ -81,10 +81,10 @@ Public authoring surface:
 | --------------- | ---------------------------------------------------------------------------- |
 | Extension shape | `defineExtension`, `GentExtension`, `ExtensionSetupContext`                  |
 | Capabilities    | `tool`, `request`, `ref`                                                     |
-| Resources       | `defineResource`, `defineStateResource`, resource scope/schedule types       |
+| Resources       | `defineResource`, `defineStateResource`, `ResourceId`, `ResourceRevision`    |
 | Hooks           | `hook` factories and hook input/output types                                 |
 | Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                      |
-| Stable ids      | `ExtensionId`, `ArtifactId`, `ToolCallId`                                    |
+| Stable ids      | `ExtensionId`, `ArtifactId`, `ToolCallId`, `ResourceId`, `ResourceRevision`  |
 | Policies/errors | `PermissionRule`, capability/provider-auth/agent-run author-facing errors    |
 | Host facts      | `ExtensionSetupContext.host`                                                 |
 | Serialization   | Message/output projection helpers safe to expose across extension boundaries |
@@ -298,10 +298,14 @@ For the complete shape, including state and slash presentation, see
 
 ## Resource (long-lived state)
 
-A Resource declares its scope (lifetime) and carries a service Layer plus
-optional schedule and lifecycle hooks. Extension-owned state should live in
-scoped services/resources; `defineStateResource(...)` is the low-ceremony state
-cell helper for that case. True actor protocols belong at their owning runtime
+A Resource declares a stable `id`, an optional semantic `revision`, its scope
+(lifetime), and a service Layer plus optional schedule and lifecycle hooks.
+Declare `requires` with stable resource IDs when activation needs other
+resources. `required` marks a root policy resource and defaults to `false`.
+The revision records resource semantics, including configuration changes, and
+defaults to `"1"`. Extension-owned state should live in scoped
+services/resources; `defineStateResource(...)` is the low-ceremony state cell
+helper for that case. True actor protocols belong at their owning runtime
 boundary through Effect Entity/RPC, not in extension authoring buckets.
 
 | Scope     | Lifetime        |
@@ -339,8 +343,18 @@ class CounterState extends Context.Service<CounterState, ExtensionState<number>>
 export default defineExtension({
   id: "my-service-ext",
   resources: [
-    defineResource({ tag: MyService, scope: "process", layer: MyService.Live }),
-    defineStateResource({ tag: CounterState, scope: "process", initial: 0 }),
+    defineResource({
+      id: "my-service-ext/service",
+      tag: MyService,
+      scope: "process",
+      layer: MyService.Live,
+    }),
+    defineStateResource({
+      id: "my-service-ext/counter-state",
+      tag: CounterState,
+      scope: "process",
+      initial: 0,
+    }),
   ],
 })
 ```
@@ -378,6 +392,54 @@ The framework validates all loaded extensions before creating the registry:
 
 Cross-scope: higher scope wins silently (project overrides user overrides
 builtin).
+
+## Repairing an Unavailable Resource Owner
+
+Gent does not create a default profile when a durable resource graph for the
+launch directory cannot be reacquired. The graph control plane remains
+available from a server started for another healthy directory with the same
+SQLite database.
+
+```ts
+import { CanonicalCwd, RequestId, ResourceGraphRevision } from "@gent/sdk"
+
+const targetCwd = CanonicalCwd.make("/path/to/failed-project")
+const server =
+  yield *
+  Gent.server({
+    cwd: "/tmp/gent-control",
+    state: Gent.state.sqlite({ dbPath: "/path/to/gent.db" }),
+  })
+const { client } = yield * Gent.client(server, { cwd: String(targetCwd) })
+const status = yield * client.resourceGraph.get({ cwd: targetCwd })
+
+if (status === null) throw new Error("No durable resource graph exists for the target")
+
+// Preview the target declarations without publishing or acquiring resources.
+// The loader supplies the artifact identity. Do not invent source strings or
+// revisions from a package name, path, or file digest.
+const correctedSnapshot = yield * client.resourceGraph.preview({ cwd: targetCwd })
+const receipt =
+  yield *
+  client.resourceGraph.submit({
+    cwd: targetCwd,
+    commandId: RequestId.make("repair-2026-09-06"),
+    expectedRevision: status.desiredRevision,
+    desiredRevision: ResourceGraphRevision.make("profile-repair/1"),
+    snapshot: correctedSnapshot,
+  })
+```
+
+Use the returned `desiredRevision` as `expectedRevision` when submitting a
+corrected snapshot. The target `cwd` selects the workspace header. The control
+server must use the same database. A failed source identity remains visible as
+failed or pending until a valid snapshot is applied. Wait for
+`client.resourceGraph.get({ cwd: targetCwd })` to report `state: "applied"`;
+submission only records and queues the command.
+
+Preview does not publish a catalog or acquire declared resources. It runs trusted
+extension setup to read the declarations. Setup can perform its own effects.
+Preview is not a sandbox or a general side-effect-free operation.
 
 ## In-tree Examples
 

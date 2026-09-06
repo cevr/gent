@@ -2,6 +2,8 @@
 
 Minimal agent harness. Effect-first. Small seams. One owner per concern.
 
+The resource evolution plan is in [`docs/malleability.md`](docs/malleability.md).
+
 ## Core Model
 
 `gent` is organized around five nouns:
@@ -127,14 +129,46 @@ It is the composition boundary. Not the domain boundary.
 
 ### RuntimeProfileResolver
 
-`packages/core/src/runtime/profile.ts` is the single discover → setup → reconcile → sections pipeline. Both profile entrypoints go through the resolver paired with `buildExtensionLayers`:
+`packages/core/src/runtime/profile.ts` owns the shared profile pipeline.
+`loadRuntimeProfileDeclarations` discovers extensions, runs trusted setup,
+validates declarations, and loads static prompt inputs. It does not acquire
+Resource layers, invoke their lifecycle hooks, or reconcile scheduled jobs.
+Trusted setup can still perform its own effects; this is not a sandbox boundary.
 
-- **Server startup** (`server/dependencies.ts`) — resolves once at boot, builds the registry/state/event-bus layer via `buildExtensionLayers`, publishes the profile as a tag so `agentRuntimeLive` reuses the same prompt sections instead of recomputing.
-- **Per-cwd profile cache** (`runtime/session-profile.ts`) — resolves lazily per unique cwd, builds the same layer shape via `buildExtensionLayers` inside the captured server scope.
+`resolveRuntimeProfile` consumes those declarations and activates resources and
+scheduled jobs. It retains each successful resource context with its owning scope.
+`buildExtensionLayers` assembles those contexts and remaining declarative layers
+in resolved extension order. It does not acquire the retained services again.
+The authored resource descriptors remain unchanged.
+
+The production server uses one live profile owner:
+
+- `runtime/session-profile.ts` owns entries by workspace and canonical cwd.
+  `runtime/live-profile.ts` stages each catalog from the graph host's acquired
+  service context. It does not acquire a second resource layer.
+- `server/dependencies.ts` recovers durable graph owners before selecting the
+  launch profile from that cache. An unavailable saved launch owner fails startup.
+  It does not receive a default profile with replacement authority.
+- `runtime/extensions/resource-host/resource-graph-command.ts` records desired
+  state and dispatches commands through Effect Encore. Recovery reacquires live
+  scopes, including graphs previously marked applied. A saved applied receipt
+  does not prove that this process owns the resource.
+- `runtime/extensions/resource-host/resource-graph-host.ts` owns catalog
+  publication, resource generations, and admission leases. Effect Machine in
+  `resource-lifecycle.ts` owns each local resource's lifecycle. Effect scopes own
+  its acquired services and cleanup. Neither library replaces the branch actor.
+
+Live turn profiles enter the selected publication lease before execution.
+Direct actor tests can use an explicit legacy profile without a graph host.
+Native source-mode approval, public repair, direct-command cleanup, and external
+callback limits have focused validation. Full gate and terminal/server E2E pass.
+See `plans/live-composition-review.md` for evidence and recovery limits.
 
 Ephemeral child runs (`runtime/agent/agent-runner.ts`) intentionally do NOT call the resolver — they forward an already-resolved `ExtensionRegistry` from the parent and only rebuild the per-run mutable bits (storage, pub/sub engine, state runtime) for isolation. That divergence is structural, not duplication.
 
-`compileBaseSections(profile)` resolves dynamic prompt sections inside the extension-services runtime so contributions like `Skills`'s prompt section can read services from their own `setup.layer`.
+`compileBaseSections(profile)` combines static core and extension prompt sections.
+Per-turn projection hooks resolve dynamic prompt content inside the extension
+service context.
 
 ## Runtime
 
@@ -175,12 +209,16 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 
 ### Interactions (Cold Pattern)
 
-One interaction primitive: `ctx.approve({ text, metadata? })` → `{ approved, notes? }`.
+One interaction primitive: `ctx.Interaction.approve({ text, metadata? })` → `{ approved, notes? }`.
 
-Tools that need human input call `ctx.approve()`, which delegates to `ApprovalService`. The pattern is cold — no blocked fibers, survives restarts.
+Tools that need human input call `ctx.Interaction.approve()`, which delegates to
+`ApprovalService`. The turn parks without keeping a blocked tool fiber. Cold
+replay also requires a trusted, unchanged saved tool binding. A source-only tool
+without durable identity can resume in the same loaded generation, but not after
+an unsupported restart or replacement.
 
 ```text
-tool calls ctx.approve({ text, metadata? })
+tool calls ctx.Interaction.approve({ text, metadata? })
   → ApprovalService.present() checks for stored resolution (cold resume)
     → if found: returns { approved, notes? }
     → if not: persists to InteractionStorage, publishes InteractionPresented
@@ -191,7 +229,7 @@ client responds via respondInteraction RPC
   → storeResolution(requestId, { approved, notes? })
     → machine receives InteractionResponded
       → WaitingForInteraction → ExecutingTools
-        → tool re-runs, calls ctx.approve(), finds stored resolution
+        → tool re-runs, calls ctx.Interaction.approve(), finds stored resolution
           → continues normally
 ```
 
@@ -201,7 +239,18 @@ Key properties:
 
 - **No Deferred, no blocked fiber.** `WaitingForInteraction` is a cold state — no background turn work. The machine is checkpointed and survives restarts.
 - **Crash-safe resume.** `rehydrate()` rebuilds the in-memory context lookup and re-publishes the event. If the process dies before wake, `listPending()` in `InteractionStorage` provides the pending requests for recovery.
-- **Tool re-execution on resume.** The full `executeToolsPhase` re-runs. Pre-interaction side effects re-execute (idempotent by convention). No continuation payloads.
+- **Exact replay.** Resume uses the saved assistant message, call ID, input, and
+  binding. Completed sibling results are reused with their structured values.
+  Only unfinished calls execute again. A pending call can repeat work before its
+  interaction point; authors must make that work safe to repeat. This is not an
+  exactly-once guarantee for arbitrary external effects.
+- **Invalid replay.** Changed bindings and corrupt completed-result data fail
+  explicitly. A paired failed result keeps later model turns usable. A corrupt
+  completed result does not give permission to repeat the tool.
+- **Internal direct command.** `InvokeTool` is not a waiting turn. If its tool
+  requests approval, the command closes the request, saves a paired failed result,
+  and returns an explicit failure. Redelivery preserves that failure without
+  running the tool again. Interactive tools use native or external session turns.
 - **Permissions are not interactive.** Default-allow with explicit deny rules. `Permission.check` is a synchronous policy check, never blocks.
 
 Files: `interaction-request.ts` (InteractionPendingError, makeInteractionService), `approval-service.ts` (ApprovalService), `interaction-pending-reader.ts` (pending storage read seam), `agent-loop.state.ts` (WaitingForInteraction), `interaction-commands.ts` (respond orchestration).
@@ -326,8 +375,8 @@ host-owned design. It should expose:
 - extension shape: `defineExtension`, `GentExtension`,
   `ExtensionSetupContext`, `DefineExtensionInput`;
 - typed leaves: `tool`, `request`, `ref`;
-- scoped resources: `defineResource`, `resource`, resource scope/schedule
-  types;
+- scoped resources: `defineResource`, `defineStateResource`, `ResourceId`,
+  `ResourceRevision`, and resource scope types;
 - turn hooks: the public reaction input/output types needed to author
   `reactions`;
 - agents and model ids: `defineAgent`, `AgentName`, `ModelId`, run-spec
@@ -377,7 +426,7 @@ One authoring shape: `defineExtension({ id, resources?, tools?, requests?, agent
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
-- **Resource** — `defineResource({ scope, layer?, schedule?, start?, stop? })`. Long-lived state with explicit `scope`. Today only `"process"` is public, because it is the only lifecycle with a host owner. `cwd`, `session`, and `branch` lifetimes stay out of the author API until their runtime owners exist. Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
+- **Resource** — `defineResource({ id, revision?, requires?, required?, scope, layer?, start?, stop? })`. Long-lived state has a stable identity and explicit `scope`; `revision` records resource semantics, including configuration changes, and defaults to `"1"`; `requires` defaults to `[]`, and `required` defaults to `false`. Today only `"process"` is public, because it is the only lifecycle with a host owner. `cwd`, `session`, and `branch` lifetimes stay out of the author API until their runtime owners exist. Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
 - **Callable leaves** — `tool(...)` / `request(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Agent`, `Interaction`, `Process`, `Files`, `FileLock`, `State`); extension-private authority comes from extension-owned Effect service Tags. The `Files` / `FileLock` / `State` facets wrap the host-internal `FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so shipped and external extensions share the same surface. See `packages/core/src/domain/capability/{tool,request}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
 - **Reactions** — `reactions.turnProjection`, `systemPrompt`, `turnBefore`, `turnAfter`, `messageOutput`, and `toolResult` are the explicit runtime hooks. Reaction handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-reactions.ts`.
 - **Driver** — `modelDrivers` and `externalDrivers` are split buckets of `ModelDriverContribution` and `ExternalDriverContribution`. Model drivers provide LLM provider layers + auth; external drivers stream Effect AI response parts from process-owned executors such as ACP. See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.

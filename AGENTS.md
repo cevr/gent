@@ -6,7 +6,7 @@ Building gent - minimal, opinionated agent harness (built with Effect).
 
 ```bash
 bun install
-bun run typecheck  # tsgo + @effect/language-service, must pass clean
+bun run typecheck  # patched TypeScript 7 + Effect diagnostics, must pass clean
 bun run lint       # oxlint (gent custom rules + oxlint-tsgolint type-aware lints)
 bun run test       # Gate tests. NOT bare `bun test` (picks up flaky e2e)
 bun run test:diagnose # Print slowest chunks without failing on duration
@@ -40,7 +40,7 @@ bun run --cwd apps/tui dev sessions
 
 - **bun:sqlite** - Can't use vitest (runs in Node). Use `bun test` directly.
 - **Schema.Class JSON roundtrip** - `JSON.parse` returns plain objects. Use `Schema.decodeUnknownSync` to reconstruct instances.
-- **Effect LSP suggestions** - TS41 messages are suggestions, not errors. Still must fix them.
+- **Effect diagnostics** - Effect compiler suggestions are not TypeScript errors. Still fix them.
 - **Bun peer deps** - Bun resolves to minimum version; can cause version mismatches with @effect packages.
 - **@effect/platform imports** - Some types not re-exported from main. Use `import type { PlatformError } from "@effect/platform/Error"`.
 - **No `any` casts** - ESLint enforces. Causes type drift bugs. Import the owning type instead of redeclaring it.
@@ -76,7 +76,7 @@ Use `effect` skill. Key patterns:
 - Telegraph style, minimal tokens
 - Every service exposes a `Live` layer; add a `Test` layer only when there is a real alternative implementation worth a Tag. Language model tests use `LanguageModelLayers` instead of provider wrapper statics.
 - Schema validation at boundaries
-- **Tagged/discriminated unions use Effect Schema primitives.** Prefer `Schema.TaggedUnion` (or `Schema.TaggedStruct` + `Schema.toTaggedUnion` for kebab-case wire tags, or `Schema.TaggedErrorClass` for errors); do not hand-roll `{ _tag: "X" } | { _tag: "Y" }` literal unions.
+- **Tagged/discriminated unions use Effect Schema primitives.** Prefer `Schema.TaggedUnion` (or `Schema.TaggedStruct` + `Schema.toTaggedUnion` for kebab-case wire tags, or `Schema.TaggedError` for errors); do not hand-roll `{ _tag: "X" } | { _tag: "Y" }` literal unions.
 - **File naming**: kebab-case everywhere (`agent-loop.actor.ts`, `message-list.tsx`)
 
 ## Package Structure
