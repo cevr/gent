@@ -28,7 +28,7 @@ priority: P0 lands first.
   Replace `Effect.option` swallow with
   `Effect.tapErrorCause(cause => Effect.logWarning("event decode failed").pipe(Effect.annotateLogs({ event_id, error: String(cause) })))`
   then propagate a tagged `EventDecodeError` (new
-  `Schema.TaggedErrorClass`). Silent drops become loud warnings;
+  `Schema.TaggedError`). Silent drops become loud warnings;
   decoder bugs surface in logs.
 - **C2**: Brand `WorkspaceId` at actor payload boundary at
   `packages/core/src/runtime/agent/agent-loop.actor.ts:91-93`.

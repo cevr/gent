@@ -89,12 +89,13 @@ regression classes directly. Historical batch/commit labels belong in plans or
 dated audit receipts, not source, tests, or lint-rule comments.
 
 **Changes**:
-| File | Change |
-| ---- | ------ |
-| `apps/**` | Replace migration-history labels in active TUI comments with behavior-grounded explanations. |
+
+| File          | Change                                                                                                       |
+| ------------- | ------------------------------------------------------------------------------------------------------------ |
+| `apps/**`     | Replace migration-history labels in active TUI comments with behavior-grounded explanations.                 |
 | `packages/**` | Replace migration-history labels in active package source/tests with stable invariant or regression wording. |
-| `lint/**` | Replace rule-history labels with the current lint-rule rationale. |
-| `AGENTS.md` | Keep the process-shaped naming ban explicit so this does not creep back into active code. |
+| `lint/**`     | Replace rule-history labels with the current lint-rule rationale.                                            |
+| `AGENTS.md`   | Keep the process-shaped naming ban explicit so this does not creep back into active code.                    |
 
 **Verification**:
 

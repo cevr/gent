@@ -567,16 +567,16 @@ explicit suppression-inventory entries.
 
 **Changes**
 
-| File                                                                              | Change                                                                                                               | Lines                    |
+| File | Change | Lines |
 | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------ | --------------------------------------------------------- | --- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/platform/gent-platform.ts`  | Add `hash(algorithm: "sha256"                                                                                        | "md5", input: Uint8Array | string)`, `randomBytes(n)`, `fileURLToPath` capabilities. | ~1  |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite/rows.ts`     | Replace `createHash` with `GentPlatform.hash`.                                                                       | ~1, 156                  |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/memory/vault.ts`      | Replace `createHash` with `ctx.host`-routed hash (or yield `GentPlatform`).                                          | ~10, 138                 |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/anthropic/signing.ts` | Replace `createHash` calls.                                                                                          | ~24, 61, 73              |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/executor/sidecar.ts`  | Move `fileURLToPath` into existing `ExecutorPlatform` adapter.                                                       | ~33, 357                 |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/openai/oauth.ts`      | Replace `crypto.getRandomValues` with `Random.nextBytes`; route SHA-256 + base64url through platform/Effect helpers. | ~1, 83, 100, 112, 117    |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/utils/mermaid.ts`                | Inject hash via `useEnv()`/`GentPlatform`, or use a non-crypto cache key (length+first-32-chars).                    | ~9, 113                  |
-| `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts`                   | Take `cwd` from `GentPlatform.cwd`; fall back to `process.cwd()` only inside Bun adapter.                            | ~206, 291, 317           |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/platform/gent-platform.ts` | Add `hash(algorithm: "sha256"                                                                                        | "md5", input: Uint8Array | string)`, `randomBytes(n)`, `fileURLToPath` capabilities. | ~1 |
+| `/Users/cvr/Developer/personal/gent/packages/core/src/storage/sqlite/rows.ts` | Replace `createHash` with `GentPlatform.hash`. | ~1, 156 |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/memory/vault.ts` | Replace `createHash` with `ctx.host`-routed hash (or yield `GentPlatform`). | ~10, 138 |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/anthropic/signing.ts` | Replace `createHash` calls. | ~24, 61, 73 |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/executor/sidecar.ts` | Move `fileURLToPath` into existing `ExecutorPlatform` adapter. | ~33, 357 |
+| `/Users/cvr/Developer/personal/gent/packages/extensions/src/openai/oauth.ts` | Replace `crypto.getRandomValues` with `Random.nextBytes`; route SHA-256 + base64url through platform/Effect helpers. | ~1, 83, 100, 112, 117 |
+| `/Users/cvr/Developer/personal/gent/apps/tui/src/utils/mermaid.ts` | Inject hash via `useEnv()`/`GentPlatform`, or use a non-crypto cache key (length+first-32-chars). | ~9, 113 |
+| `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts` | Take `cwd` from `GentPlatform.cwd`; fall back to `process.cwd()` only inside Bun adapter. | ~206, 291, 317 |
 
 **Verification**
 

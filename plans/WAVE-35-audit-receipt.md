@@ -18,8 +18,8 @@ Per the durable directive at `plans/WAVE-35.md:258-266`: _"Scope is not a constr
 **[L1-P0-1] `ToolInteractionPending` hand-rolled tagged class**
 
 - `packages/core/src/runtime/agent/turn-helpers.ts:484-490`
-- Hand-rolled `class ToolInteractionPending extends Data.TaggedError(...)` instead of `Schema.TaggedErrorClass<>()`. Codebase rule (CLAUDE.md): every tagged/discriminated union uses `Schema.TaggedUnion` / `Schema.TaggedErrorClass`.
-- Fix: convert to `class ToolInteractionPending extends Schema.TaggedErrorClass<ToolInteractionPending>()("ToolInteractionPending", { ... }) {}`.
+- Hand-rolled `class ToolInteractionPending extends Data.TaggedError(...)` instead of `Schema.TaggedError<>()`. Codebase rule (CLAUDE.md): every tagged/discriminated union uses `Schema.TaggedUnion` / `Schema.TaggedError`.
+- Fix: convert to `class ToolInteractionPending extends Schema.TaggedError<ToolInteractionPending>()("ToolInteractionPending", { ... }) {}`.
 
 **[L1-P0-2] Duplicate type declarations `AssistantResponsePart`/`ToolResponsePart`**
 
@@ -160,7 +160,7 @@ All eight: demote to pure helper functions; delete the service method.
 
 W35 follow-up sub-commits (C16+):
 
-- **C16**: L1-P0-1 ToolInteractionPending → `Schema.TaggedErrorClass`
+- **C16**: L1-P0-1 ToolInteractionPending → `Schema.TaggedError`
 - **C17**: L1-P0-2 delete duplicate `AssistantResponsePart`/`ToolResponsePart`
 - **C18**: L2-P0-1 add `withWorkspace` wrapper to `openLoop`
 - **C19**: L4-P0-1 delete `defineScheduledJob`

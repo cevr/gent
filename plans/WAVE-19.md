@@ -66,7 +66,7 @@ The north stars are unchanged from Wave 18:
   the pattern. Recipes carry exact rename rules, transformation rules, two
   worked examples, the validation command, and "stop and report on misfit".
 - Every new behavior ships tests in the same commit. Every new tagged union
-  uses `TaggedEnumClass` / `Schema.TaggedStruct` / `Schema.TaggedErrorClass`.
+  uses `TaggedEnumClass` / `Schema.TaggedStruct` / `Schema.TaggedError`.
 - **Apply the preserve-features filter on every commit.** For each deletion
   candidate, ask: "If I delete this and nothing else changed, what
   user-visible behavior disappears?" If the answer is "nothing" or "thin

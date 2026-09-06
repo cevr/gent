@@ -41,7 +41,7 @@ The north stars are unchanged:
   the pattern. Recipes carry exact rename rules, transformation rules, two
   worked examples, the validation command, and "stop and report on a misfit".
 - Every new behavior ships tests in the same commit. Every new tagged union
-  uses `TaggedEnumClass` / `Schema.TaggedStruct` / `Schema.TaggedErrorClass`.
+  uses `TaggedEnumClass` / `Schema.TaggedStruct` / `Schema.TaggedError`.
 - No process-shaped names enter active source. `wave18`, `c12`, `migration` and
   similar belong only to this plan and dated audit receipts.
 
@@ -737,7 +737,7 @@ proposed in this slot are already enforced at "error" severity by
   in oxlint.
 
 The only gap was `no-throw-in-effect` (bare `throw new Error()` inside
-`Effect.gen` body). After review, gent already uses `Schema.TaggedErrorClass`
+`Effect.gen` body). After review, gent already uses `Schema.TaggedError`
 everywhere; no production source has bare throws, and the recent C22 commit
 explicitly migrated remaining sites. Adding a custom rule for an empty
 violation set is dead weight.
