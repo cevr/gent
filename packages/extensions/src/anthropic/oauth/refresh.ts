@@ -1,4 +1,4 @@
-import { Clock, Duration, Effect, Schema, type FileSystem, type Path } from "effect"
+import { Clock, Duration, Effect, Option, Schema, type FileSystem, type Path } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { ProviderAuthError } from "@gent/core/extensions/api"
@@ -48,24 +48,25 @@ const refreshViaOAuth = (
     const body = yield* response.text
     const now = yield* Clock.currentTimeMillis
     const creds = parseOAuthResponse(body, refreshToken, now)
-    if (creds === undefined) {
+    if (Option.isNone(creds)) {
       return yield* new ProviderAuthError({
         message: "OAuth refresh response missing access_token",
       })
     }
-    return creds
+    return creds.value
   }).pipe(
     Effect.timeout("15 seconds"),
-    Effect.catchEager((e) =>
-      Schema.is(ProviderAuthError)(e)
-        ? Effect.fail(e)
-        : Effect.fail(
-            new ProviderAuthError({
-              message: `Direct OAuth refresh failed: ${e instanceof Error ? e.message : String(e)}`,
-              cause: e,
-            }),
-          ),
-    ),
+    Effect.catchEager((e) => {
+      if (Schema.is(ProviderAuthError)(e)) return Effect.fail(e)
+      let message = String(e)
+      if (e instanceof Error) message = e.message
+      return Effect.fail(
+        new ProviderAuthError({
+          message: `Direct OAuth refresh failed: ${message}`,
+          cause: e,
+        }),
+      )
+    }),
     // @effect-diagnostics-next-line strictEffectProvide:off
     Effect.provide(FetchHttpClient.layer),
   )
@@ -127,25 +128,21 @@ export const refreshClaudeCodeCredentials = (
   AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
-    const current = yield* readClaudeCodeCredentials(source).pipe(
-      Effect.catchEager(() => Effect.sync((): ClaudeCredentials | undefined => undefined)),
-    )
-    if (current?.refreshToken !== undefined && current.refreshToken !== "") {
-      const refreshed = yield* refreshViaOAuth(current.refreshToken).pipe(
-        Effect.catchEager(() => Effect.sync((): ClaudeCredentials | undefined => undefined)),
-      )
-      if (refreshed !== undefined) {
+    const current = yield* readClaudeCodeCredentials(source).pipe(Effect.option)
+    if (Option.isSome(current) && current.value.refreshToken !== "") {
+      const refreshed = yield* refreshViaOAuth(current.value.refreshToken).pipe(Effect.option)
+      if (Option.isSome(refreshed)) {
         // Best-effort write-back so subsequent processes pick up the
         // new token. A failure here doesn't lose the refresh — the
         // caller has it in memory.
-        yield* writeBackCredentials(refreshed, source).pipe(
+        yield* writeBackCredentials(refreshed.value, source).pipe(
           Effect.catchEager((e: ProviderAuthError) =>
             Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
               Effect.annotateLogs({ error: String(e), source }),
             ),
           ),
         )
-        return refreshed
+        return refreshed.value
       }
     }
     // Direct path failed — fall back to the CLI spawn (second attempt

@@ -1,7 +1,9 @@
-import { createContext, useContext, createMemo, onMount, onCleanup } from "solid-js"
+import { createContext, createMemo, onMount, onCleanup } from "solid-js"
+import { useRequiredContext } from "../utils/solid-context"
 import type { JSX } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { useRenderer } from "@opentui/solid"
+import { Option } from "effect"
 import type { Theme, ThemeJson, ThemeMode } from "./types"
 import { resolveTheme, generateSystemTheme } from "./resolve"
 import { DEFAULT_THEMES } from "./default-themes"
@@ -18,14 +20,14 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue>()
 
+const toThemeCatalog = (themes: Record<string, ThemeJson>): Record<string, ThemeJson> => themes
+
 export function useTheme(): ThemeContextValue {
-  const ctx = useContext(ThemeContext)
-  if (ctx === undefined) throw new Error("useTheme must be used within ThemeProvider")
-  return ctx
+  return useRequiredContext(ThemeContext, "useTheme must be used within ThemeProvider")
 }
 
 interface ThemeProviderProps {
-  mode: ThemeMode | undefined
+  mode?: ThemeMode
   children: JSX.Element
 }
 
@@ -205,10 +207,11 @@ export function ThemeProvider(props: ThemeProviderProps) {
     return "dark"
   }
 
+  const initialThemes = toThemeCatalog({ ...DEFAULT_THEMES })
   const [store, setStore] = createStore({
-    themes: DEFAULT_THEMES as Record<string, ThemeJson>,
+    themes: initialThemes,
     mode: initialMode(),
-    active: "system" as string,
+    active: "system",
     ready: false,
   })
 
@@ -222,7 +225,8 @@ export function ThemeProvider(props: ThemeProviderProps) {
     renderer
       .getPalette({ size: 16 })
       .then((colors) => {
-        if (colors.palette[0] === undefined) {
+        const firstColor = Option.fromNullishOr(colors.palette[0])
+        if (Option.isNone(firstColor)) {
           // No palette available, fall back to opencode theme
           if (store.active === "system") {
             setStore(
@@ -270,8 +274,12 @@ export function ThemeProvider(props: ThemeProviderProps) {
   onCleanup(() => process.off("SIGUSR2", sigusr2Handler))
 
   const values = createMemo(() => {
-    const activeTheme = store.themes[store.active] ?? store.themes["opencode"]
-    if (activeTheme === undefined) throw new Error(`Theme not found: ${store.active}`)
+    const activeTheme = Option.getOrElse(
+      Option.orElse(Option.fromNullishOr(store.themes[store.active]), () =>
+        Option.fromNullishOr(store.themes["opencode"]),
+      ),
+      () => DEFAULT_THEMES.opencode,
+    )
     return resolveTheme(activeTheme, store.mode)
   })
 

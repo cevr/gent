@@ -24,6 +24,7 @@ import { resolveExtensions } from "../../src/runtime/extensions/registry.js"
 const SESSION_ID = SessionId.make("test-session")
 const BRANCH_ID = BranchId.make("test-branch")
 const FIXTURE_DATE = dateFromMillis(0)
+const EMPTY_RESOLVED_EXTENSIONS = resolveExtensions([])
 
 const die = (label: string) => () => Effect.die(`${label} not wired in test`)
 
@@ -34,31 +35,32 @@ const baseDeps = (overrides: {
     cwd: "/tmp",
     home: "/tmp",
     platform: "test",
-  } as MakeExtensionHostContextDeps["platform"],
+  },
   host: testExtensionHostContext().host,
   approvalService: {
     present: die("ApprovalService.present"),
-    pendingRequestId: () => Effect.void,
+    pendingRequestId: die("ApprovalService.pendingRequestId"),
     storeResolution: die("ApprovalService.storeResolution"),
     respond: die("ApprovalService.respond"),
     rehydrate: die("ApprovalService.rehydrate"),
-  } as MakeExtensionHostContextDeps["approvalService"],
+  },
   promptPresenter: {
     present: die("PromptPresenter.present"),
     confirm: die("PromptPresenter.confirm"),
     review: die("PromptPresenter.review"),
-  } as MakeExtensionHostContextDeps["promptPresenter"],
+  },
   extensionRegistry: {
-    getResolved: () => resolveExtensions([]),
-  } as unknown as MakeExtensionHostContextDeps["extensionRegistry"],
+    extensionHooks: EMPTY_RESOLVED_EXTENSIONS.extensionHooks,
+    getResolved: () => EMPTY_RESOLVED_EXTENSIONS,
+  },
   sessionStorage: {
     getSession: die("getSession"),
     updateSession: die("updateSession"),
     createSession: die("createSession"),
     deleteSession: die("deleteSession"),
     getLastSessionByCwd: die("getLastSessionByCwd"),
-    listSessions: die("listSessions"),
-  } as MakeExtensionHostContextDeps["sessionStorage"],
+    listSessions: die("listSessions")(),
+  },
   branchStorage: {
     listBranches: overrides.listBranches,
     createBranch: die("createBranch"),
@@ -67,7 +69,7 @@ const baseDeps = (overrides: {
     updateBranchSummary: die("updateBranchSummary"),
     countMessages: die("countMessages"),
     countMessagesByBranches: die("countMessagesByBranches"),
-  } as MakeExtensionHostContextDeps["branchStorage"],
+  },
   messageStorage: {
     listMessages: die("listMessages"),
     createMessage: die("createMessage"),
@@ -75,18 +77,18 @@ const baseDeps = (overrides: {
     getMessage: die("getMessage"),
     deleteMessages: die("deleteMessages"),
     updateMessageTurnDuration: die("updateMessageTurnDuration"),
-  } as MakeExtensionHostContextDeps["messageStorage"],
+  },
   relationshipStorage: {
     getChildSessions: die("getChildSessions"),
     getSessionAncestors: die("getSessionAncestors"),
     getSessionDetail: die("getSessionDetail"),
-  } as MakeExtensionHostContextDeps["relationshipStorage"],
+  },
   searchStorage: {
     searchMessages: () => Effect.succeed([]),
-  } as MakeExtensionHostContextDeps["searchStorage"],
+  },
   agentRunner: {
     run: die("agentRunner.run"),
-  } as MakeExtensionHostContextDeps["agentRunner"],
+  },
   sessionMutations: {
     renameSession: die("renameSession"),
     createSessionBranch: die("createSessionBranch"),
@@ -97,21 +99,25 @@ const baseDeps = (overrides: {
     deleteBranch: die("deleteBranch"),
     deleteMessages: die("deleteMessages"),
     updateReasoningLevel: die("updateReasoningLevel"),
-  } as MakeExtensionHostContextDeps["sessionMutations"],
+  },
   sessionControl: {
     queueFollowUp: die("queueFollowUp"),
-  } as MakeExtensionHostContextDeps["sessionControl"],
+  },
 })
 
 describe("host facet survivors after C9.5 prune", () => {
   it.live("requireAgent fails with typed ExtensionServiceError when the agent is missing", () =>
     Effect.gen(function* () {
       const base = testToolContext()
-      const ctxLayer = Layer.succeed(ExtensionContext, {
-        ...base,
-        Agent: { ...base.Agent, listAgents: () => Effect.succeed([] as const) },
-      })
+      const ctxLayer = Layer.succeed(
+        ExtensionContext,
+        ExtensionContext.of({
+          ...base,
+          Agent: { ...base.Agent, listAgents: Effect.succeed([]) },
+        }),
+      )
       const exit = yield* Effect.exit(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         requireAgent(AgentName.make("missing-agent")).pipe(Effect.provide(ctxLayer)),
       )
       expect(exit._tag).toBe("Failure")
@@ -144,7 +150,12 @@ describe("host facet survivors after C9.5 prune", () => {
         createdAt: FIXTURE_DATE,
       })
       const deps = baseDeps({
-        listBranches: (id) => (id === SESSION_ID ? Effect.succeed([branch]) : Effect.succeed([])),
+        listBranches: (id) => {
+          if (id === SESSION_ID) {
+            return Effect.succeed([branch])
+          }
+          return Effect.succeed([])
+        },
       })
       const ctx = makeExtensionHostContextProvider(deps).forRun({
         sessionId: SESSION_ID,

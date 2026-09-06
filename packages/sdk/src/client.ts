@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Match, Option, Predicate } from "effect"
 import type { Scope } from "effect"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
 import { Socket } from "effect/unstable/socket"
@@ -217,6 +217,7 @@ const connectWs = (
       WsTransport(url).pipe(Layer.provide(hooksLayer)),
       scope,
     )
+    // oxlint-disable-next-line effect/noInlineProvide -- the connection factory owns its scoped transport
     const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
     const services = yield* Effect.context<Scope.Scope>()
 
@@ -272,6 +273,7 @@ export const Gent = {
   ): Effect.Effect<GentClientBundle<R | Scope.Scope>, E, R | Scope.Scope> =>
     Effect.gen(function* () {
       const context = yield* Layer.build(Layer.provide(RpcHandlersLive, handlersLayer))
+      // oxlint-disable-next-line effect/noInlineProvide -- the test client factory owns its supplied handler context
       const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
       const services = yield* Effect.context<R | Scope.Scope>()
       return {
@@ -300,37 +302,44 @@ export const Gent = {
     options?: GentClientOptions,
   ): Effect.Effect<GentClientBundle<Scope.Scope>, GentConnectionError, Scope.Scope> =>
     Effect.gen(function* () {
-      if (typeof serverOrUrl === "string") {
-        return yield* connectWs(serverOrUrl, workspaceHeadersForCwd(options?.cwd ?? process.cwd()))
+      if (Predicate.isString(serverOrUrl)) {
+        const cwd = Option.fromNullishOr(options?.cwd).pipe(Option.getOrElse(() => process.cwd()))
+        return yield* connectWs(serverOrUrl, workspaceHeadersForCwd(cwd))
       }
 
-      switch (serverOrUrl._tag) {
-        case "owned": {
-          // Direct in-process RPC — zero network
-          const internal = getOwnedInternal(serverOrUrl)
-          if (internal === undefined) {
-            return yield* new GentConnectionError({
-              message: "owned server internal state missing",
-            })
-          }
-          const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(
-            Effect.provide(internal.handlerContext),
-          )
-          const services = yield* Effect.context<Scope.Scope>()
-          const headers =
-            options?.cwd !== undefined ? workspaceHeadersForCwd(options.cwd) : internal.headers
-          return {
-            client: makeNamespacedClient(rpcClient, headers),
-            runtime: makeRuntime(
-              services,
-              staticLifecycle(ConnectionState.cases.connected.make({ generation: 0 })),
-            ),
-          }
-        }
-        case "attached":
-          return yield* connectWs(serverOrUrl.url, {
-            "x-gent-workspace-id": serverOrUrl.workspaceId,
-          })
-      }
+      return yield* Match.value(serverOrUrl).pipe(
+        Match.tagsExhaustive({
+          owned: (ownedServer) =>
+            Effect.gen(function* () {
+              const internal = yield* Effect.fromOption(getOwnedInternal(ownedServer)).pipe(
+                Effect.mapError(
+                  () => new GentConnectionError({ message: "owned server internal state missing" }),
+                ),
+              )
+              const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(
+                // oxlint-disable-next-line effect/noInlineProvide -- the owned client uses its server-owned handler context
+                Effect.provide(internal.handlerContext),
+              )
+              const services = yield* Effect.context<Scope.Scope>()
+              const headers = Option.fromNullishOr(options?.cwd).pipe(
+                Option.match({
+                  onNone: () => internal.headers,
+                  onSome: workspaceHeadersForCwd,
+                }),
+              )
+              return {
+                client: makeNamespacedClient(rpcClient, headers),
+                runtime: makeRuntime(
+                  services,
+                  staticLifecycle(ConnectionState.cases.connected.make({ generation: 0 })),
+                ),
+              }
+            }),
+          attached: (attachedServer) =>
+            connectWs(attachedServer.url, {
+              "x-gent-workspace-id": attachedServer.workspaceId,
+            }),
+        }),
+      )
     }),
-} as const
+}

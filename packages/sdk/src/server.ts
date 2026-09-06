@@ -8,12 +8,14 @@
 
 import { BunHttpServer, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { FetchHttpClient, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
-import { Clock, Effect, Layer, Context, Schema } from "effect"
+import { Clock, Effect, Layer, Context, Match, Option, Schema } from "effect"
 import type { Scope } from "effect"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 // @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution
 import { resolve as pathResolve, join as pathJoin } from "node:path"
 
 import { BuiltinExtensions } from "@gent/extensions"
+import type { GentExtension } from "@gent/core/extensions/api"
 import type { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
 import { seedDebugSession } from "@gent/core-internal/debug/session.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
@@ -55,7 +57,7 @@ export type StateSpec = Schema.Schema.Type<typeof StateSpec>
 export const ProviderSpec = Schema.Union([
   Schema.TaggedStruct("live", {}),
   Schema.TaggedStruct("mock", {
-    delayMs: Schema.optional(Schema.Number),
+    delayMs: Schema.optional(Schema.Finite),
     failing: Schema.optional(Schema.Boolean),
     retries: Schema.optional(Schema.Boolean),
   }),
@@ -64,9 +66,11 @@ export type ProviderSpec = Schema.Schema.Type<typeof ProviderSpec>
 
 export interface GentServerOptions {
   readonly cwd: string
+  /** Extension declarations for this server. Defaults to the builtins. */
+  readonly extensions?: ReadonlyArray<GentExtension<ChildProcessSpawner>>
   readonly state?: StateSpec
   readonly provider?: ProviderSpec
-  readonly env?: Record<string, string | undefined>
+  readonly env?: Readonly<Record<string, string>>
   readonly authDirectory?: string
   /** Seed storage with a debug session on startup. */
   readonly debug?: boolean
@@ -98,19 +102,16 @@ interface OwnedServerInternal {
 const ownedInternals = new WeakMap<GentServer, OwnedServerInternal>()
 
 /** @internal — used by Gent.client to access owned server handler context */
-export const getOwnedInternal = (server: GentServer): OwnedServerInternal | undefined =>
-  ownedInternals.get(server)
+export const getOwnedInternal = (server: GentServer): Option.Option<OwnedServerInternal> =>
+  Option.fromNullishOr(ownedInternals.get(server))
 
 // ── Factories ──
 
 export const state = {
   sqlite: (options?: { readonly home?: string; readonly dbPath?: string }): StateSpec =>
-    StateSpec.cases["sqlite"].make({
-      ...(options?.home !== undefined ? { home: options.home } : {}),
-      ...(options?.dbPath !== undefined ? { dbPath: options.dbPath } : {}),
-    }),
+    StateSpec.cases["sqlite"].make(options ?? {}),
   memory: (): StateSpec => StateSpec.cases["memory"].make({}),
-} as const
+}
 
 export const provider = {
   live: (): ProviderSpec => ProviderSpec.cases["live"].make({}),
@@ -118,8 +119,8 @@ export const provider = {
     readonly delayMs?: number
     readonly failing?: boolean
     readonly retries?: boolean
-  }): ProviderSpec => ProviderSpec.cases["mock"].make({ ...(options ?? {}) }),
-} as const
+  }): ProviderSpec => ProviderSpec.cases["mock"].make(options ?? {}),
+}
 
 // ── Language model layer from spec ──
 
@@ -127,14 +128,21 @@ export const provider = {
  *  (let createDependencies build its own from auth deps). */
 const resolveLanguageModelLayer = (
   spec: ProviderSpec,
-): Layer.Layer<LanguageModel.LanguageModel, never, never> | undefined => {
-  if (spec._tag === "live") return undefined
-  if (spec.failing === true) return LanguageModelLayers.failing
-  return LanguageModelLayers.debug({
-    delayMs: spec.delayMs,
-    retries: spec.retries,
-  })
-}
+): Option.Option<Layer.Layer<LanguageModel.LanguageModel, never, never>> =>
+  Match.value(spec).pipe(
+    Match.tagsExhaustive({
+      live: () => Option.none(),
+      mock: (mockSpec) => {
+        if (mockSpec.failing === true) return Option.some(LanguageModelLayers.failing)
+        return Option.some(
+          LanguageModelLayers.debug({
+            delayMs: mockSpec.delayMs,
+            retries: mockSpec.retries,
+          }),
+        )
+      },
+    }),
+  )
 
 // ── Platform layers ──
 
@@ -155,13 +163,20 @@ const resolveHome = (
   stateSpec: StateSpec,
   homeDirectory: string,
 ): string =>
-  (stateSpec._tag === "sqlite" ? stateSpec.home : undefined) ??
-  options.env?.["HOME"] ??
-  homeDirectory
+  Match.value(stateSpec).pipe(
+    Match.tagsExhaustive({
+      memory: () => Option.none<string>(),
+      sqlite: (sqliteSpec) => Option.fromNullishOr(sqliteSpec.home),
+    }),
+    Option.orElse(() => Option.fromNullishOr(options.env?.["HOME"])),
+    Option.getOrElse(() => homeDirectory),
+  )
 
 const resolveDbPath = (home: string, stateSpec: StateSpec): string => {
-  if (stateSpec._tag === "sqlite" && stateSpec.dbPath !== undefined)
-    return pathResolve(stateSpec.dbPath)
+  if (stateSpec._tag === "sqlite") {
+    const dbPath = Option.fromNullishOr(stateSpec.dbPath)
+    if (Option.isSome(dbPath)) return pathResolve(dbPath.value)
+  }
   const dataDir = pathJoin(home, ".gent")
   return pathResolve(pathJoin(dataDir, "data.db"))
 }
@@ -191,7 +206,10 @@ const buildOwnedServer = (
         ),
       )
       const httpServer = Context.get(httpServerCtx, HttpServer.HttpServer)
-      const port = httpServer.address._tag === "TcpAddress" ? httpServer.address.port : 0
+      const port = Match.value(httpServer.address).pipe(
+        Match.tag("TcpAddress", (address) => address.port),
+        Match.orElse(() => 0),
+      )
       if (port === 0) {
         return yield* new GentConnectionError({
           message: "server listener did not bind a concrete TCP port",
@@ -204,27 +222,35 @@ const buildOwnedServer = (
       const buildFingerprint = yield* (yield* BuildFingerprint).resolved
 
       const languageModelLayer = resolveLanguageModelLayer(providerSpec)
-      const dbPath = stateSpec._tag === "sqlite" ? resolveDbPath(home, stateSpec) : undefined
+      const dbPath = Match.value(stateSpec).pipe(
+        Match.tagsExhaustive({
+          memory: () => Option.none<string>(),
+          sqlite: (sqliteSpec) => Option.some(resolveDbPath(home, sqliteSpec)),
+        }),
+      )
       const serverRoot = yield* buildServerRoot({
         dependencies: {
           cwd: options.cwd,
           home,
           platform: osInfo.platform,
           osVersion: osInfo.release,
-          dbPath,
-          ...(options.authDirectory !== undefined ? { authDirectory: options.authDirectory } : {}),
-          persistenceMode: stateSpec._tag === "memory" ? "memory" : "disk",
+          dbPath: Option.getOrUndefined(dbPath),
+          authDirectory: options.authDirectory,
+          persistenceMode: Match.value(stateSpec).pipe(
+            Match.tagsExhaustive({
+              memory: (): "memory" => "memory",
+              sqlite: (): "disk" => "disk",
+            }),
+          ),
           sharedServerUrl: url,
-          extensions: BuiltinExtensions,
-          ...(languageModelLayer !== undefined
-            ? { languageModelLayerOverride: languageModelLayer }
-            : {}),
+          extensions: options.extensions ?? BuiltinExtensions,
+          languageModelLayerOverride: Option.getOrUndefined(languageModelLayer),
         },
         identity: {
           serverId,
           pid,
           hostname: osInfo.hostname,
-          dbPath: dbPath ?? ":memory:",
+          dbPath: Option.getOrElse(dbPath, () => ":memory:"),
           buildFingerprint,
         },
       }).pipe(
@@ -244,8 +270,7 @@ const buildOwnedServer = (
       // Seed debug session if requested
       if (options.debug === true) {
         yield* seedDebugSession(options.cwd).pipe(
-          // @effect-diagnostics-next-line strictEffectProvide:off
-          Effect.provide(serverRoot.coreServicesLive),
+          Effect.provideContext(serverRoot.coreServices),
           Effect.catchEager(() => Effect.void),
         )
       }
@@ -277,8 +302,15 @@ const probeServer = (
     const baseUrl = rpcUrl.replace("/rpc", "")
     const response = yield* http.get(`${baseUrl}/_gent/identity`).pipe(Effect.timeout(3000))
     if (response.status >= 400) return false
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary validates foreign runtime shape before use
-    const identity = (yield* response.json) as Partial<ReturnType<typeof serverLockIdentityOf>>
+    const identity = yield* Schema.decodeUnknownEffect(
+      Schema.Struct({
+        serverId: Schema.String,
+        pid: Schema.Finite,
+        hostname: Schema.String,
+        dbPath: Schema.String,
+        buildFingerprint: Schema.String,
+      }),
+    )(yield* response.json)
     // Server id/db/build prove endpoint identity; pid/host prove signal ownership.
     // All fields must match before attach or SIGTERM.
     return (
@@ -335,8 +367,9 @@ const resolveServerInternal = (
     const pid = yield* platform.pid
 
     // Check the single shared server lock.
-    const existing = yield* readServerLock(home)
-    if (existing !== undefined) {
+    const existingOption = Option.fromNullishOr(yield* readServerLock(home))
+    if (Option.isSome(existingOption)) {
+      const existing = existingOption.value
       const validation = yield* validateServerLockEntry(existing)
       if (validation.valid && existing.buildFingerprint === fingerprint) {
         // Probe the server before trusting — verify serverId, dbPath, fingerprint
@@ -362,8 +395,9 @@ const resolveServerInternal = (
     }
 
     const server = yield* buildOwnedServer(options, stateSpec, providerSpec)
-    const internal = getOwnedInternal(server)
-    if (internal !== undefined) {
+    const internalOption = getOwnedInternal(server)
+    if (Option.isSome(internalOption)) {
+      const internal = internalOption.value
       yield* writeServerLock(
         home,
         new ServerLockEntry({

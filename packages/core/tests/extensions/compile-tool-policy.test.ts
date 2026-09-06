@@ -12,6 +12,7 @@ describe("compileToolPolicy", () => {
       description: name,
       params: Schema.Struct({}),
       output: Schema.Null,
+      // oxlint-disable-next-line effect/noNullish -- Tool fixture intentionally exercises Schema.Null output.
       execute: () => Effect.succeed(null),
     })
 
@@ -22,6 +23,7 @@ describe("compileToolPolicy", () => {
       params: Schema.Struct({}),
       output: Schema.Null,
       interactive: true,
+      // oxlint-disable-next-line effect/noNullish -- Tool fixture intentionally exercises Schema.Null output.
       execute: () => Effect.succeed(null),
     })
 
@@ -116,7 +118,7 @@ describe("compileToolPolicy", () => {
     const interactiveTool = makeInteractiveTool("ask_user")
     const nonInteractiveTool = makeTool("read")
     const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
-    const ctx = { ...emptyCtx, interactive: false as const }
+    const ctx = { ...emptyCtx, interactive: false }
     const { tools } = compileToolPolicy([interactiveTool, nonInteractiveTool], agent, ctx, [])
     expect(names(tools)).toEqual(["read"])
     expect(names(tools)).not.toContain("ask_user")

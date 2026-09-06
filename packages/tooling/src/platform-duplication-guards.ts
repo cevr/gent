@@ -274,8 +274,8 @@ const bannedServerRootConsumerPatterns: ReadonlyArray<BannedPattern> = [
   },
 ]
 
-const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => [
-  ...bannedActiveSourcePatterns.filter(
+const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
+  const patterns = bannedActiveSourcePatterns.filter(
     ({ pattern }) =>
       !(
         hostFactPatternSources.has(pattern.source) &&
@@ -292,23 +292,25 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => [
         (platformProviderRootFiles.has(file) &&
           pattern.source === "\\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\\b")
       ),
-  ),
-  ...(protectedHostFactFile(file) ? bannedProtectedHostFactPatterns : []),
-  ...(serverRootConsumerFiles.has(file) ? bannedServerRootConsumerPatterns : []),
-  ...(file === "packages/core/src/server/transport-contract.ts"
-    ? bannedTransportContractPatterns
-    : []),
-  ...(file === "packages/core/src/runtime/agent/agent-runner.ts"
-    ? bannedAgentRunnerCompositionPatterns
-    : []),
-]
+  )
+  if (protectedHostFactFile(file)) patterns.push(...bannedProtectedHostFactPatterns)
+  if (serverRootConsumerFiles.has(file)) patterns.push(...bannedServerRootConsumerPatterns)
+  if (file === "packages/core/src/server/transport-contract.ts") {
+    patterns.push(...bannedTransportContractPatterns)
+  }
+  if (file === "packages/core/src/runtime/agent/agent-runner.ts") {
+    patterns.push(...bannedAgentRunnerCompositionPatterns)
+  }
+  return patterns
+}
 
 const startsInsidePipeCall = (
   lines: ReadonlyArray<string>,
   index: number,
   column: number,
 ): boolean => {
-  const prefixWindow = [...lines.slice(0, index), (lines[index] ?? "").slice(0, column)].join("\n")
+  const currentLine = Option.getOrElse(Option.fromNullishOr(lines[index]), () => "")
+  const prefixWindow = [...lines.slice(0, index), currentLine.slice(0, column)].join("\n")
   const pipeStart = prefixWindow.lastIndexOf(".pipe(")
   if (pipeStart === -1) return false
 
@@ -327,7 +329,7 @@ const startsByWrappingFunctionInvocation = (
   column: number,
 ): boolean => {
   const firstArgumentWindow = [
-    (lines[index] ?? "").slice(column),
+    Option.getOrElse(Option.fromNullishOr(lines[index]), () => "").slice(column),
     ...lines.slice(index + 1, index + 8),
   ].join("\n")
 
@@ -339,7 +341,10 @@ const startsWithCallbackArgument = (
   index: number,
   column: number,
 ): boolean => {
-  const callWindow = [(lines[index] ?? "").slice(column), ...lines.slice(index + 1, index + 8)]
+  const callWindow = [
+    Option.getOrElse(Option.fromNullishOr(lines[index]), () => "").slice(column),
+    ...lines.slice(index + 1, index + 8),
+  ]
     .join("\n")
     .trimStart()
 
@@ -348,9 +353,48 @@ const startsWithCallbackArgument = (
 
 const declaresCallbackParameter = (declarationWindow: string): boolean => {
   const firstArrowIndex = declarationWindow.indexOf("=>")
-  const signatureWindow =
-    firstArrowIndex === -1 ? declarationWindow : declarationWindow.slice(0, firstArrowIndex + 2)
+  let signatureWindow = declarationWindow
+  if (firstArrowIndex !== -1) signatureWindow = declarationWindow.slice(0, firstArrowIndex + 2)
   return callbackParameterPattern.test(signatureWindow)
+}
+
+const findWrapperViolations = (
+  file: string,
+  lines: ReadonlyArray<string>,
+  line: string,
+  index: number,
+): ReadonlyArray<PlatformDuplicationFinding> => {
+  const findings: PlatformDuplicationFinding[] = []
+  if (withEffectWrapperDefinitionPattern.test(line)) {
+    const declarationWindow = lines.slice(index, index + 8).join("\n")
+    if (effectWrapperArgumentPattern.test(declarationWindow)) {
+      findings.push({ file, line: index + 1, message: withEffectWrapperMessage })
+    }
+    if (declaresCallbackParameter(declarationWindow)) {
+      findings.push({ file, line: index + 1, message: withCallbackWrapperMessage })
+    }
+  }
+
+  withFunctionInvocationPattern.lastIndex = 0
+  let invocationMatch = Option.fromNullishOr(withFunctionInvocationPattern.exec(line))
+  while (Option.isSome(invocationMatch)) {
+    const match = invocationMatch.value
+    const firstArgumentColumn = match.index + match[0].length
+    if (
+      startsByWrappingFunctionInvocation(lines, index, firstArgumentColumn) &&
+      !startsInsidePipeCall(lines, index, match.index)
+    ) {
+      findings.push({ file, line: index + 1, message: withFunctionInvocationMessage })
+    }
+    if (
+      startsWithCallbackArgument(lines, index, firstArgumentColumn) &&
+      !startsInsidePipeCall(lines, index, match.index)
+    ) {
+      findings.push({ file, line: index + 1, message: withCallbackWrapperMessage })
+    }
+    invocationMatch = Option.fromNullishOr(withFunctionInvocationPattern.exec(line))
+  }
+  return findings
 }
 
 export const findPlatformDuplicationViolations = (
@@ -367,39 +411,13 @@ export const findPlatformDuplicationViolations = (
     }
   }
 
-  const patterns = [
-    ...(activeSourceFile(file) ? patternsForFile(file) : []),
-    ...(referenceExtensionFile(file) ? bannedReferenceExtensionPatterns : []),
-  ]
+  const patterns: BannedPattern[] = []
+  if (activeSourceFile(file)) patterns.push(...patternsForFile(file))
+  if (referenceExtensionFile(file)) patterns.push(...bannedReferenceExtensionPatterns)
   const lines = text.split("\n")
   for (let index = 0; index < lines.length; index++) {
-    const line = lines[index] ?? ""
-    if (withEffectWrapperDefinitionPattern.test(line)) {
-      const declarationWindow = lines.slice(index, index + 8).join("\n")
-      if (effectWrapperArgumentPattern.test(declarationWindow)) {
-        findings.push({ file, line: index + 1, message: withEffectWrapperMessage })
-      }
-      if (declaresCallbackParameter(declarationWindow)) {
-        findings.push({ file, line: index + 1, message: withCallbackWrapperMessage })
-      }
-    }
-    withFunctionInvocationPattern.lastIndex = 0
-    let invocationMatch: RegExpExecArray | null
-    while ((invocationMatch = withFunctionInvocationPattern.exec(line)) !== null) {
-      const firstArgumentColumn = invocationMatch.index + invocationMatch[0].length
-      if (
-        startsByWrappingFunctionInvocation(lines, index, firstArgumentColumn) &&
-        !startsInsidePipeCall(lines, index, invocationMatch.index)
-      ) {
-        findings.push({ file, line: index + 1, message: withFunctionInvocationMessage })
-      }
-      if (
-        startsWithCallbackArgument(lines, index, firstArgumentColumn) &&
-        !startsInsidePipeCall(lines, index, invocationMatch.index)
-      ) {
-        findings.push({ file, line: index + 1, message: withCallbackWrapperMessage })
-      }
-    }
+    const line = Option.getOrElse(Option.fromNullishOr(lines[index]), () => "")
+    findings.push(...findWrapperViolations(file, lines, line, index))
     for (const { pattern, message } of patterns) {
       if (pattern.test(line)) {
         findings.push({ file, line: index + 1, message })
@@ -409,3 +427,4 @@ export const findPlatformDuplicationViolations = (
 
   return findings
 }
+import { Option } from "effect"

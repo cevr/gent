@@ -1,4 +1,15 @@
-import { Context, Effect, Layer, Ref, Schema, FileSystem, Path, SynchronizedRef } from "effect"
+import {
+  Predicate,
+  Context,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Ref,
+  Schema,
+  SynchronizedRef,
+} from "effect"
 import { AgentName, DriverRef } from "../domain/agent.js"
 import { PermissionRule } from "../domain/permission.js"
 import { RuntimeEnvironment } from "./runtime-environment.js"
@@ -31,20 +42,67 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
  *     map directly to `record[name] = ref` / `delete record[name]`.
  */
 const mergeConfigsImpl = (user: UserConfig, project: UserConfig): UserConfig => {
-  const permissions = [...(project.permissions ?? []), ...(user.permissions ?? [])]
-  const disabledExtensions = [
-    ...(user.disabledExtensions ?? []),
-    ...(project.disabledExtensions ?? []),
-  ]
-  const driverOverrides: Record<AgentName, DriverRef> = {
-    ...(user.driverOverrides ?? {}),
-    ...(project.driverOverrides ?? {}),
+  const projectPermissions = Option.getOrElse(Option.fromUndefinedOr(project.permissions), () => [])
+  const userPermissions = Option.getOrElse(Option.fromUndefinedOr(user.permissions), () => [])
+  const permissions = [...projectPermissions, ...userPermissions]
+  const userDisabledExtensions = Option.getOrElse(
+    Option.fromUndefinedOr(user.disabledExtensions),
+    () => [],
+  )
+  const projectDisabledExtensions = Option.getOrElse(
+    Option.fromUndefinedOr(project.disabledExtensions),
+    () => [],
+  )
+  const disabledExtensions = [...userDisabledExtensions, ...projectDisabledExtensions]
+  const userDriverOverrides = Option.getOrElse(
+    Option.fromUndefinedOr(user.driverOverrides),
+    () => ({}),
+  )
+  const projectDriverOverrides = Option.getOrElse(
+    Option.fromUndefinedOr(project.driverOverrides),
+    () => ({}),
+  )
+  const driverOverrides = {
+    ...userDriverOverrides,
+    ...projectDriverOverrides,
   }
-  return new UserConfig({
-    permissions: permissions.length > 0 ? permissions : undefined,
-    disabledExtensions: disabledExtensions.length > 0 ? disabledExtensions : undefined,
-    driverOverrides: Object.keys(driverOverrides).length > 0 ? driverOverrides : undefined,
+
+  let mergedPermissions = Option.none<ReadonlyArray<PermissionRule>>()
+  if (permissions.length > 0) mergedPermissions = Option.some(permissions)
+  let mergedDisabledExtensions = Option.none<ReadonlyArray<string>>()
+  if (disabledExtensions.length > 0) mergedDisabledExtensions = Option.some(disabledExtensions)
+  let mergedDriverOverrides = Option.none<Readonly<Record<AgentName, DriverRef>>>()
+  if (Object.keys(driverOverrides).length > 0) mergedDriverOverrides = Option.some(driverOverrides)
+  return userConfigFromOptions(mergedPermissions, mergedDisabledExtensions, mergedDriverOverrides)
+}
+
+const selectConfigField = <A>(partial?: A, current?: A): Option.Option<A> =>
+  Option.match(Option.fromUndefinedOr(partial), {
+    onNone: () => Option.fromUndefinedOr(current),
+    onSome: Option.some,
   })
+
+const userConfigFromOptions = (
+  permissions: Option.Option<ReadonlyArray<PermissionRule>>,
+  disabledExtensions: Option.Option<ReadonlyArray<string>>,
+  driverOverrides: Option.Option<Readonly<Record<AgentName, DriverRef>>>,
+): UserConfig => {
+  const config = Object.assign(
+    {},
+    Option.match(permissions, {
+      onNone: () => ({}),
+      onSome: (value) => ({ permissions: value }),
+    }),
+    Option.match(disabledExtensions, {
+      onNone: () => ({}),
+      onSome: (value) => ({ disabledExtensions: value }),
+    }),
+    Option.match(driverOverrides, {
+      onNone: () => ({}),
+      onSome: (value) => ({ driverOverrides: value }),
+    }),
+  )
+  return new UserConfig(config)
 }
 
 // ConfigService
@@ -61,6 +119,11 @@ export interface ConfigServiceService {
    * returns the cached project config from the server's launch cwd.
    */
   readonly get: (cwd?: string) => Effect.Effect<UserConfig>
+  /**
+   * Read user and project config from disk without using the launch snapshot.
+   * Invalid JSON or schema data is reported to the caller.
+   */
+  readonly getFresh: (cwd: string) => Effect.Effect<UserConfig, ConfigLoadError>
   readonly set: (config: Partial<UserConfig>) => Effect.Effect<void>
   readonly addPermissionRule: (rule: PermissionRule) => Effect.Effect<void>
   readonly removePermissionRule: (tool: string, pattern?: string) => Effect.Effect<void>
@@ -73,6 +136,11 @@ export interface ConfigServiceService {
   readonly clearDriverOverride: (agent: AgentName) => Effect.Effect<void>
   readonly loadInstructions: (cwd: string) => Effect.Effect<string>
 }
+
+export class ConfigLoadError extends Schema.TaggedError<ConfigLoadError>()("ConfigLoadError", {
+  path: Schema.String,
+  message: Schema.String,
+}) {}
 
 export class ConfigService extends Context.Service<ConfigService, ConfigServiceService>()(
   "@gent/core/src/runtime/config-service/ConfigService",
@@ -126,11 +194,12 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       const loadConfig = Effect.gen(function* () {
         const readConfig = (filePath: string) =>
           fs.exists(filePath).pipe(
-            Effect.flatMap((exists) =>
-              exists ? fs.readFileString(filePath) : Effect.succeed("{}"),
-            ),
+            Effect.flatMap((exists) => {
+              if (exists) return fs.readFileString(filePath)
+              return Effect.succeed("{}")
+            }),
             Effect.flatMap((content) =>
-              Schema.decodeUnknownEffect(Schema.fromJsonString(UserConfig))(content),
+              Schema.decodeEffect(Schema.fromJsonString(UserConfig))(content),
             ),
             Effect.catchEager(() => Effect.succeed(new UserConfig({}))),
           )
@@ -143,6 +212,29 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
 
         return mergeConfigs(userConfig, projectConfig)
       }).pipe(Effect.asVoid)
+
+      const readConfigFresh = (filePath: string): Effect.Effect<UserConfig, ConfigLoadError> =>
+        fs.exists(filePath).pipe(
+          Effect.flatMap((exists) => {
+            if (exists) return fs.readFileString(filePath)
+            return Effect.succeed("{}")
+          }),
+          Effect.flatMap((content) =>
+            Schema.decodeEffect(Schema.fromJsonString(UserConfig))(content).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ConfigLoadError({
+                    path: filePath,
+                    message: String(cause),
+                  }),
+              ),
+            ),
+          ),
+          Effect.mapError((cause) => {
+            if (Schema.is(ConfigLoadError)(cause)) return cause
+            return new ConfigLoadError({ path: filePath, message: String(cause) })
+          }),
+        )
 
       // Save user config to disk
       const saveUserConfig = (config: UserConfig) =>
@@ -169,26 +261,28 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       const readProjectConfigAt = (cwd: string): Effect.Effect<UserConfig> => {
         const filePath = path.join(cwd, ConfigService.PROJECT_CONFIG_RELATIVE)
         return fs.exists(filePath).pipe(
-          Effect.flatMap((exists) => (exists ? fs.readFileString(filePath) : Effect.succeed("{}"))),
+          Effect.flatMap((exists) => {
+            if (exists) return fs.readFileString(filePath)
+            return Effect.succeed("{}")
+          }),
           Effect.flatMap((content) =>
-            Schema.decodeUnknownEffect(Schema.fromJsonString(UserConfig))(content),
+            Schema.decodeEffect(Schema.fromJsonString(UserConfig))(content),
           ),
           Effect.catchEager(() => Effect.succeed(new UserConfig({}))),
         )
       }
 
-      const mutateUserConfig = <A>(
+      const mutateUserConfig = (
         decide: (current: UserConfig) => {
-          readonly value: A
           readonly updated: UserConfig
           readonly save: boolean
         },
       ) =>
         SynchronizedRef.modifyEffect(userConfigRef, (current) => {
           const decision = decide(current)
-          return (decision.save ? saveUserConfig(decision.updated) : Effect.void).pipe(
-            Effect.as([decision.value, decision.updated] as const),
-          )
+          let save = Effect.void
+          if (decision.save) save = saveUserConfig(decision.updated)
+          return save.pipe(Effect.as([true, decision.updated]))
         })
 
       const service: ConfigServiceService = {
@@ -197,7 +291,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           // No cwd, or cwd matches the server's launch cwd: short-circuit
           // to the cached project ref so launch-cwd callers don't pay an
           // extra disk read per request.
-          if (cwd === undefined || cwd === runtimeEnvironment.cwd) {
+          if (Predicate.isUndefined(cwd) || cwd === runtimeEnvironment.cwd) {
             const project = yield* Ref.get(projectConfigRef)
             return mergeConfigs(user, project)
           }
@@ -205,88 +299,123 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           return mergeConfigs(user, project)
         }),
 
+        getFresh: Effect.fn("ConfigService.getFresh")(function* (cwd) {
+          const user = yield* readConfigFresh(userConfigPath)
+          const project = yield* readConfigFresh(
+            path.join(cwd, ConfigService.PROJECT_CONFIG_RELATIVE),
+          )
+          // Publish only a fully decoded snapshot. User config is shared by
+          // all profile keys. The cached project snapshot is launch-cwd only;
+          // arbitrary session cwds continue to use their own fresh file on
+          // every `get(cwd)` call.
+          yield* SynchronizedRef.set(userConfigRef, user)
+          if (cwd === runtimeEnvironment.cwd) yield* Ref.set(projectConfigRef, project)
+          return mergeConfigs(user, project)
+        }),
+
         set: Effect.fn("ConfigService.set")(function* (partial) {
           yield* mutateUserConfig((current) => {
-            const updated = new UserConfig({
-              permissions: partial.permissions ?? current.permissions,
-              disabledExtensions: partial.disabledExtensions ?? current.disabledExtensions,
-              driverOverrides: partial.driverOverrides ?? current.driverOverrides,
-            })
-            return { value: undefined, updated, save: true }
+            const updated = userConfigFromOptions(
+              selectConfigField(partial.permissions, current.permissions),
+              selectConfigField(partial.disabledExtensions, current.disabledExtensions),
+              selectConfigField(partial.driverOverrides, current.driverOverrides),
+            )
+            return { updated, save: true }
           })
         }),
 
         addPermissionRule: Effect.fn("ConfigService.addPermissionRule")(function* (rule) {
           yield* mutateUserConfig((current) => {
-            const permissions = [...(current.permissions ?? []), rule]
-            const updated = new UserConfig({
-              permissions,
-              disabledExtensions: current.disabledExtensions,
-              driverOverrides: current.driverOverrides,
-            })
-            return { value: undefined, updated, save: true }
+            const currentPermissions = Option.getOrElse(
+              Option.fromUndefinedOr(current.permissions),
+              () => [],
+            )
+            const permissions = [...currentPermissions, rule]
+            const updated = userConfigFromOptions(
+              Option.some(permissions),
+              Option.fromUndefinedOr(current.disabledExtensions),
+              Option.fromUndefinedOr(current.driverOverrides),
+            )
+            return { updated, save: true }
           })
         }),
 
         removePermissionRule: Effect.fn("ConfigService.removePermissionRule")(
           function* (tool, pattern) {
             yield* mutateUserConfig((current) => {
-              const permissions = (current.permissions ?? []).filter(
+              const currentPermissions = Option.getOrElse(
+                Option.fromUndefinedOr(current.permissions),
+                () => [],
+              )
+              const permissions = currentPermissions.filter(
                 (r) => !(r.tool === tool && r.pattern === pattern),
               )
-              const updated = new UserConfig({
-                permissions: permissions.length > 0 ? permissions : undefined,
-                disabledExtensions: current.disabledExtensions,
-                driverOverrides: current.driverOverrides,
-              })
-              return { value: undefined, updated, save: true }
+              let nextPermissions = Option.none<ReadonlyArray<PermissionRule>>()
+              if (permissions.length > 0) nextPermissions = Option.some(permissions)
+              const updated = userConfigFromOptions(
+                nextPermissions,
+                Option.fromUndefinedOr(current.disabledExtensions),
+                Option.fromUndefinedOr(current.driverOverrides),
+              )
+              return { updated, save: true }
             })
           },
         ),
 
         setDriverOverride: Effect.fn("ConfigService.setDriverOverride")(function* (agent, driver) {
           yield* mutateUserConfig((current) => {
-            const driverOverrides = { ...(current.driverOverrides ?? {}), [agent]: driver }
-            const updated = new UserConfig({
-              permissions: current.permissions,
-              disabledExtensions: current.disabledExtensions,
-              driverOverrides,
-            })
-            return { value: undefined, updated, save: true }
+            const existing = Option.getOrElse(
+              Option.fromUndefinedOr(current.driverOverrides),
+              () => ({}),
+            )
+            const driverOverrides = { ...existing, [agent]: driver }
+            const updated = userConfigFromOptions(
+              Option.fromUndefinedOr(current.permissions),
+              Option.fromUndefinedOr(current.disabledExtensions),
+              Option.some(driverOverrides),
+            )
+            return { updated, save: true }
           })
         }),
 
         clearDriverOverride: Effect.fn("ConfigService.clearDriverOverride")(function* (agent) {
           yield* mutateUserConfig((current) => {
-            const existing = current.driverOverrides ?? {}
+            const existing = Option.getOrElse(
+              Option.fromUndefinedOr(current.driverOverrides),
+              () => ({}),
+            )
             if (!(agent in existing)) {
-              return { value: undefined, updated: current, save: false }
+              return { updated: current, save: false }
             }
             const next = { ...existing }
             delete next[agent]
-            const updated = new UserConfig({
-              permissions: current.permissions,
-              disabledExtensions: current.disabledExtensions,
-              driverOverrides: Object.keys(next).length > 0 ? next : undefined,
-            })
-            return { value: undefined, updated, save: true }
+            let nextOverrides = Option.none<Readonly<Record<AgentName, DriverRef>>>()
+            if (Object.keys(next).length > 0) nextOverrides = Option.some(next)
+            const updated = userConfigFromOptions(
+              Option.fromUndefinedOr(current.permissions),
+              Option.fromUndefinedOr(current.disabledExtensions),
+              nextOverrides,
+            )
+            return { updated, save: true }
           })
         }),
 
         loadInstructions: Effect.fn("ConfigService.loadInstructions")(function* (cwd) {
           const readIfExists = (filePath: string): Effect.Effect<string> =>
             fs.exists(filePath).pipe(
-              Effect.flatMap((exists) =>
-                exists ? fs.readFileString(filePath) : Effect.succeed(""),
-              ),
+              Effect.flatMap((exists) => {
+                if (exists) return fs.readFileString(filePath)
+                return Effect.succeed("")
+              }),
               Effect.map((content) => content.trim()),
               Effect.catchEager(() => Effect.succeed("")),
             )
 
           const readWithFallback = (primary: string, fallback: string): Effect.Effect<string> =>
             readIfExists(primary).pipe(
-              Effect.flatMap((content) =>
-                content.length > 0 ? Effect.succeed(content) : readIfExists(fallback),
+              Effect.filterOrElse(
+                (content) => content.length > 0,
+                () => readIfExists(fallback),
               ),
             )
 
@@ -329,7 +458,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         const userConfigRef = yield* Ref.make(initialConfig)
         const projectConfigRef = yield* Ref.make(new UserConfig({}))
 
-        return {
+        return ConfigService.of({
           // Test impl: `cwd` is ignored — no filesystem to read. Tests that
           // need per-cwd behavior should drive it through `Live` with a
           // tmpdir cwd, since `Test` is for hermetic units.
@@ -339,59 +468,82 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
               const project = yield* Ref.get(projectConfigRef)
               return mergeConfigsImpl(user, project)
             }),
+          getFresh: () =>
+            Effect.gen(function* () {
+              const user = yield* Ref.get(userConfigRef)
+              const project = yield* Ref.get(projectConfigRef)
+              return mergeConfigsImpl(user, project)
+            }),
           set: (partial) =>
-            Ref.update(
-              userConfigRef,
-              (current) =>
-                new UserConfig({
-                  permissions: partial.permissions ?? current.permissions,
-                  disabledExtensions: partial.disabledExtensions ?? current.disabledExtensions,
-                  driverOverrides: partial.driverOverrides ?? current.driverOverrides,
-                }),
+            Ref.update(userConfigRef, (current) =>
+              userConfigFromOptions(
+                selectConfigField(partial.permissions, current.permissions),
+                selectConfigField(partial.disabledExtensions, current.disabledExtensions),
+                selectConfigField(partial.driverOverrides, current.driverOverrides),
+              ),
             ),
           addPermissionRule: (rule) =>
             Ref.update(userConfigRef, (current) => {
-              const permissions = [...(current.permissions ?? []), rule]
-              return new UserConfig({
-                permissions,
-                disabledExtensions: current.disabledExtensions,
-                driverOverrides: current.driverOverrides,
-              })
+              const currentPermissions = Option.getOrElse(
+                Option.fromUndefinedOr(current.permissions),
+                () => [],
+              )
+              const permissions = [...currentPermissions, rule]
+              return userConfigFromOptions(
+                Option.some(permissions),
+                Option.fromUndefinedOr(current.disabledExtensions),
+                Option.fromUndefinedOr(current.driverOverrides),
+              )
             }).pipe(Effect.asVoid),
           removePermissionRule: (tool, pattern) =>
             Ref.update(userConfigRef, (current) => {
-              const permissions = (current.permissions ?? []).filter(
+              const currentPermissions = Option.getOrElse(
+                Option.fromUndefinedOr(current.permissions),
+                () => [],
+              )
+              const permissions = currentPermissions.filter(
                 (r) => !(r.tool === tool && r.pattern === pattern),
               )
-              return new UserConfig({
-                permissions: permissions.length > 0 ? permissions : undefined,
-                disabledExtensions: current.disabledExtensions,
-                driverOverrides: current.driverOverrides,
-              })
+              let nextPermissions = Option.none<ReadonlyArray<PermissionRule>>()
+              if (permissions.length > 0) nextPermissions = Option.some(permissions)
+              return userConfigFromOptions(
+                nextPermissions,
+                Option.fromUndefinedOr(current.disabledExtensions),
+                Option.fromUndefinedOr(current.driverOverrides),
+              )
             }).pipe(Effect.asVoid),
           setDriverOverride: (agent, driver) =>
             Ref.update(userConfigRef, (current) => {
-              const driverOverrides = { ...(current.driverOverrides ?? {}), [agent]: driver }
-              return new UserConfig({
-                permissions: current.permissions,
-                disabledExtensions: current.disabledExtensions,
-                driverOverrides,
-              })
+              const existing = Option.getOrElse(
+                Option.fromUndefinedOr(current.driverOverrides),
+                () => ({}),
+              )
+              const driverOverrides = { ...existing, [agent]: driver }
+              return userConfigFromOptions(
+                Option.fromUndefinedOr(current.permissions),
+                Option.fromUndefinedOr(current.disabledExtensions),
+                Option.some(driverOverrides),
+              )
             }).pipe(Effect.asVoid),
           clearDriverOverride: (agent) =>
             Ref.update(userConfigRef, (current) => {
-              const existing = current.driverOverrides ?? {}
+              const existing = Option.getOrElse(
+                Option.fromUndefinedOr(current.driverOverrides),
+                () => ({}),
+              )
               if (!(agent in existing)) return current
               const next = { ...existing }
               delete next[agent]
-              return new UserConfig({
-                permissions: current.permissions,
-                disabledExtensions: current.disabledExtensions,
-                driverOverrides: Object.keys(next).length > 0 ? next : undefined,
-              })
+              let nextOverrides = Option.none<Readonly<Record<AgentName, DriverRef>>>()
+              if (Object.keys(next).length > 0) nextOverrides = Option.some(next)
+              return userConfigFromOptions(
+                Option.fromUndefinedOr(current.permissions),
+                Option.fromUndefinedOr(current.disabledExtensions),
+                nextOverrides,
+              )
             }).pipe(Effect.asVoid),
           loadInstructions: () => Effect.succeed(""),
-        }
+        })
       }),
     )
 }

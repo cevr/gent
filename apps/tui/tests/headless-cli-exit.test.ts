@@ -1,20 +1,12 @@
-import { afterEach } from "bun:test"
 import { it, describe, expect } from "effect-bun-test"
-// @effect-diagnostics-next-line nodeBuiltinImport:off
-import { mkdtempSync, rmSync } from "node:fs"
-import * as os from "node:os"
-// @effect-diagnostics-next-line nodeBuiltinImport:off
-import * as path from "node:path"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, Layer } from "effect"
+import { Effect, FileSystem, Layer, Path } from "effect"
 import { Auth, AuthApi } from "@gent/core-internal/domain/auth"
 import { createWorkerEnv } from "@gent/core-internal/test-utils/fixtures.js"
-const tempDirs: string[] = []
-const makeTempDir = () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "gent-headless-exit-"))
-  tempDirs.push(dir)
-  return dir
-}
+const makeTempDir = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  return yield* fs.makeTempDirectoryScoped({ prefix: "gent-headless-exit-" })
+})
 const waitForExit = (proc: Bun.Subprocess, timeoutMs: number) => {
   // gent/no-sleep: allow real-clock timeout fence that kills a wedged subprocess
   const timeout = Effect.sleep(timeoutMs).pipe(
@@ -26,12 +18,6 @@ const waitForExit = (proc: Bun.Subprocess, timeoutMs: number) => {
     timeout,
   )
 }
-afterEach(() => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop()
-    if (dir !== undefined) rmSync(dir, { recursive: true, force: true })
-  }
-})
 const seedAuth = (directory: string) => {
   const authLayer = Auth.Live(directory).pipe(Layer.provide(BunServices.layer))
   return Effect.gen(function* () {
@@ -41,6 +27,7 @@ const seedAuth = (directory: string) => {
   }).pipe(Effect.provide(authLayer))
 }
 const makeChildEnv = (homeDir: string, env: ReturnType<typeof createWorkerEnv>) => {
+  // eslint-disable-next-line effect/noGlobals -- child process env must inherit the host environment.
   const childEnv = { ...Bun.env }
   delete childEnv["FORCE_COLOR"]
   delete childEnv["NO_COLOR"]
@@ -53,19 +40,21 @@ const makeChildEnv = (homeDir: string, env: ReturnType<typeof createWorkerEnv>) 
   }
 }
 describe("headless CLI", () => {
-  it.live(
+  it.scopedLive(
     "exits after a successful headless turn",
     () =>
       Effect.gen(function* () {
+        const path = yield* Path.Path
         const appDir = path.resolve(import.meta.dir, "..")
-        const homeDir = makeTempDir()
+        const homeDir = yield* makeTempDir
         const env = createWorkerEnv(homeDir, { providerMode: "debug-scripted" })
         yield* seedAuth(env["GENT_AUTH_DIRECTORY"]!)
+        // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
         const proc = Bun.spawn(
           [
             "bun",
             "--preload",
-            "./node_modules/@opentui/solid/scripts/preload.ts",
+            "@opentui/solid/preload",
             "src/main.tsx",
             "--debug",
             "-H",
@@ -89,7 +78,7 @@ describe("headless CLI", () => {
         expect(stderr).toBe("")
         expect(exitCode).toBe(0)
         expect(stdout.length).toBeGreaterThan(0)
-      }),
+      }).pipe(Effect.provide(BunServices.layer)),
     20000,
   )
 })

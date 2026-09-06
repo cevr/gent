@@ -8,6 +8,7 @@ import {
   type FakeFetchState,
 } from "@gent/core-internal/test-utils/fake-fetch"
 import { GoogleExtension, MistralExtension } from "../src/openai-compatible-driver.js"
+import { encodeExternalJson } from "./helpers/external-wire.js"
 
 const makeApiAuthInfo = (key: string): ProviderAuthInfo => ({
   type: "api",
@@ -16,7 +17,7 @@ const makeApiAuthInfo = (key: string): ProviderAuthInfo => ({
 
 const chatHappyResponse = (model: string) => ({
   status: 200,
-  body: JSON.stringify({
+  body: encodeExternalJson({
     id: "chatcmpl-test-1",
     object: "chat.completion",
     created: 1_700_000_000,
@@ -45,7 +46,7 @@ describe("OpenAI-compatible provider drivers", () => {
     Effect.gen(function* () {
       const contributions = yield* GoogleExtension.setup.pipe(provideTestSetupContext())
       const driver = onlyDriver(contributions.modelDrivers ?? [])
-      const model = driver.resolveModel("gemini-2.5-pro", makeApiAuthInfo("google-key"))
+      const model = yield* driver.resolveModel("gemini-2.5-pro", makeApiAuthInfo("google-key"))
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       const request = fetchState.captured.at(-1)!
@@ -60,7 +61,10 @@ describe("OpenAI-compatible provider drivers", () => {
     Effect.gen(function* () {
       const contributions = yield* MistralExtension.setup.pipe(provideTestSetupContext())
       const driver = onlyDriver(contributions.modelDrivers ?? [])
-      const model = driver.resolveModel("mistral-large-latest", makeApiAuthInfo("mistral-key"))
+      const model = yield* driver.resolveModel(
+        "mistral-large-latest",
+        makeApiAuthInfo("mistral-key"),
+      )
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       const request = fetchState.captured.at(-1)!

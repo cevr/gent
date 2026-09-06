@@ -16,9 +16,13 @@ describe("run spec construction", () => {
 
   test("undefined fields are omitted, not stored", () => {
     const spec = makeRunSpec({
+      // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
       persistence: undefined,
+      // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
       overrides: undefined,
+      // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
       tags: undefined,
+      // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
       parentToolCallId: undefined,
     })
     expect(Object.keys(spec)).toEqual([])

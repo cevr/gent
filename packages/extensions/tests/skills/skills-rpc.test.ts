@@ -3,13 +3,13 @@
  * request(...) path with per-request scopes, matching production behavior.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
-import { ref, type TurnProjection } from "@gent/core/extensions/api"
+import { ref } from "@gent/core/extensions/api"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { SkillsExtension } from "../../src/skills/index.js"
-import { SkillsRpc } from "../../src/skills/protocol.js"
+import { SkillEntry, SkillsRpc } from "../../src/skills/protocol.js"
 import { Skill, Skills } from "../../src/skills/skills.js"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { provideTestSetupContext } from "@gent/core-internal/test-utils"
@@ -40,18 +40,27 @@ describe("SkillsExtension via RPC", () => {
       Effect.gen(function* () {
         const contributions = yield* SkillsExtension.setup.pipe(provideTestSetupContext())
 
-        const turnProjection = contributions.hooks?.find((slot) => slot.kind === "turnProjection")
-        if (turnProjection === undefined) throw new Error("expected skills turn projection")
+        const turnProjection = Option.fromUndefinedOr(
+          contributions.hooks?.find((slot) => slot.kind === "turnProjection"),
+        )
+        if (Option.isNone(turnProjection)) {
+          return yield* Effect.die(new Error("expected skills turn projection"))
+        }
         const result = yield* narrowR(
-          (turnProjection.hook.handler() as Effect.Effect<TurnProjection, never, Skills>).pipe(
-            Effect.provide(Skills.Test(testSkills)),
-            Effect.orDie,
-          ),
+          turnProjection.value.hook
+            .handler()
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+            .pipe(Effect.provide(Skills.Test(testSkills)), Effect.orDie),
         )
 
-        const section = (result.promptSections ?? []).find((s) => s.id === "skills")
-        expect(section?.content).toContain("effect-v4")
-        expect(section?.content).toContain("react")
+        const section = Option.flatMap(Option.fromUndefinedOr(result.promptSections), (sections) =>
+          Option.fromUndefinedOr(sections.find((s) => s.id === "skills")),
+        )
+        if (Option.isNone(section)) {
+          return yield* Effect.die(new Error("expected skills prompt section"))
+        }
+        expect(section.value.content).toContain("effect-v4")
+        expect(section.value.content).toContain("react")
       }),
     ),
   )
@@ -69,13 +78,14 @@ describe("SkillsExtension via RPC", () => {
             layerOverrides: skillsLayerOverride,
           })
 
-          const reply = (yield* client.extension.request({
+          const rawReply = yield* client.extension.request({
             sessionId,
             extensionId: ref(SkillsRpc.ListSkills).extensionId,
             capabilityId: ref(SkillsRpc.ListSkills).capabilityId,
             input: {},
             branchId,
-          })) as ReadonlyArray<{ name: string; description: string; level: string }>
+          })
+          const reply = yield* Schema.decodeUnknownEffect(Schema.Array(SkillEntry))(rawReply)
 
           expect(Array.isArray(reply)).toBe(true)
           expect(reply).toHaveLength(2)
@@ -98,13 +108,14 @@ describe("SkillsExtension via RPC", () => {
             layerOverrides: skillsLayerOverride,
           })
 
-          const reply = (yield* client.extension.request({
+          const rawReply = yield* client.extension.request({
             sessionId,
             extensionId: ref(SkillsRpc.GetSkillContent).extensionId,
             capabilityId: ref(SkillsRpc.GetSkillContent).capabilityId,
             input: { name: "effect-v4" },
             branchId,
-          })) as { name: string; content: string } | null
+          })
+          const reply = yield* Schema.decodeUnknownEffect(Schema.NullOr(SkillEntry))(rawReply)
 
           expect(reply).not.toBeNull()
           expect(reply!.name).toBe("effect-v4")

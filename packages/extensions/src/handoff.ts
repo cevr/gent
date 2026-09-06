@@ -55,9 +55,9 @@ const HandoffCommand = request({
 // A process-scoped Ref is the entire product semantics here.
 
 interface HandoffCooldownService {
-  readonly turnCompleted: () => Effect.Effect<void>
+  readonly turnCompleted: Effect.Effect<void>
   readonly suppress: (count: number) => Effect.Effect<void>
-  readonly get: () => Effect.Effect<number>
+  readonly get: Effect.Effect<number>
 }
 
 export class HandoffCooldown extends Context.Service<HandoffCooldown, HandoffCooldownService>()(
@@ -68,9 +68,9 @@ export class HandoffCooldown extends Context.Service<HandoffCooldown, HandoffCoo
     Effect.gen(function* () {
       const cooldown = yield* Ref.make(0)
       return {
-        turnCompleted: () => Ref.update(cooldown, (n) => (n > 0 ? n - 1 : 0)),
+        turnCompleted: Ref.update(cooldown, (n) => Math.max(0, n - 1)),
         suppress: (count) => Ref.set(cooldown, Math.max(0, count)),
-        get: () => Ref.get(cooldown),
+        get: Ref.get(cooldown),
       } satisfies HandoffCooldownService
     }),
   )
@@ -83,11 +83,13 @@ const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
     .slice(-20)
     .map((m) => {
       const text = messagePartsTextLines(m.parts).join("\n")
-      return text !== "" ? `${m.role}: ${text}` : ""
+      if (text !== "") return `${m.role}: ${text}`
+      return ""
     })
     .filter((line) => line.length > 0)
     .join("\n\n")
-  return recentText.length > 0 ? recentText.slice(0, 4000) : "Session context"
+  if (recentText.length > 0) return recentText.slice(0, 4000)
+  return "Session context"
 }
 
 const autoHandoffImpl = (input: TurnAfterInput) =>
@@ -99,17 +101,17 @@ const autoHandoffImpl = (input: TurnAfterInput) =>
     const cooldown = cooldownOption.value
 
     // turnAfter is the natural place to drive the cooldown clock.
-    yield* cooldown.turnCompleted().pipe(Effect.catchEager(() => Effect.void))
+    yield* cooldown.turnCompleted.pipe(Effect.catchEager(() => Effect.void))
 
     // Auto owns its own handoff flow — skip generic threshold handoff when active
     const auto = yield* Effect.serviceOption(AutoRead)
-    const autoActive =
-      auto._tag === "Some"
-        ? yield* auto.value.isActive().pipe(Effect.catchEager(() => Effect.succeed(false)))
-        : false
+    let autoActive = false
+    if (auto._tag === "Some") {
+      autoActive = yield* auto.value.isActive.pipe(Effect.catchEager(() => Effect.succeed(false)))
+    }
     if (autoActive) return
 
-    const cooldownCount = yield* cooldown.get().pipe(Effect.catchEager(() => Effect.succeed(0)))
+    const cooldownCount = yield* cooldown.get.pipe(Effect.catchEager(() => Effect.succeed(0)))
     if (cooldownCount > 0) return
 
     const ctx = yield* ExtensionContext
@@ -144,7 +146,12 @@ export const HandoffExtension = defineExtension({
   requests: [HandoffCommand],
   tools: [HandoffTool],
   resources: [
-    defineResource({ tag: HandoffCooldown, scope: "process", layer: HandoffCooldown.Live }),
+    defineResource({
+      id: "@gent/handoff/cooldown",
+      tag: HandoffCooldown,
+      scope: "process",
+      layer: HandoffCooldown.Live,
+    }),
   ],
   hooks: [hook.turnAfter(autoHandoffImpl)],
 })

@@ -24,93 +24,94 @@
  * @module
  */
 import { describe, test, expect, it } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Predicate, Effect, Schema } from "effect"
 import { AgentEvent } from "@gent/core-internal/domain/event"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 
 describe("Schema.TaggedUnion — basic shape", () => {
-  const Shape = Schema.TaggedUnion({
-    Circle: { radius: Schema.Number },
-    Rectangle: { width: Schema.Number, height: Schema.Number },
+  const Figures = Schema.TaggedUnion({
+    Circle: { radius: Schema.Finite },
+    Rectangle: { width: Schema.Finite, height: Schema.Finite },
   })
-  test("cases bag exposes a TaggedStruct per member", () => {
-    expect(typeof Shape.cases.Circle).toBe("object")
-    expect(typeof Shape.cases.Rectangle).toBe("object")
-    expect(typeof Shape.cases.Circle.make).toBe("function")
+  test("cases bag exposes a constructible schema per member", () => {
+    expect(Predicate.isFunction(Figures.cases.Circle)).toBe(true)
+    expect(Predicate.isFunction(Figures.cases.Rectangle)).toBe(true)
+    // oxlint-disable-next-line typescript/unbound-method -- This assertion inspects the constructor and does not invoke it.
+    expect(Predicate.isFunction(Figures.cases.Circle.make)).toBe(true)
   })
   test("`cases.Variant.make(...)` constructs a value with the right `_tag`", () => {
-    const c = Shape.cases.Circle.make({ radius: 5 })
+    const c = Figures.cases.Circle.make({ radius: 5 })
     expect(c._tag).toBe("Circle")
     expect(c.radius).toBe(5)
   })
   test("schema guards work on directly-constructed variants", () => {
-    const c = Shape.cases.Circle.make({ radius: 5 })
-    const r = Shape.cases.Rectangle.make({ width: 3, height: 4 })
-    expect(Schema.is(Shape.cases.Circle)(c)).toBe(true)
-    expect(Schema.is(Shape.cases.Rectangle)(r)).toBe(true)
-    expect(Schema.is(Shape.cases.Rectangle)(c)).toBe(false)
+    const c = Figures.cases.Circle.make({ radius: 5 })
+    const r = Figures.cases.Rectangle.make({ width: 3, height: 4 })
+    expect(Schema.is(Figures.cases.Circle)(c)).toBe(true)
+    expect(Schema.is(Figures.cases.Rectangle)(r)).toBe(true)
+    expect(Schema.is(Figures.cases.Rectangle)(c)).toBe(false)
   })
 })
 
 describe("Schema.TaggedUnion — decode/encode round-trip", () => {
-  const Shape = Schema.TaggedUnion({
-    Circle: { radius: Schema.Number },
-    Rectangle: { width: Schema.Number, height: Schema.Number },
+  const Figures = Schema.TaggedUnion({
+    Circle: { radius: Schema.Finite },
+    Rectangle: { width: Schema.Finite, height: Schema.Finite },
   })
   test("decode produces well-shaped values", () => {
-    const decoded = Schema.decodeUnknownSync(Shape)({ _tag: "Circle", radius: 5 })
+    const decoded = Schema.decodeSync(Figures)({ _tag: "Circle", radius: 5 })
     expect(decoded._tag).toBe("Circle")
     if (decoded._tag === "Circle") {
       expect(decoded.radius).toBe(5)
     }
   })
   test("encode round-trips back to wire format", () => {
-    const c = Shape.cases.Circle.make({ radius: 5 })
-    const encoded = Schema.encodeUnknownSync(Shape)(c)
+    const c = Figures.cases.Circle.make({ radius: 5 })
+    const encoded = Schema.encodeUnknownSync(Figures)(c)
     expect(encoded).toEqual({ _tag: "Circle", radius: 5 })
   })
   test("decode rejects unknown `_tag`", () => {
-    expect(() => Schema.decodeUnknownSync(Shape)({ _tag: "Unknown", radius: 5 })).toThrow()
+    expect(() => Schema.decodeUnknownSync(Figures)({ _tag: "Unknown", radius: 5 })).toThrow()
   })
   test("decode rejects malformed payload", () => {
     expect(() =>
-      Schema.decodeUnknownSync(Shape)({ _tag: "Circle", radius: "not a number" }),
+      Schema.decodeUnknownSync(Figures)({ _tag: "Circle", radius: "not a number" }),
     ).toThrow()
   })
 })
 
 describe("Schema.TaggedUnion — match / guards / isAnyOf", () => {
-  const Shape = Schema.TaggedUnion({
-    Circle: { radius: Schema.Number },
-    Rectangle: { width: Schema.Number, height: Schema.Number },
-    Triangle: { base: Schema.Number, height: Schema.Number },
+  const Figures = Schema.TaggedUnion({
+    Circle: { radius: Schema.Finite },
+    Rectangle: { width: Schema.Finite, height: Schema.Finite },
+    Triangle: { base: Schema.Finite, height: Schema.Finite },
   })
-  type Shape = Schema.Schema.Type<typeof Shape>
+  type Figures = Schema.Schema.Type<typeof Figures>
   test("`match` is exhaustive by member name", () => {
-    const area = (s: Shape) =>
-      Shape.match({
+    const area = (s: Figures) =>
+      Figures.match({
         Circle: (c) => Math.PI * c.radius ** 2,
         Rectangle: (r) => r.width * r.height,
         Triangle: (t) => (t.base * t.height) / 2,
       })(s)
-    expect(area(Shape.cases.Circle.make({ radius: 1 }))).toBeCloseTo(Math.PI)
-    expect(area(Shape.cases.Rectangle.make({ width: 3, height: 4 }))).toBe(12)
-    expect(area(Shape.cases.Triangle.make({ base: 4, height: 6 }))).toBe(12)
+    expect(area(Figures.cases.Circle.make({ radius: 1 }))).toBeCloseTo(Math.PI)
+    expect(area(Figures.cases.Rectangle.make({ width: 3, height: 4 }))).toBe(12)
+    expect(area(Figures.cases.Triangle.make({ base: 4, height: 6 }))).toBe(12)
   })
   test("`guards` narrow per member", () => {
-    const c = Shape.cases.Circle.make({ radius: 5 })
-    const r = Shape.cases.Rectangle.make({ width: 1, height: 2 })
-    expect(Shape.guards.Circle(c)).toBe(true)
-    expect(Shape.guards.Circle(r)).toBe(false)
-    expect(Shape.guards.Rectangle(r)).toBe(true)
-    expect(Shape.guards.Rectangle(c)).toBe(false)
+    const c = Figures.cases.Circle.make({ radius: 5 })
+    const r = Figures.cases.Rectangle.make({ width: 1, height: 2 })
+    expect(Figures.guards.Circle(c)).toBe(true)
+    expect(Figures.guards.Circle(r)).toBe(false)
+    expect(Figures.guards.Rectangle(r)).toBe(true)
+    expect(Figures.guards.Rectangle(c)).toBe(false)
   })
   test("`isAnyOf` checks subset membership by member name", () => {
-    const c = Shape.cases.Circle.make({ radius: 5 })
-    const r = Shape.cases.Rectangle.make({ width: 1, height: 2 })
-    const t = Shape.cases.Triangle.make({ base: 1, height: 1 })
-    const round = Shape.isAnyOf(["Circle"])
-    const angular = Shape.isAnyOf(["Rectangle", "Triangle"])
+    const c = Figures.cases.Circle.make({ radius: 5 })
+    const r = Figures.cases.Rectangle.make({ width: 1, height: 2 })
+    const t = Figures.cases.Triangle.make({ base: 1, height: 1 })
+    const round = Figures.isAnyOf(["Circle"])
+    const angular = Figures.isAnyOf(["Rectangle", "Triangle"])
     expect(round(c)).toBe(true)
     expect(round(r)).toBe(false)
     expect(angular(r)).toBe(true)
@@ -120,35 +121,36 @@ describe("Schema.TaggedUnion — match / guards / isAnyOf", () => {
 })
 
 describe("Schema.TaggedUnion — runtime-helper payload-validation semantics", () => {
-  const Shape = Schema.TaggedUnion({
-    Circle: { radius: Schema.Number },
-    Rectangle: { width: Schema.Number, height: Schema.Number },
+  const Figures = Schema.TaggedUnion({
+    Circle: { radius: Schema.Finite },
+    Rectangle: { width: Schema.Finite, height: Schema.Finite },
   })
-  type Shape = Schema.Schema.Type<typeof Shape>
+  type Figures = Schema.Schema.Type<typeof Figures>
   // A spoof value: right `_tag`, wrong payload shape. Constructed via
-  // `as unknown as Shape` to bypass the type system — exactly the kind of
+  // `as unknown as Figures` to bypass the type system — exactly the kind of
   // value a wire-boundary failure or a hostile decode would produce.
-  const spoof = { _tag: "Circle", radius: "not a number" } as unknown as Shape
+  // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions -- This test deliberately supplies a malformed payload to the tag-only dispatcher.
+  const spoof = { _tag: "Circle", radius: "not a number" } as unknown as Figures
   test("`guards.X` validates the full payload — spoofed payload is rejected", () => {
     // `guards.X` is `Schema.is(case)` per variant in upstream, so the payload
     // shape is checked, not just the discriminator.
-    expect(Shape.guards.Circle(spoof)).toBe(false)
+    expect(Figures.guards.Circle(spoof)).toBe(false)
   })
   test("`isAnyOf` is tag-only — spoofed payload is accepted", () => {
     // Regression-lock: `isAnyOf` matches against `_tag` only. Production
     // callers do not feed untrusted values through `isAnyOf`.
-    expect(Shape.isAnyOf(["Circle"])(spoof)).toBe(true)
+    expect(Figures.isAnyOf(["Circle"])(spoof)).toBe(true)
   })
   test("`match` is tag-only — dispatches on spoofed payload", () => {
     // Regression-lock: `match` dispatches via the `_tag` key into the
     // handler map without re-validating the payload. Production callers
     // (`AgentEvent.match` on events emitted in-process or decoded via
     // `Schema.decodeUnknownSync`) never see spoofed values.
-    const out = Shape.match({
-      Circle: (c) => `circle:${typeof c.radius}`,
+    const out = Figures.match({
+      Circle: (c) => String(c.radius),
       Rectangle: (r) => `rect:${r.width * r.height}`,
     })(spoof)
-    expect(out).toBe("circle:string")
+    expect(String(out)).toBe("not a number")
   })
 })
 
@@ -170,7 +172,7 @@ describe("Schema.TaggedUnion — explicit wire tags via Schema.TaggedStruct + to
     expect(e.text).toBe("hello")
   })
   test("kebab-case wire tags decode through the union", () => {
-    const decoded = Schema.decodeUnknownSync(WireEvent)({
+    const decoded = Schema.decodeSync(WireEvent)({
       _tag: "text-delta",
       text: "hi",
     })
@@ -195,19 +197,19 @@ describe("Schema.TaggedUnion — explicit wire tags via Schema.TaggedStruct + to
 
 describe("Schema.TaggedUnion — single-variant edge case", () => {
   const Singleton = Schema.TaggedUnion({
-    Only: { value: Schema.Number },
+    Only: { value: Schema.Finite },
   })
   test("construct/decode single variant", () => {
     const o = Singleton.cases.Only.make({ value: 42 })
     expect(o._tag).toBe("Only")
-    const decoded = Schema.decodeUnknownSync(Singleton)({ _tag: "Only", value: 42 })
+    const decoded = Schema.decodeSync(Singleton)({ _tag: "Only", value: 42 })
     expect(decoded._tag).toBe("Only")
   })
 })
 
 describe("Schema.TaggedUnion — namespacing via TaggedStruct identity", () => {
-  const A = Schema.TaggedUnion({ Shared: { value: Schema.Number } })
-  const B = Schema.TaggedUnion({ Shared: { value: Schema.Number } })
+  const A = Schema.TaggedUnion({ Shared: { value: Schema.Finite } })
+  const B = Schema.TaggedUnion({ Shared: { value: Schema.Finite } })
   test("same member name across enums has distinct case identity", () => {
     expect(A.cases.Shared).not.toBe(B.cases.Shared)
   })
@@ -220,19 +222,19 @@ describe("Schema.TaggedUnion — AgentEvent JSON wire shape", () => {
     const evt = AgentEvent.cases.SessionStarted.make({ sessionId, branchId })
     const encoded = Schema.encodeUnknownSync(AgentEvent)(evt)
     expect(encoded).toEqual({ _tag: "SessionStarted", sessionId, branchId })
-    const decoded = Schema.decodeUnknownSync(AgentEvent)(encoded)
+    const decoded = Schema.decodeSync(AgentEvent)(encoded)
     expect(Schema.is(AgentEvent.cases.SessionStarted)(decoded)).toBe(true)
   })
 })
 
 describe("Schema.TaggedUnion — Effect-friendly decode", () => {
-  const Shape = Schema.TaggedUnion({
-    Circle: { radius: Schema.Number },
-    Rectangle: { width: Schema.Number, height: Schema.Number },
+  const Figures = Schema.TaggedUnion({
+    Circle: { radius: Schema.Finite },
+    Rectangle: { width: Schema.Finite, height: Schema.Finite },
   })
   it.live("decode works inside Effect without service requirements", () =>
     Effect.gen(function* () {
-      const program = Schema.decodeUnknownEffect(Shape)({
+      const program = Schema.decodeEffect(Figures)({
         _tag: "Rectangle",
         width: 3,
         height: 4,

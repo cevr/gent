@@ -27,6 +27,7 @@ export const SkillsExtension = defineExtension({
       const ctx = yield* ExtensionSetupContext
       return [
         defineResource({
+          id: "@gent/skills/service",
           tag: Skills,
           scope: "process",
           layer: Skills.Live({ cwd: ctx.cwd, home: ctx.home }),
@@ -37,7 +38,7 @@ export const SkillsExtension = defineExtension({
     hook.turnProjection(() =>
       Effect.gen(function* () {
         const service = yield* Skills
-        const skills = yield* service.list()
+        const skills = yield* service.list
         return {
           promptSections: [{ id: "skills", priority: 80, content: formatSkillsForPrompt(skills) }],
         }

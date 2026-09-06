@@ -38,7 +38,7 @@ const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = HttpRou
       if (!isUpgrade) return yield* handler
 
       const trackerOpt = yield* Effect.serviceOption(ConnectionTracker)
-      if (Option.isSome(trackerOpt)) yield* trackerOpt.value.increment()
+      if (Option.isSome(trackerOpt)) yield* trackerOpt.value.increment
 
       yield* Effect.logInfo("ws.connect").pipe(
         Effect.annotateLogs({
@@ -56,7 +56,7 @@ const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = HttpRou
         }),
         Effect.ensuring(
           Effect.gen(function* () {
-            if (Option.isSome(trackerOpt)) yield* trackerOpt.value.decrement()
+            if (Option.isSome(trackerOpt)) yield* trackerOpt.value.decrement
             yield* Effect.logInfo("ws.disconnect").pipe(
               Effect.annotateLogs({
                 url: request.url,

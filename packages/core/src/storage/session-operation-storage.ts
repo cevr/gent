@@ -1,4 +1,4 @@
-import { Context, DateTime, Effect, Layer, Schema } from "effect"
+import { Predicate, Context, DateTime, Effect, Layer, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { AgentName } from "../domain/agent.js"
 import { BranchId, type RequestId, SessionId } from "../domain/ids.js"
@@ -46,6 +46,7 @@ const decodeStoredSwitchBranchResult = Schema.decodeUnknownEffect(StoredSwitchBr
 export interface SessionOperationStorageService {
   readonly getCreateSession: (
     requestId: RequestId,
+    // oxlint-disable-next-line effect/noNullish -- Idempotency lookup uses undefined when no row exists.
   ) => Effect.Effect<StoredCreateSessionResult | undefined, StorageError>
   readonly saveCreateSession: (
     requestId: RequestId,
@@ -53,6 +54,7 @@ export interface SessionOperationStorageService {
   ) => Effect.Effect<void, StorageError>
   readonly getCreateBranch: (
     requestId: RequestId,
+    // oxlint-disable-next-line effect/noNullish -- Idempotency lookup uses undefined when no row exists.
   ) => Effect.Effect<StoredBranchResult | undefined, StorageError>
   readonly saveCreateBranch: (
     requestId: RequestId,
@@ -60,6 +62,7 @@ export interface SessionOperationStorageService {
   ) => Effect.Effect<void, StorageError>
   readonly getForkBranch: (
     requestId: RequestId,
+    // oxlint-disable-next-line effect/noNullish -- Idempotency lookup uses undefined when no row exists.
   ) => Effect.Effect<StoredBranchResult | undefined, StorageError>
   readonly saveForkBranch: (
     requestId: RequestId,
@@ -67,6 +70,7 @@ export interface SessionOperationStorageService {
   ) => Effect.Effect<void, StorageError>
   readonly getSwitchBranch: (
     requestId: RequestId,
+    // oxlint-disable-next-line effect/noNullish -- Idempotency lookup uses undefined when no row exists.
   ) => Effect.Effect<StoredSwitchBranchResult | undefined, StorageError>
   readonly saveSwitchBranch: (
     requestId: RequestId,
@@ -99,7 +103,8 @@ export class SessionOperationStorage extends Context.Service<
           LIMIT 1
         `
         const row = rows[0]
-        if (row === undefined) return undefined
+        // oxlint-disable-next-line effect/noNullish -- Idempotency lookup uses undefined when no row exists.
+        if (Predicate.isUndefined(row)) return undefined
         return yield* decode(row.result_json)
       })
 
@@ -148,7 +153,7 @@ export class SessionOperationStorage extends Context.Service<
           LIMIT 1
         `
         const row = rows[0]
-        if (row === undefined) {
+        if (Predicate.isUndefined(row)) {
           return yield* new StorageError({
             message: `Cannot persist durable operation for missing branch: ${branchId}`,
           })

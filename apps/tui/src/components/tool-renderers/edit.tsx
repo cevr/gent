@@ -6,16 +6,19 @@
  */
 
 import { Show, For, createMemo } from "solid-js"
+import type { JSX } from "solid-js"
+import { Option } from "effect"
 import { windowItems, headTailExcerpts } from "@gent/core-internal/domain/windowing.js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
 import { fileUrl, isAbsPath } from "../../utils/file-refs"
 import { getString } from "../../utils/parse-tool-output"
+import type { ToolInput } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 import { getEditUnifiedDiff } from "./edit-utils"
 
-function getPath(input: unknown): string {
+function getPath(input: ToolInput): string {
   return getString(input, "path")
 }
 
@@ -37,14 +40,39 @@ function diffLineColor(kind: DiffLineKind, theme: ReturnType<typeof useTheme>["t
   return theme.textMuted
 }
 
+const renderDiffLine = (
+  item: DiffLine,
+  theme: ReturnType<typeof useTheme>["theme"],
+): JSX.Element => {
+  if (item._tag === "elision") {
+    return (
+      <text>
+        <span style={{ fg: theme.border }}>{"· ··· "}</span>
+        <span style={{ fg: theme.textMuted }}>{item.count} more lines</span>
+      </text>
+    )
+  }
+  return (
+    <text>
+      <span style={{ fg: diffLineColor(item.kind, theme) }}>{item.text}</span>
+    </text>
+  )
+}
+
 export function EditToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
   const editData = () => getEditUnifiedDiff(props.toolCall.input)
   const path = () => getPath(props.toolCall.input)
+  const subtitleHref = () => {
+    if (isAbsPath(path())) return fileUrl(path())
+    return Option.getOrUndefined(Option.none<string>())
+  }
 
   const collapsedDiffLines = createMemo((): DiffLine[] => {
     const data = editData()
+    // `getEditUnifiedDiff` returns null for invalid tool input at this adapter boundary.
+    // eslint-disable-next-line effect/noNullish -- invalid edit payloads are rendered as an empty diff.
     if (data === null) return []
     const lines: DiffLine[] = data.diff
       .split("\n")
@@ -64,7 +92,7 @@ export function EditToolRenderer(props: ToolRendererProps) {
         <ToolFrame
           title="edit"
           subtitle={truncatePath(path())}
-          subtitleHref={isAbsPath(path()) ? fileUrl(path()) : undefined}
+          subtitleHref={subtitleHref()}
           status={props.toolCall.status}
           expanded={props.expanded}
         />
@@ -74,7 +102,7 @@ export function EditToolRenderer(props: ToolRendererProps) {
         <ToolFrame
           title="edit"
           subtitle={truncatePath(path())}
-          subtitleHref={isAbsPath(path()) ? fileUrl(path()) : undefined}
+          subtitleHref={subtitleHref()}
           status={props.toolCall.status}
           expanded={props.expanded}
           collapsedContent={
@@ -85,26 +113,7 @@ export function EditToolRenderer(props: ToolRendererProps) {
                 <span style={{ fg: theme.error, bold: true }}>-{data().removed}</span>
               </text>
               <Show when={collapsedDiffLines().length > 0}>
-                <For each={collapsedDiffLines()}>
-                  {(item) =>
-                    item._tag === "elision" ? (
-                      <text>
-                        <span style={{ fg: theme.border }}>{"· ··· "}</span>
-                        <span style={{ fg: theme.textMuted }}>{item.count} more lines</span>
-                      </text>
-                    ) : (
-                      <text>
-                        <span
-                          style={{
-                            fg: diffLineColor(item.kind, theme),
-                          }}
-                        >
-                          {item.text}
-                        </span>
-                      </text>
-                    )
-                  }
-                </For>
+                <For each={collapsedDiffLines()}>{(item) => renderDiffLine(item, theme)}</For>
               </Show>
             </box>
           }

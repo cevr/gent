@@ -17,8 +17,8 @@ export interface ShellResult {
   savedPath?: string
 }
 
-export class ShellCommandError extends Schema.TaggedErrorClass<ShellCommandError>(
-  "ShellCommandError",
+export class ShellCommandError extends Schema.TaggedError<ShellCommandError>(
+  "@gent/tui/src/utils/shell/ShellCommandError",
 )("ShellCommandError", {
   message: Schema.String,
 }) {}
@@ -30,7 +30,8 @@ export class ShellCommandError extends Schema.TaggedErrorClass<ShellCommandError
 export const executeShell = (command: string, cwd: string) =>
   Effect.gen(function* () {
     const { stdout, stderr } = yield* runCommand(command, cwd)
-    const fullOutput: string = stderr.length > 0 ? `${stdout}\n${stderr}` : stdout
+    let fullOutput = stdout
+    if (stderr.length > 0) fullOutput = `${stdout}\n${stderr}`
 
     const lines = fullOutput.split("\n")
     const needsTruncation = lines.length > MAX_LINES || fullOutput.length > MAX_BYTES

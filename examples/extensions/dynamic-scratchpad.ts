@@ -37,7 +37,7 @@ const appendInput = Schema.Struct({
 })
 
 const appendOutput = Schema.Struct({
-  count: Schema.Number,
+  count: Schema.Finite,
   latest: Schema.String,
 })
 
@@ -119,6 +119,7 @@ export default defineExtension({
   id: DYNAMIC_SCRATCHPAD_ID,
   resources: [
     defineStateResource({
+      id: "example/dynamic-scratchpad/state",
       tag: ScratchpadStateResource,
       scope: "process",
       initial: { entries: [] },

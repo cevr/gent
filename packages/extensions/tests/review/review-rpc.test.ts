@@ -15,6 +15,7 @@ import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { AgentRunResult, SessionId } from "@gent/core/extensions/api"
 import type { AgentName } from "@gent/core/extensions/api"
 import { e2ePreset } from "../helpers/test-preset"
+import { isToolResultFor } from "../helpers/tool-event.js"
 
 describe("ReviewExtension via model turn", () => {
   it.live(
@@ -33,15 +34,22 @@ describe("ReviewExtension via model turn", () => {
           const subagentRunner = {
             run: (params: { prompt: string; agent: { name: AgentName } }) => {
               const isSynth = params.prompt.includes("Synthesize")
-              const text = isSynth
-                ? '[{"file":"x.ts","severity":"low","type":"suggestion","text":"could be const"}]'
-                : "found nothing critical"
+              if (isSynth) {
+                return Effect.succeed(
+                  AgentRunResult.cases.success.make({
+                    text: '[{"file":"x.ts","severity":"low","type":"suggestion","text":"could be const"}]',
+                    sessionId: SessionId.make("review-synth"),
+                    agentName: params.agent.name,
+                    persistence: "ephemeral",
+                  }),
+                )
+              }
               return Effect.succeed(
                 AgentRunResult.cases.success.make({
-                  text,
-                  sessionId: SessionId.make(isSynth ? "review-synth" : "review-worker"),
+                  text: "found nothing critical",
+                  sessionId: SessionId.make("review-worker"),
                   agentName: params.agent.name,
-                  persistence: "ephemeral" as const,
+                  persistence: "ephemeral",
                 }),
               )
             },
@@ -52,17 +60,14 @@ describe("ReviewExtension via model turn", () => {
             subagentRunner,
           })
 
-          const toolEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
-            Stream.filter(
-              (envelope) =>
-                (envelope.event._tag === "ToolCallSucceeded" ||
-                  envelope.event._tag === "ToolCallFailed") &&
-                (envelope.event as { readonly toolName?: string }).toolName === "review",
-            ),
-            Stream.take(1),
-            Stream.runCollect,
-            Effect.forkScoped,
-          )
+          const toolEventFiber = yield* client.session
+            .events({ sessionId, branchId })
+            .pipe(
+              Stream.filter(isToolResultFor("review")),
+              Stream.take(1),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
 
           yield* client.message.send({
             sessionId,

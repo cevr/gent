@@ -2,19 +2,17 @@ import { Config, Effect, Option } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
-const readColorFgBg = Effect.gen(function* () {
-  const opt = yield* Config.option(Config.string("COLORFGBG"))
-    .asEffect()
-    .pipe(Effect.catch(() => Effect.succeed(Option.none<string>())))
-  return Option.getOrUndefined(opt)
-})
+const readColorFgBg = Config.option(Config.string("COLORFGBG")).pipe(
+  Effect.orElseSucceed(() => Option.none<string>()),
+)
 
 const readDarwinAppearance = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const exitCode = yield* spawner
     .exitCode(ChildProcess.make("defaults", ["read", "-g", "AppleInterfaceStyle"]))
     .pipe(Effect.orElseSucceed(() => 1))
-  return exitCode === 0 ? ("dark" as const) : ("light" as const)
+  if (exitCode === 0) return "dark"
+  return "light"
 })
 
 /**
@@ -30,11 +28,15 @@ export const detectColorScheme: Effect.Effect<
   ChildProcessSpawner.ChildProcessSpawner | GentPlatform
 > = Effect.gen(function* () {
   const colorFgBg = yield* readColorFgBg
-  if (colorFgBg !== undefined && colorFgBg.length > 0) {
-    const parts = colorFgBg.split(";")
-    const bg = parseInt(parts[parts.length - 1] ?? "0", 10)
+  if (Option.isSome(colorFgBg) && colorFgBg.value.length > 0) {
+    const parts = colorFgBg.value.split(";")
+    const bg = parseInt(
+      Option.getOrElse(Option.fromNullishOr(parts[parts.length - 1]), () => "0"),
+      10,
+    )
     // ANSI colors 0-6 are typically dark, 7+ are light
-    return bg > 6 ? "light" : "dark"
+    if (bg > 6) return "light"
+    return "dark"
   }
 
   const platform = yield* GentPlatform

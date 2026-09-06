@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test"
+import { Option } from "effect"
 import { dateFromMillis } from "@gent/core-internal/domain/message"
 import { toSlug, memoryPath, newFrontmatter } from "../../src/memory/tools.js"
 
@@ -19,15 +20,17 @@ describe("toSlug", () => {
 
 describe("memoryPath", () => {
   test("global scope", () => {
-    expect(memoryPath("global", "My Topic")).toBe("global/my-topic.md")
+    expect(memoryPath("global", "My Topic", Option.none())).toBe("global/my-topic.md")
   })
 
   test("project scope with key", () => {
-    expect(memoryPath("project", "My Topic", "gent-abc123")).toBe("project/gent-abc123/my-topic.md")
+    expect(memoryPath("project", "My Topic", Option.some("gent-abc123"))).toBe(
+      "project/gent-abc123/my-topic.md",
+    )
   })
 
   test("project scope without key falls back to global", () => {
-    expect(memoryPath("project", "My Topic")).toBe("global/my-topic.md")
+    expect(memoryPath("project", "My Topic", Option.none())).toBe("global/my-topic.md")
   })
 })
 

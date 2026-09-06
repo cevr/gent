@@ -36,13 +36,31 @@
  * @module
  */
 
-import { DateTime, Effect, Exit, Option, Ref, Schema, Stream, Semaphore } from "effect"
+import {
+  DateTime,
+  Effect,
+  Exit,
+  FileSystem,
+  Option,
+  Path,
+  Predicate,
+  Ref,
+  Schema,
+  Stream,
+  Semaphore,
+} from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Actor } from "effect-encore"
 import { type AgentName, type RunSpec } from "../../domain/agent.js"
 import type { ModelId } from "../../domain/model.js"
-import { EventStore } from "../../domain/event.js"
+import { EventStore, InteractionResolved } from "../../domain/event.js"
+import { EventPublisher } from "../../domain/event-publisher.js"
 import { Message, type MessageMetadata } from "../../domain/message.js"
+
+const isActiveLoopState = Predicate.or(
+  Predicate.isTagged("Running"),
+  Predicate.isTagged("WaitingForInteraction"),
+)
 import {
   MessageId,
   RpcId,
@@ -78,12 +96,21 @@ import { MessageStorage } from "../../storage/message-storage.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { DynamicExtensionRegistry } from "../../domain/dynamic-extension-registry.js"
+import type { CapabilityError, CapabilityNotFoundError } from "../../domain/capability.js"
 import { provideExtensionServices } from "../../domain/extension-services.js"
 import { parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { recordToolResult } from "./turn-persistence.js"
-import { invokeTool } from "./turn-tool-execution.js"
-import { provideAgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
+import { invokeTool, ToolInvocationInteractionError } from "./turn-tool-execution.js"
+import { ApprovalService } from "../approval-service.js"
+import {
+  ProcessLocalToolReplay,
+  processLocalReplayBindingKey,
+} from "./process-local-tool-replay.js"
+import {
+  runAgentLoopTurnProfileOrLegacy,
+  type AgentLoopTurnProfile,
+} from "./agent-loop.turn-profile.js"
 import { CurrentExtensionHostContext } from "./current-extension-host-context.js"
 import { runExtensionCapability } from "../extensions/registry.js"
 import {
@@ -104,6 +131,7 @@ import {
   type MessageType,
   type RecordToolResultInput,
   type RequestExtensionInput,
+  type QueueFollowUpInput,
   type RespondInteractionInput,
   type SteerCommandType,
   type SteerInput,
@@ -130,6 +158,8 @@ export const buildAgentLoopActorHandlers = (config: {
     const startupSemaphore = yield* Semaphore.make(1)
     const sessionGovernance = yield* AgentLoopSessionGovernance
     const platform = yield* GentPlatform
+    const fileSystem = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
     const addr = yield* Actor.CurrentAddress
     const { workspaceId, sessionId, branchId } = yield* parseEntityId(addr.entityId).pipe(
       Effect.orDie,
@@ -150,6 +180,32 @@ export const buildAgentLoopActorHandlers = (config: {
     const closed = yield* Ref.make(false)
     const operationSeen = yield* Ref.make(false)
 
+    type ExtensionRequestEffect = Effect.Effect<
+      unknown,
+      CapabilityError | CapabilityNotFoundError,
+      CurrentExtensionHostContext | FileSystem.FileSystem | Path.Path
+    >
+
+    const extensionRequestError = (
+      error: AgentLoopError | CapabilityError | CapabilityNotFoundError,
+    ): AgentLoopError => {
+      if (Schema.is(AgentLoopError)(error)) return error
+      let message: string = error._tag
+      if ("reason" in error) message = `${error._tag}: ${error.reason}`
+      return new AgentLoopError({ message, cause: error })
+    }
+
+    const runExtensionRequest = (
+      environment: AgentLoopTurnProfile,
+      requestEffect: ExtensionRequestEffect,
+    ) =>
+      requestEffect.pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+        runAgentLoopTurnProfileOrLegacy(environment),
+        Effect.mapError(extensionRequestError),
+      )
+
     // `handle` and `startupExit` were plain `let` bindings before C13.1. The
     // mailbox runs at `concurrency: "unbounded"`, so the post-flip window in
     // `openLoop` between `Ref.set(closed, false)` and the assignment of
@@ -158,8 +214,10 @@ export const buildAgentLoopActorHandlers = (config: {
     // a stale (now-closed) handle. Promoted to `Ref` and all reads happen
     // inside `ensureStarted` (which holds `startupSemaphore` across the
     // rebuild, the post-check, and the published handle return).
-    const handleRef = yield* Ref.make<AgentLoopBehavior | undefined>(undefined)
-    const startupExitRef = yield* Ref.make<Exit.Exit<void, AgentLoopError> | undefined>(undefined)
+    const handleRef = yield* Ref.make<Option.Option<AgentLoopBehavior>>(Option.none())
+    const startupExitRef = yield* Ref.make<Option.Option<Exit.Exit<void, AgentLoopError>>>(
+      Option.none(),
+    )
 
     const closeBehaviorWithHeldStartupPermit = (loop: AgentLoopBehavior) =>
       Effect.gen(function* () {
@@ -187,12 +245,12 @@ export const buildAgentLoopActorHandlers = (config: {
     // ensuring no one observes a half-reopened loop.
     const reentrantHandle = Effect.gen(function* () {
       const value = yield* Ref.get(handleRef)
-      if (value === undefined) {
+      if (Option.isNone(value)) {
         return yield* new AgentLoopError({
           message: `AgentLoop handle unavailable for ${sessionId}/${branchId}`,
         })
       }
-      return value
+      return value.value
     })
 
     const hasPriorMessageHistory = Effect.gen(function* () {
@@ -207,11 +265,15 @@ export const buildAgentLoopActorHandlers = (config: {
         .listEvents({ sessionId, branchId })
         .pipe(Effect.catchEager(() => Effect.succeed([])))
       const completed = new Set(
-        envelopes.flatMap((envelope) =>
-          envelope.event._tag === "TurnCompleted" && envelope.event.messageId !== undefined
-            ? [envelope.event.messageId]
-            : [],
-        ),
+        envelopes.flatMap((envelope) => {
+          if (
+            envelope.event._tag === "TurnCompleted" &&
+            !Predicate.isUndefined(envelope.event.messageId)
+          ) {
+            return [envelope.event.messageId]
+          }
+          return []
+        }),
       )
       const incomplete = envelopes.filter(
         (envelope) =>
@@ -219,13 +281,14 @@ export const buildAgentLoopActorHandlers = (config: {
           envelope.event.message.role === "user" &&
           !completed.has(envelope.event.message.id),
       )
-      const latest = incomplete[incomplete.length - 1]?.event
-      return latest?._tag === "MessageReceived" ? latest.message : undefined
+      const latest = Option.fromUndefinedOr(incomplete[incomplete.length - 1])
+      if (Option.isNone(latest) || latest.value.event._tag !== "MessageReceived") {
+        return Option.none()
+      }
+      return Option.some(latest.value.event.message)
     })
 
-    const hasIncompleteUserTurn = latestIncompleteUserTurn.pipe(
-      Effect.map((message) => message !== undefined),
-    )
+    const hasIncompleteUserTurn = latestIncompleteUserTurn.pipe(Effect.map(Option.isSome))
 
     const startNextQueuedTurnIfIdle = (
       handle: AgentLoopBehavior,
@@ -233,17 +296,19 @@ export const buildAgentLoopActorHandlers = (config: {
     ) =>
       Effect.gen(function* () {
         const start = yield* handle.takeNextQueuedTurnIfIdle
-        if (start !== undefined) {
-          yield* handle
-            .startTurn(start)
-            .pipe(
-              Effect.catchEager((error) =>
-                (options?.startupPermitHeld === true
-                  ? closeBehaviorWithHeldStartupPermit(handle)
-                  : cleanupLoop(handle)
-                ).pipe(Effect.andThen(Effect.fail(error))),
-              ),
-            )
+        if (Option.isSome(start)) {
+          yield* handle.startTurn(start.value).pipe(
+            Effect.catchEager((error) => {
+              let cleanup = cleanupLoop
+              const startupPermitHeld = Option.fromUndefinedOr(options).pipe(
+                Option.map(({ startupPermitHeld: held }) => held),
+              )
+              if (Option.isSome(startupPermitHeld) && startupPermitHeld.value === true) {
+                cleanup = closeBehaviorWithHeldStartupPermit
+              }
+              return cleanup(handle).pipe(Effect.andThen(Effect.fail(error)))
+            }),
+          )
         }
       })
 
@@ -253,7 +318,7 @@ export const buildAgentLoopActorHandlers = (config: {
           message: `Session runtime terminated: ${sessionId}`,
         })
       }
-      return yield* Ref.modify(operationSeen, (seen) => [seen, true] as const)
+      return yield* Ref.modify(operationSeen, (seen) => [seen, true])
     })
 
     const rejectIfTerminated = Effect.gen(function* () {
@@ -264,14 +329,19 @@ export const buildAgentLoopActorHandlers = (config: {
       }
     })
 
-    const ensureTarget = (target: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
-      target.sessionId === sessionId && target.branchId === branchId
-        ? Effect.void
-        : Effect.fail(
-            new AgentLoopError({
-              message: `AgentLoop op target mismatch: entity=${sessionId}/${branchId} payload=${target.sessionId}/${target.branchId}`,
-            }),
-          )
+    const ensureTarget = (target: {
+      readonly sessionId: SessionId
+      readonly branchId: BranchId
+    }) => {
+      if (target.sessionId === sessionId && target.branchId === branchId) {
+        return Effect.void
+      }
+      return Effect.fail(
+        new AgentLoopError({
+          message: `AgentLoop op target mismatch: entity=${sessionId}/${branchId} payload=${target.sessionId}/${target.branchId}`,
+        }),
+      )
+    }
 
     // Both call sites supply an already-resolved `handle`:
     //   - the `AgentLoopFollowUp` enqueue implementation reads
@@ -301,7 +371,7 @@ export const buildAgentLoopActorHandlers = (config: {
           role: "user",
           parts: [Prompt.textPart({ text: input.content ?? "" })],
           createdAt: yield* DateTime.nowAsDate,
-          ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+          metadata: input.metadata,
         })
 
       yield* ensureTarget(message)
@@ -314,7 +384,7 @@ export const buildAgentLoopActorHandlers = (config: {
       const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
         coldQueueOnly: !wasAlreadyWarm,
       })
-      if (reservedStart !== undefined) {
+      if (Option.isSome(reservedStart)) {
         yield* handle
           .startTurn(item)
           .pipe(
@@ -343,21 +413,24 @@ export const buildAgentLoopActorHandlers = (config: {
           ),
         ),
       )
-      const initialQueue = Exit.isSuccess(initialQueueExit)
-        ? initialQueueExit.value
-        : emptyLoopQueueState()
-      const initialQueueFailure = Exit.isFailure(initialQueueExit)
-        ? new AgentLoopError({
+      let initialQueue = emptyLoopQueueState()
+      let initialQueueFailure = Option.none<AgentLoopError>()
+      if (Exit.isSuccess(initialQueueExit)) {
+        initialQueue = initialQueueExit.value
+      } else {
+        initialQueueFailure = Option.some(
+          new AgentLoopError({
             message: `Failed to load loop queue for ${sessionId}/${branchId}`,
             cause: initialQueueExit.cause,
-          })
-        : undefined
-      if (initialQueueFailure !== undefined) {
+          }),
+        )
+      }
+      if (Option.isSome(initialQueueFailure)) {
         yield* Effect.logWarning("failed to load loop queue").pipe(
           Effect.annotateLogs({
             sessionId,
             branchId,
-            error: initialQueueFailure.message,
+            error: initialQueueFailure.value.message,
           }),
         )
       }
@@ -367,15 +440,15 @@ export const buildAgentLoopActorHandlers = (config: {
         sideMutationSemaphore,
         config.baseSections,
         initialQueue,
-        sessionProfileCacheOption._tag === "Some" ? sessionProfileCacheOption.value : undefined,
+        Option.getOrUndefined(sessionProfileCacheOption),
       ).pipe(
         Effect.provideService(AgentLoopFollowUp, {
           enqueue: (input) => reentrantHandle.pipe(Effect.flatMap((h) => enqueueMessage(h, input))),
         }),
       )
-      yield* Ref.set(handleRef, handle)
-      if (initialQueueFailure !== undefined) {
-        yield* Ref.set(startupExitRef, Exit.fail(initialQueueFailure))
+      yield* Ref.set(handleRef, Option.some(handle))
+      if (Option.isSome(initialQueueFailure)) {
+        yield* Ref.set(startupExitRef, Option.some(Exit.fail(initialQueueFailure.value)))
         yield* Ref.set(closed, false)
         return
       }
@@ -386,9 +459,9 @@ export const buildAgentLoopActorHandlers = (config: {
           Effect.andThen(
             Effect.gen(function* () {
               const incompleteMessage = yield* latestIncompleteUserTurn
-              if (incompleteMessage !== undefined) {
+              if (Option.isSome(incompleteMessage)) {
                 yield* handle
-                  .startTurn({ message: incompleteMessage })
+                  .startTurn({ message: incompleteMessage.value })
                   .pipe(
                     Effect.catchEager((error) =>
                       closeBehaviorWithHeldStartupPermit(handle).pipe(
@@ -399,7 +472,7 @@ export const buildAgentLoopActorHandlers = (config: {
                 return
               }
               const hasRecoveredQueue =
-                initialQueue.inFlight !== undefined ||
+                !Predicate.isUndefined(initialQueue.inFlight) ||
                 initialQueue.steering.length > 0 ||
                 initialQueue.followUp.length > 0
               if (!hasRecoveredQueue) return
@@ -410,7 +483,7 @@ export const buildAgentLoopActorHandlers = (config: {
           ),
         ),
       )
-      yield* Ref.set(startupExitRef, exit)
+      yield* Ref.set(startupExitRef, Option.some(exit))
       // Publish `closed=false` only after both `handleRef` and
       // `startupExitRef` are visible. `ensureStarted` reads `closed`
       // before reading the handle/exit, so flipping it last guarantees a
@@ -421,9 +494,10 @@ export const buildAgentLoopActorHandlers = (config: {
 
     yield* openLoop.pipe(provideActorWorkspace)
     yield* Effect.addFinalizer(() =>
-      Effect.flatMap(Ref.get(handleRef), (loop) =>
-        loop !== undefined ? cleanupLoop(loop) : Effect.void,
-      ),
+      Effect.flatMap(Ref.get(handleRef), (loop) => {
+        if (Option.isNone(loop)) return Effect.void
+        return cleanupLoop(loop.value)
+      }),
     )
 
     // Serialize the full read/rebuild/check path so concurrent ops cannot
@@ -437,16 +511,16 @@ export const buildAgentLoopActorHandlers = (config: {
         yield* openLoop.pipe(provideActorWorkspace)
       }
       const exit = yield* Ref.get(startupExitRef)
-      if (exit === undefined || Exit.isSuccess(exit)) {
+      if (Option.isNone(exit) || Exit.isSuccess(exit.value)) {
         const handle = yield* Ref.get(handleRef)
-        if (handle === undefined) {
+        if (Option.isNone(handle)) {
           return yield* new AgentLoopError({
             message: `AgentLoop handle unavailable for ${sessionId}/${branchId}`,
           })
         }
-        return handle
+        return handle.value
       }
-      return yield* causeToAgentLoopError(exit.cause)
+      return yield* causeToAgentLoopError(exit.value.cause)
     }).pipe(startupSemaphore.withPermits(1))
 
     const currentRegisteredState = Effect.gen(function* () {
@@ -466,12 +540,11 @@ export const buildAgentLoopActorHandlers = (config: {
       }),
     )
 
-    yield* Actor.registerState({
-      get: currentRegisteredState.pipe(provideActorWorkspace),
-      watch: registeredStateChanges.pipe(
-        Stream.provideService(CurrentWorkspaceId, brandedWorkspaceId),
-      ),
-    })
+    const registeredState = Actor.State.makeReadable(
+      currentRegisteredState.pipe(provideActorWorkspace),
+      registeredStateChanges.pipe(Stream.provideService(CurrentWorkspaceId, brandedWorkspaceId)),
+    )
+    yield* Actor.registerState(registeredState)
 
     const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (
       operation: TurnSubmissionInput,
@@ -483,7 +556,7 @@ export const buildAgentLoopActorHandlers = (config: {
       const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
         coldQueueOnly: false,
       })
-      if (reservedStart !== undefined) {
+      if (Option.isSome(reservedStart)) {
         yield* handle
           .startTurn(item)
           .pipe(
@@ -499,7 +572,7 @@ export const buildAgentLoopActorHandlers = (config: {
         const existingMessage = yield* messageStorage
           .getMessage(messageId)
           .pipe(Effect.catchEager(() => Effect.undefined))
-        if (existingMessage?.turnDurationMs !== undefined) return
+        if (!Predicate.isUndefined(existingMessage?.turnDurationMs)) return
 
         const completed = yield* eventStore.subscribe({ sessionId, branchId }).pipe(
           Stream.filter(
@@ -526,14 +599,19 @@ export const buildAgentLoopActorHandlers = (config: {
       operation: TurnSubmissionInput,
     ) {
       const handle = yield* ensureStarted
-      const failureBaseline = (yield* handle.readState).turnFailure?.epoch ?? 0
+      const failureBaseline = Option.getOrElse(
+        Option.fromUndefinedOr((yield* handle.readState).turnFailure).pipe(
+          Option.map(({ epoch }) => epoch),
+        ),
+        () => 0,
+      )
       yield* ensureTarget(operation.message)
       yield* markWrite
       const item = buildQueuedTurnItem(operation)
       const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
         coldQueueOnly: false,
       })
-      if (reservedStart !== undefined) {
+      if (Option.isSome(reservedStart)) {
         yield* handle
           .startTurn(item)
           .pipe(
@@ -559,7 +637,7 @@ export const buildAgentLoopActorHandlers = (config: {
       yield* markWrite
       const item = buildQueuedTurnItem(operation)
       const start = yield* handle.reserveRunStartOrQueueFollowUp(item)
-      if (start === undefined) return
+      if (Option.isNone(start)) return
 
       yield* handle
         .startTurn(item)
@@ -571,14 +649,14 @@ export const buildAgentLoopActorHandlers = (config: {
 
       yield* Effect.raceFirst(
         Effect.raceFirst(
-          waitForIdleAfterEpoch(handle, start.stateEpochBaseline),
-          waitForTurnFailureAfterEpoch(handle, start.turnFailureBaseline),
+          waitForIdleAfterEpoch(handle, start.value.stateEpochBaseline),
+          waitForTurnFailureAfterEpoch(handle, start.value.turnFailureBaseline),
         ),
         handle.persistenceFailure,
       ).pipe(
         Effect.catchEager((error) => cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error)))),
       )
-      yield* failIfTurnFailedAfterEpoch(handle, start.turnFailureBaseline)
+      yield* failIfTurnFailedAfterEpoch(handle, start.value.turnFailureBaseline)
     })
 
     const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
@@ -603,10 +681,7 @@ export const buildAgentLoopActorHandlers = (config: {
 
         case "Cancel":
         case "Interrupt":
-          if (
-            projectedState._tag === "Running" ||
-            projectedState._tag === "WaitingForInteraction"
-          ) {
+          if (isActiveLoopState(projectedState)) {
             yield* handle.interrupt.pipe(
               Effect.catchEager((error) =>
                 cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
@@ -615,7 +690,7 @@ export const buildAgentLoopActorHandlers = (config: {
             return
           }
           const loopState = yield* handle.snapshot
-          if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
+          if (isActiveLoopState(loopState)) {
             yield* handle.interrupt.pipe(
               Effect.catchEager((error) =>
                 cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
@@ -635,7 +710,7 @@ export const buildAgentLoopActorHandlers = (config: {
           })
           const item: QueuedTurnItem = {
             message: interjectMessage,
-            ...(command.agent !== undefined ? { agentOverride: command.agent } : {}),
+            agentOverride: command.agent,
           }
           const loopState = yield* handle.appendSteering(item)
           const shouldInterrupt = projectedState._tag === "Running" || loopState._tag === "Running"
@@ -663,14 +738,11 @@ export const buildAgentLoopActorHandlers = (config: {
         runTurn(operation).pipe(provideActorWorkspace),
       ),
       QueueFollowUp: Effect.fn("AgentLoop.QueueFollowUp")(
-        ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
+        ({ operation }: HandlerRequest<QueueFollowUpInput>) =>
           Effect.gen(function* () {
             const handle = yield* ensureStarted
             yield* enqueueMessage(handle, {
               message: operation.message,
-              agentOverride: operation.agentOverride,
-              runSpec: operation.runSpec,
-              interactive: operation.interactive,
             })
           }).pipe(provideActorWorkspace),
       ),
@@ -680,7 +752,7 @@ export const buildAgentLoopActorHandlers = (config: {
       Interrupt: Effect.fn("AgentLoop.Interrupt")(function* ({
         operation,
       }: HandlerRequest<InterruptInput>) {
-        const command = yield* Schema.decodeUnknownEffect(SteerCommand)({
+        const command = yield* Schema.decodeEffect(SteerCommand)({
           _tag: "Cancel",
           sessionId: operation.sessionId,
           branchId: operation.branchId,
@@ -704,10 +776,10 @@ export const buildAgentLoopActorHandlers = (config: {
               if (state._tag !== "WaitingForInteraction") {
                 if (state._tag !== "Idle") return
                 const message = yield* latestIncompleteUserTurn
-                if (message === undefined) return
+                if (Option.isNone(message)) return
                 const baseline = (yield* handle.readState).stateEpoch
                 yield* handle
-                  .startTurn({ message })
+                  .startTurn({ message: message.value })
                   .pipe(
                     Effect.catchEager((error) =>
                       cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
@@ -769,7 +841,7 @@ export const buildAgentLoopActorHandlers = (config: {
             let durationMs = 0
             let costUsd = 0
             let lastInputTokens = 0
-            let lastModelId: ModelId | undefined
+            let lastModelId = Option.none<ModelId>()
             for (const { event } of envelopes) {
               switch (event._tag) {
                 case "TurnCompleted":
@@ -777,15 +849,15 @@ export const buildAgentLoopActorHandlers = (config: {
                   durationMs += event.durationMs
                   break
                 case "StreamEnded":
-                  if (event.usage !== undefined) {
+                  if (!Predicate.isUndefined(event.usage)) {
                     tokens += event.usage.inputTokens + event.usage.outputTokens
                     lastInputTokens = event.usage.inputTokens
                   }
-                  if (event.costUsd !== undefined) {
+                  if (!Predicate.isUndefined(event.costUsd)) {
                     costUsd += event.costUsd
                   }
-                  if (event.model !== undefined) {
-                    lastModelId = event.model
+                  if (!Predicate.isUndefined(event.model)) {
+                    lastModelId = Option.some(event.model)
                   }
                   break
                 case "ToolCallStarted":
@@ -796,7 +868,7 @@ export const buildAgentLoopActorHandlers = (config: {
                   break
               }
             }
-            return {
+            const metrics = {
               turns,
               tokens,
               toolCalls,
@@ -804,8 +876,10 @@ export const buildAgentLoopActorHandlers = (config: {
               durationMs,
               costUsd,
               lastInputTokens,
-              ...(lastModelId !== undefined ? { lastModelId } : {}),
             }
+            if (Option.isSome(lastModelId))
+              Object.assign(metrics, { lastModelId: lastModelId.value })
+            return metrics
           }).pipe(provideActorWorkspace),
       ),
       RecordToolResult: Effect.fn("AgentLoop.RecordToolResult")(
@@ -814,17 +888,18 @@ export const buildAgentLoopActorHandlers = (config: {
             yield* ensureTarget(operation)
             yield* markWrite
             const handle = yield* ensureStarted
+            const toolResultMessageId = Option.match(Option.fromUndefinedOr(operation.commandId), {
+              onNone: () => toolResultMessageIdForToolCall(operation.toolCallId),
+              onSome: (commandId) => toolResultMessageIdForCommand(commandId),
+            })
             yield* recordToolResult({
-              toolResultMessageId:
-                operation.commandId !== undefined
-                  ? toolResultMessageIdForCommand(operation.commandId)
-                  : toolResultMessageIdForToolCall(operation.toolCallId),
+              toolResultMessageId,
               sessionId: operation.sessionId,
               branchId: operation.branchId,
               toolCallId: operation.toolCallId,
               toolName: operation.toolName,
               output: operation.output,
-              ...(operation.isError !== undefined ? { isError: operation.isError } : {}),
+              isError: operation.isError,
             }).pipe(handle.withSideMutation)
           }).pipe(
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
@@ -849,7 +924,55 @@ export const buildAgentLoopActorHandlers = (config: {
                 sessionId: operation.sessionId,
                 branchId: operation.branchId,
                 currentTurnAgent,
-              }).pipe(provideAgentLoopTurnProfile(environment))
+                turnProfile: environment,
+              }).pipe(
+                Effect.catchTag("ToolInteractionPending", (pending) =>
+                  Effect.gen(function* () {
+                    const error = new ToolInvocationInteractionError({
+                      message:
+                        "InvokeTool cannot wait for approval. Use a session turn for interactive tools.",
+                      toolCallId: pending.toolCallId,
+                    })
+                    const approval = yield* ApprovalService
+                    yield* approval.respond(pending.pending.requestId)
+                    yield* recordToolResult({
+                      sessionId: operation.sessionId,
+                      branchId: operation.branchId,
+                      toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
+                      toolCallId: pending.toolCallId,
+                      toolName: operation.toolName,
+                      output: { error: error.message, reason: error._tag },
+                      isError: true,
+                    })
+                    const publisher = yield* EventPublisher
+                    yield* publisher.publish(
+                      InteractionResolved.make({
+                        sessionId: operation.sessionId,
+                        branchId: operation.branchId,
+                        requestId: pending.pending.requestId,
+                        approved: false,
+                        notes: error.message,
+                      }),
+                    )
+                    return yield* new AgentLoopError({ message: error.message, cause: error })
+                  }).pipe(
+                    Effect.ensuring(
+                      Effect.gen(function* () {
+                        const replay = yield* ProcessLocalToolReplay
+                        yield* replay.removeBinding(
+                          processLocalReplayBindingKey({
+                            sessionId: operation.sessionId,
+                            branchId: operation.branchId,
+                            assistantMessageId: assistantMessageIdForCommand(operation.commandId),
+                            toolCallId: pending.toolCallId,
+                          }),
+                        )
+                      }),
+                    ),
+                  ),
+                ),
+                runAgentLoopTurnProfileOrLegacy(environment),
+              )
             }).pipe(handle.withSideMutation)
           }).pipe(
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
@@ -864,43 +987,38 @@ export const buildAgentLoopActorHandlers = (config: {
             return yield* Effect.gen(function* () {
               const environment = yield* handle.resolveTurnProfile
               const rpcRegistry = environment.turnExtensionRegistry.getResolved().rpcRegistry
-              const input = operation.input._tag === "Present" ? operation.input.value : undefined
+              let inputOption = Option.none<unknown>()
+              if (operation.input._tag === "Present") {
+                inputOption = Option.some(operation.input.value)
+              }
+              const input = Option.getOrUndefined(inputOption)
               const staticRequest = rpcRegistry.run(
                 operation.extensionId,
                 RpcId.make(operation.capabilityId),
                 input,
               )
-              const dynamicRequest =
-                dynamicRegistryOption._tag === "Some"
-                  ? Effect.gen(function* () {
-                      const dynamic = yield* dynamicRegistryOption.value.findRequest({
-                        sessionId: operation.sessionId,
-                        extensionId: operation.extensionId,
-                        capabilityId: operation.capabilityId,
-                      })
-                      if (dynamic === undefined) return yield* staticRequest
-                      const hostCtx = yield* CurrentExtensionHostContext
-                      return yield* provideExtensionServices(
-                        { ...hostCtx, extensionId: dynamic.extensionId },
-                        runExtensionCapability(
-                          dynamic.extensionId,
-                          RpcId.make(operation.capabilityId),
-                          dynamic.capability,
-                          input,
-                        ),
-                      )
-                    })
-                  : staticRequest
-              return yield* dynamicRequest.pipe(
-                provideAgentLoopTurnProfile(environment),
-                Effect.mapError(
-                  (error) =>
-                    new AgentLoopError({
-                      message: "reason" in error ? `${error._tag}: ${error.reason}` : error._tag,
-                      cause: error,
-                    }),
-                ),
-              )
+              let dynamicRequest: ExtensionRequestEffect = staticRequest
+              if (Option.isSome(dynamicRegistryOption)) {
+                dynamicRequest = Effect.gen(function* () {
+                  const dynamic = yield* dynamicRegistryOption.value.findRequest({
+                    sessionId: operation.sessionId,
+                    extensionId: operation.extensionId,
+                    capabilityId: operation.capabilityId,
+                  })
+                  if (Option.isNone(dynamic)) return yield* staticRequest
+                  const hostCtx = yield* CurrentExtensionHostContext
+                  return yield* provideExtensionServices(
+                    { ...hostCtx, extensionId: dynamic.value.extensionId },
+                    runExtensionCapability(
+                      dynamic.value.extensionId,
+                      RpcId.make(operation.capabilityId),
+                      dynamic.value.capability,
+                      input,
+                    ),
+                  )
+                })
+              }
+              return yield* runExtensionRequest(environment, dynamicRequest)
             }).pipe(handle.withSideMutation)
           }).pipe(
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
@@ -917,8 +1035,8 @@ export const buildAgentLoopActorHandlers = (config: {
             // skip cleanup in that case rather than triggering a rebuild
             // via `ensureStarted`.
             const handle = yield* Ref.get(handleRef)
-            if (handle !== undefined) {
-              yield* cleanupLoop(handle)
+            if (Option.isSome(handle)) {
+              yield* cleanupLoop(handle.value)
             }
           }).pipe(provideActorWorkspace),
       ),

@@ -16,12 +16,24 @@ export interface ExtensionManifest {
   readonly version?: string
 }
 
+/**
+ * Stable identity supplied by the package or loader that produced an
+ * extension artifact. This is never derived from a cached setup closure or a
+ * current source-file read.
+ */
+export const LoadedArtifactIdentity = Schema.NonEmptyString.pipe(
+  Schema.brand("LoadedArtifactIdentity"),
+)
+export type LoadedArtifactIdentity = typeof LoadedArtifactIdentity.Type
+
 // Loaded Extension — manifest + derived metadata from loader
 
 export interface LoadedExtension {
   readonly manifest: ExtensionManifest
   readonly scope: ExtensionScope
   readonly sourcePath: string
+  /** Stable package/build identity. Missing means durable replay is unsupported. */
+  readonly artifactIdentity?: LoadedArtifactIdentity
   /**
    * Typed contribution buckets produced by the extension's setup function.
    * Consumers (registries, workflow runtime, scheduler, lifecycle hooks,
@@ -64,13 +76,13 @@ export type ExtensionStatusInfo =
     } & FailedExtension)
 
 /** Scope precedence for extension resolution. Higher value = higher priority. */
-export const SCOPE_PRECEDENCE = { builtin: 0, user: 1, project: 2 } as const
+export const SCOPE_PRECEDENCE = { builtin: 0, user: 1, project: 2 }
 export type ExtensionScope = keyof typeof SCOPE_PRECEDENCE
 
 // Extension Load Error
 
-export class ExtensionLoadError extends Schema.TaggedErrorClass<ExtensionLoadError>(
-  "@gent/core-internal/domain/extension/ExtensionLoadError",
+export class ExtensionLoadError extends Schema.TaggedError<ExtensionLoadError>(
+  "@gent/core/src/domain/extension/ExtensionLoadError",
 )("ExtensionLoadError", {
   extensionId: ExtensionId,
   message: Schema.String,
@@ -78,7 +90,7 @@ export class ExtensionLoadError extends Schema.TaggedErrorClass<ExtensionLoadErr
 }) {}
 
 /** Failure raised by a turn projection hook. Carries slot id + cause for diagnostics. */
-export class ProjectionError extends Schema.TaggedErrorClass<ProjectionError>()("ProjectionError", {
+export class ProjectionError extends Schema.TaggedError<ProjectionError>()("ProjectionError", {
   projectionId: Schema.String,
   reason: Schema.String,
 }) {}
@@ -207,6 +219,7 @@ export type AnyExtensionHook = ExtensionHookSlot<never, never>
 
 const eraseHookSlot = <E, R>(slot: ExtensionHookSlot<E, R>): ExtensionHookSlot<never, never> =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- hook factories erase author E/R at the public bucket boundary; runtime reseals failures and provides extension services at invocation.
+  // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- Hook buckets intentionally erase author error and service types at the runtime membrane.
   slot as ExtensionHookSlot<never, never>
 
 export const hook = {
@@ -295,12 +308,12 @@ export interface ExtensionHostOsInfo {
 
 export type ExtensionHostSignal = string | 0
 
-export class ExtensionHostProcessError extends Schema.TaggedErrorClass<ExtensionHostProcessError>()(
+export class ExtensionHostProcessError extends Schema.TaggedError<ExtensionHostProcessError>()(
   "ExtensionHostProcessError",
   {
     command: Schema.String,
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
     timedOut: Schema.optional(Schema.Boolean),
   },
 ) {}
@@ -313,6 +326,7 @@ export interface ExtensionHostProcessResult {
 
 export interface ExtensionHostRunProcessOptions {
   readonly cwd?: string
+  // oxlint-disable-next-line effect/noNullish -- Process environment maps preserve absent variables at the host boundary.
   readonly env?: Record<string, string | undefined>
   readonly timeout?: Duration.Duration
   readonly stdin?: "pipe" | "ignore" | "inherit"
@@ -331,7 +345,9 @@ export interface ExtensionHostFacts {
 }
 
 export interface ExtensionHostPlatform extends ExtensionHostFacts {
+  // oxlint-disable-next-line effect/noNullish -- Process environment maps preserve absent variables at the host boundary.
   readonly parentEnv: Record<string, string | undefined>
+  readonly randomId: Effect.Effect<string>
   readonly signalPid: (pid: number, signal: ExtensionHostSignal) => Effect.Effect<void>
   readonly runProcess: (
     command: string,
@@ -342,6 +358,8 @@ export interface ExtensionHostPlatform extends ExtensionHostFacts {
 
 export interface GentExtension<R = ChildProcessSpawner> {
   readonly manifest: ExtensionManifest
+  /** Stable package/build identity. Missing means durable replay is unsupported. */
+  readonly artifactIdentity?: LoadedArtifactIdentity
   /**
    * Effect that resolves to the typed `ExtensionContributions` buckets for
    * this extension. The runtime stores the resolved contributions on

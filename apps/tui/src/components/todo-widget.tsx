@@ -4,15 +4,15 @@ import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useTheme } from "../theme/index"
 import { InlineChrome } from "./inline-chrome"
 
-const STATUS_ICONS: Record<string, string> = {
+const STATUS_ICONS = {
   pending: "◻",
   in_progress: "◰",
   completed: "✔",
   failed: "✗",
   stopped: "◼",
-}
+} satisfies Record<TodoStatusType, string>
 
-const IN_PROGRESS_SPINNER = ["◰", "◳", "◲", "◱"] as const
+const IN_PROGRESS_SPINNER = ["◰", "◳", "◲", "◱"] satisfies ReadonlyArray<string>
 
 const MAX_DISPLAY = 10
 

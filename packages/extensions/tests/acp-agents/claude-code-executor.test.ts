@@ -10,6 +10,7 @@ import {
   makeSdkResponsePartMapper,
   mapSdkMessageToResponseParts,
 } from "../../src/acp-agents/claude-code-executor.js"
+import { externalWireNull } from "../helpers/external-wire.js"
 type SDKMessage = Parameters<typeof mapSdkMessageToResponseParts>[0]
 type StreamEventMessage = Extract<SDKMessage, { type: "stream_event" }>
 type AssistantMessage = Extract<SDKMessage, { type: "assistant" }>
@@ -19,7 +20,7 @@ type SystemInitMessage = Extract<SDKMessage, { type: "system"; subtype: "init" }
 
 const UUID: `${string}-${string}-${string}-${string}-${string}` =
   "00000000-0000-4000-8000-000000000001"
-const stubBase = { uuid: UUID, session_id: "s-1", parent_tool_use_id: null }
+const stubBase = { uuid: UUID, session_id: "s-1", parent_tool_use_id: externalWireNull }
 const usage = (
   inputTokens: number,
   outputTokens: number,
@@ -30,10 +31,12 @@ const usage = (
   },
   cache_creation_input_tokens: 0,
   cache_read_input_tokens: 0,
+  fallback_credit: { status: { type: "not_applied", reason: "not_enabled" } },
   inference_geo: "test",
   input_tokens: inputTokens,
   iterations: [],
   output_tokens: outputTokens,
+  output_tokens_details: { thinking_tokens: 0 },
   server_tool_use: {
     web_fetch_requests: 0,
     web_search_requests: 0,
@@ -54,13 +57,15 @@ const sdkAssistant = (content: AssistantMessage["message"]["content"]): Assistan
   message: {
     id: "msg_1",
     type: "message",
-    container: null,
-    context_management: null,
+    container: externalWireNull,
+    context_management: externalWireNull,
+    diagnostics: externalWireNull,
     role: "assistant",
     model: "claude-test",
     content,
-    stop_reason: null,
-    stop_sequence: null,
+    stop_reason: externalWireNull,
+    stop_details: externalWireNull,
+    stop_sequence: externalWireNull,
     usage: usage(0, 0),
   },
 })
@@ -128,7 +133,7 @@ describe("mapSdkMessageToResponseParts", () => {
     const msg = sdkStreamEvent({
       type: "content_block_delta",
       index: 0,
-      delta: { type: "thinking_delta", thinking: "ponder" },
+      delta: { type: "thinking_delta", thinking: "ponder", estimated_tokens: externalWireNull },
     })
     const parts = mapSdkMessageToResponseParts(msg)
     expect(parts).toHaveLength(1)
@@ -140,7 +145,7 @@ describe("mapSdkMessageToResponseParts", () => {
   })
 
   test("assistant text block does NOT emit (stream_event is the source)", () => {
-    const msg = sdkAssistant([{ type: "text", text: "hello", citations: null }])
+    const msg = sdkAssistant([{ type: "text", text: "hello", citations: externalWireNull }])
     expect(mapSdkMessageToResponseParts(msg)).toEqual([])
   })
 

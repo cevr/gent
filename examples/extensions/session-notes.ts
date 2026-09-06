@@ -30,7 +30,7 @@ const NoteInput = Schema.Struct({
 })
 
 const NoteOutput = Schema.Struct({
-  count: Schema.Number,
+  count: Schema.Finite,
   latest: Schema.String,
 })
 
@@ -73,6 +73,7 @@ export default defineExtension({
   id: "session-notes",
   resources: [
     defineStateResource({
+      id: "example/session-notes/state",
       tag: SessionNotesState,
       scope: "process",
       initial: { notes: [] },

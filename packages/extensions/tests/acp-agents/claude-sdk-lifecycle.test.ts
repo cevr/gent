@@ -2,7 +2,7 @@
  * ClaudeSdk lifecycle + cache invalidation tests.
  *
  * Validates the executor's session-management contract using a controllable
- * fake `ClaudeSdkServiceShape` plus a stub token reader — keeping the
+ * fake `ClaudeSdkServiceApi` plus a stub token reader — keeping the
  * tests independent of the macOS keychain so they run in CI. Pure SDK
  * message → response part mapping tests live in
  * `claude-code-executor.test.ts`.
@@ -23,18 +23,19 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Stream } from "effect"
 import { createClaudeCodeSessionManager } from "../../src/acp-agents/claude-code-executor.js"
 import type { ExternalSessionKey } from "../../src/acp-agents/executor.js"
-import type { ClaudeSdkServiceShape, ClaudeSdkSession } from "../../src/acp-agents/claude-sdk.js"
+import type { ClaudeSdkServiceApi, ClaudeSdkSession } from "../../src/acp-agents/claude-sdk.js"
 
 interface CountingSession extends ClaudeSdkSession {
   readonly id: string
   closeCalls: number
 }
-const makeCountingSdk = (): {
-  sdk: ClaudeSdkServiceShape
-  sessions: CountingSession[]
-} => {
+interface CountingSdk {
+  readonly sdk: ClaudeSdkServiceApi
+  readonly sessions: CountingSession[]
+}
+const makeCountingSdk = (): CountingSdk => {
   const sessions: CountingSession[] = []
-  const sdk: ClaudeSdkServiceShape = {
+  const sdk: ClaudeSdkServiceApi = {
     createSession: () =>
       Effect.sync(() => {
         const id = `sess-${sessions.length}`
@@ -63,8 +64,8 @@ describe("ClaudeCodeSessionManager", () => {
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
       const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
-      const a = yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT", undefined)
-      const b = yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT", undefined)
+      const a = yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT")
+      const b = yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT")
       expect(a.session).toBe(b.session)
       expect(a.created).toBe(true)
       expect(b.created).toBe(false)
@@ -75,8 +76,8 @@ describe("ClaudeCodeSessionManager", () => {
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
       const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
-      yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT-A", undefined)
-      const second = yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT-B", undefined)
+      yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT-A")
+      const second = yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT-B")
       expect(sessions).toHaveLength(2)
       expect(sessions[0]?.closeCalls).toBe(1)
       expect(second.created).toBe(true)
@@ -86,8 +87,8 @@ describe("ClaudeCodeSessionManager", () => {
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
       const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
-      yield* manager.getOrCreate(key("g1"), "/cwd-a", "PROMPT", undefined)
-      yield* manager.getOrCreate(key("g1"), "/cwd-b", "PROMPT", undefined)
+      yield* manager.getOrCreate(key("g1"), "/cwd-a", "PROMPT")
+      yield* manager.getOrCreate(key("g1"), "/cwd-b", "PROMPT")
       expect(sessions).toHaveLength(2)
       expect(sessions[0]?.closeCalls).toBe(1)
     }),
@@ -96,8 +97,8 @@ describe("ClaudeCodeSessionManager", () => {
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
       const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
-      yield* manager.getOrCreate(key("g1", "branch-1"), "/cwd", "PROMPT", undefined)
-      yield* manager.getOrCreate(key("g1", "branch-2"), "/cwd", "PROMPT", undefined)
+      yield* manager.getOrCreate(key("g1", "branch-1"), "/cwd", "PROMPT")
+      yield* manager.getOrCreate(key("g1", "branch-2"), "/cwd", "PROMPT")
       expect(sessions).toHaveLength(2)
       // Neither was torn down — they coexist under different cache keys.
       expect(sessions[0]?.closeCalls).toBe(0)
@@ -108,13 +109,8 @@ describe("ClaudeCodeSessionManager", () => {
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
       const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
-      yield* manager.getOrCreate(
-        key("g1", "branch-1", "acp-claude-code"),
-        "/cwd",
-        "PROMPT",
-        undefined,
-      )
-      yield* manager.getOrCreate(key("g1", "branch-1", "acp-opencode"), "/cwd", "PROMPT", undefined)
+      yield* manager.getOrCreate(key("g1", "branch-1", "acp-claude-code"), "/cwd", "PROMPT")
+      yield* manager.getOrCreate(key("g1", "branch-1", "acp-opencode"), "/cwd", "PROMPT")
       expect(sessions).toHaveLength(2)
       expect(sessions[0]?.closeCalls).toBe(0)
       expect(sessions[1]?.closeCalls).toBe(0)
@@ -124,7 +120,7 @@ describe("ClaudeCodeSessionManager", () => {
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
       const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
-      yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT", undefined)
+      yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT")
       yield* manager.invalidate(key("g1"))
       expect(sessions[0]?.closeCalls).toBe(1)
     }),
@@ -141,19 +137,9 @@ describe("ClaudeCodeSessionManager", () => {
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
       const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
-      yield* manager.getOrCreate(
-        key("g1", "branch-1", "acp-claude-code"),
-        "/cwd",
-        "PROMPT",
-        undefined,
-      )
-      yield* manager.getOrCreate(
-        key("g1", "branch-2", "acp-claude-code"),
-        "/cwd",
-        "PROMPT",
-        undefined,
-      )
-      yield* manager.getOrCreate(key("g1", "branch-1", "acp-opencode"), "/cwd", "PROMPT", undefined)
+      yield* manager.getOrCreate(key("g1", "branch-1", "acp-claude-code"), "/cwd", "PROMPT")
+      yield* manager.getOrCreate(key("g1", "branch-2", "acp-claude-code"), "/cwd", "PROMPT")
+      yield* manager.getOrCreate(key("g1", "branch-1", "acp-opencode"), "/cwd", "PROMPT")
       yield* manager.invalidateDriver("acp-claude-code")
       expect(sessions[0]?.closeCalls).toBe(1)
       expect(sessions[1]?.closeCalls).toBe(1)
@@ -165,8 +151,8 @@ describe("ClaudeCodeSessionManager", () => {
     Effect.gen(function* () {
       const { sdk, sessions } = makeCountingSdk()
       const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
-      yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT", undefined)
-      yield* manager.getOrCreate(key("g2"), "/cwd", "PROMPT", undefined)
+      yield* manager.getOrCreate(key("g1"), "/cwd", "PROMPT")
+      yield* manager.getOrCreate(key("g2"), "/cwd", "PROMPT")
       yield* manager.disposeAll
       expect(sessions[0]?.closeCalls).toBe(1)
       expect(sessions[1]?.closeCalls).toBe(1)

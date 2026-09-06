@@ -5,12 +5,13 @@
  * Expanded: full head-50/tail-50 with OutputBuffer
  */
 
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { Show, createMemo } from "solid-js"
 import { formatHeadTail } from "@gent/core-internal/domain/output-buffer.js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
-import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutputOption, getString } from "../../utils/parse-tool-output"
+import type { ToolInput } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface BashOutput {
@@ -22,20 +23,20 @@ interface BashOutput {
 const BashOutputSchema = Schema.Struct({
   stdout: Schema.optional(Schema.String),
   stderr: Schema.optional(Schema.String),
-  exitCode: Schema.Number,
+  exitCode: Schema.Finite,
 })
 
-function parseBashOutput(output: string | undefined): BashOutput | undefined {
-  const decoded = decodeToolOutput(BashOutputSchema, output)
-  if (decoded === undefined) return undefined
-  return {
+function parseBashOutput(
+  output: ToolRendererProps["toolCall"]["output"],
+): Option.Option<BashOutput> {
+  return Option.map(decodeToolOutputOption(BashOutputSchema, output), (decoded) => ({
     stdout: decoded["stdout"] ?? "",
     stderr: decoded["stderr"] ?? "",
     exitCode: decoded["exitCode"],
-  }
+  }))
 }
 
-function getCommand(input: unknown): string {
+function getCommand(input: ToolInput): string {
   return getString(input, "command")
 }
 
@@ -47,8 +48,9 @@ export function BashToolRenderer(props: ToolRendererProps) {
 
   const lines = createMemo(() => {
     const d = data()
-    if (d === undefined) return []
-    const combined = d.stderr.length > 0 ? `${d.stdout}\n${d.stderr}` : d.stdout
+    if (Option.isNone(d)) return []
+    let combined = d.value.stdout
+    if (d.value.stderr.length > 0) combined += `\n${d.value.stderr}`
     return combined.split("\n").filter((l) => l.length > 0)
   })
 
@@ -57,8 +59,9 @@ export function BashToolRenderer(props: ToolRendererProps) {
 
   const exitCodeColor = () => {
     const d = data()
-    if (d === undefined) return theme.textMuted
-    return d.exitCode === 0 ? theme.success : theme.error
+    if (Option.isNone(d)) return theme.textMuted
+    if (d.value.exitCode === 0) return theme.success
+    return theme.error
   }
 
   return (
@@ -68,10 +71,12 @@ export function BashToolRenderer(props: ToolRendererProps) {
       status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={
-        <Show when={data()}>
+        <Show when={Option.getOrUndefined(data())}>
           <box flexDirection="column">
             <text>
-              <span style={{ fg: exitCodeColor() }}>exit {data()?.exitCode}</span>
+              <span style={{ fg: exitCodeColor() }}>
+                exit {Option.getOrUndefined(data())?.exitCode}
+              </span>
               <span style={{ fg: theme.textMuted }}> · {lines().length} lines</span>
             </text>
             <Show when={collapsedText().length > 0}>
@@ -81,10 +86,12 @@ export function BashToolRenderer(props: ToolRendererProps) {
         </Show>
       }
     >
-      <Show when={data()}>
+      <Show when={Option.getOrUndefined(data())}>
         <box flexDirection="column">
           <text>
-            <span style={{ fg: exitCodeColor() }}>exit {data()?.exitCode}</span>
+            <span style={{ fg: exitCodeColor() }}>
+              exit {Option.getOrUndefined(data())?.exitCode}
+            </span>
             <span style={{ fg: theme.textMuted }}> · {lines().length} lines</span>
           </text>
           <Show when={expandedText().length > 0}>

@@ -1,3 +1,5 @@
+import { Option } from "effect"
+
 /**
  * Per-model Anthropic configuration — beta flags, ccVersion, and
  * model-specific overrides. Counsel  — ports
@@ -67,12 +69,12 @@ export const MODEL_CONFIG: ModelConfig = {
  * specific keys before broader ones (e.g. `"opus-4-6"` before
  * `"opus"`) so the right override wins.
  */
-export const getModelOverride = (modelId: string): ModelOverride | undefined => {
+export const getModelOverride = (modelId: string): Option.Option<ModelOverride> => {
   const lower = modelId.toLowerCase()
   for (const [pattern, override] of Object.entries(MODEL_CONFIG.modelOverrides)) {
-    if (lower.includes(pattern)) return override
+    if (lower.includes(pattern)) return Option.some(override)
   }
-  return undefined
+  return Option.none()
 }
 
 /** Currently-advertised Claude Code CLI version, used by the billing
@@ -90,12 +92,37 @@ export const supports1mContext = (modelId: string): boolean => {
   const lower = modelId.toLowerCase()
   if (!lower.includes("opus") && !lower.includes("sonnet")) return false
   const versionMatch = lower.match(/(opus|sonnet)-(\d+)-(\d+)/)
-  if (versionMatch === null) return false
-  const major = parseInt(versionMatch[2] ?? "0", 10)
-  const minor = parseInt(versionMatch[3] ?? "0", 10)
+  const match = Option.fromNullishOr(versionMatch)
+  if (Option.isNone(match)) return false
+  const major = parseInt(
+    Option.getOrElse(Option.fromNullishOr(match.value[2]), () => "0"),
+    10,
+  )
+  const minor = parseInt(
+    Option.getOrElse(Option.fromNullishOr(match.value[3]), () => "0"),
+    10,
+  )
   // Date suffixes like 20250514 are not minor versions — treat as x.0
-  const effectiveMinor = minor > 99 ? 0 : minor
+  let effectiveMinor = minor
+  if (minor > 99) effectiveMinor = 0
   return major > 4 || (major === 4 && effectiveMinor >= 6)
+}
+
+const applyModelOverride = (betas: Array<string>, override: Option.Option<ModelOverride>): void => {
+  if (Option.isNone(override)) return
+  const excludedBetas = Option.fromNullishOr(override.value.exclude)
+  if (Option.isSome(excludedBetas)) {
+    for (const excludedBeta of excludedBetas.value) {
+      const index = betas.indexOf(excludedBeta)
+      if (index !== -1) betas.splice(index, 1)
+    }
+  }
+  const addedBetas = Option.fromNullishOr(override.value.add)
+  if (Option.isSome(addedBetas)) {
+    for (const addedBeta of addedBetas.value) {
+      if (!betas.includes(addedBeta)) betas.push(addedBeta)
+    }
+  }
 }
 
 /**
@@ -111,10 +138,10 @@ export const supports1mContext = (modelId: string): boolean => {
  */
 export const getModelBetas = (
   modelId: string,
-  envBaseBetas: string | undefined,
-  excluded?: ReadonlySet<string>,
+  envBaseBetas: Option.Option<string>,
+  excluded: Option.Option<ReadonlySet<string>> = Option.none(),
 ): ReadonlyArray<string> => {
-  const baseRaw = envBaseBetas ?? MODEL_CONFIG.baseBetas.join(",")
+  const baseRaw = Option.getOrElse(envBaseBetas, () => MODEL_CONFIG.baseBetas.join(","))
   const betas = baseRaw
     .split(",")
     .map((s) => s.trim())
@@ -122,26 +149,14 @@ export const getModelBetas = (
 
   if (supports1mContext(modelId)) {
     const longContext = MODEL_CONFIG.longContextBetas[0]
-    if (longContext !== undefined) betas.push(longContext)
+    const longContextOption = Option.fromNullishOr(longContext)
+    if (Option.isSome(longContextOption)) betas.push(longContextOption.value)
   }
 
-  const override = getModelOverride(modelId)
-  if (override !== undefined) {
-    if (override.exclude !== undefined) {
-      for (const ex of override.exclude) {
-        const idx = betas.indexOf(ex)
-        if (idx !== -1) betas.splice(idx, 1)
-      }
-    }
-    if (override.add !== undefined) {
-      for (const add of override.add) {
-        if (!betas.includes(add)) betas.push(add)
-      }
-    }
-  }
+  applyModelOverride(betas, getModelOverride(modelId))
 
-  if (excluded !== undefined && excluded.size > 0) {
-    return betas.filter((beta) => !excluded.has(beta))
+  if (Option.isSome(excluded) && excluded.value.size > 0) {
+    return betas.filter((beta) => !excluded.value.has(beta))
   }
   return betas
 }

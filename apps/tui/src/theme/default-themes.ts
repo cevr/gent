@@ -7,11 +7,11 @@ import nord from "./themes/nord.json" with { type: "json" }
 import gruvbox from "./themes/gruvbox.json" with { type: "json" }
 import tokyonight from "./themes/tokyonight.json" with { type: "json" }
 
-export const DEFAULT_THEMES: Record<string, ThemeJson> = {
+export const DEFAULT_THEMES = {
   opencode,
   catppuccin,
   dracula,
   nord,
   gruvbox,
   tokyonight,
-}
+} satisfies Record<string, ThemeJson>

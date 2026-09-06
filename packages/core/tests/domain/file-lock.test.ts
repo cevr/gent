@@ -88,10 +88,10 @@ describe("FileLockService", () => {
             "/fail/path",
             Effect.gen(function* () {
               yield* Ref.update(order, (o) => [...o, "fail-start"])
-              return yield* Effect.fail("boom" as const)
+              return yield* Effect.fail("boom")
             }),
           )
-          .pipe(Effect.catch(() => Effect.void))
+          .pipe(Effect.ignore)
 
         // Second task should still acquire the lock
         yield* lock.withLock(
@@ -109,14 +109,14 @@ describe("FileLockService", () => {
     run(
       Effect.gen(function* () {
         const lock = yield* FileLockService
-        expect(yield* lock.currentSize()).toBe(0)
+        expect(yield* lock.currentSize).toBe(0)
 
         // Acquire 100 distinct paths sequentially. After each release the
         // entry must drop out: refcount-bounded design, not unbounded.
         for (let i = 0; i < 100; i++) {
           yield* lock.withLock(`/p/${i}`, Effect.void)
         }
-        expect(yield* lock.currentSize()).toBe(0)
+        expect(yield* lock.currentSize).toBe(0)
 
         // While a lock is held the entry is present.
         const release = yield* Deferred.make<void>()
@@ -124,14 +124,16 @@ describe("FileLockService", () => {
         const held = yield* Effect.forkChild(
           lock.withLock(
             "/held/path",
+            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
             Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
           ),
         )
         yield* Deferred.await(entered)
-        expect(yield* lock.currentSize()).toBe(1)
+        expect(yield* lock.currentSize).toBe(1)
+        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
         yield* Deferred.succeed(release, undefined)
         yield* Fiber.join(held)
-        expect(yield* lock.currentSize()).toBe(0)
+        expect(yield* lock.currentSize).toBe(0)
       }),
     ),
   )
@@ -140,10 +142,8 @@ describe("FileLockService", () => {
     run(
       Effect.gen(function* () {
         const lock = yield* FileLockService
-        yield* lock
-          .withLock("/boom/path", Effect.fail("boom" as const))
-          .pipe(Effect.catch(() => Effect.void))
-        expect(yield* lock.currentSize()).toBe(0)
+        yield* lock.withLock("/boom/path", Effect.fail("boom")).pipe(Effect.ignore)
+        expect(yield* lock.currentSize).toBe(0)
       }),
     ),
   )

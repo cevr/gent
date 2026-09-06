@@ -8,7 +8,7 @@
  * silently breaks per-cwd extension resolution.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, Option, Predicate, Stream } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import * as Response from "effect/unstable/ai/Response"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -26,21 +26,26 @@ import type { ExtensionContributions } from "@gent/core-internal/domain/contribu
 import { Model, ModelId, ProviderId } from "@gent/core-internal/domain/model"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { failingLanguageModel } from "../helpers/failing-language-model"
-const noopInvalidate = (): Effect.Effect<void> => Effect.void
-const stubResolution = (): ProviderResolution =>
-  AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel))
+const noopInvalidate = Effect.void
+const stubResolution = (): Effect.Effect<ProviderResolution> =>
+  Effect.succeed(
+    AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel)),
+  )
 const makeModel = (id: string, name?: string): ModelDriverContribution => ({
   id,
-  name: name ?? id,
+  name: Option.getOrElse(Option.fromUndefinedOr(name), () => id),
   resolveModel: stubResolution,
 })
-const makeCatalogModel = (id: string, keep = true): Model =>
-  Model.make({
+const makeCatalogModel = (id: string, keep = true): Model => {
+  let contextLength = 0
+  if (keep) contextLength = 1
+  return Model.make({
     id: ModelId.make(id),
     name: id,
     provider: ProviderId.make(id.split("/", 1)[0] ?? id),
-    contextLength: keep ? 1 : 0,
+    contextLength,
   })
+}
 const makeExecutor = (label: string): TurnExecutor => ({
   executeTurn: () =>
     Stream.fromIterable([
@@ -56,9 +61,15 @@ const makeExt = (
     readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
   },
 ): LoadedExtension => {
-  const contributions: ExtensionContributions = {
-    ...(opts.modelDrivers !== undefined && { modelDrivers: opts.modelDrivers }),
-    ...(opts.externalDrivers !== undefined && { externalDrivers: opts.externalDrivers }),
+  let contributions: ExtensionContributions
+  if (!Predicate.isUndefined(opts.modelDrivers) && !Predicate.isUndefined(opts.externalDrivers)) {
+    contributions = { modelDrivers: opts.modelDrivers, externalDrivers: opts.externalDrivers }
+  } else if (!Predicate.isUndefined(opts.modelDrivers)) {
+    contributions = { modelDrivers: opts.modelDrivers }
+  } else if (!Predicate.isUndefined(opts.externalDrivers)) {
+    contributions = { externalDrivers: opts.externalDrivers }
+  } else {
+    contributions = {}
   }
   return {
     manifest: { id: ExtensionId.make(id) },
@@ -83,6 +94,7 @@ describe("DriverRegistry", () => {
       const result = yield* Effect.gen(function* () {
         const reg = yield* DriverRegistry
         return yield* reg.getModel("anthropic")
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result?.id).toBe("anthropic")
     }),
@@ -98,6 +110,7 @@ describe("DriverRegistry", () => {
       const result = yield* Effect.gen(function* () {
         const reg = yield* DriverRegistry
         return yield* reg.getExternal("acp-claude-code")
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result?.id).toBe("acp-claude-code")
       expect(result?.executor).toBe(exec)
@@ -112,6 +125,7 @@ describe("DriverRegistry", () => {
       const result = yield* Effect.gen(function* () {
         const reg = yield* DriverRegistry
         return yield* reg.getModel("openai")
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result?.name).toBe("Project")
     }),
@@ -131,6 +145,7 @@ describe("DriverRegistry", () => {
       const driver = yield* Effect.gen(function* () {
         const reg = yield* DriverRegistry
         return yield* reg.getExternal("shared")
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(driver?.executor).toBe(projectExec)
     }),
@@ -156,6 +171,7 @@ describe("DriverRegistry", () => {
           makeCatalogModel("test/kept"),
           makeCatalogModel("test/dropped", false),
         ])
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       // dropper removes the unkept entry; adder appends one — two remain
       expect(result.length).toBe(2)
@@ -167,14 +183,14 @@ describe("DriverRegistry", () => {
     Effect.gen(function* () {
       const seenAuth: Array<{
         driverId: string
-        auth: ProviderAuthInfo | undefined
+        auth: Option.Option<ProviderAuthInfo>
       }> = []
       const driverA: ModelDriverContribution = {
         id: "auth-a",
         name: "AuthA",
         resolveModel: stubResolution,
         listModels: (catalog, auth) => {
-          seenAuth.push({ driverId: "auth-a", auth })
+          seenAuth.push({ driverId: "auth-a", auth: Option.fromUndefinedOr(auth) })
           return catalog
         },
       }
@@ -183,7 +199,7 @@ describe("DriverRegistry", () => {
         name: "AuthB",
         resolveModel: stubResolution,
         listModels: (catalog, auth) => {
-          seenAuth.push({ driverId: "auth-b", auth })
+          seenAuth.push({ driverId: "auth-b", auth: Option.fromUndefinedOr(auth) })
           return catalog
         },
       }
@@ -192,17 +208,23 @@ describe("DriverRegistry", () => {
       ])
       yield* Effect.gen(function* () {
         const reg = yield* DriverRegistry
-        return yield* reg.filterModelCatalog([makeCatalogModel("test/x")], (driverId) =>
-          Effect.succeed(
-            driverId === "auth-a" ? { type: "api" as const, key: "secret-a" } : undefined,
-          ),
-        )
+        return yield* reg.filterModelCatalog([makeCatalogModel("test/x")], (driverId) => {
+          if (driverId === "auth-a") return Effect.succeed({ type: "api", key: "secret-a" })
+          return Effect.succeed(Option.getOrUndefined(Option.none<ProviderAuthInfo>()))
+        })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       // Each driver's listModels should have been called with the auth from resolveAuth(its id)
-      const authA = seenAuth.find((s) => s.driverId === "auth-a")?.auth
-      const authB = seenAuth.find((s) => s.driverId === "auth-b")?.auth
-      expect(authA?.key).toBe("secret-a")
-      expect(authB).toBeUndefined()
+      const authAEntry = Option.fromUndefinedOr(seenAuth.find((s) => s.driverId === "auth-a"))
+      expect(Option.isSome(authAEntry)).toBe(true)
+      if (Option.isNone(authAEntry)) return
+      expect(Option.isSome(authAEntry.value.auth)).toBe(true)
+      if (Option.isNone(authAEntry.value.auth)) return
+      expect(authAEntry.value.auth.value.key).toBe("secret-a")
+      const authBEntry = Option.fromUndefinedOr(seenAuth.find((s) => s.driverId === "auth-b"))
+      expect(Option.isSome(authBEntry)).toBe(true)
+      if (Option.isNone(authBEntry)) return
+      expect(Option.isNone(authBEntry.value.auth)).toBe(true)
     }),
   )
   it.live("filterModelCatalog rejects malformed runtime filter output", () =>
@@ -220,9 +242,14 @@ describe("DriverRegistry", () => {
         const reg = yield* DriverRegistry
         return yield* reg.filterModelCatalog([makeCatalogModel("test/x")])
       }).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(layer),
         Effect.catchEager((error) =>
-          Effect.succeed(error._tag === "DriverError" ? error.reason : error.message),
+          Effect.sync(() => {
+            let message = error.message
+            if (error._tag === "DriverError") message = error.reason
+            return message
+          }),
         ),
       )
       expect(result).toContain("invalid model catalog")

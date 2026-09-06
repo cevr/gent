@@ -12,6 +12,9 @@ import {
   makeClientExtensionRuntime,
   runClientExtensionSetup,
 } from "./extension-test-harness-boundary"
+
+const throwCleanup = (): never => Effect.runSync(Effect.die("boom"))
+
 describe("transport-only extension widgets", () => {
   test("cleanups fire in registration order", () => {
     const calls: string[] = []
@@ -29,13 +32,9 @@ describe("transport-only extension widgets", () => {
       const cleanups: Array<() => void> = []
       const lifecycle = { addCleanup: (fn: () => void) => cleanups.push(fn) }
       lifecycle.addCleanup(() => calls.push("before-throw"))
-      lifecycle.addCleanup(() => {
-        throw new Error("boom")
-      })
+      lifecycle.addCleanup(throwCleanup)
       lifecycle.addCleanup(() => calls.push("after-throw"))
-      yield* Effect.forEach(cleanups, (cleanup) =>
-        Effect.sync(cleanup).pipe(Effect.catchCause(() => Effect.void)),
-      )
+      yield* Effect.forEach(cleanups, (cleanup) => Effect.sync(cleanup).pipe(Effect.ignoreCause))
       expect(calls).toEqual(["before-throw", "after-throw"])
     }),
   )

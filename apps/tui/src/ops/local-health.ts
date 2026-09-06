@@ -1,10 +1,15 @@
 import { Database } from "bun:sqlite"
-import { DateTime, Effect, FileSystem, Option } from "effect"
+import { DateTime, Effect, FileSystem, Match, Option, Schema } from "effect"
 import type { ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/sdk"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
 const LOG_DIR = "/tmp/gent/logs"
-const STORAGE_TABLES = ["sessions", "branches", "messages", "events"] as const
+const STORAGE_TABLES = [
+  "sessions",
+  "branches",
+  "messages",
+  "events",
+] satisfies ReadonlyArray<string>
 
 export interface StorageHealth {
   readonly dbPath: string
@@ -52,48 +57,57 @@ export const storagePaths = (home: string) => {
   const dbPath = `${home}/.gent/data.db`
   return {
     dbPath,
-    files: [dbPath, `${dbPath}-shm`, `${dbPath}-wal`] as const,
+    files: [dbPath, `${dbPath}-shm`, `${dbPath}-wal`] satisfies ReadonlyArray<string>,
   }
 }
 
-const readSqliteHealth = (
-  dbPath: string,
-): Omit<StorageHealth, "dbPath" | "exists" | "sizeBytes"> => {
-  try {
-    const db = new Database(dbPath, { readonly: true })
-    try {
-      const tables = db
-        .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table'")
-        .all()
-        .map((row) => row.name)
-      const migrationTable = tables.includes("gent_storage_migrations") ? "present" : "missing"
-      const migrationCount =
-        migrationTable === "present"
-          ? (db
+type SqliteHealth = Omit<StorageHealth, "dbPath" | "exists" | "sizeBytes">
+
+const readSqliteHealth = (dbPath: string): Effect.Effect<SqliteHealth> =>
+  Effect.acquireUseRelease(
+    Effect.try(() => new Database(dbPath, { readonly: true })),
+    (db) =>
+      Effect.try((): SqliteHealth => {
+        const tables = db
+          .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table'")
+          .all()
+          .map((row) => row.name)
+        let migrationTable: StorageHealth["migrationTable"] = "missing"
+        if (tables.includes("gent_storage_migrations")) migrationTable = "present"
+        let migrationCount = 0
+        if (migrationTable === "present") {
+          migrationCount = Option.fromNullishOr(
+            db
               .query<{ count: number }, []>("SELECT COUNT(*) AS count FROM gent_storage_migrations")
-              .get()?.count ?? 0)
-          : 0
-      const existingStorageTables = STORAGE_TABLES.filter((table) => tables.includes(table))
-      const incompatible = existingStorageTables.length > 0 && migrationCount === 0
-      return {
-        migrationTable,
-        migrationCount,
-        existingStorageTables,
-        status: incompatible ? "incompatible" : "ok",
-      }
-    } finally {
-      db.close()
-    }
-  } catch (error) {
-    return {
-      migrationTable: "missing",
-      migrationCount: 0,
-      existingStorageTables: [],
-      status: "unreadable",
-      error: String(error),
-    }
-  }
-}
+              .get(),
+          ).pipe(
+            Option.map((row) => row.count),
+            Option.getOrElse(() => 0),
+          )
+        }
+        const existingStorageTables = STORAGE_TABLES.filter((table) => tables.includes(table))
+        const incompatible = existingStorageTables.length > 0 && migrationCount === 0
+        let status: StorageHealth["status"] = "ok"
+        if (incompatible) status = "incompatible"
+        return {
+          migrationTable,
+          migrationCount,
+          existingStorageTables,
+          status,
+        }
+      }),
+    (db) => Effect.sync(() => db.close()),
+  ).pipe(
+    Effect.catchEager((error) =>
+      Effect.succeed({
+        migrationTable: "missing",
+        migrationCount: 0,
+        existingStorageTables: [],
+        status: "unreadable",
+        error: String(error),
+      } satisfies SqliteHealth),
+    ),
+  )
 
 export const inspectStorage = (
   home: string,
@@ -119,12 +133,12 @@ export const inspectStorage = (
       dbPath,
       exists: true,
       sizeBytes: Number(stat.size),
-      ...readSqliteHealth(dbPath),
+      ...(yield* readSqliteHealth(dbPath)),
     }
   })
 
-export const inspectLogs = (): Effect.Effect<LogHealth, never, FileSystem.FileSystem> =>
-  Effect.gen(function* () {
+export const inspectLogs: Effect.Effect<LogHealth, never, FileSystem.FileSystem> = Effect.gen(
+  function* () {
     const fs = yield* FileSystem.FileSystem
     const exists = yield* fs.exists(LOG_DIR).pipe(Effect.orElseSucceed(() => false))
     if (!exists) return { dir: LOG_DIR }
@@ -148,29 +162,38 @@ export const inspectLogs = (): Effect.Effect<LogHealth, never, FileSystem.FileSy
       latestServer: sorted.find((entry) => entry.name.endsWith("-server.log"))?.path,
       latestClient: sorted.find((entry) => entry.name.endsWith("-client.log"))?.path,
     }
-  })
+  },
+)
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null
+const ServerLockEntry = Schema.Struct({
+  pid: Schema.Finite,
+  serverId: Schema.optionalKey(Schema.String),
+  rpcUrl: Schema.optionalKey(Schema.String),
+})
+const decodeServerLockEntry = Schema.decodeUnknownOption(ServerLockEntry)
+type ServerLockEntryInput = Parameters<typeof decodeServerLockEntry>[0]
 
-export const inspectServer = (entry: unknown): Effect.Effect<ServerHealth, never, GentPlatform> =>
+export const inspectServer = (
+  entry: ServerLockEntryInput,
+): Effect.Effect<ServerHealth, never, GentPlatform> =>
   Effect.gen(function* () {
-    if (entry === undefined) return { status: "none", summary: "No shared server." }
-    if (!isRecord(entry)) return { status: "dead", summary: "Invalid server lock." }
-    const pid = entry["pid"]
-    if (typeof pid !== "number") return { status: "dead", summary: "Invalid server lock." }
+    if (Option.isNone(Option.fromNullishOr(entry))) {
+      return { status: "none", summary: "No shared server." }
+    }
+    const decoded = decodeServerLockEntry(entry)
+    if (Option.isNone(decoded)) return { status: "dead", summary: "Invalid server lock." }
+    const { pid } = decoded.value
     const platform = yield* GentPlatform
     const alive = yield* platform.signal(pid, 0).pipe(
       Effect.as(true),
       Effect.orElseSucceed(() => false),
     )
-    const serverId = entry["serverId"]
-    const rpcUrl = entry["rpcUrl"]
-    const id = typeof serverId === "string" ? serverId : "unknown"
-    const url = typeof rpcUrl === "string" ? rpcUrl : "unknown"
-    return alive
-      ? { status: "alive", summary: `Shared server alive: pid ${pid}, ${id}, ${url}` }
-      : { status: "dead", summary: `Shared server lock is stale: pid ${pid}, ${id}` }
+    const id = Option.getOrElse(Option.fromNullishOr(decoded.value.serverId), () => "unknown")
+    const url = Option.getOrElse(Option.fromNullishOr(decoded.value.rpcUrl), () => "unknown")
+    if (alive) {
+      return { status: "alive", summary: `Shared server alive: pid ${pid}, ${id}, ${url}` }
+    }
+    return { status: "dead", summary: `Shared server lock is stale: pid ${pid}, ${id}` }
   })
 
 export const extensionHealthUnavailable = (summary: string): ExtensionDoctorHealth => ({
@@ -188,9 +211,11 @@ export const extensionHealthFromSnapshot = (
   snapshot: ExtensionHealthSnapshot,
 ): ExtensionDoctorHealth => {
   if (snapshot._tag === "healthy") {
+    let suffix = "s"
+    if (snapshot.extensions.length === 1) suffix = ""
     return {
       status: "healthy",
-      summary: `healthy (${snapshot.extensions.length} active extension${snapshot.extensions.length === 1 ? "" : "s"})`,
+      summary: `healthy (${snapshot.extensions.length} active extension${suffix})`,
       snapshot,
     }
   }
@@ -204,38 +229,32 @@ export const extensionHealthFromSnapshot = (
 
 export const makeDoctorReport = (
   home: string,
-  serverEntry: unknown,
+  serverEntry: ServerLockEntryInput,
   extensions?: ExtensionDoctorHealth,
 ): Effect.Effect<DoctorReport, never, FileSystem.FileSystem | GentPlatform> =>
   Effect.gen(function* () {
     const server = yield* inspectServer(serverEntry)
+    const defaultExtensions = () => {
+      let summary = "No live shared server."
+      if (server.status === "alive") summary = "Extension health was not queried."
+      return extensionHealthUnavailable(summary)
+    }
     return {
       home,
       storage: yield* inspectStorage(home),
       server,
-      logs: yield* inspectLogs(),
-      extensions:
-        extensions ??
-        extensionHealthUnavailable(
-          server.status === "alive"
-            ? "Extension health was not queried."
-            : "No live shared server.",
-        ),
+      logs: yield* inspectLogs,
+      extensions: Option.getOrElse(Option.fromNullishOr(extensions), defaultExtensions),
     }
   })
 
 const stamp = () =>
-  DateTime.make(performance.timeOrigin + performance.now()).pipe(
-    Option.match({
-      onNone: () => "unknown",
-      onSome: (date) =>
-        DateTime.formatIso(date)
-          .replace(/[-:T.]/g, "")
-          .slice(0, 14),
-    }),
-  )
+  DateTime.formatIso(DateTime.nowUnsafe())
+    .replace(/[-:T.]/g, "")
+    .slice(0, 14)
 
-const basename = (path: string): string => path.split("/").filter(Boolean).at(-1) ?? path
+const basename = (path: string): string =>
+  Option.getOrElse(Option.fromNullishOr(path.split("/").filter(Boolean).at(-1)), () => path)
 
 export const resetStorage = (
   home: string,
@@ -268,22 +287,22 @@ const formatBytes = (bytes: number): string => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-const formatIssue = (issue: ExtensionHealthIssue): string => {
-  switch (issue._tag) {
-    case "activation-failed":
-      return `activation failed during ${issue.phase}: ${issue.error}`
-    case "scheduled-job-failed":
-      return `scheduled job ${issue.jobId} failed: ${issue.error}`
-  }
-}
+const formatIssue = (issue: ExtensionHealthIssue): string =>
+  Match.value(issue).pipe(
+    Match.tagsExhaustive({
+      "activation-failed": (issue) => `activation failed during ${issue.phase}: ${issue.error}`,
+      "scheduled-job-failed": (issue) => `scheduled job ${issue.jobId} failed: ${issue.error}`,
+    }),
+  )
 
 const formatExtensions = (extensions: ExtensionDoctorHealth): ReadonlyArray<string> => {
   const lines = [`  Status: ${extensions.summary}`]
-  if (extensions.error !== undefined) lines.push(`  Error: ${extensions.error}`)
-  const snapshot = extensions.snapshot
-  if (snapshot?._tag !== "degraded") return lines
+  const error = Option.fromNullishOr(extensions.error)
+  if (Option.isSome(error)) lines.push(`  Error: ${error.value}`)
+  const snapshot = Option.fromNullishOr(extensions.snapshot)
+  if (Option.isNone(snapshot) || snapshot.value._tag !== "degraded") return lines
 
-  for (const extension of snapshot.degradedExtensions) {
+  for (const extension of snapshot.value.degradedExtensions) {
     lines.push(`  ${extension.manifest.id}:`)
     for (const issue of extension.issues) {
       lines.push(`    - ${formatIssue(issue)}`)
@@ -295,14 +314,16 @@ const formatExtensions = (extensions: ExtensionDoctorHealth): ReadonlyArray<stri
 
 export const formatDoctorReport = (report: DoctorReport): string => {
   const storage = report.storage
-  const storageLine =
-    storage.status === "missing"
-      ? `missing (${storage.dbPath})`
-      : `${storage.status} (${storage.dbPath}, ${formatBytes(storage.sizeBytes)}, migrations: ${storage.migrationCount})`
-  const tableLine =
-    storage.existingStorageTables.length === 0 ? "none" : storage.existingStorageTables.join(", ")
+  let storageLine = `missing (${storage.dbPath})`
+  if (storage.status !== "missing") {
+    storageLine = `${storage.status} (${storage.dbPath}, ${formatBytes(storage.sizeBytes)}, migrations: ${storage.migrationCount})`
+  }
+  let tableLine = "none"
+  if (storage.existingStorageTables.length > 0) {
+    tableLine = storage.existingStorageTables.join(", ")
+  }
 
-  return [
+  const lines = [
     "Gent doctor",
     "",
     `Home: ${report.home}`,
@@ -311,7 +332,10 @@ export const formatDoctorReport = (report: DoctorReport): string => {
     `  DB: ${storageLine}`,
     `  Migration table: ${storage.migrationTable}`,
     `  Existing storage tables: ${tableLine}`,
-    ...(storage.error !== undefined ? [`  Error: ${storage.error}`] : []),
+  ]
+  const error = Option.fromNullishOr(storage.error)
+  if (Option.isSome(error)) lines.push(`  Error: ${error.value}`)
+  lines.push(
     "",
     "Server:",
     `  ${report.server.summary}`,
@@ -321,7 +345,8 @@ export const formatDoctorReport = (report: DoctorReport): string => {
     "",
     "Logs:",
     `  Directory: ${report.logs.dir}`,
-    `  Latest server: ${report.logs.latestServer ?? "none"}`,
-    `  Latest client: ${report.logs.latestClient ?? "none"}`,
-  ].join("\n")
+    `  Latest server: ${Option.getOrElse(Option.fromNullishOr(report.logs.latestServer), () => "none")}`,
+    `  Latest client: ${Option.getOrElse(Option.fromNullishOr(report.logs.latestClient), () => "none")}`,
+  )
+  return lines.join("\n")
 }

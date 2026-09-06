@@ -21,15 +21,23 @@
  *
  * @module
  */
-import { Effect } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
 const BILLING_SALT = "59cf53e54c78"
 
-interface Message {
-  readonly role?: string
-  readonly content?: string | ReadonlyArray<{ readonly type?: string; readonly text?: string }>
-}
+const MessageBlock = Schema.Struct({
+  type: Schema.optional(Schema.String),
+  text: Schema.optional(Schema.String),
+})
+const MessageContent = Schema.Union([Schema.String, Schema.Array(MessageBlock)])
+const Message = Schema.Struct({
+  role: Schema.optional(Schema.String),
+  content: Schema.optional(MessageContent),
+})
+const decodeMessages = Schema.decodeUnknownOption(Schema.Array(Message))
+const decodeTextContent = Schema.decodeUnknownOption(Schema.String)
+const decodeBlockContent = Schema.decodeUnknownOption(Schema.Array(MessageBlock))
 
 /**
  * Pull the text of the first user message's first text block — exactly
@@ -37,19 +45,24 @@ interface Message {
  * no user message or no text content is present (matching Claude Code's
  * fallback so the hash stays stable on no-input requests).
  */
-export const extractFirstUserMessageText = (messages: ReadonlyArray<Message>): string => {
-  const userMsg = messages.find((m) => m.role === "user")
-  if (userMsg === undefined) return ""
-  const content = userMsg.content
-  if (typeof content === "string") return content
-  if (Array.isArray(content)) {
-    const textBlock = content.find((b) => b.type === "text")
-    if (textBlock?.type === "text" && typeof textBlock.text === "string") {
-      return textBlock.text
-    }
-  }
-  return ""
-}
+export const extractFirstUserMessageText = (messages: ReadonlyArray<object>): string =>
+  decodeMessages(messages).pipe(
+    Option.flatMap((decoded) =>
+      Option.fromNullishOr(decoded.find((message) => message.role === "user")),
+    ),
+    Option.flatMap((message) => Option.fromNullishOr(message.content)),
+    Option.flatMap((content) => {
+      const text = decodeTextContent(content)
+      if (Option.isSome(text)) return text
+      return decodeBlockContent(content).pipe(
+        Option.flatMap((blocks) =>
+          Option.fromNullishOr(blocks.find((block) => block.type === "text")),
+        ),
+        Option.flatMap((block) => Option.fromNullishOr(block.text)),
+      )
+    }),
+    Option.getOrElse(() => ""),
+  )
 
 /**
  * Compute `cch` — first 5 hex chars of `sha256(messageText)`. The
@@ -77,7 +90,9 @@ export const computeVersionSuffix = (
 ): Effect.Effect<string, never, GentPlatform> =>
   Effect.gen(function* () {
     const platform = yield* GentPlatform
-    const sampled = [4, 7, 20].map((i) => (i < messageText.length ? messageText[i] : "0")).join("")
+    const sampled = [4, 7, 20]
+      .map((index) => Option.getOrElse(Option.fromNullishOr(messageText[index]), () => "0"))
+      .join("")
     const input = `${BILLING_SALT}${sampled}${version}`
     return platform.hash("sha256", input).slice(0, 3)
   })
@@ -88,7 +103,7 @@ export const computeVersionSuffix = (
  * change the trailing semicolons — the validator is strict.
  */
 export const buildBillingHeaderValue = (
-  messages: ReadonlyArray<Message>,
+  messages: ReadonlyArray<object>,
   version: string,
   entrypoint: string,
 ): Effect.Effect<string, never, GentPlatform> =>

@@ -1,4 +1,4 @@
-import { Context, Effect, Schema } from "effect"
+import { Context, Effect, Predicate, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
 import { branded, SessionId, ToolCallId } from "./ids.js"
 import type { BranchId } from "./ids.js"
@@ -72,7 +72,7 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   systemPromptAddendum: Schema.optional(Schema.String),
   allowedTools: Schema.optional(Schema.Array(Schema.String)),
   deniedTools: Schema.optional(Schema.Array(Schema.String)),
-  temperature: Schema.optional(Schema.Number),
+  temperature: Schema.optional(Schema.Finite),
   reasoningEffort: Schema.optional(ReasoningEffort),
   driver: Schema.optional(DriverRef),
 }) {}
@@ -100,7 +100,7 @@ export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
 // fallback to the first two modeled agents, then single-agent self-pair, then
 // fail.
 
-export class NoModeledAgentsError extends Schema.TaggedErrorClass<NoModeledAgentsError>()(
+export class NoModeledAgentsError extends Schema.TaggedError<NoModeledAgentsError>()(
   "NoModeledAgentsError",
   {
     message: Schema.String,
@@ -114,16 +114,16 @@ export const resolveDualModelPair = (
     // 1. Name-based: cowork + deepwork (the standard dual-model pair)
     const cowork = agents.find((a) => a.name === "cowork")
     const deepwork = agents.find((a) => a.name === "deepwork")
-    if (cowork !== undefined && deepwork !== undefined) {
-      return [resolveAgentModel(cowork), resolveAgentModel(deepwork)] as const
+    if (Predicate.isNotUndefined(cowork) && Predicate.isNotUndefined(deepwork)) {
+      return [resolveAgentModel(cowork), resolveAgentModel(deepwork)]
     }
     // 2. Position-based fallback: first two modeled agents
-    const [first, second] = agents.filter((agent) => agent.model !== undefined)
-    if (first !== undefined && second !== undefined) {
-      return [resolveAgentModel(first), resolveAgentModel(second)] as const
+    const [first, second] = agents.filter((agent) => Predicate.isNotUndefined(agent.model))
+    if (Predicate.isNotUndefined(first) && Predicate.isNotUndefined(second)) {
+      return [resolveAgentModel(first), resolveAgentModel(second)]
     }
-    if (first !== undefined) {
-      return [resolveAgentModel(first), resolveAgentModel(first)] as const
+    if (Predicate.isNotUndefined(first)) {
+      return [resolveAgentModel(first), resolveAgentModel(first)]
     }
     return yield* new NoModeledAgentsError({
       message:
@@ -144,7 +144,7 @@ export type DriverSource = typeof DriverSource.Type
 export interface ResolvedAgentDriver {
   /** The driver to dispatch through. `undefined` ⇒ default model path
    *  (the loop derives a model driver from the agent's model id). */
-  readonly driver: DriverRef | undefined
+  readonly driver: AgentDefinition["driver"]
   readonly source: DriverSource
 }
 
@@ -166,14 +166,14 @@ export const resolveAgentDriver = (
   agent: AgentDefinition,
   overrides?: Readonly<Record<AgentName, DriverRef>>,
 ): ResolvedAgentDriver => {
-  if (agent.driver !== undefined) {
+  if (Predicate.isNotUndefined(agent.driver)) {
     return { driver: agent.driver, source: "agent" }
   }
   const fromConfig = overrides?.[agent.name]
-  if (fromConfig !== undefined) {
+  if (Predicate.isNotUndefined(fromConfig)) {
     return { driver: fromConfig, source: "config" }
   }
-  return { driver: undefined, source: "default" }
+  return { driver: agent.driver, source: "default" }
 }
 
 // ── RunSpec — per-run dispatch configuration ──
@@ -205,19 +205,17 @@ export const RunSpecSchema = Schema.Struct({
 })
 export type RunSpec = typeof RunSpecSchema.Type
 
-export interface RunSpecInput {
-  readonly persistence?: AgentPersistence | undefined
-  readonly overrides?: AgentRunOverrides | undefined
-  readonly tags?: ReadonlyArray<string> | undefined
-  readonly parentToolCallId?: ToolCallId | undefined
-}
+export interface RunSpecInput extends RunSpec {}
 
-export const makeRunSpec = (input: RunSpecInput = {}): RunSpec => ({
-  ...(input.persistence !== undefined ? { persistence: input.persistence } : {}),
-  ...(input.overrides !== undefined ? { overrides: input.overrides } : {}),
-  ...(input.tags !== undefined ? { tags: input.tags } : {}),
-  ...(input.parentToolCallId !== undefined ? { parentToolCallId: input.parentToolCallId } : {}),
-})
+export const makeRunSpec = (input: RunSpecInput = {}): RunSpec => {
+  const spec: { -readonly [K in keyof RunSpec]: RunSpec[K] } = {}
+  if (Predicate.isNotUndefined(input.persistence)) spec.persistence = input.persistence
+  if (Predicate.isNotUndefined(input.overrides)) spec.overrides = input.overrides
+  if (Predicate.isNotUndefined(input.tags)) spec.tags = input.tags
+  if (Predicate.isNotUndefined(input.parentToolCallId))
+    spec.parentToolCallId = input.parentToolCallId
+  return spec
+}
 
 /** Resolve persistence for a run — explicit RunSpec wins; default `durable`. */
 export const resolveRunPersistence = (runSpec?: RunSpec): AgentPersistence =>
@@ -242,9 +240,9 @@ export const AgentRunToolCallSchema = Schema.Struct({
 export type AgentRunToolCall = Schema.Schema.Type<typeof AgentRunToolCallSchema>
 
 const AgentRunUsageSchema = Schema.Struct({
-  input: Schema.Number,
-  output: Schema.Number,
-  cost: Schema.optional(Schema.Number),
+  input: Schema.Finite,
+  output: Schema.Finite,
+  cost: Schema.optional(Schema.Finite),
 })
 
 const AgentRunSuccessStruct = Schema.TaggedStruct("success", {
@@ -268,12 +266,13 @@ export const AgentRunResult = Schema.Union([AgentRunSuccessStruct, AgentRunFailu
 )
 export type AgentRunResult = Schema.Schema.Type<typeof AgentRunResult>
 
-export const getDurableAgentRunSessionId = (result: AgentRunResult): SessionId | undefined =>
-  result.sessionId !== undefined && (result.persistence ?? "durable") === "durable"
-    ? result.sessionId
-    : undefined
+export const getDurableAgentRunSessionId = (
+  result: AgentRunResult,
+): AgentRunResult["sessionId"] => {
+  if ((result.persistence ?? "durable") === "durable") return result.sessionId
+}
 
-export class AgentRunError extends Schema.TaggedErrorClass<AgentRunError>()("AgentRunError", {
+export class AgentRunError extends Schema.TaggedError<AgentRunError>()("AgentRunError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}

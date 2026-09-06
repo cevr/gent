@@ -12,7 +12,7 @@
  * provider's `onCleanup` runs them when it unmounts, so this widget
  * leaves no detached root behind.
  */
-import { Effect } from "effect"
+import { Effect, Option, Predicate } from "effect"
 import { ref } from "@gent/core/extensions/api"
 import {
   defineClientExtension,
@@ -52,15 +52,25 @@ export default defineClientExtension(EXT_ID, {
         position: "top-left",
         priority: 20,
         produce: () => {
-          const model = liveModel()
-          if (!model?.active) return []
-          const phase = model.phase === "awaiting-review" ? "review" : "auto"
-          const iter =
-            model.iteration !== undefined ? ` ${model.iteration}/${model.maxIterations ?? "?"}` : ""
+          const model = Option.fromNullishOr(liveModel())
+          if (Option.isNone(model) || !model.value.active) return []
+          let phase: "review" | "auto" = "auto"
+          if (model.value.phase === "awaiting-review") phase = "review"
+          const iteration = Option.fromNullishOr(model.value.iteration)
+          let iter = ""
+          if (Option.isSome(iteration)) {
+            const maxIterations = Option.getOrElse(
+              Option.fromNullishOr(model.value.maxIterations),
+              () => "?",
+            )
+            iter = ` ${iteration.value}/${maxIterations}`
+          }
+          let color: "warning" | "info" = "info"
+          if (model.value.phase === "awaiting-review") color = "warning"
           return [
             {
               text: `${phase}${iter}`,
-              color: model.phase === "awaiting-review" ? "warning" : "info",
+              color,
             },
           ]
         },
@@ -76,17 +86,17 @@ export default defineClientExtension(EXT_ID, {
         keybind: "shift+tab",
         slash: "auto",
         onSelect: () => {
-          const model = liveModel()
-          if (model?.active) {
+          const model = Option.fromNullishOr(liveModel())
+          if (Option.isSome(model) && model.value.active) {
             void shell.run(
               requestExtension(ref(AutoRpc.CancelAuto), {}, transport).pipe(
-                Effect.catchEager((err: unknown) =>
-                  Effect.logWarning(`[${EXT_ID}] auto cancel failed`).pipe(
-                    Effect.annotateLogs({
-                      error: err instanceof Error ? err.message : String(err),
-                    }),
-                  ),
-                ),
+                Effect.catchEager((err) => {
+                  let error = String(err)
+                  if (Predicate.isError(err)) error = err.message
+                  return Effect.logWarning(`[${EXT_ID}] auto cancel failed`).pipe(
+                    Effect.annotateLogs({ error }),
+                  )
+                }),
               ),
             )
           } else {

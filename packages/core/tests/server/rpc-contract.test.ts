@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { Schema } from "effect"
+import { Predicate, Effect, Schema } from "effect"
 import { GentRpcs, WorkspaceRpcMiddleware } from "../../src/server/rpcs"
 import { SessionRpcs } from "../../src/server/rpcs/session"
 
-const decodeSuccess = (key: string, value: unknown): unknown => {
+const decodeSuccess = (key: string, value: Readonly<Record<string, string>>): unknown => {
   const group = SessionRpcs
   const rpc = group.requests.get(key)
-  if (rpc === undefined) throw new Error(`Missing RPC ${key}`)
+  if (Predicate.isUndefined(rpc)) return Effect.runSync(Effect.die(new Error(`Missing RPC ${key}`)))
   return Schema.decodeUnknownSync(rpc.successSchema)(value)
 }
 

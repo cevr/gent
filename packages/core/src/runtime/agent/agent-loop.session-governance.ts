@@ -30,12 +30,15 @@ export class AgentLoopSessionGovernance extends Context.Service<
     AgentLoopSessionGovernance,
     Effect.gen(function* () {
       const ref = yield* TxRef.make(HashMap.empty<string, HashSet.HashSet<SessionId>>())
-      return {
+      return AgentLoopSessionGovernance.of({
         markTerminated: (workspaceId, sessionId) =>
           TxRef.update(ref, (m) => {
-            const sessions = HashMap.get(m, workspaceId).pipe((opt) =>
-              opt._tag === "Some" ? opt.value : HashSet.empty<SessionId>(),
-            )
+            const sessions = HashMap.get(m, workspaceId).pipe((opt) => {
+              if (opt._tag === "Some") {
+                return opt.value
+              }
+              return HashSet.empty<SessionId>()
+            })
             return HashMap.set(m, workspaceId, HashSet.add(sessions, sessionId))
           }),
         clearTerminated: (workspaceId, sessionId) =>
@@ -43,9 +46,10 @@ export class AgentLoopSessionGovernance extends Context.Service<
             const opt = HashMap.get(m, workspaceId)
             if (opt._tag === "None" || !HashSet.has(opt.value, sessionId)) return m
             const nextSessions = HashSet.remove(opt.value, sessionId)
-            return HashSet.size(nextSessions) === 0
-              ? HashMap.remove(m, workspaceId)
-              : HashMap.set(m, workspaceId, nextSessions)
+            if (HashSet.size(nextSessions) === 0) {
+              return HashMap.remove(m, workspaceId)
+            }
+            return HashMap.set(m, workspaceId, nextSessions)
           }),
         isTerminated: (workspaceId, sessionId) =>
           TxRef.get(ref).pipe(
@@ -54,7 +58,7 @@ export class AgentLoopSessionGovernance extends Context.Service<
               return opt._tag === "Some" && HashSet.has(opt.value, sessionId)
             }),
           ),
-      }
+      })
     }),
   )
 }

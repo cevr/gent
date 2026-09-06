@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Random } from "effect"
 import { ExtensionHostProcessError } from "../domain/extension.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { BranchId, SessionId } from "../domain/ids.js"
@@ -55,6 +55,7 @@ export const testExtensionHostContext = (
     execPath: "/usr/bin/node",
     homeDirectory: overrides.home ?? "/tmp",
     parentEnv: {},
+    randomId: Random.nextInt.pipe(Effect.map((value) => `test-${value}`)),
     pathListSeparator: ":",
     commandCandidates: (command) => [command],
     isPortFree: () => Effect.succeed(true),
@@ -68,7 +69,7 @@ export const testExtensionHostContext = (
         }),
       ),
   },
-  ...(overrides.agentName !== undefined ? { agentName: overrides.agentName } : {}),
+  agentName: overrides.agentName,
   agent: { ...defaultAgent(), ...overrides.agent },
   session: { ...defaultSession(), ...overrides.session },
   interaction: { ...defaultInteraction(), ...overrides.interaction },

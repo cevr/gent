@@ -16,7 +16,7 @@ export const CurrentWorkspaceId = Context.Reference<WorkspaceId>(
   { defaultValue: () => DefaultWorkspaceId },
 )
 
-export class WorkspaceHeaderError extends Schema.TaggedErrorClass<WorkspaceHeaderError>()(
+export class WorkspaceHeaderError extends Schema.TaggedError<WorkspaceHeaderError>()(
   "WorkspaceHeaderError",
   {
     message: Schema.String,
@@ -26,7 +26,7 @@ export class WorkspaceHeaderError extends Schema.TaggedErrorClass<WorkspaceHeade
 export const validateWorkspaceId = (
   workspaceId: string,
 ): Effect.Effect<WorkspaceId, WorkspaceHeaderError> =>
-  Schema.decodeUnknownEffect(WorkspaceId)(workspaceId).pipe(
+  Schema.decodeEffect(WorkspaceId)(workspaceId).pipe(
     Effect.mapError(
       () =>
         new WorkspaceHeaderError({

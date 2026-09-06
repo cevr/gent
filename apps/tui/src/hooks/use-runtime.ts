@@ -8,8 +8,8 @@
  * services (`FileSystem`, `ChildProcessSpawner`, …) execute without any
  * per-call-site `Effect.provide`.
  */
-import { Effect, Exit, Fiber, Cause } from "effect"
-import { createSignal, onCleanup, type Accessor, type Setter } from "solid-js"
+import { Cause, Context, Effect, Exit, Fiber } from "effect"
+import { createSignal, onCleanup, type Accessor } from "solid-js"
 import { type Result, initial, success, failure } from "../atom-solid/result"
 import { useClientRuntime } from "../client/index"
 
@@ -26,9 +26,10 @@ export interface UseRuntimeReturn {
 export function useRuntime(): UseRuntimeReturn {
   const { services, log } = useClientRuntime()
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary: caller-supplied services context covers any R the caller declares
   const fork = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.runForkWith(services as Parameters<typeof Effect.runForkWith<R>>[0])(effect)
+    // The runtime context is captured at the UI boundary. Its map contains the
+    // services required by the caller-supplied effect.
+    Effect.runForkWith(Context.makeUnsafe<R>(services.mapUnsafe))(effect)
 
   const call = <A, E, R>(effect: Effect.Effect<A, E, R>): [Accessor<Result<A, E>>, () => void] => {
     const [result, setResult] = createSignal<Result<A, E>>(initial<A, E>(true))
@@ -39,9 +40,9 @@ export function useRuntime(): UseRuntimeReturn {
     fiber.addObserver((exit) => {
       if (cancelled) return
       if (Exit.isSuccess(exit)) {
-        ;(setResult as Setter<Result<A, E>>)(success<A, E>(exit.value, false))
+        setResult(() => success<A, E>(exit.value, false))
       } else {
-        ;(setResult as Setter<Result<A, E>>)(failure<A, E>(exit.cause, false))
+        setResult(() => failure<A, E>(exit.cause, false))
       }
     })
 

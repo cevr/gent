@@ -10,7 +10,7 @@ import {
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { makeScopedTempDir } from "../helpers/scoped-temp-dir"
-import { ExtensionContext } from "@gent/core/extensions/api"
+import { AgentDefinition, AgentName, ExtensionContext } from "@gent/core/extensions/api"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 
 const projectionTest = it.scopedLive.layer(
@@ -51,8 +51,9 @@ const writeFile = (
   })
 const sid = SessionId.make("019d97c0-0000-7000-0000-000000000000")
 const bid = BranchId.make("019d97c0-0000-7001-0000-000000000000")
+const projectionAgent = AgentDefinition.make({ name: AgentName.make("projection-test") })
 const withMemoryProjectionContext = (cwd: string, home: string) =>
-  projectMemoryVaultTurn().pipe(
+  projectMemoryVaultTurn.pipe(
     Effect.provide(MemoryVaultTest(home)),
     Effect.provideService(
       ExtensionContext,
@@ -64,7 +65,7 @@ const withMemoryProjectionContext = (cwd: string, home: string) =>
         turn: {
           sessionId: sid,
           branchId: bid,
-          agent: {} as never,
+          agent: projectionAgent,
           allTools: [],
         },
       }),
@@ -130,6 +131,7 @@ describe("memory vault turn projection — read-only and scoped", () => {
             expect(value).toEqual({})
           }),
         ),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(MemoryVaultTest(tmpDir)),
       )
       // Projection must not have created the dirs as a side-effect

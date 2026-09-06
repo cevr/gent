@@ -1,4 +1,4 @@
-import { Cause, Clock, Effect, Schedule, Duration, Schema } from "effect"
+import { Cause, Clock, Duration, Effect, Option, Predicate, Schedule, Schema } from "effect"
 import { ProviderError } from "../domain/provider-error.js"
 import type { ProviderAuthError } from "../domain/driver.js"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -12,7 +12,7 @@ export const RetryConfig = Schema.Struct({
   maxDelay: Schema.Int.check(Schema.isGreaterThan(0)).annotate({
     description: "Maximum delay in milliseconds",
   }),
-  backoffFactor: Schema.Number.check(Schema.isGreaterThan(0)).annotate({
+  backoffFactor: Schema.Finite.check(Schema.isGreaterThan(0)).annotate({
     description: "Multiplier for exponential backoff",
   }),
   maxAttempts: Schema.Int.check(Schema.isGreaterThan(0)).annotate({
@@ -46,15 +46,17 @@ const retryableMessageSnippets = [
   "gateway timeout",
 ]
 
+const StatusCause = Schema.Struct({ status: Schema.Finite })
+
 const hasRetryableStatus = (cause: unknown) => {
-  if (cause === null || typeof cause !== "object" || !("status" in cause)) return false
+  if (!Schema.is(StatusCause)(cause)) return false
   const status = cause.status
-  if (typeof status !== "number") return false
   return status === 429 || status === 529 || (status >= 500 && status < 600)
 }
 
 // Check if error is retryable
 
+// oxlint-disable-next-line effect/noUnknownParameters -- Provider failures arrive as unknown values at this retry boundary.
 export const isRetryable = (error: unknown): boolean => {
   if (!Schema.is(ProviderError)(error)) return false
 
@@ -69,38 +71,43 @@ export const isRetryable = (error: unknown): boolean => {
   return hasRetryableStatus(error.cause)
 }
 
-// Extract retry-after from error/headers
+// Extract retry-after from error/headers.
 
-export const getRetryAfter = (error: unknown, nowMs = 0): number | undefined => {
-  if (error === null || typeof error !== "object") return undefined
+const ErrorCause = Schema.Struct({ cause: Schema.optional(Schema.Unknown) })
+const HeadersCause = Schema.Struct({ headers: Schema.instanceOf(Headers) })
 
-  // Check if cause is an AiError with retryAfter
-  const errorCause = (error as { cause?: unknown }).cause
-  if (AiError.isAiError(errorCause) && errorCause.retryAfter !== undefined) {
-    return Duration.toMillis(errorCause.retryAfter)
-  }
+// oxlint-disable-next-line effect/noUnknownParameters -- Provider failures arrive as unknown values at this retry boundary.
+const getRetryAfterOption = (error: unknown, nowMs: number): Option.Option<number> => {
+  const decodedError = Schema.decodeUnknownOption(ErrorCause)(error)
+  if (Option.isNone(decodedError)) return Option.none()
 
-  // Fallback: check cause for headers
-  const cause = errorCause
-  if (cause !== null && typeof cause === "object" && "headers" in cause) {
-    const headers = (cause as { headers: unknown }).headers
-    if (headers instanceof Headers) {
-      const retryAfter = headers.get("retry-after")
-      if (retryAfter !== null && retryAfter !== "") {
-        // Could be seconds or HTTP date
-        const seconds = parseInt(retryAfter, 10)
-        if (!isNaN(seconds)) return seconds * 1000
-        // Try parsing as date
-        const dateMs = Date.parse(retryAfter)
-        if (!isNaN(dateMs)) {
-          return Math.max(0, dateMs - nowMs)
+  return Option.match(Option.fromUndefinedOr(decodedError.value.cause), {
+    onNone: () => Option.none(),
+    onSome: (errorCause) => {
+      if (AiError.isAiError(errorCause)) {
+        if (!Predicate.isUndefined(errorCause.retryAfter)) {
+          return Option.some(Duration.toMillis(errorCause.retryAfter))
         }
+        return Option.none()
       }
-    }
-  }
 
-  return undefined
+      if (!Schema.is(HeadersCause)(errorCause)) return Option.none()
+      const retryAfter = errorCause.headers.get("retry-after")
+      if (Predicate.isNull(retryAfter) || retryAfter === "") return Option.none()
+      // Could be seconds or HTTP date.
+      const seconds = parseInt(retryAfter, 10)
+      if (!Number.isNaN(seconds)) return Option.some(seconds * 1000)
+      // Try parsing as date.
+      const dateMs = Date.parse(retryAfter)
+      if (!Number.isNaN(dateMs)) return Option.some(Math.max(0, dateMs - nowMs))
+      return Option.none()
+    },
+  })
 }
+
+// oxlint-disable-next-line effect/noNullish, effect/noUnknownParameters -- This public helper preserves the established absent retry-after API and accepts provider failures at the retry boundary.
+export const getRetryAfter = (error: unknown, nowMs = 0): number | undefined =>
+  Option.getOrUndefined(getRetryAfterOption(error, nowMs))
 
 // Calculate delay for attempt — private. `retryProviderCall` is the only consumer;
 // unit coverage flows through `retryProviderCall({ onRetry })` reporting the
@@ -108,14 +115,14 @@ export const getRetryAfter = (error: unknown, nowMs = 0): number | undefined => 
 
 const getRetryDelay = (
   attempt: number,
-  error: unknown,
+  error: ProviderError,
   nowMs: number,
   config: RetryConfig = DEFAULT_RETRY_CONFIG,
 ): number => {
   // Check retry-after header first
-  const retryAfter = getRetryAfter(error, nowMs)
-  if (retryAfter !== undefined) {
-    return Math.min(retryAfter, config["maxDelay"])
+  const retryAfter = getRetryAfterOption(error, nowMs)
+  if (Option.isSome(retryAfter)) {
+    return Math.min(retryAfter.value, config["maxDelay"])
   }
 
   // Exponential backoff
@@ -170,7 +177,7 @@ export const retryProviderCall =
         return Effect.gen(function* () {
           const nowMs = yield* Clock.currentTimeMillis
           const delayMs = getRetryDelay(meta.attempt - 1, error, nowMs, config)
-          if (options?.onRetry !== undefined) {
+          if (!Predicate.isUndefined(options?.onRetry)) {
             yield* options.onRetry({
               attempt: meta.attempt,
               maxAttempts: config.maxAttempts,
@@ -178,7 +185,7 @@ export const retryProviderCall =
               error,
             })
           }
-          return [meta.attempt, Duration.millis(delayMs)] as [number, Duration.Duration]
+          return [meta.attempt, Duration.millis(delayMs)] satisfies [number, Duration.Duration]
         })
       }),
     )

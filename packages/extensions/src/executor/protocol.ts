@@ -39,7 +39,7 @@ export const ExecutorRpc = defineRequests(EXECUTOR_EXTENSION_ID, {
     output: Schema.Void,
     execute: Effect.fn("ExecutorRpc.Stop")(function* () {
       const executor = yield* ExecutorWrite
-      yield* executor.disconnect()
+      yield* executor.disconnect
     }),
   }),
   GetSnapshot: request({
@@ -48,7 +48,7 @@ export const ExecutorRpc = defineRequests(EXECUTOR_EXTENSION_ID, {
     output: ExecutorSnapshotReply,
     execute: Effect.fn("ExecutorRpc.GetSnapshot")(function* () {
       const executor = yield* ExecutorRead
-      return yield* executor.snapshot()
+      return yield* executor.snapshot
     }),
   }),
 })

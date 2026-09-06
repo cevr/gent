@@ -14,7 +14,18 @@
  *
  * @module
  */
-import { Context, Duration, Effect, Exit, HashMap, HashSet, Scope, TxRef } from "effect"
+import {
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  HashMap,
+  HashSet,
+  Option,
+  Scope,
+  Schema,
+  TxRef,
+} from "effect"
 import { ChildProcess } from "effect/unstable/process"
 // `ChildProcessSpawner` re-exported from `effect/unstable/process` is a
 // namespace — for the runtime tag value we need the deep module path.
@@ -32,12 +43,21 @@ interface AcpProcess {
   readonly killProc: Effect.Effect<void>
   readonly scope: Scope.Closeable
   readonly procScope: Scope.Closeable
-  readonly codemode?: CodemodeServer
-  readonly codemodeScope?: Scope.Closeable
+  readonly codemode: Option.Option<CodemodeServer>
+  readonly codemodeScope: Option.Option<Scope.Closeable>
   readonly fingerprint: string
 }
 
 const cacheKey = (k: ExternalSessionKey): string => `${k.driverId}::${k.sessionId}::${k.branchId}`
+
+const Fingerprint = Schema.Struct({
+  command: Schema.String,
+  args: Schema.Array(Schema.String),
+  cwd: Schema.String,
+  systemPrompt: Schema.String,
+  tools: Schema.Array(Schema.String),
+})
+const encodeFingerprint = Schema.encodeSync(Schema.fromJsonString(Fingerprint))
 
 /**
  * Fingerprint covers every session-defining input passed to ACP
@@ -49,16 +69,16 @@ const fingerprintSession = (
   config: AcpProtocolAgentConfig,
   cwd: string,
   systemPrompt: string,
-  codemodeConfig: CodemodeConfig | undefined,
+  codemodeConfig: Option.Option<CodemodeConfig>,
 ): string => {
-  const toolNames =
-    codemodeConfig === undefined
-      ? []
-      : codemodeConfig.tools
-          .map((t) => t.id)
-          .slice()
-          .sort()
-  return JSON.stringify({
+  let toolNames: ReadonlyArray<string> = []
+  if (Option.isSome(codemodeConfig)) {
+    toolNames = codemodeConfig.value.tools
+      .map((t) => t.id)
+      .slice()
+      .sort()
+  }
+  return encodeFingerprint({
     command: config.command,
     args: config.args,
     cwd,
@@ -100,8 +120,8 @@ export const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, Ch
         yield* Scope.close(entry.scope, Exit.void).pipe(Effect.ignore)
         yield* entry.killProc
         yield* Scope.close(entry.procScope, Exit.void).pipe(Effect.ignore)
-        if (entry.codemodeScope !== undefined) {
-          yield* Scope.close(entry.codemodeScope, Exit.void).pipe(Effect.ignore)
+        if (Option.isSome(entry.codemodeScope)) {
+          yield* Scope.close(entry.codemodeScope.value, Exit.void).pipe(Effect.ignore)
         }
       })
 
@@ -120,13 +140,14 @@ export const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, Ch
     ): Effect.Effect<AcpManagedSession, AcpError | AcpClosedError> =>
       Effect.gen(function* () {
         const k = cacheKey(key)
-        const fingerprint = fingerprintSession(config, cwd, systemPrompt, codemodeConfig)
+        const codemodeConfigOption = Option.fromNullishOr(codemodeConfig)
+        const fingerprint = fingerprintSession(config, cwd, systemPrompt, codemodeConfigOption)
         const existingOpt = HashMap.get(yield* TxRef.get(sessionsRef), k)
         if (existingOpt._tag === "Some") {
           const existing = existingOpt.value
           if (existing.fingerprint === fingerprint) {
-            if (existing.codemode !== undefined && codemodeConfig !== undefined) {
-              yield* existing.codemode.updateConfig(codemodeConfig)
+            if (Option.isSome(existing.codemode) && Option.isSome(codemodeConfigOption)) {
+              yield* existing.codemode.value.updateConfig(codemodeConfigOption.value)
             }
             return {
               conn: existing.conn,
@@ -157,36 +178,36 @@ export const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, Ch
           stdin: "pipe",
           stdout: "pipe",
           stderr: "inherit",
-        })
-          .asEffect()
-          .pipe(
-            Scope.provide(procScope),
-            Effect.catchTag("PlatformError", (e) =>
-              Effect.fail(new AcpError({ message: `failed to spawn ACP agent: ${e.message}` })),
-            ),
-            Effect.tapError(() => Scope.close(procScope, Exit.void)),
-          )
+        }).pipe(
+          Scope.provide(procScope),
+          Effect.catchTag("PlatformError", (e) =>
+            Effect.fail(new AcpError({ message: `failed to spawn ACP agent: ${e.message}` })),
+          ),
+          Effect.tapError(() => Scope.close(procScope, Exit.void)),
+        )
 
         const killProc = handle
           .kill({ killSignal: "SIGTERM", forceKillAfter: Duration.millis(ACP_KILL_GRACE_MS) })
           .pipe(Effect.ignore)
 
-        let codemode: CodemodeServer | undefined
-        let codemodeScope: Scope.Closeable | undefined
-        if (codemodeConfig !== undefined && codemodeConfig.tools.length > 0) {
+        let codemode = Option.none<CodemodeServer>()
+        let codemodeScope = Option.none<Scope.Closeable>()
+        if (Option.isSome(codemodeConfigOption) && codemodeConfigOption.value.tools.length > 0) {
           const localCodemodeScope = yield* Scope.make()
-          codemodeScope = localCodemodeScope
-          codemode = yield* startCodemodeServer(codemodeConfig).pipe(
-            Scope.provide(localCodemodeScope),
-            Effect.mapError((e) => new AcpError({ message: e.message, cause: e })),
-            // Close codemode scope first so its bound port releases even if
-            // startCodemodeServer fails after the HTTP server bound, then
-            // tear down the spawned ACP child process.
-            Effect.tapError(() =>
-              Scope.close(localCodemodeScope, Exit.void).pipe(
-                Effect.ignore,
-                Effect.andThen(killProc),
-                Effect.andThen(Scope.close(procScope, Exit.void).pipe(Effect.ignore)),
+          codemodeScope = Option.some(localCodemodeScope)
+          codemode = Option.some(
+            yield* startCodemodeServer(codemodeConfigOption.value).pipe(
+              Scope.provide(localCodemodeScope),
+              Effect.mapError((e) => new AcpError({ message: e.message, cause: e })),
+              // Close codemode scope first so its bound port releases even if
+              // startCodemodeServer fails after the HTTP server bound, then
+              // tear down the spawned ACP child process.
+              Effect.tapError(() =>
+                Scope.close(localCodemodeScope, Exit.void).pipe(
+                  Effect.ignore,
+                  Effect.andThen(killProc),
+                  Effect.andThen(Scope.close(procScope, Exit.void).pipe(Effect.ignore)),
+                ),
               ),
             ),
           )
@@ -199,8 +220,8 @@ export const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, Ch
           yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
           yield* killProc
           yield* Scope.close(procScope, Exit.void).pipe(Effect.ignore)
-          if (codemodeScopeRef !== undefined) {
-            yield* Scope.close(codemodeScopeRef, Exit.void).pipe(Effect.ignore)
+          if (Option.isSome(codemodeScopeRef)) {
+            yield* Scope.close(codemodeScopeRef.value, Exit.void).pipe(Effect.ignore)
           }
         })
 
@@ -228,8 +249,10 @@ export const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, Ch
         // claude-agent-acp reference impl recognises `_meta.systemPrompt`
         // (string = replace, `{append}` = append). Agents that don't
         // recognise it ignore the field.
-        const mcpServers: unknown[] =
-          codemode !== undefined ? [{ type: "http", name: "gent", url: `${codemode.url}/mcp` }] : []
+        let mcpServers: Parameters<AcpConnection["newSession"]>[0]["mcpServers"] = []
+        if (Option.isSome(codemode)) {
+          mcpServers = [{ type: "http", name: "gent", url: `${codemode.value.url}/mcp` }]
+        }
         const sessionResponse = yield* conn
           .newSession({
             cwd,
@@ -245,7 +268,7 @@ export const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, Ch
           scope,
           procScope,
           codemode,
-          ...(codemodeScope !== undefined ? { codemodeScope } : {}),
+          codemodeScope,
           fingerprint,
         }
         // Install entry + driver-index update inside a single transaction so
@@ -257,8 +280,8 @@ export const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, Ch
             yield* TxRef.update(sessionsRef, (current) => HashMap.set(current, k, entry))
             yield* TxRef.update(byDriverRef, (current) => {
               const existing = HashMap.get(current, key.driverId)
-              const set =
-                existing._tag === "Some" ? HashSet.add(existing.value, k) : HashSet.make(k)
+              let set = HashSet.make(k)
+              if (existing._tag === "Some") set = HashSet.add(existing.value, k)
               return HashMap.set(current, key.driverId, set)
             })
           }),
@@ -285,8 +308,8 @@ export const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, Ch
       Effect.gen(function* () {
         const driverKeys = yield* TxRef.modify(byDriverRef, (current) => {
           const found = HashMap.get(current, driverId)
-          if (found._tag === "None") return [HashSet.empty<string>(), current] as const
-          return [found.value, HashMap.remove(current, driverId)] as const
+          if (found._tag === "None") return [HashSet.empty<string>(), current]
+          return [found.value, HashMap.remove(current, driverId)]
         })
         const keysArr = Array.from(driverKeys)
         const snapshot = yield* TxRef.get(sessionsRef)
@@ -296,26 +319,24 @@ export const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, Ch
           keysArr,
           (k) => {
             const entry = HashMap.get(snapshot, k)
-            return entry._tag === "None"
-              ? Effect.void
-              : tearDown(k, entry.value).pipe(Effect.ignore)
+            if (entry._tag === "None") return Effect.void
+            return tearDown(k, entry.value).pipe(Effect.ignore)
           },
-          { concurrency: "unbounded", discard: true },
+          { concurrency: 16, discard: true },
         )
       })
 
-    const disposeAll = (): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        // Same parallelism rationale as invalidateDriver — server shutdown
-        // shouldn't be N × ACP_KILL_GRACE_MS.
-        const snapshot = yield* TxRef.get(sessionsRef)
-        const entries = Array.from(HashMap.entries(snapshot))
-        yield* Effect.forEach(entries, ([k, entry]) => tearDown(k, entry).pipe(Effect.ignore), {
-          concurrency: "unbounded",
-          discard: true,
-        })
-        yield* TxRef.set(byDriverRef, HashMap.empty<string, HashSet.HashSet<string>>())
+    const disposeAll: Effect.Effect<void> = Effect.gen(function* () {
+      // Same parallelism rationale as invalidateDriver — server shutdown
+      // shouldn't be N × ACP_KILL_GRACE_MS.
+      const snapshot = yield* TxRef.get(sessionsRef)
+      const entries = Array.from(HashMap.entries(snapshot))
+      yield* Effect.forEach(entries, ([k, entry]) => tearDown(k, entry).pipe(Effect.ignore), {
+        concurrency: 16,
+        discard: true,
       })
+      yield* TxRef.set(byDriverRef, HashMap.empty<string, HashSet.HashSet<string>>())
+    })
 
     return { getOrCreate, invalidate, invalidateDriver, disposeAll }
   })

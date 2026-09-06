@@ -10,12 +10,12 @@
  * `configService.get(cwd)` → `driverOverrides`.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Path } from "effect"
+import { Predicate, Effect, FileSystem, Layer, Option, Path } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { Auth, AuthError, AuthMethod, type AuthInfo } from "@gent/core-internal/domain/auth"
+import { Auth, AuthError, AuthMethod } from "@gent/core-internal/domain/auth"
 import { AgentName, ExternalDriverRef } from "@gent/core-internal/domain/agent"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
@@ -30,7 +30,7 @@ import { failingLanguageModel } from "../helpers/failing-language-model"
 const failingAuthStoreLayer = Layer.succeed(
   Auth,
   Auth.of({
-    get: () => Effect.as(Effect.void, undefined as AuthInfo | undefined),
+    get: () => Effect.as(Effect.void, void 0),
     set: () => Effect.fail(new AuthError({ message: "write failed" })),
     remove: () => Effect.fail(new AuthError({ message: "delete failed" })),
   }),
@@ -53,16 +53,16 @@ const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   const oauthProvider: ModelDriverContribution = {
     id: "persisting-oauth",
     name: "Persisting OAuth",
-    resolveModel: () => stubModel,
+    resolveModel: () => Effect.succeed(stubModel),
     auth: {
       methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
       authorize: (ctx) =>
         Effect.sync(() => {
           pendingCallbacks.set(ctx.authorizationId, (code) => code ?? "")
-          return {
+          return Option.some({
             url: "http://example.com/auth",
-            method: "code" as const,
-          }
+            method: "code",
+          })
         }),
       callback: (ctx) =>
         Effect.gen(function* () {
@@ -74,16 +74,16 @@ const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   const authorizePersistProvider: ModelDriverContribution = {
     id: "persisting-authorize",
     name: "Persisting Authorize",
-    resolveModel: () => stubModel,
+    resolveModel: () => Effect.succeed(stubModel),
     auth: {
       methods: [AuthMethod.make({ type: "oauth", label: "Done" })],
       authorize: (ctx) =>
         Effect.gen(function* () {
           yield* ctx.persist({ type: "api", key: "sk-authorize" })
-          return {
+          return Option.some({
             url: "",
-            method: "done" as const,
-          }
+            method: "done",
+          })
         }),
     },
   }
@@ -172,7 +172,7 @@ describe("auth.listProviders", () => {
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list()).drivers
         const externalDriver = drivers.find((d) => d._tag === "external")
-        if (externalDriver === undefined) return
+        if (Predicate.isUndefined(externalDriver)) return
         yield* client.driver.set({
           agentName: AgentName.make("cowork"),
           driver: ExternalDriverRef.make({ id: externalDriver.id }),
@@ -307,7 +307,7 @@ describe("auth persistence RPC failures", () => {
           provider: "persisting-oauth",
           method: 0,
         })
-        if (authorization === null) return yield* Effect.die("auth setup failed")
+        if (Predicate.isNull(authorization)) return yield* Effect.die("auth setup failed")
         const exit = yield* Effect.exit(
           client.auth.callback({
             sessionId: SessionId.make("auth-rpc-session"),

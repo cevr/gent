@@ -26,7 +26,7 @@ const makeActiveStream = (
   interrupted: boolean,
 ): Effect.Effect<ActiveStreamHandle, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const handle = yield* makeActiveStreamHandle()
+    const handle = yield* makeActiveStreamHandle
     if (interrupted) yield* signalActiveStreamInterrupt(handle)
     return handle
   })
@@ -34,11 +34,14 @@ const makeActiveStream = (
 const captureEvents = () =>
   Effect.gen(function* () {
     const events = yield* Ref.make<ReadonlyArray<AgentEvent>>([])
-    const layer = Layer.succeed(EventPublisher, {
-      append: () => Effect.die("append not exercised in turn response tests"),
-      deliver: () => Effect.void,
-      publish: (event) => Ref.update(events, (items) => [...items, event]),
-    })
+    const layer = Layer.succeed(
+      EventPublisher,
+      EventPublisher.of({
+        append: () => Effect.die("append not exercised in turn response tests"),
+        deliver: () => Effect.void,
+        publish: (event) => Ref.update(events, (items) => [...items, event]),
+      }),
+    )
     return { events, layer }
   })
 
@@ -59,6 +62,7 @@ describe("agent turn response collectors", () => {
   })
 
   test("stream error formatting accepts errors message objects and primitives", () => {
+    // oxlint-disable-next-line effect/noNewError -- This formatter accepts native host error values at its boundary.
     expect(formatStreamErrorMessage(new Error("native boom"))).toBe("native boom")
     expect(formatStreamErrorMessage({ message: "structured boom" })).toBe("structured boom")
     expect(formatStreamErrorMessage("plain boom")).toBe("plain boom")
@@ -81,6 +85,7 @@ describe("agent turn response collectors", () => {
         activeStream,
         formatStreamError: (error) => error.message,
         retryPreOutputFailures: true,
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.flip, Effect.provide(layer))
 
       expect(error._tag).toBe("ProviderError")
@@ -98,6 +103,7 @@ describe("agent turn response collectors", () => {
         branchId,
         activeStream,
         formatStreamError: (error) => error.message,
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       expect(collected.interrupted).toBe(true)
@@ -138,13 +144,17 @@ describe("agent turn response collectors", () => {
         branchId,
         activeStream,
         formatStreamError: (error: TurnError) => error.message,
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       expect(collected.messageProjection.assistant.map((part) => part.type)).toEqual(["tool-call"])
       expect(
-        collected.messageProjection.tool.flatMap((part) =>
-          part.type === "tool-result" ? [part.name] : [],
-        ),
+        collected.messageProjection.tool.flatMap((part) => {
+          if (part.type === "tool-result") {
+            return [part.name]
+          }
+          return []
+        }),
       ).toEqual(["probe"])
       expect(collected.messageProjection.usage).toEqual({ inputTokens: 7, outputTokens: 11 })
       const published = yield* Ref.get(events)
@@ -181,6 +191,7 @@ describe("agent turn response collectors", () => {
           branchId,
           activeStream,
           formatStreamError: (error: TurnError) => error.message,
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer))
 
         expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual(["ToolCallStarted"])
@@ -210,6 +221,7 @@ describe("agent turn response collectors", () => {
           branchId,
           activeStream,
           formatStreamError: (error: TurnError) => error.message,
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer))
 
         expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual(["ToolCallSucceeded"])
@@ -232,6 +244,7 @@ describe("agent turn response collectors", () => {
         activeStream,
         formatStreamError: (error) => error.message,
         retryPreOutputFailures: true,
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       expect(collected.streamFailed).toBe(true)

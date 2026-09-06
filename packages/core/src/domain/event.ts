@@ -1,4 +1,16 @@
-import { Clock, Context, Deferred, Effect, Layer, Ref, Schema, Stream, TxQueue } from "effect"
+import {
+  Clock,
+  Context,
+  Deferred,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Ref,
+  Schema,
+  Stream,
+  TxQueue,
+} from "effect"
 
 import { Message } from "./message"
 import {
@@ -20,8 +32,8 @@ import { makeSessionPubSubRegistry } from "./session-pubsub-registry"
 // ============================================================================
 
 export const UsageSchema = Schema.Struct({
-  inputTokens: Schema.Number,
-  outputTokens: Schema.Number,
+  inputTokens: Schema.Finite,
+  outputTokens: Schema.Finite,
 })
 export type Usage = typeof UsageSchema.Type
 
@@ -79,14 +91,14 @@ export const AgentEvent = Schema.TaggedUnion({
     // `model`. Freezing cost into the event makes the transcript authoritative:
     // replaying the same event log always sums to the same cost, even if the
     // upstream pricing registry later refreshes.
-    costUsd: Schema.optional(Schema.Number),
+    costUsd: Schema.optional(Schema.Finite),
     interrupted: Schema.optional(Schema.Boolean),
   },
   TurnCompleted: {
     sessionId: SessionId,
     branchId: BranchId,
     messageId: Schema.optional(MessageId),
-    durationMs: Schema.Number,
+    durationMs: Schema.Finite,
     interrupted: Schema.optional(Schema.Boolean),
   },
   ToolCallStarted: {
@@ -103,6 +115,7 @@ export const AgentEvent = Schema.TaggedUnion({
     toolName: Schema.String,
     summary: Schema.optional(Schema.String),
     output: Schema.optional(Schema.String),
+    resultJson: Schema.optional(Schema.String),
   },
   ToolCallFailed: {
     sessionId: SessionId,
@@ -111,6 +124,7 @@ export const AgentEvent = Schema.TaggedUnion({
     toolName: Schema.String,
     summary: Schema.optional(Schema.String),
     output: Schema.optional(Schema.String),
+    resultJson: Schema.optional(Schema.String),
   },
   /** Generic interaction event — replaces PromptPresented, HandoffPresented, QuestionsAsked */
   InteractionPresented: {
@@ -201,9 +215,9 @@ export const AgentEvent = Schema.TaggedUnion({
     branchId: Schema.optional(BranchId),
     usage: Schema.optional(
       Schema.Struct({
-        input: Schema.Number,
-        output: Schema.Number,
-        cost: Schema.optional(Schema.Number),
+        input: Schema.Finite,
+        output: Schema.Finite,
+        cost: Schema.optional(Schema.Finite),
       }),
     ),
     preview: Schema.optional(Schema.String),
@@ -219,7 +233,7 @@ export const AgentEvent = Schema.TaggedUnion({
   AgentRestarted: {
     sessionId: SessionId,
     branchId: BranchId,
-    attempt: Schema.Number,
+    attempt: Schema.Finite,
     error: Schema.optional(Schema.String),
   },
   /**
@@ -325,19 +339,19 @@ export type ApprovalResult = {
 // EventEnvelope + EventStore
 // ============================================================================
 
-export const EventId = Schema.Number.pipe(branded("EventId"))
+export const EventId = Schema.Finite.pipe(branded("EventId"))
 export type EventId = typeof EventId.Type
 
 export class EventEnvelope extends Schema.Class<EventEnvelope>("EventEnvelope")({
   id: EventId,
   event: AgentEvent,
-  createdAt: Schema.Number,
+  createdAt: Schema.Finite,
   traceId: Schema.optional(Schema.String),
 }) {}
 
-export class EventStoreError extends Schema.TaggedErrorClass<EventStoreError>()("EventStoreError", {
+export class EventStoreError extends Schema.TaggedError<EventStoreError>()("EventStoreError", {
   message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
+  cause: Schema.optional(Schema.Defect()),
 }) {}
 
 export interface EventStoreService {
@@ -378,7 +392,7 @@ export const makeSerializedEventDelivery = (
             delivered.add(job.envelope.id)
             if (delivered.size > maxDeliveredIds) {
               const oldest = delivered.values().next().value
-              if (oldest !== undefined) delivered.delete(oldest)
+              if (!Predicate.isUndefined(oldest)) delivered.delete(oldest)
             }
           }
           yield* Deferred.done(job.ack, exit)
@@ -425,8 +439,7 @@ const matchEventSessionId = AgentEvent.match({
   ExtensionStateChanged: (e) => e.sessionId,
 })
 
-export const getEventSessionId = (event: AgentEvent): SessionId | undefined =>
-  matchEventSessionId(event)
+export const getEventSessionId = (event: AgentEvent): SessionId => matchEventSessionId(event)
 
 const matchEventBranchId = AgentEvent.match({
   SessionStarted: (e) => e.branchId,
@@ -444,13 +457,19 @@ const matchEventBranchId = AgentEvent.match({
   ProviderRetrying: (e) => e.branchId,
   MachineTaskSucceeded: (e) => e.branchId,
   MachineTaskFailed: (e) => e.branchId,
-  SessionNameUpdated: () => undefined,
-  SessionSettingsUpdated: () => undefined,
+  SessionNameUpdated: () =>
+    // oxlint-disable-next-line effect/noNullish -- Session-name events have no branch identity by design.
+    undefined,
+  SessionSettingsUpdated: () =>
+    // oxlint-disable-next-line effect/noNullish -- Session-settings events have no branch identity by design.
+    undefined,
   BranchCreated: (e) => e.branchId,
   // BranchSwitched has no `branchId` field — `from`/`to` are both per-branch.
   // Returning `undefined` lets branch-scoped subscribers see the switch on
   // either side, matching the prior structural-narrowing behavior.
-  BranchSwitched: () => undefined,
+  BranchSwitched: () =>
+    // oxlint-disable-next-line effect/noNullish -- Branch-switch events have no single branch identity.
+    undefined,
   BranchSummarized: (e) => e.branchId,
   AgentSwitched: (e) => e.branchId,
   AgentRunSpawned: (e) => e.branchId,
@@ -460,6 +479,7 @@ const matchEventBranchId = AgentEvent.match({
   ExtensionStateChanged: (e) => e.branchId,
 })
 
+// oxlint-disable-next-line effect/noNullish -- Some event variants intentionally have no branch identity.
 export const getEventBranchId = (event: AgentEvent): BranchId | undefined =>
   matchEventBranchId(event)
 
@@ -469,15 +489,15 @@ export const matchesEventFilter = (
   branchId?: BranchId,
 ): boolean => {
   const eventSessionId = getEventSessionId(env.event)
-  if (eventSessionId === undefined || eventSessionId !== sessionId) return false
+  if (Predicate.isUndefined(eventSessionId) || eventSessionId !== sessionId) return false
   return matchesBranchFilter(env, branchId)
 }
 
 /** Branch-only filter — use when session is already known to match. */
 export const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): boolean => {
-  if (branchId === undefined) return true
+  if (Predicate.isUndefined(branchId)) return true
   const eventBranchId = getEventBranchId(env.event)
-  return eventBranchId === branchId || eventBranchId === undefined
+  return eventBranchId === branchId || Predicate.isUndefined(eventBranchId)
 }
 
 // EventStore Service
@@ -492,15 +512,14 @@ const makeMemoryEventStore = Effect.gen(function* () {
   const service: EventStoreService = {
     append: Effect.fn("EventStore.append")(function* (event) {
       const id = yield* Ref.modify(idRef, (n) => [n + 1, n + 1])
-      const currentSpan = yield* Effect.currentParentSpan.pipe(
-        Effect.orElseSucceed(() => undefined),
-      )
-      const envelope = EventEnvelope.make({
+      const currentSpan = yield* Effect.currentParentSpan.pipe(Effect.option)
+      const fields = {
         id: EventId.make(id),
         event,
         createdAt: yield* Clock.currentTimeMillis,
-        ...(currentSpan !== undefined ? { traceId: currentSpan.traceId } : {}),
-      })
+      }
+      if (Option.isSome(currentSpan)) Object.assign(fields, { traceId: currentSpan.value.traceId })
+      const envelope = EventEnvelope.make(fields)
       yield* Ref.update(eventsRef, (events) => [...events, envelope])
       return envelope
     }),

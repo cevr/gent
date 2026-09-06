@@ -2,27 +2,22 @@
  * Lock: `loadTuiExtensions` runs Effect-typed `setup` values through the
  * provided `runtime: ManagedRuntime`. Only the Effect setup shape is accepted.
  */
-import { afterAll, beforeAll } from "bun:test"
 import { describe, it, expect } from "effect-bun-test"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous filesystem fixture setup is a test boundary.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import { join } from "node:path"
-import { Effect, FileSystem, Layer, ManagedRuntime, Path } from "effect"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { join } from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous path fixture setup is a test boundary.
+import { Effect, FileSystem, Path, Predicate } from "effect"
 import {
   autocompleteContribution,
   type ClientContributions,
-  type ClientRuntime,
   type ExtensionClientModule,
 } from "../src/extensions/client-facets.js"
 import type { ClientEffect } from "../src/extensions/client-effect.js"
 import { ClientSetupError } from "../src/extensions/client-effect.js"
 import { loadTuiExtensions } from "../src/extensions/loader-boundary"
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture
-const runtime = ManagedRuntime.make(
-  Layer.merge(BunFileSystem.layer, BunServices.layer),
-) as unknown as ClientRuntime
+import { makeClientExtensionRuntime } from "./extension-test-harness-boundary"
+const runtime = makeClientExtensionRuntime()
 describe("loadTuiExtensions Effect setup", () => {
   it.live("Effect setup is run through the runtime; FileSystem is provided", () =>
     Effect.gen(function* () {
@@ -31,8 +26,8 @@ describe("loadTuiExtensions Effect setup", () => {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
         // Touch both services so unused imports don't get optimized away.
-        expect(typeof fs.readFileString).toBe("function")
-        expect(typeof path.join).toBe("function")
+        expect(Predicate.isFunction(fs.readFileString)).toBe(true)
+        expect(Predicate.isFunction(path.join)).toBe(true)
         return autocompleteContribution({
           prefix: "!",
           title: "effect",
@@ -90,14 +85,15 @@ describe("loadTuiExtensions Effect setup", () => {
     const tmpRoot = join(import.meta.dir, "../.tmp-c9-1-discovery")
     const userDir = join(tmpRoot, "user")
     const projectDir = join(tmpRoot, "project")
-    beforeAll(() => {
-      rmSync(tmpRoot, { recursive: true, force: true })
-      mkdirSync(userDir, { recursive: true })
-      mkdirSync(projectDir, { recursive: true })
-      // Effect-valued `setup` — exactly the accepted shape.
-      writeFileSync(
-        join(userDir, "discovered.client.ts"),
-        `
+    const discoveryFixture = Effect.acquireRelease(
+      Effect.sync(() => {
+        rmSync(tmpRoot, { recursive: true, force: true })
+        mkdirSync(userDir, { recursive: true })
+        mkdirSync(projectDir, { recursive: true })
+        // Effect-valued `setup` — exactly the accepted shape.
+        writeFileSync(
+          join(userDir, "discovered.client.ts"),
+          `
 import { Effect } from "effect"
 import { autocompleteContribution } from "../../src/extensions/client-facets.js"
 
@@ -112,13 +108,13 @@ export default {
   }),
 }
 `.trim(),
-      )
-    })
-    afterAll(() => {
-      rmSync(tmpRoot, { recursive: true, force: true })
-    })
-    it.live("imports + runs an Effect-valued setup discovered from userDir", () =>
+        )
+      }),
+      () => Effect.sync(() => rmSync(tmpRoot, { recursive: true, force: true })),
+    )
+    it.scopedLive("imports + runs an Effect-valued setup discovered from userDir", () =>
       Effect.gen(function* () {
+        yield* discoveryFixture
         const result = yield* Effect.promise(() =>
           loadTuiExtensions({ userDir, projectDir, runtime }),
         )

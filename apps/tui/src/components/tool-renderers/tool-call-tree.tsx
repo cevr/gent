@@ -1,3 +1,5 @@
+import { Option } from "effect"
+import type { Schema } from "effect"
 import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { toolArgSummary } from "../../utils/format-tool.js"
@@ -5,7 +7,7 @@ import { useSpinnerClock } from "../../hooks/use-spinner-clock"
 
 interface ToolCallInfo {
   toolName: string
-  args: Record<string, unknown>
+  args: Schema.JsonObject
   isError: boolean
   status?: "running" | "completed" | "error"
 }
@@ -38,10 +40,17 @@ export function ToolCallTree(props: {
       <For each={[...visible()]}>
         {(call, index) => {
           const isLast = () => index() === visible().length - 1
-          const connector = () => (isLast() ? "╰──" : "├──")
+          const connector = () => {
+            if (isLast()) return "╰──"
+            return "├──"
+          }
           const icon = () => {
-            if (call.status === "running")
-              return SPINNER_FRAMES[tick() % SPINNER_FRAMES.length] ?? "·"
+            if (call.status === "running") {
+              return Option.getOrElse(
+                Option.fromNullishOr(SPINNER_FRAMES[tick() % SPINNER_FRAMES.length]),
+                () => "·",
+              )
+            }
             if (call.isError || call.status === "error") return "✕"
             return "✓"
           }
@@ -51,11 +60,15 @@ export function ToolCallTree(props: {
             return theme.textMuted
           }
           const summary = () => toolArgSummary(call.toolName, call.args)
+          const summaryText = () => {
+            if (summary().length > 0) return ` ${summary()}`
+            return ""
+          }
 
           return (
             <text style={{ fg: theme.textMuted }}>
               {connector()} <span style={{ fg: iconColor() }}>{icon()}</span> {call.toolName}
-              {summary().length > 0 ? ` ${summary()}` : ""}
+              {summaryText()}
             </text>
           )
         }}

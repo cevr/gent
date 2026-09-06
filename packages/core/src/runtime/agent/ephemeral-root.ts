@@ -1,4 +1,4 @@
-import { Context, Effect, FileSystem, Layer, Path, type Config } from "effect"
+import { Context, Crypto, Effect, FileSystem, Layer, Option, Path, type Config } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import type { SqlClient } from "effect/unstable/sql"
 import { EventStore } from "../../domain/event.js"
@@ -42,6 +42,7 @@ export type EphemeralParentServices =
   | ConfigService
   | ModelRegistry
   | GentPlatform
+  | Crypto.Crypto
 
 type EphemeralStorageProvides =
   | SqlClient.SqlClient
@@ -102,7 +103,7 @@ const recoverExtensionLayer = <Provides>(
   layer: Layer.Layer<Provides, unknown, unknown>,
 ): Layer.Layer<Provides, never, EphemeralExtensionRequires> =>
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit extension-layer recovery membrane
-  layer as Layer.Layer<Provides, never, EphemeralExtensionRequires> // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- explicit extension-layer recovery membrane
+  layer as Layer.Layer<Provides, never, EphemeralExtensionRequires> // oxlint-disable-line effect/noAs, typescript/no-unsafe-type-assertion -- The extension layer crosses the child runtime recovery membrane with its failure and requirement channels erased. // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- explicit extension-layer recovery membrane
 
 const composeEphemeralRuntimeLayer = <Provides>(params: {
   readonly parentLayer: Layer.Layer<EphemeralParentServices, never, never>
@@ -120,25 +121,21 @@ const composeEphemeralRuntimeLayer = <Provides>(params: {
     params.overrides.sessionRuntime,
   )
 
-  const typedExtensionLayer =
-    params.extensionLayers === undefined
-      ? undefined
-      : // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous upstream shape feeds the recovery membrane
-        recoverExtensionLayer<Provides>(params.extensionLayers)
-  const extensionLayer =
-    typedExtensionLayer === undefined
-      ? undefined
-      : Layer.provideMerge(
-          typedExtensionLayer,
-          Layer.merge(params.parentLayer, params.overrides.storage),
-        )
+  const typedExtensionLayer = Option.fromUndefinedOr(params.extensionLayers).pipe(
+    Option.map(recoverExtensionLayer<Provides>),
+  )
+  const extensionLayer = Option.map(typedExtensionLayer, (layer) =>
+    Layer.provideMerge(layer, Layer.merge(params.parentLayer, params.overrides.storage)),
+  )
 
-  const childLayer =
-    extensionLayer === undefined ? overridesLayer : Layer.merge(extensionLayer, overridesLayer)
+  const childLayer = Option.match(extensionLayer, {
+    onNone: () => overridesLayer,
+    onSome: (layer) => Layer.merge(layer, overridesLayer),
+  })
 
   // Fresh memoization keeps child-owned layer constants, such as in-memory
   // SqliteClient, from aliasing the parent runtime's memoized services.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Provides plus override provides is the local composition output
+  // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- Provides plus override provides is the local composition output.
   return Layer.fresh(Layer.provideMerge(childLayer, params.parentLayer)) as Layer.Layer<
     Provides | EphemeralOverrideProvides,
     EphemeralOverrideError,
@@ -166,6 +163,7 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
   const configService = yield* ConfigService
   const modelRegistry = yield* ModelRegistry
   const gentPlatform = yield* GentPlatform
+  const crypto = yield* Crypto.Crypto
 
   const parentRuntimeEnvironmentLayer = Layer.succeed(RuntimeEnvironment, runtimeEnvironment)
   const parentFileSystemLayer = Layer.succeed(FileSystem.FileSystem, fileSystem)
@@ -174,6 +172,7 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
   const parentConfigLayer = Layer.succeed(ConfigService, configService)
   const parentModelRegistryLayer = Layer.succeed(ModelRegistry, modelRegistry)
   const parentGentPlatformLayer = Layer.succeed(GentPlatform, gentPlatform)
+  const parentCryptoLayer = Layer.succeed(Crypto.Crypto, crypto)
   const parentLayer = Layer.mergeAll(
     parentRuntimeEnvironmentLayer,
     parentFileSystemLayer,
@@ -182,6 +181,7 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
     parentConfigLayer,
     parentModelRegistryLayer,
     parentGentPlatformLayer,
+    parentCryptoLayer,
   )
 
   return (params: {
@@ -193,7 +193,7 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
     const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(parentGentPlatformLayer))
     const clusterRunnerLayer = Layer.provide(
       SingleRunner.layer({ runnerStorage: "memory" }),
-      storageLayer,
+      Layer.merge(storageLayer, parentCryptoLayer),
     )
     const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
     const approvalLayer = ApprovalService.LiveAutoResolve
@@ -232,7 +232,7 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
     )
     const sessionGovernanceLayer = AgentLoopSessionGovernance.Live
     const sessionRuntimeLayer = SessionRuntime.Live({
-      baseSections: params.config.baseSections ?? [],
+      baseSections: Option.getOrElse(Option.fromUndefinedOr(params.config.baseSections), () => []),
     }).pipe(
       Layer.provide(
         Layer.provideMerge(
@@ -253,7 +253,7 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
       ),
     )
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension-provided services are extra outputs; child runtime requires only override provides
+    // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- Extension-provided services are extra outputs; child runtime requires only override provides.
     return composeEphemeralRuntimeLayer({
       parentLayer,
       overrides: {

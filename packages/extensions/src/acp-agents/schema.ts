@@ -79,7 +79,7 @@ export class ClientCapabilities extends Schema.Class<ClientCapabilities>("AcpCli
 }) {}
 
 export class InitializeRequest extends Schema.Class<InitializeRequest>("AcpInitializeRequest")({
-  protocolVersion: Schema.optional(Schema.Number),
+  protocolVersion: Schema.optional(Schema.Finite),
   clientCapabilities: Schema.optional(ClientCapabilities),
   clientInfo: Schema.optional(Implementation),
 }) {}
@@ -95,7 +95,7 @@ export class AgentCapabilities extends Schema.Class<AgentCapabilities>("AcpAgent
 }) {}
 
 export class InitializeResponse extends Schema.Class<InitializeResponse>("AcpInitializeResponse")({
-  protocolVersion: Schema.Number,
+  protocolVersion: Schema.Finite,
   agentCapabilities: Schema.optional(AgentCapabilities),
   agentInfo: Schema.optional(Implementation),
 }) {}

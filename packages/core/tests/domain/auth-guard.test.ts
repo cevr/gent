@@ -19,7 +19,7 @@ import { AgentDefinition, AgentName, ExternalDriverRef } from "@gent/core-intern
 import { Effect, Layer, Schema } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
-import { ProviderId } from "@gent/core-internal/domain/model"
+import { ModelId, ProviderId } from "@gent/core-internal/domain/model"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 
 const stubModel = AiModel.make(
@@ -29,20 +29,20 @@ const stubModel = AiModel.make(
 )
 
 const testProviders: ModelDriverContribution[] = [
-  { id: "anthropic", name: "Anthropic", resolveModel: () => stubModel },
-  { id: "openai", name: "OpenAI", resolveModel: () => stubModel },
-  { id: "google", name: "Google", resolveModel: () => stubModel },
-  { id: "mistral", name: "Mistral", resolveModel: () => stubModel },
+  { id: "anthropic", name: "Anthropic", resolveModel: () => Effect.succeed(stubModel) },
+  { id: "openai", name: "OpenAI", resolveModel: () => Effect.succeed(stubModel) },
+  { id: "google", name: "Google", resolveModel: () => Effect.succeed(stubModel) },
+  { id: "mistral", name: "Mistral", resolveModel: () => Effect.succeed(stubModel) },
 ]
 
 const testAgents = [
   AgentDefinition.make({
-    name: "cowork" as never,
-    model: "anthropic/claude-opus-4-6" as never,
+    name: AgentName.make("cowork"),
+    model: ModelId.make("anthropic/claude-opus-4-6"),
   }),
   AgentDefinition.make({
-    name: "deepwork" as never,
-    model: "openai/gpt-5.4" as never,
+    name: AgentName.make("deepwork"),
+    model: ModelId.make("openai/gpt-5.4"),
   }),
 ]
 
@@ -75,8 +75,8 @@ const helperResolved = resolveExtensions([
       agents: [
         ...testAgents,
         AgentDefinition.make({
-          name: "helper:google" as never,
-          model: "google/gemini-2.5-flash" as never,
+          name: AgentName.make("helper:google"),
+          model: ModelId.make("google/gemini-2.5-flash"),
         }),
       ],
     },
@@ -230,9 +230,9 @@ describe("ListAuthProvidersPayload schema", () => {
     const query = decode({
       sessionId: SessionId.make("019d-test-session-id"),
       driverOverrides: { [AgentName.make("cowork")]: { _tag: "external", id: "evil" } },
-    } as Record<string, unknown>)
+    })
     expect(query.sessionId).toBe(SessionId.make("019d-test-session-id"))
     // The decoded type intentionally has no `driverOverrides` field.
-    expect((query as Record<string, unknown>)["driverOverrides"]).toBeUndefined()
+    expect("driverOverrides" in query).toBe(false)
   })
 })

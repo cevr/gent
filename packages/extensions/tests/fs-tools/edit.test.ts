@@ -1,5 +1,5 @@
 import { describe, test, expect, it } from "effect-bun-test"
-import { Effect, FileSystem, Path } from "effect"
+import { Effect, FileSystem, Option, Path } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
 import { BunServices } from "@effect/platform-bun"
 import {
@@ -12,32 +12,32 @@ import {
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { runToolWithCtx } from "@gent/core-internal/test-utils"
 describe("detectRedaction", () => {
-  test("clean replacement → undefined", () => {
-    expect(detectRedaction("old code", "new code")).toBeUndefined()
+  test("clean replacement has no redaction", () => {
+    expect(Option.isNone(detectRedaction("old code", "new code"))).toBe(true)
   })
   test("catches [REDACTED]", () => {
     const result = detectRedaction("old", "before [REDACTED] after")
-    expect(result).toContain("[REDACTED]")
+    expect(Option.getOrThrow(result)).toContain("[REDACTED]")
   })
   test("catches [...omitted code]", () => {
     const result = detectRedaction("old", "before [...omitted code] after")
-    expect(result).toContain("[...omitted code]")
+    expect(Option.getOrThrow(result)).toContain("[...omitted code]")
   })
   test("catches [rest of file unchanged]", () => {
     const result = detectRedaction("old", "before [rest of file unchanged] after")
-    expect(result).toContain("[rest of file unchanged]")
+    expect(Option.getOrThrow(result)).toContain("[rest of file unchanged]")
   })
   test("catches // ... existing code", () => {
     const result = detectRedaction("old", "line1\n// ... existing code\nline3")
-    expect(result).toContain("// ... existing code")
+    expect(Option.getOrThrow(result)).toContain("// ... existing code")
   })
   test("catches # ... existing code", () => {
     const result = detectRedaction("old", "line1\n# ... existing code\nline3")
-    expect(result).toContain("# ... existing code")
+    expect(Option.getOrThrow(result)).toContain("# ... existing code")
   })
   test("allows pattern when also in oldString (legitimate content)", () => {
     const content = "// ... existing code"
-    expect(detectRedaction(content, content)).toBeUndefined()
+    expect(Option.isNone(detectRedaction(content, content))).toBe(true)
   })
 })
 describe("unescapeStr", () => {
@@ -75,24 +75,22 @@ describe("findMatch", () => {
   test("exact match → strategy 'exact', correct index", () => {
     const content = "hello world foo bar"
     const result = findMatch(content, "world foo")
-    expect(result).toBeDefined()
-    expect(result!.strategy).toBe("exact")
-    expect(result!.index).toBe(6)
+    const match = Option.getOrThrow(result)
+    expect(match.strategy).toBe("exact")
+    expect(match.index).toBe(6)
   })
   test("literal \\n in oldString → falls through to 'unescaped'", () => {
     const content = "line1\nline2"
     const result = findMatch(content, "line1\\nline2")
-    expect(result).toBeDefined()
-    expect(result!.strategy).toBe("unescaped")
+    expect(Option.getOrThrow(result).strategy).toBe("unescaped")
   })
   test("trailing whitespace diff → falls through to 'normalized'", () => {
     const content = "hello\nworld"
     const result = findMatch(content, "hello   \nworld")
-    expect(result).toBeDefined()
-    expect(result!.strategy).toBe("normalized")
+    expect(Option.getOrThrow(result).strategy).toBe("normalized")
   })
-  test("no match → undefined", () => {
-    expect(findMatch("hello world", "xyz")).toBeUndefined()
+  test("no match returns none", () => {
+    expect(Option.isNone(findMatch("hello world", "xyz"))).toBe(true)
   })
 })
 // ============================================================================
@@ -114,7 +112,9 @@ describe("EditTool execution", () => {
           EditTool,
           { path: filePath, oldString: "hello world", newString: "hi there" },
           stubCtx,
-        ).pipe(Effect.provide(editLayer)),
+        )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          .pipe(Effect.provide(editLayer)),
       )
       expect(result.replacements).toBe(1)
       expect(result.path).toBe(filePath)
@@ -134,7 +134,9 @@ describe("EditTool execution", () => {
           EditTool,
           { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
           stubCtx,
-        ).pipe(Effect.provide(editLayer)),
+        )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          .pipe(Effect.provide(editLayer)),
       )
       expect(result.replacements).toBe(3)
       const content = yield* fs.readFileString(filePath)
@@ -154,7 +156,9 @@ describe("EditTool execution", () => {
             EditTool,
             { path: filePath, oldString: "not here", newString: "replaced" },
             stubCtx,
-          ).pipe(Effect.provide(editLayer)),
+          )
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+            .pipe(Effect.provide(editLayer)),
         ),
       )
       expect(exit._tag).toBe("Failure")
@@ -169,11 +173,9 @@ describe("EditTool execution", () => {
       yield* fs.writeFileString(filePath, "foo bar foo\n")
       const exit = yield* narrowR(
         Effect.exit(
-          runToolWithCtx(
-            EditTool,
-            { path: filePath, oldString: "foo", newString: "baz" },
-            stubCtx,
-          ).pipe(Effect.provide(editLayer)),
+          runToolWithCtx(EditTool, { path: filePath, oldString: "foo", newString: "baz" }, stubCtx)
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+            .pipe(Effect.provide(editLayer)),
         ),
       )
       expect(exit._tag).toBe("Failure")
@@ -191,7 +193,9 @@ describe("EditTool execution", () => {
           EditTool,
           { path: filePath, oldString: "line1\\nline2", newString: "merged" },
           stubCtx,
-        ).pipe(Effect.provide(editLayer)),
+        )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          .pipe(Effect.provide(editLayer)),
       )
       expect(result.replacements).toBe(1)
       const content = yield* fs.readFileString(filePath)

@@ -3,6 +3,7 @@ import {
   Effect,
   type Fiber,
   Layer,
+  Option,
   Ref,
   Schema,
   ScopedRef,
@@ -19,33 +20,33 @@ import {
   transitionDisconnect,
   viewForState,
 } from "./actor.js"
-import { ExecutorEndpoint, ExecutorMcpInspection, type ResolvedExecutorSettings } from "./domain.js"
+import { ExecutorEndpoint, ExecutorMcpInspection } from "./domain.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
 import type { ExecutorSnapshotReply } from "./protocol.js"
 import { ExecutorSidecar } from "./sidecar.js"
 
-interface ExecutorReadShape {
-  readonly snapshot: () => Effect.Effect<ExecutorSnapshotReply>
+interface ExecutorReadService {
+  readonly snapshot: Effect.Effect<ExecutorSnapshotReply>
 }
 
-interface ExecutorWriteShape extends ExecutorReadShape {
+interface ExecutorWriteService extends ExecutorReadService {
   readonly connect: (cwd: string) => Effect.Effect<void>
-  readonly disconnect: () => Effect.Effect<void>
+  readonly disconnect: Effect.Effect<void>
 }
 
-interface ExecutorRuntimeShape extends ExecutorWriteShape {
-  readonly turnProjection: () => Effect.Effect<TurnProjection>
+interface ExecutorRuntimeService extends ExecutorWriteService {
+  readonly turnProjection: Effect.Effect<TurnProjection>
 }
 
-export class ExecutorRead extends Context.Service<ExecutorRead, ExecutorReadShape>()(
+export class ExecutorRead extends Context.Service<ExecutorRead, ExecutorReadService>()(
   "@gent/extensions/src/executor/controller/ExecutorRead",
 ) {}
 
-export class ExecutorWrite extends Context.Service<ExecutorWrite, ExecutorWriteShape>()(
+export class ExecutorWrite extends Context.Service<ExecutorWrite, ExecutorWriteService>()(
   "@gent/extensions/src/executor/controller/ExecutorWrite",
 ) {}
 
-export class ExecutorRuntime extends Context.Service<ExecutorRuntime, ExecutorRuntimeShape>()(
+export class ExecutorRuntime extends Context.Service<ExecutorRuntime, ExecutorRuntimeService>()(
   "@gent/extensions/src/executor/controller/ExecutorRuntime",
 ) {}
 
@@ -64,11 +65,11 @@ export const ExecutorControllerLive = (
       const state = yield* TxSubscriptionRef.make<ExecutorState>(ExecutorState.cases.Idle.make({}))
       const gate = yield* Semaphore.make(1)
       const connection = yield* ScopedRef.fromAcquire(
-        Effect.succeed<Fiber.Fiber<void> | null>(null),
+        Effect.succeed(Option.none<Fiber.Fiber<void>>()),
       )
       const generation = yield* Ref.make(0)
 
-      const snapshot = () => TxSubscriptionRef.get(state).pipe(Effect.map(projectSnapshot))
+      const snapshot = TxSubscriptionRef.get(state).pipe(Effect.map(projectSnapshot))
 
       const setIfCurrent = (expectedGeneration: number, next: ExecutorState) =>
         Effect.gen(function* () {
@@ -81,10 +82,10 @@ export const ExecutorControllerLive = (
       const runConnection = (targetCwd: string, expectedGeneration: number) =>
         Effect.gen(function* () {
           const endpointRaw = yield* sidecar.resolveEndpoint(targetCwd)
-          const endpoint = yield* Schema.decodeUnknownEffect(ExecutorEndpoint)(endpointRaw)
+          const endpoint = yield* Schema.decodeEffect(ExecutorEndpoint)(endpointRaw)
           const inspection = yield* bridge.inspect(endpoint.baseUrl).pipe(
-            Effect.flatMap((raw) => Schema.decodeUnknownEffect(ExecutorMcpInspection)(raw)),
-            Effect.orElseSucceed(() => undefined),
+            Effect.flatMap((raw) => Schema.decodeEffect(ExecutorMcpInspection)(raw)),
+            Effect.option,
           )
           yield* setIfCurrent(
             expectedGeneration,
@@ -92,28 +93,36 @@ export const ExecutorControllerLive = (
               mode: endpoint.mode,
               baseUrl: endpoint.baseUrl,
               scopeId: endpoint.scope.id,
-              executorPrompt: inspection?.instructions,
+              executorPrompt: Option.getOrUndefined(
+                inspection.pipe(
+                  Option.flatMap((value) => Option.fromNullishOr(value.instructions)),
+                ),
+              ),
             }),
           )
         }).pipe(
-          Effect.catchEager((cause) =>
-            setIfCurrent(
+          Effect.catchEager((cause) => {
+            let message = String(cause)
+            if (cause instanceof Error) message = cause.message
+            return setIfCurrent(
               expectedGeneration,
               transitionConnectionFailed(
                 ExecutorState.cases.Connecting.make({ cwd: targetCwd }),
-                cause instanceof Error ? cause.message : String(cause),
+                message,
               ),
-            ),
-          ),
-          Effect.catchDefect((cause) =>
-            setIfCurrent(
+            )
+          }),
+          Effect.catchDefect((cause) => {
+            let message = String(cause)
+            if (cause instanceof Error) message = cause.message
+            return setIfCurrent(
               expectedGeneration,
               transitionConnectionFailed(
                 ExecutorState.cases.Connecting.make({ cwd: targetCwd }),
-                cause instanceof Error ? cause.message : String(cause),
+                message,
               ),
-            ),
-          ),
+            )
+          }),
         )
 
       const connect = (targetCwd: string) =>
@@ -125,47 +134,41 @@ export const ExecutorControllerLive = (
           yield* TxSubscriptionRef.set(state, next)
           yield* ScopedRef.set(
             connection,
-            runConnection(targetCwd, nextGeneration).pipe(Effect.forkScoped),
+            runConnection(targetCwd, nextGeneration).pipe(
+              Effect.forkScoped,
+              Effect.map(Option.some),
+            ),
           )
         }).pipe(gate.withPermits(1))
 
-      const disconnect = () =>
-        Effect.gen(function* () {
-          const current = yield* TxSubscriptionRef.get(state)
-          const next = transitionDisconnect(current)
-          if (next === current) return
-          yield* Ref.update(generation, (n) => n + 1)
-          yield* ScopedRef.set(connection, Effect.succeed(null))
-          yield* TxSubscriptionRef.set(state, next)
-        }).pipe(gate.withPermits(1))
+      const disconnect: Effect.Effect<void> = Effect.gen(function* () {
+        const current = yield* TxSubscriptionRef.get(state)
+        const next = transitionDisconnect(current)
+        if (next === current) return
+        yield* Ref.update(generation, (n) => n + 1)
+        yield* ScopedRef.set(connection, Effect.succeed(Option.none()))
+        yield* TxSubscriptionRef.set(state, next)
+      }).pipe(gate.withPermits(1))
 
       const runtime = {
         snapshot,
         connect,
         disconnect,
-        turnProjection: () =>
-          TxSubscriptionRef.get(state).pipe(Effect.map((current) => viewForState(current))),
-      } satisfies ExecutorRuntimeShape
+        turnProjection: TxSubscriptionRef.get(state).pipe(Effect.map(viewForState)),
+      } satisfies ExecutorRuntimeService
 
       const read = {
         snapshot: runtime.snapshot,
-      } satisfies ExecutorReadShape
+      } satisfies ExecutorReadService
       const write = {
         snapshot: runtime.snapshot,
         connect: runtime.connect,
         disconnect: runtime.disconnect,
-      } satisfies ExecutorWriteShape
+      } satisfies ExecutorWriteService
 
       const bootstrap = Effect.gen(function* () {
-        const settingsRaw = yield* sidecar
-          .resolveSettings(cwd)
-          .pipe(
-            Effect.catchEager(() =>
-              Effect.sync((): ResolvedExecutorSettings | undefined => undefined),
-            ),
-          )
-        const settings = settingsRaw
-        if (settings?.autoStart !== true) return
+        const settings = yield* sidecar.resolveSettings(cwd).pipe(Effect.option)
+        if (Option.isNone(settings) || settings.value.autoStart !== true) return
         yield* runtime.connect(cwd)
       }).pipe(
         Effect.catchDefect((cause) =>

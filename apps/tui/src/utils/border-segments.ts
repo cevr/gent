@@ -29,9 +29,7 @@ export function buildBorderSegments(
   if (leftItems.length > 0) {
     result.push({ text: "── ", color: bc })
     usedWidth += 3
-    for (let idx = 0; idx < leftItems.length; idx++) {
-      const item = leftItems[idx]
-      if (item === undefined) continue
+    for (const [idx, item] of leftItems.entries()) {
       if (idx > 0) {
         result.push({ text: " · ", color: bc })
         usedWidth += 3
@@ -48,9 +46,7 @@ export function buildBorderSegments(
   if (rightItems.length > 0) {
     rightSegments.push({ text: " ", color: bc })
     usedWidth += 1
-    for (let idx = 0; idx < rightItems.length; idx++) {
-      const item = rightItems[idx]
-      if (item === undefined) continue
+    for (const [idx, item] of rightItems.entries()) {
       if (idx > 0) {
         rightSegments.push({ text: " · ", color: bc })
         usedWidth += 3

@@ -8,7 +8,7 @@
  * harness.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { AnthropicBetaCache } from "../../src/anthropic/beta-cache.js"
 const run = <A, E>(eff: Effect.Effect<A, E, AnthropicBetaCache>) =>
   Effect.scoped(eff.pipe(Effect.provide(AnthropicBetaCache.layer)))
@@ -17,7 +17,7 @@ describe("AnthropicBetaCache — basic record / get", () => {
     run(
       Effect.gen(function* () {
         const cache = yield* AnthropicBetaCache
-        const excluded = yield* cache.getExcluded("claude-opus-4-6", "flag-a")
+        const excluded = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
         expect(excluded.size).toBe(0)
       }),
     ),
@@ -26,9 +26,13 @@ describe("AnthropicBetaCache — basic record / get", () => {
     run(
       Effect.gen(function* () {
         const cache = yield* AnthropicBetaCache
-        yield* cache.getExcluded("claude-opus-4-6", "flag-a")
-        yield* cache.recordExcluded("claude-opus-4-6", "context-1m-2025-08-07", "flag-a")
-        const excluded = yield* cache.getExcluded("claude-opus-4-6", "flag-a")
+        yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
+        yield* cache.recordExcluded(
+          "claude-opus-4-6",
+          "context-1m-2025-08-07",
+          Option.some("flag-a"),
+        )
+        const excluded = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
         expect(excluded.has("context-1m-2025-08-07")).toBe(true)
         expect(excluded.size).toBe(1)
       }),
@@ -38,10 +42,10 @@ describe("AnthropicBetaCache — basic record / get", () => {
     run(
       Effect.gen(function* () {
         const cache = yield* AnthropicBetaCache
-        yield* cache.getExcluded("claude-opus-4-6", "flag-a")
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", "flag-a")
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-y", "flag-a")
-        const excluded = yield* cache.getExcluded("claude-opus-4-6", "flag-a")
+        yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
+        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", Option.some("flag-a"))
+        yield* cache.recordExcluded("claude-opus-4-6", "beta-y", Option.some("flag-a"))
+        const excluded = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
         expect(excluded.has("beta-x")).toBe(true)
         expect(excluded.has("beta-y")).toBe(true)
         expect(excluded.size).toBe(2)
@@ -55,8 +59,8 @@ describe("AnthropicBetaCache — basic record / get", () => {
     run(
       Effect.gen(function* () {
         const cache = yield* AnthropicBetaCache
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", "flag-a")
-        const excluded = yield* cache.getExcluded("claude-opus-4-6", "flag-a")
+        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", Option.some("flag-a"))
+        const excluded = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
         expect(excluded.has("beta-x")).toBe(true)
         expect(excluded.size).toBe(1)
       }),
@@ -68,13 +72,13 @@ describe("AnthropicBetaCache — clear-on-env-change", () => {
     run(
       Effect.gen(function* () {
         const cache = yield* AnthropicBetaCache
-        yield* cache.getExcluded("claude-opus-4-6", "flag-a")
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", "flag-a")
+        yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
+        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", Option.some("flag-a"))
         // Env changes: prior learning should be discarded.
-        const after = yield* cache.getExcluded("claude-opus-4-6", "flag-b")
+        const after = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-b"))
         expect(after.size).toBe(0)
         // And subsequent same-env requests start fresh.
-        const stillEmpty = yield* cache.getExcluded("claude-opus-4-6", "flag-b")
+        const stillEmpty = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-b"))
         expect(stillEmpty.size).toBe(0)
       }),
     ),
@@ -85,8 +89,8 @@ describe("AnthropicBetaCache — clear-on-env-change", () => {
     run(
       Effect.gen(function* () {
         const cache = yield* AnthropicBetaCache
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", undefined)
-        const after = yield* cache.getExcluded("claude-opus-4-6", "flag-a")
+        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", Option.none())
+        const after = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
         expect(after.size).toBe(0)
       }),
     ),
@@ -97,13 +101,13 @@ describe("AnthropicBetaCache — clear-on-model-change", () => {
     run(
       Effect.gen(function* () {
         const cache = yield* AnthropicBetaCache
-        yield* cache.getExcluded("claude-opus-4-6", "flag-a")
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", "flag-a")
+        yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
+        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", Option.some("flag-a"))
         // Different model under same env → cache cleared.
-        const haiku = yield* cache.getExcluded("claude-haiku-4-5", "flag-a")
+        const haiku = yield* cache.getExcluded("claude-haiku-4-5", Option.some("flag-a"))
         expect(haiku.size).toBe(0)
         // Switching back doesn't restore the prior learning either.
-        const opus = yield* cache.getExcluded("claude-opus-4-6", "flag-a")
+        const opus = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
         expect(opus.size).toBe(0)
       }),
     ),
@@ -114,9 +118,9 @@ describe("AnthropicBetaCache — same-model same-env stability", () => {
     run(
       Effect.gen(function* () {
         const cache = yield* AnthropicBetaCache
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", "flag-a")
+        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", Option.some("flag-a"))
         for (let i = 0; i < 5; i++) {
-          const excluded = yield* cache.getExcluded("claude-opus-4-6", "flag-a")
+          const excluded = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
           expect(excluded.has("beta-x")).toBe(true)
         }
       }),

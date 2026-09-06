@@ -1,14 +1,19 @@
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-}
+import { Option, Schema } from "effect"
+import type { ToolCall } from "./types"
 
-function uniqueNonEmpty(parts: Array<string | undefined>): string[] {
+const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))
+const decodeJsonObject = Schema.decodeUnknownOption(Schema.JsonObject)
+const decodeString = Schema.decodeUnknownOption(Schema.String)
+const decodeStringArray = Schema.decodeUnknownOption(Schema.Array(Schema.String))
+const encodePrettyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json, { space: 2 }))
+
+function uniqueNonEmpty(parts: ReadonlyArray<Option.Option<string>>): string[] {
   const seen = new Set<string>()
   const result: string[] = []
 
   for (const part of parts) {
-    if (part === undefined) continue
-    const trimmed = part.trim()
+    if (Option.isNone(part)) continue
+    const trimmed = part.value.trim()
     if (trimmed.length === 0 || seen.has(trimmed)) continue
     seen.add(trimmed)
     result.push(trimmed)
@@ -17,43 +22,38 @@ function uniqueNonEmpty(parts: Array<string | undefined>): string[] {
   return result
 }
 
-function extractPrimaryMessage(value: Record<string, unknown>): string | undefined {
-  let primary: string | undefined
-  if (typeof value["error"] === "string") primary = value["error"]
-  else if (typeof value["message"] === "string") primary = value["message"]
-  else if (typeof value["summary"] === "string") primary = value["summary"]
-
-  let secondary: string | undefined
-  if (typeof value["details"] === "string") secondary = value["details"]
-  else if (typeof value["reason"] === "string") secondary = value["reason"]
-
-  const issues = Array.isArray(value["errors"])
-    ? value["errors"].filter((item): item is string => typeof item === "string")
-    : []
-
-  const parts = uniqueNonEmpty([primary, secondary, ...issues])
-  if (parts.length === 0) return undefined
-  return parts.join("\n")
+function extractPrimaryMessage(value: Schema.JsonObject) {
+  const primary = decodeString(value["error"]).pipe(
+    Option.orElse(() => decodeString(value["message"])),
+    Option.orElse(() => decodeString(value["summary"])),
+  )
+  const secondary = decodeString(value["details"]).pipe(
+    Option.orElse(() => decodeString(value["reason"])),
+  )
+  const issues = Option.getOrElse(decodeStringArray(value["errors"]), () => [])
+  const parts = uniqueNonEmpty([primary, secondary, ...issues.map((issue) => Option.some(issue))])
+  if (parts.length === 0) return Option.none<string>()
+  return Option.some(parts.join("\n"))
 }
 
-export function formatGenericToolText(text: string | undefined): string | undefined {
-  if (text === undefined) return undefined
+export function formatGenericToolText(text: ToolCall["output"]) {
+  const source = Option.fromNullishOr(text)
+  if (Option.isNone(source)) return Option.getOrUndefined(source)
 
-  const trimmed = text.trim()
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return text
+  const trimmed = source.value.trim()
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return source.value
 
-  try {
-    const parsed: unknown = JSON.parse(text)
+  const parsed = decodeJson(source.value)
+  if (Option.isNone(parsed)) return source.value
 
-    if (typeof parsed === "string") return parsed
+  const stringValue = decodeString(parsed.value)
+  if (Option.isSome(stringValue)) return stringValue.value
 
-    if (isRecord(parsed)) {
-      const extracted = extractPrimaryMessage(parsed)
-      if (extracted !== undefined) return extracted
-    }
-
-    return JSON.stringify(parsed, null, 2)
-  } catch {
-    return text
+  const record = decodeJsonObject(parsed.value)
+  if (Option.isSome(record)) {
+    const extracted = extractPrimaryMessage(record.value)
+    if (Option.isSome(extracted)) return extracted.value
   }
+
+  return encodePrettyJson(parsed.value)
 }

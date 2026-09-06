@@ -8,6 +8,7 @@
  *   - Fallback: toolCall.output/preview when message fetch unavailable
  */
 
+import { Option, Schema } from "effect"
 import { Show, For, createMemo, createResource } from "solid-js"
 import type { JSX } from "solid-js"
 import { useTheme } from "../../theme/index"
@@ -37,20 +38,26 @@ interface AgentTreeProps {
   completedContent?: JSX.Element
 }
 
+interface ChildContent {
+  readonly reasoning: string[]
+  readonly text: string[]
+}
+
 /** Extract reasoning + text parts from child session messages */
 function extractChildContent(
   messages: ReadonlyArray<{
     role: string
     parts: ReadonlyArray<{ type: string; text?: string }>
   }>,
-): { reasoning: string[]; text: string[] } {
+): ChildContent {
   const reasoning: string[] = []
   const text: string[] = []
   for (const msg of messages) {
     if (msg.role !== "assistant") continue
     for (const part of msg.parts) {
-      if (part.type === "reasoning" && part.text !== undefined) reasoning.push(part.text)
-      else if (part.type === "text" && part.text !== undefined) text.push(part.text)
+      const partText = Option.fromNullishOr(part.text)
+      if (part.type === "reasoning" && Option.isSome(partText)) reasoning.push(partText.value)
+      else if (part.type === "text" && Option.isSome(partText)) text.push(partText.value)
     }
   }
   return { reasoning, text }
@@ -62,9 +69,10 @@ export function AgentTree(props: AgentTreeProps) {
 
   const children = () => props.childSessions ?? []
   const hasChildren = () => children().length > 0
-  const completedChild = () => {
+  const completedChild = (): Option.Option<ChildSessionEntry> => {
     const c = children()
-    return c.length === 1 ? c[0] : undefined
+    if (c.length !== 1) return Option.none()
+    return Option.fromNullishOr(c[0])
   }
 
   // Aggregate tool calls from all child sessions for the tree view
@@ -72,8 +80,7 @@ export function AgentTree(props: AgentTreeProps) {
     children().flatMap((child) =>
       child.toolCalls.map((tc) => ({
         toolName: tc.toolName,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
-        args: (tc.input ?? {}) as Record<string, unknown>,
+        args: Option.getOrElse(Schema.decodeUnknownOption(Schema.JsonObject)(tc.input), () => ({})),
         isError: tc.status === "error",
         status: tc.status,
       })),
@@ -83,21 +90,31 @@ export function AgentTree(props: AgentTreeProps) {
   // Aggregate usage across all children
   const totalUsage = createMemo(() => {
     const c = children()
-    if (c.length === 0) return undefined
+    if (c.length === 0)
+      return Option.none<{
+        input: number
+        output: number
+        // eslint-disable-next-line effect/noNullish -- usage formatting accepts an absent cost.
+        cost: number | undefined
+      }>()
     let input = 0
     let output = 0
     let cost = 0
     let hasUsage = false
     for (const child of c) {
-      if (child.usage !== undefined) {
+      const usage = Option.fromNullishOr(child.usage)
+      if (Option.isSome(usage)) {
         hasUsage = true
-        input += child.usage.input
-        output += child.usage.output
-        cost += child.usage.cost ?? 0
+        input += usage.value.input
+        output += usage.value.output
+        const childCost = Option.getOrElse(Option.fromNullishOr(usage.value.cost), () => 0)
+        cost += childCost
       }
     }
-    if (!hasUsage) return undefined
-    return { input, output, cost: cost > 0 ? cost : undefined }
+    if (!hasUsage) return Option.none()
+    let costValue = Option.none<number>()
+    if (cost > 0) costValue = Option.some(cost)
+    return Option.some({ input, output, cost: Option.getOrUndefined(costValue) })
   })
 
   // Live stream text — bounded tail from all children
@@ -111,37 +128,41 @@ export function AgentTree(props: AgentTreeProps) {
   })
 
   // Fetch structured messages (reasoning + text) on completion
-  const childBranchId = () => {
-    const id = completedChild()?.childBranchId
-    return id !== undefined ? BranchId.make(id) : undefined
-  }
+  const childBranchId = () =>
+    Option.flatMap(completedChild(), (child) =>
+      Option.map(Option.fromNullishOr(child.childBranchId), (id) => BranchId.make(id)),
+    )
   const fetchKey = () => {
-    if (props.toolCall.status === "running") return undefined
-    return childBranchId()
+    if (props.toolCall.status === "running") return Option.getOrUndefined(Option.none<BranchId>())
+    return Option.getOrUndefined(childBranchId())
   }
 
   const [childMessages] = createResource(fetchKey, (branchId) =>
     clientCtx.runtime
       .run(clientCtx.client.message.list({ branchId }))
       .then((messages) => extractChildContent(messages))
-      .catch(() => undefined),
+      .catch(() => Option.getOrUndefined(Option.none<ChildContent>())),
   )
 
   // Fallback text from toolCall.output or child preview
   const fallbackText = () => {
-    const cm = childMessages()
-    if (cm !== undefined && (cm.reasoning.length > 0 || cm.text.length > 0)) return undefined
+    const cm = Option.fromNullishOr(childMessages())
+    if (Option.isSome(cm) && (cm.value.reasoning.length > 0 || cm.value.text.length > 0)) {
+      return Option.none<string>()
+    }
     // Try preview from completed child
-    const preview = completedChild()?.preview
-    if (preview !== undefined) return preview
+    const preview = Option.flatMap(completedChild(), (child) => Option.fromNullishOr(child.preview))
+    if (Option.isSome(preview)) return preview
     // Try toolCall.output or summary
-    return props.toolCall.output ?? props.toolCall.summary ?? undefined
+    return Option.orElse(Option.fromNullishOr(props.toolCall.output), () =>
+      Option.fromNullishOr(props.toolCall.summary),
+    )
   }
 
   const usageLine = () => {
     const u = totalUsage()
-    if (u === undefined) return undefined
-    return formatUsageStats(u)
+    if (Option.isNone(u)) return Option.none<string>()
+    return Option.some(formatUsageStats(u.value))
   }
 
   return (
@@ -155,7 +176,7 @@ export function AgentTree(props: AgentTreeProps) {
           <Show when={hasChildren()}>
             <ToolCallTree toolCalls={allToolCalls()} collapsed />
           </Show>
-          <Show when={usageLine()}>
+          <Show when={Option.getOrUndefined(usageLine())}>
             {(line) => <text style={{ fg: theme.textMuted }}>{line()}</text>}
           </Show>
           {props.collapsedSummary}
@@ -184,7 +205,7 @@ export function AgentTree(props: AgentTreeProps) {
       <Show when={props.toolCall.status !== "running" && hasChildren()}>
         <box flexDirection="column">
           <ToolCallTree toolCalls={allToolCalls()} />
-          <Show when={usageLine()}>
+          <Show when={Option.getOrUndefined(usageLine())}>
             {(line) => <text style={{ fg: theme.textMuted }}>{line()}</text>}
           </Show>
         </box>
@@ -211,7 +232,7 @@ export function AgentTree(props: AgentTreeProps) {
       </Show>
 
       {/* Fallback: preview/output when message fetch unavailable */}
-      <Show when={props.toolCall.status !== "running" && fallbackText()}>
+      <Show when={props.toolCall.status !== "running" && Option.getOrUndefined(fallbackText())}>
         {(text) => (
           <text style={{ fg: theme.textMuted }} marginTop={1}>
             {text()}

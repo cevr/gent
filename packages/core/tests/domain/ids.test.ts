@@ -26,54 +26,54 @@ import {
 
 describe("branded ids — roundtrip", () => {
   test("SessionId decodes from a plain string and brand survives", () => {
-    const id = Schema.decodeUnknownSync(SessionId)("sess-abc")
+    const id = Schema.decodeSync(SessionId)("sess-abc")
     expect(String(id)).toBe("sess-abc")
   })
 
   test("ToolCallId decodes from a plain string and brand survives", () => {
-    const id = Schema.decodeUnknownSync(ToolCallId)("tc-1")
+    const id = Schema.decodeSync(ToolCallId)("tc-1")
     expect(String(id)).toBe("tc-1")
   })
 
   test("ToolId, CommandId, RpcId all roundtrip", () => {
-    expect(String(Schema.decodeUnknownSync(ToolId)("read_file"))).toBe("read_file")
-    expect(String(Schema.decodeUnknownSync(CommandId)("executor-start"))).toBe("executor-start")
-    expect(String(Schema.decodeUnknownSync(RpcId)("todo.list"))).toBe("todo.list")
+    expect(String(Schema.decodeSync(ToolId)("read_file"))).toBe("read_file")
+    expect(String(Schema.decodeSync(CommandId)("executor-start"))).toBe("executor-start")
+    expect(String(Schema.decodeSync(RpcId)("todo.list"))).toBe("todo.list")
   })
 
   test("BranchId, MessageId, ActorCommandId, ArtifactId all roundtrip", () => {
-    expect(String(Schema.decodeUnknownSync(BranchId)("b-1"))).toBe("b-1")
-    expect(String(Schema.decodeUnknownSync(MessageId)("m-1"))).toBe("m-1")
-    expect(String(Schema.decodeUnknownSync(ActorCommandId)("a-1"))).toBe("a-1")
-    expect(String(Schema.decodeUnknownSync(ArtifactId)("art-1"))).toBe("art-1")
+    expect(String(Schema.decodeSync(BranchId)("b-1"))).toBe("b-1")
+    expect(String(Schema.decodeSync(MessageId)("m-1"))).toBe("m-1")
+    expect(String(Schema.decodeSync(ActorCommandId)("a-1"))).toBe("a-1")
+    expect(String(Schema.decodeSync(ArtifactId)("art-1"))).toBe("art-1")
   })
 
   test("ActorId, InteractionRequestId, ExtensionId all roundtrip", () => {
-    expect(String(Schema.decodeUnknownSync(ActorId)("actor-1"))).toBe("actor-1")
-    expect(String(Schema.decodeUnknownSync(InteractionRequestId)("int-1"))).toBe("int-1")
-    expect(String(Schema.decodeUnknownSync(ExtensionId)("@gent/x"))).toBe("@gent/x")
+    expect(String(Schema.decodeSync(ActorId)("actor-1"))).toBe("actor-1")
+    expect(String(Schema.decodeSync(InteractionRequestId)("int-1"))).toBe("int-1")
+    expect(String(Schema.decodeSync(ExtensionId)("@gent/x"))).toBe("@gent/x")
   })
 })
 
 describe("branded ids — cross-brand assignability is a type error", () => {
   test("SessionId is not assignable to ToolCallId", () => {
-    const session = Schema.decodeUnknownSync(SessionId)("sess-abc")
+    const session = Schema.decodeSync(SessionId)("sess-abc")
     // @ts-expect-error — branded ids should not be cross-assignable
     const tool: ToolCallId = session
     expect(String(tool)).toBe("sess-abc")
   })
 
   test("ToolCallId is not assignable to SessionId", () => {
-    const tool = Schema.decodeUnknownSync(ToolCallId)("tc-1")
+    const tool = Schema.decodeSync(ToolCallId)("tc-1")
     // @ts-expect-error — branded ids should not be cross-assignable
     const session: SessionId = tool
     expect(String(session)).toBe("tc-1")
   })
 
   test("ExtensionId, ActorId, InteractionRequestId are mutually non-assignable", () => {
-    const ext = Schema.decodeUnknownSync(ExtensionId)("@gent/x")
-    const actor = Schema.decodeUnknownSync(ActorId)("a-1")
-    const interaction = Schema.decodeUnknownSync(InteractionRequestId)("int-1")
+    const ext = Schema.decodeSync(ExtensionId)("@gent/x")
+    const actor = Schema.decodeSync(ActorId)("a-1")
+    const interaction = Schema.decodeSync(InteractionRequestId)("int-1")
     // @ts-expect-error
     const a: ActorId = ext
     // @ts-expect-error
@@ -84,9 +84,9 @@ describe("branded ids — cross-brand assignability is a type error", () => {
   })
 
   test("ToolId, CommandId, RpcId are mutually non-assignable", () => {
-    const tool = Schema.decodeUnknownSync(ToolId)("read_file")
-    const command = Schema.decodeUnknownSync(CommandId)("executor-start")
-    const rpc = Schema.decodeUnknownSync(RpcId)("todo.list")
+    const tool = Schema.decodeSync(ToolId)("read_file")
+    const command = Schema.decodeSync(CommandId)("executor-start")
+    const rpc = Schema.decodeSync(RpcId)("todo.list")
     // @ts-expect-error
     const a: CommandId = tool
     // @ts-expect-error

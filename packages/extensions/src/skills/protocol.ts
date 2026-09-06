@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { defineRequests, ExtensionId, request } from "@gent/core/extensions/api"
 import { SkillLevel, Skills } from "./skills.js"
 
@@ -21,7 +21,7 @@ export const SkillsRpc = defineRequests(SKILLS_EXTENSION_ID, {
     output: Schema.Array(SkillEntry),
     execute: Effect.fn("SkillsRpc.ListSkills")(function* () {
       const skills = yield* Skills
-      return yield* skills.list()
+      return yield* skills.list
     }),
   }),
   GetSkillContent: request({
@@ -31,7 +31,7 @@ export const SkillsRpc = defineRequests(SKILLS_EXTENSION_ID, {
     output: Schema.NullOr(SkillEntry),
     execute: Effect.fn("SkillsRpc.GetSkillContent")(function* ({ name }) {
       const skills = yield* Skills
-      return (yield* skills.get(name)) ?? null
+      return Option.getOrNull(yield* skills.get(name, Option.none()))
     }),
   }),
 })

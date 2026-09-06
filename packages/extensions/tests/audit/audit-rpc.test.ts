@@ -15,6 +15,12 @@ import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { AgentRunResult, SessionId } from "@gent/core/extensions/api"
 import type { AgentName } from "@gent/core/extensions/api"
 import { e2ePreset } from "../helpers/test-preset"
+import { isToolResultFor } from "../helpers/tool-event.js"
+
+interface AuditPhase {
+  readonly phase: string
+  readonly text: string
+}
 
 describe("AuditExtension via model turn", () => {
   it.live(
@@ -26,7 +32,7 @@ describe("AuditExtension via model turn", () => {
             toolCallStep("audit", { paths: ["src/foo.ts"], mode: "report" }),
             textStep("audited"),
           ])
-          const phaseFor = (prompt: string): { phase: string; text: string } => {
+          const phaseFor = (prompt: string): AuditPhase => {
             if (prompt.includes("Identify audit concerns")) {
               return { phase: "detect", text: "1. error-handling: Check error handling" }
             }
@@ -49,7 +55,7 @@ describe("AuditExtension via model turn", () => {
                   text,
                   sessionId: SessionId.make(`audit-${phase}`),
                   agentName: params.agent.name,
-                  persistence: "ephemeral" as const,
+                  persistence: "ephemeral",
                 }),
               )
             },
@@ -60,17 +66,14 @@ describe("AuditExtension via model turn", () => {
             subagentRunner,
           })
 
-          const toolEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
-            Stream.filter(
-              (envelope) =>
-                (envelope.event._tag === "ToolCallSucceeded" ||
-                  envelope.event._tag === "ToolCallFailed") &&
-                (envelope.event as { readonly toolName?: string }).toolName === "audit",
-            ),
-            Stream.take(1),
-            Stream.runCollect,
-            Effect.forkScoped,
-          )
+          const toolEventFiber = yield* client.session
+            .events({ sessionId, branchId })
+            .pipe(
+              Stream.filter(isToolResultFor("audit")),
+              Stream.take(1),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
 
           yield* client.message.send({
             sessionId,

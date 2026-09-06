@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test"
+import { Option } from "effect"
 import {
   formatThinkTime,
   truncatePath,
@@ -6,6 +7,9 @@ import {
   formatToolInput,
   TOOL_SPINNERS,
 } from "../src/components/message-list-utils.js"
+
+const absent = Option.getOrUndefined(Option.none())
+const nullValue = Option.getOrNull(Option.none())
 
 describe("formatThinkTime", () => {
   test("formats seconds under 60", () => {
@@ -111,8 +115,8 @@ describe("getSpinnerFrames", () => {
 
 describe("formatToolInput", () => {
   test("returns empty for null/undefined input", () => {
-    expect(formatToolInput("bash", null)).toBe("")
-    expect(formatToolInput("bash", undefined)).toBe("")
+    expect(formatToolInput("bash", nullValue)).toBe("")
+    expect(formatToolInput("bash", absent)).toBe("")
   })
 
   test("returns empty for non-object input", () => {
@@ -183,7 +187,7 @@ describe("formatToolInput", () => {
 
   test("handles wrong property types", () => {
     expect(formatToolInput("bash", { command: 123 })).toBe("")
-    expect(formatToolInput("read", { path: null })).toBe("")
+    expect(formatToolInput("read", { path: nullValue })).toBe("")
     expect(formatToolInput("glob", { pattern: {}, path: "/foo" })).toBe("")
   })
 

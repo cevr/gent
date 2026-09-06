@@ -1,5 +1,6 @@
-import { createContext, onCleanup, onMount, useContext, type ParentProps } from "solid-js"
+import { createContext, onCleanup, onMount, type ParentProps } from "solid-js"
 import { useKeyboard } from "@opentui/solid"
+import { useRequiredContext } from "../utils/solid-context"
 
 type KeyInput = Parameters<Parameters<typeof useKeyboard>[0]>[0]
 type ScopedKeyHandler = (event: KeyInput) => boolean | void
@@ -59,10 +60,10 @@ export function KeyboardScopeProvider(props: ParentProps) {
 }
 
 export function useScopedKeyboard(handler: ScopedKeyHandler, options?: ScopedKeyboardOptions) {
-  const context = useContext(KeyboardScopeContext)
-  if (context === undefined) {
-    throw new Error("useScopedKeyboard must be used within KeyboardScopeProvider")
-  }
+  const context = useRequiredContext(
+    KeyboardScopeContext,
+    "useScopedKeyboard must be used within KeyboardScopeProvider",
+  )
 
   onMount(() => {
     const unregister = context.register({

@@ -33,7 +33,12 @@ describe("Concurrent writes", () => {
     Effect.acquireUseRelease(
       Effect.gen(function* () {
         const n = yield* Ref.updateAndGet(active, (m) => m + 1)
-        yield* Ref.update(peak, (p) => (n > p ? n : p))
+        yield* Ref.update(peak, (p) => {
+          if (n > p) {
+            return n
+          }
+          return p
+        })
         // Yield to the scheduler so peer fibers in `Effect.forEach`
         // get a chance to enter before this one completes its body.
         // Without this, bun:sqlite's synchronous calls cause each
@@ -59,9 +64,9 @@ describe("Concurrent writes", () => {
             peak,
             sessions.createSession(new Session({ id, createdAt: FIXED_NOW, updatedAt: FIXED_NOW })),
           ),
-        { concurrency: "unbounded" },
+        { concurrency: N },
       )
-      const sessionsResult = yield* sessions.listSessions()
+      const sessionsResult = yield* sessions.listSessions
       const seen = new Set(sessionsResult.map((s) => s.id))
       for (const id of ids) {
         expect(seen.has(id)).toBe(true)
@@ -92,7 +97,7 @@ describe("Concurrent writes", () => {
             peak,
             events.appendEvent(SessionStarted.make({ sessionId, branchId })),
           ),
-        { concurrency: "unbounded" },
+        { concurrency: N },
       )
       expect(envelopes.length).toBe(N)
       const idSet = new Set(envelopes.map((e) => e.id))
@@ -134,7 +139,7 @@ describe("Concurrent writes", () => {
               }),
             ),
           ),
-        { concurrency: "unbounded" },
+        { concurrency: N },
       )
       const persisted = yield* messages.listMessages(branchId)
       expect(persisted.length).toBe(N)

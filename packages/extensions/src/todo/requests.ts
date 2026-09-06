@@ -7,7 +7,7 @@
  *
  * @module
  */
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import {
   AgentName,
   CapabilityError,
@@ -21,7 +21,7 @@ import { TodoStorageReadOnly } from "../todo-storage.js"
 
 // ── Read Requests ──
 
-const todoCapabilityError = (capabilityId: string, operation: string, error: unknown) =>
+const todoCapabilityError = (capabilityId: string, operation: string, error: Error) =>
   new CapabilityError({
     extensionId: TODO_EXTENSION_ID,
     capabilityId,
@@ -45,7 +45,7 @@ export const TodoGetRequest = request({
             Effect.fail(todoCapabilityError("todo.get", "TodoStorage.getTodo", e)),
           ),
         )
-      return todo ?? null
+      return Option.getOrNull(todo)
     }),
 })
 
@@ -158,7 +158,7 @@ export const TodoUpdateRequest = request({
             Effect.fail(todoCapabilityError("todo.update", "TodoService.update", e)),
           ),
         )
-      return result ?? null
+      return Option.getOrNull(result)
     }),
 })
 
@@ -179,7 +179,7 @@ export const TodoDeleteRequest = request({
             Effect.fail(todoCapabilityError("todo.delete", "TodoService.remove", e)),
           ),
         )
-      return null
+      return Option.getOrNull(Option.none())
     }),
 })
 
@@ -200,7 +200,7 @@ export const TodoAddDepRequest = request({
             Effect.fail(todoCapabilityError("todo.addDep", "TodoService.addDep", e)),
           ),
         )
-      return null
+      return Option.getOrNull(Option.none())
     }),
 })
 
@@ -221,7 +221,7 @@ export const TodoRemoveDepRequest = request({
             Effect.fail(todoCapabilityError("todo.removeDep", "TodoService.removeDep", e)),
           ),
         )
-      return null
+      return Option.getOrNull(Option.none())
     }),
 })
 

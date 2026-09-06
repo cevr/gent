@@ -1,4 +1,4 @@
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, Option, Predicate, Stream } from "effect"
 import {
   EventStore,
   EventStoreError,
@@ -26,12 +26,13 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
 
       const service: EventStoreService = {
         append: Effect.fn("EventStore.append")(function* (event) {
-          const currentSpan = yield* Effect.currentParentSpan.pipe(
-            Effect.orElseSucceed(() => undefined),
-          )
-          const traceId = currentSpan !== undefined ? currentSpan.traceId : undefined
+          const currentSpan = yield* Effect.currentParentSpan.pipe(Effect.option)
+          const appendOptions = Option.match(currentSpan, {
+            onNone: () => ({}),
+            onSome: (span) => ({ traceId: span.traceId }),
+          })
           const envelope = yield* eventStorage
-            .appendEvent(event, traceId !== undefined ? { traceId } : undefined)
+            .appendEvent(event, appendOptions)
             .pipe(Effect.mapError(toEventStoreError("Failed to append event")))
           return envelope
         }),
@@ -52,7 +53,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
                 const session = yield* sessionStorage
                   .getSession(sessionId)
                   .pipe(Effect.mapError(toEventStoreError("Failed to validate session")))
-                if (session === undefined) {
+                if (Predicate.isUndefined(session)) {
                   return yield* new EventStoreError({
                     message: `Session not found: ${sessionId}`,
                   })

@@ -5,6 +5,7 @@ describe("SDK public surface", () => {
   test("exports only stable runtime values", () => {
     expect(Object.keys(RuntimePublicSdk).sort()).toEqual([
       "Branch",
+      "CanonicalCwd",
       "ConnectionState",
       "DriverInfo",
       "DriverListResult",
@@ -12,6 +13,14 @@ describe("SDK public surface", () => {
       "GentConnectionError",
       "QueueEntryInfo",
       "QueueSnapshot",
+      "RequestId",
+      "ResourceDescriptor",
+      "ResourceGraphExtensionSource",
+      "ResourceGraphRevision",
+      "ResourceGraphSnapshot",
+      "ResourceGraphSource",
+      "ResourceId",
+      "ResourceRevision",
       "Session",
       "SessionSnapshot",
       "SlashCommandInfo",

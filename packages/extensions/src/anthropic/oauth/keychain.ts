@@ -1,4 +1,4 @@
-import { Duration, Effect, Schema } from "effect"
+import { Duration, Effect, Option, Schema } from "effect"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { decodeCredentials, type ClaudeCredentials } from "./credentials.js"
 import { AnthropicPlatform } from "../platform-adapter.js"
@@ -11,7 +11,7 @@ import { AnthropicPlatform } from "../platform-adapter.js"
  */
 export const PRIMARY_CLAUDE_SERVICE = "Claude Code-credentials"
 
-export class ClaudeKeychainNotFoundError extends Schema.TaggedErrorClass<ClaudeKeychainNotFoundError>()(
+export class ClaudeKeychainNotFoundError extends Schema.TaggedError<ClaudeKeychainNotFoundError>()(
   "ClaudeKeychainNotFoundError",
   {},
 ) {}
@@ -103,7 +103,7 @@ export const shouldFallBackToCli = (source: string): boolean => source === PRIMA
  */
 export const getKeychainAccountName = (
   serviceName: string,
-): Effect.Effect<string | undefined, never, AnthropicPlatform> =>
+): Effect.Effect<Option.Option<string>, never, AnthropicPlatform> =>
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     return yield* platform
@@ -113,9 +113,9 @@ export const getKeychainAccountName = (
       .pipe(
         Effect.map((result) => {
           const match = /"acct"<blob>="([^"]*)"/.exec(result.stdout)
-          return match?.[1]
+          return Option.fromNullishOr(match?.[1])
         }),
-        Effect.catchEager(() => Effect.sync((): string | undefined => undefined)),
+        Effect.catchEager(() => Effect.succeedNone),
       )
   })
 

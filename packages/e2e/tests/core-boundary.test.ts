@@ -11,10 +11,10 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
     yield* stream.pipe(
       Stream.runForEach((value) =>
         Ref.update(values, (current) => [...current, value]).pipe(
-          Effect.andThen(Deferred.succeed(ready, undefined).pipe(Effect.ignore)),
+          Effect.andThen(Deferred.succeed(ready, void 0).pipe(Effect.ignore)),
         ),
       ),
-      Effect.ensuring(Deferred.succeed(closed, undefined).pipe(Effect.ignore)),
+      Effect.ensuring(Deferred.succeed(closed, void 0).pipe(Effect.ignore)),
       Effect.forkScoped,
     )
 

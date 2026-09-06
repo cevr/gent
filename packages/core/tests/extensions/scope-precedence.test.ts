@@ -12,7 +12,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { narrowR } from "../helpers/effect"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
@@ -22,9 +21,13 @@ import { compileExtensionHooks } from "../../src/runtime/extensions/extension-ho
 import { provideExtensionHookContext } from "../../src/runtime/extensions/extension-hook-context"
 import { PermissionRule } from "@gent/core-internal/domain/permission"
 import { hook, tool, type ToolCapability } from "@gent/core/extensions/api"
-import { runToolWithCtx, testExtensionHostContext } from "@gent/core-internal/test-utils"
-import type { AgentDefinition } from "@gent/core-internal/domain/agent"
-import { AgentName } from "@gent/core-internal/domain/agent"
+import {
+  runToolWithCtx,
+  testExtensionHostContext,
+  testToolContext,
+} from "@gent/core-internal/test-utils"
+import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
+import { isToolCapability } from "@gent/core-internal/domain/capability/tool"
 
 const stubCtx = testExtensionHostContext()
 
@@ -42,7 +45,7 @@ const stubProjectionCtx = {
   },
 }
 
-const toolReturning = (name: string, label: string): ToolCapability<{}, string> =>
+const toolReturning = (name: string, label: string): ToolCapability<{}, string, never> =>
   tool({
     id: name,
     description: label,
@@ -77,25 +80,22 @@ describe("scope precedence", () => {
         ext("c", "project", { tools: [projectTool] }),
       ])
 
-      const resolvedTool = resolved.modelCapabilities.get("greet")! as ToolCapability<
-        {},
-        string,
-        never
-      >
-      return narrowR(
-        runToolWithCtx(resolvedTool, {}, {} as never).pipe(
-          Effect.orDie,
-          Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-project"))),
-        ),
+      const resolvedTool = resolved.modelCapabilities.get("greet")
+      expect(resolvedTool).toBeDefined()
+      if (!isToolCapability(resolvedTool)) return Effect.void
+      expect(resolvedTool).toBe(projectTool)
+      return runToolWithCtx(projectTool, {}, testToolContext()).pipe(
+        Effect.orDie,
+        Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-project"))),
       )
     })
 
     test("agent with same name: project shadows builtin", () => {
       const builtinAgent = getBuiltinAgent("cowork")!
-      const projectAgent = {
+      const projectAgent = AgentDefinition.make({
         ...getBuiltinAgent("cowork")!,
         description: "shadowed",
-      } as AgentDefinition
+      })
 
       const resolved = resolveExtensions([
         ext("a", "builtin", { agents: [builtinAgent] }),
@@ -198,16 +198,13 @@ describe("scope precedence", () => {
       ])
 
       // Sorted [a-ext, z-ext] — z-ext registered last, so wins
-      const resolvedTool = resolved.modelCapabilities.get("greet")! as ToolCapability<
-        {},
-        string,
-        never
-      >
-      return narrowR(
-        runToolWithCtx(resolvedTool, {}, {} as never).pipe(
-          Effect.orDie,
-          Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-z"))),
-        ),
+      const resolvedTool = resolved.modelCapabilities.get("greet")
+      expect(resolvedTool).toBeDefined()
+      if (!isToolCapability(resolvedTool)) return Effect.void
+      expect(resolvedTool).toBe(toolFromZ)
+      return runToolWithCtx(toolFromZ, {}, testToolContext()).pipe(
+        Effect.orDie,
+        Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-z"))),
       )
     })
   })

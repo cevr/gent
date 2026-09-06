@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import {
   AgentDefinition,
   AgentName,
@@ -46,44 +46,54 @@ export const ResearchResult = Schema.Struct({
   error: Schema.optional(Schema.String),
   response: Schema.optional(Schema.String),
   repos: Schema.optional(Schema.Array(Schema.String)),
-  repoCount: Schema.optional(Schema.Number),
+  repoCount: Schema.optional(Schema.Finite),
 })
 
-const buildResearchPrompt = (question: string, repoPath: string, spec: string, focus?: string) =>
-  [
-    `Research the repository at ${repoPath} (${spec}).`,
-    "",
-    "## Question",
-    question,
-    ...(focus !== undefined && focus.trim() !== ""
-      ? ["", "## Focus", `Narrow your search to: ${focus}`]
-      : []),
+const buildResearchPrompt = (
+  question: string,
+  repoPath: string,
+  spec: string,
+  focus: Option.Option<string>,
+) => {
+  const parts = [`Research the repository at ${repoPath} (${spec}).`, "", "## Question", question]
+  if (Option.isSome(focus) && focus.value.trim() !== "") {
+    parts.push("", "## Focus", `Narrow your search to: ${focus.value}`)
+  }
+  parts.push(
     "",
     "## Instructions",
     "Read the code to answer the question. Cite specific file paths and line numbers.",
     "Report patterns, design decisions, and implementation details relevant to the question.",
-  ].join("\n")
+  )
+  return parts.join("\n")
+}
 
 const buildSynthesisPrompt = (
   question: string,
   findings: ReadonlyArray<{ spec: string; text: string }>,
-  focus?: string,
-) =>
-  [
-    findings.length === 1
-      ? "Summarize these research findings into a clear, actionable answer."
-      : "Synthesize these research findings into a comparative analysis.",
-    "",
-    "## Question",
-    question,
-    ...(focus !== undefined && focus.trim() !== "" ? ["", "## Focus", focus] : []),
-    "",
-    ...findings.flatMap((f) => [`## ${f.spec}`, f.text, ""]),
-    "## Instructions",
-    findings.length === 1
-      ? "Produce a clear answer grounded in the specific files and patterns found."
-      : "Compare approaches across repos. Note patterns, tradeoffs, and design decisions. Recommend based on evidence.",
-  ].join("\n")
+  focus: Option.Option<string>,
+) => {
+  const parts: string[] = []
+  if (findings.length === 1) {
+    parts.push("Summarize these research findings into a clear, actionable answer.")
+  } else {
+    parts.push("Synthesize these research findings into a comparative analysis.")
+  }
+  parts.push("", "## Question", question)
+  if (Option.isSome(focus) && focus.value.trim() !== "") {
+    parts.push("", "## Focus", focus.value)
+  }
+  parts.push("", ...findings.flatMap((finding) => [`## ${finding.spec}`, finding.text, ""]))
+  parts.push("## Instructions")
+  if (findings.length === 1) {
+    parts.push("Produce a clear answer grounded in the specific files and patterns found.")
+  } else {
+    parts.push(
+      "Compare approaches across repos. Note patterns, tradeoffs, and design decisions. Recommend based on evidence.",
+    )
+  }
+  return parts.join("\n")
+}
 
 export const ResearchTool = tool({
   id: "research",
@@ -101,6 +111,7 @@ export const ResearchTool = tool({
   output: ResearchResult,
   execute: Effect.fn("ResearchTool.execute")(function* (params: typeof ResearchParams.Type) {
     const ctx = yield* ExtensionContext
+    const focus = Option.fromNullishOr(params.focus)
     if (params.repos.length === 0) {
       return { error: "At least one repository spec required" }
     }
@@ -126,7 +137,7 @@ export const ResearchTool = tool({
       ({ spec, path }) =>
         agent.run({
           agent: researchAgent,
-          prompt: buildResearchPrompt(params.question, path, spec, params.focus),
+          prompt: buildResearchPrompt(params.question, path, spec, focus),
           runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
         }),
       { concurrency: MAX_CONCURRENCY },
@@ -134,7 +145,10 @@ export const ResearchTool = tool({
 
     const findings: Array<{ spec: string; text: string }> = []
     for (const [i, result] of results.entries()) {
-      const spec = repoPaths[i]?.spec ?? "unknown"
+      const spec = Option.fromNullishOr(repoPaths[i]).pipe(
+        Option.map((repo) => repo.spec),
+        Option.getOrElse(() => "unknown"),
+      )
       if (result._tag === "success" && result.text.trim() !== "") {
         findings.push({ spec, text: result.text })
       }
@@ -147,17 +161,20 @@ export const ResearchTool = tool({
     // Single finding — return directly (no synthesis needed)
     if (findings.length === 1) {
       return {
-        response: findings[0]?.text ?? "",
+        response: Option.fromNullishOr(findings[0]).pipe(
+          Option.map((finding) => finding.text),
+          Option.getOrElse(() => ""),
+        ),
         repos: params.repos,
       }
     }
 
     // Multiple findings — synthesize with cross-vendor model
-    const agents = yield* agent.listAgents()
+    const agents = yield* agent.listAgents
     const [, modelB] = yield* resolveDualModelPair(agents)
     const synthesisResult = yield* agent.run({
       agent: researchAgent,
-      prompt: buildSynthesisPrompt(params.question, findings, params.focus),
+      prompt: buildSynthesisPrompt(params.question, findings, focus),
       runSpec: makeRunSpec({
         persistence: "ephemeral",
         parentToolCallId: ctx.toolCallId,

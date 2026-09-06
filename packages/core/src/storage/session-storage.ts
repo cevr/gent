@@ -5,14 +5,14 @@
  * all focused storage Tags from one SQLite client.
  */
 
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Predicate, Schema } from "effect"
 import { Model } from "effect/unstable/schema"
 import type { Session } from "../domain/message.js"
 import { BranchId, SessionId } from "../domain/ids.js"
 import { ReasoningEffort } from "../domain/agent.js"
 import { StorageError } from "../domain/storage-error.js"
 import { SqlClient, SqlModel } from "effect/unstable/sql"
-import { sessionFromRow, type SessionRow } from "./sqlite/rows.js"
+import { sessionFromRow, toSqlNull, type SessionRow } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 class SessionTable extends Model.Class<SessionTable>("SessionTable")({
@@ -24,15 +24,17 @@ class SessionTable extends Model.Class<SessionTable>("SessionTable")({
   active_branch_id: Schema.NullOr(BranchId),
   parent_session_id: Schema.NullOr(SessionId),
   parent_branch_id: Schema.NullOr(BranchId),
-  created_at: Schema.Number,
-  updated_at: Schema.Number,
+  created_at: Schema.Finite,
+  updated_at: Schema.Finite,
 }) {}
 
 export interface SessionStorageService {
   readonly createSession: (session: Session) => Effect.Effect<Session, StorageError>
+  // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
   readonly getSession: (id: SessionId) => Effect.Effect<Session | undefined, StorageError>
+  // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
   readonly getLastSessionByCwd: (cwd: string) => Effect.Effect<Session | undefined, StorageError>
-  readonly listSessions: () => Effect.Effect<ReadonlyArray<Session>, StorageError>
+  readonly listSessions: Effect.Effect<ReadonlyArray<Session>, StorageError>
   readonly updateSession: (session: Session) => Effect.Effect<Session, StorageError>
   /**
    * Deletes the session and every descendant, returning the full set of
@@ -61,12 +63,18 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
         createSession: Effect.fn("SessionStorage.createSession")(
           function* (session) {
             const workspaceId = yield* CurrentWorkspaceId
-            if (session.parentBranchId !== undefined && session.parentSessionId === undefined) {
+            if (
+              !Predicate.isUndefined(session.parentBranchId) &&
+              Predicate.isUndefined(session.parentSessionId)
+            ) {
               return yield* new StorageError({
                 message: "Cannot create session with parentBranchId without parentSessionId",
               })
             }
-            if (session.parentBranchId !== undefined && session.parentSessionId !== undefined) {
+            if (
+              !Predicate.isUndefined(session.parentBranchId) &&
+              !Predicate.isUndefined(session.parentSessionId)
+            ) {
               const parentRows = yield* sql<{
                 id: BranchId
               }>`SELECT b.id
@@ -84,12 +92,12 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
             yield* sessionRepository.insertVoid({
               id: session.id,
               workspace_id: workspaceId,
-              name: session.name ?? null,
-              cwd: session.cwd ?? null,
-              reasoning_level: session.reasoningLevel ?? null,
-              active_branch_id: session.activeBranchId ?? null,
-              parent_session_id: session.parentSessionId ?? null,
-              parent_branch_id: session.parentBranchId ?? null,
+              name: toSqlNull(session.name),
+              cwd: toSqlNull(session.cwd),
+              reasoning_level: toSqlNull(session.reasoningLevel),
+              active_branch_id: toSqlNull(session.activeBranchId),
+              parent_session_id: toSqlNull(session.parentSessionId),
+              parent_branch_id: toSqlNull(session.parentBranchId),
               created_at: session.createdAt.getTime(),
               updated_at: session.updatedAt.getTime(),
             })
@@ -104,7 +112,8 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
             const rows =
               yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${id} AND workspace_id = ${workspaceId}`
             const row = rows[0]
-            if (row === undefined) return undefined
+            // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
+            if (Predicate.isUndefined(row)) return undefined
             return yield* sessionFromRow(row)
           },
           Effect.mapError(mapError("Failed to get session")),
@@ -116,26 +125,26 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
             const rows =
               yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE cwd = ${cwd} AND workspace_id = ${workspaceId} ORDER BY updated_at DESC LIMIT 1`
             const row = rows[0]
-            if (row === undefined) return undefined
+            // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
+            if (Predicate.isUndefined(row)) return undefined
             return yield* sessionFromRow(row)
           },
           Effect.mapError(mapError("Failed to get last session by cwd")),
         ),
 
-        listSessions: Effect.fn("SessionStorage.listSessions")(
-          function* () {
+        listSessions: Effect.suspend(
+          Effect.fn("SessionStorage.listSessions")(function* () {
             const workspaceId = yield* CurrentWorkspaceId
             const rows =
               yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE workspace_id = ${workspaceId} ORDER BY updated_at DESC`
             return yield* Effect.forEach(rows, sessionFromRow)
-          },
-          Effect.mapError(mapError("Failed to list sessions")),
-        ),
+          }),
+        ).pipe(Effect.mapError(mapError("Failed to list sessions"))),
 
         updateSession: Effect.fn("SessionStorage.updateSession")(
           function* (session) {
             const workspaceId = yield* CurrentWorkspaceId
-            yield* sql`UPDATE sessions SET name = ${session.name ?? null}, reasoning_level = ${session.reasoningLevel ?? null}, active_branch_id = ${session.activeBranchId ?? null}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id} AND workspace_id = ${workspaceId}`
+            yield* sql`UPDATE sessions SET name = ${toSqlNull(session.name)}, reasoning_level = ${toSqlNull(session.reasoningLevel)}, active_branch_id = ${toSqlNull(session.activeBranchId)}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id} AND workspace_id = ${workspaceId}`
             return session
           },
           Effect.mapError(mapError("Failed to update session")),

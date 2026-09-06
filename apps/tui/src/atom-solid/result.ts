@@ -1,5 +1,6 @@
 import type * as Cause from "effect/Cause"
 import * as Exit from "effect/Exit"
+import * as Match from "effect/Match"
 import * as Option from "effect/Option"
 
 export class InitialResult {
@@ -48,23 +49,26 @@ export const isSuccess = <A, E>(result: Result<A, E>): result is SuccessResult<A
 export const isFailure = <A, E>(result: Result<A, E>): result is FailureResult<E> =>
   result._tag === "Failure"
 
-export const fromExit = <A, E>(exit: Exit.Exit<A, E>): Result<A, E> =>
-  Exit.isSuccess(exit) ? success(exit.value) : failure(exit.cause)
+export const fromExit = <A, E>(exit: Exit.Exit<A, E>): Result<A, E> => {
+  if (Exit.isSuccess(exit)) return success(exit.value)
+  return failure(exit.cause)
+}
 
 export const waiting = <A, E>(result: Result<A, E>): Result<A, E> => {
   if (result.waiting) return result
-  switch (result._tag) {
-    case "Initial":
-      return initial(true)
-    case "Success":
-      return success(result.value, true)
-    case "Failure":
-      return failure(result.cause, true)
-  }
+  return Match.value(result).pipe(
+    Match.tagsExhaustive({
+      Initial: () => initial<A, E>(true),
+      Success: (result) => success<A, E>(result.value, true),
+      Failure: (result) => failure<A, E>(result.cause, true),
+    }),
+  )
 }
 
-export const waitingFrom = <A, E>(previous: Option.Option<Result<A, E>>): Result<A, E> =>
-  Option.isSome(previous) ? waiting(previous.value) : initial(true)
+export const waitingFrom = <A, E>(previous: Option.Option<Result<A, E>>): Result<A, E> => {
+  if (Option.isSome(previous)) return waiting(previous.value)
+  return initial(true)
+}
 
 export const match = <A, E, R>(
   result: Result<A, E>,
@@ -74,6 +78,7 @@ export const match = <A, E, R>(
     onFailure: (cause: Cause.Cause<E>) => R
   },
 ): R => {
+  // eslint-disable-next-line effect/preferMatchTagsExhaustive -- Match returns Unify<R>, which cannot preserve this caller-owned generic return type.
   switch (result._tag) {
     case "Initial":
       return handlers.onInitial()
@@ -84,8 +89,14 @@ export const match = <A, E, R>(
   }
 }
 
-export const getOrUndefined = <A, E>(result: Result<A, E>): A | undefined =>
-  result._tag === "Success" ? result.value : undefined
+// eslint-disable-next-line effect/noNullish -- Solid accessors use undefined to omit absent JSX content.
+export const getOrUndefined = <A, E>(result: Result<A, E>): A | undefined => {
+  if (result._tag === "Success") return result.value
+  // eslint-disable-next-line effect/noNullish -- Preserve the Solid accessor absence contract.
+  return undefined
+}
 
-export const getOrElse = <A, E>(result: Result<A, E>, defaultValue: A): A =>
-  result._tag === "Success" ? result.value : defaultValue
+export const getOrElse = <A, E>(result: Result<A, E>, defaultValue: A): A => {
+  if (result._tag === "Success") return result.value
+  return defaultValue
+}

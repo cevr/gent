@@ -5,7 +5,7 @@
  * Single wiring point: ToolRunner and agent-loop both call this.
  */
 
-import { Context, Effect } from "effect"
+import { Predicate, Context, Effect } from "effect"
 import {
   ExtensionHostError,
   ExtensionHostSearchResult,
@@ -13,13 +13,13 @@ import {
 } from "../domain/extension-host-context.js"
 import { AgentRunnerService, type AgentRunner, type AgentName } from "../domain/agent.js"
 import { BranchId, SessionId } from "../domain/ids.js"
-import { RuntimeEnvironment, type RuntimeEnvironmentShape } from "./runtime-environment.js"
+import { RuntimeEnvironment, type RuntimeEnvironmentApi } from "./runtime-environment.js"
 import {
   ExtensionHostProcessError,
   type ExtensionHostFacts,
   type ExtensionHostPlatform,
 } from "../domain/extension.js"
-import { ApprovalService, type ApprovalServiceShape } from "./approval-service.js"
+import { ApprovalService, type ApprovalServiceApi } from "./approval-service.js"
 import { PromptPresenter, type PromptPresenterService } from "../domain/prompt-presenter.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
 import { BranchStorage, type BranchStorageService } from "../storage/branch-storage.js"
@@ -32,6 +32,7 @@ import { SearchStorage, type SearchStorageService } from "../storage/search-stor
 import { SessionStorage, type SessionStorageService } from "../storage/session-storage.js"
 import type { MessageMetadata } from "../domain/message.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
+import { hasMessage } from "../domain/guards.js"
 
 export interface ExtensionSessionControlService {
   readonly queueFollowUp: (input: {
@@ -44,9 +45,9 @@ export interface ExtensionSessionControlService {
 }
 
 export interface MakeExtensionHostContextDeps {
-  readonly platform: RuntimeEnvironmentShape
+  readonly platform: RuntimeEnvironmentApi
   readonly host: ExtensionHostPlatform
-  readonly approvalService: ApprovalServiceShape
+  readonly approvalService: ApprovalServiceApi
   readonly promptPresenter: PromptPresenterService
   readonly extensionRegistry: ExtensionRegistryService
   readonly capabilityContext?: Context.Context<never>
@@ -105,22 +106,15 @@ type AmbientHostContextDefaults = Pick<
 
 const unavailable = (service: string) => () => Effect.die(`${service} not available`)
 
-const errorMessage = (error: unknown): string => {
-  if (error instanceof Error) return error.message
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message
-  }
+const errorMessage = (error: Parameters<typeof hasMessage>[0]): string => {
+  if (Predicate.isError(error)) return error.message
+  if (hasMessage(error)) return error.message
   return String(error)
 }
 
 const toHostError =
   (operation: string) =>
-  (error: unknown): ExtensionHostError =>
+  (error: Parameters<typeof hasMessage>[0]): ExtensionHostError =>
     new ExtensionHostError({
       operation,
       message: errorMessage(error),
@@ -137,7 +131,7 @@ export const extensionHostFacts = (host: ExtensionHostPlatform): ExtensionHostFa
   isPidAlive: host.isPidAlive,
 })
 
-export const HostPlatformRef = Context.Reference<RuntimeEnvironmentShape>(
+export const HostPlatformRef = Context.Reference<RuntimeEnvironmentApi>(
   "@gent/core/src/runtime/make-extension-host-context/HostPlatformRef",
   {
     defaultValue: () => ({ cwd: "", home: "", platform: "unknown" }),
@@ -158,6 +152,7 @@ export const HostExtensionPlatformRef = Context.Reference<ExtensionHostPlatform>
       execPath: "",
       homeDirectory: "",
       parentEnv: {},
+      randomId: Effect.succeed("00000000-0000-4000-8000-000000000000"),
       pathListSeparator: ":",
       commandCandidates: (command) => [command],
       isPortFree: () => Effect.succeed(false),
@@ -174,7 +169,7 @@ export const HostExtensionPlatformRef = Context.Reference<ExtensionHostPlatform>
   },
 )
 
-export const HostApprovalServiceRef = Context.Reference<ApprovalServiceShape>(
+export const HostApprovalServiceRef = Context.Reference<ApprovalServiceApi>(
   "@gent/core/src/runtime/make-extension-host-context/HostApprovalServiceRef",
   {
     defaultValue: () => ({
@@ -214,7 +209,7 @@ export const HostSessionStorageRef = Context.Reference<SessionStorageService>(
       createSession: unavailable("SessionStorage"),
       getSession: unavailable("SessionStorage"),
       getLastSessionByCwd: unavailable("SessionStorage"),
-      listSessions: unavailable("SessionStorage"),
+      listSessions: unavailable("SessionStorage")(),
       updateSession: unavailable("SessionStorage"),
       deleteSession: unavailable("SessionStorage"),
     }),
@@ -327,37 +322,41 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
       sessionMutations: Effect.serviceOption(SessionMutations),
     })
 
-    return {
-      ...(available.platform._tag === "Some" ? { platform: available.platform.value } : {}),
-      ...(available.host._tag === "Some" ? { host: available.host.value } : {}),
-      ...(available.approvalService._tag === "Some"
-        ? { approvalService: available.approvalService.value }
-        : {}),
-      ...(available.promptPresenter._tag === "Some"
-        ? { promptPresenter: available.promptPresenter.value }
-        : {}),
-      ...(available.sessionStorage._tag === "Some"
-        ? { sessionStorage: available.sessionStorage.value }
-        : {}),
-      ...(available.branchStorage._tag === "Some"
-        ? { branchStorage: available.branchStorage.value }
-        : {}),
-      ...(available.messageStorage._tag === "Some"
-        ? { messageStorage: available.messageStorage.value }
-        : {}),
-      ...(available.relationshipStorage._tag === "Some"
-        ? { relationshipStorage: available.relationshipStorage.value }
-        : {}),
-      ...(available.searchStorage._tag === "Some"
-        ? { searchStorage: available.searchStorage.value }
-        : {}),
-      ...(available.agentRunner._tag === "Some"
-        ? { agentRunner: available.agentRunner.value }
-        : {}),
-      ...(available.sessionMutations._tag === "Some"
-        ? { sessionMutations: available.sessionMutations.value }
-        : {}),
+    const overrides: AmbientHostContextOverrides = {}
+    if (available.platform._tag === "Some") {
+      Object.assign(overrides, { platform: available.platform.value })
     }
+    if (available.host._tag === "Some") {
+      Object.assign(overrides, { host: available.host.value })
+    }
+    if (available.approvalService._tag === "Some") {
+      Object.assign(overrides, { approvalService: available.approvalService.value })
+    }
+    if (available.promptPresenter._tag === "Some") {
+      Object.assign(overrides, { promptPresenter: available.promptPresenter.value })
+    }
+    if (available.sessionStorage._tag === "Some") {
+      Object.assign(overrides, { sessionStorage: available.sessionStorage.value })
+    }
+    if (available.branchStorage._tag === "Some") {
+      Object.assign(overrides, { branchStorage: available.branchStorage.value })
+    }
+    if (available.messageStorage._tag === "Some") {
+      Object.assign(overrides, { messageStorage: available.messageStorage.value })
+    }
+    if (available.relationshipStorage._tag === "Some") {
+      Object.assign(overrides, { relationshipStorage: available.relationshipStorage.value })
+    }
+    if (available.searchStorage._tag === "Some") {
+      Object.assign(overrides, { searchStorage: available.searchStorage.value })
+    }
+    if (available.agentRunner._tag === "Some") {
+      Object.assign(overrides, { agentRunner: available.agentRunner.value })
+    }
+    if (available.sessionMutations._tag === "Some") {
+      Object.assign(overrides, { sessionMutations: available.sessionMutations.value })
+    }
+    return overrides
   },
 )
 
@@ -365,42 +364,42 @@ const provideAmbientHostContextOverrides =
   (overrides: AmbientHostContextOverrides) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> => {
     let next = effect
-    if (overrides.platform !== undefined) {
+    if (!Predicate.isUndefined(overrides.platform)) {
       next = next.pipe(Effect.provideService(HostPlatformRef, overrides.platform))
     }
-    if (overrides.host !== undefined) {
+    if (!Predicate.isUndefined(overrides.host)) {
       next = next.pipe(Effect.provideService(HostExtensionPlatformRef, overrides.host))
     }
-    if (overrides.approvalService !== undefined) {
+    if (!Predicate.isUndefined(overrides.approvalService)) {
       next = next.pipe(Effect.provideService(HostApprovalServiceRef, overrides.approvalService))
     }
-    if (overrides.promptPresenter !== undefined) {
+    if (!Predicate.isUndefined(overrides.promptPresenter)) {
       next = next.pipe(Effect.provideService(HostPromptPresenterRef, overrides.promptPresenter))
     }
-    if (overrides.sessionStorage !== undefined) {
+    if (!Predicate.isUndefined(overrides.sessionStorage)) {
       next = next.pipe(Effect.provideService(HostSessionStorageRef, overrides.sessionStorage))
     }
-    if (overrides.branchStorage !== undefined) {
+    if (!Predicate.isUndefined(overrides.branchStorage)) {
       next = next.pipe(Effect.provideService(HostBranchStorageRef, overrides.branchStorage))
     }
-    if (overrides.messageStorage !== undefined) {
+    if (!Predicate.isUndefined(overrides.messageStorage)) {
       next = next.pipe(Effect.provideService(HostMessageStorageRef, overrides.messageStorage))
     }
-    if (overrides.relationshipStorage !== undefined) {
+    if (!Predicate.isUndefined(overrides.relationshipStorage)) {
       next = next.pipe(
         Effect.provideService(HostRelationshipStorageRef, overrides.relationshipStorage),
       )
     }
-    if (overrides.searchStorage !== undefined) {
+    if (!Predicate.isUndefined(overrides.searchStorage)) {
       next = next.pipe(Effect.provideService(HostSearchStorageRef, overrides.searchStorage))
     }
-    if (overrides.agentRunner !== undefined) {
+    if (!Predicate.isUndefined(overrides.agentRunner)) {
       next = next.pipe(Effect.provideService(HostAgentRunnerRef, overrides.agentRunner))
     }
-    if (overrides.sessionMutations !== undefined) {
+    if (!Predicate.isUndefined(overrides.sessionMutations)) {
       next = next.pipe(Effect.provideService(HostSessionMutationsRef, overrides.sessionMutations))
     }
-    if (overrides.sessionControl !== undefined) {
+    if (!Predicate.isUndefined(overrides.sessionControl)) {
       next = next.pipe(Effect.provideService(HostSessionControlRef, overrides.sessionControl))
     }
     return next
@@ -428,9 +427,7 @@ const makeAmbientExtensionHostContextDeps = (
       approvalService: defaults.approvalService,
       promptPresenter: defaults.promptPresenter,
       extensionRegistry: input.extensionRegistry,
-      ...(input.capabilityContext !== undefined
-        ? { capabilityContext: input.capabilityContext }
-        : {}),
+      capabilityContext: input.capabilityContext,
       sessionStorage: defaults.sessionStorage,
       branchStorage: defaults.branchStorage,
       messageStorage: defaults.messageStorage,
@@ -446,19 +443,17 @@ export const makeExtensionHostContextProvider = (
   deps: MakeExtensionHostContextDeps,
 ): ExtensionHostContextProviderService => ({
   defaultExtensionRegistry: deps.extensionRegistry,
-  ...(deps.capabilityContext !== undefined
-    ? { defaultCapabilityContext: deps.capabilityContext }
-    : {}),
-  forRun: (runInfo, overrides) =>
-    makeExtensionHostContext(runInfo, {
-      ...deps,
-      ...(overrides?.extensionRegistry !== undefined
-        ? { extensionRegistry: overrides.extensionRegistry }
-        : {}),
-      ...(overrides?.capabilityContext !== undefined
-        ? { capabilityContext: overrides.capabilityContext }
-        : {}),
-    }),
+  defaultCapabilityContext: deps.capabilityContext,
+  forRun: (runInfo, overrides) => {
+    const nextDeps: MakeExtensionHostContextDeps = { ...deps }
+    if (!Predicate.isUndefined(overrides?.extensionRegistry)) {
+      Object.assign(nextDeps, { extensionRegistry: overrides.extensionRegistry })
+    }
+    if (!Predicate.isUndefined(overrides?.capabilityContext)) {
+      Object.assign(nextDeps, { capabilityContext: overrides.capabilityContext })
+    }
+    return makeExtensionHostContext(runInfo, nextDeps)
+  },
 })
 
 export const makeAmbientExtensionHostContextProvider = (
@@ -487,7 +482,7 @@ const makeExtensionHostContext = (
           parentSessionId: runInfo.sessionId,
           parentBranchId: runInfo.branchId,
           cwd: params.cwd ?? runInfo.sessionCwd ?? deps.platform.cwd,
-          ...(params.runSpec !== undefined ? { runSpec: params.runSpec } : {}),
+          runSpec: params.runSpec,
         }),
     },
 
@@ -531,7 +526,7 @@ const makeExtensionHostContext = (
             sessionId: runInfo.sessionId,
             branchId: params.branchId ?? runInfo.branchId,
             content: params.content,
-            ...(params.metadata !== undefined ? { metadata: params.metadata } : {}),
+            metadata: params.metadata,
           })
           .pipe(Effect.mapError(toHostError("session.queueFollowUp"))),
 

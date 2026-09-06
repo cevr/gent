@@ -19,44 +19,44 @@
  * `oauth.ts`; tests can pass anything they want. No global mutation.
  */
 
-import { Context, Effect, Layer, Ref } from "effect"
+import { Context, Effect, Equal, Layer, Option, Ref } from "effect"
 
 // ── Internal cache cell ──
 
 export interface BetaCacheCell {
   readonly map: ReadonlyMap<string, ReadonlySet<string>>
-  readonly lastBetaFlags: string | undefined
-  readonly lastModelId: string | undefined
+  readonly lastBetaFlags: Option.Option<string>
+  readonly lastModelId: Option.Option<string>
 }
 
 export const EMPTY_BETA_CELL: BetaCacheCell = {
   map: new Map(),
-  lastBetaFlags: undefined,
-  lastModelId: undefined,
+  lastBetaFlags: Option.none(),
+  lastModelId: Option.none(),
 }
 
 const cellAfterMaybeClear = (
   cell: BetaCacheCell,
-  currentBetaFlags: string | undefined,
+  currentBetaFlags: Option.Option<string>,
   modelId: string,
 ): BetaCacheCell => {
   // Env betaFlags changed → clear everything. (Note: prior shape
   // tracked `lastBetaFlagsEnv` separately; here it's part of the cell.)
-  if (cell.lastBetaFlags !== currentBetaFlags) {
-    return { map: new Map(), lastBetaFlags: currentBetaFlags, lastModelId: modelId }
+  if (!Equal.equals(cell.lastBetaFlags, currentBetaFlags)) {
+    return { map: new Map(), lastBetaFlags: currentBetaFlags, lastModelId: Option.some(modelId) }
   }
   // Model changed → clear (prior shape only cleared when lastModelId
   // was already set, but the result is identical because the very
   // first request also has nothing to clear).
-  if (cell.lastModelId !== undefined && cell.lastModelId !== modelId) {
-    return { map: new Map(), lastBetaFlags: currentBetaFlags, lastModelId: modelId }
+  if (Option.isSome(cell.lastModelId) && cell.lastModelId.value !== modelId) {
+    return { map: new Map(), lastBetaFlags: currentBetaFlags, lastModelId: Option.some(modelId) }
   }
-  return { ...cell, lastModelId: modelId }
+  return { ...cell, lastModelId: Option.some(modelId) }
 }
 
 // ── Service interface ──
 
-export interface AnthropicBetaCacheShape {
+export interface AnthropicBetaCacheApi {
   /**
    * Get the set of betas previously learned to be rejected for `modelId`
    * under the current `betaFlags` env. Auto-clears the entire cache if
@@ -64,7 +64,7 @@ export interface AnthropicBetaCacheShape {
    */
   readonly getExcluded: (
     modelId: string,
-    currentBetaFlags: string | undefined,
+    currentBetaFlags: Option.Option<string>,
   ) => Effect.Effect<ReadonlySet<string>>
   /**
    * Record that `beta` was rejected for `modelId` under the current
@@ -75,7 +75,7 @@ export interface AnthropicBetaCacheShape {
   readonly recordExcluded: (
     modelId: string,
     beta: string,
-    currentBetaFlags: string | undefined,
+    currentBetaFlags: Option.Option<string>,
   ) => Effect.Effect<void>
 }
 
@@ -83,13 +83,13 @@ export interface AnthropicBetaCacheShape {
 
 export class AnthropicBetaCache extends Context.Service<
   AnthropicBetaCache,
-  AnthropicBetaCacheShape
+  AnthropicBetaCacheApi
 >()("@gent/extensions/src/anthropic/beta-cache/AnthropicBetaCache") {
   static layer: Layer.Layer<AnthropicBetaCache> = Layer.effect(
     AnthropicBetaCache,
     Effect.gen(function* () {
       const cellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
-      return AnthropicBetaCache.buildShape(cellRef)
+      return AnthropicBetaCache.buildService(cellRef)
     }),
   )
 
@@ -101,30 +101,36 @@ export class AnthropicBetaCache extends Context.Service<
    * turn N+1 because the rebuild zeros the map.
    */
   static layerFromRef = (cellRef: Ref.Ref<BetaCacheCell>): Layer.Layer<AnthropicBetaCache> =>
-    Layer.succeed(AnthropicBetaCache, AnthropicBetaCache.buildShape(cellRef))
+    Layer.succeed(AnthropicBetaCache, AnthropicBetaCache.buildService(cellRef))
 
-  private static buildShape = (cellRef: Ref.Ref<BetaCacheCell>): AnthropicBetaCacheShape => {
+  private static buildService = (cellRef: Ref.Ref<BetaCacheCell>): AnthropicBetaCacheApi => {
     const getExcluded = (
       modelId: string,
-      currentBetaFlags: string | undefined,
+      currentBetaFlags: Option.Option<string>,
     ): Effect.Effect<ReadonlySet<string>> =>
       Ref.modify(cellRef, (cell) => {
         const next = cellAfterMaybeClear(cell, currentBetaFlags, modelId)
-        const excluded = next.map.get(modelId) ?? new Set<string>()
-        return [excluded, next] as const
+        const excluded = Option.getOrElse(
+          Option.fromNullishOr(next.map.get(modelId)),
+          () => new Set<string>(),
+        )
+        return [excluded, next]
       })
 
     const recordExcluded = (
       modelId: string,
       beta: string,
-      currentBetaFlags: string | undefined,
+      currentBetaFlags: Option.Option<string>,
     ): Effect.Effect<void> =>
       Ref.update(cellRef, (cell) => {
         // Apply the same clear/seed transition as getExcluded so the
         // call is standalone-safe — no hidden contract that
         // recordExcluded must follow a getExcluded.
         const seeded = cellAfterMaybeClear(cell, currentBetaFlags, modelId)
-        const existing = seeded.map.get(modelId) ?? new Set<string>()
+        const existing = Option.getOrElse(
+          Option.fromNullishOr(seeded.map.get(modelId)),
+          () => new Set<string>(),
+        )
         const updated = new Set(existing)
         updated.add(beta)
         const nextMap = new Map(seeded.map)

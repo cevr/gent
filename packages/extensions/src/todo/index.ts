@@ -46,6 +46,7 @@ export const TodoExtension = defineExtension({
   ],
   resources: [
     defineResource({
+      id: "@gent/todo/service",
       scope: "process",
       layer: Layer.mergeAll(TodoStorage.Live, TodoService.Live),
     }),

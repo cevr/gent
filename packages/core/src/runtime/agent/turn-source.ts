@@ -1,18 +1,38 @@
-import { Effect, Random, Stream } from "effect"
+import { Effect, Option, Predicate, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
 import { ExternalToolRunner, type ProviderAuthError, type TurnError } from "../../domain/driver.js"
-import { ErrorOccurred, ProviderRetrying } from "../../domain/event.js"
+import {
+  ErrorOccurred,
+  MessageReceived,
+  ProviderRetrying,
+  type EventEnvelope,
+} from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
-import { ToolCallId, type BranchId, type SessionId } from "../../domain/ids.js"
+import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
+import { type Message } from "../../domain/message.js"
+import { ModelId, parseModelId } from "../../domain/model.js"
 import { ProviderError } from "../../domain/provider-error.js"
+import { StorageError } from "../../domain/storage-error.js"
 import { toPrompt } from "../../providers/ai-transcript.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
+import { MessageStorage } from "../../storage/message-storage.js"
+import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
-import { retryProviderCall } from "../retry"
+import {
+  estimateSystemPromptTokens,
+  estimateToolSchemaTokens,
+  MODEL_OUTPUT_RESERVE_TOKENS,
+  ModelContextBudget,
+  ModelContextCapabilityError,
+  ModelContextCapabilityFailure,
+} from "../model-context.js"
+import { compactModelContext, MODEL_COMPACTION_OUTPUT_TOKENS } from "../model-compaction.js"
+import { ModelRegistry } from "../model-registry.js"
+import { DEFAULT_RETRY_CONFIG, retryProviderCall } from "../retry"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../wide-event-boundary"
 import {
   CurrentExtensionHostContext,
@@ -26,23 +46,24 @@ import {
   type CollectedTurnResponse,
 } from "./turn-response.js"
 import type { ResolvedTurnContext } from "./turn-resolve.js"
+import type { ResolveModelRequest } from "../../providers/model-resolver.js"
 
 export const toolCallsFromResponseParts = (
   parts: ReadonlyArray<Response.AnyPart>,
 ): ReadonlyArray<Prompt.ToolCallPart> =>
-  parts.flatMap(
-    (part): ReadonlyArray<Prompt.ToolCallPart> =>
-      part.type === "tool-call"
-        ? [
-            Prompt.toolCallPart({
-              id: part.id,
-              name: part.name,
-              params: part.params,
-              providerExecuted: part.providerExecuted,
-            }),
-          ]
-        : [],
-  )
+  parts.flatMap((part): ReadonlyArray<Prompt.ToolCallPart> => {
+    if (part.type === "tool-call") {
+      return [
+        Prompt.toolCallPart({
+          id: part.id,
+          name: part.name,
+          params: part.params,
+          providerExecuted: part.providerExecuted,
+        }),
+      ]
+    }
+    return []
+  })
 
 type ModelTurnSource = {
   readonly driverKind: "model"
@@ -62,11 +83,25 @@ type ExternalTurnSource = {
   readonly collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
 
+export type ExternalToolPersistence = {
+  readonly assistantMessageId: MessageId
+  readonly toolResultMessageId: MessageId
+}
+
 export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
   resolved: ResolvedTurnContext
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle
+  randomId: Effect.Effect<string>
+  hash: (input: string) => string
+  persistExternalToolCall: (
+    toolCall: Prompt.ToolCallPart,
+  ) => Effect.Effect<ExternalToolPersistence, StorageError | TurnError>
+  persistExternalToolResult: (
+    persistence: ExternalToolPersistence,
+    result: Prompt.ToolResultPart,
+  ) => Effect.Effect<void, StorageError>
 }) {
   const driverRegistry = yield* DriverRegistry
   const hostCtx = yield* CurrentExtensionHostContext
@@ -76,17 +111,21 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       yield* eventPublisher.publish(event).pipe(Effect.orDie)
     })
   const { resolved } = params
-  if (resolved.driver?._tag === "external") {
-    const externalDriver = yield* driverRegistry.getExternal(resolved.driver.id)
-    const executor = externalDriver?.executor
-    if (executor === undefined) {
+  const resolvedDriver = resolved.driver
+  if (Predicate.isNotUndefined(resolvedDriver) && resolvedDriver._tag === "external") {
+    const externalDriver = yield* driverRegistry.getExternal(resolvedDriver.id)
+    const executor = Option.fromUndefinedOr(externalDriver).pipe(
+      Option.flatMap((value) => Option.fromUndefinedOr(value.executor)),
+    )
+    if (Option.isNone(executor)) {
       yield* publishEventOrDie(
         ErrorOccurred.make({
           sessionId: params.sessionId,
           branchId: params.branchId,
-          error: `External driver "${resolved.driver.id}" not found`,
+          error: `External driver "${resolvedDriver.id}" not found`,
         }),
       )
+      // oxlint-disable-next-line effect/noNullish -- A missing external executor is an expected resolution miss after the error event is published.
       return undefined
     }
 
@@ -96,21 +135,36 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     const externalToolRunner = ExternalToolRunner.of({
       runTool: (toolName, args) =>
         Effect.gen(function* () {
-          const toolCallId = ToolCallId.make(yield* Random.nextUUIDv4)
-          return yield* toolRunner
-            .run({ toolCallId, toolName, input: args })
+          const toolCallId = ToolCallId.make(yield* params.randomId)
+          const persistence = yield* params
+            .persistExternalToolCall(
+              Prompt.toolCallPart({
+                id: toolCallId,
+                name: toolName,
+                params: args,
+                providerExecuted: false,
+              }),
+            )
+            .pipe(Effect.catchTag("StorageError", Effect.die))
+          const result = yield* toolRunner
+            .runBound(
+              { toolCallId, toolName, input: args },
+              Option.fromUndefinedOr(resolved.toolBindings.get(toolName)),
+            )
             .pipe(
               provideCurrentHostCtx(hostCtx),
               Effect.provideService(ExtensionRegistry, extensionRegistry),
               Effect.provideService(EventPublisher, eventPublisher),
             )
+          yield* params.persistExternalToolResult(persistence, result).pipe(Effect.orDie)
+          return result
         }),
     })
 
     return {
-      driverKind: "external" as const,
-      driverId: resolved.driver.id,
-      stream: executor
+      driverKind: "external",
+      driverId: resolvedDriver.id,
+      stream: executor.value
         .executeTurn({
           sessionId: params.sessionId,
           branchId: params.branchId,
@@ -123,6 +177,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
           hostCtx,
         })
         .pipe(Stream.provideService(ExternalToolRunner, externalToolRunner)),
+      // oxlint-disable-next-line effect/noUnknownParameters -- External driver errors cross an untyped executor boundary.
       formatStreamError: (streamError: unknown) =>
         `External turn executor error: ${formatStreamErrorMessage(streamError)}`,
       collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
@@ -130,43 +185,139 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   }
 
   const modelResolver = yield* ModelResolver
-  const modelRequest = {
+  let modelRequest: ResolveModelRequest = {
     modelId: resolved.modelId,
     hints: {
-      ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
-      ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
+      temperature: resolved.temperature,
+      reasoning: resolved.reasoning,
     },
     driverRegistry,
-    ...(resolved.driver?._tag === "model" && resolved.driver.id !== undefined
-      ? { driverId: resolved.driver.id }
-      : {}),
   }
-  const prompt = toPrompt(resolved.messages, { systemPrompt: resolved.systemPrompt })
+  if (
+    Predicate.isNotUndefined(resolvedDriver) &&
+    resolvedDriver._tag === "model" &&
+    Predicate.isNotUndefined(resolvedDriver.id)
+  ) {
+    modelRequest = { ...modelRequest, driverId: resolvedDriver.id }
+  }
+
+  const modelRegistry = yield* ModelRegistry
+  let contextModelId = resolved.modelId
+  if (
+    Predicate.isNotUndefined(resolvedDriver) &&
+    resolvedDriver._tag === "model" &&
+    Predicate.isNotUndefined(resolvedDriver.id)
+  ) {
+    const parsedModelId = parseModelId(resolved.modelId)
+    if (Option.isSome(parsedModelId)) {
+      contextModelId = ModelId.make(`${resolvedDriver.id}/${parsedModelId.value[1]}`)
+    }
+  }
+  const modelOption = yield* modelRegistry.get(contextModelId)
+  if (Option.isNone(modelOption)) {
+    return yield* new ModelContextCapabilityError({
+      failure: ModelContextCapabilityFailure.cases.UnknownModel.make({
+        modelId: contextModelId,
+      }),
+    })
+  }
+  const contextLimit = modelOption.value.contextLength
+  if (Predicate.isUndefined(contextLimit)) {
+    return yield* new ModelContextCapabilityError({
+      failure: ModelContextCapabilityFailure.cases.MissingContextLimit.make({
+        modelId: contextModelId,
+      }),
+    })
+  }
+  if (!Number.isSafeInteger(contextLimit) || contextLimit <= 0) {
+    return yield* new ModelContextCapabilityError({
+      failure: ModelContextCapabilityFailure.cases.InvalidContextLimit.make({
+        modelId: contextModelId,
+        reason: "contextLength must be a positive safe integer",
+      }),
+    })
+  }
+  const budget = ModelContextBudget.make({
+    contextLimitTokens: contextLimit,
+    reservedSystemTokens: estimateSystemPromptTokens(resolved.systemPrompt),
+    reservedToolTokens: estimateToolSchemaTokens(resolved.tools),
+    reservedOutputTokens: MODEL_OUTPUT_RESERVE_TOKENS,
+  })
+  const eventPublisher = yield* EventPublisher
+  const messageStorage = yield* MessageStorage
+  const storageTransaction = yield* makeStorageTransaction
+  const persistSummary = (message: Message) =>
+    Effect.gen(function* () {
+      const persisted = yield* storageTransaction(
+        Effect.gen(function* () {
+          const existing = yield* messageStorage.getMessage(message.id)
+          if (Predicate.isNotUndefined(existing)) {
+            return { message: existing, envelope: Option.none<EventEnvelope>() }
+          }
+          yield* messageStorage.createMessageIfAbsent(message)
+          const stored = yield* messageStorage.getMessage(message.id)
+          if (Predicate.isUndefined(stored)) {
+            return yield* new StorageError({ message: "Summary was not readable after insertion" })
+          }
+          return {
+            message: stored,
+            envelope: Option.some(
+              yield* eventPublisher.append(MessageReceived.make({ message: stored })),
+            ),
+          }
+        }),
+      )
+      if (Option.isSome(persisted.envelope)) yield* eventPublisher.deliver(persisted.envelope.value)
+      return persisted.message
+    })
+  const compacted = yield* compactModelContext({
+    modelId: contextModelId,
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    messages: resolved.messages,
+    budget,
+    hash: params.hash,
+    persistSummary,
+    summaryModel: modelResolver.resolve({
+      ...modelRequest,
+      hints: { ...modelRequest.hints, maxTokens: MODEL_COMPACTION_OUTPUT_TOKENS },
+    }),
+  })
+  const prompt = toPrompt(compacted.projection.messages, { systemPrompt: resolved.systemPrompt })
   const toolkit = convertTools([...resolved.tools])
+  modelRequest = {
+    ...modelRequest,
+    hints: { ...modelRequest.hints, maxTokens: MODEL_OUTPUT_RESERVE_TOKENS },
+  }
   const rawStream = Stream.unwrap(
     modelResolver.resolve(modelRequest).pipe(
-      Effect.map((model) =>
-        resolved.tools.length > 0
-          ? model.streamText({
-              prompt,
-              toolkit,
-              disableToolCallResolution: true as const,
-            })
-          : model.streamText({ prompt }),
-      ),
+      Effect.map((model) => {
+        if (resolved.tools.length > 0) {
+          return model.streamText({
+            prompt,
+            toolkit,
+            disableToolCallResolution: true,
+          })
+        }
+        return model.streamText({ prompt })
+      }),
     ),
   )
 
   return {
-    driverKind: "model" as const,
+    driverKind: "model",
     stream: rawStream.pipe(
       Stream.mapError(
-        (error: unknown) =>
-          new ProviderError({
-            message: AiError.isAiError(error) ? error.message : String(error),
+        // oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
+        (error: unknown) => {
+          let message = String(error)
+          if (AiError.isAiError(error)) message = error.message
+          return new ProviderError({
+            message,
             model: resolved.modelId,
             cause: error,
-          }),
+          })
+        },
       ),
     ),
     formatStreamError: formatStreamErrorMessage,
@@ -178,7 +329,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       // seam surfaces the typed auth failure; narrow the retry scope to
       // transient `ProviderError` only.
       effect.pipe(
-        retryProviderCall(undefined, {
+        retryProviderCall(DEFAULT_RETRY_CONFIG, {
           onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
             publishEventOrDie(
               ProviderRetrying.make({
@@ -200,15 +351,19 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
             formatStreamError: formatStreamErrorMessage,
           }),
         ),
-        Effect.tap((collected) =>
-          WideEvent.set({
-            inputTokens: collected.messageProjection.usage?.inputTokens ?? 0,
-            outputTokens: collected.messageProjection.usage?.outputTokens ?? 0,
+        Effect.tap((collected) => {
+          const usage = Option.getOrElse(
+            Option.fromUndefinedOr(collected.messageProjection.usage),
+            () => ({ inputTokens: 0, outputTokens: 0 }),
+          )
+          return WideEvent.set({
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
             toolCallCount: toolCallsFromResponseParts(collected.responseParts).length,
             interrupted: collected.interrupted,
             streamFailed: collected.streamFailed,
-          }),
-        ),
+          })
+        }),
         withWideEvent(
           WideEventBoundary.provider("stream", {
             envelope: { model: resolved.modelId },

@@ -20,10 +20,10 @@ export interface AcpProtocolAgentConfig {
  * Subprocess configurations for ACP-protocol agents only. Claude Code is
  * NOT in this map — it goes through the SDK path (see `claude-code-executor.ts`).
  */
-export const ACP_PROTOCOL_AGENTS: Record<string, AcpProtocolAgentConfig> = {
+export const ACP_PROTOCOL_AGENTS = {
   opencode: { command: "opencode", args: ["acp"] },
   "gemini-cli": { command: "gemini", args: ["acp"] },
-}
+} satisfies Readonly<Record<string, AcpProtocolAgentConfig>>
 
 /** Claude Code agent name — registered separately because it uses the SDK path. */
-export const CLAUDE_CODE_AGENT_NAME = "claude-code" as const
+export const CLAUDE_CODE_AGENT_NAME = "claude-code"

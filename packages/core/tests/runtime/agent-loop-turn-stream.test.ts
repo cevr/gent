@@ -6,6 +6,7 @@ import {
   textDeltaPart,
 } from "@gent/core-internal/test-utils/language-model"
 import type { AgentEvent } from "@gent/core-internal/domain/event"
+import { AgentName } from "@gent/core-internal/domain/agent"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import {
@@ -24,14 +25,14 @@ import {
 describe("turn stream parity", () => {
   it.live("model and external turns produce the same assistant draft and lifecycle tags", () =>
     Effect.gen(function* () {
-      const expectedTags = [
+      const expectedTags: AgentEvent["_tag"][] = [
         "MessageReceived",
         "StreamStarted",
         "StreamChunk",
         "StreamEnded",
         "MessageReceived",
         "TurnCompleted",
-      ] as const
+      ]
       const modelEventsRef = yield* Ref.make<AgentEvent[]>([])
       const externalEventsRef = yield* Ref.make<AgentEvent[]>([])
       const modelDraft = yield* Effect.gen(function* () {
@@ -47,6 +48,7 @@ describe("turn stream parity", () => {
         expect(assistant).toBeDefined()
         return assistantDraftFromMessage(assistant!)
       }).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
           makeLayerWithEvents(
             scriptedProvider([
@@ -71,11 +73,14 @@ describe("turn stream parity", () => {
           BranchId.make("external-parity-branch"),
           "hello",
         )
-        yield* runAgentLoop(agentLoop, message, { agentOverride: "test-external-parity" as never })
+        yield* runAgentLoop(agentLoop, message, {
+          agentOverride: AgentName.make("test-external-parity"),
+        })
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
         return assistantDraftFromMessage(assistant!)
       }).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
           makeExternalLayerWithEvents(
             [
@@ -91,10 +96,8 @@ describe("turn stream parity", () => {
         ),
       )
       expect(modelDraft).toEqual(externalDraft)
-      expect((yield* Ref.get(modelEventsRef)).map((event) => event._tag as string)).toEqual([
-        ...expectedTags,
-      ])
-      expect((yield* Ref.get(externalEventsRef)).map((event) => event._tag as string)).toEqual([
+      expect((yield* Ref.get(modelEventsRef)).map((event) => event._tag)).toEqual([...expectedTags])
+      expect((yield* Ref.get(externalEventsRef)).map((event) => event._tag)).toEqual([
         ...expectedTags,
       ])
     }),

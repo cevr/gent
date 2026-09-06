@@ -20,6 +20,7 @@
 
 import { Effect, Layer, Ref } from "effect"
 import type { Context } from "effect"
+import { ResourceDescriptor, ResourceId, ResourceRevision } from "./resource-graph.js"
 
 // ── Scope discriminator + brand mapping ──
 
@@ -47,6 +48,8 @@ export type ScopeOf<S extends ResourceScope> = S extends "process" ? ServerScope
 /**
  * One Resource carries:
  *
+ * - `id` / `revision` / `requires` / `required` — stable graph metadata used
+ *   by planning and later lifecycle reconciliation.
  * - `tag` + `layer` — the canonical Layer providing one or more services.
  *   The `R` channel must include `ScopeOf<S>` so the typed scope brand
  *   gates instantiation.
@@ -68,7 +71,7 @@ export interface ResourceContribution<
   R = never,
   E = never,
   StartR = never,
-> {
+> extends ResourceDescriptor {
   /**
    * Optional canonical service tag. When present, consumers may depend on the
    * tag without knowing about Resource. The `start`/`stop` effects get `A`
@@ -98,6 +101,17 @@ export interface ResourceContribution<
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
 export type AnyResourceContribution = ResourceContribution<any, ResourceScope, any, any, any>
 
+interface ResourceIdentitySpec {
+  /** Stable resource identity. */
+  readonly id: string
+  /** Desired semantic revision. Defaults to `"1"`. */
+  readonly revision?: string
+  /** Stable resource identities required before activation. */
+  readonly requires?: ReadonlyArray<ResourceId>
+  /** Host policy marker for a required root resource. */
+  readonly required?: boolean
+}
+
 // ── Smart constructor ──
 
 /**
@@ -106,7 +120,13 @@ export type AnyResourceContribution = ResourceContribution<any, ResourceScope, a
  * a tag for a different service identity is then a type error rather
  * than a silent unification of `A` to a union supertype.
  */
-export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never, StartR = never> {
+export interface ResourceSpec<
+  A,
+  S extends ResourceScope,
+  R = never,
+  E = never,
+  StartR = never,
+> extends ResourceIdentitySpec {
   readonly tag?: Context.Key<NoInfer<A>, unknown>
   readonly scope: S
   readonly layer: Layer.Layer<A, E, R | ScopeOf<S>>
@@ -124,10 +144,9 @@ export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never, 
 /**
  * Author-facing factory for a {@link ResourceContribution}.
  *
- * The factory is identity at runtime — its purpose is to (a) infer the
- * generics from the inputs (so authors don't write `<MyService, "process", never, never>`)
- * and (b) anchor the public API surface so future shape changes have one
- * call site to migrate.
+ * The factory infers the generics from the inputs (so authors don't write
+ * `<MyService, "process", never, never>`) and validates the authored resource
+ * metadata through the resource descriptor schema.
  *
  * Identity `A` is inferred from `layer`. The `tag` field, if present, is
  * typed as `Context.Key<NoInfer<A>, unknown>` — it must match the layer's
@@ -135,7 +154,19 @@ export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never, 
  */
 export const defineResource = <A, S extends ResourceScope, R = never, E = never, StartR = never>(
   spec: ResourceSpec<A, S, R, E, StartR>,
-): ResourceContribution<A, S, R, E, StartR> => ({ ...spec })
+): ResourceContribution<A, S, R, E, StartR> => {
+  const { id, revision, requires, required, ...resource } = spec
+  const descriptor = ResourceDescriptor.make({
+    id: ResourceId.make(id),
+    revision: ResourceRevision.make(revision ?? "1"),
+    requires: [...(requires ?? [])],
+    required: required ?? false,
+  })
+  return {
+    ...resource,
+    ...descriptor,
+  }
+}
 
 export interface ExtensionState<Value> {
   readonly get: Effect.Effect<Value>
@@ -146,20 +177,28 @@ export interface ExtensionState<Value> {
 
 export type StateInitializer<Value, E = never, R = never> = Value | Effect.Effect<Value, E, R>
 
-export interface StateResourceSpec<A, Value, S extends ResourceScope, R = never, E = never> {
+export interface StateResourceSpec<A, Value, R = never, E = never> extends ResourceIdentitySpec {
   readonly tag: Context.Key<A, ExtensionState<Value>>
-  readonly scope: S
+  readonly scope: "process"
   readonly initial: StateInitializer<Value, E, R>
 }
 
 const resolveStateInitial = <Value, E, R>(
   initial: StateInitializer<Value, E, R>,
-): Effect.Effect<Value, E, R> => (Effect.isEffect(initial) ? initial : Effect.succeed(initial))
+): Effect.Effect<Value, E, R> => {
+  if (Effect.isEffect(initial)) return initial
+  return Effect.succeed(initial)
+}
 
-export const defineStateResource = <A, Value, S extends ResourceScope, R = never, E = never>(
-  spec: StateResourceSpec<A, Value, S, R, E>,
-): ResourceContribution<A, S, R, E> =>
-  defineResource({
+export const defineStateResource = <A, Value, R = never, E = never>(
+  spec: StateResourceSpec<A, Value, R, E>,
+): ResourceContribution<A, "process", R, E> => {
+  const { id, revision, requires, required } = spec
+  return defineResource({
+    id,
+    revision,
+    requires,
+    required,
     tag: spec.tag,
     scope: spec.scope,
     layer: Layer.effect(
@@ -176,3 +215,4 @@ export const defineStateResource = <A, Value, S extends ResourceScope, R = never
       }),
     ),
   })
+}

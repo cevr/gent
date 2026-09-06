@@ -27,7 +27,7 @@ const makeCtx = (overrides: {
               agentName: params.agent.name,
             }),
           )),
-      listAgents: dieStub("agent.listAgents"),
+      listAgents: Effect.die("agent.listAgents not wired in test"),
     },
     Interaction: {
       approve: overrides.approve ?? dieStub("interaction.approve"),
@@ -101,31 +101,32 @@ describe("HandoffCooldown", () => {
         const cooldown = yield* HandoffCooldown
 
         // Initial cooldown is 0.
-        expect(yield* cooldown.get()).toBe(0)
+        expect(yield* cooldown.get).toBe(0)
 
         // suppress(5) sets cooldown to 5.
         yield* cooldown.suppress(5)
-        expect(yield* cooldown.get()).toBe(5)
+        expect(yield* cooldown.get).toBe(5)
 
         // Each turnCompleted decrements the counter.
-        yield* cooldown.turnCompleted()
-        expect(yield* cooldown.get()).toBe(4)
+        yield* cooldown.turnCompleted
+        expect(yield* cooldown.get).toBe(4)
 
-        yield* cooldown.turnCompleted()
-        yield* cooldown.turnCompleted()
-        expect(yield* cooldown.get()).toBe(2)
+        yield* cooldown.turnCompleted
+        yield* cooldown.turnCompleted
+        expect(yield* cooldown.get).toBe(2)
 
         // suppress(2) re-arms (overwrite, not add).
         yield* cooldown.suppress(2)
-        expect(yield* cooldown.get()).toBe(2)
+        expect(yield* cooldown.get).toBe(2)
 
         // Decrement clamps at zero.
-        yield* cooldown.turnCompleted()
-        yield* cooldown.turnCompleted()
-        yield* cooldown.turnCompleted()
-        expect(yield* cooldown.get()).toBe(0)
+        yield* cooldown.turnCompleted
+        yield* cooldown.turnCompleted
+        yield* cooldown.turnCompleted
+        expect(yield* cooldown.get).toBe(0)
       })
 
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       return yield* program.pipe(Effect.provide(HandoffCooldown.Live))
     }),
   )

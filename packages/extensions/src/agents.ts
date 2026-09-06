@@ -72,7 +72,13 @@ const title = AgentDefinition.make({
 })
 
 /** Core agents — general-purpose agents not tied to a specific tool extension. */
-export const CoreAgents = [cowork, deepwork, explore, summarizer, title] as const
+export const CoreAgents = [
+  cowork,
+  deepwork,
+  explore,
+  summarizer,
+  title,
+] satisfies ReadonlyArray<AgentDefinition>
 
 export const AgentsExtension = defineExtension({
   id: "@gent/agents",

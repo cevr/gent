@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Option, Path, Ref } from "effect"
+import { Predicate, Effect, FileSystem, Layer, Option, Path, Ref } from "effect"
 import * as ChildProcessSpawnerNs from "effect/unstable/process/ChildProcessSpawner"
 import { dateFromMillis } from "@gent/core-internal/domain/message"
 import { BuildFingerprint } from "@gent/core-internal/server/build-fingerprint"
@@ -39,13 +39,19 @@ const PlatformCompiledBin: Layer.Layer<GentPlatform> = Layer.effect(
       exit: () => Effect.die(new Error("exit not expected in this test")),
       now: Effect.succeed(0),
       hash: (_alg, input) => {
-        const text = typeof input === "string" ? input : new TextDecoder().decode(input)
+        let text = input
+        if (!Predicate.isString(text)) text = new TextDecoder().decode(text)
         let h = 5381
         for (let i = 0; i < text.length; i += 1) h = (h * 33) ^ text.charCodeAt(i)
         return (h >>> 0).toString(16).padStart(64, "0")
       },
       randomBytes: (length) => Effect.succeed(new Uint8Array(length)),
-      fileURLToPath: (url) => (url.startsWith("file://") ? url.slice("file://".length) : url),
+      fileURLToPath: (url) => {
+        if (url.startsWith("file://")) {
+          return url.slice("file://".length)
+        }
+        return url
+      },
     })
   }),
 )
@@ -58,7 +64,7 @@ const makeCountingFs = (counter: Ref.Ref<number>): Layer.Layer<FileSystem.FileSy
     stat: () =>
       Ref.updateAndGet(counter, (n) => n + 1).pipe(
         Effect.map((n) => ({
-          type: "File" as const,
+          type: "File",
           mtime: Option.some(dateFromMillis(n * 1000)),
           atime: Option.none(),
           birthtime: Option.none(),
@@ -69,7 +75,7 @@ const makeCountingFs = (counter: Ref.Ref<number>): Layer.Layer<FileSystem.FileSy
           uid: Option.none(),
           gid: Option.none(),
           rdev: Option.none(),
-          size: BigInt(0) as unknown as FileSystem.Size,
+          size: FileSystem.Size(0),
           blksize: Option.none(),
           blocks: Option.none(),
         })),
@@ -102,6 +108,7 @@ describe("BuildFingerprint", () => {
           return { fp1, fp2, fp3, statCalls: yield* Ref.get(counter) }
         })
 
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         const result = yield* program.pipe(Effect.provide(buildFp))
 
         // Caching contract: only one underlying stat call, all three fingerprints identical.

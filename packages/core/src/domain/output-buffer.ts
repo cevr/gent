@@ -15,14 +15,28 @@ const DEFAULT_HEAD_LINES = 50
 const DEFAULT_TAIL_LINES = 50
 const OUTPUT_DIR = "/tmp/gent/outputs"
 
+export interface HeadTailResult<T> {
+  readonly head: T[]
+  readonly tail: T[]
+  readonly truncatedCount: number
+}
+
+export interface HeadTailCharsResult {
+  readonly text: string
+  readonly truncated: boolean
+  readonly totalChars: number
+}
+
+export interface OutputBufferFormat {
+  readonly text: string
+  readonly truncatedLines: number
+}
+
 /**
  * Truncate an array to head + tail. Simpler than OutputBuffer — for when
  * you have all items upfront (not streaming).
  */
-export function headTail<T>(
-  items: readonly T[],
-  maxItems: number = 100,
-): { head: T[]; tail: T[]; truncatedCount: number } {
+export function headTail<T>(items: readonly T[], maxItems: number = 100): HeadTailResult<T> {
   const total = items.length
   if (total <= maxItems) {
     return { head: [...items], tail: [], truncatedCount: 0 }
@@ -55,10 +69,7 @@ export function formatHeadTail(
 /**
  * Truncate raw text to head + tail by characters.
  */
-export function headTailChars(
-  text: string,
-  maxChars: number = 64_000,
-): { text: string; truncated: boolean; totalChars: number } {
+export function headTailChars(text: string, maxChars: number = 64_000): HeadTailCharsResult {
   const total = text.length
   if (total <= maxChars) {
     return { text, truncated: false, totalChars: total }
@@ -149,7 +160,7 @@ export class OutputBuffer {
    * Finalize and format the output.
    * Returns text + count of truncated lines.
    */
-  format(): { text: string; truncatedLines: number } {
+  format(): OutputBufferFormat {
     // flush remaining pending line
     if (this.pendingLine) {
       this.totalLines++

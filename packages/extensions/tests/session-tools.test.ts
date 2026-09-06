@@ -7,7 +7,7 @@
  * runtime slot compiler.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { SessionToolsExtension } from "../src/index.js"
 import { getBuiltinAgent } from "./helpers/builtin-agents.js"
 import type { SystemPromptInput } from "@gent/core/extensions/api"
@@ -15,9 +15,13 @@ import { provideTestSetupContext } from "@gent/core-internal/test-utils"
 
 const getSystemPrompt = Effect.gen(function* () {
   const contributions = yield* SessionToolsExtension.setup.pipe(provideTestSetupContext())
-  const systemPrompt = contributions.hooks?.find((slot) => slot.kind === "systemPrompt")
-  if (systemPrompt === undefined) throw new Error("expected session tools systemPrompt hook")
-  return systemPrompt.hook.handler
+  const systemPrompt = Option.fromUndefinedOr(
+    contributions.hooks?.find((slot) => slot.kind === "systemPrompt"),
+  )
+  if (Option.isNone(systemPrompt)) {
+    return yield* Effect.die(new Error("expected session tools systemPrompt hook"))
+  }
+  return systemPrompt.value.hook.handler
 })
 
 describe("SessionToolsExtension", () => {

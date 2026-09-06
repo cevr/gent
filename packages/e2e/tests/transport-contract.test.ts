@@ -1,12 +1,9 @@
 import { describe, expect, test } from "effect-bun-test"
 import { Effect } from "effect"
 import { ToolCallId } from "@gent/core-internal/domain/ids.js"
-import { createTempDirFixture } from "@gent/core-internal/test-utils/fixtures"
+import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures"
 import { extractText } from "@gent/sdk"
 import { toTestFailure, transportCases, waitFor } from "./transport-harness-boundary"
-
-const makeSecondaryA = createTempDirFixture("gent-secondary-A-")
-const makeSecondaryB = createTempDirFixture("gent-secondary-B-")
 
 describe("GentClient transport contract", () => {
   for (const transport of transportCases) {
@@ -168,8 +165,8 @@ describe("GentClient transport contract", () => {
         transport.run(({ client }) =>
           Effect.scoped(
             Effect.gen(function* () {
-              const cwdA = makeSecondaryA()
-              const cwdB = makeSecondaryB()
+              const cwdA = yield* makeTempDirectoryScoped("gent-secondary-A-")
+              const cwdB = yield* makeTempDirectoryScoped("gent-secondary-B-")
               const a = yield* client.session
                 .create({ cwd: cwdA })
                 .pipe(Effect.mapError(toTestFailure))

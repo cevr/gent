@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test"
+import { Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import {
@@ -7,6 +8,8 @@ import {
   getContextWindow,
 } from "../../src/runtime/context-estimation"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 describe("Token Estimation", () => {
   test("estimateTokens calculates token count", () => {
@@ -115,6 +118,7 @@ describe("estimateContextPercent", () => {
             id: ToolCallId.make("tc1"),
             name: "test",
             isFailure: false,
+            providerExecuted: false,
             result: { result: "z".repeat(2_000) },
           }),
         ],
@@ -181,7 +185,7 @@ describe("estimateTokens", () => {
       }),
     ]
     const tokens = estimateTokens(messages)
-    const expectedChars = JSON.stringify({ key: "value" }).length
+    const expectedChars = encodeJson({ key: "value" }).length
     expect(tokens).toBe(Math.ceil(expectedChars / 4))
   })
 
@@ -197,6 +201,7 @@ describe("estimateTokens", () => {
             id: ToolCallId.make("tc1"),
             name: "test",
             isFailure: false,
+            providerExecuted: false,
             result: { data: "hello" },
           }),
         ],

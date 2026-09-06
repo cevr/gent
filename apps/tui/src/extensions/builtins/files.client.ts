@@ -7,7 +7,7 @@
  *  with the "no native bun apis" mandate).
  */
 
-import { Effect, FileSystem } from "effect"
+import { Effect, FileSystem, Option } from "effect"
 import { defineClientExtension, autocompleteContribution } from "../client-facets.js"
 import { truncatePath } from "../../components/message-list-utils"
 import { getFileTag } from "../../components/file-tag"
@@ -18,9 +18,11 @@ const MAX_RESULTS = 50
 
 const formatMatch = (f: { path: string; name: string }) => {
   const tag = getFileTag(f.path)
+  let label = f.name
+  if (tag.length > 0) label = `${tag} ${f.name}`
   return {
     id: f.path,
-    label: tag.length > 0 ? `${tag} ${f.name}` : f.name,
+    label,
     description: truncatePath(f.path, 40),
   }
 }
@@ -55,12 +57,11 @@ export default defineClientExtension("@gent/files-ui", {
           // Non-empty filter: FFF Effect. Failures (FFF unavailable, init
           // failure) are caught here so the popup adapter still shows []
           // instead of swallowing the failure as opaque.
-          const fffResult = yield* Effect.orElseSucceed(
+          const fffResult = yield* Effect.option(
             searchFiles(cwd, workspace.home, filter, MAX_RESULTS),
-            () => undefined,
           )
-          if (fffResult === undefined) return []
-          return fffResult.items.map((item: { relativePath: string; fileName: string }) =>
+          if (Option.isNone(fffResult)) return []
+          return fffResult.value.items.map((item: { relativePath: string; fileName: string }) =>
             formatMatch({ path: item.relativePath, name: item.fileName }),
           )
         }),

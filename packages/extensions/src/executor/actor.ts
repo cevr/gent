@@ -6,7 +6,7 @@
  * re-bootstraps via autoStart.
  */
 
-import { Schema } from "effect"
+import { Match, Option, Predicate, Schema } from "effect"
 import { type PromptSection, type TurnProjection } from "@gent/core/extensions/api"
 import { ExecutorMode } from "./domain.js"
 import type { ExecutorSnapshotReply } from "./protocol.js"
@@ -38,22 +38,21 @@ export type ExecutorUiModel = typeof ExecutorUiModel.Type
 
 // ── Snapshot projection ──
 
-export const projectSnapshot = (state: ExecutorState): ExecutorSnapshotReply => {
-  switch (state._tag) {
-    case "Idle":
-      return { status: "idle" }
-    case "Connecting":
-      return { status: "connecting" }
-    case "Ready":
-      return {
-        status: "ready",
-        baseUrl: state.baseUrl,
-        executorPrompt: state.executorPrompt,
-      }
-    case "Error":
-      return { status: "error", errorMessage: state.message }
-  }
-}
+export const projectSnapshot: (state: ExecutorState) => ExecutorSnapshotReply =
+  Match.type<ExecutorState>().pipe(
+    Match.tagsExhaustive({
+      Idle: () => ({ status: "idle" }) satisfies ExecutorSnapshotReply,
+      Connecting: () => ({ status: "connecting" }) satisfies ExecutorSnapshotReply,
+      Ready: (state) =>
+        ({
+          status: "ready",
+          baseUrl: state.baseUrl,
+          executorPrompt: state.executorPrompt,
+        }) satisfies ExecutorSnapshotReply,
+      Error: (state) =>
+        ({ status: "error", errorMessage: state.message }) satisfies ExecutorSnapshotReply,
+    }),
+  )
 
 // ── Turn projection (prompt + tool policy) ──
 //
@@ -78,30 +77,35 @@ const buildExecutorPrompt = (instructions: string): string =>
     "- If execution pauses for approval, use the `resume` tool with the returned executionId.",
   ].join("\n")
 
-const buildPromptSection = (snapshot: ExecutorSnapshotReply): PromptSection | undefined => {
-  if (snapshot.status !== "ready") return undefined
-  if (snapshot.executorPrompt === undefined || snapshot.executorPrompt.length === 0)
-    return undefined
-  return {
+const buildPromptSection = (snapshot: ExecutorSnapshotReply): Option.Option<PromptSection> => {
+  if (snapshot.status !== "ready") return Option.none()
+  const executorPrompt = Option.fromNullishOr(snapshot.executorPrompt)
+  if (Option.isNone(executorPrompt) || executorPrompt.value.length === 0) return Option.none()
+  return Option.some({
     id: "executor-guidance",
-    content: buildExecutorPrompt(snapshot.executorPrompt),
+    content: buildExecutorPrompt(executorPrompt.value),
     priority: 85,
-  }
+  })
 }
 
 export const viewForState = (state: ExecutorState): TurnProjection => {
   const snapshot = projectSnapshot(state)
   const section = buildPromptSection(snapshot)
-  return {
-    ...(section !== undefined ? { promptSections: [section] } : {}),
-    toolPolicy: snapshot.status === "ready" ? {} : { exclude: ["execute", "resume"] },
+  if (snapshot.status === "ready") {
+    if (Option.isSome(section)) return { promptSections: [section.value], toolPolicy: {} }
+    return { toolPolicy: {} }
   }
+  const toolPolicy = { exclude: ["execute", "resume"] }
+  if (Option.isSome(section)) return { promptSections: [section.value], toolPolicy }
+  return { toolPolicy }
 }
 
 // ── Pure transitions ──
 
+const isConnectable = Predicate.or(Predicate.isTagged("Idle"), Predicate.isTagged("Error"))
+
 export const transitionConnect = (state: ExecutorState, cwd: string): ExecutorState => {
-  if (state._tag === "Idle" || state._tag === "Error") {
+  if (isConnectable(state)) {
     return ExecutorState.cases.Connecting.make({ cwd })
   }
   return state
@@ -113,7 +117,7 @@ export const transitionConnected = (
     readonly mode: ExecutorMode
     readonly baseUrl: string
     readonly scopeId: string
-    readonly executorPrompt?: string | undefined
+    readonly executorPrompt?: string
   },
 ): ExecutorState => {
   if (state._tag !== "Connecting") return state
@@ -138,7 +142,7 @@ export const transitionDisconnect = (state: ExecutorState): ExecutorState => {
   // intent. The runtime service interrupts the in-flight connection fork
   // before writing Idle, so a disconnect mid-handshake cancels the sidecar
   // resolve before it can race back to Ready.
-  if (state._tag === "Ready" || state._tag === "Connecting")
-    return ExecutorState.cases.Idle.make({})
+  const isConnected = Predicate.or(Predicate.isTagged("Ready"), Predicate.isTagged("Connecting"))
+  if (isConnected(state)) return ExecutorState.cases.Idle.make({})
   return state
 }

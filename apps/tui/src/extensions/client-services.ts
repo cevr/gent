@@ -13,29 +13,29 @@
  */
 
 import { createEffect, createRoot, createSignal } from "solid-js"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option } from "effect"
 import type { AgentName, DriverRef } from "@gent/core/extensions/api"
 import type { OverlayId, ComposerState } from "./client-facets.js"
-import type { ClientTransportShape } from "./client-transport"
+import type { ClientTransportDefinition } from "./client-transport"
 
 // ── ClientWorkspace ──────────────────────────────────────────────────────
 
-export interface ClientWorkspaceShape {
+export interface ClientWorkspaceDefinition {
   readonly cwd: string
   readonly home: string
 }
 
-export class ClientWorkspace extends Context.Service<ClientWorkspace, ClientWorkspaceShape>()(
+export class ClientWorkspace extends Context.Service<ClientWorkspace, ClientWorkspaceDefinition>()(
   "@gent/tui/src/extensions/client-services/ClientWorkspace",
 ) {}
 
 export const makeClientWorkspaceLayer = (
-  payload: ClientWorkspaceShape,
+  payload: ClientWorkspaceDefinition,
 ): Layer.Layer<ClientWorkspace> => Layer.succeed(ClientWorkspace, payload)
 
 // ── ClientShell ──────────────────────────────────────────────────────────
 
-export interface ClientShellShape {
+export interface ClientShellDefinition {
   /** Send a chat message into the active session. */
   readonly sendMessage: (content: string) => void
   /** Open a registered overlay by id. */
@@ -48,17 +48,17 @@ export interface ClientShellShape {
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
 }
 
-export class ClientShell extends Context.Service<ClientShell, ClientShellShape>()(
+export class ClientShell extends Context.Service<ClientShell, ClientShellDefinition>()(
   "@gent/tui/src/extensions/client-services/ClientShell",
 ) {}
 
-export const makeClientShellLayer = (payload: ClientShellShape): Layer.Layer<ClientShell> =>
+export const makeClientShellLayer = (payload: ClientShellDefinition): Layer.Layer<ClientShell> =>
   Layer.succeed(ClientShell, payload)
 
 // ── ClientDriver ─────────────────────────────────────────────────────────
 
-export interface ClientDriverShape {
-  readonly list: () => Effect.Effect<
+export interface ClientDriverDefinition {
+  readonly list: Effect.Effect<
     {
       readonly drivers: ReadonlyArray<{ readonly _tag: "model" | "external"; readonly id: string }>
     },
@@ -71,31 +71,31 @@ export interface ClientDriverShape {
   readonly clear: (input: { readonly agentName: AgentName }) => Effect.Effect<void, Error>
 }
 
-export class ClientDriver extends Context.Service<ClientDriver, ClientDriverShape>()(
+export class ClientDriver extends Context.Service<ClientDriver, ClientDriverDefinition>()(
   "@gent/tui/src/extensions/client-services/ClientDriver",
 ) {}
 
-export const makeClientDriverLayer = (payload: ClientDriverShape): Layer.Layer<ClientDriver> =>
+export const makeClientDriverLayer = (payload: ClientDriverDefinition): Layer.Layer<ClientDriver> =>
   Layer.succeed(ClientDriver, payload)
 
 // ── ClientComposer ───────────────────────────────────────────────────────
 
-export interface ClientComposerShape {
+export interface ClientComposerDefinition {
   /** Reactive accessor for the current composer state. */
   readonly state: () => ComposerState
 }
 
-export class ClientComposer extends Context.Service<ClientComposer, ClientComposerShape>()(
+export class ClientComposer extends Context.Service<ClientComposer, ClientComposerDefinition>()(
   "@gent/tui/src/extensions/client-services/ClientComposer",
 ) {}
 
 export const makeClientComposerLayer = (
-  payload: ClientComposerShape,
+  payload: ClientComposerDefinition,
 ): Layer.Layer<ClientComposer> => Layer.succeed(ClientComposer, payload)
 
 // ── ClientLifecycle ──────────────────────────────────────────────────────
 
-export interface ClientLifecycleShape {
+export interface ClientLifecycleDefinition {
   /**
    * Register a cleanup callback to run when the surrounding
    * `ExtensionUIProvider` unmounts (i.e. when the per-provider runtime is
@@ -109,29 +109,31 @@ export interface ClientLifecycleShape {
   readonly addCleanup: (fn: () => void) => void
 }
 
-export class ClientLifecycle extends Context.Service<ClientLifecycle, ClientLifecycleShape>()(
+export class ClientLifecycle extends Context.Service<ClientLifecycle, ClientLifecycleDefinition>()(
   "@gent/tui/src/extensions/client-services/ClientLifecycle",
 ) {}
 
 export const makeClientLifecycleLayer = (
-  payload: ClientLifecycleShape,
+  payload: ClientLifecycleDefinition,
 ): Layer.Layer<ClientLifecycle> => Layer.succeed(ClientLifecycle, payload)
 
 // ── Session Resource ─────────────────────────────────────────────────────
 
-type ActiveClientSession = NonNullable<ReturnType<ClientTransportShape["currentSession"]>>
+type ActiveClientSession = NonNullable<ReturnType<ClientTransportDefinition["currentSession"]>>
 
 export interface ClientSessionResource<A> {
+  // eslint-disable-next-line effect/noNullish -- resource consumers use undefined before the first fetch.
   readonly read: () => A | undefined
   readonly refetch: () => void
 }
 
 export const makeClientSessionResource = <A>(opts: {
-  readonly transport: ClientTransportShape
-  readonly lifecycle: ClientLifecycleShape
+  readonly transport: ClientTransportDefinition
+  readonly lifecycle: ClientLifecycleDefinition
   readonly cast: <B, E>(effect: Effect.Effect<B, E, never>) => void
   readonly label: string
   readonly fetch: (session: ActiveClientSession) => Effect.Effect<A, Error>
+  // eslint-disable-next-line effect/noNullish -- subscription is optional for static resources.
   readonly subscribe?: (refetch: () => void) => () => void
 }): Effect.Effect<ClientSessionResource<A>> =>
   Effect.sync(() => {
@@ -141,17 +143,23 @@ export const makeClientSessionResource = <A>(opts: {
       readonly value: A
     }
 
-    let getState: () => Keyed | undefined = () => undefined
-    let setState: (next: Keyed | undefined) => void = () => {}
+    let getState: () => Option.Option<Keyed> = () => Option.none()
+    let setState: (next: Option.Option<Keyed>) => void = () => {}
 
+    // eslint-disable-next-line effect/noNullish -- resource consumers use undefined before the first fetch.
     const read = (): A | undefined => {
       const state = getState()
-      const current = opts.transport.currentSession()
-      if (state === undefined || current === undefined) return undefined
-      if (state.sessionId !== current.sessionId || state.branchId !== current.branchId) {
-        return undefined
+      const current = Option.fromNullishOr(opts.transport.currentSession())
+      if (Option.isNone(state) || Option.isNone(current)) {
+        return Option.getOrUndefined(Option.none<A>())
       }
-      return state.value
+      if (
+        state.value.sessionId !== current.value.sessionId ||
+        state.value.branchId !== current.value.branchId
+      ) {
+        return Option.getOrUndefined(Option.none<A>())
+      }
+      return state.value.value
     }
 
     const refetchCaptured = (captured: ActiveClientSession): void => {
@@ -159,19 +167,21 @@ export const makeClientSessionResource = <A>(opts: {
         opts.fetch(captured).pipe(
           Effect.flatMap((value) =>
             Effect.sync(() => {
-              const current = opts.transport.currentSession()
+              const current = Option.fromNullishOr(opts.transport.currentSession())
               if (
-                current === undefined ||
-                current.sessionId !== captured.sessionId ||
-                current.branchId !== captured.branchId
+                Option.isNone(current) ||
+                current.value.sessionId !== captured.sessionId ||
+                current.value.branchId !== captured.branchId
               ) {
                 return
               }
-              setState({
-                sessionId: captured.sessionId,
-                branchId: captured.branchId,
-                value,
-              })
+              setState(
+                Option.some({
+                  sessionId: captured.sessionId,
+                  branchId: captured.branchId,
+                  value,
+                }),
+              )
             }),
           ),
           Effect.catchEager((err) =>
@@ -184,27 +194,26 @@ export const makeClientSessionResource = <A>(opts: {
     }
 
     const refetch = (): void => {
-      const session = opts.transport.currentSession()
-      if (session === undefined) return
-      refetchCaptured(session)
+      const session = Option.fromNullishOr(opts.transport.currentSession())
+      if (Option.isNone(session)) return
+      refetchCaptured(session.value)
     }
 
     createRoot((dispose) => {
-      const [state, set] = createSignal<Keyed | undefined>(undefined)
+      const [state, set] = createSignal<Option.Option<Keyed>>(Option.none())
       getState = state
       setState = set
       createEffect(() => {
-        const session = opts.transport.currentSession()
-        setState(undefined)
-        if (session === undefined) return
-        refetchCaptured(session)
+        const session = Option.fromNullishOr(opts.transport.currentSession())
+        setState(Option.none())
+        if (Option.isNone(session)) return
+        refetchCaptured(session.value)
       })
       opts.lifecycle.addCleanup(dispose)
     })
 
-    if (opts.subscribe !== undefined) {
-      opts.lifecycle.addCleanup(opts.subscribe(refetch))
-    }
+    const subscribe = Option.fromNullishOr(opts.subscribe)
+    if (Option.isSome(subscribe)) opts.lifecycle.addCleanup(subscribe.value(refetch))
 
     return { read, refetch }
   })

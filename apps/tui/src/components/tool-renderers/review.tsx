@@ -1,34 +1,14 @@
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { AgentTree } from "./agent-tree"
-import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutputOption, getString } from "../../utils/parse-tool-output"
+import type { ToolInput } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
-
-interface ReviewComment {
-  readonly file: string
-  readonly line?: number
-  readonly severity: "critical" | "high" | "medium" | "low"
-  readonly type: "bug" | "suggestion" | "style"
-  readonly text: string
-  readonly fix?: string
-}
-
-interface ReviewOutput {
-  readonly comments?: readonly ReviewComment[]
-  readonly summary?: {
-    readonly critical: number
-    readonly high: number
-    readonly medium: number
-    readonly low: number
-  }
-  readonly raw?: string
-  readonly error?: string
-}
 
 const ReviewCommentSchema = Schema.Struct({
   file: Schema.String,
-  line: Schema.optional(Schema.Number),
+  line: Schema.optional(Schema.Finite),
   severity: Schema.Literals(["critical", "high", "medium", "low"]),
   type: Schema.Literals(["bug", "suggestion", "style"]),
   text: Schema.String,
@@ -39,27 +19,28 @@ const ReviewOutputSchema = Schema.Struct({
   comments: Schema.optional(Schema.Array(ReviewCommentSchema)),
   summary: Schema.optional(
     Schema.Struct({
-      critical: Schema.Number,
-      high: Schema.Number,
-      medium: Schema.Number,
-      low: Schema.Number,
+      critical: Schema.Finite,
+      high: Schema.Finite,
+      medium: Schema.Finite,
+      low: Schema.Finite,
     }),
   ),
   raw: Schema.optional(Schema.String),
   error: Schema.optional(Schema.String),
 })
 
-function getDescription(input: unknown): string | undefined {
+function getDescription(input: ToolInput): Option.Option<string> {
   const desc = getString(input, "description")
-  return desc !== "" ? desc : undefined
+  if (desc.length === 0) return Option.none()
+  return Option.some(desc)
 }
 
-const SEVERITY_COLORS: Record<string, string> = {
+const SEVERITY_COLORS = {
   critical: "#ff5555",
   high: "#ffb86c",
   medium: "#f1fa8c",
   low: "#6272a4",
-}
+} satisfies Record<string, string>
 
 function formatSummary(s: { critical: number; high: number; medium: number; low: number }): string {
   const total = s.critical + s.high + s.medium + s.low
@@ -75,36 +56,36 @@ export function ReviewToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
   const description = () => getDescription(props.toolCall.input)
-  const output = () =>
-    decodeToolOutput(ReviewOutputSchema, props.toolCall.output) as ReviewOutput | undefined
+  const output = () => decodeToolOutputOption(ReviewOutputSchema, props.toolCall.output)
 
-  const subtitle = () => {
+  const subtitle = (): Option.Option<string> => {
     const d = description()
-    if (d === undefined) return undefined
-    return d.length > 60 ? d.slice(0, 60) + "…" : d
+    if (Option.isNone(d)) return Option.none()
+    if (d.value.length > 60) return Option.some(d.value.slice(0, 60) + "…")
+    return d
   }
 
-  const summaryText = () => {
-    const s = output()?.summary
-    if (s === undefined) return undefined
-    return formatSummary(s)
+  const summaryText = (): Option.Option<string> => {
+    const s = Option.flatMap(output(), (value) => Option.fromNullishOr(value.summary))
+    if (Option.isNone(s)) return Option.none()
+    return Option.some(formatSummary(s.value))
   }
 
   const reviewContent = () => {
-    const comments = output()?.comments
-    if (comments === undefined || comments.length === 0) return undefined
+    const comments = Option.flatMap(output(), (value) => Option.fromNullishOr(value.comments))
+    if (Option.isNone(comments) || comments.value.length === 0) return Option.none()
     return comments
   }
 
   return (
     <AgentTree
       title="review"
-      subtitle={subtitle()}
+      subtitle={Option.getOrUndefined(subtitle())}
       toolCall={props.toolCall}
       expanded={props.expanded}
       childSessions={props.childSessions}
       collapsedSummary={
-        <Show when={summaryText()}>
+        <Show when={Option.getOrUndefined(summaryText())}>
           {(text) => (
             <text style={{ fg: theme.textMuted }}>
               <span style={{ fg: theme.success }}>✓</span> {text()}
@@ -114,13 +95,25 @@ export function ReviewToolRenderer(props: ToolRendererProps) {
       }
       completedContent={
         <>
-          <Show when={props.expanded && reviewContent()}>
+          <Show when={props.expanded && Option.getOrUndefined(reviewContent())}>
             {(comments) => (
               <For each={comments()}>
                 {(comment, index) => {
-                  const isLast = () => index() === (reviewContent()?.length ?? 1) - 1
-                  const connector = () => (isLast() ? "╰──" : "├──")
-                  const severityColor = () => SEVERITY_COLORS[comment.severity] ?? theme.textMuted
+                  const isLast = () => index() === comments().length - 1
+                  const connector = () => {
+                    if (isLast()) return "╰──"
+                    return "├──"
+                  }
+                  const severityColor = () =>
+                    Option.getOrElse(
+                      Option.fromNullishOr(SEVERITY_COLORS[comment.severity]),
+                      () => theme.textMuted,
+                    )
+                  const lineSuffix = () => {
+                    const line = Option.fromNullishOr(comment.line)
+                    if (Option.isNone(line)) return ""
+                    return `:${line.value}`
+                  }
 
                   return (
                     <box flexDirection="column">
@@ -129,16 +122,18 @@ export function ReviewToolRenderer(props: ToolRendererProps) {
                         <span style={{ fg: severityColor() }}>[{comment.severity}]</span>{" "}
                         <span style={{ fg: theme.text }}>
                           {comment.file}
-                          {comment.line !== undefined ? `:${comment.line}` : ""}
+                          {lineSuffix()}
                         </span>{" "}
                         <span style={{ fg: theme.textMuted }}>({comment.type})</span>
                       </text>
                       <box paddingLeft={4}>
                         <text style={{ fg: theme.textMuted }}>{comment.text}</text>
                       </box>
-                      <Show when={comment.fix !== undefined}>
+                      <Show when={Option.getOrUndefined(Option.fromNullishOr(comment.fix))}>
                         <box paddingLeft={4}>
-                          <text style={{ fg: theme.success }}>fix: {comment.fix}</text>
+                          <text style={{ fg: theme.success }}>
+                            fix: {Option.getOrElse(Option.fromNullishOr(comment.fix), () => "")}
+                          </text>
                         </box>
                       </Show>
                     </box>
@@ -148,9 +143,17 @@ export function ReviewToolRenderer(props: ToolRendererProps) {
             )}
           </Show>
 
-          <Show when={output()?.error !== undefined}>
+          <Show
+            when={Option.getOrUndefined(
+              Option.flatMap(output(), (value) => Option.fromNullishOr(value.error)),
+            )}
+          >
             <text style={{ fg: theme.error }}>
-              <span>✕</span> {output()?.error}
+              <span>✕</span>{" "}
+              {Option.getOrElse(
+                Option.flatMap(output(), (value) => Option.fromNullishOr(value.error)),
+                () => "",
+              )}
             </text>
           </Show>
         </>

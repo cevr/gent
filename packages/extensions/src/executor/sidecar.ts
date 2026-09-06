@@ -18,6 +18,7 @@ import {
   Layer,
   Option,
   Path,
+  Predicate,
   type PlatformError,
   Schema,
   Scope,
@@ -69,16 +70,16 @@ const CloseableScopeSchema = Schema.declare<Scope.Closeable>(
 const SidecarRecord = Schema.Union([
   Schema.TaggedStruct("owned", {
     cwd: Schema.String,
-    port: Schema.Number,
+    port: Schema.Finite,
     baseUrl: Schema.String,
-    pid: Schema.Number,
+    pid: Schema.Finite,
     handle: ChildProcessHandleSchema,
     handleScope: CloseableScopeSchema,
     scope: Schema.optional(ScopeInfo),
   }),
   Schema.TaggedStruct("external", {
     cwd: Schema.String,
-    port: Schema.Number,
+    port: Schema.Finite,
     baseUrl: Schema.String,
     scope: ScopeInfo,
   }),
@@ -87,15 +88,15 @@ type SidecarRecord = Schema.Schema.Type<typeof SidecarRecord>
 
 export const RegisteredSidecarSchema = Schema.Struct({
   cwd: Schema.String,
-  pid: Schema.Number,
-  port: Schema.Number,
+  pid: Schema.Finite,
+  port: Schema.Finite,
   baseUrl: Schema.String,
   startedAt: Schema.String,
 })
 type RegisteredSidecar = Schema.Schema.Type<typeof RegisteredSidecarSchema>
 
 export const SidecarRegistryFileSchema = Schema.Struct({
-  version: Schema.Number,
+  version: Schema.Finite,
   sidecars: Schema.Record(Schema.String, RegisteredSidecarSchema),
 })
 type SidecarRegistryFile = Schema.Schema.Type<typeof SidecarRegistryFileSchema>
@@ -105,24 +106,36 @@ export const decodeRegistryFile = Schema.decodeUnknownEffect(SidecarRegistryFile
 
 const PortProbe = Schema.Union([
   Schema.TaggedStruct("free", {
-    port: Schema.Number,
+    port: Schema.Finite,
   }),
   Schema.TaggedStruct("reusable", {
-    port: Schema.Number,
+    port: Schema.Finite,
     scope: ScopeInfo,
   }),
   Schema.TaggedStruct("occupied", {
-    port: Schema.Number,
+    port: Schema.Finite,
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
 type PortProbe = Schema.Schema.Type<typeof PortProbe>
+type JsonValue = Schema.Schema.Type<typeof Schema.Unknown>
+type PortScan = {
+  readonly reusable: Option.Option<Extract<PortProbe, { readonly _tag: "reusable" }>>
+  readonly freePort: Option.Option<number>
+}
+
+const JSON_NULL_REPLACER = Option.getOrNull(Option.none())
+
+const errorMessage = (error: JsonValue): string => {
+  if (error instanceof Error) return error.message
+  return String(error)
+}
 
 // ── Service interface ──
 
 export interface ExecutorSidecarService {
   readonly resolveEndpoint: (cwd: string) => Effect.Effect<ExecutorEndpoint, ExecutorSidecarError>
   readonly stop: (cwd: string) => Effect.Effect<"stopped" | "missing", ExecutorSidecarError>
-  readonly find: (cwd: string) => Effect.Effect<ExecutorEndpoint | undefined>
+  readonly find: (cwd: string) => Effect.Effect<Option.Option<ExecutorEndpoint>>
   readonly resolveSettings: (cwd: string) => Effect.Effect<ResolvedExecutorSettings>
 }
 
@@ -151,7 +164,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         // ── Settings ──
 
         const parseSettingsJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))
-        const decodeSettings = (input: unknown) =>
+        const decodeSettings = (input: Schema.Schema.Type<typeof Schema.Unknown>) =>
           Schema.decodeUnknownEffect(ExecutorSettings)(input).pipe(
             Effect.mapError(
               () =>
@@ -178,7 +191,8 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             Effect.flatMap((json) => {
               if (!isRecord(json)) return decodeSettings({})
               const section = json["gentExecutor"]
-              return decodeSettings(section && typeof section === "object" ? section : {})
+              if (Predicate.isObjectOrArray(section)) return decodeSettings(section)
+              return decodeSettings({})
             }),
             Effect.orElseSucceed(() => ({})),
           )
@@ -206,7 +220,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               Effect.fail(
                 new ExecutorSidecarError({
                   code: "STARTUP_TIMEOUT",
-                  message: `Failed to reach ${baseUrl}/api/scope: ${e instanceof Error ? e.message : String(e)}`,
+                  message: `Failed to reach ${baseUrl}/api/scope: ${errorMessage(e)}`,
                 }),
               ),
             ),
@@ -217,37 +231,36 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         const probePort = (cwd: string, port: number): Effect.Effect<PortProbe> => {
           const baseUrl = `http://127.0.0.1:${port}`
           return fetchScope(baseUrl).pipe(
-            Effect.map(
-              (scope): PortProbe =>
-                scope.dir === cwd
-                  ? PortProbe.cases.reusable.make({ port, scope })
-                  : PortProbe.cases.occupied.make({ port }),
-            ),
+            Effect.map((scope): PortProbe => {
+              if (scope.dir === cwd) return PortProbe.cases.reusable.make({ port, scope })
+              return PortProbe.cases.occupied.make({ port })
+            }),
             Effect.catchEager(() =>
-              platform
-                .isPortFree(port)
-                .pipe(
-                  Effect.map(
-                    (free): PortProbe =>
-                      free
-                        ? PortProbe.cases.free.make({ port })
-                        : PortProbe.cases.occupied.make({ port }),
-                  ),
-                ),
+              platform.isPortFree(port).pipe(
+                Effect.map((free): PortProbe => {
+                  if (free) return PortProbe.cases.free.make({ port })
+                  return PortProbe.cases.occupied.make({ port })
+                }),
+              ),
             ),
           )
         }
 
-        const scanPorts = (cwd: string) =>
+        const scanPorts = (cwd: string): Effect.Effect<PortScan> =>
           Effect.gen(function* () {
             const probes: PortProbe[] = []
             for (let offset = 0; offset < PORT_SCAN_LIMIT; offset++) {
               probes.push(yield* probePort(cwd, DEFAULT_PORT_SEED + offset))
             }
-            const reusable = probes.find(PortProbe.guards.reusable)
-            if (reusable) return { reusable, freePort: undefined } as const
-            const free = probes.find(PortProbe.guards.free)
-            return { reusable: undefined, freePort: free?.port } as const
+            const reusable = Option.fromNullishOr(probes.find(PortProbe.guards.reusable))
+            if (Option.isSome(reusable)) {
+              return { reusable, freePort: Option.none() }
+            }
+            const free = Option.fromNullishOr(probes.find(PortProbe.guards.free))
+            return {
+              reusable: Option.none(),
+              freePort: Option.map(free, (probe) => probe.port),
+            }
           })
 
         // ── PID registry ──
@@ -263,7 +276,11 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         const writeRegistry = (registry: SidecarRegistryFile) =>
           fs.makeDirectory(path.dirname(registryPath), { recursive: true }).pipe(
             Effect.andThen(
-              fs.writeFileString(registryPath, JSON.stringify(registry, null, 2) + "\n"),
+              fs.writeFileString(
+                registryPath,
+                // oxlint-disable-next-line effect/noGlobals -- sidecar registry persistence is a JSON file boundary.
+                JSON.stringify(registry, JSON_NULL_REPLACER, 2) + "\n",
+              ),
             ),
             Effect.orElseSucceed(() => {}),
           )
@@ -290,13 +307,13 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             const registry = yield* readRegistry
             const existing = registry.sidecars[cwd]
             if (!existing) return
-            if (pid !== undefined && existing.pid !== pid) return
+            if (Predicate.isNotUndefined(pid) && existing.pid !== pid) return
             const { [cwd]: _removed, ...rest } = registry.sidecars
             yield* writeRegistry({ ...registry, sidecars: rest })
           })
 
         const getRegisteredSidecar = (cwd: string) =>
-          readRegistry.pipe(Effect.map((r) => r.sidecars[cwd]))
+          readRegistry.pipe(Effect.map((r) => Option.fromNullishOr(r.sidecars[cwd])))
 
         // ── Binary resolution ──
 
@@ -305,15 +322,15 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         // first matching entry, or `undefined` if none exists.
         const whichOnPath = (
           command: string,
-        ): Effect.Effect<string | undefined, PlatformError.PlatformError> =>
+        ): Effect.Effect<Option.Option<string>, PlatformError.PlatformError> =>
           Effect.gen(function* () {
             // `Config.option` still surfaces `ConfigError` on parse failure
             // even when the var is missing. Treat any failure as "no PATH".
-            const pathEnv = yield* Config.option(Config.string("PATH"))
-              .asEffect()
-              .pipe(Effect.catch(() => Effect.succeed(Option.none<string>())))
+            const pathEnv = yield* Config.option(Config.string("PATH")).pipe(
+              Effect.orElseSucceed(() => Option.none<string>()),
+            )
             const dirs = Option.match(pathEnv, {
-              onNone: () => [] as ReadonlyArray<string>,
+              onNone: () => [],
               onSome: (raw) => raw.split(platform.pathListSeparator).filter((d) => d.length > 0),
             })
             const candidates = platform.commandCandidates(command)
@@ -321,16 +338,16 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               for (const name of candidates) {
                 const candidate = path.join(dir, name)
                 const exists = yield* fs.exists(candidate)
-                if (exists) return candidate
+                if (exists) return Option.some(candidate)
               }
             }
-            return undefined
+            return Option.none()
           })
 
         const resolveBinary = Effect.gen(function* () {
           // Try PATH first
           const fromPath = yield* whichOnPath("executor")
-          if (fromPath !== undefined) return fromPath
+          if (Option.isSome(fromPath)) return fromPath.value
 
           // Fallback: package resolution → bootstrap if needed
           const pkgPath = yield* Effect.try({
@@ -338,7 +355,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             catch: (e) =>
               new ExecutorSidecarError({
                 code: "PACKAGE_RESOLUTION_FAILED",
-                message: `Could not resolve executor: ${e instanceof Error ? e.message : String(e)}`,
+                message: `Could not resolve executor: ${errorMessage(e)}`,
               }),
           })
           const pkgRoot = path.dirname(pkgPath)
@@ -400,21 +417,19 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               stdin: "ignore",
               stdout: "ignore",
               stderr: "ignore",
-            })
-              .asEffect()
-              .pipe(
-                Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-                Scope.provide(handleScope),
-                Effect.catchTag("PlatformError", (e) =>
-                  Effect.fail(
-                    new ExecutorSidecarError({
-                      code: "BOOTSTRAP_FAILED",
-                      message: `Failed to spawn executor: ${e.message}`,
-                    }),
-                  ),
+            }).pipe(
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              Scope.provide(handleScope),
+              Effect.catchTag("PlatformError", (e) =>
+                Effect.fail(
+                  new ExecutorSidecarError({
+                    code: "BOOTSTRAP_FAILED",
+                    message: `Failed to spawn executor: ${e.message}`,
+                  }),
                 ),
-                Effect.tapError(() => Scope.close(handleScope, Exit.void)),
-              )
+              ),
+              Effect.tapError(() => Scope.close(handleScope, Exit.void)),
+            )
             yield* handle.unref.pipe(Effect.ignore)
 
             return SidecarRecord.cases.owned.make({
@@ -424,7 +439,6 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               pid: Number(handle.pid),
               handle,
               handleScope,
-              scope: undefined,
             })
           })
 
@@ -437,10 +451,13 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
             while ((yield* Clock.currentTimeMillis) < deadline) {
               const result = yield* fetchScope(baseUrl, HEALTH_TIMEOUT_MS).pipe(
-                Effect.map((scope) => (scope.dir === cwd ? scope : undefined)),
-                Effect.orElseSucceed(() => undefined),
+                Effect.map((scope) => {
+                  if (scope.dir === cwd) return Option.some(scope)
+                  return Option.none()
+                }),
+                Effect.orElseSucceed(() => Option.none()),
               )
-              if (result) return result
+              if (Option.isSome(result)) return result.value
               yield* Effect.sleep(Duration.millis(100))
             }
             return yield* new ExecutorSidecarError({
@@ -485,8 +502,9 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
             const owned = Array.from(sidecarsByCwd.values()).filter(SidecarRecord.guards.owned)
-            yield* Effect.all(
-              owned.map((record) =>
+            yield* Effect.forEach(
+              owned,
+              (record) =>
                 Effect.gen(function* () {
                   const settings = yield* loadSettings(record.cwd).pipe(
                     Effect.catchEager(() => Effect.succeed(ExecutorSettingsDefaults)),
@@ -495,10 +513,9 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
                     yield* killRecord(record)
                   }
                 }),
-              ),
-              { concurrency: "unbounded" },
+              { concurrency: 1 },
             )
-          }).pipe(Effect.catchCause(() => Effect.void)),
+          }).pipe(Effect.ignoreCause),
         )
 
         // ── Core operations ──
@@ -506,30 +523,33 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         const findRunning = (cwd: string) =>
           Effect.gen(function* () {
             const normalized = path.resolve(cwd)
-            const cached = sidecarsByCwd.get(normalized)
-            if (cached) {
-              const health = yield* fetchScope(cached.baseUrl).pipe(
-                Effect.map((scope) => (scope.dir === normalized ? scope : undefined)),
-                Effect.orElseSucceed(() => undefined),
+            const cached = Option.fromNullishOr(sidecarsByCwd.get(normalized))
+            if (Option.isSome(cached)) {
+              const health = yield* fetchScope(cached.value.baseUrl).pipe(
+                Effect.map((scope) => {
+                  if (scope.dir === normalized) return Option.some(scope)
+                  return Option.none()
+                }),
+                Effect.orElseSucceed(() => Option.none()),
               )
-              if (health) return cached
+              if (Option.isSome(health)) return Option.some(cached.value)
               sidecarsByCwd.delete(normalized)
             }
 
             // Scan for a reusable sidecar on known ports
             const scan = yield* scanPorts(normalized)
-            if (scan.reusable) {
+            if (Option.isSome(scan.reusable)) {
               const record = SidecarRecord.cases.external.make({
                 cwd: normalized,
-                port: scan.reusable.port,
-                baseUrl: `http://127.0.0.1:${scan.reusable.port}`,
-                scope: scan.reusable.scope,
+                port: scan.reusable.value.port,
+                baseUrl: `http://127.0.0.1:${scan.reusable.value.port}`,
+                scope: scan.reusable.value.scope,
               })
               sidecarsByCwd.set(normalized, record)
-              return record
+              return Option.some(record)
             }
 
-            return undefined
+            return Option.none()
           })
 
         const ensureSidecar = (cwd: string) =>
@@ -537,17 +557,17 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             const normalized = path.resolve(cwd)
 
             const running = yield* findRunning(normalized)
-            if (running) return running
+            if (Option.isSome(running)) return running.value
 
             const scan = yield* scanPorts(normalized)
-            if (scan.freePort === undefined) {
+            if (Option.isNone(scan.freePort)) {
               return yield* new ExecutorSidecarError({
                 code: "PORT_EXHAUSTED",
                 message: `No free port in ${DEFAULT_PORT_SEED}-${DEFAULT_PORT_SEED + PORT_SCAN_LIMIT - 1}`,
               })
             }
 
-            const record = yield* spawnSidecar(normalized, scan.freePort)
+            const record = yield* spawnSidecar(normalized, scan.freePort.value)
             sidecarsByCwd.set(normalized, record)
 
             const scope = yield* pollHealth(record.baseUrl, normalized, STARTUP_TIMEOUT_MS).pipe(
@@ -578,15 +598,26 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             return updated
           }).pipe(spawnMutex.withPermits(1))
 
-        const toEndpoint = (record: SidecarRecord): ExecutorEndpoint => ({
-          mode: "local",
-          baseUrl: record.baseUrl,
-          ownedByGent: record._tag === "owned",
-          scope:
-            record._tag === "external"
-              ? record.scope
-              : (record.scope ?? { id: "", name: "", dir: record.cwd }),
-        })
+        const toEndpoint = (record: SidecarRecord): ExecutorEndpoint => {
+          if (record._tag === "external") {
+            return {
+              mode: "local",
+              baseUrl: record.baseUrl,
+              ownedByGent: false,
+              scope: record.scope,
+            }
+          }
+          return {
+            mode: "local",
+            baseUrl: record.baseUrl,
+            ownedByGent: true,
+            scope: Option.getOrElse(Option.fromNullishOr(record.scope), () => ({
+              id: "",
+              name: "",
+              dir: record.cwd,
+            })),
+          }
+        }
 
         // ── Service implementation ──
 
@@ -603,7 +634,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               }
               const scope = yield* fetchScope(remoteUrl)
               return {
-                mode: "remote" as const,
+                mode: "remote",
                 baseUrl: remoteUrl,
                 ownedByGent: false,
                 scope,
@@ -616,27 +647,27 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           stop: Effect.fn("ExecutorSidecar.stop")(function* (cwd) {
             const normalized = path.resolve(cwd)
             const running = yield* findRunning(normalized)
-            if (running) {
-              yield* killRecord(running)
+            if (Option.isSome(running)) {
+              yield* killRecord(running.value)
               sidecarsByCwd.delete(normalized)
-              return "stopped" as const
+              return "stopped"
             }
 
             const registered = yield* getRegisteredSidecar(normalized)
-            if (!registered) return "missing" as const
+            if (Option.isNone(registered)) return "missing"
 
-            if (!(yield* platform.isPidAlive(registered.pid))) {
-              yield* unregisterSidecar(normalized, registered.pid)
-              return "missing" as const
+            if (!(yield* platform.isPidAlive(registered.value.pid))) {
+              yield* unregisterSidecar(normalized, registered.value.pid)
+              return "missing"
             }
 
-            yield* terminatePid(registered.pid)
-            yield* unregisterSidecar(normalized, registered.pid)
-            return "stopped" as const
+            yield* terminatePid(registered.value.pid)
+            yield* unregisterSidecar(normalized, registered.value.pid)
+            return "stopped"
           }),
 
           find: Effect.fn("ExecutorSidecar.find")((cwd: string) =>
-            findRunning(cwd).pipe(Effect.map((r) => (r ? toEndpoint(r) : undefined))),
+            findRunning(cwd).pipe(Effect.map(Option.map(toEndpoint))),
           ),
 
           resolveSettings: Effect.fn("ExecutorSidecar.resolveSettings")((cwd: string) =>

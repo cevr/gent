@@ -1,15 +1,16 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, Exit, Layer, Schema } from "effect"
+import { Predicate, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { hook, tool, ExtensionContext } from "@gent/core/extensions/api"
-import { ToolRunner } from "../../src/runtime/agent/tool-runner"
+import { ToolRunner, type ResolvedToolCapability } from "../../src/runtime/agent/tool-runner"
 import { DynamicExtensionRegistry } from "../../src/domain/dynamic-extension-registry"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core-internal/domain/permission"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import type { AgentEvent, ToolCallStarted } from "../../src/domain/event"
+import type * as Prompt from "effect/unstable/ai/Prompt"
 import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { provideCurrentHostCtx } from "../../src/runtime/agent/current-extension-host-context"
@@ -26,29 +27,33 @@ import { AgentName } from "@gent/core-internal/domain/agent"
 class ToolProfileToken extends Context.Service<
   ToolProfileToken,
   {
-    readonly read: () => Effect.Effect<string>
+    readonly read: Effect.Effect<string>
   }
 >()("@gent/core/tests/runtime/tool-runner.test/ToolProfileToken") {}
 
-interface ToolReadTokenShape {
-  readonly read: () => Effect.Effect<string>
+interface ToolReadTokenApi {
+  readonly read: Effect.Effect<string>
 }
 
-class ToolReadToken extends Context.Service<ToolReadToken, ToolReadTokenShape>()(
+class ToolReadToken extends Context.Service<ToolReadToken, ToolReadTokenApi>()(
   "@gent/core/tests/runtime/tool-runner.test/ToolReadToken",
 ) {}
 
 class ToolWriteToken extends Context.Service<
   ToolWriteToken,
   {
-    readonly write: () => Effect.Effect<string>
+    readonly write: Effect.Effect<string>
   }
 >()("@gent/core/tests/runtime/tool-runner.test/ToolWriteToken") {}
 
-class ToolRunnerTestError extends Schema.TaggedErrorClass<ToolRunnerTestError>()(
+class ToolRunnerTestError extends Schema.TaggedError<ToolRunnerTestError>()(
   "@gent/core/tests/runtime/tool-runner.test/ToolRunnerTestError",
   { message: Schema.String },
 ) {}
+
+const ErrorResult = Schema.Struct({ error: Schema.String })
+const errorFromResult = (result: Prompt.ToolResultPart): string =>
+  Schema.decodeUnknownSync(ErrorResult)(result.result).error
 
 describe("tool execution", () => {
   const test = it.live.layer(BunServices.layer)
@@ -95,6 +100,7 @@ describe("tool execution", () => {
               }),
             ),
           )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ echoed: "hello" })
@@ -118,15 +124,17 @@ describe("tool execution", () => {
               sourcePath: "policy",
               contributions: {
                 hooks: [
-                  hook.toolCall((input) =>
-                    input.toolName === "dynamic_echo" &&
-                    typeof input.input === "object" &&
-                    input.input !== null &&
-                    "message" in input.input &&
-                    input.input.message === "blocked"
-                      ? Effect.succeed({ _tag: "deny" as const, message: "blocked" })
-                      : Effect.undefined,
-                  ),
+                  hook.toolCall((input) => {
+                    if (
+                      input.toolName === "dynamic_echo" &&
+                      Predicate.isObjectOrArray(input.input) &&
+                      "message" in input.input &&
+                      input.input["message"] === "blocked"
+                    ) {
+                      return Effect.succeed({ _tag: "deny", message: "blocked" })
+                    }
+                    return Effect.undefined
+                  }),
                 ],
               },
             },
@@ -183,12 +191,87 @@ describe("tool execution", () => {
             ),
           )
         return { allowed, denied }
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(allowed.isFailure).toBe(false)
       expect(allowed.result).toEqual({ echoed: "hello" })
       expect(denied.isFailure).toBe(true)
       expect(denied.result).toEqual({ error: "blocked" })
     }))
+
+  test("executes the captured dynamic implementation after replacement", () =>
+    Effect.gen(function* () {
+      const makeReplacementTool = (value: string) =>
+        tool({
+          id: "replaceable",
+          description: "Replacement probe",
+          params: Schema.Struct({}),
+          output: Schema.Struct({ value: Schema.String }),
+          execute: () => Effect.succeed({ value }),
+        })
+      const first = makeReplacementTool("A")
+      const replacement = makeReplacementTool("B")
+      const sessionId = SessionId.make("replacement-session")
+      const branchId = BranchId.make("replacement-branch")
+      const deps = Layer.mergeAll(
+        ExtensionRegistry.Test(),
+        DynamicExtensionRegistry.Live,
+        Permission.Test(),
+        EventPublisher.Test(),
+        ApprovalService.Test(),
+        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      )
+      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
+      const layer = Layer.mergeAll(deps, runnerLayer)
+
+      const result = yield* Effect.gen(function* () {
+        const dynamic = yield* DynamicExtensionRegistry
+        const unregisterFirst = yield* dynamic.registerTool({
+          extensionId: ExtensionId.make("dynamic-a"),
+          scope: { _tag: "session", sessionId },
+          capability: first,
+        })
+        const runner = yield* ToolRunner
+        const captured = yield* runner.capture({ sessionId, toolName: "replaceable" })
+        yield* unregisterFirst
+        const unregisterReplacement = yield* dynamic.registerTool({
+          extensionId: ExtensionId.make("dynamic-b"),
+          scope: { _tag: "session", sessionId },
+          capability: replacement,
+        })
+
+        const run = (toolCallId: string, entry: Option.Option<ResolvedToolCapability>) =>
+          runner
+            .runBound(
+              { toolCallId: ToolCallId.make(toolCallId), toolName: "replaceable", input: {} },
+              entry,
+            )
+            .pipe(
+              provideCurrentHostCtx(
+                testToolContext({
+                  sessionId,
+                  branchId,
+                  toolCallId: ToolCallId.make(toolCallId),
+                  agentName: AgentName.make("cowork"),
+                }),
+              ),
+            )
+
+        const oldTurn = yield* run("replacement-old", captured)
+        const current = yield* runner.capture({ sessionId, toolName: "replaceable" })
+        const currentTurn = yield* run("replacement-current", current)
+        const hiddenTurn = yield* run("replacement-hidden", Option.none<ResolvedToolCapability>())
+        yield* unregisterReplacement
+        return { oldTurn, currentTurn, hiddenTurn }
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(layer))
+
+      expect(result.oldTurn.result).toEqual({ value: "A" })
+      expect(result.currentTurn.result).toEqual({ value: "B" })
+      expect(result.hiddenTurn.isFailure).toBe(true)
+      expect(result.hiddenTurn.result).toEqual({ error: "Unknown tool: replaceable" })
+    }))
+
   test("provides host authority through ExtensionContext service", () =>
     Effect.gen(function* () {
       const Output = Schema.Struct({
@@ -212,10 +295,10 @@ describe("tool execution", () => {
               sessionId: ctx.sessionId,
               branchId: ctx.branchId,
               toolCallId: ctx.toolCallId ?? "",
-              hasAgentRun: typeof ctx.Agent.run === "function",
-              hasSessionListMessages: typeof ctx.Session.listMessages === "function",
-              hasInteraction: typeof ctx.Interaction.approve === "function",
-              hasProcessRun: typeof ctx.Process.run === "function",
+              hasAgentRun: Predicate.isFunction(ctx.Agent.run),
+              hasSessionListMessages: Predicate.isFunction(ctx.Session.listMessages),
+              hasInteraction: Predicate.isFunction(ctx.Interaction.approve),
+              hasProcessRun: Predicate.isFunction(ctx.Process.run),
             }
           }),
       })
@@ -251,6 +334,7 @@ describe("tool execution", () => {
         return yield* runner
           .run({ toolCallId, toolName: "probe", input: {} })
           .pipe(provideCurrentHostCtx(ctx))
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       expect(result.isFailure).toBe(false)
@@ -304,14 +388,10 @@ describe("tool execution", () => {
             }),
           ),
         )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(true)
-      const error =
-        (
-          result.result as {
-            error?: string
-          }
-        ).error ?? ""
+      const error = errorFromResult(result)
       expect(error).toContain("Tool 'fail' failed")
     }))
   test("returns structured error on invalid input", () =>
@@ -354,14 +434,10 @@ describe("tool execution", () => {
             }),
           ),
         )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(true)
-      const error =
-        (
-          result.result as {
-            error?: string
-          }
-        ).error ?? ""
+      const error = errorFromResult(result)
       expect(error).toContain("Tool 'strict' input failed:")
       expect(error).toContain("path")
     }))
@@ -413,14 +489,10 @@ describe("tool execution", () => {
             }),
           ),
         )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(true)
-      const error =
-        (
-          result.result as {
-            error?: string
-          }
-        ).error ?? ""
+      const error = errorFromResult(result)
       expect(error).toContain("Tool 'strict_output' failed:")
       expect(error).toContain("ok")
     }))
@@ -468,14 +540,10 @@ describe("tool execution", () => {
             }),
           ),
         )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(true)
-      const error =
-        (
-          result.result as {
-            error?: string
-          }
-        ).error ?? ""
+      const error = errorFromResult(result)
       expect(error).toBe("Permission denied")
     }))
   test("uses the provided tool context without reconstructing it", () =>
@@ -499,7 +567,7 @@ describe("tool execution", () => {
               home: ctx.home,
               sessionId: ctx.sessionId,
               branchId: ctx.branchId,
-              agentName: ctx.agentName ?? null,
+              agentName: Option.getOrNull(Option.fromUndefinedOr(ctx.agentName)),
             }
           }),
       })
@@ -534,6 +602,7 @@ describe("tool execution", () => {
             }),
           ),
         )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({
@@ -554,7 +623,7 @@ describe("tool execution", () => {
         execute: () =>
           Effect.gen(function* () {
             const token = yield* ToolProfileToken
-            const value = yield* token.read()
+            const value = yield* token.read
             return { value }
           }),
       })
@@ -577,8 +646,10 @@ describe("tool execution", () => {
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
       const capabilityContext = Context.make(ToolProfileToken, {
-        read: () => Effect.succeed("selected-profile"),
-      }) as Context.Context<never>
+        read: Effect.succeed("selected-profile"),
+      })
+      let erasedCapabilityContext: Context.Context<never> = Context.empty()
+      if (Context.isContext(capabilityContext)) erasedCapabilityContext = capabilityContext
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
         const toolCallId = ToolCallId.make("tc-context")
@@ -591,8 +662,9 @@ describe("tool execution", () => {
               agentName: AgentName.make("cowork"),
             }),
           ),
-          provideCurrentCapabilityContext(capabilityContext),
+          provideCurrentCapabilityContext(erasedCapabilityContext),
         )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ value: "selected-profile" })
@@ -613,7 +685,7 @@ describe("tool execution", () => {
             const readToken = yield* ToolReadToken
             const writeToken = yield* Effect.serviceOption(ToolWriteToken)
             return {
-              readValue: yield* readToken.read(),
+              readValue: yield* readToken.read,
               writeUnavailable: writeToken._tag === "None",
             }
           }),
@@ -633,14 +705,16 @@ describe("tool execution", () => {
         EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        Layer.succeed(ToolWriteToken, { write: () => Effect.succeed("outer-write") }),
+        Layer.succeed(ToolWriteToken, ToolWriteToken.of({ write: Effect.succeed("outer-write") })),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
       const capabilityContext = Context.empty().pipe(
-        Context.add(ToolReadToken, { read: () => Effect.succeed("read-ok") }),
-        Context.add(ToolWriteToken, { write: () => Effect.succeed("write-leak") }),
-      ) as Context.Context<never>
+        Context.add(ToolReadToken, { read: Effect.succeed("read-ok") }),
+        Context.add(ToolWriteToken, { write: Effect.succeed("write-leak") }),
+      )
+      let erasedCapabilityContext: Context.Context<never> = Context.empty()
+      if (Context.isContext(capabilityContext)) erasedCapabilityContext = capabilityContext
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
         const toolCallId = ToolCallId.make("tc-read-context")
@@ -653,8 +727,9 @@ describe("tool execution", () => {
               agentName: AgentName.make("cowork"),
             }),
           ),
-          provideCurrentCapabilityContext(capabilityContext),
+          provideCurrentCapabilityContext(erasedCapabilityContext),
         )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ readValue: "read-ok", writeUnavailable: false })
@@ -725,6 +800,7 @@ describe("tool execution", () => {
               }),
             ),
           )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({
@@ -754,15 +830,18 @@ describe("tool execution", () => {
       })
       const eventTags: Array<string> = []
       const events: Array<ToolCallStarted> = []
-      const eventPublisherLayer = Layer.succeed(EventPublisher, {
-        append: () => Effect.die("append not exercised in ToolRunner tests"),
-        deliver: () => Effect.void,
-        publish: (event: AgentEvent) =>
-          Effect.sync(() => {
-            eventTags.push(event._tag)
-            if (event._tag === "ToolCallStarted") events.push(event)
-          }),
-      })
+      const eventPublisherLayer = Layer.succeed(
+        EventPublisher,
+        EventPublisher.of({
+          append: () => Effect.die("append not exercised in ToolRunner tests"),
+          deliver: () => Effect.void,
+          publish: (event: AgentEvent) =>
+            Effect.sync(() => {
+              eventTags.push(event._tag)
+              if (event._tag === "ToolCallStarted") events.push(event)
+            }),
+        }),
+      )
       const deps = Layer.mergeAll(
         ExtensionRegistry.fromResolved(
           resolveExtensions([
@@ -796,6 +875,7 @@ describe("tool execution", () => {
             ),
           ),
         )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result).toBeInstanceOf(InteractionPendingError)
       expect(result.requestId).toBe(InteractionRequestId.make("req-pending"))

@@ -30,6 +30,12 @@ import {
   Session,
   SessionTreeNode,
 } from "../domain/message.js"
+import {
+  CanonicalCwd,
+  ResourceGraphRevision,
+  ResourceGraphSnapshot,
+  ResourceGraphStatus,
+} from "../domain/resource-graph-state.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
 import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
@@ -113,7 +119,7 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
   branchId: BranchId,
   name: Schema.optional(Schema.String),
   messages: Schema.Array(ProjectedMessage),
-  lastEventId: Schema.NullOr(Schema.Number),
+  lastEventId: Schema.NullOr(Schema.Finite),
   reasoningLevel: Schema.optional(ReasoningEffort),
   activeBranchId: Schema.optional(BranchId),
   /** Current runtime state (`_tag` + agent/queue). Idle sessions return Idle runtime. */
@@ -141,7 +147,7 @@ export type QueueDrainInput = typeof QueueDrainInput.Type
 export const SubscribeEventsInput = Schema.Struct({
   sessionId: SessionId,
   branchId: Schema.optional(BranchId),
-  after: Schema.optional(Schema.Number),
+  after: Schema.optional(Schema.Finite),
 })
 export type SubscribeEventsInput = typeof SubscribeEventsInput.Type
 
@@ -189,7 +195,7 @@ export const ListAuthMethodsSuccess = Schema.Record(Schema.String, Schema.Array(
 export const AuthorizeAuthInput = Schema.Struct({
   sessionId: SessionId,
   provider: Schema.String,
-  method: Schema.Number,
+  method: Schema.Finite,
 })
 export type AuthorizeAuthInput = typeof AuthorizeAuthInput.Type
 
@@ -198,7 +204,7 @@ export const AuthorizeAuthSuccess = Schema.NullOr(AuthAuthorization)
 export const CallbackAuthInput = Schema.Struct({
   sessionId: SessionId,
   provider: Schema.String,
-  method: Schema.Number,
+  method: Schema.Finite,
   authorizationId: Schema.String,
   code: Schema.optional(Schema.String),
 })
@@ -223,6 +229,29 @@ export const ExtensionRpcRequestInput = Schema.Struct({
   branchId: BranchId,
 })
 export type ExtensionRpcRequestInput = typeof ExtensionRpcRequestInput.Type
+
+/** Submit one durable desired resource graph for the workspace header owner. */
+export const ResourceGraphSubmitInput = Schema.Struct({
+  cwd: CanonicalCwd,
+  commandId: RequestId,
+  expectedRevision: Schema.optional(ResourceGraphRevision),
+  desiredRevision: ResourceGraphRevision,
+  snapshot: ResourceGraphSnapshot,
+})
+export type ResourceGraphSubmitInput = typeof ResourceGraphSubmitInput.Type
+
+/** Query one durable resource graph owner in the workspace header. */
+export const ResourceGraphGetInput = Schema.Struct({
+  cwd: CanonicalCwd,
+})
+export type ResourceGraphGetInput = typeof ResourceGraphGetInput.Type
+
+/** Preview the current target declarations without publishing or acquiring them. */
+export const ResourceGraphPreviewInput = ResourceGraphGetInput
+export type ResourceGraphPreviewInput = typeof ResourceGraphPreviewInput.Type
+
+export const ResourceGraphStatusResult = Schema.NullOr(ResourceGraphStatus)
+export type ResourceGraphStatusResult = typeof ResourceGraphStatusResult.Type
 
 export class SlashCommandInfo extends Schema.Class<SlashCommandInfo>("SlashCommandInfo")({
   /** Routing key (capability id). */
@@ -335,7 +364,7 @@ export type ClearDriverOverrideInput = typeof ClearDriverOverrideInput.Type
 // Connection lifecycle
 // ---------------------------------------------------------------------------
 
-export class GentConnectionError extends Schema.TaggedErrorClass<GentConnectionError>()(
+export class GentConnectionError extends Schema.TaggedError<GentConnectionError>()(
   "@gent/core/GentConnectionError",
   { message: Schema.String },
 ) {}
@@ -343,12 +372,12 @@ export class GentConnectionError extends Schema.TaggedErrorClass<GentConnectionE
 export const ConnectionState = Schema.Union([
   Schema.TaggedStruct("connecting", {}),
   Schema.TaggedStruct("connected", {
-    pid: Schema.optional(Schema.Number),
-    generation: Schema.Number,
+    pid: Schema.optional(Schema.Finite),
+    generation: Schema.Finite,
   }),
   Schema.TaggedStruct("reconnecting", {
-    attempt: Schema.Number,
-    generation: Schema.Number,
+    attempt: Schema.Finite,
+    generation: Schema.Finite,
   }),
   Schema.TaggedStruct("disconnected", {
     reason: Schema.String,

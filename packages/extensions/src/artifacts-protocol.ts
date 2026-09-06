@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import {
   ArtifactId,
   defineRequests,
@@ -25,8 +25,8 @@ export const Artifact = Schema.Struct({
   status: ArtifactStatus,
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   branchId: Schema.optional(BranchId),
-  createdAt: Schema.Number,
-  updatedAt: Schema.Number,
+  createdAt: Schema.Finite,
+  updatedAt: Schema.Finite,
 })
 export type Artifact = typeof Artifact.Type
 
@@ -59,7 +59,7 @@ export const ArtifactEntry = Schema.Struct({
   status: ArtifactStatus,
   path: Schema.optional(Schema.String),
   branchId: Schema.optional(BranchId),
-  createdAt: Schema.Number,
+  createdAt: Schema.Finite,
 })
 export type ArtifactEntry = typeof ArtifactEntry.Type
 
@@ -95,7 +95,7 @@ export const ArtifactRpc = defineRequests(ARTIFACTS_EXTENSION_ID, {
     execute: Effect.fn("ArtifactRpc.Read")(function* ({ query }) {
       const ctx = yield* ExtensionContext
       const artifacts = yield* ArtifactsRead
-      return yield* artifacts.read(ctx.sessionId, ctx.branchId, query)
+      return Option.getOrNull(yield* artifacts.read(ctx.sessionId, ctx.branchId, query))
     }),
   }),
   Update: request({
@@ -111,7 +111,7 @@ export const ArtifactRpc = defineRequests(ARTIFACTS_EXTENSION_ID, {
     execute: Effect.fn("ArtifactRpc.Update")(function* (input) {
       const ctx = yield* ExtensionContext
       const artifacts = yield* ArtifactsWrite
-      return yield* artifacts.update(ctx.sessionId, ctx.branchId, input)
+      return Option.getOrNull(yield* artifacts.update(ctx.sessionId, ctx.branchId, input))
     }),
   }),
   Clear: request({

@@ -4,7 +4,7 @@
  * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
-import { Context, Effect, Layer } from "effect"
+import { Predicate, Context, Effect, Layer } from "effect"
 import type { Session, Branch, Message } from "../domain/message.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
@@ -91,7 +91,7 @@ export class RelationshipStorage extends Context.Service<
             const sessionRows =
               yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}`
             const sessionRow = sessionRows[0]
-            if (sessionRow === undefined) {
+            if (Predicate.isUndefined(sessionRow)) {
               return yield* new StorageError({ message: `Session not found: ${sessionId}` })
             }
             const session = yield* sessionFromRow(sessionRow)
@@ -126,7 +126,7 @@ export class RelationshipStorage extends Context.Service<
             JOIN sessions s ON s.id = m.session_id
             WHERE m.branch_id IN ${sql.in(branchIds)}
               AND s.workspace_id = ${workspaceId}
-            ORDER BY m.created_at ASC, m.id ASC, mc.ordinal ASC`
+            ORDER BY m.created_at ASC, m.insertion_order ASC, mc.ordinal ASC`
             const allMsgRows = yield* Effect.forEach(allMsgRawRows, (row) =>
               decodeMessageChunkRow(row),
             )
@@ -135,7 +135,7 @@ export class RelationshipStorage extends Context.Service<
             for (const branch of branches) rowsByBranch.set(branch.id, [])
             for (const row of allMsgRows) {
               const bucket = rowsByBranch.get(row.branch_id)
-              if (bucket !== undefined) bucket.push(row)
+              if (!Predicate.isUndefined(bucket)) bucket.push(row)
             }
 
             const result = yield* Effect.forEach(branches, (branch) =>

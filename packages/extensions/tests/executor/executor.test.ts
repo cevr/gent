@@ -14,7 +14,11 @@ import {
 } from "../../src/executor/domain.js"
 import { readExecutionId, normalizeToolResult } from "../../src/executor/mcp-bridge.js"
 import { decodeRegistryFile } from "../../src/executor/sidecar.js"
-import { Effect, Exit } from "effect"
+import { Effect, Exit, Option, Schema } from "effect"
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+const WIRE_NULL = Option.getOrNull(Option.none())
+const WIRE_ABSENT = Option.getOrUndefined(Option.none())
 
 // ── State machine ──
 //
@@ -215,8 +219,8 @@ describe("Executor MCP normalization", () => {
 
   test("readExecutionId returns undefined for non-object", () => {
     expect(readExecutionId("string")).toBeUndefined()
-    expect(readExecutionId(null)).toBeUndefined()
-    expect(readExecutionId(undefined)).toBeUndefined()
+    expect(readExecutionId(WIRE_NULL)).toBeUndefined()
+    expect(readExecutionId(WIRE_ABSENT)).toBeUndefined()
   })
 })
 
@@ -241,6 +245,9 @@ describe("normalizeToolResult", () => {
   })
 
   test("missing content falls back to toolResult", () => {
+    // The malformed object is a vendor response fixture. The production
+    // boundary receives the wider MCP SDK result shape.
+    // oxlint-disable-next-line effect/noAs -- malformed MCP response fixture
     const result = normalizeToolResult({
       toolResult: { answer: 42 },
     } as never)
@@ -249,6 +256,7 @@ describe("normalizeToolResult", () => {
   })
 
   test("missing content and no toolResult → default text", () => {
+    // oxlint-disable-next-line effect/noAs -- malformed MCP response fixture
     const result = normalizeToolResult({} as never)
     expect(result.text).toBe("(no result)")
     expect(result.structuredContent).toBeNull()
@@ -316,7 +324,7 @@ describe("normalizeToolResult", () => {
 
 describe("Executor sidecar registry codec", () => {
   test("round-trips a well-formed registry file", () => {
-    const raw = JSON.stringify({
+    const raw = encodeJson({
       version: 1,
       sidecars: {
         "/repo/a": {
@@ -342,7 +350,7 @@ describe("Executor sidecar registry codec", () => {
   })
 
   test("fails on shape mismatch", () => {
-    const raw = JSON.stringify({ version: 1, sidecars: { "/x": { cwd: "/x" } } })
+    const raw = encodeJson({ version: 1, sidecars: { "/x": { cwd: "/x" } } })
     const exit = Effect.runSyncExit(decodeRegistryFile(raw))
     expect(Exit.isFailure(exit)).toBe(true)
   })

@@ -1,4 +1,5 @@
 import type { PaletteLevel } from "../components/command-palette-state"
+import { Option } from "effect"
 
 export interface Command {
   id: string
@@ -26,8 +27,8 @@ export interface Keybind {
   meta: boolean
 }
 
-export function parseKeybind(config: string): Keybind | null {
-  if (config.length === 0) return null
+export function parseKeybind(config: string): Option.Option<Keybind> {
+  if (config.length === 0) return Option.none()
 
   const parts = config.toLowerCase().split("+")
   const keybind: Keybind = {
@@ -57,7 +58,7 @@ export function parseKeybind(config: string): Keybind | null {
     }
   }
 
-  return keybind
+  return Option.some(keybind)
 }
 
 export function matchKeybind(
@@ -73,8 +74,9 @@ export function matchKeybind(
 }
 
 export function formatKeybind(config: string): string {
-  const kb = parseKeybind(config)
-  if (kb === null) return ""
+  const parsed = parseKeybind(config)
+  if (Option.isNone(parsed)) return ""
+  const kb = parsed.value
 
   const parts: string[] = []
   if (kb.ctrl) parts.push("Ctrl")

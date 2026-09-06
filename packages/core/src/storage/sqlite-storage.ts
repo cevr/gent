@@ -2,8 +2,8 @@ import type { PlatformError } from "effect"
 import { Effect, Layer, FileSystem, Path } from "effect"
 import { SqlClient, SqlError } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
+import { BunCrypto } from "@effect/platform-bun"
 import type { MessageStorage as ClusterMessageStorage } from "effect/unstable/cluster"
-import type { EncoreMessageStorage } from "effect-encore"
 import { fromSqlClient as encoreSqlMessageStorage } from "effect-encore"
 import { InteractionStorage } from "./interaction-storage.js"
 import { SearchStorage } from "./search-storage.js"
@@ -14,6 +14,8 @@ import { AgentLoopQueueStorage } from "./agent-loop-queue-storage.js"
 import { EventStorage } from "./event-storage.js"
 import { RelationshipStorage } from "./relationship-storage.js"
 import { SessionOperationStorage } from "./session-operation-storage.js"
+import { ToolCallBindingStorage } from "./tool-call-binding-storage.js"
+import { ResourceGraphStorage } from "./resource-graph-storage.js"
 import { StorageError } from "../domain/storage-error.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 export { StorageError }
@@ -60,8 +62,9 @@ type FocusedStorage =
   | EventStorage
   | RelationshipStorage
   | SessionOperationStorage
+  | ToolCallBindingStorage
+  | ResourceGraphStorage
   | ClusterMessageStorage.MessageStorage
-  | EncoreMessageStorage
 
 const provideFocusedRepositories = <E, R>(
   base: Layer.Layer<SqlClient.SqlClient, E, R>,
@@ -76,7 +79,9 @@ const provideFocusedRepositories = <E, R>(
     Layer.provide(EventStorage.Live, base),
     Layer.provide(RelationshipStorage.Live, base),
     Layer.provide(SessionOperationStorage.Live, base),
-    Layer.provide(encoreSqlMessageStorage(), base),
+    Layer.provide(ToolCallBindingStorage.Live, base),
+    Layer.provide(ResourceGraphStorage.Live, base),
+    Layer.provide(encoreSqlMessageStorage(), Layer.merge(base, BunCrypto.layer)),
     interactionStorage,
     Layer.provide(SearchStorage.Live, base),
   )

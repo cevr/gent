@@ -5,9 +5,9 @@ import { MessageId } from "./ids.js"
 const QueueEntryFields = {
   id: MessageId,
   content: Schema.String,
-  createdAt: Schema.Number,
+  createdAt: Schema.Finite,
   agentOverride: Schema.optional(AgentName),
-} as const
+}
 
 const SteeringEntry = Schema.TaggedStruct("steering", QueueEntryFields)
 const FollowUpEntry = Schema.TaggedStruct("follow-up", QueueEntryFields)

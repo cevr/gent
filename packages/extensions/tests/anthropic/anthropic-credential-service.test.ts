@@ -51,13 +51,11 @@ const makeIO = (state: IOState): AnthropicCredentialIO => ({
   refresh: Effect.suspend(() => state.refreshResult()),
 })
 interface PersistState {
-  lastWritten:
-    | {
-        access: string
-        refresh: string
-        expires: number
-      }
-    | undefined
+  lastWritten: Option.Option<{
+    access: string
+    refresh: string
+    expires: number
+  }>
   failNext: boolean
 }
 const makeAuthInfo = (state: PersistState): ProviderAuthInfo => ({
@@ -68,12 +66,13 @@ const makeAuthInfo = (state: PersistState): ProviderAuthInfo => ({
         state.failNext = false
         return Effect.die(new Error("simulated persist failure"))
       }
-      state.lastWritten = updated
+      state.lastWritten = Option.some(updated)
       return Effect.void
     }),
 })
 // TestClock starts at time 0, so all expiresAt values are absolute offsets.
 const FAR_FUTURE = 10 * 60 * 1000 // expiresAt = 10 minutes from t=0
+const COMPLETE = Option.getOrUndefined(Option.none<void>())
 // `TestClock.adjust` requires a `Scope` (it manages internal sleeper
 // fibers). Wrap with `Effect.scoped` so tests don't have to thread
 // scope manually.
@@ -88,9 +87,7 @@ describe("AnthropicCredentialService — cache hit/miss", () => {
       // cache was consulted, no internal call counter needed.
       const creds1 = makeCreds("k1", FAR_FUTURE)
       const creds2 = makeCreds("k2", FAR_FUTURE)
-      const callsRef: {
-        current: ClaudeCredentials
-      } = { current: creds1 }
+      const callsRef = { current: creds1 }
       const state: IOState = {
         readResult: () => Effect.succeed(callsRef.current),
         refreshResult: () =>
@@ -105,6 +102,7 @@ describe("AnthropicCredentialService — cache hit/miss", () => {
           const second = yield* svc.getFresh
           expect(first.accessToken).toBe("k1-access")
           expect(second.accessToken).toBe("k1-access")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -113,9 +111,7 @@ describe("AnthropicCredentialService — cache hit/miss", () => {
     Effect.gen(function* () {
       const creds1 = makeCreds("k1", FAR_FUTURE)
       const creds2 = makeCreds("k2", FAR_FUTURE)
-      const callsRef: {
-        current: ClaudeCredentials
-      } = { current: creds1 }
+      const callsRef = { current: creds1 }
       const state: IOState = {
         readResult: () => Effect.succeed(callsRef.current),
         refreshResult: () =>
@@ -131,6 +127,7 @@ describe("AnthropicCredentialService — cache hit/miss", () => {
           const second = yield* svc.getFresh
           expect(first.accessToken).toBe("k1-access")
           expect(second.accessToken).toBe("k2-access")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -149,12 +146,12 @@ describe("AnthropicCredentialService — refresh on stale", () => {
         refreshResult: () =>
           Effect.gen(function* () {
             refreshCount += 1
-            yield* Deferred.succeed(refreshStarted, undefined)
+            yield* Deferred.succeed(refreshStarted, COMPLETE)
             yield* Deferred.await(releaseRefresh)
             return fresh
           }),
       }
-      const persistState: PersistState = { lastWritten: undefined, failNext: false }
+      const persistState: PersistState = { lastWritten: Option.none(), failNext: false }
       const layer = credLayer(makeIO(state), makeAuthInfo(persistState))
       yield* runWithTestClock(
         Effect.gen(function* () {
@@ -166,12 +163,15 @@ describe("AnthropicCredentialService — refresh on stale", () => {
           yield* Effect.yieldNow
           yield* Effect.yieldNow
           expect(refreshCount).toBe(1)
-          yield* Deferred.succeed(releaseRefresh, undefined)
+          yield* Deferred.succeed(releaseRefresh, COMPLETE)
           const results = yield* Fiber.join(fiber)
           expect(results[0].accessToken).toBe("fresh-access")
           expect(results[1].accessToken).toBe("fresh-access")
           expect(refreshCount).toBe(1)
-          expect(persistState.lastWritten?.access).toBe("fresh-access")
+          expect(Option.map(persistState.lastWritten, (value) => value.access)).toEqual(
+            Option.some("fresh-access"),
+          )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -188,14 +188,17 @@ describe("AnthropicCredentialService — refresh on stale", () => {
         readResult: () => Effect.succeed(stale),
         refreshResult: () => Effect.succeed(fresh),
       }
-      const persistState: PersistState = { lastWritten: undefined, failNext: false }
+      const persistState: PersistState = { lastWritten: Option.none(), failNext: false }
       const layer = credLayer(makeIO(state), makeAuthInfo(persistState))
       yield* runWithTestClock(
         Effect.gen(function* () {
           const svc = yield* AnthropicCredentialService
           const result = yield* svc.getFresh
           expect(result.accessToken).toBe("fresh-access")
-          expect(persistState.lastWritten?.access).toBe("fresh-access")
+          expect(Option.map(persistState.lastWritten, (value) => value.access)).toEqual(
+            Option.some("fresh-access"),
+          )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -213,6 +216,7 @@ describe("AnthropicCredentialService — refresh on stale", () => {
         Effect.gen(function* () {
           const svc = yield* AnthropicCredentialService
           return yield* Effect.exit(svc.getFresh)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -231,9 +235,7 @@ describe("AnthropicCredentialService — invalidate", () => {
     Effect.gen(function* () {
       const creds1 = makeCreds("k1", FAR_FUTURE)
       const creds2 = makeCreds("k2", FAR_FUTURE)
-      const callsRef: {
-        current: ClaudeCredentials
-      } = { current: creds1 }
+      const callsRef = { current: creds1 }
       const state: IOState = {
         readResult: () => Effect.succeed(callsRef.current),
         refreshResult: () =>
@@ -249,6 +251,7 @@ describe("AnthropicCredentialService — invalidate", () => {
           const after = yield* svc.getFresh
           expect(before.accessToken).toBe("k1-access")
           expect(after.accessToken).toBe("k2-access")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -263,12 +266,13 @@ describe("AnthropicCredentialService — durable persist failure", () => {
         readResult: () => Effect.succeed(stale),
         refreshResult: () => Effect.succeed(fresh),
       }
-      const persistState: PersistState = { lastWritten: undefined, failNext: true }
+      const persistState: PersistState = { lastWritten: Option.none(), failNext: true }
       const layer = credLayer(makeIO(state), makeAuthInfo(persistState))
       const result = yield* runWithTestClock(
         Effect.gen(function* () {
           const svc = yield* AnthropicCredentialService
           return yield* Effect.exit(svc.getFresh)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -281,7 +285,7 @@ describe("AnthropicCredentialService — durable persist failure", () => {
           )
         }
       }
-      expect(persistState.lastWritten).toBeUndefined()
+      expect(Option.isNone(persistState.lastWritten)).toBe(true)
     }),
   )
 })
@@ -301,6 +305,7 @@ describe("AnthropicCredentialService — keychain miss falls through to refresh"
           // Outcome: when read fails, the refresh path's creds reach the
           // caller. No internal call counters needed.
           expect(result.accessToken).toBe("fresh-access")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),

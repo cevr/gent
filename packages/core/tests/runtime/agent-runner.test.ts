@@ -1,7 +1,17 @@
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Context, Effect, Fiber, Layer, Schema, Stream, SubscriptionRef } from "effect"
+import {
+  Context,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Predicate,
+  Schema,
+  Stream,
+  SubscriptionRef,
+} from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
@@ -34,7 +44,13 @@ import {
   ToolCallId,
 } from "@gent/core-internal/domain/ids"
 import { ModelId } from "@gent/core-internal/domain/model"
-import { AgentEvent, EventStore, EventStoreError } from "@gent/core-internal/domain/event"
+import {
+  AgentEvent,
+  EventStore,
+  EventStoreError,
+  ToolCallStarted,
+  ToolCallSucceeded,
+} from "@gent/core-internal/domain/event"
 import { EventPublisher, EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
@@ -43,6 +59,8 @@ import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import type { RelationshipStorage } from "@gent/core-internal/storage/relationship-storage"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
+import { ApprovalService } from "../../src/runtime/approval-service"
+import { loadAgentRunSuccessData } from "../../src/runtime/agent/agent-runner.metadata"
 import { defineResource, ExtensionContext, tool } from "@gent/core/extensions/api"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
 import {
@@ -59,7 +77,7 @@ import {
   type SessionRuntimeService,
   type SessionRuntimeState,
 } from "../../src/runtime/session-runtime"
-import { BunFileSystem, BunPath } from "@effect/platform-bun"
+import { BunCrypto, BunFileSystem, BunPath, BunServices } from "@effect/platform-bun"
 const bashStubTool = tool({
   id: "bash",
   description: "Stub bash tool for tests",
@@ -112,7 +130,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<LanguageModel.Langu
   const storageLayer = SqliteStorage.TestWithSql()
   const clusterRunnerLayer = Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
-    storageLayer,
+    Layer.merge(storageLayer, BunCrypto.layer),
   )
   const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
   const eventPublisherLayer = Layer.provide(
@@ -137,11 +155,12 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<LanguageModel.Langu
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     ToolRunner.Test(),
+    ApprovalService.Test(),
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunPlatformLive,
     ConfigService.Test(),
     ModelRegistry.Test(),
-    ephemeralParentDeps,
+    ephemeralParentServices,
     AgentLoopSessionGovernance.Live,
   )
   const sessionRuntimeLayer = Layer.provide(
@@ -154,13 +173,17 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<LanguageModel.Langu
   )
   const deps = Layer.mergeAll(baseDeps, sessionMutationsLayer, sessionRuntimeLayer)
   const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
-  return Layer.mergeAll(deps, runnerLayer) as Layer.Layer<
-    AgentRunnerService | SessionStorage | BranchStorage | EventStore | SequenceRecorder
-  >
+  return Layer.mergeAll(deps, runnerLayer)
 }
 // Extra services the parent context needs for ephemeral child runtime
 const ephemeralParentDeps = Layer.mergeAll(
   BunPlatformLive,
+  Permission.Live([], "allow"),
+  RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+  ConfigService.Test(),
+  ModelRegistry.Test(),
+)
+const ephemeralParentServices = Layer.mergeAll(
   Permission.Live([], "allow"),
   RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   ConfigService.Test(),
@@ -222,7 +245,7 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
     }),
   )
 describe("helper run spec propagation", () => {
-  it.live("durable helper-agent runSpec reaches the provider through AgentRunner", () =>
+  it.scopedLive("durable helper-agent runSpec reaches the provider through AgentRunner", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         {
@@ -279,9 +302,10 @@ describe("helper run spec propagation", () => {
         if (result._tag === "success") {
           expect(result.text).toContain("child result")
         }
-        yield* controls.assertDone()
+        yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
-    }),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 })
 describe("AgentRunner", () => {
@@ -296,6 +320,7 @@ describe("AgentRunner", () => {
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         sessionRuntimeStub(),
         recorderLayer,
         eventStoreLayer,
@@ -333,7 +358,7 @@ describe("AgentRunner", () => {
           cwd: process.cwd(),
           runSpec: { persistence: "durable" },
         })
-        const calls = yield* recorder.getCalls()
+        const calls = yield* recorder.getCalls
         assertSequence(calls, [
           { service: "EventStore", method: "append", match: { _tag: "AgentRunSpawned" } },
           { service: "EventStore", method: "append", match: { _tag: "AgentRunSucceeded" } },
@@ -355,32 +380,42 @@ describe("AgentRunner", () => {
           expect(child?.activeBranchId).toBe(spawnEvent.childBranchId)
         }
         // Verify enriched AgentRunSucceeded payload fields (args is the event object directly)
-        const successEvent = calls.find((c) => {
-          const args = c.args as Record<string, unknown> | undefined
-          return (
-            c.service === "EventStore" &&
-            c.method === "append" &&
-            args?.["_tag"] === "AgentRunSucceeded"
+        const successEvent = calls
+          .map((call) => ({
+            call,
+            event: Schema.decodeUnknownOption(AgentEvent)(call.args),
+          }))
+          .find(
+            ({ call, event }) =>
+              call.service === "EventStore" &&
+              call.method === "append" &&
+              Option.isSome(event) &&
+              event.value._tag === "AgentRunSucceeded",
           )
-        })
         expect(successEvent).toBeDefined()
-        const event = successEvent!.args as Record<string, unknown>
-        expect(event["preview"]).toBeDefined()
-        expect(typeof event["preview"]).toBe("string")
-        expect(event["savedPath"]).toBeDefined()
-        expect(typeof event["savedPath"]).toBe("string")
-        expect(event["savedPath"]).toContain("/tmp/gent/outputs/")
+        if (Predicate.isUndefined(successEvent) || Option.isNone(successEvent.event)) return
+        const event = successEvent.event.value
+        if (event._tag !== "AgentRunSucceeded") return
+        expect(event.preview).toBeDefined()
+        expect(Predicate.isString(event.preview)).toBe(true)
+        expect(event.savedPath).toBeDefined()
+        expect(Predicate.isString(event.savedPath)).toBe(true)
+        expect(event.savedPath).toContain("/tmp/gent/outputs/")
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
   it.live("rolls back durable child session when spawn event append fails", () =>
     Effect.gen(function* () {
       const storageLayer = Layer.orDie(SqliteStorage.TestWithSql())
-      const failingPublisherLayer = Layer.succeed(EventPublisher, {
-        append: () => Effect.fail(new EventStoreError({ message: "spawn append failed" })),
-        deliver: () => Effect.void,
-        publish: () => Effect.fail(new EventStoreError({ message: "spawn publish failed" })),
-      })
+      const failingPublisherLayer = Layer.succeed(
+        EventPublisher,
+        EventPublisher.of({
+          append: () => Effect.fail(new EventStoreError({ message: "spawn append failed" })),
+          deliver: () => Effect.void,
+          publish: () => Effect.fail(new EventStoreError({ message: "spawn publish failed" })),
+        }),
+      )
       const deps = Layer.mergeAll(
         storageLayer,
         EventStore.Memory,
@@ -389,6 +424,7 @@ describe("AgentRunner", () => {
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         sessionRuntimeStub(),
       )
       const runnerLayer = InProcessRunner({}).pipe(
@@ -422,10 +458,11 @@ describe("AgentRunner", () => {
           runSpec: { persistence: "durable" },
         })
         expect(result._tag).toBe("error")
-        const sessionsResult = yield* sessions.listSessions()
+        const sessionsResult = yield* sessions.listSessions
         expect(
           sessionsResult.filter((candidate) => candidate.parentSessionId === session.id),
         ).toEqual([])
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
@@ -440,6 +477,7 @@ describe("AgentRunner", () => {
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         sessionRuntimeStub(() => Effect.fail(new AgentRunError({ message: "permanent failure" }))),
         recorderLayer,
         eventStoreLayer,
@@ -477,6 +515,7 @@ describe("AgentRunner", () => {
         })
         // Without retry, failure propagates as error result
         expect(result._tag).toBe("error")
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
@@ -490,6 +529,7 @@ describe("AgentRunner", () => {
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         sessionRuntimeStub(() => Effect.never),
         eventStoreLayer,
         eventPublisherLayer,
@@ -524,6 +564,7 @@ describe("AgentRunner", () => {
           cwd: process.cwd(),
           runSpec: { persistence: "durable" },
         })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
       expect(result._tag).toBe("error")
       if (result._tag === "error") {
@@ -546,6 +587,7 @@ describe("AgentRunner", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         sessionRuntimeStub(),
         ephemeralParentDeps,
       )
@@ -577,8 +619,9 @@ describe("AgentRunner", () => {
           cwd: process.cwd(),
           runSpec: { persistence: "ephemeral" },
         })
-        const sessionsResult = yield* sessions.listSessions()
+        const sessionsResult = yield* sessions.listSessions
         return { runResult, sessionsResult }
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
       expect(result.runResult._tag).toBe("success")
       if (result.runResult._tag === "success") {
@@ -607,6 +650,7 @@ describe("AgentRunner", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         sessionRuntimeStub(),
         ephemeralParentDeps,
       )
@@ -640,13 +684,14 @@ describe("AgentRunner", () => {
           runSpec: { persistence: "ephemeral" },
         })
         if (runResult._tag !== "success") {
-          return { runResult, childTags: [] as string[] }
+          return { runResult, childTags: [] satisfies string[] }
         }
         const childEvents = yield* events.listEvents({ sessionId: session.id })
         return {
           runResult,
           childTags: childEvents.map((event) => event.event._tag),
         }
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
       expect(result.runResult._tag).toBe("success")
       expect(result.childTags).toContain("ToolCallStarted")
@@ -663,6 +708,7 @@ describe("AgentRunner", () => {
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         sessionRuntimeStub(),
         eventStoreLayer,
         eventPublisherLayer,
@@ -697,8 +743,9 @@ describe("AgentRunner", () => {
           cwd: process.cwd(),
           runSpec: { persistence: "durable" },
         })
-        const sessionsResult = yield* sessions.listSessions()
+        const sessionsResult = yield* sessions.listSessions
         return { runResult, sessionsResult }
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
       expect(result.runResult._tag).toBe("success")
       if (result.runResult._tag === "success") {
@@ -735,6 +782,7 @@ describe("AgentRunner", () => {
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         mockRuntime,
         eventStoreLayer,
         eventPublisherLayer,
@@ -772,6 +820,7 @@ describe("AgentRunner", () => {
           cwd: "/tmp",
           runSpec: { persistence: "durable" },
         })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
       expect(result._tag).toBe("success")
       if (result._tag === "success") {
@@ -809,6 +858,7 @@ describe("AgentRunner", () => {
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         mockRuntime,
         eventStoreLayer,
         eventPublisherLayer,
@@ -846,6 +896,7 @@ describe("AgentRunner", () => {
           cwd: "/tmp",
           runSpec: { persistence: "durable" },
         })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
       expect(result._tag).toBe("success")
       if (result._tag === "success") {
@@ -883,6 +934,7 @@ describe("AgentRunner", () => {
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         mockRuntime,
         eventStoreLayer,
         eventPublisherLayer,
@@ -920,23 +972,118 @@ describe("AgentRunner", () => {
           cwd: "/tmp",
           runSpec: { persistence: "durable" },
         })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
       expect(result._tag).toBe("success")
       if (result._tag === "success") {
-        expect(result.savedPath).toBeDefined()
-        expect(result.savedPath).toContain("/tmp/gent/outputs/")
-        expect(result.savedPath).toContain("explore_")
-        expect(result.savedPath).toEndWith(".md")
+        const savedPath = result.savedPath
+        expect(savedPath).toBeDefined()
+        if (Predicate.isUndefined(savedPath)) return
+        expect(savedPath).toContain("/tmp/gent/outputs/")
+        expect(savedPath).toContain("explore_")
+        expect(savedPath).toEndWith(".md")
         // Verify file contents
-        const content = yield* Effect.promise(() => Bun.file(result.savedPath!).text())
+        // oxlint-disable-next-line effect/noGlobals -- This test verifies the durable output file contents.
+        const content = yield* Effect.promise(() => Bun.file(savedPath).text())
         expect(content).toContain("## Reasoning")
         expect(content).toContain("internal thinking")
         expect(content).toContain("## Response")
         expect(content).toContain("visible answer")
         // Cleanup
-        yield* Effect.promise(() => Bun.file(result.savedPath!).delete())
+        // oxlint-disable-next-line effect/noGlobals -- This test removes the durable output fixture.
+        yield* Effect.promise(() => Bun.file(savedPath).delete())
       }
     }),
+  )
+})
+describe("agent runner metadata", () => {
+  it.live("keeps object tool arguments and ignores non-record inputs", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const messages = yield* MessageStorage
+      const events = yield* EventStorage
+      const sessionId = SessionId.make("metadata-session")
+      const branchId = BranchId.make("metadata-branch")
+      const now = dateFromMillis(1_767_225_600_000)
+      yield* sessions.createSession(
+        new Session({
+          id: sessionId,
+          name: "Metadata",
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+      yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+      yield* messages.createMessage(
+        Message.cases.regular.make({
+          id: MessageId.make("metadata-message"),
+          sessionId,
+          branchId,
+          role: "assistant",
+          parts: [Prompt.textPart({ text: "metadata result" })],
+          createdAt: now,
+        }),
+      )
+
+      const started = [
+        ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make("metadata-scalar"),
+          toolName: "scalar-tool",
+          input: "scalar input",
+        }),
+        ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make("metadata-array"),
+          toolName: "array-tool",
+          input: ["array", 1],
+        }),
+        ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make("metadata-object"),
+          toolName: "object-tool",
+          input: { path: "src", limit: 2 },
+        }),
+      ]
+      for (const event of started) yield* events.appendEvent(event)
+      const succeeded = [
+        ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make("metadata-scalar"),
+          toolName: "scalar-tool",
+        }),
+        ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make("metadata-array"),
+          toolName: "array-tool",
+        }),
+        ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make("metadata-object"),
+          toolName: "object-tool",
+        }),
+      ]
+      for (const event of succeeded) yield* events.appendEvent(event)
+
+      const result = yield* loadAgentRunSuccessData({
+        branchId,
+        sessionId,
+        agentName: AgentName.make("explore"),
+        persistence: "ephemeral",
+      })
+      expect(result.success.toolCalls).toEqual([
+        { toolName: "scalar-tool", args: {}, isError: false },
+        { toolName: "array-tool", args: {}, isError: false },
+        { toolName: "object-tool", args: { path: "src", limit: 2 }, isError: false },
+      ])
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
   )
 })
 // ============================================================================
@@ -946,16 +1093,21 @@ describe("session depth guard", () => {
   const run = <A, E>(
     effect: Effect.Effect<A, E, SessionStorage | BranchStorage | RelationshipStorage>,
   ) => effect.pipe(Effect.timeout("4 seconds"), Effect.provide(SqliteStorage.TestWithSql()))
-  const makeSession = (id: string, parentSessionId?: string) =>
-    new Session({
+  const makeSession = (id: string, parentSessionId?: string) => {
+    const fields = {
       id: SessionId.make(id),
       name: `session-${id}`,
-      parentSessionId: parentSessionId !== undefined ? SessionId.make(parentSessionId) : undefined,
-      parentBranchId:
-        parentSessionId !== undefined ? BranchId.make(`branch-${parentSessionId}`) : undefined,
       createdAt: dateFromMillis(1_767_225_600_000),
       updatedAt: dateFromMillis(1_767_225_600_000),
-    })
+    }
+    if (!Predicate.isUndefined(parentSessionId)) {
+      Object.assign(fields, {
+        parentSessionId: SessionId.make(parentSessionId),
+        parentBranchId: BranchId.make(`branch-${parentSessionId}`),
+      })
+    }
+    return new Session(fields)
+  }
   const makeBranch = (sessionId: string) =>
     new Branch({
       id: BranchId.make(`branch-${sessionId}`),
@@ -1098,6 +1250,7 @@ describe("ephemeral service propagation", () => {
             config: { baseSections: [] },
             extensionRegistry,
           })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(parentDeps)),
       )
       yield* Effect.gen(function* () {
@@ -1129,6 +1282,7 @@ describe("ephemeral service propagation", () => {
         yield* publisher.deliver(envelope)
         const deliveredAgain = yield* Fiber.join(duplicate).pipe(Effect.timeoutOption("25 millis"))
         expect(deliveredAgain._tag).toBe("None")
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.scoped, Effect.provide(layer))
     }).pipe(Effect.timeout("4 seconds")),
   )
@@ -1155,8 +1309,9 @@ describe("ephemeral service propagation", () => {
           expect(result.text).toContain("ephemeral text output")
         }
         // Parent storage should only have the parent session
-        const sessionsResult = yield* sessions.listSessions()
+        const sessionsResult = yield* sessions.listSessions
         expect(sessionsResult.map((s) => s.id)).toEqual([SessionId.make("parent-svc-prop")])
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.timeout("4 seconds")),
   )
@@ -1180,7 +1335,7 @@ describe("ephemeral service propagation", () => {
         resolveExtensions([
           {
             manifest: { id: ExtensionId.make("agents") },
-            scope: "builtin" as const,
+            scope: "builtin",
             sourcePath: "test",
             contributions: {
               agents: AllBuiltinAgents,
@@ -1227,6 +1382,7 @@ describe("ephemeral service propagation", () => {
         if (result._tag === "success") {
           expect(result.text).toContain("approved")
         }
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.timeout("4 seconds")),
   )
@@ -1252,7 +1408,7 @@ describe("ephemeral service propagation", () => {
         resolveExtensions([
           {
             manifest: { id: ExtensionId.make("agents") },
-            scope: "builtin" as const,
+            scope: "builtin",
             sourcePath: "test",
             contributions: {
               agents: AllBuiltinAgents,
@@ -1260,13 +1416,17 @@ describe("ephemeral service propagation", () => {
           },
           {
             manifest: { id: ExtensionId.make("resource-probe") },
-            scope: "builtin" as const,
+            scope: "builtin",
             sourcePath: "test",
             contributions: {
               resources: [
                 defineResource({
+                  id: "test/agent-runner/resource-probe",
                   scope: "process",
-                  layer: Layer.succeed(ProbeService, { read: Effect.succeed("service-ok") }),
+                  layer: Layer.succeed(
+                    ProbeService,
+                    ProbeService.of({ read: Effect.succeed("service-ok") }),
+                  ),
                   start: Effect.sync(() => {
                     starts += 1
                   }),
@@ -1315,6 +1475,7 @@ describe("ephemeral service propagation", () => {
           expect(result.text).toContain("done")
         }
         expect(starts).toBe(0)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.timeout("4 seconds")),
   )

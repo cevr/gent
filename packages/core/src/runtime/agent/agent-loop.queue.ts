@@ -3,6 +3,8 @@ import {
   DateTime,
   Deferred,
   Effect,
+  Option,
+  Predicate,
   Ref,
   Schema,
   TxSubscriptionRef,
@@ -54,17 +56,12 @@ export type AgentLoopQueue = {
   readonly reserveStartOrQueueFollowUp: (
     item: QueuedTurnItem,
     options: { readonly coldQueueOnly: boolean },
-  ) => Effect.Effect<RunningState | undefined, AgentLoopError>
-  readonly reserveRunStartOrQueueFollowUp: (item: QueuedTurnItem) => Effect.Effect<
-    | {
-        readonly stateEpochBaseline: number
-        readonly turnFailureBaseline: number
-      }
-    | undefined,
-    AgentLoopError
-  >
-  readonly takeNextQueuedTurnIfIdle: Effect.Effect<QueuedTurnItem | undefined, AgentLoopError>
-  readonly takeNextQueuedTurn: Effect.Effect<QueuedTurnItem | undefined, AgentLoopError>
+  ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError>
+  readonly reserveRunStartOrQueueFollowUp: (
+    item: QueuedTurnItem,
+  ) => Effect.Effect<Option.Option<RunStartReservation>, AgentLoopError>
+  readonly takeNextQueuedTurnIfIdle: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
+  readonly takeNextQueuedTurn: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   readonly clearInFlightTurn: (
     messageId: QueuedTurnItem["message"]["id"],
   ) => Effect.Effect<void, AgentLoopError>
@@ -73,14 +70,25 @@ export type AgentLoopQueue = {
   readonly saveCheckpoint: (next: LoopState) => Effect.Effect<void, AgentLoopError>
 }
 
+interface RunStartReservation {
+  readonly stateEpochBaseline: number
+  readonly turnFailureBaseline: number
+}
+
 const mergeConcurrentLoopMetadata = (
   base: AgentLoopState,
   current: AgentLoopState,
   next: AgentLoopState,
-): AgentLoopState => ({
-  ...next,
-  turnFailure: current.turnFailure !== base.turnFailure ? current.turnFailure : next.turnFailure,
-})
+): AgentLoopState => {
+  if (current.turnFailure === base.turnFailure) return next
+  const merged = { ...next }
+  if (Predicate.isUndefined(current.turnFailure)) {
+    delete merged.turnFailure
+  } else {
+    merged.turnFailure = current.turnFailure
+  }
+  return merged
+}
 
 export const makeAgentLoopQueue = (
   scope: AgentLoopQueueContext,
@@ -89,19 +97,18 @@ export const makeAgentLoopQueue = (
     const queueStorage = yield* AgentLoopQueueStorage
 
     const persistCommittedQueue = (queue: LoopQueueState, operation: string) =>
-      Effect.flatMap(Ref.get(scope.startedRef), (started) =>
-        started
-          ? queueStorage.putQueueState(scope.sessionId, scope.branchId, queue).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new AgentLoopError({
-                    message: `Failed to persist ${operation} for ${scope.sessionId}/${scope.branchId}`,
-                    cause,
-                  }),
-              ),
-            )
-          : Effect.void,
-      )
+      Effect.flatMap(Ref.get(scope.startedRef), (started) => {
+        if (!started) return Effect.void
+        return queueStorage.putQueueState(scope.sessionId, scope.branchId, queue).pipe(
+          Effect.mapError(
+            (cause) =>
+              new AgentLoopError({
+                message: `Failed to persist ${operation} for ${scope.sessionId}/${scope.branchId}`,
+                cause,
+              }),
+          ),
+        )
+      })
 
     const recordPersistenceFailure = (error: AgentLoopError) =>
       Deferred.fail(scope.persistenceFailure, error).pipe(Effect.catchEager(() => Effect.void))
@@ -117,12 +124,13 @@ export const makeAgentLoopQueue = (
       Effect.gen(function* () {
         const base = yield* TxSubscriptionRef.get(scope.loopRef)
         const next = decide(base)
-        const committed = next.persist
-          ? {
-              ...next.next,
-              stateEpoch: next.next.stateEpoch + 1,
-            }
-          : next.next
+        let committed = next.next
+        if (next.persist) {
+          committed = {
+            ...next.next,
+            stateEpoch: next.next.stateEpoch + 1,
+          }
+        }
         const decision = { ...next, next: committed }
         if (decision.persist) {
           yield* persistCommittedQueue(decision.next.queue, operation).pipe(
@@ -148,13 +156,17 @@ export const makeAgentLoopQueue = (
                   }),
               ),
               Effect.andThen(
-                TxSubscriptionRef.update(scope.loopRef, (current) => ({
-                  ...current,
-                  state,
-                  queue: current.queue,
-                  stateEpoch: current.stateEpoch + 1,
-                  startingState: undefined,
-                })),
+                TxSubscriptionRef.update(scope.loopRef, (current) => {
+                  const next: AgentLoopState = {
+                    state,
+                    queue: current.queue,
+                    stateEpoch: current.stateEpoch + 1,
+                  }
+                  if (!Predicate.isUndefined(current.turnFailure)) {
+                    return Object.assign(next, { turnFailure: current.turnFailure })
+                  }
+                  return next
+                }),
               ),
             ),
           ),
@@ -182,7 +194,7 @@ export const makeAgentLoopQueue = (
     const reserveStartOrQueueFollowUp = Effect.fn("AgentLoop.reserveStartOrQueueFollowUp")(
       function* (item: QueuedTurnItem, options: { readonly coldQueueOnly: boolean }) {
         const startedAtMs = yield* Clock.currentTimeMillis
-        return yield* commitQueueTransaction<RunningState | undefined | AgentLoopError>(
+        return yield* commitQueueTransaction<Option.Option<RunningState> | AgentLoopError>(
           "reserved or queued follow-up",
           (current) => {
             if (countQueuedFollowUps(current.queue) >= FOLLOW_UP_QUEUE_MAX) {
@@ -198,15 +210,15 @@ export const makeAgentLoopQueue = (
             const nextQueue = appendFollowUpQueueState(current.queue, item)
             if (options.coldQueueOnly) {
               return {
-                value: undefined,
+                value: Option.none(),
                 next: { ...current, queue: nextQueue },
                 persist: true,
               }
             }
 
-            if (current.startingState !== undefined) {
+            if (!Predicate.isUndefined(current.startingState)) {
               return {
-                value: undefined,
+                value: Option.none(),
                 next: {
                   ...current,
                   queue: nextQueue,
@@ -218,7 +230,7 @@ export const makeAgentLoopQueue = (
             const projectedState = projectRuntimeState(current)
             if (projectedState._tag !== "Idle" || current.state._tag !== "Idle") {
               return {
-                value: undefined,
+                value: Option.none(),
                 next: { ...current, queue: nextQueue },
                 persist: true,
               }
@@ -226,15 +238,18 @@ export const makeAgentLoopQueue = (
 
             const reservedRunningState = buildRunningState(current.state, item, { startedAtMs })
             return {
-              value: reservedRunningState,
+              value: Option.some(reservedRunningState),
               next: { ...current, startingState: reservedRunningState },
               persist: false,
             }
           },
         ).pipe(
-          Effect.flatMap(
-            (value): Effect.Effect<RunningState | undefined, AgentLoopError> =>
-              Schema.is(AgentLoopError)(value) ? Effect.fail(value) : Effect.succeed(value),
+          Effect.filterOrFail(
+            (value): value is Option.Option<RunningState> => !Schema.is(AgentLoopError)(value),
+            (value) => {
+              if (Schema.is(AgentLoopError)(value)) return value
+              return new AgentLoopError({ message: "Queue transaction returned an invalid value" })
+            },
           ),
         )
       },
@@ -243,42 +258,55 @@ export const makeAgentLoopQueue = (
     const reserveRunStartOrQueueFollowUp = Effect.fn("AgentLoop.reserveRunStartOrQueueFollowUp")(
       function* (item: QueuedTurnItem) {
         const startedAtMs = yield* Clock.currentTimeMillis
-        return yield* commitQueueTransaction("run start reservation", (current) => {
-          if (current.state._tag !== "Idle" || current.startingState !== undefined) {
-            const state = current.startingState ?? current.state
-            return {
-              value: undefined,
-              next: { ...current, state, queue: appendFollowUpQueueState(current.queue, item) },
-              persist: true,
+        return yield* commitQueueTransaction<Option.Option<RunStartReservation>>(
+          "run start reservation",
+          (current) => {
+            if (current.state._tag !== "Idle" || !Predicate.isUndefined(current.startingState)) {
+              const state = Option.getOrElse(
+                Option.fromUndefinedOr(current.startingState),
+                () => current.state,
+              )
+              return {
+                value: Option.none(),
+                next: { ...current, state, queue: appendFollowUpQueueState(current.queue, item) },
+                persist: true,
+              }
             }
-          }
 
-          return {
-            value: {
-              stateEpochBaseline: current.stateEpoch,
-              turnFailureBaseline: current.turnFailure?.epoch ?? 0,
-            },
-            next: {
-              ...current,
-              startingState: buildRunningState(current.state, item, { startedAtMs }),
-            },
-            persist: false,
-          }
-        })
+            return {
+              value: Option.some({
+                stateEpochBaseline: current.stateEpoch,
+                turnFailureBaseline: Option.getOrElse(
+                  Option.fromUndefinedOr(current.turnFailure).pipe(
+                    Option.map(({ epoch }) => epoch),
+                  ),
+                  () => 0,
+                ),
+              } satisfies RunStartReservation),
+              next: {
+                ...current,
+                startingState: buildRunningState(current.state, item, { startedAtMs }),
+              },
+              persist: false,
+            }
+          },
+        )
       },
     )
 
-    const refreshRuntimeState = Effect.gen(function* () {
-      if (!(yield* Ref.get(scope.startedRef))) return
-      yield* persistRuntimeState(yield* currentLoopState)
-    }).pipe(Effect.withSpan("AgentLoop.refreshRuntimeState"))
+    const refreshRuntimeState = Effect.suspend(
+      Effect.fn("AgentLoop.refreshRuntimeState")(function* () {
+        if (!(yield* Ref.get(scope.startedRef))) return
+        yield* persistRuntimeState(yield* currentLoopState)
+      }),
+    )
 
     const takeNextQueuedTurnFromState = Effect.fn("AgentLoop.takeNextQueuedTurnFromState")(
       function* (options: { readonly onlyIfIdle: boolean }) {
         const queuedCreatedAt = yield* DateTime.nowAsDate
         return yield* commitQueueTransaction("dequeued turn", (s) => {
           if (options.onlyIfIdle && s.state._tag !== "Idle") {
-            return { value: undefined, next: s, persist: false }
+            return { value: Option.none(), next: s, persist: false }
           }
           const { queue, nextItem } = takeNextQueuedTurn(s.queue, queuedCreatedAt)
           return {
@@ -295,7 +323,7 @@ export const makeAgentLoopQueue = (
         commitQueueTransaction("cleared in-flight turn", (s) => {
           const queue = clearInFlightQueuedTurn(s.queue, messageId)
           return {
-            value: undefined,
+            value: void 0,
             next: { ...s, queue },
             persist: queue !== s.queue,
           }

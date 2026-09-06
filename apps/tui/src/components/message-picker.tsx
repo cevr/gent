@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
@@ -8,6 +8,7 @@ import type { Message } from "./message-list"
 import { MessageId } from "@gent/core-internal/domain/ids.js"
 import { truncate } from "../utils/format-tool"
 import { useScopedKeyboard } from "../keyboard/context"
+import { Option } from "effect"
 
 interface PickerItem {
   id: string
@@ -23,10 +24,13 @@ export interface MessagePickerProps {
 
 const buildItems = (messages: readonly Message[]): PickerItem[] =>
   messages.map((m) => {
-    const rolePrefix = m.role === "user" ? "U" : "A"
+    let rolePrefix = "A"
+    if (m.role === "user") rolePrefix = "U"
     let labelContent = m.content.replace(/\s+/g, " ")
     if (labelContent.length === 0 && m.images.length > 0) {
-      labelContent = `[Image${m.images.length > 1 ? ` x${m.images.length}` : ""}]`
+      let imageCount = ""
+      if (m.images.length > 1) imageCount = ` x${m.images.length}`
+      labelContent = `[Image${imageCount}]`
     }
     return {
       id: m.id,
@@ -38,11 +42,13 @@ export function MessagePicker(props: MessagePickerProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const [selectedIndex, setSelectedIndex] = createSignal(0)
-  let scrollRef: ScrollBoxRenderable | undefined = undefined
+  let scrollRef = Option.none<ScrollBoxRenderable>()
 
   const items = () => buildItems(props.messages)
 
-  useScrollSync(() => `message-picker-${selectedIndex()}`, { getRef: () => scrollRef })
+  useScrollSync(() => `message-picker-${selectedIndex()}`, {
+    getRef: () => Option.getOrUndefined(scrollRef),
+  })
 
   createEffect(() => {
     if (props.open) {
@@ -61,19 +67,25 @@ export function MessagePicker(props: MessagePickerProps) {
       if (list.length === 0) return false
 
       if (e.name === "return") {
-        const item = list[selectedIndex()]
+        const item = Option.fromNullishOr(list[selectedIndex()])
         // SAFETY: PickerItem.id originates from domain Message.id which is a MessageId
-        if (item !== undefined) props.onSelect(MessageId.make(item.id))
+        if (Option.isSome(item)) props.onSelect(MessageId.make(item.value.id))
         return true
       }
 
       if (e.name === "up") {
-        setSelectedIndex((i) => (i > 0 ? i - 1 : list.length - 1))
+        setSelectedIndex((i) => {
+          if (i > 0) return i - 1
+          return list.length - 1
+        })
         return true
       }
 
       if (e.name === "down") {
-        setSelectedIndex((i) => (i < list.length - 1 ? i + 1 : 0))
+        setSelectedIndex((i) => {
+          if (i < list.length - 1) return i + 1
+          return 0
+        })
         return true
       }
       return false
@@ -95,19 +107,27 @@ export function MessagePicker(props: MessagePickerProps) {
         left={left()}
         top={top()}
       >
-        <ChromePanel.Body ref={scrollRef}>
+        <ChromePanel.Body ref={(value) => (scrollRef = Option.some(value))}>
           <For each={items()}>
             {(item, index) => {
               const isSelected = () => selectedIndex() === index()
+              const backgroundColor = () => {
+                if (isSelected()) return theme.primary
+                return "transparent"
+              }
+              const textColor = () => {
+                if (isSelected()) return theme.selectedListItemText
+                return theme.text
+              }
               return (
                 <box
                   id={`message-picker-${index()}`}
-                  backgroundColor={isSelected() ? theme.primary : "transparent"}
+                  backgroundColor={backgroundColor()}
                   paddingLeft={1}
                 >
                   <text
                     style={{
-                      fg: isSelected() ? theme.selectedListItemText : theme.text,
+                      fg: textColor(),
                     }}
                   >
                     {truncate(item.label, panelWidth() - 4)}

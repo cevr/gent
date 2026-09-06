@@ -8,7 +8,7 @@
 
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { createStore, produce, type SetStoreFunction } from "solid-js/store"
-import { Clock, Effect, Fiber, Random, Schedule, Stream } from "effect"
+import { Clock, Effect, Fiber, Option, Predicate, Schedule, Stream } from "effect"
 import type {
   ActiveInteraction,
   AgentEvent,
@@ -31,8 +31,10 @@ import {
   type ToolInteraction,
 } from "@gent/sdk"
 import type { AssistantSegment, Message, SessionItem } from "../components/message-list"
+import type { ToolCall } from "../components/tool-renderers"
 import type { SessionEvent } from "../components/session-event-label"
 import { formatToolInput } from "../components/message-list-utils"
+import { randomId } from "../utils/random-id"
 import { formatConnectionIssue } from "../utils/format-error"
 import type { ClientLog } from "../utils/client-logger"
 import type { ClientSessionValue, ClientTransportValue } from "../client/context"
@@ -44,18 +46,18 @@ interface ReconnectOptions<E> {
   readonly waitForRetry: () => Effect.Effect<void>
 }
 
-const reconnectBackoff = Schedule.exponential("1 second", 2).pipe(
-  Schedule.either(Schedule.spaced("30 seconds")),
-)
+const reconnectBackoff = Schedule.min([
+  Schedule.exponential("1 second", 2),
+  Schedule.spaced("30 seconds"),
+])
 
 const runWithReconnect = <E, R>(
   effectFactory: () => Effect.Effect<void, E, R>,
   options: ReconnectOptions<E>,
 ): Effect.Effect<never, never, R> => {
   let attempt = 0
-  const label = options.label ?? "unknown"
+  const label = Option.getOrElse(Option.fromNullishOr(options.label), () => "unknown")
   const log = options.log
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
   return Effect.gen(function* () {
     attempt++
     log.info("reconnect.attempt", { label, attempt })
@@ -63,7 +65,8 @@ const runWithReconnect = <E, R>(
       Effect.catchEager((error) =>
         Effect.sync(() => {
           log.warn("reconnect.error", { label, attempt, error: String(error) })
-          options.onError?.(error)
+          const onError = Option.fromNullishOr(options.onError)
+          if (Option.isSome(onError)) onError.value(error)
         }),
       ),
     )
@@ -71,7 +74,7 @@ const runWithReconnect = <E, R>(
     log.info("reconnect.wait-for-ready", { label, attempt })
     yield* options.waitForRetry()
     log.info("reconnect.ready", { label, attempt })
-  }).pipe(Effect.repeat(reconnectBackoff)) as Effect.Effect<never, never, R>
+  }).pipe(Effect.repeat(reconnectBackoff), Effect.andThen(Effect.never))
 }
 
 // ── Types ──
@@ -89,6 +92,7 @@ export interface SessionFeed {
   items: () => SessionItem[]
   messages: () => Message[]
   turnCount: () => number
+  // eslint-disable-next-line effect/noNullish -- Solid accessor omits an inactive tool.
   activeTool: () => string | undefined
   clear: () => void
 }
@@ -111,8 +115,10 @@ type SessionFeedStore = {
   events: SessionEvent[]
 }
 
-const isMessage = (item: SessionItem): item is Message =>
-  item._tag === "regular-message" || item._tag === "interjection-message"
+const isMessage = Predicate.or(
+  Predicate.isTagged("regular-message"),
+  Predicate.isTagged("interjection-message"),
+)
 
 // ── Build messages from raw ──
 
@@ -125,31 +131,31 @@ const buildSegments = (
     toolInteractions.map((interaction) => [String(interaction.id), interaction]),
   )
   for (const part of parts) {
-    const text = messagePartText(part)
-    if (text !== undefined) {
-      segments.push({ _tag: "text", content: text })
+    const text = Option.fromNullishOr(messagePartText(part))
+    if (Option.isSome(text)) {
+      segments.push({ _tag: "text", content: text.value })
       continue
     }
 
-    const reasoning = messagePartReasoning(part)
-    if (reasoning !== undefined) {
-      segments.push({ _tag: "reasoning", content: reasoning })
+    const reasoning = Option.fromNullishOr(messagePartReasoning(part))
+    if (Option.isSome(reasoning)) {
+      segments.push({ _tag: "reasoning", content: reasoning.value })
       continue
     }
 
-    const image = messagePartImage(part)
-    if (image !== undefined) {
-      segments.push({ _tag: "image", image: { mediaType: image.mediaType } })
+    const image = Option.fromNullishOr(messagePartImage(part))
+    if (Option.isSome(image)) {
+      segments.push({ _tag: "image", image: { mediaType: image.value.mediaType } })
       continue
     }
 
-    const tc = messagePartToolCall(part)
-    if (tc !== undefined) {
-      const toolCall = interactionsById.get(tc.id)
-      if (toolCall === undefined) continue
+    const tc = Option.fromNullishOr(messagePartToolCall(part))
+    if (Option.isSome(tc)) {
+      const toolCall = Option.fromNullishOr(interactionsById.get(tc.value.id))
+      if (Option.isNone(toolCall)) continue
       segments.push({
         _tag: "tool-call",
-        toolCall,
+        toolCall: toolCall.value,
       })
     }
   }
@@ -161,7 +167,10 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
 
   return filteredMsgs.map((m) => {
     const toolCalls = [...m.toolInteractions]
-    const segments = m.role === "assistant" ? buildSegments(m.parts, m.toolInteractions) : undefined
+    let toolCallsOption = Option.none<typeof toolCalls>()
+    if (toolCalls.length > 0) toolCallsOption = Option.some(toolCalls)
+    let segments = Option.none<AssistantSegment[]>()
+    if (m.role === "assistant") segments = Option.some(buildSegments(m.parts, m.toolInteractions))
     const message = {
       id: m.id,
       role: m.role,
@@ -169,13 +178,14 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
       reasoning: extractReasoning(m.parts),
       images: extractImages(m.parts),
       createdAt: m.createdAt.getTime(),
-      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-      segments,
+      toolCalls: Option.getOrUndefined(toolCallsOption),
+      segments: Option.getOrUndefined(segments),
       metadata: m.metadata,
     }
-    return m._tag === "interjection"
-      ? { ...message, _tag: "interjection-message", role: "user" }
-      : { ...message, _tag: "regular-message" }
+    if (m._tag === "interjection") {
+      return { ...message, _tag: "interjection-message", role: "user" }
+    }
+    return { ...message, _tag: "regular-message" }
   })
 }
 
@@ -184,15 +194,16 @@ const upsertReceivedMessage = (
   message: ProjectedMessage,
 ) => {
   const next = buildMessages([message])[0]
-  if (next === undefined) return
+  const nextMessage = Option.fromNullishOr(next)
+  if (Option.isNone(nextMessage)) return
   setStore(
     produce((draft) => {
-      const index = draft.messages.findIndex((candidate) => candidate.id === next.id)
+      const index = draft.messages.findIndex((candidate) => candidate.id === nextMessage.value.id)
       if (index === -1) {
-        draft.messages.push(next)
+        draft.messages.push(nextMessage.value)
         return
       }
-      draft.messages[index] = next
+      draft.messages[index] = nextMessage.value
     }),
   )
 }
@@ -205,7 +216,7 @@ const createAssistantMessage = (content: string, id: string, createdAt: number):
   reasoning: "",
   images: [],
   createdAt,
-  toolCalls: undefined,
+  toolCalls: Option.getOrUndefined(Option.none<ToolCall[]>()),
 })
 
 const createInterruptionEvent = (createdAt: number, seq: number): SessionEvent => ({
@@ -236,9 +247,20 @@ const createRetryingEvent = (
   attempt,
   maxAttempts,
   delayMs,
+  resolved: false,
   createdAt,
   seq,
 })
+
+const resolveRetryingEvents = (setStore: SetStoreFunction<SessionFeedStore>) => {
+  setStore(
+    produce((draft) => {
+      for (const event of draft.events) {
+        if (event._tag === "retrying") event.resolved = true
+      }
+    }),
+  )
+}
 
 const createErrorEvent = (error: string, createdAt: number, seq: number): SessionEvent => ({
   _tag: "error",
@@ -246,6 +268,15 @@ const createErrorEvent = (error: string, createdAt: number, seq: number): Sessio
   createdAt,
   seq,
 })
+
+type MessageWithMetadata = {
+  readonly metadata?: {
+    readonly customType?: string
+  }
+}
+
+const isCompactionMessage = (message: MessageWithMetadata): boolean =>
+  message.metadata?.customType === "model-compaction"
 
 const appendSessionEvent = (setStore: SetStoreFunction<SessionFeedStore>, event: SessionEvent) => {
   setStore(
@@ -264,22 +295,29 @@ const ensureAssistantMessage = (
   setStore(
     produce((draft) => {
       const last = draft.messages[draft.messages.length - 1]
-      if (last !== undefined && last.role === "assistant") {
-        last.content += content
+      const lastMessage = Option.fromNullishOr(last)
+      if (
+        Option.isSome(lastMessage) &&
+        lastMessage.value.role === "assistant" &&
+        !isCompactionMessage(lastMessage.value)
+      ) {
+        const assistant = lastMessage.value
+        assistant.content += content
         // Append to last text segment or create new one
-        if (last.segments !== undefined) {
-          const lastSeg = last.segments[last.segments.length - 1]
-          if (lastSeg !== undefined && lastSeg._tag === "text") {
-            lastSeg.content += content
+        const segments = Option.fromNullishOr(assistant.segments)
+        if (Option.isSome(segments)) {
+          const lastSeg = Option.fromNullishOr(segments.value[segments.value.length - 1])
+          if (Option.isSome(lastSeg) && lastSeg.value._tag === "text") {
+            lastSeg.value.content += content
           } else {
-            last.segments.push({ _tag: "text", content })
+            segments.value.push({ _tag: "text", content })
           }
         }
         return
       }
 
       const msg = createAssistantMessage(content, id, createdAt)
-      msg.segments = content.length > 0 ? [{ _tag: "text", content }] : []
+      msg.segments = [{ _tag: "text", content }]
       draft.messages.push(msg)
     }),
   )
@@ -291,49 +329,56 @@ const updateLatestToolCall = (
 ) => {
   setStore(
     produce((draft) => {
-      const last = draft.messages[draft.messages.length - 1]
-      if (last === undefined || last.role !== "assistant") return
-      updater(last)
+      const last = Option.fromNullishOr(draft.messages[draft.messages.length - 1])
+      if (Option.isNone(last) || last.value.role !== "assistant") return
+      updater(last.value)
     }),
   )
 }
 
 const handleToolCallResult = (
   setStore: SetStoreFunction<SessionFeedStore>,
-  setActiveTool: (value: string | undefined) => string | undefined,
+  setActiveTool: (value: Option.Option<string>) => void,
   toolEvent: ToolResultEvent,
 ) => {
-  const isError = toolEvent._tag === "ToolCallFailed"
+  let status: "error" | "completed" = "completed"
+  if (toolEvent._tag === "ToolCallFailed") status = "error"
 
-  setActiveTool(undefined)
+  setActiveTool(Option.none())
   updateLatestToolCall(setStore, (message) => {
-    if (message.toolCalls === undefined) return
-    const tc = message.toolCalls.find((t) => t.id === toolEvent.toolCallId)
-    if (tc === undefined) return
-    tc.status = isError ? "error" : "completed"
-    tc.summary = toolEvent.summary
-    tc.output = toolEvent.output
+    const toolCalls = Option.fromNullishOr(message.toolCalls)
+    if (Option.isNone(toolCalls)) return
+    const tc = Option.fromNullishOr(toolCalls.value.find((t) => t.id === toolEvent.toolCallId))
+    if (Option.isNone(tc)) return
+    tc.value.status = status
+    tc.value.summary = toolEvent.summary
+    tc.value.output = toolEvent.output
     // Also update the segment's toolCall
-    if (message.segments !== undefined) {
-      const seg = message.segments.find(
-        (s) => s._tag === "tool-call" && s.toolCall.id === toolEvent.toolCallId,
+    const segments = Option.fromNullishOr(message.segments)
+    if (Option.isSome(segments)) {
+      const seg = Option.fromNullishOr(
+        segments.value.find(
+          (s) => s._tag === "tool-call" && s.toolCall.id === toolEvent.toolCallId,
+        ),
       )
-      if (seg !== undefined && seg._tag === "tool-call") {
-        seg.toolCall.status = tc.status
-        seg.toolCall.summary = tc.summary
-        seg.toolCall.output = tc.output
+      if (Option.isSome(seg) && seg.value._tag === "tool-call") {
+        seg.value.toolCall.status = tc.value.status
+        seg.value.toolCall.summary = tc.value.summary
+        seg.value.toolCall.output = tc.value.output
       }
     }
   })
 }
 
-const toActiveInteraction = (event: AgentEvent): ActiveInteraction | undefined => {
-  if (event._tag === "InteractionPresented") return event
-  return undefined
+const toActiveInteraction = (event: AgentEvent): Option.Option<ActiveInteraction> => {
+  if (event._tag === "InteractionPresented") return Option.some(event)
+  return Option.none()
 }
 
-const isToolResultEvent = (event: AgentEvent): event is ToolResultEvent =>
-  event._tag === "ToolCallSucceeded" || event._tag === "ToolCallFailed"
+const isToolResultEvent = Predicate.or(
+  Predicate.isTagged("ToolCallSucceeded"),
+  Predicate.isTagged("ToolCallFailed"),
+)
 
 // ── Hook ──
 
@@ -351,20 +396,22 @@ export function useSessionFeed(
     events: [],
   })
   const [turnCount, setTurnCount] = createSignal(0)
-  const [activeTool, setActiveTool] = createSignal<string | undefined>(undefined)
-  const [streamReadyKey, setStreamReadyKey] = createSignal<string | null>(null)
+  const [activeTool, setActiveTool] = createSignal<Option.Option<string>>(Option.none())
+  const [streamReadyKey, setStreamReadyKey] = createSignal<Option.Option<string>>(Option.none())
   let eventSeq = 0
   const lastSeenEventIdByKey = new Map<string, number>()
   let processedEnvelopeIds = new Set<EventEnvelope["id"]>()
 
   // Track the active key to guard against stale async writes and reset prompt state
-  let currentKey: string | null = null
+  let currentKey = Option.none<string>()
+  const initialPromptValue = Option.fromNullishOr(initialPrompt)
+  const canSendPromptValue = Option.fromNullishOr(canSendPrompt)
 
   const resetProjection = () => {
     setStore({ messages: [], events: [] })
     setTurnCount(0)
-    setActiveTool(undefined)
-    setStreamReadyKey(null)
+    setActiveTool(Option.none())
+    setStreamReadyKey(Option.none())
     eventSeq = 0
     processedEnvelopeIds = new Set()
   }
@@ -375,7 +422,8 @@ export function useSessionFeed(
       if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt
       if (!isMessage(a) && !isMessage(b)) return a.seq - b.seq
       if (a._tag === b._tag) return 0
-      return isMessage(a) ? -1 : 1
+      if (isMessage(a)) return -1
+      return 1
     })
   })
 
@@ -383,20 +431,27 @@ export function useSessionFeed(
   const feedKey = createMemo(() => `${sessionId()}:${branchId()}`)
 
   // Wait for session to become active before subscribing
-  const activeSessionKey = createMemo(() => {
-    const s = client.session()
-    return s === null ? null : `${s.sessionId}:${s.branchId}`
+  const activeSessionKey = createMemo((): Option.Option<string> => {
+    const session = Option.fromNullishOr(client.session())
+    if (Option.isNone(session)) return Option.none()
+    return Option.some(`${session.value.sessionId}:${session.value.branchId}`)
   })
 
   // Track which prompts have been sent (keyed by feedKey to handle re-navigation)
   const sentPrompts = new Set<string>()
+  const canSendPromptNow = () =>
+    Option.getOrElse(
+      Option.map(canSendPromptValue, (check) => check()),
+      () => true,
+    )
 
   createEffect(
     on(
-      [activeSessionKey, feedKey, streamReadyKey, () => canSendPrompt?.() ?? true],
+      [activeSessionKey, feedKey, streamReadyKey, canSendPromptNow],
       ([active, key, readyKey, canSend]) => {
-        if (initialPrompt === undefined || initialPrompt === "") return
-        if (active === null || active !== key || readyKey !== key || !canSend) return
+        if (Option.isNone(initialPromptValue) || initialPromptValue.value === "") return
+        if (Option.isNone(active) || active.value !== key) return
+        if (Option.isNone(readyKey) || readyKey.value !== key || !canSend) return
         if (sentPrompts.has(key)) return
 
         const session = sessionId()
@@ -411,12 +466,12 @@ export function useSessionFeed(
             .send({
               sessionId: session,
               branchId: branch,
-              content: initialPrompt,
+              content: initialPromptValue.value,
             })
             .pipe(
               Effect.catchEager((err) =>
                 Effect.sync(() => {
-                  if (currentKey !== key) return
+                  if (Option.isNone(currentKey) || currentKey.value !== key) return
                   client.setConnectionIssue(formatConnectionIssue(err))
                 }),
               ),
@@ -428,12 +483,12 @@ export function useSessionFeed(
 
   createEffect(
     on([activeSessionKey, feedKey], ([active, key]) => {
-      if (active === null || active !== key) return
+      if (Option.isNone(active) || active.value !== key) return
 
       // Reset all projection state on identity change
-      if (currentKey !== key) {
+      if (Option.isNone(currentKey) || currentKey.value !== key) {
         resetProjection()
-        currentKey = key
+        currentKey = Option.some(key)
       }
 
       const branch = branchId()
@@ -463,7 +518,7 @@ export function useSessionFeed(
                 })
 
                 const snapshotApplied = yield* Effect.sync(() => {
-                  if (currentKey !== key) return false
+                  if (Option.isNone(currentKey) || currentKey.value !== key) return false
                   client.applySessionSnapshot(snapshot)
                   callbacks.onQueueSnapshot(snapshot.runtime.queue)
                   setStore("messages", buildMessages(snapshot.messages))
@@ -471,7 +526,10 @@ export function useSessionFeed(
                 })
                 if (!snapshotApplied) return yield* Effect.never
 
-                const after = lastSeenEventIdByKey.get(key) ?? 0
+                const after = Option.getOrElse(
+                  Option.fromNullishOr(lastSeenEventIdByKey.get(key)),
+                  () => 0,
+                )
 
                 const eventStream = client.client.session.events({
                   sessionId: session,
@@ -483,9 +541,14 @@ export function useSessionFeed(
                 const eventsFiber = yield* eventStream.pipe(
                   Stream.runForEach((envelope) =>
                     Effect.gen(function* () {
-                      if (currentKey !== key) return
-                      client.setConnectionIssue(null)
-                      yield* processEnvelope(envelope, branch, key, snapshot.lastEventId)
+                      if (Option.isNone(currentKey) || currentKey.value !== key) return
+                      client.setConnectionIssue(Option.getOrNull(Option.none()))
+                      yield* processEnvelope(
+                        envelope,
+                        branch,
+                        key,
+                        Option.fromNullishOr(snapshot.lastEventId),
+                      )
                     }),
                   ),
                   Effect.forkScoped,
@@ -498,8 +561,9 @@ export function useSessionFeed(
                   .pipe(
                     Stream.runForEach((next) =>
                       Effect.sync(() => {
-                        if (currentKey !== key) return
-                        client.setConnectionIssue(null)
+                        if (Option.isNone(currentKey) || currentKey.value !== key) return
+                        client.setConnectionIssue(Option.getOrNull(Option.none()))
+                        if (next._tag === "Idle") resolveRetryingEvents(setStore)
                         callbacks.onQueueSnapshot(next.queue)
                       }),
                     ),
@@ -507,8 +571,8 @@ export function useSessionFeed(
                   )
 
                 yield* Effect.sync(() => {
-                  if (currentKey !== key) return
-                  setStreamReadyKey(key)
+                  if (Option.isNone(currentKey) || currentKey.value !== key) return
+                  setStreamReadyKey(Option.some(key))
                 })
 
                 return yield* Effect.raceFirst(Fiber.join(eventsFiber), Fiber.join(runtimeFiber))
@@ -517,14 +581,14 @@ export function useSessionFeed(
               label: "feed.events",
               log: client.log,
               onError: (err) => {
-                if (currentKey !== key) return
+                if (Option.isNone(currentKey) || currentKey.value !== key) return
                 client.log.error("feed.error", {
                   key,
                   error: formatConnectionIssue(err),
                 })
                 client.setConnectionIssue(formatConnectionIssue(err))
               },
-              waitForRetry: () => client.waitForTransportReady(),
+              waitForRetry: () => client.waitForTransportReady,
             },
           ),
         ),
@@ -541,28 +605,79 @@ export function useSessionFeed(
     envelope: EventEnvelope,
     branch: BranchId,
     key: string,
-    snapshotLastEventId: number | null,
+    snapshotLastEventId: Option.Option<number>,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
       // Drop events if identity changed
-      if (currentKey !== key) return
+      if (Option.isNone(currentKey) || currentKey.value !== key) return
       if (processedEnvelopeIds.has(envelope.id)) {
         client.log.debug("feed.event.duplicate", { key, eventId: envelope.id })
         return
       }
       processedEnvelopeIds.add(envelope.id)
-      lastSeenEventIdByKey.set(key, Math.max(lastSeenEventIdByKey.get(key) ?? 0, envelope.id))
-      if (snapshotLastEventId !== null && envelope.id <= snapshotLastEventId) {
+      const lastSeen = Option.getOrElse(
+        Option.fromNullishOr(lastSeenEventIdByKey.get(key)),
+        () => 0,
+      )
+      lastSeenEventIdByKey.set(key, Math.max(lastSeen, envelope.id))
+      if (Option.isSome(snapshotLastEventId) && envelope.id <= snapshotLastEventId.value) {
         client.applyBufferedSessionEvent(envelope)
-        processBufferedEvent(envelope.event, branch, key)
+        processBufferedEvent(envelope, branch, key)
         return
       }
       client.applySessionEvent(envelope)
       yield* processEvent(envelope.event, branch, key)
     })
 
-  const processBufferedEvent = (event: AgentEvent, branch: BranchId, key: string) => {
-    if (currentKey !== key) return
+  const processBufferedEvent = (envelope: EventEnvelope, branch: BranchId, key: string) => {
+    if (Option.isNone(currentKey) || currentKey.value !== key) return
+    const event = envelope.event
+
+    if (event._tag === "MessageReceived") {
+      if (isCompactionMessage(event.message)) {
+        upsertReceivedMessage(setStore, projectMessage(event.message, []))
+      }
+      return
+    }
+
+    if (event._tag === "ProviderRetrying") {
+      appendSessionEvent(
+        setStore,
+        createRetryingEvent(
+          event.attempt,
+          event.maxAttempts,
+          event.delayMs,
+          envelope.createdAt,
+          eventSeq++,
+        ),
+      )
+      return
+    }
+
+    if (event._tag === "StreamStarted") {
+      resolveRetryingEvents(setStore)
+      return
+    }
+
+    if (event._tag === "TurnCompleted") {
+      resolveRetryingEvents(setStore)
+      const durationSeconds = Math.round(event.durationMs / 1000)
+      if (event.interrupted === true) {
+        appendSessionEvent(setStore, createInterruptionEvent(envelope.createdAt, eventSeq++))
+      } else if (durationSeconds > 0) {
+        appendSessionEvent(
+          setStore,
+          createTurnEndedEvent(durationSeconds, envelope.createdAt, eventSeq++),
+        )
+      }
+      return
+    }
+
+    if (event._tag === "ErrorOccurred") {
+      resolveRetryingEvents(setStore)
+      appendSessionEvent(setStore, createErrorEvent(event.error, envelope.createdAt, eventSeq++))
+      return
+    }
 
     // Snapshot data already contains message, lifecycle, and metrics state.
     // Buffered replay only hydrates event-only UI state that is absent from the
@@ -578,12 +693,12 @@ export function useSessionFeed(
     }
 
     const interaction = toActiveInteraction(event)
-    if (interaction !== undefined) callbacks.onInteraction(interaction)
+    if (Option.isSome(interaction)) callbacks.onInteraction(interaction.value)
   }
 
   const processEvent = (event: AgentEvent, branch: BranchId, key: string): Effect.Effect<void> =>
     Effect.gen(function* () {
-      if (currentKey !== key) return
+      if (Option.isNone(currentKey) || currentKey.value !== key) return
       client.log.debug("feed.event", { key, tag: event._tag })
 
       if (event._tag === "InteractionResolved") {
@@ -592,8 +707,8 @@ export function useSessionFeed(
       }
 
       const interaction = toActiveInteraction(event)
-      if (interaction !== undefined) {
-        callbacks.onInteraction(interaction)
+      if (Option.isSome(interaction)) {
+        callbacks.onInteraction(interaction.value)
         return
       }
 
@@ -604,7 +719,7 @@ export function useSessionFeed(
 
       switch (event._tag) {
         case "MessageReceived":
-          if (event.message.role === "user") {
+          if (event.message.role === "user" || isCompactionMessage(event.message)) {
             upsertReceivedMessage(setStore, projectMessage(event.message, []))
           }
           break
@@ -617,26 +732,23 @@ export function useSessionFeed(
           break
 
         case "StreamStarted":
+          resolveRetryingEvents(setStore)
           setTurnCount((n) => n + 1)
-          setActiveTool(undefined)
-          ensureAssistantMessage(
-            setStore,
-            "",
-            yield* Random.nextUUIDv4,
-            yield* Clock.currentTimeMillis,
-          )
+          setActiveTool(Option.none())
+          ensureAssistantMessage(setStore, "", yield* randomId, yield* Clock.currentTimeMillis)
           break
 
         case "StreamChunk":
           ensureAssistantMessage(
             setStore,
             event.chunk,
-            yield* Random.nextUUIDv4,
+            yield* randomId,
             yield* Clock.currentTimeMillis,
           )
           break
 
         case "TurnCompleted": {
+          resolveRetryingEvents(setStore)
           const durationSeconds = Math.round(event.durationMs / 1000)
           const createdAt = yield* Clock.currentTimeMillis
           if (event.interrupted === true) {
@@ -652,28 +764,37 @@ export function useSessionFeed(
 
         case "ToolCallStarted": {
           const inputSummary = formatToolInput(event.toolName, event.input)
-          setActiveTool(
-            inputSummary.length > 0 ? `${event.toolName}(${inputSummary})` : event.toolName,
-          )
+          let activeToolLabel = event.toolName
+          if (inputSummary.length > 0) activeToolLabel = `${event.toolName}(${inputSummary})`
+          setActiveTool(Option.some(activeToolLabel))
           const toolCall = {
             id: event.toolCallId,
             toolName: event.toolName,
-            status: "running" as const,
+            status: "running",
             input: event.input,
-            summary: undefined,
-            output: undefined,
-          }
+            summary: Option.getOrUndefined(Option.none<string>()),
+            output: Option.getOrUndefined(Option.none<string>()),
+          } satisfies ToolCall
           updateLatestToolCall(setStore, (message) => {
-            if (message.toolCalls === undefined) message.toolCalls = []
-            message.toolCalls.push(toolCall)
+            let toolCalls = Option.fromNullishOr(message.toolCalls)
+            if (Option.isNone(toolCalls)) {
+              message.toolCalls = []
+              toolCalls = Option.fromNullishOr(message.toolCalls)
+            }
+            if (Option.isSome(toolCalls)) toolCalls.value.push(toolCall)
             // Also push to segments for interleaved rendering
-            if (message.segments === undefined) message.segments = []
-            message.segments.push({ _tag: "tool-call", toolCall })
+            let segments = Option.fromNullishOr(message.segments)
+            if (Option.isNone(segments)) {
+              message.segments = []
+              segments = Option.fromNullishOr(message.segments)
+            }
+            if (Option.isSome(segments)) segments.value.push({ _tag: "tool-call", toolCall })
           })
           break
         }
 
         case "ProviderRetrying":
+          resolveRetryingEvents(setStore)
           appendSessionEvent(
             setStore,
             createRetryingEvent(
@@ -687,6 +808,7 @@ export function useSessionFeed(
           break
 
         case "ErrorOccurred":
+          resolveRetryingEvents(setStore)
           client.log.error("sessionFeed.error", { error: event.error, seq: eventSeq })
           appendSessionEvent(
             setStore,
@@ -700,7 +822,7 @@ export function useSessionFeed(
     items,
     messages: () => store.messages,
     turnCount,
-    activeTool,
+    activeTool: () => Option.getOrUndefined(activeTool()),
     clear: resetProjection,
   }
 }

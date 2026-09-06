@@ -9,6 +9,7 @@ describe("session event labels", () => {
       attempt: 1,
       maxAttempts: 3,
       delayMs: 2000,
+      resolved: false,
       createdAt,
       seq: 1,
     }
@@ -16,5 +17,8 @@ describe("session event labels", () => {
     expect(getSessionEventLabel(event, createdAt)).toBe("Retrying in 2s... 1/3")
     expect(getSessionEventLabel(event, createdAt + 1_100)).toBe("Retrying in 1s... 1/3")
     expect(getSessionEventLabel(event, createdAt + 2_000)).toBe("Retrying now... 1/3")
+    expect(getSessionEventLabel({ ...event, resolved: true }, createdAt + 20_000)).toBe(
+      "Retry 1/3 finished",
+    )
   })
 })

@@ -40,6 +40,7 @@ export const ExecutorExtension: GentExtension = defineExtension({
       )
       return [
         defineResource({
+          id: "@gent/executor/controller",
           scope: "process",
           layer: executorLayer,
         }),
@@ -51,7 +52,7 @@ export const ExecutorExtension: GentExtension = defineExtension({
     hook.turnProjection(() =>
       Effect.gen(function* () {
         const executor = yield* ExecutorRuntime
-        return yield* executor.turnProjection()
+        return yield* executor.turnProjection
       }),
     ),
   ],

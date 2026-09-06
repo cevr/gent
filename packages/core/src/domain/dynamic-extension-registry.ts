@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { Context, Effect, Layer, Option, Predicate, Ref, Schema } from "effect"
 import type { RequestCapability } from "./capability/request.js"
 import { getToolId, type ToolCapability } from "./capability/tool.js"
 import type { ExtensionId, SessionId } from "./ids.js"
@@ -17,6 +17,18 @@ interface DynamicRequestEntry {
   readonly extensionId: ExtensionId
   readonly scope: DynamicRegistrationScope
   readonly capability: RequestCapability
+}
+
+type RegistrationToken = symbol
+
+interface RegisteredToolEntry {
+  readonly token: RegistrationToken
+  readonly entry: DynamicToolEntry
+}
+
+interface RegisteredRequestEntry {
+  readonly token: RegistrationToken
+  readonly entry: DynamicRequestEntry
 }
 
 export interface DynamicExtensionRegistryService {
@@ -39,23 +51,24 @@ export interface DynamicExtensionRegistryService {
     readonly extensionId: ExtensionId
     readonly capabilityId: string
   }) => Effect.Effect<
-    | {
-        readonly extensionId: ExtensionId
-        readonly capability: RequestCapability
-      }
-    | undefined
+    Option.Option<{
+      readonly extensionId: ExtensionId
+      readonly capability: RequestCapability
+    }>
   >
 }
 
-const scopeLabel = (scope: DynamicRegistrationScope) =>
-  scope._tag === "process" ? "process" : `session ${scope.sessionId}`
+const scopeLabel = (scope: DynamicRegistrationScope) => {
+  if (scope._tag === "process") return "process"
+  return `session ${scope.sessionId}`
+}
 
-const sameScope = (left: DynamicRegistrationScope, right: DynamicRegistrationScope) =>
-  left._tag === "process"
-    ? right._tag === "process"
-    : right._tag === "session" && left.sessionId === right.sessionId
+const sameScope = (left: DynamicRegistrationScope, right: DynamicRegistrationScope) => {
+  if (left._tag === "process") return right._tag === "process"
+  return right._tag === "session" && left.sessionId === right.sessionId
+}
 
-export class DynamicRegistrationError extends Schema.TaggedErrorClass<DynamicRegistrationError>(
+export class DynamicRegistrationError extends Schema.TaggedError<DynamicRegistrationError>(
   "@gent/core/src/domain/dynamic-extension-registry/DynamicRegistrationError",
 )("DynamicRegistrationError", {
   kind: Schema.Literals(["tool", "request"]),
@@ -71,14 +84,16 @@ const duplicateError = (kind: "tool" | "request", id: string, scope: DynamicRegi
   })
 
 const visibleToolWinners = (
-  entries: ReadonlyArray<DynamicToolEntry>,
+  registrations: ReadonlyArray<RegisteredToolEntry>,
   sessionId: SessionId,
 ): ReadonlyArray<DynamicToolEntry> => {
   const winners = new Map<string, DynamicToolEntry>()
-  for (const entry of entries) {
+  for (const registration of registrations) {
+    const entry = registration.entry
     if (entry.scope._tag === "process") winners.set(String(getToolId(entry.capability)), entry)
   }
-  for (const entry of entries) {
+  for (const registration of registrations) {
+    const entry = registration.entry
     if (entry.scope._tag === "session" && entry.scope.sessionId === sessionId) {
       winners.set(String(getToolId(entry.capability)), entry)
     }
@@ -87,7 +102,7 @@ const visibleToolWinners = (
 }
 
 const visibleRequestWinners = (
-  entries: ReadonlyArray<DynamicRequestEntry>,
+  registrations: ReadonlyArray<RegisteredRequestEntry>,
   sessionId: SessionId,
 ): ReadonlyArray<{
   readonly extensionId: ExtensionId
@@ -97,7 +112,8 @@ const visibleRequestWinners = (
     string,
     { readonly extensionId: ExtensionId; readonly capability: RequestCapability }
   >()
-  for (const entry of entries) {
+  for (const registration of registrations) {
+    const entry = registration.entry
     if (entry.scope._tag === "process") {
       winners.set(String(entry.capability.id), {
         extensionId: entry.extensionId,
@@ -105,7 +121,8 @@ const visibleRequestWinners = (
       })
     }
   }
-  for (const entry of entries) {
+  for (const registration of registrations) {
+    const entry = registration.entry
     if (entry.scope._tag === "session" && entry.scope.sessionId === sessionId) {
       winners.set(String(entry.capability.id), {
         extensionId: entry.extensionId,
@@ -123,38 +140,75 @@ export class DynamicExtensionRegistry extends Context.Service<
   static Live: Layer.Layer<DynamicExtensionRegistry> = Layer.effect(
     DynamicExtensionRegistry,
     Effect.gen(function* () {
-      const tools = yield* Ref.make<ReadonlyArray<DynamicToolEntry>>([])
-      const requests = yield* Ref.make<ReadonlyArray<DynamicRequestEntry>>([])
+      const tools = yield* Ref.make<ReadonlyArray<RegisteredToolEntry>>([])
+      const requests = yield* Ref.make<ReadonlyArray<RegisteredRequestEntry>>([])
 
-      const unregisterTool = (entry: DynamicToolEntry) =>
-        Ref.update(tools, (entries) => entries.filter((candidate) => candidate !== entry))
+      const unregisterTool = (token: RegistrationToken) =>
+        Ref.update(tools, (entries) => entries.filter((candidate) => candidate.token !== token))
 
-      const unregisterRequest = (entry: DynamicRequestEntry) =>
-        Ref.update(requests, (entries) => entries.filter((candidate) => candidate !== entry))
+      const unregisterRequest = (token: RegistrationToken) =>
+        Ref.update(requests, (entries) => entries.filter((candidate) => candidate.token !== token))
 
       return DynamicExtensionRegistry.of({
         registerTool: (entry) =>
           Effect.gen(function* () {
             const id = String(getToolId(entry.capability))
-            const existing = (yield* Ref.get(tools)).find(
-              (candidate) =>
-                String(getToolId(candidate.capability)) === id &&
-                sameScope(candidate.scope, entry.scope),
-            )
-            if (existing !== undefined) return yield* duplicateError("tool", id, entry.scope)
-            yield* Ref.update(tools, (entries) => [...entries, entry])
-            return yield* Effect.succeed(unregisterTool(entry))
+            const token = Symbol("dynamic-tool-registration")
+            const duplicate = yield* Ref.modify(tools, (registrations) => {
+              const existing = registrations.find(
+                (registration) =>
+                  String(getToolId(registration.entry.capability)) === id &&
+                  sameScope(registration.entry.scope, entry.scope),
+              )
+              if (!Predicate.isUndefined(existing)) {
+                return [
+                  Option.some(duplicateError("tool", id, entry.scope)),
+                  registrations,
+                ] satisfies readonly [
+                  Option.Option<DynamicRegistrationError>,
+                  ReadonlyArray<RegisteredToolEntry>,
+                ]
+              }
+              return [
+                Option.none<DynamicRegistrationError>(),
+                [...registrations, { token, entry }],
+              ] satisfies readonly [
+                Option.Option<DynamicRegistrationError>,
+                ReadonlyArray<RegisteredToolEntry>,
+              ]
+            })
+            if (Option.isSome(duplicate)) return yield* duplicate.value
+            return yield* Effect.succeed(unregisterTool(token))
           }),
         registerRequest: (entry) =>
           Effect.gen(function* () {
             const id = String(entry.capability.id)
-            const existing = (yield* Ref.get(requests)).find(
-              (candidate) =>
-                String(candidate.capability.id) === id && sameScope(candidate.scope, entry.scope),
-            )
-            if (existing !== undefined) return yield* duplicateError("request", id, entry.scope)
-            yield* Ref.update(requests, (entries) => [...entries, entry])
-            return yield* Effect.succeed(unregisterRequest(entry))
+            const token = Symbol("dynamic-request-registration")
+            const duplicate = yield* Ref.modify(requests, (registrations) => {
+              const existing = registrations.find(
+                (registration) =>
+                  String(registration.entry.capability.id) === id &&
+                  sameScope(registration.entry.scope, entry.scope),
+              )
+              if (!Predicate.isUndefined(existing)) {
+                return [
+                  Option.some(duplicateError("request", id, entry.scope)),
+                  registrations,
+                ] satisfies readonly [
+                  Option.Option<DynamicRegistrationError>,
+                  ReadonlyArray<RegisteredRequestEntry>,
+                ]
+              }
+              return [
+                Option.none<DynamicRegistrationError>(),
+                [...registrations, { token, entry }],
+              ] satisfies readonly [
+                Option.Option<DynamicRegistrationError>,
+                ReadonlyArray<RegisteredRequestEntry>,
+              ]
+            })
+            if (Option.isSome(duplicate)) return yield* duplicate.value
+            return yield* Effect.succeed(unregisterRequest(token))
           }),
         listTools: (sessionId) =>
           Ref.get(tools).pipe(
@@ -171,10 +225,12 @@ export class DynamicExtensionRegistry extends Context.Service<
         findRequest: (params) =>
           Ref.get(requests).pipe(
             Effect.map((entries) =>
-              visibleRequestWinners(entries, params.sessionId).find(
-                (entry) =>
-                  entry.extensionId === params.extensionId &&
-                  String(entry.capability.id) === params.capabilityId,
+              Option.fromUndefinedOr(
+                visibleRequestWinners(entries, params.sessionId).find(
+                  (entry) =>
+                    entry.extensionId === params.extensionId &&
+                    String(entry.capability.id) === params.capabilityId,
+                ),
               ),
             ),
           ),

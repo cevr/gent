@@ -45,23 +45,23 @@ export type JournalRow = ConfigRow | CheckpointRow | ReviewRow
 const ConfigRowSchema = Schema.Struct({
   type: Schema.Literal("config"),
   goal: Schema.String,
-  maxIterations: Schema.Number,
-  startedAt: Schema.Number,
+  maxIterations: Schema.Finite,
+  startedAt: Schema.Finite,
 })
 
 const CheckpointRowSchema = Schema.Struct({
   type: Schema.Literal("checkpoint"),
-  iteration: Schema.Number,
+  iteration: Schema.Finite,
   status: Schema.Literals(["continue", "complete", "abandon"]),
   summary: Schema.String,
   learnings: Schema.optional(Schema.String),
-  metrics: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
+  metrics: Schema.optional(Schema.Record(Schema.String, Schema.Finite)),
   nextIdea: Schema.optional(Schema.String),
 })
 
 const ReviewRowSchema = Schema.Struct({
   type: Schema.Literal("review"),
-  iteration: Schema.Number,
+  iteration: Schema.Finite,
 })
 
 const JournalRowSchema = Schema.Union([ConfigRowSchema, CheckpointRowSchema, ReviewRowSchema])
@@ -76,6 +76,7 @@ const ACTIVE_POINTER_KEY = "active"
 type AutoJournalError = KeyValueStoreError | PlatformError.PlatformError | Schema.SchemaError
 
 const encodeConfigRowJson = Schema.encodeSync(Schema.fromJsonString(ConfigRowSchema))
+const encodeJournalRowJson = Schema.encodeSync(Schema.fromJsonString(JournalRowSchema))
 const decodeJournalRow = Schema.decodeUnknownOption(Schema.fromJsonString(JournalRowSchema))
 
 // ── Service ──
@@ -98,31 +99,36 @@ export interface AutoJournalService {
   readonly appendReview: (iteration: number) => Effect.Effect<void, AutoJournalError>
 
   /** Mark the active journal as complete (clears the active pointer). */
-  readonly finish: () => Effect.Effect<void>
+  readonly finish: Effect.Effect<void>
 
   /** Read all rows from the active journal (for onInit replay). Returns undefined if no active journal. */
-  readonly readActive: () => Effect.Effect<
-    { rows: ReadonlyArray<JournalRow>; path: string; sessionId?: string } | undefined,
+  readonly readActive: Effect.Effect<
+    Option.Option<{
+      rows: ReadonlyArray<JournalRow>
+      path: string
+      sessionId: Option.Option<string>
+    }>,
     AutoJournalError
   >
 
   /** Get the active journal path, if any. */
-  readonly getActivePath: () => Effect.Effect<string | undefined>
+  readonly getActivePath: Effect.Effect<Option.Option<string>>
 }
 
 export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService>()(
   "@gent/extensions/src/auto/journal/AutoJournal",
 ) {
-  static Noop: Layer.Layer<AutoJournal> = Layer.succeed(AutoJournal, {
-    start: () => Effect.succeed("") as Effect.Effect<string>,
-    appendCheckpoint: () => Effect.void,
-    appendReview: () => Effect.void,
-    finish: () => Effect.void,
-    readActive: (): Effect.Effect<
-      { rows: ReadonlyArray<JournalRow>; path: string; sessionId?: string } | undefined
-    > => Effect.void.pipe(Effect.as(undefined)),
-    getActivePath: (): Effect.Effect<string | undefined> => Effect.void.pipe(Effect.as(undefined)),
-  } satisfies AutoJournalService)
+  static Noop: Layer.Layer<AutoJournal> = Layer.succeed(
+    AutoJournal,
+    AutoJournal.of({
+      start: () => Effect.succeed(""),
+      appendCheckpoint: () => Effect.void,
+      appendReview: () => Effect.void,
+      finish: Effect.void,
+      readActive: Effect.succeedNone,
+      getActivePath: Effect.succeedNone,
+    }),
+  )
 
   static Live = (params: {
     cwd: string
@@ -145,7 +151,7 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
             .slice(0, 60)
 
         const appendRow = (filePath: string, row: JournalRow) =>
-          fs.writeFileString(filePath, JSON.stringify(row) + "\n", { flag: "a" })
+          fs.writeFileString(filePath, encodeJournalRowJson(row) + "\n", { flag: "a" })
 
         const readRows = (filePath: string) =>
           fs.readFileString(filePath).pipe(
@@ -172,8 +178,15 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
         const pointerStore = KeyValueStore.toSchemaStore(kv, ActivePointerSchema)
 
         const readActivePointer = pointerStore.get(ACTIVE_POINTER_KEY).pipe(
-          Effect.map(Option.getOrUndefined),
-          Effect.orElseSucceed(() => undefined),
+          Effect.map(
+            Option.map((pointer) => ({
+              path: pointer.path,
+              sessionId: Option.fromNullishOr(pointer.sessionId),
+            })),
+          ),
+          Effect.orElseSucceed(() =>
+            Option.none<{ path: string; sessionId: Option.Option<string> }>(),
+          ),
         )
 
         return AutoJournal.of({
@@ -191,7 +204,7 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
               yield* fs.writeFileString(journalPath, encodeConfigRowJson(row) + "\n")
               yield* pointerStore.set(ACTIVE_POINTER_KEY, {
                 path: journalPath,
-                ...(sessionId !== undefined ? { sessionId } : {}),
+                sessionId: Option.getOrUndefined(Option.fromNullishOr(sessionId)),
               })
               return journalPath
             }),
@@ -199,30 +212,33 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
           appendCheckpoint: (params) =>
             Effect.gen(function* () {
               const active = yield* readActivePointer
-              if (active === undefined) return
-              yield* appendRow(active.path, { type: "checkpoint", ...params })
+              if (Option.isNone(active)) return
+              yield* appendRow(active.value.path, { type: "checkpoint", ...params })
             }),
 
           appendReview: (iteration) =>
             Effect.gen(function* () {
               const active = yield* readActivePointer
-              if (active === undefined) return
-              yield* appendRow(active.path, { type: "review", iteration })
+              if (Option.isNone(active)) return
+              yield* appendRow(active.value.path, { type: "review", iteration })
             }),
 
-          finish: () => pointerStore.remove(ACTIVE_POINTER_KEY).pipe(Effect.ignore),
+          finish: pointerStore.remove(ACTIVE_POINTER_KEY).pipe(Effect.ignore),
 
-          readActive: () =>
-            Effect.gen(function* () {
-              const active = yield* readActivePointer
-              if (active === undefined) return undefined
-              const exists = yield* fs.exists(active.path)
-              if (!exists) return undefined
-              const rows = yield* readRows(active.path)
-              return { rows, path: active.path, sessionId: active.sessionId }
-            }),
+          readActive: Effect.gen(function* () {
+            const active = yield* readActivePointer
+            if (Option.isNone(active)) return Option.none()
+            const exists = yield* fs.exists(active.value.path)
+            if (!exists) return Option.none()
+            const rows = yield* readRows(active.value.path)
+            return Option.some({
+              rows,
+              path: active.value.path,
+              sessionId: active.value.sessionId,
+            })
+          }),
 
-          getActivePath: () => readActivePointer.pipe(Effect.map((a) => a?.path)),
+          getActivePath: readActivePointer.pipe(Effect.map(Option.map((a) => a.path))),
         } satisfies AutoJournalService)
       }),
     ).pipe(Layer.provide(KeyValueStore.layerFileSystem(autoDir)))

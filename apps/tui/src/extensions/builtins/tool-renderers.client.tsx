@@ -13,7 +13,7 @@
  * leaves no detached root behind.
  */
 import { createMemo } from "solid-js"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import {
   defineClientExtension,
   borderLabelContribution,
@@ -59,12 +59,16 @@ export const builtinTools = defineClientExtension("@gent/tools", {
           shell.sendMessage(
             "Use the loop tool to iterate on the current todo until complete or a condition is met.",
           ),
-        onSlash: (args) =>
+        onSlash: (args) => {
+          const trimmed = args.trim()
+          if (trimmed.length > 0) {
+            shell.sendMessage(`Use the loop tool: ${trimmed}`)
+            return
+          }
           shell.sendMessage(
-            args.trim().length > 0
-              ? `Use the loop tool: ${args.trim()}`
-              : "Use the loop tool to iterate on the current todo until complete or a condition is met.",
-          ),
+            "Use the loop tool to iterate on the current todo until complete or a condition is met.",
+          )
+        },
       }),
     )
   }),
@@ -101,7 +105,8 @@ export const builtinTodos = defineClientExtension("@gent/todo", {
           if (isTodoMutation(envelope.event)) refetch()
         }),
     })
-    const liveTodos = (): readonly TodoEntry[] => todosResource.read() ?? []
+    const liveTodos = (): readonly TodoEntry[] =>
+      Option.getOrElse(Option.fromNullishOr(todosResource.read()), () => [])
 
     const runningCount = (): number =>
       liveTodos().filter((t) => t.status === "in_progress" || t.status === "pending").length
@@ -131,7 +136,7 @@ export const builtinTodos = defineClientExtension("@gent/todo", {
         },
         { when: () => runningCount() > 0 },
       )
-      return null
+      return <></>
     }
 
     return clientContributions(
@@ -166,7 +171,9 @@ export const builtinTodos = defineClientExtension("@gent/todo", {
         produce: () => {
           const count = runningCount()
           if (count === 0) return []
-          return [{ text: `${count} todo${count > 1 ? "s" : ""} ↓`, color: "info" }]
+          let suffix = ""
+          if (count > 1) suffix = "s"
+          return [{ text: `${count} todo${suffix} ↓`, color: "info" }]
         },
       }),
     )

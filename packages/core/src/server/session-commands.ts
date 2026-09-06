@@ -1,4 +1,4 @@
-import { DateTime, Effect, Layer, Context, Option, Stream } from "effect"
+import { Predicate, DateTime, Effect, Layer, Context, Option, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { SessionMutations, type SessionMutationError } from "../domain/session-mutations.js"
@@ -21,6 +21,7 @@ import { ProviderError } from "../domain/provider-error.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { makeRequestDeduper } from "../runtime/request-dedup.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
+import type { SendUserMessagePayload } from "../runtime/session-runtime.js"
 import { SessionMutationsLive as SessionMutationsLiveLayer } from "./session-mutations-live.js"
 import { NotFoundError, type GentRpcError } from "./errors.js"
 import type {
@@ -124,28 +125,37 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         CreateSessionInput,
         CreateSessionResult,
         GentRpcError
-      >({ body: (input) => doCreateSession(input), keyOf: (input) => input.requestId })
+      >({
+        body: (input) => doCreateSession(input),
+        keyOf: (input) => Option.fromUndefinedOr(input.requestId),
+      })
       const dedupControl = yield* Effect.serviceOption(SessionCommandsDedupControl)
       if (Option.isSome(dedupControl)) {
         yield* dedupControl.value.registerCreateSessionInvalidator(dedupCreateSession.invalidateKey)
       }
       const dedupSendMessage = yield* makeRequestDeduper<SendMessageInput, void, GentRpcError>({
         body: (input) => doSendMessage(input),
-        keyOf: (input) => input.requestId,
+        keyOf: (input) => Option.fromUndefinedOr(input.requestId),
       })
       const dedupCreateBranch = yield* makeRequestDeduper<
         CreateBranchInput,
         CreateBranchResult,
         GentRpcError
-      >({ body: (input) => doCreateBranch(input), keyOf: (input) => input.requestId })
+      >({
+        body: (input) => doCreateBranch(input),
+        keyOf: (input) => Option.fromUndefinedOr(input.requestId),
+      })
       const dedupForkBranch = yield* makeRequestDeduper<
         ForkBranchInput,
         CreateBranchResult,
         GentRpcError
-      >({ body: (input) => doForkBranch(input), keyOf: (input) => input.requestId })
+      >({
+        body: (input) => doForkBranch(input),
+        keyOf: (input) => Option.fromUndefinedOr(input.requestId),
+      })
       const dedupSwitchBranch = yield* makeRequestDeduper<SwitchBranchInput, void, GentRpcError>({
         body: (input) => doSwitchBranch(input),
-        keyOf: (input) => input.requestId,
+        keyOf: (input) => Option.fromUndefinedOr(input.requestId),
       })
 
       const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
@@ -154,13 +164,16 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         const messages = yield* messageStorage.listMessages(branchId)
         if (messages.length === 0) return ""
         const firstMessage = messages[0]
-        if (firstMessage === undefined) return ""
+        if (Predicate.isUndefined(firstMessage)) return ""
 
         const conversation = messages
           .slice(-50)
           .map((message) => {
             const text = messagePartsTextLines(message.parts).join("\n")
-            return text !== "" ? `${message.role}: ${text}` : ""
+            if (text !== "") {
+              return `${message.role}: ${text}`
+            }
+            return ""
           })
           .filter((line) => line.trim().length > 0)
           .join("\n\n")
@@ -188,14 +201,15 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
               hints: { maxTokens: 400 },
             })
             const stream = model.streamText({ prompt: toPrompt([summaryMessage]) }).pipe(
-              Stream.mapError(
-                (error: unknown) =>
-                  new ProviderError({
-                    message: AiError.isAiError(error) ? error.message : String(error),
-                    model: NAME_GEN_MODEL,
-                    cause: error,
-                  }),
-              ),
+              Stream.mapError((error: Parameters<typeof AiError.isAiError>[0]) => {
+                let message = String(error)
+                if (AiError.isAiError(error)) message = error.message
+                return new ProviderError({
+                  message,
+                  model: NAME_GEN_MODEL,
+                  cause: error,
+                })
+              }),
             )
             yield* Stream.runForEach(stream, (part) =>
               Effect.sync(() => {
@@ -217,18 +231,22 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
       const sendInitialPrompt = Effect.fn("SessionCommands.sendInitialPrompt")(function* (
         operation: StoredCreateSessionResult,
-        requestId: string | undefined,
+        requestId: Option.Option<string>,
       ) {
-        if (operation.initialPrompt === undefined || operation.initialPrompt.length === 0) return
-        yield* sessionRuntime.sendUserMessage({
+        if (Predicate.isUndefined(operation.initialPrompt) || operation.initialPrompt.length === 0)
+          return
+        let message: SendUserMessagePayload = {
           sessionId: operation.sessionId,
           branchId: operation.branchId,
           content: operation.initialPrompt,
-          ...(operation.agentOverride !== undefined
-            ? { agentOverride: operation.agentOverride }
-            : {}),
-          ...(requestId !== undefined ? { requestId: `session.create:${requestId}:initial` } : {}),
-        })
+        }
+        if (Predicate.isNotUndefined(operation.agentOverride)) {
+          message = { ...message, agentOverride: operation.agentOverride }
+        }
+        if (Option.isSome(requestId)) {
+          message = { ...message, requestId: `session.create:${requestId.value}:initial` }
+        }
+        yield* sessionRuntime.sendUserMessage(message)
       })
 
       const createSessionResult = (operation: StoredCreateSessionResult): CreateSessionResult => ({
@@ -240,33 +258,42 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const doCreateSession = Effect.fn("SessionCommands.doCreateSession")(function* (
         input: CreateSessionInput,
       ) {
-        if (input.requestId !== undefined) {
+        if (!Predicate.isUndefined(input.requestId)) {
           const existing = yield* sessionOperationStorage.getCreateSession(input.requestId)
-          if (existing !== undefined) {
-            yield* sendInitialPrompt(existing, input.requestId)
+          if (!Predicate.isUndefined(existing)) {
+            yield* sendInitialPrompt(existing, Option.fromUndefinedOr(input.requestId))
             return createSessionResult(existing)
           }
         }
 
         const sessionId = SessionId.make(yield* platform.randomId)
-        if (input.parentBranchId !== undefined && input.parentSessionId === undefined) {
+        if (
+          !Predicate.isUndefined(input.parentBranchId) &&
+          Predicate.isUndefined(input.parentSessionId)
+        ) {
           return yield* new NotFoundError({
             message: "parentBranchId requires parentSessionId",
             entity: "session",
           })
         }
-        if (input.parentSessionId !== undefined) {
+        if (!Predicate.isUndefined(input.parentSessionId)) {
           const parent = yield* sessionStorage.getSession(input.parentSessionId)
-          if (parent === undefined) {
+          if (Predicate.isUndefined(parent)) {
             return yield* new NotFoundError({
               message: `Parent session not found: ${input.parentSessionId}`,
               entity: "session",
             })
           }
         }
-        if (input.parentBranchId !== undefined && input.parentSessionId !== undefined) {
+        if (
+          !Predicate.isUndefined(input.parentBranchId) &&
+          !Predicate.isUndefined(input.parentSessionId)
+        ) {
           const parentBranch = yield* branchStorage.getBranch(input.parentBranchId)
-          if (parentBranch === undefined || parentBranch.sessionId !== input.parentSessionId) {
+          if (
+            Predicate.isUndefined(parentBranch) ||
+            parentBranch.sessionId !== input.parentSessionId
+          ) {
             return yield* new NotFoundError({
               message: `Parent branch not found in parent session: ${input.parentBranchId}`,
               entity: "branch",
@@ -295,9 +322,9 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
         const committed = yield* storageTransaction(
           Effect.gen(function* () {
-            if (input.requestId !== undefined) {
+            if (!Predicate.isUndefined(input.requestId)) {
               const existing = yield* sessionOperationStorage.getCreateSession(input.requestId)
-              if (existing !== undefined) return { result: existing }
+              if (!Predicate.isUndefined(existing)) return { result: existing }
             }
             yield* sessionStorage.createSession(session)
             yield* branchStorage.createBranch(branch)
@@ -308,27 +335,27 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
               sessionId,
               branchId,
               name,
-              ...(input.initialPrompt !== undefined ? { initialPrompt: input.initialPrompt } : {}),
-              ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
+              initialPrompt: input.initialPrompt,
+              agentOverride: input.agentOverride,
             }
-            if (input.requestId !== undefined) {
+            if (!Predicate.isUndefined(input.requestId)) {
               yield* sessionOperationStorage.saveCreateSession(input.requestId, result)
             }
             return { envelope, result }
           }),
         )
-        if (committed.envelope !== undefined) {
+        if (!Predicate.isUndefined(committed.envelope)) {
           yield* eventPublisher.deliver(committed.envelope)
           yield* Effect.logInfo("session.created").pipe(
             Effect.annotateLogs({
               sessionId: committed.result.sessionId,
               branchId: committed.result.branchId,
-              ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+              requestId: input.requestId,
             }),
           )
         }
 
-        yield* sendInitialPrompt(committed.result, input.requestId)
+        yield* sendInitialPrompt(committed.result, Option.fromUndefinedOr(input.requestId))
         return createSessionResult(committed.result)
       })
 
@@ -344,7 +371,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         return yield* mutations.createSessionBranch({
           sessionId: input.sessionId,
           name: input.name,
-          ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+          requestId: input.requestId,
         })
       })
 
@@ -379,7 +406,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           sessionId: input.sessionId,
           fromBranchId: input.fromBranchId,
           toBranchId: input.toBranchId,
-          ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+          requestId: input.requestId,
         })
       })
 
@@ -399,7 +426,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           fromBranchId: input.fromBranchId,
           atMessageId: input.atMessageId,
           name: input.name,
-          ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+          requestId: input.requestId,
         })
       })
 
@@ -416,15 +443,15 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           sessionId: input.sessionId,
           branchId: input.branchId,
           content: input.content,
-          ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
-          ...(input.runSpec !== undefined ? { runSpec: input.runSpec } : {}),
-          ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+          agentOverride: input.agentOverride,
+          runSpec: input.runSpec,
+          requestId: input.requestId,
         })
         yield* Effect.logInfo("session.messageSent").pipe(
           Effect.annotateLogs({
             sessionId: input.sessionId,
             branchId: input.branchId,
-            ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+            requestId: input.requestId,
           }),
         )
       })

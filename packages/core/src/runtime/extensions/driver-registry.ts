@@ -16,7 +16,7 @@
  *
  * @module
  */
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Predicate, Schema } from "effect"
 import type {
   ExternalDriverContribution,
   ModelDriverContribution,
@@ -39,18 +39,21 @@ export interface ResolvedDrivers {
 
 export interface DriverRegistryService {
   /** Resolve a model driver by id (the `provider` segment of `provider/model`). */
+  // oxlint-disable-next-line effect/noNullish -- Driver lookup preserves an absent-driver result at this internal boundary.
   readonly getModel: (id: string) => Effect.Effect<ModelDriverContribution | undefined>
   /** Resolve an external driver by id (the runner id, e.g. `acp-claude-code`). */
+  // oxlint-disable-next-line effect/noNullish -- Driver lookup preserves an absent-driver result at this internal boundary.
   readonly getExternal: (id: string) => Effect.Effect<ExternalDriverContribution | undefined>
   /** All registered model drivers in registration order. */
-  readonly listModels: () => Effect.Effect<ReadonlyArray<ModelDriverContribution>>
+  readonly listModels: Effect.Effect<ReadonlyArray<ModelDriverContribution>>
   /** All registered external drivers in registration order. */
-  readonly listExternal: () => Effect.Effect<ReadonlyArray<ExternalDriverContribution>>
+  readonly listExternal: Effect.Effect<ReadonlyArray<ExternalDriverContribution>>
   /** Run a base catalog through every model driver's `listModels` filter. */
   readonly filterModelCatalog: (
     baseCatalog: ReadonlyArray<Model>,
     resolveAuth?: (
       driverId: string,
+      // oxlint-disable-next-line effect/noNullish -- Driver auth callbacks may have no auth result.
     ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
   ) => Effect.Effect<ReadonlyArray<Model>, DriverError | ProviderAuthError>
 }
@@ -59,32 +62,39 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
   "@gent/core/src/runtime/extensions/driver-registry/DriverRegistry",
 ) {
   static fromResolved = (resolved: ResolvedDrivers): Layer.Layer<DriverRegistry> =>
-    Layer.succeed(DriverRegistry, {
-      getModel: (id) => Effect.succeed(resolved.modelDrivers.get(id)),
-      getExternal: (id) => Effect.succeed(resolved.externalDrivers.get(id)),
-      listModels: () => Effect.succeed([...resolved.modelDrivers.values()]),
-      listExternal: () => Effect.succeed([...resolved.externalDrivers.values()]),
-      filterModelCatalog: Effect.fn("DriverRegistry.filterModelCatalog")(function* (
-        baseCatalog: ReadonlyArray<Model>,
-        resolveAuth?: (
-          driverId: string,
-        ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
-      ) {
-        let catalog = baseCatalog
-        for (const driver of resolved.modelDrivers.values()) {
-          if (driver.listModels === undefined) continue
-          const auth = resolveAuth !== undefined ? yield* resolveAuth(driver.id) : undefined
-          const nextCatalog = driver.listModels(catalog, auth)
-          const decoded = decodeModelCatalog(nextCatalog)
-          if (decoded._tag === "None") {
-            return yield* new DriverError({
-              driver: DriverFailureRef.cases.model.make({ id: DriverFailureId.make(driver.id) }),
-              reason: `Model driver "${driver.id}" returned an invalid model catalog`,
-            })
+    Layer.succeed(
+      DriverRegistry,
+      DriverRegistry.of({
+        getModel: (id) => Effect.succeed(resolved.modelDrivers.get(id)),
+        getExternal: (id) => Effect.succeed(resolved.externalDrivers.get(id)),
+        listModels: Effect.succeed([...resolved.modelDrivers.values()]),
+        listExternal: Effect.succeed([...resolved.externalDrivers.values()]),
+        filterModelCatalog: Effect.fn("DriverRegistry.filterModelCatalog")(function* (
+          baseCatalog: ReadonlyArray<Model>,
+          resolveAuth?: (
+            driverId: string,
+            // oxlint-disable-next-line effect/noNullish -- Driver auth callbacks may have no auth result.
+          ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
+        ) {
+          let catalog = baseCatalog
+          for (const driver of resolved.modelDrivers.values()) {
+            if (Predicate.isUndefined(driver.listModels)) continue
+            let auth = Option.none<ProviderAuthInfo>()
+            if (!Predicate.isUndefined(resolveAuth)) {
+              auth = yield* resolveAuth(driver.id).pipe(Effect.map(Option.fromUndefinedOr))
+            }
+            const nextCatalog = driver.listModels(catalog, Option.getOrUndefined(auth))
+            const decoded = decodeModelCatalog(nextCatalog)
+            if (decoded._tag === "None") {
+              return yield* new DriverError({
+                driver: DriverFailureRef.cases.model.make({ id: DriverFailureId.make(driver.id) }),
+                reason: `Model driver "${driver.id}" returned an invalid model catalog`,
+              })
+            }
+            catalog = decoded.value
           }
-          catalog = decoded.value
-        }
-        return catalog
+          return catalog
+        }),
       }),
-    })
+    )
 }

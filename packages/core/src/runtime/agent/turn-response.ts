@@ -1,4 +1,4 @@
-import { Deferred, Effect, Stream, type Scope } from "effect"
+import { Deferred, Effect, Exit, Option, Stream, type Scope } from "effect"
 import type * as Response from "effect/unstable/ai/Response"
 import { DEFAULT_AGENT_NAME, type AgentName as AgentNameType } from "../../domain/agent.js"
 import { TurnError } from "../../domain/driver.js"
@@ -21,7 +21,7 @@ import {
   projectResponsePartsToMessageParts,
 } from "../../domain/message-part-projection.js"
 import { ProviderError } from "../../domain/provider-error.js"
-import { summarizeOutput, stringifyOutput } from "../../domain/tool-output.js"
+import { encodeToolOutput, summarizeOutput, stringifyOutput } from "../../domain/tool-output.js"
 import type { AssistantResponsePart, ToolResponsePart } from "./turn-persistence.js"
 
 /**
@@ -36,16 +36,18 @@ export type ActiveStreamHandle = {
   readonly abortSignal: AbortSignal
 }
 
+const makeAbortController = (): AbortController => new AbortController()
+
 /**
  * Scoped: the forked listener that translates `Deferred.succeed(interrupted)`
  * into `abortController.abort()` lives for the duration of the supplied
  * scope. Clean turn completion closes the scope and interrupts the listener,
  * preventing the per-turn fiber-leak that a detached fork would produce.
  */
-export const makeActiveStreamHandle = (): Effect.Effect<ActiveStreamHandle, never, Scope.Scope> =>
+export const makeActiveStreamHandle: Effect.Effect<ActiveStreamHandle, never, Scope.Scope> =
   Effect.gen(function* () {
     const interrupted = yield* Deferred.make<void>()
-    const abortController = new AbortController()
+    const abortController = makeAbortController()
     yield* Effect.forkScoped(
       Deferred.await(interrupted).pipe(Effect.andThen(Effect.sync(() => abortController.abort()))),
     )
@@ -53,7 +55,7 @@ export const makeActiveStreamHandle = (): Effect.Effect<ActiveStreamHandle, neve
   })
 
 export const signalActiveStreamInterrupt = (handle: ActiveStreamHandle): Effect.Effect<void> =>
-  Deferred.succeed(handle.interrupted, undefined).pipe(Effect.asVoid)
+  Deferred.done(handle.interrupted, Exit.void).pipe(Effect.asVoid)
 
 const wasInterrupted = (handle: ActiveStreamHandle): Effect.Effect<boolean> =>
   Deferred.isDone(handle.interrupted)
@@ -89,6 +91,7 @@ export interface CollectedTurnResponse {
   readonly driverKind: "model" | "external"
 }
 
+// oxlint-disable-next-line effect/noUnknownParameters -- Provider and external-driver errors cross an untyped SDK boundary.
 export const formatStreamErrorMessage = (streamError: unknown) => {
   if (streamError instanceof Error) return streamError.message
   if (hasMessage(streamError)) return streamError.message
@@ -119,13 +122,23 @@ export const toResponseFinishReason = (stopReason: string): Response.FinishReaso
 
 const finishedUsage = (
   usage: Response.FinishPart["usage"],
-): AssistantDraft["usage"] | undefined => {
-  if (usage === undefined) return undefined
-  return {
-    inputTokens: usage.inputTokens?.total ?? 0,
-    outputTokens: usage.outputTokens?.total ?? 0,
-  }
-}
+): Option.Option<NonNullable<AssistantDraft["usage"]>> =>
+  Option.fromUndefinedOr(usage).pipe(
+    Option.map((value) => ({
+      inputTokens: Option.getOrElse(
+        Option.fromUndefinedOr(value.inputTokens).pipe(
+          Option.flatMap(({ total }) => Option.fromUndefinedOr(total)),
+        ),
+        () => 0,
+      ),
+      outputTokens: Option.getOrElse(
+        Option.fromUndefinedOr(value.outputTokens).pipe(
+          Option.flatMap(({ total }) => Option.fromUndefinedOr(total)),
+        ),
+        () => 0,
+      ),
+    })),
+  )
 
 export const collectNormalizedResponse = (params: {
   responseParts: ReadonlyArray<Response.AnyPart>
@@ -135,17 +148,21 @@ export const collectNormalizedResponse = (params: {
 }): CollectedTurnResponse => {
   const normalized = normalizeResponseParts(params.responseParts)
   const messages = projectResponsePartsToMessageParts(normalized)
-  const usage = normalized
+  const usageOption = normalized
     .filter((part): part is Response.FinishPart => part.type === "finish")
     .map((part) => finishedUsage(part.usage))
-    .find((part) => part !== undefined)
+    .find(Option.isSome)
+  const usage = Option.fromUndefinedOr(usageOption).pipe(
+    Option.flatMap((value) => value),
+    Option.getOrUndefined,
+  )
 
   return {
     responseParts: normalized,
     messageProjection: {
       assistant: messages.assistant,
       tool: messages.tool,
-      ...(usage !== undefined ? { usage } : {}),
+      usage,
     },
     interrupted: params.interrupted,
     streamFailed: params.streamFailed,
@@ -279,12 +296,14 @@ export const collectFailedModelTurnResponse = (params: {
     })
   })
 
-const externalToolOutput = (
-  part: Extract<Response.AnyPart, { readonly type: "tool-result" }>,
-): { readonly type: "json" | "error-json"; readonly value: unknown } => ({
-  type: part.isFailure ? "error-json" : "json",
-  value: part.encodedResult,
-})
+const externalToolOutput = (part: Extract<Response.AnyPart, { readonly type: "tool-result" }>) => {
+  let type: "json" | "error-json" = "json"
+  if (part.isFailure) type = "error-json"
+  return {
+    type,
+    value: part.encodedResult,
+  } satisfies { readonly type: "json" | "error-json"; readonly value: unknown }
+}
 
 const publishExternalStreamChunk = (params: {
   sessionId: SessionId
@@ -327,10 +346,10 @@ const publishExternalToolResult = (params: {
     toolName: params.part.name,
     summary: summarizeOutput(output),
     output: stringifyOutput(output.value),
+    resultJson: encodeToolOutput(output.value),
   }
-  return publishEventOrDie(
-    params.part.isFailure ? ToolCallFailed.make(fields) : ToolCallSucceeded.make(fields),
-  )
+  if (params.part.isFailure) return publishEventOrDie(ToolCallFailed.make(fields))
+  return publishEventOrDie(ToolCallSucceeded.make(fields))
 }
 
 const collectExternalResponsePart = (params: {

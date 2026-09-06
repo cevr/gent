@@ -1,23 +1,10 @@
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
-import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutputOption, getString } from "../../utils/parse-tool-output"
+import type { ToolInput } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
-
-interface SessionResult {
-  readonly sessionId: string
-  readonly name: string
-  readonly lastActivity: string
-  readonly excerpts: readonly string[]
-}
-
-interface SearchOutput {
-  readonly query?: string
-  readonly totalMatches?: number
-  readonly sessions?: readonly SessionResult[]
-  readonly error?: string
-}
 
 const SessionResultSchema = Schema.Struct({
   sessionId: Schema.String,
@@ -28,33 +15,46 @@ const SessionResultSchema = Schema.Struct({
 
 const SearchOutputSchema = Schema.Struct({
   query: Schema.optional(Schema.String),
-  totalMatches: Schema.optional(Schema.Number),
+  totalMatches: Schema.optional(Schema.Finite),
   sessions: Schema.optional(Schema.Array(SessionResultSchema)),
   error: Schema.optional(Schema.String),
 })
 
-function getQuery(input: unknown): string | undefined {
+function getQuery(input: ToolInput): Option.Option<string> {
   const q = getString(input, "query")
-  return q !== "" ? q : undefined
+  if (q.length === 0) return Option.none()
+  return Option.some(q)
 }
 
 export function SearchSessionsToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
   const query = () => getQuery(props.toolCall.input)
-  const output = () =>
-    decodeToolOutput(SearchOutputSchema, props.toolCall.output) as SearchOutput | undefined
+  const output = () => decodeToolOutputOption(SearchOutputSchema, props.toolCall.output)
 
-  const subtitle = () => {
+  const subtitle = (): Option.Option<string> => {
     const q = query()
-    if (q === undefined) return undefined
-    return q.length > 60 ? q.slice(0, 60) + "…" : q
+    if (Option.isNone(q)) return Option.none()
+    if (q.value.length > 60) return Option.some(q.value.slice(0, 60) + "…")
+    return q
+  }
+
+  const sessions = () => Option.flatMap(output(), (value) => Option.fromNullishOr(value.sessions))
+  const totalMatches = () =>
+    Option.getOrElse(
+      Option.flatMap(output(), (value) => Option.fromNullishOr(value.totalMatches)),
+      () => 0,
+    )
+  const error = () => Option.flatMap(output(), (value) => Option.fromNullishOr(value.error))
+  const excerptText = (excerpt: string): string => {
+    if (excerpt.length > 120) return excerpt.slice(0, 120) + "…"
+    return excerpt
   }
 
   return (
     <ToolFrame
       title="search_sessions"
-      subtitle={subtitle()}
+      subtitle={Option.getOrUndefined(subtitle())}
       status={props.toolCall.status}
       expanded={props.expanded}
     >
@@ -64,17 +64,21 @@ export function SearchSessionsToolRenderer(props: ToolRendererProps) {
         </text>
       </Show>
 
-      <Show when={props.toolCall.status !== "running" && output()?.sessions !== undefined}>
+      <Show when={props.toolCall.status !== "running" && Option.getOrUndefined(sessions())}>
         <text style={{ fg: theme.textMuted }}>
-          <span style={{ fg: theme.success }}>✓</span> {output()?.totalMatches ?? 0} matches in{" "}
-          {output()?.sessions?.length ?? 0} sessions
+          <span style={{ fg: theme.success }}>✓</span> {totalMatches()} matches in{" "}
+          {Option.getOrElse(sessions(), () => []).length} sessions
         </text>
 
         <Show when={props.expanded}>
-          <For each={output()?.sessions ?? []}>
+          <For each={Option.getOrElse(sessions(), () => [])}>
             {(session, index) => {
-              const isLast = () => index() === (output()?.sessions?.length ?? 1) - 1
-              const connector = () => (isLast() ? "╰──" : "├──")
+              const sessionList = Option.getOrElse(sessions(), () => [])
+              const isLast = () => index() === sessionList.length - 1
+              const connector = () => {
+                if (isLast()) return "╰──"
+                return "├──"
+              }
 
               return (
                 <box flexDirection="column">
@@ -85,9 +89,7 @@ export function SearchSessionsToolRenderer(props: ToolRendererProps) {
                   <For each={session.excerpts}>
                     {(excerpt) => (
                       <box paddingLeft={4}>
-                        <text style={{ fg: theme.textMuted }}>
-                          {excerpt.length > 120 ? excerpt.slice(0, 120) + "…" : excerpt}
-                        </text>
+                        <text style={{ fg: theme.textMuted }}>{excerptText(excerpt)}</text>
                       </box>
                     )}
                   </For>
@@ -98,9 +100,9 @@ export function SearchSessionsToolRenderer(props: ToolRendererProps) {
         </Show>
       </Show>
 
-      <Show when={output()?.error !== undefined}>
+      <Show when={Option.getOrUndefined(error())}>
         <text style={{ fg: theme.error }}>
-          <span>✕</span> {output()?.error}
+          <span>✕</span> {Option.getOrElse(error(), () => "")}
         </text>
       </Show>
     </ToolFrame>

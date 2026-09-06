@@ -5,7 +5,7 @@
  * Expanded: same (write has no content preview in output)
  */
 
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { Show, createMemo } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
@@ -16,7 +16,7 @@ import type { ToolRendererProps } from "./types"
 
 const WriteOutputSchema = Schema.Struct({
   path: Schema.String,
-  bytesWritten: Schema.Number,
+  bytesWritten: Schema.Finite,
 })
 
 function formatBytes(bytes: number): string {
@@ -30,12 +30,16 @@ export function WriteToolRenderer(props: ToolRendererProps) {
 
   const data = createMemo(() => decodeToolOutput(WriteOutputSchema, props.toolCall.output))
   const path = createMemo(() => data()?.path ?? "")
+  const subtitleHref = () => {
+    if (isAbsPath(path())) return fileUrl(path())
+    return Option.getOrUndefined(Option.none<string>())
+  }
 
   return (
     <ToolFrame
       title="write"
       subtitle={truncatePath(path())}
-      subtitleHref={isAbsPath(path()) ? fileUrl(path()) : undefined}
+      subtitleHref={subtitleHref()}
       status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={

@@ -28,7 +28,7 @@
  *
  * @module
  */
-import { Context, Schema, type Effect, type Layer, type Stream } from "effect"
+import { Context, Schema, type Effect, type Layer, type Option, type Stream } from "effect"
 import type { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"
 import type { AgentDefinition } from "./agent.js"
@@ -70,18 +70,18 @@ export const DriverFailureRef = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type DriverFailureRef = Schema.Schema.Type<typeof DriverFailureRef>
 
-export class DriverError extends Schema.TaggedErrorClass<DriverError>()("DriverError", {
+export class DriverError extends Schema.TaggedError<DriverError>()("DriverError", {
   driver: DriverFailureRef,
   reason: Schema.String,
 }) {}
 
 // ── Shared types lifted from provider-contribution.ts ──
 
-export class ProviderAuthError extends Schema.TaggedErrorClass<ProviderAuthError>()(
+export class ProviderAuthError extends Schema.TaggedError<ProviderAuthError>()(
   "ProviderAuthError",
   {
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -159,7 +159,7 @@ export interface ProviderAuthContribution {
   readonly methods: ReadonlyArray<AuthMethod>
   readonly authorize?: (
     ctx: ProviderAuthorizeContext,
-  ) => Effect.Effect<ProviderAuthorizationResult | undefined, ProviderAuthError>
+  ) => Effect.Effect<Option.Option<ProviderAuthorizationResult>, ProviderAuthError>
   readonly callback?: (ctx: ProviderCallbackContext) => Effect.Effect<void, ProviderAuthError>
 }
 
@@ -183,7 +183,7 @@ export interface ModelDriverContribution {
     modelName: string,
     authInfo?: ProviderAuthInfo,
     hints?: ProviderHints,
-  ) => ProviderResolution
+  ) => Effect.Effect<ProviderResolution, ProviderAuthError>
   /** Filter or extend the model catalog. */
   readonly listModels?: (
     baseCatalog: ReadonlyArray<Model>,
@@ -200,7 +200,7 @@ export interface ModelDriverContribution {
 export type TurnStreamPart = Response.AnyPart
 
 /** Failure raised by an external driver while streaming a turn. */
-export class TurnError extends Schema.TaggedErrorClass<TurnError>()("TurnError", {
+export class TurnError extends Schema.TaggedError<TurnError>()("TurnError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
@@ -221,8 +221,8 @@ export interface TurnContext {
 export interface ExternalToolRunnerService {
   readonly runTool: (
     toolName: string,
-    args: unknown,
-  ) => Effect.Effect<unknown, InteractionPendingError>
+    args: Schema.Schema.Type<typeof Schema.Unknown>,
+  ) => Effect.Effect<unknown, InteractionPendingError | TurnError>
 }
 
 export class ExternalToolRunner extends Context.Service<
@@ -299,7 +299,7 @@ export interface ExternalDriverContribution {
    * hides cache-staleness bugs. Stateless drivers supply `Effect.void`
    * explicitly so reviewers see the intent.
    */
-  readonly invalidate: () => Effect.Effect<void>
+  readonly invalidate: Effect.Effect<void>
 }
 
 export type AnyDriverContribution = ModelDriverContribution | ExternalDriverContribution

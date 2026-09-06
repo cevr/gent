@@ -29,6 +29,7 @@ import {
 } from "@gent/core-internal/storage/session-storage"
 import type { ExternalDriverContribution } from "@gent/core-internal/domain/driver"
 import { ProcessRunnerLive } from "../../src/utils/run-process"
+import type { PermissionService } from "../../src/domain/permission"
 
 const processRunnerLive = ProcessRunnerLive.pipe(Layer.provide(BunServices.layer))
 
@@ -126,6 +127,7 @@ describe("resolveSessionEnvironment", () => {
           expect(yield* resolved.environment.permission.check("bash", { command: "ls -la" })).toBe(
             "allowed",
           )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(testLayer), Effect.scoped)
       }).pipe(Effect.provide(BunPlatformLive)),
   )
@@ -137,8 +139,8 @@ describe("resolveSessionEnvironment", () => {
         platform: "test",
       })
       const defaultPermission = {
-        check: () => Effect.succeed("denied" as const),
-      }
+        check: () => Effect.succeed("denied" satisfies "denied"),
+      } satisfies PermissionService
       const driverRegistryContext = yield* Layer.build(
         DriverRegistry.fromResolved({
           modelDrivers: new Map(),
@@ -176,6 +178,7 @@ describe("resolveSessionEnvironment", () => {
         expect(resolved.environment.baseSections).toEqual([
           { id: "default", content: "Default", priority: 1 },
         ])
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer))
     }),
   )
@@ -242,11 +245,14 @@ describe("resolveSessionEnvironment", () => {
           expect(Option.isSome(error)).toBe(true)
           if (Option.isSome(error)) {
             expect(Schema.is(StorageError)(error.value)).toBe(true)
-            expect(Schema.is(StorageError)(error.value) ? error.value.message : undefined).toBe(
-              "lookup failed",
-            )
+            if (Schema.is(StorageError)(error.value)) {
+              expect(error.value.message).toBe("lookup failed")
+            } else {
+              expect(Schema.is(StorageError)(error.value)).toBe(true)
+            }
           }
         }
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer))
     }),
   )
@@ -266,7 +272,7 @@ describe("resolveSessionEnvironment", () => {
               executor: {
                 executeTurn: () => Stream.die("unused in test"),
               },
-              invalidate: () => Effect.void,
+              invalidate: Effect.void,
             },
           ],
         ]),
@@ -304,9 +310,9 @@ describe("resolveSessionEnvironment", () => {
           cwd: "/tmp/profile-driver-scope",
           extensions: [],
           resolved: resolveExtensions([]),
-          layerContext: Context.empty(),
+          layerContext: Context.makeUnsafe(new Map<string, unknown>()),
           permissionService: {
-            check: () => Effect.succeed("allowed" as const),
+            check: () => Effect.succeed("allowed"),
           },
           registryService: extensionRegistry,
           driverRegistryService: profileDriverRegistry,
@@ -315,6 +321,10 @@ describe("resolveSessionEnvironment", () => {
         }
         const fakeProfileCache: SessionProfileCacheService = {
           resolve: () => Effect.succeed(fakeProfile),
+          preview: () => Effect.die("unused in this test"),
+          refresh: () => Effect.die("unused in this test"),
+          current: () => Effect.succeedSome(fakeProfile),
+          requireCurrent: () => Effect.succeed(fakeProfile),
         }
         const hostProvider = yield* makeAmbientExtensionHostContextProvider({
           extensionRegistry,
@@ -336,6 +346,7 @@ describe("resolveSessionEnvironment", () => {
         expect(resolved.environment.cwd).toBe("/tmp/profile-driver-scope")
         expect(fromProfile?.id).toBe("profile-driver")
         expect(fromDefault).toBeUndefined()
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer))
     }),
   )

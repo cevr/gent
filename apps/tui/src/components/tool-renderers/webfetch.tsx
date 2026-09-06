@@ -5,11 +5,12 @@
  * Expanded: full markdown content
  */
 
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { Show, createMemo } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
-import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutput, decodeToolOutputOption, getString } from "../../utils/parse-tool-output"
+import type { ToolInput } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 const WebfetchOutputSchema = Schema.Struct({
@@ -18,7 +19,7 @@ const WebfetchOutputSchema = Schema.Struct({
   title: Schema.optional(Schema.String),
 })
 
-function getUrl(input: unknown): string {
+function getUrl(input: ToolInput): string {
   return getString(input, "url")
 }
 
@@ -28,11 +29,12 @@ export function WebfetchToolRenderer(props: ToolRendererProps) {
   const data = createMemo(() => decodeToolOutput(WebfetchOutputSchema, props.toolCall.output))
   const url = createMemo(() => getUrl(props.toolCall.input))
 
-  const contentLines = createMemo(() => {
-    const d = data()
-    if (d === undefined) return 0
-    return d.content.split("\n").length
-  })
+  const contentLines = createMemo(() =>
+    Option.match(decodeToolOutputOption(WebfetchOutputSchema, props.toolCall.output), {
+      onNone: () => 0,
+      onSome: (value) => value.content.split("\n").length,
+    }),
+  )
 
   return (
     <ToolFrame

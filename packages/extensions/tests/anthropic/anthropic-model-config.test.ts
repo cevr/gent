@@ -6,6 +6,7 @@
  * shape.
  */
 import { describe, test, expect } from "bun:test"
+import { Option } from "effect"
 import {
   getCcVersion,
   getModelBetas,
@@ -41,27 +42,33 @@ describe("MODEL_CONFIG", () => {
 describe("getModelOverride", () => {
   test("haiku family disables effort and excludes interleaved-thinking", () => {
     const override = getModelOverride("claude-haiku-4-5")
-    expect(override?.disableEffort).toBe(true)
-    expect(override?.exclude).toContain("interleaved-thinking-2025-05-14")
+    expect(Option.isSome(override)).toBe(true)
+    if (Option.isSome(override)) {
+      expect(override.value.disableEffort).toBe(true)
+      expect(override.value.exclude).toContain("interleaved-thinking-2025-05-14")
+    }
   })
 
   test("4-6 models add the effort beta", () => {
     const override = getModelOverride("claude-sonnet-4-6")
-    expect(override?.add).toContain("effort-2025-11-24")
+    expect(Option.isSome(override)).toBe(true)
+    if (Option.isSome(override)) expect(override.value.add).toContain("effort-2025-11-24")
   })
 
   test("4-7 models add the effort beta", () => {
     const override = getModelOverride("claude-opus-4-7")
-    expect(override?.add).toContain("effort-2025-11-24")
+    expect(Option.isSome(override)).toBe(true)
+    if (Option.isSome(override)) expect(override.value.add).toContain("effort-2025-11-24")
   })
 
-  test("returns undefined for models matching no override pattern", () => {
-    expect(getModelOverride("claude-sonnet-3-5")).toBeUndefined()
+  test("returns None for models matching no override pattern", () => {
+    expect(Option.isNone(getModelOverride("claude-sonnet-3-5"))).toBe(true)
   })
 
   test("matches case-insensitively", () => {
     const override = getModelOverride("CLAUDE-HAIKU-4-5")
-    expect(override?.disableEffort).toBe(true)
+    expect(Option.isSome(override)).toBe(true)
+    if (Option.isSome(override)) expect(override.value.disableEffort).toBe(true)
   })
 })
 
@@ -95,21 +102,21 @@ describe("supports1mContext", () => {
 
 describe("getModelBetas", () => {
   test("includes every base beta for a generic sonnet model", () => {
-    const betas = getModelBetas("claude-sonnet-4-5", undefined)
+    const betas = getModelBetas("claude-sonnet-4-5", Option.none())
     for (const beta of MODEL_CONFIG.baseBetas) {
       expect(betas).toContain(beta)
     }
   })
 
   test("opus 4.6+ also gets the long-context beta", () => {
-    const betas = getModelBetas("claude-opus-4-6", undefined)
+    const betas = getModelBetas("claude-opus-4-6", Option.none())
     expect(betas).toContain("context-1m-2025-08-07")
     // Plus the 4-6 override adds the effort beta.
     expect(betas).toContain("effort-2025-11-24")
   })
 
   test("haiku omits interleaved-thinking (excluded by override)", () => {
-    const betas = getModelBetas("claude-haiku-4-5", undefined)
+    const betas = getModelBetas("claude-haiku-4-5", Option.none())
     expect(betas).not.toContain("interleaved-thinking-2025-05-14")
     // baseBetas minus the excluded one.
     expect(betas).toContain("claude-code-20250219")
@@ -117,12 +124,16 @@ describe("getModelBetas", () => {
   })
 
   test("env override replaces the base list comma-split", () => {
-    const betas = getModelBetas("claude-sonnet-4-5", "alpha,beta,gamma")
+    const betas = getModelBetas("claude-sonnet-4-5", Option.some("alpha,beta,gamma"))
     expect(betas).toEqual(["alpha", "beta", "gamma"])
   })
 
   test("excluded set drops the listed betas (long-context backoff path)", () => {
-    const betas = getModelBetas("claude-opus-4-6", undefined, new Set(["context-1m-2025-08-07"]))
+    const betas = getModelBetas(
+      "claude-opus-4-6",
+      Option.none(),
+      Option.some(new Set(["context-1m-2025-08-07"])),
+    )
     expect(betas).not.toContain("context-1m-2025-08-07")
     // Other betas survive.
     expect(betas).toContain("oauth-2025-04-20")
@@ -130,7 +141,10 @@ describe("getModelBetas", () => {
 
   test("does not duplicate add-overrides already present in the base list", () => {
     // Simulate an env that already includes the override-added beta.
-    const betas = getModelBetas("claude-sonnet-4-6", "claude-code-20250219,effort-2025-11-24")
+    const betas = getModelBetas(
+      "claude-sonnet-4-6",
+      Option.some("claude-code-20250219,effort-2025-11-24"),
+    )
     const occurrences = betas.filter((b) => b === "effort-2025-11-24").length
     expect(occurrences).toBe(1)
   })

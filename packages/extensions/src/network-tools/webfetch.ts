@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
 import { tool } from "@gent/core/extensions/api"
 import TurndownService from "turndown"
@@ -6,7 +6,7 @@ import { parseHTML } from "linkedom"
 
 // WebFetch Error
 
-export class WebFetchError extends Schema.TaggedErrorClass<WebFetchError>()("WebFetchError", {
+export class WebFetchError extends Schema.TaggedError<WebFetchError>()("WebFetchError", {
   message: Schema.String,
   url: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -51,13 +51,15 @@ export const WebFetchTool = tool({
       })
       .pipe(
         Effect.catchEager((e) =>
-          Effect.fail(
-            new WebFetchError({
-              message: `Fetch failed: ${e instanceof Error ? e.message : String(e)}`,
+          Effect.gen(function* () {
+            let message = String(e)
+            if (e instanceof Error) message = e.message
+            return yield* new WebFetchError({
+              message: `Fetch failed: ${message}`,
               url: params.url,
               cause: e,
-            }),
-          ),
+            })
+          }),
         ),
       )
 
@@ -70,13 +72,15 @@ export const WebFetchTool = tool({
 
     const html = yield* response.text.pipe(
       Effect.catchEager((e) =>
-        Effect.fail(
-          new WebFetchError({
-            message: `Failed to read response: ${e instanceof Error ? e.message : String(e)}`,
+        Effect.gen(function* () {
+          let message = String(e)
+          if (e instanceof Error) message = e.message
+          return yield* new WebFetchError({
+            message: `Failed to read response: ${message}`,
             url: params.url,
             cause: e,
-          }),
-        ),
+          })
+        }),
       ),
     )
 
@@ -85,35 +89,41 @@ export const WebFetchTool = tool({
 
     // Extract title
     const titleEl = document.querySelector("title")
-    const title = titleEl?.textContent ?? undefined
+    const title = Option.fromNullishOr(titleEl).pipe(
+      Option.flatMap((element) => Option.fromNullishOr(element.textContent)),
+    )
 
     // Select content
-    let contentEl: Element | null = null
-    if (params.selector !== undefined) {
-      contentEl = document.querySelector(params.selector)
-      if (contentEl === null) {
+    const selector = Option.fromNullishOr(params.selector)
+    let contentEl: Option.Option<Element>
+    if (Option.isSome(selector)) {
+      contentEl = Option.fromNullishOr(document.querySelector(selector.value))
+      if (Option.isNone(contentEl)) {
         return yield* new WebFetchError({
-          message: `Selector "${params.selector}" not found`,
+          message: `Selector "${selector.value}" not found`,
           url: params.url,
         })
       }
     } else {
       // Try common content selectors
-      contentEl =
-        document.querySelector("main") ??
-        document.querySelector("article") ??
-        document.querySelector('[role="main"]') ??
-        document.querySelector(".content") ??
-        document.querySelector("#content") ??
-        document.body
+      contentEl = Option.firstSomeOf([
+        Option.fromNullishOr(document.querySelector("main")),
+        Option.fromNullishOr(document.querySelector("article")),
+        Option.fromNullishOr(document.querySelector('[role="main"]')),
+        Option.fromNullishOr(document.querySelector(".content")),
+        Option.fromNullishOr(document.querySelector("#content")),
+        Option.fromNullishOr(document.body),
+      ])
     }
 
     // Remove unwanted elements
     const unwanted = ["script", "style", "nav", "header", "footer", "aside", "iframe", "noscript"]
-    for (const tag of unwanted) {
-      const elements = contentEl?.querySelectorAll(tag) ?? []
-      for (const el of elements) {
-        el.remove()
+    if (Option.isSome(contentEl)) {
+      for (const tag of unwanted) {
+        const elements = contentEl.value.querySelectorAll(tag)
+        for (const el of elements) {
+          el.remove()
+        }
       }
     }
 
@@ -123,19 +133,24 @@ export const WebFetchTool = tool({
       codeBlockStyle: "fenced",
     })
 
-    const markdown = turndown.turndown(contentEl?.innerHTML ?? "")
+    const markdown = turndown.turndown(
+      contentEl.pipe(
+        Option.map((element) => element.innerHTML),
+        Option.getOrElse(() => ""),
+      ),
+    )
 
     // Truncate if too long (preserve ~50k chars for context)
     const maxLength = 50000
-    const content =
-      markdown.length > maxLength
-        ? markdown.slice(0, maxLength) + "\n\n[Content truncated...]"
-        : markdown
+    let content = markdown
+    if (markdown.length > maxLength) {
+      content = markdown.slice(0, maxLength) + "\n\n[Content truncated...]"
+    }
 
     return {
       url: params.url,
       content,
-      title,
+      title: Option.getOrUndefined(title),
     }
   }),
 })

@@ -2,13 +2,12 @@ import { describe, it, expect, test } from "effect-bun-test"
 import { createComponent, createRoot } from "solid-js"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { atom, effect, make, makeRegistryScope, state, type Registry } from "../src/atom-solid"
 import * as Result from "../src/atom-solid/result"
-class AtomSolidTestError extends Schema.TaggedErrorClass<AtomSolidTestError>()(
-  "AtomSolidTestError",
-  { message: Schema.String },
-) {}
+class AtomSolidTestError extends Schema.TaggedError<AtomSolidTestError>()("AtomSolidTestError", {
+  message: Schema.String,
+}) {}
 class Greeting extends Context.Service<
   Greeting,
   {
@@ -17,7 +16,7 @@ class Greeting extends Context.Service<
 >()("@gent/tui/tests/atom-solid.test/Greeting") {}
 const waitFor = (predicate: () => boolean): Effect.Effect<void, AtomSolidTestError> => {
   let attempts = 20
-  const check = Effect.gen(function* () {
+  const check: Effect.Effect<void, AtomSolidTestError> = Effect.gen(function* () {
     if (predicate()) return
     attempts -= 1
     if (attempts <= 0) {
@@ -26,7 +25,7 @@ const waitFor = (predicate: () => boolean): Effect.Effect<void, AtomSolidTestErr
     // gent/no-sleep: allow yield-then-retry primitive — Solid signal microtasks must drain between checks
     yield* Effect.sleep("0 millis")
     return yield* check
-  }) as Effect.Effect<void, AtomSolidTestError>
+  })
   return check
 }
 describe("atom-solid registry", () => {
@@ -104,23 +103,23 @@ describe("atom-solid registry", () => {
           return service.text
         }),
       )
-      let observedRegistry: Registry<Greeting> | undefined
-      let observed: string | undefined
+      let observedRegistry: Option.Option<Registry<Greeting>> = Option.none()
+      let observed: Option.Option<string> = Option.none()
       const dispose = createRoot((disposeRoot) => {
         createComponent(scope.RegistryProvider, {
           registry,
           get children() {
-            observedRegistry = scope.useRegistry()
+            observedRegistry = Option.some(scope.useRegistry())
             const result = scope.useAtomValue(greeting)
-            observed = Result.getOrUndefined(result())
-            return undefined
+            observed = Option.fromNullishOr(Result.getOrUndefined(result()))
+            return Option.getOrUndefined(Option.none())
           },
         })
         return disposeRoot
       })
-      yield* waitFor(() => observed === "scoped")
-      expect(observedRegistry).toBe(registry)
-      expect(observed).toBe("scoped")
+      yield* waitFor(() => Option.isSome(observed) && observed.value === "scoped")
+      expect(Option.getOrUndefined(observedRegistry)).toBe(registry)
+      expect(Option.getOrUndefined(observed)).toBe("scoped")
       dispose()
       registry.dispose()
     }),
@@ -136,19 +135,19 @@ describe("atom-solid registry", () => {
           return service.text
         }),
       )
-      let observed: string | undefined
+      let observed: Option.Option<string> = Option.none()
       const dispose = createRoot((disposeRoot) => {
         createComponent(scope.RegistryProvider, {
           get children() {
             const result = scope.useAtomValue(greeting)
-            observed = Result.getOrUndefined(result())
-            return undefined
+            observed = Option.fromNullishOr(Result.getOrUndefined(result()))
+            return Option.getOrUndefined(Option.none())
           },
         })
         return disposeRoot
       })
-      yield* waitFor(() => observed === "default-scope")
-      expect(observed).toBe("default-scope")
+      yield* waitFor(() => Option.isSome(observed) && observed.value === "default-scope")
+      expect(Option.getOrUndefined(observed)).toBe("default-scope")
       dispose()
       registry.dispose()
     }),

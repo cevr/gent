@@ -1,12 +1,7 @@
-import { Context, Effect, Layer, Schema, type Scope } from "effect"
+import { Context, Effect, Layer, Option, Predicate, Schema, type Scope } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import { Auth, AuthOauth } from "../domain/auth.js"
-import {
-  ProviderAuthError,
-  type ProviderAuthInfo,
-  type ProviderHints,
-  type ProviderResolution,
-} from "../domain/driver.js"
+import { ProviderAuthError, type ProviderAuthInfo, type ProviderHints } from "../domain/driver.js"
 import type { AgentName } from "../domain/agent.js"
 import { parseModelId, type ModelId } from "../domain/model.js"
 import { ProviderError } from "../domain/provider-error.js"
@@ -29,8 +24,10 @@ export interface ResolveModelRequest {
 }
 
 export const CurrentResolveModelAssertion = Context.Reference<
+  // oxlint-disable-next-line effect/noNullish -- The optional assertion is test-only instrumentation at this service boundary.
   ((request: ResolveModelRequest) => Effect.Effect<void, ProviderError>) | undefined
 >("@gent/core/src/providers/model-resolver/CurrentResolveModelAssertion", {
+  // oxlint-disable-next-line effect/noNullish -- The optional assertion is test-only instrumentation.
   defaultValue: () => undefined,
 })
 
@@ -40,24 +37,42 @@ export interface ModelResolverService {
   ) => Effect.Effect<LanguageModel.Service, ProviderError | ProviderAuthError, Scope.Scope>
 }
 
+const resolveModelDefect = (
+  // oxlint-disable-next-line effect/noUnknownParameters -- Provider factories can defect with any thrown value.
+  defect: unknown,
+  providerName: string,
+  modelId: ModelId | string,
+): ProviderError | ProviderAuthError => {
+  if (Schema.is(ProviderAuthError)(defect)) return defect
+  let detail = String(defect)
+  if (Predicate.isError(defect)) detail = defect.message
+  return new ProviderError({
+    message: `Extension provider "${providerName}" failed: ${detail}`,
+    model: modelId,
+    cause: defect,
+  })
+}
+
 const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(function* (
   request: ResolveModelRequest,
 ) {
   const parsed = parseModelId(request.modelId)
-  if (parsed === undefined) {
+  if (Option.isNone(parsed)) {
     return yield* new ProviderError({
       message: "Invalid model id (expected provider/model)",
       model: request.modelId,
     })
   }
-  const [parsedProviderName, modelName] = parsed
-  const providerName = request.driverId ?? parsedProviderName
+  const [parsedProviderName, modelName] = parsed.value
+  let providerName: string = parsedProviderName
+  if (!Predicate.isUndefined(request.driverId)) providerName = request.driverId
   const authStore = yield* Auth
   const defaultRegistry = yield* DriverRegistry
-  const driverRegistry = request.driverRegistry ?? defaultRegistry
+  let driverRegistry = defaultRegistry
+  if (!Predicate.isUndefined(request.driverRegistry)) driverRegistry = request.driverRegistry
 
   const extensionProvider = yield* driverRegistry.getModel(providerName)
-  if (extensionProvider === undefined) {
+  if (Predicate.isUndefined(extensionProvider)) {
     return yield* new ProviderError({
       message: `Unknown provider: ${providerName}`,
       model: request.modelId,
@@ -73,17 +88,18 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
           cause: e,
         }),
     ),
+    Effect.map(Option.fromUndefinedOr),
   )
-  let authParam: ProviderAuthInfo | undefined
-  if (authInfo?.type === "api") {
-    authParam = { type: "api", key: authInfo.key }
-  } else if (authInfo?.type === "oauth") {
-    authParam = {
+  let authParam: Option.Option<ProviderAuthInfo> = Option.none()
+  if (Option.isSome(authInfo) && authInfo.value.type === "api") {
+    authParam = Option.some({ type: "api", key: authInfo.value.key })
+  } else if (Option.isSome(authInfo) && authInfo.value.type === "oauth") {
+    authParam = Option.some({
       type: "oauth",
-      access: authInfo.access,
-      refresh: authInfo.refresh,
-      expires: authInfo.expires,
-      accountId: authInfo.accountId,
+      access: authInfo.value.access,
+      refresh: authInfo.value.refresh,
+      expires: authInfo.value.expires,
+      accountId: authInfo.value.accountId,
       persist: (updated) =>
         authStore
           .set(
@@ -93,7 +109,7 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
               access: updated.access,
               refresh: updated.refresh,
               expires: updated.expires,
-              ...(updated.accountId !== undefined ? { accountId: updated.accountId } : {}),
+              accountId: updated.accountId,
             }),
           )
           .pipe(
@@ -105,21 +121,16 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
                 }),
             ),
           ),
-    }
+    })
   }
 
-  return yield* Effect.try({
-    try: (): ProviderResolution =>
-      extensionProvider.resolveModel(modelName, authParam, request.hints),
-    catch: (e): ProviderError | ProviderAuthError => {
-      if (Schema.is(ProviderAuthError)(e)) return e
-      return new ProviderError({
-        message: `Extension provider "${providerName}" failed: ${e instanceof Error ? e.message : String(e)}`,
-        model: request.modelId,
-        cause: e,
-      })
-    },
-  })
+  return yield* Effect.suspend(() =>
+    extensionProvider.resolveModel(modelName, Option.getOrUndefined(authParam), request.hints),
+  ).pipe(
+    Effect.catchDefect((defect) =>
+      Effect.fail(resolveModelDefect(defect, providerName, request.modelId)),
+    ),
+  )
 })
 
 export class ModelResolver extends Context.Service<ModelResolver, ModelResolverService>()(
@@ -133,13 +144,13 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
       Effect.gen(function* () {
         const model = yield* LanguageModel.LanguageModel
         const assertRequest = yield* CurrentResolveModelAssertion
-        return {
+        return ModelResolver.of({
           resolve: (request) =>
             Effect.gen(function* () {
-              if (assertRequest !== undefined) yield* assertRequest(request)
+              if (!Predicate.isUndefined(assertRequest)) yield* assertRequest(request)
               return model
             }),
-        }
+        })
       }),
     ).pipe(Layer.provide(layer))
 
@@ -147,7 +158,7 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
     ModelResolver,
     Effect.gen(function* () {
       const context = yield* Effect.context<Auth | DriverRegistry>()
-      return {
+      return ModelResolver.of({
         resolve: (request) =>
           Effect.gen(function* () {
             const resolved = yield* resolveProviderModel(request)
@@ -155,7 +166,7 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
             const built = yield* Layer.buildWithScope(resolved, scope)
             return Context.get(built, LanguageModel.LanguageModel)
           }).pipe(Effect.provideContext(context)),
-      } satisfies ModelResolverService
+      })
     }),
   )
 }

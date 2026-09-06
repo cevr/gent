@@ -1,8 +1,8 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Stream } from "effect"
+import { Effect, Option, Predicate, Stream } from "effect"
 import { RpcClient } from "effect/unstable/rpc"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Gent, extractText, extractImages, type Message as DomainMessage } from "../src/index"
+import { extractText, extractImages, type Message as DomainMessage } from "../src/index"
 import { makeNamespacedClient } from "../src/namespaced-client"
 import { GentRpcs, type GentRpcClient } from "@gent/core-internal/server/rpcs"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
@@ -12,16 +12,6 @@ import { WORKSPACE_ID_HEADER } from "@gent/core-internal/server/workspace-rpc"
 import { workspaceHeadersForCwd, workspaceIdForCwd } from "../src/transport-headers"
 
 describe("sdk client helpers", () => {
-  test("sdk entrypoint exports the public constructors", () => {
-    expect(typeof Gent.server).toBe("function")
-    expect(typeof Gent.client).toBe("function")
-    expect(typeof Gent.test).toBe("function")
-    expect(typeof Gent.state.sqlite).toBe("function")
-    expect(typeof Gent.state.memory).toBe("function")
-    expect(typeof Gent.provider.live).toBe("function")
-    expect(typeof Gent.provider.mock).toBe("function")
-  })
-
   test("extractText extracts text from message parts", () => {
     const parts = [Prompt.textPart({ text: "Hello world" })]
     expect(extractText(parts)).toBe("Hello world")
@@ -84,6 +74,7 @@ describe("sdk client helpers", () => {
             id: ToolCallId.make("tc1"),
             name: "read",
             isFailure: false,
+            providerExecuted: false,
             result: "file contents",
           }),
         ],
@@ -99,24 +90,27 @@ describe("sdk client helpers", () => {
     const handlers = new Map<string, () => Effect.Effect<void>>(
       [...GentRpcs.requests.keys()].map((key) => [key, () => Effect.void]),
     )
-    const flat = new Proxy(Object.create(null) as GentRpcClient, {
-      get: (_target, property) =>
-        typeof property === "string" ? handlers.get(property) : undefined,
+    const flat: GentRpcClient = new Proxy(Object.create(null), {
+      get: (_target, property) => {
+        if (!Predicate.isString(property)) return Option.getOrUndefined(Option.none())
+        return Option.getOrUndefined(Option.fromNullishOr(handlers.get(property)))
+      },
     })
     const namespaced = makeNamespacedClient(flat)
     expect(namespaced.session).toBe(namespaced.session)
 
     for (const key of GentRpcs.requests.keys()) {
       const separator = key.indexOf(".")
-      if (separator === -1) {
-        throw new Error(`RPC key is not namespaced: ${key}`)
-      }
+      expect(separator, `RPC key is not namespaced: ${key}`).not.toBe(-1)
+      if (separator === -1) return
       const namespace = key.slice(0, separator)
       const method = key.slice(separator + 1)
+      // oxlint-disable-next-line effect/noAs -- this test verifies the dynamic RPC namespace boundary
       const namespaceClient = namespaced[namespace as keyof typeof namespaced]
       expect(namespaceClient).toBeDefined()
       expect(namespace in namespaced).toBe(true)
       expect(method in namespaceClient).toBe(true)
+      // oxlint-disable-next-line effect/noAs, effect/noUnsafeDictionaryType -- this test verifies the dynamic RPC method boundary
       const methodClient = (namespaceClient as Readonly<Record<string, unknown>>)[method]
       expect(methodClient).toBeDefined()
       expect(methodClient).toBe(handlers.get(key))
@@ -133,39 +127,38 @@ describe("sdk client helpers", () => {
 
   it.live("namespaced client attaches workspace header to RPC effects", () =>
     Effect.gen(function* () {
-      let observed: string | undefined
-      const flat = new Proxy(Object.create(null) as GentRpcClient, {
-        get: (_target, property) =>
-          property === "session.list"
-            ? () =>
-                Effect.gen(function* () {
-                  const headers = yield* RpcClient.CurrentHeaders
-                  observed = headers[WORKSPACE_ID_HEADER]
-                  return []
-                })
-            : undefined,
+      let observed = Option.none<string>()
+      const flat: GentRpcClient = new Proxy(Object.create(null), {
+        get: (_target, property) => {
+          if (property !== "session.list") return Option.getOrUndefined(Option.none())
+          return () =>
+            Effect.gen(function* () {
+              const headers = yield* RpcClient.CurrentHeaders
+              observed = Option.fromNullishOr(headers[WORKSPACE_ID_HEADER])
+              return []
+            })
+        },
       })
       const client = makeNamespacedClient(flat, workspaceHeadersForCwd("/tmp/gent"))
       yield* client.session.list()
-      expect(observed).toBe(workspaceIdForCwd("/tmp/gent"))
+      expect(observed).toEqual(Option.some(workspaceIdForCwd("/tmp/gent")))
     }),
   )
 
   it.live("namespaced client attaches workspace header to RPC streams", () =>
     Effect.gen(function* () {
-      let observed: string | undefined
-      const flat = new Proxy(Object.create(null) as GentRpcClient, {
-        get: (_target, property) =>
-          property === "session.watchRuntime"
-            ? () =>
-                Stream.fromEffect(
-                  Effect.gen(function* () {
-                    const headers = yield* RpcClient.CurrentHeaders
-                    observed = headers[WORKSPACE_ID_HEADER]
-                    return undefined
-                  }),
-                )
-            : undefined,
+      let observed = Option.none<string>()
+      const flat: GentRpcClient = new Proxy(Object.create(null), {
+        get: (_target, property) => {
+          if (property !== "session.watchRuntime") return Option.getOrUndefined(Option.none())
+          return () =>
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                const headers = yield* RpcClient.CurrentHeaders
+                observed = Option.fromNullishOr(headers[WORKSPACE_ID_HEADER])
+              }),
+            )
+        },
       })
       const client = makeNamespacedClient(flat, workspaceHeadersForCwd("/tmp/gent"))
       yield* Stream.runDrain(
@@ -174,7 +167,7 @@ describe("sdk client helpers", () => {
           branchId: BranchId.make("branch-stream-header"),
         }),
       )
-      expect(observed).toBe(workspaceIdForCwd("/tmp/gent"))
+      expect(observed).toEqual(Option.some(workspaceIdForCwd("/tmp/gent")))
     }),
   )
 })

@@ -13,9 +13,25 @@
  *   ╰── 1.2s
  */
 
-import { Show, createEffect, createSignal, type JSX } from "solid-js"
+import { createContext, Show, useContext, createEffect, createSignal, type JSX } from "solid-js"
+import { Option } from "effect"
 import { useTheme } from "../theme/index"
 import { InlineChrome } from "./inline-chrome"
+
+const ToolCallIdentityContext = createContext<Option.Option<string>>(Option.none())
+
+export interface ToolCallIdentityProviderProps {
+  id: string
+  children: JSX.Element
+}
+
+export function ToolCallIdentityProvider(props: ToolCallIdentityProviderProps) {
+  return (
+    <ToolCallIdentityContext.Provider value={Option.some(props.id)}>
+      {props.children}
+    </ToolCallIdentityContext.Provider>
+  )
+}
 
 export interface ToolFrameProps {
   /** Tool display name */
@@ -45,8 +61,14 @@ function formatDuration(ms: number): string {
   return `${mins}m ${remainingSecs}s`
 }
 
+export function formatToolCallIdentity(identity: string): string {
+  if (identity.length <= 14) return identity
+  return `${identity.slice(0, 8)}…${identity.slice(-4)}`
+}
+
 export function ToolFrame(props: ToolFrameProps) {
   const { theme } = useTheme()
+  const callIdentity = useContext(ToolCallIdentityContext)
   const [localExpanded, setLocalExpanded] = createSignal(props.expanded)
 
   createEffect(() => {
@@ -65,24 +87,40 @@ export function ToolFrame(props: ToolFrameProps) {
     return theme.success
   }
 
-  const footer = () => {
-    if (props.durationMs === undefined) return undefined
-    return formatDuration(props.durationMs)
+  const footer = () =>
+    Option.fromNullishOr(props.durationMs).pipe(Option.map(formatDuration), Option.getOrUndefined)
+
+  const expandIndicator = () => {
+    if (localExpanded()) return "▾"
+    return "▸"
   }
 
-  const expandIndicator = () => (localExpanded() ? "▾" : "▸")
+  const callIdentityLabel = () =>
+    Option.map(callIdentity, (identity) => `#${formatToolCallIdentity(identity)}`).pipe(
+      Option.getOrUndefined,
+    )
 
   return (
     <InlineChrome.Root paddingLeft={2} onMouseDown={() => setLocalExpanded((prev) => !prev)}>
       <InlineChrome.Header
         accentColor={statusColor()}
-        leading={<span style={{ fg: statusColor() }}>{statusIcon()}</span>}
+        leading={
+          <>
+            <span style={{ fg: statusColor() }}>{statusIcon()}</span>
+            <Show when={props.status === "error"}>
+              <span style={{ fg: theme.error }}> failed</span>
+            </Show>
+          </>
+        }
         title={<span style={{ fg: theme.info, bold: true }}>{props.title}</span>}
         subtitle={props.subtitle}
         subtitleHref={props.subtitleHref}
         subtitleColor={theme.textMuted}
         trailing={
           <>
+            <Show when={callIdentityLabel()}>
+              {(identity) => <span style={{ fg: theme.textMuted }}>{identity()} </span>}
+            </Show>
             <Show when={footer()}>
               <span style={{ fg: theme.textMuted }}>{footer()} </span>
             </Show>

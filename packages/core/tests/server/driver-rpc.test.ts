@@ -7,7 +7,7 @@
  * unit tests on `ConfigService.setDriverOverride` don't cover.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Predicate, Effect } from "effect"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core-internal/domain/agent"
@@ -42,7 +42,9 @@ describe("ExtensionRpcs", () => {
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list()).drivers
         const someModel = drivers.find((d) => d._tag === "model")
-        if (someModel === undefined) throw new Error("no model driver registered in test layer")
+        if (Predicate.isUndefined(someModel)) {
+          return yield* Effect.die(new Error("no model driver registered in test layer"))
+        }
         yield* client.driver.set({
           agentName: AgentName.make("cowork"),
           driver: ModelDriverRef.make({ id: someModel.id }),
@@ -76,7 +78,9 @@ describe("ExtensionRpcs", () => {
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list()).drivers
         const someModel = drivers.find((d) => d._tag === "model")
-        if (someModel === undefined) throw new Error("no model driver registered in test layer")
+        if (Predicate.isUndefined(someModel)) {
+          return yield* Effect.die(new Error("no model driver registered in test layer"))
+        }
         yield* client.driver.set({
           agentName: AgentName.make("cowork"),
           driver: ModelDriverRef.make({ id: someModel.id }),

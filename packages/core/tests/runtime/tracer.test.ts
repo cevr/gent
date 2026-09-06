@@ -7,18 +7,21 @@ const tracerWithConfig = (env: Record<string, string>) =>
 
 describe("tracer configuration", () => {
   it.live("keeps the default Effect tracer when OTLP is not configured", () =>
-    Effect.gen(function* () {
-      const span = yield* Effect.currentSpan
-      expect(span.constructor.name).not.toBe("OtelSpan")
-    }).pipe(Effect.withSpan("no-otel"), Effect.provide(tracerWithConfig({}))),
+    Effect.suspend(
+      Effect.fn("tracer.no-otel")(function* () {
+        const span = yield* Effect.currentSpan
+        expect(span.constructor.name).not.toBe("OtelSpan")
+      }),
+    ).pipe(Effect.provide(tracerWithConfig({}))),
   )
 
   it.live("installs the OpenTelemetry tracer when OTLP is configured", () =>
-    Effect.gen(function* () {
-      const span = yield* Effect.currentSpan
-      expect(span.constructor.name).toBe("OtelSpan")
-    }).pipe(
-      Effect.withSpan("otel"),
+    Effect.suspend(
+      Effect.fn("tracer.otel")(function* () {
+        const span = yield* Effect.currentSpan
+        expect(span.constructor.name).toBe("OtelSpan")
+      }),
+    ).pipe(
       Effect.provide(
         tracerWithConfig({
           OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:9",

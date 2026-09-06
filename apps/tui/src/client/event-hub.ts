@@ -11,6 +11,15 @@ export type ExtensionStatePulse = {
 export type ExtensionPulseCallback = (pulse: ExtensionStatePulse) => void
 export type SessionEventCallback = (envelope: EventEnvelope) => void
 
+const decodeError = Schema.decodeUnknownOption(Schema.instanceOf(Error))
+type ThrownInput = Parameters<typeof decodeError>[0]
+
+const formatThrown = (error: ThrownInput): string =>
+  Option.match(decodeError(error), {
+    onNone: () => String(error),
+    onSome: (cause) => cause.message,
+  })
+
 export const createClientEventHub = (log: ClientLog) => {
   const extensionStateChangedSubscribers = new Set<ExtensionPulseCallback>()
   const sessionEventSubscribers = new Set<SessionEventCallback>()
@@ -38,12 +47,11 @@ export const createClientEventHub = (log: ClientLog) => {
       extensionId: event.extensionId,
     }
     for (const cb of extensionStateChangedSubscribers) {
-      try {
-        cb(pulse)
-      } catch (err) {
+      const exit = Effect.runSyncExit(Effect.sync(() => cb(pulse)))
+      if (Exit.isFailure(exit)) {
         log.warn("client.extensionStateChanged.subscriber.threw", {
           extensionId: event.extensionId,
-          error: err instanceof Error ? err.message : String(err),
+          error: formatThrown(Cause.squash(exit.cause)),
         })
       }
     }
@@ -52,12 +60,11 @@ export const createClientEventHub = (log: ClientLog) => {
   const notifySessionEvent = (envelope: EventEnvelope): void => {
     if (sessionEventSubscribers.size === 0) return
     for (const cb of sessionEventSubscribers) {
-      try {
-        cb(envelope)
-      } catch (err) {
+      const exit = Effect.runSyncExit(Effect.sync(() => cb(envelope)))
+      if (Exit.isFailure(exit)) {
         log.warn("client.sessionEvent.subscriber.threw", {
           tag: envelope.event._tag,
-          error: err instanceof Error ? err.message : String(err),
+          error: formatThrown(Cause.squash(exit.cause)),
         })
       }
     }
@@ -70,3 +77,4 @@ export const createClientEventHub = (log: ClientLog) => {
     notifySessionEvent,
   }
 }
+import { Cause, Effect, Exit, Option, Schema } from "effect"

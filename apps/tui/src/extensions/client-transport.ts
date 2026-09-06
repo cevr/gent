@@ -26,7 +26,7 @@
  * each Effect-typed setup against it.
  */
 
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import type { GentNamespacedClient, GentRuntime } from "@gent/sdk"
 import type { CapabilityRef } from "@gent/core/extensions/api"
 import type { EventEnvelope } from "@gent/core-internal/domain/event.js"
@@ -34,8 +34,9 @@ import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
 
 type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
 
-export interface ClientTransportShape {
-  /** Active (sessionId, branchId) — `undefined` before a session is mounted. */
+export interface ClientTransportDefinition {
+  /** Active (sessionId, branchId) — absent before a session is mounted. */
+  // eslint-disable-next-line effect/noNullish -- extension transport preserves an absent active session.
   readonly currentSession: () => ActiveExtensionSession | undefined
   readonly request: <Input, Output>(
     ref: CapabilityRef<Input, Output>,
@@ -56,10 +57,11 @@ export interface ClientTransportShape {
   readonly onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
 }
 
-export interface ClientShellTransportShape {
+export interface ClientShellTransportDefinition {
   readonly client: GentNamespacedClient
   readonly runtime: GentRuntime
-  /** Active (sessionId, branchId) — `undefined` before a session is mounted. */
+  /** Active (sessionId, branchId) — absent before a session is mounted. */
+  // eslint-disable-next-line effect/noNullish -- extension transport preserves an absent active session.
   readonly currentSession: () => ActiveExtensionSession | undefined
   /** Subscribe to `ExtensionStateChanged` pulses from the active session.
    *  Returns an unsubscribe function. Multiple subscribers receive each
@@ -72,7 +74,7 @@ export interface ClientShellTransportShape {
   readonly onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
 }
 
-export class ClientTransport extends Context.Service<ClientTransport, ClientTransportShape>()(
+export class ClientTransport extends Context.Service<ClientTransport, ClientTransportDefinition>()(
   "@gent/tui/src/extensions/client-transport/ClientTransport",
 ) {}
 
@@ -81,9 +83,9 @@ export class ClientTransport extends Context.Service<ClientTransport, ClientTran
  * result. The input carries shell authority; the provided service does not.
  */
 export const makeClientTransportLayer = (
-  payload: ClientShellTransportShape,
+  payload: ClientShellTransportDefinition,
 ): Layer.Layer<ClientTransport> => {
-  const transport: ClientTransportShape = {
+  const transport: ClientTransportDefinition = {
     currentSession: payload.currentSession,
     request: <Input, Output>(
       ref: CapabilityRef<Input, Output>,
@@ -98,12 +100,12 @@ export const makeClientTransportLayer = (
 
 // ── request helper ────────────────────────────────────────────────────────
 
-export class NoActiveSessionError extends Schema.TaggedErrorClass<NoActiveSessionError>()(
+export class NoActiveSessionError extends Schema.TaggedError<NoActiveSessionError>()(
   "NoActiveSessionError",
   {},
 ) {}
 
-export class ClientTransportRequestError extends Schema.TaggedErrorClass<ClientTransportRequestError>()(
+export class ClientTransportRequestError extends Schema.TaggedError<ClientTransportRequestError>()(
   "ClientTransportRequestError",
   {
     extensionId: Schema.String,
@@ -113,7 +115,7 @@ export class ClientTransportRequestError extends Schema.TaggedErrorClass<ClientT
   },
 ) {}
 
-export class ClientTransportReplyDecodeError extends Schema.TaggedErrorClass<ClientTransportReplyDecodeError>()(
+export class ClientTransportReplyDecodeError extends Schema.TaggedError<ClientTransportReplyDecodeError>()(
   "ClientTransportReplyDecodeError",
   {
     extensionId: Schema.String,
@@ -124,15 +126,18 @@ export class ClientTransportReplyDecodeError extends Schema.TaggedErrorClass<Cli
 ) {}
 
 const currentOrActiveSession = (
-  transport: ClientShellTransportShape,
+  transport: ClientShellTransportDefinition,
   activeSession?: ActiveExtensionSession,
 ): Effect.Effect<ActiveExtensionSession, NoActiveSessionError> => {
-  const session = activeSession ?? transport.currentSession()
-  return session === undefined ? Effect.fail(new NoActiveSessionError()) : Effect.succeed(session)
+  const session = Option.orElse(Option.fromNullishOr(activeSession), () =>
+    Option.fromNullishOr(transport.currentSession()),
+  )
+  if (Option.isNone(session)) return Effect.fail(new NoActiveSessionError())
+  return Effect.succeed(session.value)
 }
 
 const requestExtensionAt = <Input, Output>(
-  transport: ClientShellTransportShape,
+  transport: ClientShellTransportDefinition,
   ref: CapabilityRef<Input, Output>,
   input: Input,
   activeSession?: ActiveExtensionSession,
@@ -186,7 +191,7 @@ export function requestExtension<Input, Output>(
 export function requestExtension<Input, Output>(
   ref: CapabilityRef<Input, Output>,
   input: Input,
-  transport: ClientTransportShape,
+  transport: ClientTransportDefinition,
   activeSession?: ActiveExtensionSession,
 ): Effect.Effect<
   Output,
@@ -196,10 +201,13 @@ export function requestExtension<Input, Output>(
 export function requestExtension<Input, Output>(
   ref: CapabilityRef<Input, Output>,
   input: Input,
-  transport?: ClientTransportShape,
+  transport?: ClientTransportDefinition,
   activeSession?: ActiveExtensionSession,
 ) {
-  if (transport !== undefined) return transport.request(ref, input, activeSession)
+  const transportOption = Option.fromNullishOr(transport)
+  if (Option.isSome(transportOption)) {
+    return transportOption.value.request(ref, input, activeSession)
+  }
   return Effect.gen(function* () {
     const service = yield* ClientTransport
     return yield* service.request(ref, input)

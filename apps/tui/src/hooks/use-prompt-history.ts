@@ -6,11 +6,11 @@
  */
 
 import { createSignal } from "solid-js"
-import { isRecord } from "@gent/core-internal/domain/guards.js"
+import { Option, Schema } from "effect"
 import { homedir } from "os"
 import {
   makeDirectory,
-  readFileStringOrNull,
+  readFileStringOption,
   writeFileString,
 } from "../platform/fs-runtime-boundary"
 import { joinPath } from "../platform/path-runtime"
@@ -19,9 +19,9 @@ const MAX_ENTRIES = 100
 const CACHE_DIR = joinPath(homedir(), ".cache", "gent")
 const HISTORY_PATH = joinPath(CACHE_DIR, "prompt-history.json")
 
-interface HistoryStore {
-  entries: string[]
-}
+const HistoryStore = Schema.Struct({ entries: Schema.Array(Schema.String) })
+const decodeHistoryStore = Schema.decodeUnknownOption(Schema.fromJsonString(HistoryStore))
+const encodeHistoryStore = Schema.encodeSync(Schema.fromJsonString(HistoryStore))
 
 function canNavigateAtCursor(
   direction: "up" | "down",
@@ -63,24 +63,25 @@ type PromptHistoryStore = {
   entries: ReturnType<typeof createSignal<string[]>>[0]
   setEntries: ReturnType<typeof createSignal<string[]>>[1]
   historyIndex: number
-  savedEntry: string | null
+  savedEntry: Option.Option<string>
   loaded: boolean
 }
 
-let singleton: PromptHistoryStore | null = null
+let singleton: Option.Option<PromptHistoryStore> = Option.none()
 
 const getStore = (): PromptHistoryStore => {
-  if (singleton !== null) return singleton
+  if (Option.isSome(singleton)) return singleton.value
 
   const [entries, setEntries] = createSignal<string[]>([])
-  singleton = {
+  const store: PromptHistoryStore = {
     entries,
     setEntries,
     historyIndex: -1,
-    savedEntry: null,
+    savedEntry: Option.none(),
     loaded: false,
   }
-  return singleton
+  singleton = Option.some(store)
+  return store
 }
 
 export function usePromptHistory(): PromptHistory {
@@ -89,14 +90,11 @@ export function usePromptHistory(): PromptHistory {
   const ensureLoaded = () => {
     if (store.loaded) return
     store.loaded = true
-    void readFileStringOrNull(HISTORY_PATH)
-      .then((raw) => {
-        if (raw === null || raw.length === 0) return
-        const data: unknown = JSON.parse(raw)
-        if (isRecord(data) && Array.isArray(data["entries"])) {
-          const entries = data["entries"].filter((e: unknown): e is string => typeof e === "string")
-          store.setEntries(entries.slice(0, MAX_ENTRIES))
-        }
+    void readFileStringOption(HISTORY_PATH)
+      .then((text) => {
+        if (Option.isNone(text) || text.value.length === 0) return
+        const data = decodeHistoryStore(text.value)
+        if (Option.isSome(data)) store.setEntries([...data.value.entries.slice(0, MAX_ENTRIES)])
       })
       .catch(() => {
         // No file or bad JSON — start fresh
@@ -104,9 +102,9 @@ export function usePromptHistory(): PromptHistory {
   }
 
   const persist = (items: string[]) => {
-    const data: HistoryStore = { entries: items }
+    const data = HistoryStore.make({ entries: items })
     void makeDirectory(CACHE_DIR, { recursive: true })
-      .then(() => writeFileString(HISTORY_PATH, JSON.stringify(data)))
+      .then(() => writeFileString(HISTORY_PATH, encodeHistoryStore(data)))
       .catch(() => {})
   }
 
@@ -126,7 +124,7 @@ export function usePromptHistory(): PromptHistory {
         return next
       })
       store.historyIndex = -1
-      store.savedEntry = null
+      store.savedEntry = Option.none()
     },
 
     navigate(
@@ -145,7 +143,7 @@ export function usePromptHistory(): PromptHistory {
 
       if (direction === "up") {
         if (store.historyIndex === -1) {
-          store.savedEntry = currentText
+          store.savedEntry = Option.some(currentText)
           store.historyIndex = 0
           return { handled: true, text: list[0], cursor: "start" }
         }
@@ -163,8 +161,8 @@ export function usePromptHistory(): PromptHistory {
       }
       if (store.historyIndex === 0) {
         store.historyIndex = -1
-        const restored = store.savedEntry ?? ""
-        store.savedEntry = null
+        const restored = Option.getOrElse(store.savedEntry, () => "")
+        store.savedEntry = Option.none()
         return { handled: true, text: restored, cursor: "end" }
       }
       return { handled: false }
@@ -172,7 +170,7 @@ export function usePromptHistory(): PromptHistory {
 
     reset() {
       store.historyIndex = -1
-      store.savedEntry = null
+      store.savedEntry = Option.none()
     },
   }
 }

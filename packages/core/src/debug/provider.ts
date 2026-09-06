@@ -10,6 +10,7 @@
  */
 
 import { ToolCallId } from "../domain/ids.js"
+import type { Schema } from "effect"
 import {
   finishPart,
   type SequenceStep,
@@ -19,6 +20,7 @@ import {
 
 let _stepCallIdCounter = 0
 const makeStepToolCallId = () => ToolCallId.make(`step-tc-${++_stepCallIdCounter}`)
+type DebugValue = Schema.Schema.Type<typeof Schema.Unknown>
 
 export const textStep = (text: string): SequenceStep => ({
   parts: [
@@ -32,7 +34,7 @@ export const textStep = (text: string): SequenceStep => ({
 
 export const toolCallStep = (
   toolName: string,
-  input: unknown,
+  input: DebugValue,
   options?: { toolCallId?: ToolCallId },
 ): SequenceStep => ({
   parts: [
@@ -47,7 +49,7 @@ export const toolCallStep = (
 export const textThenToolCallStep = (
   text: string,
   toolName: string,
-  input: unknown,
+  input: DebugValue,
   options?: { toolCallId?: ToolCallId },
 ): SequenceStep => ({
   parts: [
@@ -61,7 +63,7 @@ export const textThenToolCallStep = (
 })
 
 export const multiToolCallStep = (
-  ...calls: ReadonlyArray<{ toolName: string; input: unknown; toolCallId?: ToolCallId }>
+  ...calls: ReadonlyArray<{ toolName: string; input: DebugValue; toolCallId?: ToolCallId }>
 ): SequenceStep => ({
   parts: [
     ...calls.map((call) =>

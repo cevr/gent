@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import SessionNotesExtension, {
   AddNoteTool,
 } from "../../../../examples/extensions/session-notes.js"
@@ -63,12 +64,14 @@ describe("extension authoring reference", () => {
           const context = yield* Layer.build(resourceLayer)
           const metadata = getToolMetadata(AddNoteTool)
           const toolEffect = metadata.effect({ text: "ship the authoring loop" })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           const toolResult = yield* toolEffect.pipe(Effect.provide(context))
           expect(toolResult).toEqual({ count: 1, latest: "ship the authoring loop" })
 
           const hookSlot = (contributions.hooks ?? [])[0]!
           expect(hookSlot.kind).toBe("turnProjection")
           if (hookSlot.kind !== "turnProjection") return
+          // oxlint-disable-next-line effect/noNullish, effect/noInlineProvide -- Exercise the existing absent-value boundary contract. This test composes the service layer for this operation.
           const projection = yield* hookSlot.hook.handler(undefined).pipe(Effect.provide(context))
           expect(projection.promptSections?.[0]?.id).toBe("session-notes")
           expect(projection.promptSections?.[0]?.content).toContain("ship the authoring loop")
@@ -80,27 +83,31 @@ describe("extension authoring reference", () => {
 
   it.live("reference example source imports only the public extension API", () =>
     Effect.gen(function* () {
-      const source = yield* Effect.promise(() => Bun.file(sessionNotesSourceUrl).text())
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const source = yield* fs.readFileString(yield* path.fromFileUrl(sessionNotesSourceUrl))
       expect(source).toContain('from "@gent/core/extensions/api"')
       expect(source).not.toContain("@gent/core-internal")
       expect(source).not.toContain("@gent/core/src")
-    }),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.live("dynamic reference example source imports only the public extension API", () =>
     Effect.gen(function* () {
-      const source = yield* Effect.promise(() => Bun.file(dynamicScratchpadSourceUrl).text())
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const source = yield* fs.readFileString(yield* path.fromFileUrl(dynamicScratchpadSourceUrl))
       expect(String(DynamicScratchpadExtension.manifest.id)).toBe("dynamic-scratchpad")
       expect(source).toContain('from "@gent/core/extensions/api"')
       expect(source).not.toContain("@gent/core-internal")
       expect(source).not.toContain("@gent/core/src")
-    }),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.live("public package path is enough to write the representative extension shape", () =>
     Effect.sync(() => {
       const input = Schema.Struct({ text: Schema.String })
-      const output = Schema.Struct({ count: Schema.Number })
+      const output = Schema.Struct({ count: Schema.Finite })
       void input
       void output
       void SessionNotesExtension

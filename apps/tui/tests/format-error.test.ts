@@ -1,6 +1,11 @@
 import { describe, test, expect } from "bun:test"
 import { formatError, ClientError } from "../src/utils/format-error"
-import type { UiError } from "../src/utils/format-error"
+import { StorageError } from "@gent/core-internal/domain/storage-error"
+import { EventStoreError } from "@gent/core-internal/domain/event"
+import { ProviderError } from "@gent/core-internal/domain/provider-error"
+import { DriverError, DriverFailureId, ProviderAuthError } from "@gent/core-internal/domain/driver"
+import { NotFoundError, PlatformErrorSchema } from "@gent/core-internal/server/errors"
+import { SessionRuntimeError } from "@gent/core-internal/runtime/session-runtime"
 
 describe("formatError", () => {
   test("ClientError → message", () => {
@@ -8,46 +13,45 @@ describe("formatError", () => {
   })
 
   test("StorageError → prefixed", () => {
-    const err = { _tag: "StorageError", message: "disk full" } as UiError
+    const err = new StorageError({ message: "disk full" })
     expect(formatError(err)).toBe("Storage: disk full")
   })
 
   test("SessionRuntimeError → prefixed", () => {
-    const err = { _tag: "SessionRuntimeError", message: "max turns" } as UiError
+    const err = new SessionRuntimeError({ message: "max turns" })
     expect(formatError(err)).toBe("Runtime: max turns")
   })
 
   test("ProviderError → model:message", () => {
-    const err = { _tag: "ProviderError", message: "rate limited", model: "gpt-4" } as UiError
+    const err = new ProviderError({ message: "rate limited", model: "gpt-4" })
     expect(formatError(err)).toBe("gpt-4: rate limited")
   })
 
   test("EventStoreError → prefixed", () => {
-    const err = { _tag: "EventStoreError", message: "replay failed" } as UiError
+    const err = new EventStoreError({ message: "replay failed" })
     expect(formatError(err)).toBe("Events: replay failed")
   })
 
   test("NotFoundError → prefixed", () => {
-    const err = { _tag: "NotFoundError", message: "session abc" } as UiError
+    const err = new NotFoundError({ message: "session abc", entity: "session" })
     expect(formatError(err)).toBe("Not found: session abc")
   })
 
   test("PlatformError → prefixed", () => {
-    const err = { _tag: "PlatformError", message: "file not found" } as UiError
+    const err = new PlatformErrorSchema({ message: "file not found", reason: "not found" })
     expect(formatError(err)).toBe("Platform: file not found")
   })
 
   test("ProviderAuthError → prefixed", () => {
-    const err = { _tag: "ProviderAuthError", message: "invalid key" } as UiError
+    const err = new ProviderAuthError({ message: "invalid key" })
     expect(formatError(err)).toBe("Auth: invalid key")
   })
 
   test("DriverError → driver and reason", () => {
-    const err = {
-      _tag: "DriverError",
-      driver: { _tag: "model", id: "openai" },
+    const err = new DriverError({
+      driver: { _tag: "model", id: DriverFailureId.make("openai") },
       reason: "catalog filter failed",
-    } as UiError
+    })
     expect(formatError(err)).toBe("Driver model: openai: catalog filter failed")
   })
 })

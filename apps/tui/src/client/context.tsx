@@ -1,6 +1,5 @@
 import {
   createContext,
-  useContext,
   createEffect,
   createMemo,
   createSignal,
@@ -11,7 +10,7 @@ import {
 } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { Context } from "effect"
-import { Effect, Random, Schema } from "effect"
+import { Effect, Option, Predicate, Schema } from "effect"
 import {
   AgentName as AgentNameSchema,
   type AgentDefinition,
@@ -27,6 +26,8 @@ import { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
 import type { MessageId } from "@gent/core-internal/domain/ids.js"
 import type { ClientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
+import { useRequiredContext } from "../utils/solid-context"
+import { randomId } from "../utils/random-id"
 import { useWorkspace } from "../workspace/context"
 import { AgentStatus, type AgentState } from "./agent-state"
 import { createClientEventHub } from "./event-hub"
@@ -78,6 +79,9 @@ import {
   type Session,
 } from "./session-state"
 
+const isReconnectingState = (state: ConnectionState): boolean =>
+  Predicate.isTagged("connecting")(state) || Predicate.isTagged("reconnecting")(state)
+
 export const SteerCommandInput = Schema.TaggedUnion({
   Cancel: {},
   Interrupt: {},
@@ -92,16 +96,17 @@ export type SteerCommandInput = Schema.Schema.Type<typeof SteerCommandInput>
 const resolveModelInfo = (
   models: Record<string, Model>,
   agentsByName: Record<string, AgentDefinition>,
-  agent: AgentName | undefined,
-  lastModelId: ModelId | undefined,
-): Model | undefined => {
-  if (lastModelId !== undefined) {
-    const live = models[lastModelId]
-    if (live !== undefined) return live
+  agent: Option.Option<AgentName>,
+  lastModelId: Option.Option<ModelId>,
+): Option.Option<Model> => {
+  if (Option.isSome(lastModelId)) {
+    const live = Option.fromNullishOr(models[lastModelId.value])
+    if (Option.isSome(live)) return live
   }
-  if (agent === undefined) return undefined
-  const agentDef = agentsByName[agent]
-  return agentDef !== undefined ? models[resolveAgentModel(agentDef)] : undefined
+  if (Option.isNone(agent)) return Option.none()
+  const agentDef = Option.fromNullishOr(agentsByName[agent.value])
+  if (Option.isNone(agentDef)) return Option.none()
+  return Option.fromNullishOr(models[resolveAgentModel(agentDef.value)])
 }
 
 export type { Session, SessionState } from "./session-state"
@@ -127,13 +132,16 @@ export interface ClientTransportValue {
   /** Structured logger — flows through Effect's logger layer */
   log: ClientLog
 
+  // eslint-disable-next-line effect/noNullish -- RPC transport exposes an absent state before startup.
   connectionState: () => ConnectionState | undefined
-  waitForTransportReady: () => Effect.Effect<void>
+  waitForTransportReady: Effect.Effect<void>
   isReconnecting: () => boolean
   connectionGeneration: () => number
+  // eslint-disable-next-line effect/noNullish -- UI transport exposes null when no issue is present.
   connectionIssue: () => string | null
   extensionHealth: () => ExtensionHealthSnapshot
 
+  // eslint-disable-next-line effect/noNullish -- UI transport accepts null to clear its issue.
   setConnectionIssue: (error: string | null) => void
 
   // Extension state-change pulse subscription. Fires once per
@@ -155,35 +163,43 @@ export interface ClientTransportValue {
 export interface ClientSessionValue {
   // Session state (union)
   sessionState: () => SessionState
+  // eslint-disable-next-line effect/noNullish -- UI session accessors expose null while no session is active.
   session: () => Session | null
   isActive: () => boolean
   isLoading: () => boolean
 
   // Session actions (fire-and-forget, update state internally)
+  // eslint-disable-next-line effect/noNullish -- callback is optional at this UI boundary.
   createSession: (onCreated?: (sessionId: SessionId, branchId: BranchId) => void) => void
+  // eslint-disable-next-line effect/noNullish -- session switching accepts an optional agent override.
   switchSession: (sessionId: SessionId, branchId: BranchId, name: string, agent?: AgentName) => void
   clearSession: () => void
   updateSessionReasoningLevel: (
+    // eslint-disable-next-line effect/noNullish -- RPC session settings omit an unset reasoning level.
     reasoningLevel: ReasoningEffort | undefined,
   ) => Effect.Effect<void, GentClientRpcError>
 
   // Sync data fetching helpers (return Effects for caller to run)
-  listMessages: () => Effect.Effect<readonly Message[], GentClientRpcError>
-  listSessions: () => Effect.Effect<readonly DomainSession[], GentClientRpcError>
-  listBranches: () => Effect.Effect<readonly Branch[], GentClientRpcError>
+  listMessages: Effect.Effect<readonly Message[], GentClientRpcError>
+  listSessions: Effect.Effect<readonly DomainSession[], GentClientRpcError>
+  listBranches: Effect.Effect<readonly Branch[], GentClientRpcError>
+  // eslint-disable-next-line effect/noNullish -- RPC branch creation accepts an omitted name.
   createBranch: (name?: string) => Effect.Effect<BranchId, GentClientRpcError>
-  getBranchTree: () => Effect.Effect<readonly BranchTreeNode[], GentClientRpcError>
+  getBranchTree: Effect.Effect<readonly BranchTreeNode[], GentClientRpcError>
   getSessionTree: (sessionId: SessionId) => Effect.Effect<SessionTreeNode, GentClientRpcError>
+  // eslint-disable-next-line effect/noNullish -- RPC branch forking accepts an omitted name.
   forkBranch: (messageId: MessageId, name?: string) => Effect.Effect<BranchId, GentClientRpcError>
-  drainQueuedMessages: () => Effect.Effect<QueueSnapshot, GentClientRpcError>
-  getQueuedMessages: () => Effect.Effect<QueueSnapshot, GentClientRpcError>
+  drainQueuedMessages: Effect.Effect<QueueSnapshot, GentClientRpcError>
+  getQueuedMessages: Effect.Effect<QueueSnapshot, GentClientRpcError>
 
   // Branch navigation (fire-and-forget)
+  // eslint-disable-next-line effect/noNullish -- RPC branch switching accepts an omitted summary flag.
   switchBranch: (branchId: BranchId, summarize?: boolean) => void
 }
 
 export interface ClientAgentValue {
   // Agent state (derived from events)
+  // eslint-disable-next-line effect/noNullish -- UI agent accessors expose absence before hydration.
   agent: () => AgentName | undefined
   agentStatus: () => AgentStatus
   cost: () => number
@@ -191,11 +207,14 @@ export interface ClientAgentValue {
   // Derived accessors
   isStreaming: () => boolean
   isError: () => boolean
+  // eslint-disable-next-line effect/noNullish -- UI agent accessors expose null outside the error state.
   error: () => string | null
   latestInputTokens: () => number
+  // eslint-disable-next-line effect/noNullish -- model metadata is absent until the model registry loads.
   modelInfo: () => Model | undefined
 
   // Agent state setters (for local errors only)
+  // eslint-disable-next-line effect/noNullish -- UI callers pass null to clear a local error.
   setError: (error: string | null) => void
 }
 
@@ -221,25 +240,32 @@ const EMPTY_EXTENSION_HEALTH: ExtensionHealthSnapshot = {
   extensions: [],
 }
 
-const useRequiredContext = <T,>(ctx: T | undefined, name: string): T => {
-  if (ctx === undefined) throw new Error(`${name} must be used within ClientProvider`)
-  return ctx
-}
-
 export function useClientTransport(): ClientTransportValue {
-  return useRequiredContext(useContext(ClientTransportContext), "ClientTransportContext")
+  return useRequiredContext(
+    ClientTransportContext,
+    "ClientTransportContext must be used within ClientProvider",
+  )
 }
 
 export function useClientSession(): ClientSessionValue {
-  return useRequiredContext(useContext(ClientSessionContext), "ClientSessionContext")
+  return useRequiredContext(
+    ClientSessionContext,
+    "ClientSessionContext must be used within ClientProvider",
+  )
 }
 
 export function useClientAgent(): ClientAgentValue {
-  return useRequiredContext(useContext(ClientAgentContext), "ClientAgentContext")
+  return useRequiredContext(
+    ClientAgentContext,
+    "ClientAgentContext must be used within ClientProvider",
+  )
 }
 
 export function useClientActions(): ClientActionValue {
-  return useRequiredContext(useContext(ClientActionContext), "ClientActionContext")
+  return useRequiredContext(
+    ClientActionContext,
+    "ClientActionContext must be used within ClientProvider",
+  )
 }
 
 export function useClient(): ClientContextValue {
@@ -300,7 +326,9 @@ interface ClientProviderProps extends ParentProps {
   client: GentNamespacedClient
   runtime: GentRuntime
   log: ClientLog
+  // eslint-disable-next-line effect/noNullish -- bootstrap passes no session when starting fresh.
   initialSession: Session | undefined
+  // eslint-disable-next-line effect/noNullish -- bootstrap may omit an agent override.
   initialAgent?: AgentName
   /**
    * Host-provided platform services (e.g. `FileSystem`, `ChildProcessSpawner`).
@@ -314,7 +342,10 @@ interface ClientProviderProps extends ParentProps {
 }
 
 export function ClientProvider(props: ClientProviderProps) {
-  const defaultAgent: AgentName = props.initialAgent ?? DEFAULT_AGENT_NAME
+  const defaultAgent = Option.getOrElse(
+    Option.fromNullishOr(props.initialAgent),
+    () => DEFAULT_AGENT_NAME,
+  )
   const client = props.client
   const runtime = props.runtime
   const log = props.log
@@ -327,18 +358,24 @@ export function ClientProvider(props: ClientProviderProps) {
 
   const eventHub = createClientEventHub(log)
 
-  const [sessionState, setSessionState] = createSignal<SessionState>(
-    props.initialSession !== undefined
-      ? SessionState.active(props.initialSession)
-      : SessionState.none(),
-  )
+  const initialSession = Option.fromNullishOr(props.initialSession)
+  const initialSessionState = Option.match(initialSession, {
+    onNone: SessionState.none,
+    onSome: SessionState.active,
+  })
+  let initialAgent = Option.some(defaultAgent)
+  if (Option.isSome(initialSession)) initialAgent = Option.fromNullishOr(props.initialAgent)
+  const [sessionState, setSessionState] = createSignal<SessionState>(initialSessionState)
   const dispatchSession = (event: Parameters<typeof transitionSessionState>[1]) => {
     setSessionState((current) => transitionSessionState(current, event))
   }
-  const session = (): Session | null => {
+  const sessionOption = (): Option.Option<Session> => {
     const current = sessionState()
-    return current.status === "active" ? current.session : null
+    if (current.status === "active") return Option.some(current.session)
+    return Option.none()
   }
+  // eslint-disable-next-line effect/noNullish -- UI session accessors use null for inactive state.
+  const session = (): Session | null => Option.getOrNull(sessionOption())
   const isActive = () => sessionState().status === "active"
   const isLoading = () => sessionState().status === "creating"
 
@@ -370,16 +407,27 @@ export function ClientProvider(props: ClientProviderProps) {
 
   // Agent state (derived from events)
   const [agentStore, setAgentStore] = createStore<AgentState>({
-    agent: props.initialSession !== undefined ? props.initialAgent : defaultAgent,
+    agent: initialAgent,
     status: AgentStatus.cases["idle"].make({}),
     cost: 0,
-    lastModelId: undefined,
+    lastModelId: Option.none(),
   })
   const [latestInputTokens, setLatestInputTokens] = createSignal(0)
-  const [connectionState, setConnectionState] = createSignal<ConnectionState | undefined>(
-    runtime.lifecycle.getState(),
+  const [connectionState, setConnectionState] = createSignal<Option.Option<ConnectionState>>(
+    Option.fromNullishOr(runtime.lifecycle.getState()),
   )
-  const [connectionIssue, setConnectionIssue] = createSignal<string | null>(null)
+  const connectionStateValue = () => Option.getOrUndefined(connectionState())
+  const [connectionIssue, setConnectionIssueState] = createSignal<Option.Option<string>>(
+    Option.none(),
+  )
+  const connectionIssueValue = () => Option.getOrNull(connectionIssue())
+  // eslint-disable-next-line effect/noNullish -- UI transport uses null to clear an issue.
+  const setConnectionIssue = (error: string | null): void => {
+    setConnectionIssueState(Option.fromNullishOr(error))
+  }
+  const clearConnectionIssue = (): void => {
+    setConnectionIssueState(Option.none())
+  }
   const [extensionHealth, setExtensionHealth] =
     createSignal<ExtensionHealthSnapshot>(EMPTY_EXTENSION_HEALTH)
 
@@ -393,62 +441,71 @@ export function ClientProvider(props: ClientProviderProps) {
 
   createEffect(() => {
     const unsubscribe = runtime.lifecycle.subscribe((nextState) => {
+      const connectionDetails: Record<string, string | number> = {}
+      if ("generation" in nextState) connectionDetails["generation"] = nextState.generation
+      if ("reason" in nextState) connectionDetails["reason"] = nextState.reason
+      if ("pid" in nextState) {
+        const pid = Option.fromNullishOr(nextState.pid)
+        if (Option.isSome(pid)) connectionDetails["pid"] = pid.value
+      }
       log.info("connection.state", {
         tag: nextState._tag,
-        ...("generation" in nextState ? { generation: nextState.generation } : {}),
-        ...("reason" in nextState ? { reason: nextState.reason } : {}),
-        ...("pid" in nextState ? { pid: nextState.pid } : {}),
+        ...connectionDetails,
       })
-      setConnectionState(nextState)
+      setConnectionState(Option.some(nextState))
     })
     onCleanup(unsubscribe)
   })
 
-  const workerEpoch = createMemo<number | null>(() => {
+  const workerEpoch = createMemo<Option.Option<number>>(() => {
     const state = connectionState()
-    if (state === undefined) return 0
-    if (state._tag === "connected") return state.generation
-    if (state._tag === "reconnecting") return null
-    return null
+    if (Option.isNone(state) || state.value._tag !== "connected") return Option.none()
+    return Option.some(state.value.generation)
   })
 
   const isReconnecting = () => {
     const state = connectionState()
-    return state?._tag === "connecting" || state?._tag === "reconnecting"
+    if (Option.isNone(state)) return false
+    return isReconnectingState(state.value)
   }
 
   let extensionHealthLoadVersion = 0
 
+  const extensionHealthDependencies = (): readonly [
+    Option.Option<number>,
+    Option.Option<SessionId>,
+  ] => [workerEpoch(), Option.map(sessionOption(), (value) => value.sessionId)]
+
   createEffect(
     on(
-      () => [workerEpoch(), session()?.sessionId] as const,
+      extensionHealthDependencies,
       ([epoch, sessionId]) => {
         const version = ++extensionHealthLoadVersion
-        if (connectionState()?._tag !== "connected" || epoch === null) {
+        if (Option.isNone(epoch)) {
           setExtensionHealth(EMPTY_EXTENSION_HEALTH)
           return
         }
 
+        const request = Option.match(sessionId, {
+          onNone: () => ({}),
+          onSome: (value) => ({ sessionId: value }),
+        })
         cast(
-          client.extension
-            .listStatus({
-              ...(sessionId !== undefined ? { sessionId } : {}),
-            })
-            .pipe(
-              Effect.tap((nextHealth) =>
-                Effect.sync(() => {
-                  if (version !== extensionHealthLoadVersion) return
-                  setExtensionHealth(nextHealth)
-                }),
-              ),
-              Effect.catchEager((error) =>
-                Effect.sync(() => {
-                  if (version !== extensionHealthLoadVersion) return
-                  setExtensionHealth(EMPTY_EXTENSION_HEALTH)
-                  log.warn("extension.health.refresh.failed", { error: String(error) })
-                }),
-              ),
+          client.extension.listStatus(request).pipe(
+            Effect.tap((nextHealth) =>
+              Effect.sync(() => {
+                if (version !== extensionHealthLoadVersion) return
+                setExtensionHealth(nextHealth)
+              }),
             ),
+            Effect.catchEager((error) =>
+              Effect.sync(() => {
+                if (version !== extensionHealthLoadVersion) return
+                setExtensionHealth(EMPTY_EXTENSION_HEALTH)
+                log.warn("extension.health.refresh.failed", { error: String(error) })
+              }),
+            ),
+          ),
         )
       },
       { defer: false },
@@ -456,49 +513,58 @@ export function ClientProvider(props: ClientProviderProps) {
   )
 
   const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
-    const currentSession = session()
-    if (
-      currentSession !== null &&
-      (currentSession.sessionId !== snapshot.sessionId ||
-        currentSession.branchId !== snapshot.branchId)
-    ) {
-      return
+    const currentSession = sessionOption()
+    if (Option.isSome(currentSession)) {
+      if (
+        currentSession.value.sessionId !== snapshot.sessionId ||
+        currentSession.value.branchId !== snapshot.branchId
+      ) {
+        return
+      }
     }
-    setConnectionIssue(null)
-    dispatchSession(
-      SessionStateEvent.cases.Activated.make({
-        session: {
-          sessionId: snapshot.sessionId,
-          branchId: snapshot.branchId,
-          name: snapshot.name ?? currentSession?.name ?? "Unnamed",
-          reasoningLevel: snapshot.reasoningLevel,
-        },
-      }),
-    )
+    clearConnectionIssue()
+    const nextSession = {
+      sessionId: snapshot.sessionId,
+      branchId: snapshot.branchId,
+      name: Option.getOrElse(Option.fromNullishOr(snapshot.name), () =>
+        Option.getOrElse(
+          Option.flatMap(currentSession, (value) => Option.fromNullishOr(value.name)),
+          () => "Unnamed",
+        ),
+      ),
+      reasoningLevel: snapshot.reasoningLevel,
+    }
+    const sessionChanged = Option.match(currentSession, {
+      onNone: () => true,
+      onSome: (current) =>
+        current.name !== nextSession.name || current.reasoningLevel !== nextSession.reasoningLevel,
+    })
+    if (sessionChanged) {
+      dispatchSession(SessionStateEvent.cases.Activated.make({ session: nextSession }))
+    }
     const rt = snapshot.runtime
-    const status =
-      rt._tag === "Idle"
-        ? AgentStatus.cases["idle"].make({})
-        : AgentStatus.cases["streaming"].make({})
+    let status: AgentStatus = AgentStatus.cases["streaming"].make({})
+    if (rt._tag === "Idle") status = AgentStatus.cases["idle"].make({})
     setAgentStore({
-      agent: rt.agent,
+      agent: Option.fromNullishOr(rt.agent),
       status,
       cost: snapshot.metrics.costUsd,
-      lastModelId: snapshot.metrics.lastModelId,
+      lastModelId: Option.fromNullishOr(snapshot.metrics.lastModelId),
     })
     setLatestInputTokens(snapshot.metrics.lastInputTokens)
   }
 
   const refreshSessionMetrics = (): void => {
-    const s = session()
-    if (s === null) return
+    const currentSession = sessionOption()
+    if (Option.isNone(currentSession)) return
+    const s = currentSession.value
     cast(
       client.session.getSnapshot({ sessionId: s.sessionId, branchId: s.branchId }).pipe(
         Effect.tap((snapshot) =>
           Effect.sync(() => {
             setAgentStore({
               cost: snapshot.metrics.costUsd,
-              lastModelId: snapshot.metrics.lastModelId,
+              lastModelId: Option.fromNullishOr(snapshot.metrics.lastModelId),
             })
             setLatestInputTokens(snapshot.metrics.lastInputTokens)
           }),
@@ -510,42 +576,47 @@ export function ClientProvider(props: ClientProviderProps) {
 
   const applyAgentLifecycleEvent = (event: EventEnvelope["event"]): void => {
     const lifecycle = reduceAgentLifecycle(event)
-    if (lifecycle.preferredAgent !== undefined) {
-      if (Schema.is(AgentNameSchema)(lifecycle.preferredAgent)) {
-        setAgentStore({ agent: lifecycle.preferredAgent })
+    const preferredAgent = Option.fromNullishOr(lifecycle.preferredAgent)
+    if (Option.isSome(preferredAgent)) {
+      if (Schema.is(AgentNameSchema)(preferredAgent.value)) {
+        setAgentStore({ agent: preferredAgent })
       } else {
-        setAgentStore({ agent: undefined })
+        setAgentStore({ agent: Option.none() })
       }
     }
-    if (lifecycle.status !== undefined) {
-      setAgentStore({ status: lifecycle.status })
-    }
+    const status = Option.fromNullishOr(lifecycle.status)
+    if (Option.isSome(status)) setAgentStore({ status: status.value })
   }
 
   const applySessionMetadataEvent = (event: EventEnvelope["event"]): void => {
     switch (event._tag) {
       case "SessionNameUpdated": {
-        const s = session()
-        if (s !== null && event.sessionId === s.sessionId) {
+        const s = sessionOption()
+        if (Option.isSome(s) && event.sessionId === s.value.sessionId) {
           dispatchSession(SessionStateEvent.cases.UpdateName.make({ name: event.name }))
         }
         break
       }
 
       case "BranchSwitched": {
-        const s = session()
-        if (s !== null && event.sessionId === s.sessionId) {
+        const s = sessionOption()
+        if (Option.isSome(s) && event.sessionId === s.value.sessionId) {
           dispatchSession(SessionStateEvent.cases.UpdateBranch.make({ branchId: event.toBranchId }))
         }
         break
       }
 
       case "SessionSettingsUpdated": {
-        const s = session()
-        if (s !== null && event.sessionId === s.sessionId && event.reasoningLevel !== undefined) {
+        const s = sessionOption()
+        const reasoningLevel = Option.fromNullishOr(event.reasoningLevel)
+        if (
+          Option.isSome(s) &&
+          event.sessionId === s.value.sessionId &&
+          Option.isSome(reasoningLevel)
+        ) {
           dispatchSession(
             SessionStateEvent.cases.UpdateReasoningLevel.make({
-              reasoningLevel: event.reasoningLevel,
+              reasoningLevel: reasoningLevel.value,
             }),
           )
         }
@@ -558,7 +629,9 @@ export function ClientProvider(props: ClientProviderProps) {
     const event = envelope.event
     eventHub.notifySessionEvent(envelope)
     eventHub.notifyExtensionStateChanged(event)
-    if (event._tag === "StreamEnded" && event.usage !== undefined) refreshSessionMetrics()
+    if (event._tag === "StreamEnded" && Option.isSome(Option.fromNullishOr(event.usage))) {
+      refreshSessionMetrics()
+    }
     if (event._tag === "ErrorOccurred") {
       log.error("agent.error", { error: event.error, eventId: envelope.id })
     }
@@ -580,18 +653,18 @@ export function ClientProvider(props: ClientProviderProps) {
     services,
     log,
 
-    connectionState,
-    waitForTransportReady: () => runtime.lifecycle.waitForReady,
+    connectionState: connectionStateValue,
+    waitForTransportReady: runtime.lifecycle.waitForReady,
     isReconnecting,
     extensionHealth,
     connectionGeneration: () => {
       const state = connectionState()
-      if (state === undefined) return 0
-      if (state._tag === "connected") return state.generation
-      if (state._tag === "reconnecting") return state.generation
+      if (Option.isNone(state)) return 0
+      if (state.value._tag === "connected") return state.value.generation
+      if (state.value._tag === "reconnecting") return state.value.generation
       return 0
     },
-    connectionIssue,
+    connectionIssue: connectionIssueValue,
     setConnectionIssue,
     onExtensionStateChanged: eventHub.onExtensionStateChanged,
     onSessionEvent: eventHub.onSessionEvent,
@@ -609,14 +682,15 @@ export function ClientProvider(props: ClientProviderProps) {
 
     createSession: (onCreated) => {
       dispatchSession(SessionStateEvent.cases.CreateRequested.make({}))
+      const createSessionEffect = Effect.fn("TUI.createSession")(function* () {
+        const requestId = yield* randomId
+        yield* Effect.sync(() => {
+          log.info("createSession", { requestId })
+        })
+        return yield* client.session.create({ requestId, cwd: workspace.cwd })
+      })
       cast(
-        Effect.gen(function* () {
-          const requestId = yield* Random.nextUUIDv4
-          yield* Effect.sync(() => {
-            log.info("createSession", { requestId })
-          })
-          return yield* client.session.create({ requestId, cwd: workspace.cwd })
-        }).pipe(
+        createSessionEffect().pipe(
           Effect.tap((result) =>
             Effect.sync(() => {
               // Replicate `switchSession`'s side-effect resets so `/new`
@@ -625,13 +699,13 @@ export function ClientProvider(props: ClientProviderProps) {
               // Create always transitions out of a prior session (or from
               // "none"), so the extensionHealth reset is unconditional.
               setAgentStore({
-                agent: defaultAgent,
+                agent: Option.some(defaultAgent),
                 status: AgentStatus.cases["idle"].make({}),
                 cost: 0,
-                lastModelId: undefined,
+                lastModelId: Option.none(),
               })
               setLatestInputTokens(0)
-              setConnectionIssue(null)
+              clearConnectionIssue()
               setExtensionHealth(EMPTY_EXTENSION_HEALTH)
               dispatchSession(
                 SessionStateEvent.cases.CreateSucceeded.make({
@@ -639,11 +713,14 @@ export function ClientProvider(props: ClientProviderProps) {
                     sessionId: result.sessionId,
                     branchId: result.branchId,
                     name: result.name,
-                    reasoningLevel: undefined,
+                    reasoningLevel: Option.getOrUndefined(Option.none()),
                   },
                 }),
               )
-              onCreated?.(SessionId.make(result.sessionId), BranchId.make(result.branchId))
+              const callback = Option.fromNullishOr(onCreated)
+              if (Option.isSome(callback)) {
+                callback.value(SessionId.make(result.sessionId), BranchId.make(result.branchId))
+              }
             }),
           ),
           Effect.catchEager((err) =>
@@ -655,27 +732,32 @@ export function ClientProvider(props: ClientProviderProps) {
               })
             }),
           ),
-          Effect.withSpan("TUI.createSession"),
         ),
       )
     },
 
     switchSession: (sessionId, branchId, name, agent) => {
-      const currentSessionId = session()?.sessionId
+      const currentSessionId = Option.map(sessionOption(), (value) => value.sessionId)
+      const nextAgent = Option.fromNullishOr(agent)
       setAgentStore({
-        agent,
+        agent: nextAgent,
         status: AgentStatus.cases["idle"].make({}),
         cost: 0,
-        lastModelId: undefined,
+        lastModelId: Option.none(),
       })
       setLatestInputTokens(0)
-      setConnectionIssue(null)
-      if (currentSessionId !== sessionId) {
+      clearConnectionIssue()
+      if (Option.isNone(currentSessionId) || currentSessionId.value !== sessionId) {
         setExtensionHealth(EMPTY_EXTENSION_HEALTH)
       }
       dispatchSession(
         SessionStateEvent.cases.Activated.make({
-          session: { sessionId, branchId, name, reasoningLevel: undefined },
+          session: {
+            sessionId,
+            branchId,
+            name,
+            reasoningLevel: Option.getOrUndefined(Option.none()),
+          },
         }),
       )
     },
@@ -683,33 +765,34 @@ export function ClientProvider(props: ClientProviderProps) {
     clearSession: () => {
       dispatchSession(SessionStateEvent.cases.Clear.make({}))
       setAgentStore({
-        agent: defaultAgent,
+        agent: Option.some(defaultAgent),
         status: AgentStatus.cases["idle"].make({}),
         cost: 0,
-        lastModelId: undefined,
+        lastModelId: Option.none(),
       })
       setLatestInputTokens(0)
-      setConnectionIssue(null)
+      clearConnectionIssue()
       setExtensionHealth(EMPTY_EXTENSION_HEALTH)
     },
 
-    listMessages: () => {
-      const s = session()
-      if (s === null) return Effect.succeed([] as readonly Message[])
-      return client.message.list({ branchId: s.branchId })
-    },
+    listMessages: Effect.gen(function* () {
+      const currentSession = sessionOption()
+      if (Option.isNone(currentSession)) return [] satisfies readonly Message[]
+      return yield* client.message.list({ branchId: currentSession.value.branchId })
+    }),
 
-    listSessions: () => client.session.list(),
+    listSessions: client.session.list(),
 
-    listBranches: () => {
-      const s = session()
-      if (s === null) return Effect.succeed([] as readonly Branch[])
-      return client.branch.list({ sessionId: s.sessionId })
-    },
+    listBranches: Effect.gen(function* () {
+      const currentSession = sessionOption()
+      if (Option.isNone(currentSession)) return [] satisfies readonly Branch[]
+      return yield* client.branch.list({ sessionId: currentSession.value.sessionId })
+    }),
 
     updateSessionReasoningLevel: (reasoningLevel) => {
-      const s = session()
-      if (s === null) return Effect.sync(() => undefined)
+      const currentSession = sessionOption()
+      if (Option.isNone(currentSession)) return Effect.void
+      const s = currentSession.value
       return client.session.updateReasoningLevel({ sessionId: s.sessionId, reasoningLevel }).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
@@ -725,79 +808,85 @@ export function ClientProvider(props: ClientProviderProps) {
     },
 
     createBranch: (name) => {
-      const s = session()
-      if (s === null) return Effect.succeed(BranchId.make(""))
+      const currentSession = sessionOption()
+      if (Option.isNone(currentSession)) return Effect.succeed(BranchId.make(""))
+      const s = currentSession.value
       return Effect.gen(function* () {
-        const requestId = yield* Random.nextUUIDv4
+        const requestId = yield* randomId
         const result = yield* client.branch.create({
           sessionId: s.sessionId,
           requestId,
-          ...(name !== undefined ? { name } : {}),
+          name,
         })
         return result.branchId
       })
     },
 
-    getBranchTree: () => {
-      const s = session()
-      if (s === null) return Effect.succeed([] as readonly BranchTreeNode[])
-      return client.branch.getTree({ sessionId: s.sessionId })
-    },
+    getBranchTree: Effect.gen(function* () {
+      const currentSession = sessionOption()
+      if (Option.isNone(currentSession)) {
+        return [] satisfies readonly BranchTreeNode[]
+      }
+      return yield* client.branch.getTree({ sessionId: currentSession.value.sessionId })
+    }),
 
     getSessionTree: (sessionId) => client.session.getTree({ sessionId }),
 
     forkBranch: (messageId, name) => {
-      const s = session()
-      if (s === null) return Effect.succeed(BranchId.make(""))
+      const currentSession = sessionOption()
+      if (Option.isNone(currentSession)) return Effect.succeed(BranchId.make(""))
+      const s = currentSession.value
       return Effect.gen(function* () {
-        const requestId = yield* Random.nextUUIDv4
+        const requestId = yield* randomId
         const result = yield* client.branch.fork({
           sessionId: s.sessionId,
           fromBranchId: s.branchId,
           atMessageId: messageId,
           requestId,
-          ...(name !== undefined ? { name } : {}),
+          name,
         })
         return BranchId.make(result.branchId)
       })
     },
 
-    drainQueuedMessages: () => {
-      const s = session()
-      if (s === null) {
-        return Effect.succeed({ steering: [] as const, followUp: [] as const })
+    drainQueuedMessages: Effect.gen(function* () {
+      const currentSession = sessionOption()
+      if (Option.isNone(currentSession)) {
+        return { steering: [], followUp: [] } satisfies QueueSnapshot
       }
-      return Effect.gen(function* () {
-        const requestId = yield* Random.nextUUIDv4
-        return yield* client.queue.drain({
-          sessionId: s.sessionId,
-          branchId: s.branchId,
-          requestId,
-        })
+      const requestId = yield* randomId
+      return yield* client.queue.drain({
+        sessionId: currentSession.value.sessionId,
+        branchId: currentSession.value.branchId,
+        requestId,
       })
-    },
+    }),
 
-    getQueuedMessages: () => {
-      const s = session()
-      if (s === null) {
-        return Effect.succeed({ steering: [] as const, followUp: [] as const })
+    getQueuedMessages: Effect.gen(function* () {
+      const currentSession = sessionOption()
+      if (Option.isNone(currentSession)) {
+        return { steering: [], followUp: [] } satisfies QueueSnapshot
       }
-      return client.queue.get({ sessionId: s.sessionId, branchId: s.branchId })
-    },
+      return yield* client.queue.get({
+        sessionId: currentSession.value.sessionId,
+        branchId: currentSession.value.branchId,
+      })
+    }),
 
     switchBranch: (branchId, summarize) => {
-      const s = session()
-      if (s === null) return
+      const currentSession = sessionOption()
+      if (Option.isNone(currentSession)) return
+      const s = currentSession.value
 
       cast(
         Effect.gen(function* () {
-          const requestId = yield* Random.nextUUIDv4
+          const requestId = yield* randomId
           return yield* client.branch.switch({
             sessionId: s.sessionId,
             fromBranchId: s.branchId,
             toBranchId: branchId,
             requestId,
-            ...(summarize !== undefined ? { summarize } : {}),
+            summarize,
           })
         }).pipe(
           Effect.tapError((err) =>
@@ -812,7 +901,7 @@ export function ClientProvider(props: ClientProviderProps) {
     },
   }
   const agentValue: ClientAgentValue = {
-    agent: () => agentStore.agent,
+    agent: () => Option.getOrUndefined(agentStore.agent),
     agentStatus: () => agentStore.status,
     cost: () => agentStore.cost,
     model: () => {
@@ -820,76 +909,86 @@ export function ClientProvider(props: ClientProviderProps) {
       // of truth — server-side agent overrides (`runSpec.agentName`) can swap
       // to a different driver mid-turn, so the local agent default would
       // disagree with what's actually running.
-      if (agentStore.lastModelId !== undefined) return agentStore.lastModelId
-      const agentDef =
-        agentStore.agent !== undefined ? modelStore.agentsByName[agentStore.agent] : undefined
-      const defaultAgentDef = modelStore.agentsByName[DEFAULT_AGENT_NAME]
-      const resolved = agentDef ?? defaultAgentDef
-      return resolved !== undefined ? resolveAgentModel(resolved) : DEFAULT_MODEL_ID
+      if (Option.isSome(agentStore.lastModelId)) return agentStore.lastModelId.value
+      const agentDef = Option.flatMap(agentStore.agent, (agent) =>
+        Option.fromNullishOr(modelStore.agentsByName[agent]),
+      )
+      const defaultAgentDef = Option.fromNullishOr(modelStore.agentsByName[DEFAULT_AGENT_NAME])
+      const resolved = Option.orElse(agentDef, () => defaultAgentDef)
+      if (Option.isSome(resolved)) return resolveAgentModel(resolved.value)
+      return DEFAULT_MODEL_ID
     },
     // Derived accessors
     isStreaming: () => agentStore.status._tag === "streaming",
     isError: () => agentStore.status._tag === "error",
-    error: () => (agentStore.status._tag === "error" ? agentStore.status.error : null),
+    error: () => {
+      if (agentStore.status._tag === "error") return agentStore.status.error
+      return Option.getOrNull(Option.none<string>())
+    },
     latestInputTokens,
     modelInfo: () =>
-      resolveModelInfo(
-        modelStore.modelsById,
-        modelStore.agentsByName,
-        agentStore.agent,
-        agentStore.lastModelId,
+      Option.getOrUndefined(
+        resolveModelInfo(
+          modelStore.modelsById,
+          modelStore.agentsByName,
+          agentStore.agent,
+          agentStore.lastModelId,
+        ),
       ),
-    setError: (error) =>
-      setAgentStore({
-        status:
-          error !== null
-            ? AgentStatus.cases["error"].make({ error })
-            : AgentStatus.cases["idle"].make({}),
-      }),
+    setError: (error) => {
+      const nextError = Option.fromNullishOr(error)
+      if (Option.isSome(nextError)) {
+        setAgentStore({ status: AgentStatus.cases["error"].make({ error: nextError.value }) })
+        return
+      }
+      setAgentStore({ status: AgentStatus.cases["idle"].make({}) })
+    },
   }
 
   const actionValue: ClientActionValue = {
     sendMessage: (content) => {
-      const s = session()
-      if (s === null) return
+      const currentSession = sessionOption()
+      if (Option.isNone(currentSession)) return
+      const s = currentSession.value
 
+      const sendMessageEffect = Effect.fn("TUI.sendMessage")(function* () {
+        const requestId = yield* randomId
+        yield* Effect.sync(() => {
+          log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
+        })
+        return yield* client.message.send({
+          sessionId: s.sessionId,
+          branchId: s.branchId,
+          content,
+          requestId,
+        })
+      })
       cast(
-        Effect.gen(function* () {
-          const requestId = yield* Random.nextUUIDv4
-          yield* Effect.sync(() => {
-            log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
-          })
-          return yield* client.message.send({
-            sessionId: s.sessionId,
-            branchId: s.branchId,
-            content,
-            requestId,
-          })
-        }).pipe(
+        sendMessageEffect().pipe(
           Effect.tapError((err) =>
             Effect.sync(() => {
               setConnectionIssue(formatConnectionIssue(err))
             }),
           ),
-          Effect.withSpan("TUI.sendMessage"),
         ),
       )
     },
     steer: (command) => {
-      const s = session()
-      if (s === null) {
+      const currentSession = sessionOption()
+      if (Option.isNone(currentSession)) {
         if (command._tag === "SwitchAgent") {
-          setAgentStore({ agent: command.agent })
+          setAgentStore({ agent: Option.some(command.agent) })
         }
         return
       }
+      const s = currentSession.value
       // Update local agent immediately for responsive UI
       if (command._tag === "SwitchAgent") {
-        setAgentStore({ agent: command.agent })
+        setAgentStore({ agent: Option.some(command.agent) })
       }
       cast(
         Effect.gen(function* () {
-          const requestId = yield* Random.nextUUIDv4
+          const requestId = yield* randomId
           const fullCommand: SteerCommand = {
             ...command,
             sessionId: s.sessionId,

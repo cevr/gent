@@ -5,7 +5,7 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 import {
   reconcileScheduledJobs,
   collectSchedules,
-  type CronRuntimeShape,
+  type CronRuntimeApi,
 } from "../../src/runtime/extensions/resource-host/schedule-engine"
 import type { ScheduledJobContribution } from "@gent/core-internal/domain/scheduled-job"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
@@ -80,7 +80,7 @@ describe("scheduled jobs", () => {
       expect(wrapper).toContain('cwd: "/repo"')
 
       const statePath = path.join(home, ".gent", "scheduler", "managed-jobs.json")
-      const state = yield* Schema.decodeUnknownEffect(
+      const state = yield* Schema.decodeEffect(
         Schema.fromJsonString(Schema.Struct({ jobs: Schema.Record(Schema.String, Schema.String) })),
       )(yield* fs.readFileString(statePath))
       expect(Object.keys(state.jobs)).toEqual([installed.name])
@@ -105,7 +105,7 @@ describe("scheduled jobs", () => {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const home = yield* fs.makeTempDirectoryScoped()
-      const runtime: CronRuntimeShape = {
+      const runtime: CronRuntimeApi = {
         install: (_entryPath: string, _schedule: string, name: string) => {
           if (name.includes("meditate")) {
             return Effect.die(new Error("cron install boom"))
@@ -148,7 +148,7 @@ describe("scheduled jobs", () => {
       expect(failures[0]!.error).toContain("cron install boom")
 
       const statePath = path.join(home, ".gent", "scheduler", "managed-jobs.json")
-      const state = yield* Schema.decodeUnknownEffect(
+      const state = yield* Schema.decodeEffect(
         Schema.fromJsonString(Schema.Struct({ jobs: Schema.Record(Schema.String, Schema.String) })),
       )(yield* fs.readFileString(statePath))
       expect(Object.keys(state.jobs)).toHaveLength(1)

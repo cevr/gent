@@ -11,18 +11,23 @@ import {
 } from "@gent/core-internal/test-utils/language-model.js"
 import type { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
 import type { StorageError } from "@gent/core-internal/storage/sqlite-storage.js"
+import type {
+  ResourceGraphOwnerUnavailableError,
+  ResourceGraphRecoveryError,
+} from "@gent/core-internal/runtime/extensions/resource-host/resource-graph-command.js"
 import { AllBuiltinAgents } from "../../extensions/tests/helpers/builtin-agents.js"
 import { GitReader } from "../../extensions/src/librarian/index.js"
 import { Gent, type GentClientBundle } from "@gent/sdk"
 export { waitFor } from "@gent/core-internal/test-utils/fixtures"
 
-export class TestFailure extends Schema.TaggedErrorClass<TestFailure>()(
-  "@gent/e2e/tests/TestFailure",
-  { message: Schema.String },
-) {}
+export class TestFailure extends Schema.TaggedError<TestFailure>()("@gent/e2e/tests/TestFailure", {
+  message: Schema.String,
+}) {}
 
-export const toTestFailure = (error: unknown) =>
-  new TestFailure({ message: error instanceof Error ? error.message : String(error) })
+export const toTestFailure = (cause: unknown) => {
+  if (cause instanceof Error) return new TestFailure({ message: cause.message })
+  return new TestFailure({ message: String(cause) })
+}
 
 const defaultConfig: InProcessLayerConfig = {
   agents: AllBuiltinAgents,
@@ -33,6 +38,8 @@ type HarnessLayerError =
   | BootstrapError
   | Config.ConfigError
   | PlatformError.PlatformError
+  | ResourceGraphOwnerUnavailableError
+  | ResourceGraphRecoveryError
   | StorageError
 type LayerContext<T> = T extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
 type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>

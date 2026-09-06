@@ -5,7 +5,7 @@
  * dispatch accepts slash-capable requests.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Effect, Exit, type FileSystem, type Path, Schema } from "effect"
+import { Predicate, Cause, Effect, Exit, type FileSystem, type Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { CapabilityError, CapabilityNotFoundError } from "@gent/core-internal/domain/capability"
@@ -76,14 +76,14 @@ const expectRpcFailure = (
     expect(Exit.isFailure(exit)).toBe(true)
     if (!Exit.isFailure(exit)) return yield* Effect.die("expected rpc failure")
     const reason = exit.cause.reasons.find(Cause.isFailReason)
-    if (reason === undefined) return yield* Effect.die("expected failed cause")
+    if (Predicate.isUndefined(reason)) return yield* Effect.die("expected failed cause")
     return reason.error
   })
 
 const runRpc = (
   registry: ReturnType<typeof resolveExtensions>["rpcRegistry"],
   capabilityId: string,
-  input: unknown,
+  input: Readonly<Record<string, string | number>>,
   hostCtx = ctx,
 ) => registry.run(extensionId, capabilityId, input).pipe(provideCurrentHostCtx(hostCtx))
 
@@ -342,7 +342,7 @@ describe("extension capability registries", () => {
         extWith("project", [higherCap]),
       ])
 
-      const readResult = yield* runRpc(resolved.rpcRegistry, higherCap.id, null)
+      const readResult = yield* runRpc(resolved.rpcRegistry, higherCap.id, {})
       expect(readResult).toBe("project-read")
     }))
 
@@ -363,6 +363,7 @@ describe("extension capability registries", () => {
         extensionId,
         input: Schema.Struct({ value: Schema.String }),
         output: Schema.Struct({ value: Schema.String }),
+        // oxlint-disable-next-line effect/noAs, effect/noKnownValueWidening, effect/noChainedTypeAssertions -- Deliberately malformed output exercises the registry's output-boundary validation.
         execute: () => Effect.succeed({ value: 42 } as unknown as { value: string }),
       })
       const resolved = resolveExtensions([extWith("builtin", [cap])])

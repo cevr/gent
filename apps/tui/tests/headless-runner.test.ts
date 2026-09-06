@@ -1,7 +1,8 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Effect, Schema, Stream } from "effect"
+import { Cause, Effect, Option, Schema, Sink, Stdio, Stream } from "effect"
 import {
   EventEnvelope,
+  EventId,
   ToolCallStarted,
   ToolCallSucceeded,
   TurnCompleted,
@@ -11,7 +12,7 @@ import { GentConnectionError } from "@gent/sdk"
 import { runHeadless } from "../src/headless-runner"
 import { renderHeadlessToolCall } from "../src/headless-tool-renderers"
 import { createMockClient } from "./render-harness-boundary"
-class HeadlessRunnerTestError extends Schema.TaggedErrorClass<HeadlessRunnerTestError>()(
+class HeadlessRunnerTestError extends Schema.TaggedError<HeadlessRunnerTestError>()(
   "HeadlessRunnerTestError",
   { message: Schema.String },
 ) {}
@@ -19,42 +20,36 @@ const BashOutputJson = Schema.fromJsonString(
   Schema.Struct({
     stdout: Schema.String,
     stderr: Schema.String,
-    exitCode: Schema.Number,
+    exitCode: Schema.Finite,
   }),
 )
 const encodeBashOutput = Schema.encodeSync(BashOutputJson)
 
-const captureStdout = <A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<{ readonly result: A; readonly stdout: string }, E, R> =>
-  Effect.acquireUseRelease(
-    Effect.sync(() => {
-      const writes: string[] = []
-      const original = process.stdout.write.bind(process.stdout)
-      const replacement: typeof process.stdout.write = (chunk: string | Uint8Array) => {
-        writes.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk))
-        return true
-      }
-      process.stdout.write = replacement
-      return {
-        read: () => writes.join(""),
-        restore: () => {
-          process.stdout.write = original
-        },
-      }
-    }),
-    (capture) => effect.pipe(Effect.map((result) => ({ result, stdout: capture.read() }))),
-    (capture) => Effect.sync(capture.restore),
-  )
+const capturedWrites: string[] = []
+const stdout = Sink.forEach((chunk: string | Uint8Array): Effect.Effect<void> =>
+  Effect.sync(() => {
+    capturedWrites.push(String(chunk))
+  }),
+)
+const headlessTest = it.live.layer(Stdio.layerTest({ stdout: () => stdout }))
+
+const captureStdout = <A, E>(
+  effect: Effect.Effect<A, E, Stdio.Stdio>,
+): Effect.Effect<{ readonly result: A; readonly stdout: string }, E, Stdio.Stdio> =>
+  Effect.gen(function* () {
+    capturedWrites.length = 0
+    const result = yield* effect
+    return { result, stdout: capturedWrites.join("") }
+  })
 
 describe("runHeadless", () => {
-  it.live("stops after TurnCompleted even if the event stream stays open", () =>
+  headlessTest("stops after TurnCompleted even if the event stream stays open", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-test")
       const branchId = BranchId.make("branch-test")
       let sent = false
       const completed = EventEnvelope.make({
-        id: 1 as EventEnvelope["id"],
+        id: EventId.make(1),
         event: TurnCompleted.make({
           sessionId,
           branchId,
@@ -80,7 +75,7 @@ describe("runHeadless", () => {
       expect(sent).toBe(true)
     }),
   )
-  it.live(
+  headlessTest(
     "retries reuse the same sendRequestId so the server-side dedup collapses them onto one mutation",
     () =>
       Effect.gen(function* () {
@@ -89,7 +84,7 @@ describe("runHeadless", () => {
         const observedRequestIds: Array<string> = []
         let sendAttempts = 0
         const completed = EventEnvelope.make({
-          id: 1 as EventEnvelope["id"],
+          id: EventId.make(1),
           event: TurnCompleted.make({
             sessionId,
             branchId,
@@ -132,7 +127,7 @@ describe("runHeadless", () => {
         expect(observedRequestIds[0]).not.toBe("<missing>")
       }),
   )
-  it.live("fails when the event stream ends before turn completion", () =>
+  headlessTest("fails when the event stream ends before turn completion", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-test")
       const branchId = BranchId.make("branch-test")
@@ -153,13 +148,13 @@ describe("runHeadless", () => {
       )
     }),
   )
-  it.live("renders named bash tool input and truncated output", () =>
+  headlessTest("renders named bash tool input and truncated output", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-test")
       const branchId = BranchId.make("branch-test")
       const toolCallId = ToolCallId.make("tool-call-test")
       const started = EventEnvelope.make({
-        id: 1 as EventEnvelope["id"],
+        id: EventId.make(1),
         event: ToolCallStarted.make({
           sessionId,
           branchId,
@@ -171,7 +166,7 @@ describe("runHeadless", () => {
       })
       const outputLines = Array.from({ length: 20 }, (_, index) => `line ${index}`).join("\n")
       const succeeded = EventEnvelope.make({
-        id: 2 as EventEnvelope["id"],
+        id: EventId.make(2),
         event: ToolCallSucceeded.make({
           sessionId,
           branchId,
@@ -182,7 +177,7 @@ describe("runHeadless", () => {
         createdAt: 0,
       })
       const completed = EventEnvelope.make({
-        id: 3 as EventEnvelope["id"],
+        id: EventId.make(3),
         event: TurnCompleted.make({
           sessionId,
           branchId,
@@ -211,14 +206,14 @@ describe("runHeadless", () => {
     }),
   )
 
-  it.live("renders non-special tools through the generic fallback", () =>
+  headlessTest("renders non-special tools through the generic fallback", () =>
     Effect.sync(() => {
       const rendered = renderHeadlessToolCall({
         toolName: "read",
         status: "completed",
-        input: { path: "/tmp/example.txt" },
-        output: "plain output",
-        summary: undefined,
+        input: Option.some({ path: "/tmp/example.txt" }),
+        output: Option.some("plain output"),
+        summary: Option.none(),
       })
 
       expect(rendered).toContain("[tool done: read]")

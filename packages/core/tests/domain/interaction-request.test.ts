@@ -77,7 +77,9 @@ describe("Interaction Request", () => {
         ),
       )
       expect(error._tag).toBe("InteractionPendingError")
-      if (!Schema.is(InteractionPendingError)(error)) throw new Error("expected pending")
+      if (!Schema.is(InteractionPendingError)(error)) {
+        return yield* Effect.die(new Error("expected pending"))
+      }
       expect(error.requestId).toBeTruthy()
       expect(error.sessionId).toBe(SessionId.make("s1"))
       expect(error.branchId).toBe(BranchId.make("b1"))
@@ -101,7 +103,7 @@ describe("Interaction Request", () => {
         paramsJson: "{}",
         status: "pending",
         createdAt: yield* Clock.currentTimeMillis,
-      }
+      } satisfies Parameters<typeof is.persist>[0]
       yield* ensureStorageParents({ sessionId: record.sessionId, branchId: record.branchId })
       yield* is.persist(record)
       // Verify it's pending
@@ -127,18 +129,18 @@ describe("Interaction Request", () => {
         sessionId: SessionId.make("s-workspace-a"),
         branchId: BranchId.make("b-workspace-a"),
         paramsJson: "{}",
-        status: "pending" as const,
+        status: "pending",
         createdAt: yield* Clock.currentTimeMillis,
-      }
+      } satisfies Parameters<typeof is.persist>[0]
       const second = {
         requestId: InteractionRequestId.make("req-workspace-b"),
         type: "approval",
         sessionId: SessionId.make("s-workspace-b"),
         branchId: BranchId.make("b-workspace-b"),
         paramsJson: "{}",
-        status: "pending" as const,
+        status: "pending",
         createdAt: first.createdAt + 1,
-      }
+      } satisfies Parameters<typeof is.persist>[0]
 
       yield* ensureStorageParents({
         sessionId: first.sessionId,
@@ -305,7 +307,9 @@ describe("Interaction Request", () => {
         interaction.present({ text: "Approve?" }, { sessionId, branchId }),
       )
       expect(error._tag).toBe("InteractionPendingError")
-      if (!Schema.is(InteractionPendingError)(error)) throw new Error("expected pending")
+      if (!Schema.is(InteractionPendingError)(error)) {
+        return yield* Effect.die(new Error("expected pending"))
+      }
       // Store resolution keyed by requestId
       yield* interaction.storeResolution(error.requestId, { approved: true })
       // Second present — finds stored resolution, returns it
@@ -352,7 +356,9 @@ describe("Interaction Request", () => {
         service1.present({ text: "Approve deployment?" }, { sessionId, branchId }),
       )
       expect(error._tag).toBe("InteractionPendingError")
-      if (!Schema.is(InteractionPendingError)(error)) throw new Error("expected pending")
+      if (!Schema.is(InteractionPendingError)(error)) {
+        return yield* Effect.die(new Error("expected pending"))
+      }
       const requestId = error.requestId
       // Verify persisted to SQL
       const pending = yield* is.listPending()

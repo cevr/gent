@@ -20,7 +20,7 @@
  *
  * export default defineExtension({
  *   id: "my-ext",
- *   resources: [defineResource({ scope: "process", layer: MyService.Live })],
+ *   resources: [defineResource({ id: "my-ext/service", scope: "process", layer: MyService.Live })],
  *   tools: [tool(MyTool)],
  * })
  * ```
@@ -40,7 +40,7 @@
  *
  * @module
  */
-import { Effect } from "effect"
+import { Option, Predicate, Effect } from "effect"
 import { ExtensionId } from "../domain/ids.js"
 import { ExtensionLoadError } from "../domain/extension.js"
 import { sealRuntimeLoadedEffect } from "../domain/extension-load-boundary.js"
@@ -52,7 +52,7 @@ import type { RequestCapability } from "../domain/capability/request.js"
 import { bindRequestCapabilityExtension } from "../domain/capability/request.js"
 import type { ToolCapability } from "../domain/capability/tool.js"
 import {
-  validateExtensionPackageShape,
+  validateExtensionPackage,
   validateKnownExtensionInputBuckets,
 } from "../domain/extension-package-shape.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
@@ -83,6 +83,7 @@ export {
 export { requireAgent, estimateContextPercent } from "../domain/extension-services.js"
 export {
   type GentExtension,
+  LoadedArtifactIdentity,
   type TurnProjection,
   type SystemPromptInput,
   type ToolCallInput,
@@ -94,6 +95,7 @@ export {
   type ExtensionHook,
   type ExtensionHookSlot,
 } from "../domain/extension.js"
+export type { LoadedArtifactIdentity as ExtensionArtifactIdentity } from "../domain/extension.js"
 export type { PromptSection } from "../domain/prompt.js"
 export { sectionPatternFor, withSectionMarkers } from "../domain/prompt.js"
 export { ExternalToolRunner } from "../domain/driver.js"
@@ -184,6 +186,7 @@ export {
   ExtensionServiceError,
   type ExtensionContextService,
 } from "../domain/extension-services.js"
+export { ResourceId, ResourceRevision } from "../domain/resource-graph.js"
 export { DynamicExtensionRegistry } from "../domain/dynamic-extension-registry.js"
 export type { DynamicRegistrationScope } from "../domain/dynamic-extension-registry.js"
 export { isRecord, isRecordArray } from "../domain/guards.js"
@@ -243,15 +246,15 @@ interface DefineExtensionInput<R = never> {
 const resolveField = <A, R>(
   manifest: ExtensionManifest,
   field: string,
-  spec: FieldSpec<A, R> | undefined,
+  spec?: FieldSpec<A, R>,
 ): Effect.Effect<
   ReadonlyArray<A>,
   ExtensionLoadError,
   RemainingSetupRequirements<R> | ExtensionSetupContext
-> =>
-  Effect.gen(function* () {
-    if (spec === undefined) return []
-    if (typeof spec !== "function") return spec
+> => {
+  const resolved: Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R> = Effect.gen(function* () {
+    if (Predicate.isUndefined(spec)) return []
+    if (!Predicate.isFunction(spec)) return spec
     const result: ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R> =
       yield* Effect.try({
         try: () => spec(),
@@ -269,30 +272,20 @@ const resolveField = <A, R>(
     // `ExtensionSetupContext` Tag stays in the R channel — the loader
     // provides it at the outer setup boundary.
     if (Effect.isEffect(result)) {
-      const sealed: Effect.Effect<
-        ReadonlyArray<unknown>,
-        ExtensionLoadError,
-        RemainingSetupRequirements<R> | ExtensionSetupContext
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- seal returns Effect<A,_,R> from inferred R; widen to surface the loader-provided ExtensionSetupContext requirement at the bucket boundary
-      > = sealRuntimeLoadedEffect({
+      const sealed = sealRuntimeLoadedEffect<ReadonlyArray<A>, R>({
         extensionId: manifest.id,
         effect: () => result,
         failureMessage: (cause) => `${field} factory failed: ${String(cause)}`,
         defectMessage: (cause) => `${field} factory defect: ${String(cause)}`,
-      }) as Effect.Effect<
-        ReadonlyArray<unknown>,
-        ExtensionLoadError,
-        RemainingSetupRequirements<R> | ExtensionSetupContext
-      >
+      })
       const value = yield* sealed
       if (!Array.isArray(value)) {
         return yield* new ExtensionLoadError({
           extensionId: manifest.id,
-          message: `${field} factory must resolve to an array, got ${typeof value}`,
+          message: `${field} factory must resolve to an array`,
         })
       }
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
-      return value as ReadonlyArray<A>
+      return value
     }
     // Sync factory: validate shape — a JS extension returning a single item
     // (`tools: () => myCap`) would otherwise silently become "no items"
@@ -300,12 +293,18 @@ const resolveField = <A, R>(
     if (!Array.isArray(result)) {
       return yield* new ExtensionLoadError({
         extensionId: manifest.id,
-        message: `${field} factory must return an array, got ${typeof result}`,
+        message: `${field} factory must return an array`,
       })
     }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
-    return result as ReadonlyArray<A>
+    return result
   })
+  // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript-eslint/no-unsafe-type-assertion -- The extension membrane widens a dynamic factory's context to the loader-provided setup context.
+  return resolved as unknown as Effect.Effect<
+    ReadonlyArray<A>,
+    ExtensionLoadError,
+    RemainingSetupRequirements<R> | ExtensionSetupContext
+  >
+}
 
 /**
  * Define an extension as typed contribution buckets.
@@ -322,7 +321,7 @@ const resolveField = <A, R>(
  *
  * export const MyExt = defineExtension({
  *   id: "my-ext",
- *   resources: [defineResource({ scope: "process", layer: MyService.Live })],
+ *   resources: [defineResource({ id: "my-ext/service", scope: "process", layer: MyService.Live })],
  *   tools: [tool(MyTool)],
  * })
  * ```
@@ -334,12 +333,15 @@ export function defineExtension<R>(
   params: DefineExtensionInput<R>,
 ): GentExtension<RemainingSetupRequirements<R>> {
   const manifest: ExtensionManifest = { id: ExtensionId.make(params.id) }
-  return {
+  const extension = {
     manifest,
     setup: Effect.gen(function* () {
       const inputMessage = validateKnownExtensionInputBuckets(params)
-      if (inputMessage !== undefined) {
-        return yield* new ExtensionLoadError({ extensionId: manifest.id, message: inputMessage })
+      if (Option.isSome(inputMessage)) {
+        return yield* new ExtensionLoadError({
+          extensionId: manifest.id,
+          message: inputMessage.value,
+        })
       }
       const resources = yield* resolveField(manifest, "resources", params.resources)
       const scheduledJobs = yield* resolveField(manifest, "scheduledJobs", params.scheduledJobs)
@@ -355,18 +357,22 @@ export function defineExtension<R>(
         "externalDrivers",
         params.externalDrivers,
       )
-      const contribs: ExtensionContributions = {
-        ...(resources.length > 0 ? { resources } : {}),
-        ...(scheduledJobs.length > 0 ? { scheduledJobs } : {}),
-        ...(tools.length > 0 ? { tools } : {}),
-        ...(requests.length > 0 ? { requests } : {}),
-        ...(agents.length > 0 ? { agents } : {}),
-        ...(hooks.length > 0 ? { hooks } : {}),
-        ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
-        ...(externalDrivers.length > 0 ? { externalDrivers } : {}),
+      type MutableContributions = {
+        -readonly [K in keyof ExtensionContributions]?: ExtensionContributions[K]
       }
-      yield* validateExtensionPackageShape(manifest, contribs)
-      return contribs
+      const toContributions = (value: MutableContributions): ExtensionContributions => value
+      const contribs: MutableContributions = {}
+      if (resources.length > 0) contribs.resources = resources
+      if (scheduledJobs.length > 0) contribs.scheduledJobs = scheduledJobs
+      if (tools.length > 0) contribs.tools = tools
+      if (requests.length > 0) contribs.requests = requests
+      if (agents.length > 0) contribs.agents = agents
+      if (hooks.length > 0) contribs.hooks = hooks
+      if (modelDrivers.length > 0) contribs.modelDrivers = modelDrivers
+      if (externalDrivers.length > 0) contribs.externalDrivers = externalDrivers
+      yield* validateExtensionPackage(manifest, contribs)
+      return toContributions(contribs)
     }),
   }
+  return extension
 }

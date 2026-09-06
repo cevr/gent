@@ -1,6 +1,6 @@
 import type { LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
-import { Clock, Duration, Effect, Layer, Ref, Stream } from "effect"
+import { Predicate, Clock, Duration, Effect, Layer, Option, Ref, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
 import {
@@ -16,6 +16,7 @@ import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loo
 import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
+import type { DynamicExtensionRegistry } from "@gent/core-internal/domain/dynamic-extension-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
@@ -23,7 +24,7 @@ import { ConfigService } from "../../../src/runtime/config-service"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import {
   AgentDefinition,
-  type AgentName,
+  AgentName,
   ExternalDriverRef,
   type RunSpec,
 } from "@gent/core-internal/domain/agent"
@@ -70,7 +71,7 @@ export const makeExtRegistry = (
   const resolved = resolveExtensions([
     {
       manifest: { id: ExtensionId.make("agents") },
-      scope: "builtin" as const,
+      scope: "builtin",
       sourcePath: "test",
       contributions: {
         agents: AllBuiltinAgents,
@@ -159,15 +160,21 @@ export const makeAgentLoopService = Effect.gen(function* () {
         })
         yield* ensureStorageParents({ sessionId: input.sessionId, branchId: input.branchId })
         const ref = yield* refFor(input.sessionId, input.branchId)
-        yield* ref.execute(
-          AgentLoopActor.Run.make({
-            workspaceId: DefaultWorkspaceId,
-            message,
-            agentOverride: input.agentName,
-            runSpec: input.runSpec,
-            interactive: input.interactive,
-          }),
-        )
+        let payload = {
+          workspaceId: DefaultWorkspaceId,
+          message,
+          agentOverride: input.agentName,
+          // Actor operation payloads require optional fields explicitly.
+          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
+          runSpec: input.runSpec,
+          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
+          interactive: input.interactive,
+        }
+        if (Predicate.isNotUndefined(input.runSpec))
+          payload = { ...payload, runSpec: input.runSpec }
+        if (Predicate.isNotUndefined(input.interactive))
+          payload = { ...payload, interactive: input.interactive }
+        yield* ref.execute(AgentLoopActor.Run.make(payload))
       }),
     getQueue: (input) =>
       Effect.gen(function* () {
@@ -211,15 +218,18 @@ export const runAgentLoop = (
         const ref = yield* actorClientFactory(
           entityIdOf(DefaultWorkspaceId, message.sessionId, message.branchId),
         )
-        yield* ref.execute(
-          AgentLoopActor.Run.make({
-            workspaceId: DefaultWorkspaceId,
-            message,
-            agentOverride: options?.agentOverride,
-            runSpec: options?.runSpec,
-            interactive: options?.interactive,
-          }),
-        )
+        const payload = {
+          workspaceId: DefaultWorkspaceId,
+          message,
+          // Actor operation payloads require optional fields explicitly.
+          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
+          agentOverride: options?.agentOverride,
+          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
+          runSpec: options?.runSpec,
+          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
+          interactive: options?.interactive,
+        }
+        yield* ref.execute(AgentLoopActor.Run.make(payload))
       }),
     ),
   )
@@ -239,15 +249,18 @@ export const submitAgentLoop = (
         const ref = yield* actorClientFactory(
           entityIdOf(DefaultWorkspaceId, message.sessionId, message.branchId),
         )
-        yield* ref.execute(
-          AgentLoopActor.Submit.make({
-            workspaceId: DefaultWorkspaceId,
-            message,
-            agentOverride: options?.agentOverride,
-            runSpec: options?.runSpec,
-            interactive: options?.interactive,
-          }),
-        )
+        const payload = {
+          workspaceId: DefaultWorkspaceId,
+          message,
+          // Actor operation payloads require optional fields explicitly.
+          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
+          agentOverride: options?.agentOverride,
+          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
+          runSpec: options?.runSpec,
+          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
+          interactive: options?.interactive,
+        }
+        yield* ref.execute(AgentLoopActor.Submit.make(payload))
       }),
     ),
   )
@@ -295,6 +308,7 @@ export const makeLayer = (
     ConfigService.Test(),
     EventStore.Memory,
     ToolRunner.Test(),
+    ApprovalService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
@@ -315,6 +329,7 @@ export const makeRecordingLayer = (providerLayer: Layer.Layer<LanguageModel.Lang
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     ToolRunner.Test(),
+    ApprovalService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
@@ -349,6 +364,7 @@ export const makeLiveToolLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   tools: ReadonlyArray<ToolCapability> = [],
   resources: AnyResourceContribution[] = [],
+  additionalDeps?: Layer.Layer<DynamicExtensionRegistry>,
 ) => {
   const extRegistry = makeExtRegistry(tools, resources)
   const baseDeps = Layer.mergeAll(
@@ -364,19 +380,24 @@ export const makeLiveToolLayer = (
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
+    Option.match(Option.fromUndefinedOr(additionalDeps), {
+      onNone: () => Layer.empty,
+      onSome: (layer) => layer,
+    }),
   )
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoopTestActor({ baseSections: [] }).pipe(
+  const actorLayer = AgentLoopTestActor({ baseSections: [] }).pipe(
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
+  return actorLayer
 }
 export const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
   Layer.effect(
     EventStore,
     Effect.gen(function* () {
       const idRef = yield* Ref.make(0)
-      return {
+      return EventStore.of({
         append: (event: AgentEvent) =>
           Effect.gen(function* () {
             const id = yield* Ref.modify(idRef, (n) => [n + 1, n + 1])
@@ -392,7 +413,7 @@ export const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
         publish: (event: AgentEvent) => Ref.update(eventsRef, (events) => [...events, event]),
         subscribe: () => Stream.empty,
         removeSession: () => Effect.void,
-      }
+      })
     }),
   )
 export const makeLayerWithEvents = (
@@ -409,6 +430,7 @@ export const makeLayerWithEvents = (
     ConfigService.Test(),
     makeCountingEventStore(eventsRef),
     ToolRunner.Test(),
+    ApprovalService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
@@ -431,6 +453,7 @@ export const makeLayerWithEventPublisher = (
     ConfigService.Test(),
     EventStore.Memory,
     ToolRunner.Test(),
+    ApprovalService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
@@ -443,7 +466,7 @@ export const makeLayerWithEventPublisher = (
   )
 }
 export const parityExternalAgent = AgentDefinition.make({
-  name: "test-external-parity" as never,
+  name: AgentName.make("test-external-parity"),
   driver: ExternalDriverRef.make({ id: "test-parity-driver" }),
 })
 export const makeExternalLayerWithEvents = (
@@ -453,7 +476,7 @@ export const makeExternalLayerWithEvents = (
   const resolved = resolveExtensions([
     {
       manifest: { id: ExtensionId.make("agents") },
-      scope: "builtin" as const,
+      scope: "builtin",
       sourcePath: "test",
       contributions: {
         agents: AllBuiltinAgents,
@@ -461,7 +484,7 @@ export const makeExternalLayerWithEvents = (
     },
     {
       manifest: { id: ExtensionId.make("external-parity") },
-      scope: "builtin" as const,
+      scope: "builtin",
       sourcePath: "test",
       contributions: {
         agents: [parityExternalAgent],
@@ -471,7 +494,7 @@ export const makeExternalLayerWithEvents = (
             executor: {
               executeTurn: () => Stream.fromIterable(responseParts),
             },
-            invalidate: () => Effect.void,
+            invalidate: Effect.void,
           },
         ],
       },
@@ -496,6 +519,7 @@ export const makeExternalLayerWithEvents = (
     ConfigService.Test(),
     makeCountingEventStore(eventsRef),
     ToolRunner.Test(),
+    ApprovalService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
@@ -505,20 +529,20 @@ export const makeExternalLayerWithEvents = (
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
-/** Poll `check` until it yields a defined value, with a short sleep between attempts. */
+/** Poll `check` until it yields a value, with a short sleep between attempts. */
 export const waitFor = <A, E, R>(
-  check: () => Effect.Effect<A | undefined, E, R>,
+  check: () => Effect.Effect<Option.Option<A>, E, R>,
   description: string,
   attempts = 50,
 ) =>
   Effect.gen(function* () {
     for (let i = 0; i < attempts; i++) {
       const result = yield* check()
-      if (result !== undefined) return result
+      if (Option.isSome(result)) return result.value
       // gent/no-sleep: allow polling primitive — this IS the waitFor helper other tests use instead of sleep
       yield* Effect.sleep("1 millis")
     }
-    throw new Error(`Timed out waiting for ${description}`)
+    return yield* Effect.die(new Error(`Timed out waiting for ${description}`))
   })
 
 export const waitForPhase = (
@@ -534,7 +558,10 @@ export const waitForPhase = (
     () =>
       Effect.gen(function* () {
         const state = yield* agentLoop.getState(params)
-        return state._tag === runtimeTag ? state : undefined
+        if (state._tag === runtimeTag) {
+          return Option.some(state)
+        }
+        return Option.none()
       }),
     `runtime state "${runtimeTag}"`,
     attempts,

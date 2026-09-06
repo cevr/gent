@@ -44,13 +44,19 @@ export function GutterText(props: GutterTextProps) {
           const lineNum = () => startLine() + index()
           const gutter = () => String(lineNum()).padStart(gutterWidth())
           const highlighted = () => isHighlighted(lineNum())
+          const gutterColor = () => {
+            if (highlighted()) return theme.textMuted
+            return theme.border
+          }
+          const textColor = () => {
+            if (highlighted()) return theme.text
+            return theme.textMuted
+          }
 
           return (
             <text>
-              <span style={{ fg: highlighted() ? theme.textMuted : theme.border }}>
-                {gutter()} │{" "}
-              </span>
-              <span style={{ fg: highlighted() ? theme.text : theme.textMuted }}>{line}</span>
+              <span style={{ fg: gutterColor() }}>{gutter()} │ </span>
+              <span style={{ fg: textColor() }}>{line}</span>
             </text>
           )
         }}

@@ -6,6 +6,7 @@ export interface Session {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly name: string
+  // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset reasoning level.
   readonly reasoningLevel: ReasoningEffort | undefined
 }
 
@@ -13,6 +14,7 @@ const SessionSchema: Schema.Schema<Session> = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   name: Schema.String,
+  // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset reasoning level.
   reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
 })
 
@@ -29,6 +31,7 @@ export const SessionStateEvent = Schema.TaggedUnion({
   Clear: {},
   UpdateName: { name: Schema.String },
   UpdateBranch: { branchId: BranchId },
+  // eslint-disable-next-line effect/noNullish -- RPC updates preserve an omitted reasoning level.
   UpdateReasoningLevel: { reasoningLevel: Schema.UndefinedOr(ReasoningEffort) },
 })
 export type SessionStateEvent = Schema.Schema.Type<typeof SessionStateEvent>
@@ -39,8 +42,10 @@ export const SessionState = {
   active: (session: Session): SessionState => ({ status: "active", session }),
 }
 
-const mapActive = (state: SessionState, update: (session: Session) => Session): SessionState =>
-  state.status === "active" ? SessionState.active(update(state.session)) : state
+const mapActive = (state: SessionState, update: (session: Session) => Session): SessionState => {
+  if (state.status === "active") return SessionState.active(update(state.session))
+  return state
+}
 
 export function transitionSessionState(
   state: SessionState,

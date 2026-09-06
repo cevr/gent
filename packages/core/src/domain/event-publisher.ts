@@ -31,14 +31,17 @@ export class EventPublisher extends Context.Service<EventPublisher, EventPublish
   "@gent/core/src/domain/event-publisher/EventPublisher",
 ) {
   static Test = (): Layer.Layer<EventPublisher> =>
-    Layer.succeed(EventPublisher, {
-      append: (event) =>
-        Effect.map(Clock.currentTimeMillis, (createdAt) =>
-          EventEnvelope.make({ id: EventId.make(0), event, createdAt }),
-        ),
-      deliver: () => Effect.void,
-      publish: () => Effect.void,
-    })
+    Layer.succeed(
+      EventPublisher,
+      EventPublisher.of({
+        append: (event) =>
+          Effect.map(Clock.currentTimeMillis, (createdAt) =>
+            EventEnvelope.make({ id: EventId.make(0), event, createdAt }),
+          ),
+        deliver: () => Effect.void,
+        publish: () => Effect.void,
+      }),
+    )
 }
 
 export class ExtensionEventSink extends Context.Service<
@@ -46,9 +49,12 @@ export class ExtensionEventSink extends Context.Service<
   ExtensionEventSinkService
 >()("@gent/core/src/domain/event-publisher/ExtensionEventSink") {
   static Test = (): Layer.Layer<ExtensionEventSink> =>
-    Layer.succeed(ExtensionEventSink, {
-      publish: () => Effect.void,
-    })
+    Layer.succeed(
+      ExtensionEventSink,
+      ExtensionEventSink.of({
+        publish: () => Effect.void,
+      }),
+    )
 }
 
 export class ExtensionStatePublisher extends Context.Service<
@@ -56,9 +62,12 @@ export class ExtensionStatePublisher extends Context.Service<
   ExtensionStatePublisherService
 >()("@gent/core/src/domain/event-publisher/ExtensionStatePublisher") {
   static Test = (): Layer.Layer<ExtensionStatePublisher> =>
-    Layer.succeed(ExtensionStatePublisher, {
-      changed: () => Effect.void,
-    })
+    Layer.succeed(
+      ExtensionStatePublisher,
+      ExtensionStatePublisher.of({
+        changed: () => Effect.void,
+      }),
+    )
 }
 
 const makePublisherContext = (publisher: EventPublisherService) =>

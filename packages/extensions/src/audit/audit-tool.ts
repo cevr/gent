@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import {
   AgentName,
   DEFAULT_AGENT_NAME,
@@ -36,7 +36,7 @@ export const AuditParams = Schema.Struct({
     }),
   ),
   maxConcerns: Schema.optionalKey(
-    Schema.Number.check(Schema.isBetween({ minimum: 1, maximum: 8 })).annotate({
+    Schema.Finite.check(Schema.isBetween({ minimum: 1, maximum: 8 })).annotate({
       description: "Max concern categories to audit (default 5)",
     }),
   ),
@@ -54,9 +54,9 @@ export const AuditResult = Schema.Struct({
   paths: Schema.Array(Schema.String),
 })
 
-const resolveAuditPaths = (paths: ReadonlyArray<string> | undefined) => {
-  if (paths !== undefined && paths.length > 0) {
-    return Effect.succeed([...paths])
+const resolveAuditPaths = (paths: Option.Option<ReadonlyArray<string>>) => {
+  if (Option.isSome(paths) && paths.value.length > 0) {
+    return Effect.succeed([...paths.value])
   }
 
   return runCommand(["git", "diff", "--name-only"]).pipe(
@@ -70,18 +70,24 @@ const resolveAuditPaths = (paths: ReadonlyArray<string> | undefined) => {
 }
 
 const buildDetectPrompt = (
-  userPrompt: string | undefined,
+  userPrompt: Option.Option<string>,
   paths: ReadonlyArray<string>,
   maxConcerns: number,
   evaluatorFeedback?: string,
 ) => {
-  const pathsList =
-    paths.length > 0 ? paths.map((path) => `- ${path}`).join("\n") : "(no specific paths)"
-  const focusBlock = userPrompt !== undefined ? `\n## Focus\n${userPrompt}\n` : ""
-  const feedbackBlock =
-    evaluatorFeedback !== undefined && evaluatorFeedback !== ""
-      ? `\n## Remaining Issues\n${evaluatorFeedback}\n`
-      : ""
+  let pathsList = "(no specific paths)"
+  if (paths.length > 0) pathsList = paths.map((path) => `- ${path}`).join("\n")
+  const focusBlock = Option.getOrElse(
+    userPrompt.pipe(Option.map((prompt) => `\n## Focus\n${prompt}\n`)),
+    () => "",
+  )
+  const feedback = Option.fromNullishOr(evaluatorFeedback).pipe(
+    Option.filter((value) => value !== ""),
+  )
+  const feedbackBlock = Option.getOrElse(
+    feedback.pipe(Option.map((value) => `\n## Remaining Issues\n${value}\n`)),
+    () => "",
+  )
 
   return `Identify audit concerns for this code.${focusBlock}${feedbackBlock}
 ## Paths
@@ -100,21 +106,20 @@ If JSON is not possible, fall back to a numbered list:
 }
 
 const parseConcerns = (text: string, maxConcerns: number): AuditConcern[] => {
-  // Try JSON first, fall back to regex
-  try {
-    const parsed = Schema.decodeUnknownSync(
-      Schema.fromJsonString(Schema.Array(AuditConcernSchema)),
-    )(text.trim())
-    return [...parsed.slice(0, maxConcerns)]
-  } catch {
-    // Fall back to regex parsing for numbered list format
-  }
+  const parsed = Schema.decodeOption(Schema.fromJsonString(Schema.Array(AuditConcernSchema)))(
+    text.trim(),
+  )
+  if (Option.isSome(parsed)) return [...parsed.value.slice(0, maxConcerns)]
   const concerns: AuditConcern[] = []
   const pattern = /^(?:\d+[.)]\s*|\s*[-*]\s*)(?:\*\*)?(.+?)(?:\*\*)?:\s*(.+)$/
   for (const line of text.split("\n")) {
-    const match = line.match(pattern)
-    if (match?.[1] !== undefined && match[2] !== undefined) {
-      concerns.push({ name: match[1].trim(), description: match[2].trim() })
+    const match = Option.fromNullishOr(line.match(pattern))
+    if (Option.isSome(match)) {
+      const name = Option.fromNullishOr(match.value[1])
+      const description = Option.fromNullishOr(match.value[2])
+      if (Option.isSome(name) && Option.isSome(description)) {
+        concerns.push({ name: name.value.trim(), description: description.value.trim() })
+      }
     }
     if (concerns.length >= maxConcerns) break
   }
@@ -126,9 +131,12 @@ const buildConcernAuditPrompt = (
   paths: ReadonlyArray<string>,
   userPrompt?: string,
 ) => {
-  const pathsList =
-    paths.length > 0 ? paths.map((path) => `- ${path}`).join("\n") : "(no specific paths)"
-  const focusBlock = userPrompt !== undefined ? `\n## Focus\n${userPrompt}\n` : ""
+  let pathsList = "(no specific paths)"
+  if (paths.length > 0) pathsList = paths.map((path) => `- ${path}`).join("\n")
+  const focusBlock = Option.getOrElse(
+    Option.fromNullishOr(userPrompt).pipe(Option.map((prompt) => `\n## Focus\n${prompt}\n`)),
+    () => "",
+  )
 
   return `Audit the code for this concern: ${concern.name}
 ${concern.description}${focusBlock}
@@ -149,7 +157,10 @@ const buildSynthesisPrompt = (
   }>,
   userPrompt?: string,
 ) => {
-  const focusBlock = userPrompt !== undefined ? `\n## Focus\n${userPrompt}\n` : ""
+  const focusBlock = Option.getOrElse(
+    Option.fromNullishOr(userPrompt).pipe(Option.map((prompt) => `\n## Focus\n${prompt}\n`)),
+    () => "",
+  )
   const notesBlock = notes
     .map(
       ({ concern, primary, reviewer }) =>
@@ -173,25 +184,25 @@ If JSON is not possible, fall back to a numbered list:
 }
 
 const parseFindings = (text: string): AuditFinding[] => {
-  // Try JSON first, fall back to regex
-  try {
-    return [
-      ...Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(AuditFindingSchema)))(
-        text.trim(),
-      ),
-    ]
-  } catch {
-    // Fall back to regex parsing for numbered list format
-  }
+  const parsed = Schema.decodeOption(Schema.fromJsonString(Schema.Array(AuditFindingSchema)))(
+    text.trim(),
+  )
+  if (Option.isSome(parsed)) return [...parsed.value]
   const findings: AuditFinding[] = []
   for (const line of text.split("\n")) {
-    const match = line.match(/^\d+\.\s*\[(critical|warning|suggestion)\]\s*(\S+)\s*[-–—]\s*(.+)$/i)
-    if (match?.[1] !== undefined && match[2] !== undefined && match[3] !== undefined) {
-      const sev = match[1].toLowerCase()
+    const match = Option.fromNullishOr(
+      line.match(/^\d+\.\s*\[(critical|warning|suggestion)\]\s*(\S+)\s*[-–—]\s*(.+)$/i),
+    )
+    if (Option.isSome(match)) {
+      const severity = Option.fromNullishOr(match.value[1])
+      const file = Option.fromNullishOr(match.value[2])
+      const description = Option.fromNullishOr(match.value[3])
+      if (Option.isNone(severity) || Option.isNone(file) || Option.isNone(description)) continue
+      const sev = severity.value.toLowerCase()
       if (sev === "critical" || sev === "warning" || sev === "suggestion") {
         findings.push({
-          file: match[2].trim(),
-          description: match[3].trim(),
+          file: file.value.trim(),
+          description: description.value.trim(),
           severity: sev,
         })
       }
@@ -201,7 +212,10 @@ const parseFindings = (text: string): AuditFinding[] => {
 }
 
 const buildExecutionPrompt = (findings: ReadonlyArray<AuditFinding>, userPrompt?: string) => {
-  const focusBlock = userPrompt !== undefined ? `\n## Focus\n${userPrompt}\n` : ""
+  const focusBlock = Option.getOrElse(
+    Option.fromNullishOr(userPrompt).pipe(Option.map((prompt) => `\n## Focus\n${prompt}\n`)),
+    () => "",
+  )
   return `Execute this audit plan.${focusBlock}
 ## Findings
 ${findings.map((finding, index) => `${index + 1}. [${finding.severity}] ${finding.file} - ${finding.description}`).join("\n")}
@@ -223,11 +237,11 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
   evaluatorFeedback?: string
 }) {
   const ctx = yield* ExtensionContext
-  const agents = yield* ctx.Agent.listAgents()
+  const agents = yield* ctx.Agent.listAgents
   const [primaryModel, reviewerModel] = yield* resolveDualModelPair(agents)
   const auditOverrides = {
-    allowedTools: ["grep", "glob", "read", "memory_search"] as const,
-    deniedTools: ["bash"] as const,
+    allowedTools: ["grep", "glob", "read", "memory_search"],
+    deniedTools: ["bash"],
   }
 
   const runAgent = (agent: AgentDefinition, prompt: string, modelId: typeof primaryModel) =>
@@ -243,14 +257,19 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
 
   const detectResult = yield* runAgent(
     params.architect,
-    buildDetectPrompt(params.prompt, params.paths, params.maxConcerns, params.evaluatorFeedback),
+    buildDetectPrompt(
+      Option.fromNullishOr(params.prompt),
+      params.paths,
+      params.maxConcerns,
+      params.evaluatorFeedback,
+    ),
     primaryModel,
   )
   const detectText = yield* requireText(detectResult, "audit-detect")
   const concerns = parseConcerns(detectText, params.maxConcerns)
 
   if (concerns.length === 0) {
-    return { raw: "No concerns detected.", findings: [] as AuditFinding[] }
+    return { raw: "No concerns detected.", findings: [] satisfies AuditFinding[] }
   }
 
   const pairedNotes = yield* Effect.forEach(
@@ -262,7 +281,7 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
           [
             runAgent(params.auditor, prompt, primaryModel),
             runAgent(params.auditor, prompt, reviewerModel),
-          ] as const,
+          ],
           { concurrency: 2 },
         )
 
@@ -301,7 +320,7 @@ export const AuditTool = tool({
     const ctx = yield* ExtensionContext
     const mode = params.mode ?? "report"
     const maxConcerns = params.maxConcerns ?? 5
-    const paths = yield* resolveAuditPaths(params.paths)
+    const paths = yield* resolveAuditPaths(Option.fromNullishOr(params.paths))
 
     const architect = yield* requireAgent(AgentName.make("architect"))
     const auditor = yield* requireAgent(AgentName.make("auditor"))
@@ -345,7 +364,8 @@ export const AuditTool = tool({
       prompt: buildExecutionPrompt(report.findings, params.prompt),
       runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: ctx.toolCallId }),
     })
-    const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
+    let execOutput = "Execution failed."
+    if (execResult._tag === "success") execOutput = execResult.text
 
     return { mode, output: execOutput, findings: report.findings, paths }
   }),

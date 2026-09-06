@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { Option } from "effect"
+import { AgentEvent } from "@gent/core-internal/domain/event"
+import { BranchId, InteractionRequestId, SessionId } from "@gent/core-internal/domain/ids"
 import {
   autocompleteContribution,
   borderLabelContribution,
@@ -10,11 +13,12 @@ import {
   rendererContribution,
   widgetContribution,
   type ClientContributions,
+  type ComposerSurfaceProps,
   type OverlayProps,
   type WidgetComponent,
 } from "../src/extensions/client-facets.js"
 import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/resolve"
-import type { ToolRenderer } from "../src/components/tool-renderers/types"
+import type { ToolRenderer, ToolRendererProps } from "../src/components/tool-renderers/types"
 import type { HeadlessToolRenderer } from "../src/headless-tool-renderers"
 
 const make = (
@@ -23,17 +27,50 @@ const make = (
   contributions: ClientContributions,
 ): LoadedTuiExtension => ({ id, scope, filePath: `/test/${id}`, contributions })
 
-const renderer = (label: string): ToolRenderer => (() => label) as unknown as ToolRenderer
+const renderer =
+  (label: string): ToolRenderer =>
+  (_props: ToolRendererProps) =>
+    label
 const headless =
   (label: string): HeadlessToolRenderer =>
   () =>
-    label
+    Option.some(label)
 
 const widget =
   (label: string): WidgetComponent =>
   () =>
     label
 const overlay = (label: string) => (_props: OverlayProps) => label
+const absent = Option.getOrUndefined(Option.none())
+const toolProps: ToolRendererProps = {
+  toolCall: {
+    id: "test-tool-call",
+    toolName: "bash",
+    status: "completed",
+    input: {},
+    summary: "",
+    output: "",
+  },
+  expanded: false,
+}
+const interactionProps = {
+  event: AgentEvent.cases.InteractionPresented.make({
+    sessionId: SessionId.make("session-test"),
+    branchId: BranchId.make("branch-test"),
+    requestId: InteractionRequestId.make("request-test"),
+    text: "test",
+    metadata: absent,
+  }),
+  resolve: () => {},
+}
+const overlayProps: OverlayProps = { open: true, onClose: () => {} }
+const composerProps = {
+  draft: "",
+  setDraft: (_text: string) => {},
+  submit: () => {},
+  focused: false,
+  mode: "editing",
+} satisfies ComposerSurfaceProps
 
 describe("resolveTuiExtensions", () => {
   test("client contribution constructors enforce slot-specific component contracts", () => {
@@ -62,7 +99,10 @@ describe("resolveTuiExtensions", () => {
       make("project-tools", "project", rendererContribution(["bash"], renderer("project"))),
     ])
 
-    expect((resolved.renderers.get("bash") as () => string)()).toBe("project")
+    const bashRenderer = Option.fromNullishOr(resolved.renderers.get("bash"))
+    expect(Option.isSome(bashRenderer)).toBe(true)
+    if (Option.isNone(bashRenderer)) return
+    expect(bashRenderer.value(toolProps)).toBe("project")
   })
 
   test("headless renderer surfaces use the same renderer scope precedence", () => {
@@ -79,15 +119,19 @@ describe("resolveTuiExtensions", () => {
       ),
     ])
 
+    const resolvedRenderer = Option.getOrElse(
+      Option.fromNullishOr(resolved.headlessRenderers.get("bash")),
+      () => headless("missing"),
+    )
     expect(
-      resolved.headlessRenderers.get("bash")?.({
+      resolvedRenderer({
         toolName: "bash",
         status: "running",
-        input: undefined,
-        output: undefined,
-        summary: undefined,
+        input: Option.none(),
+        output: Option.none(),
+        summary: Option.none(),
       }),
-    ).toBe("project")
+    ).toEqual(Option.some("project"))
   })
 
   test("widgets stay user-ordered by priority after scope resolution", () => {
@@ -172,8 +216,13 @@ describe("resolveTuiExtensions", () => {
       ),
     ])
 
-    expect((resolved.interactionRenderers.get(undefined) as () => string)()).toBe("default")
-    expect((resolved.interactionRenderers.get("ask-user") as () => string)()).toBe("project-ask")
+    const defaultRenderer = Option.fromNullishOr(resolved.interactionRenderers.get(absent))
+    const askRenderer = Option.fromNullishOr(resolved.interactionRenderers.get("ask-user"))
+    expect(Option.isSome(defaultRenderer)).toBe(true)
+    expect(Option.isSome(askRenderer)).toBe(true)
+    if (Option.isNone(defaultRenderer) || Option.isNone(askRenderer)) return
+    expect(defaultRenderer.value(interactionProps)).toBe("default")
+    expect(askRenderer.value(interactionProps)).toBe("project-ask")
   })
 
   test("overlay surfaces use scope precedence and same-scope collisions still fail loudly", () => {
@@ -190,7 +239,10 @@ describe("resolveTuiExtensions", () => {
       ),
     ])
 
-    expect((resolved.overlays.get("modal") as () => string)()).toBe("project")
+    const modal = Option.fromNullishOr(resolved.overlays.get("modal"))
+    expect(Option.isSome(modal)).toBe(true)
+    if (Option.isNone(modal)) return
+    expect(modal.value(overlayProps)).toBe("project")
 
     expect(() =>
       resolveTuiExtensions([
@@ -206,7 +258,10 @@ describe("resolveTuiExtensions", () => {
       make("project-composer", "project", composerSurfaceContribution(widget("project"))),
     ])
 
-    expect((resolved.composerSurface as () => string)()).toBe("project")
+    const composerSurface = Option.fromNullishOr(resolved.composerSurface)
+    expect(Option.isSome(composerSurface)).toBe(true)
+    if (Option.isNone(composerSurface)) return
+    expect(composerSurface.value(composerProps)).toBe("project")
 
     expect(() =>
       resolveTuiExtensions([

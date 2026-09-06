@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, FileSystem, Layer } from "effect"
+import { Predicate, Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import {
   FileIndex,
@@ -107,6 +107,7 @@ describe("FileIndex.Fallback", () => {
       yield* Effect.gen(function* () {
         const idx = yield* FileIndex
         yield* idx.listFiles({ cwd: tmpDir })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(FallbackLayer), Effect.scoped)
 
       // Instance B: same cwd, but .gitignore now excludes bar.txt instead.
@@ -115,6 +116,7 @@ describe("FileIndex.Fallback", () => {
       const filesB = yield* Effect.gen(function* () {
         const idx = yield* FileIndex
         return yield* idx.listFiles({ cwd: tmpDir })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(FallbackLayer), Effect.scoped)
       const namesB = filesB.map((f) => f.fileName)
 
@@ -133,7 +135,7 @@ describe("FileIndex.Live", () => {
     Effect.gen(function* () {
       const fileIndex = yield* FileIndex
       expect(fileIndex).toBeDefined()
-      expect(typeof fileIndex.listFiles).toBe("function")
+      expect(Predicate.isFunction(fileIndex.listFiles)).toBe(true)
     }).pipe(
       Effect.provide(
         Layer.merge(
@@ -175,10 +177,10 @@ describe("FileIndex.Live", () => {
         .pipe(Effect.catchTag("FileIndexError", (e) => Effect.succeed({ caught: e.message })))
 
       // Either succeeded via fallback (empty list) or caught the error
-      if (Array.isArray(result)) {
-        expect(result.length).toBe(0)
+      if ("caught" in result) {
+        expect(result.caught).toBeDefined()
       } else {
-        expect((result as { caught: string }).caught).toBeDefined()
+        expect(result.length).toBe(0)
       }
     }).pipe(
       Effect.provide(

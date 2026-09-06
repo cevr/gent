@@ -1,5 +1,5 @@
 import { describe, expect, test } from "effect-bun-test"
-import { Deferred, Effect, Ref, Stream } from "effect"
+import { Deferred, Effect, Option, Ref, Stream } from "effect"
 import type { EventEnvelope } from "@gent/core-internal/domain/event"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import type { GentClientBundle } from "@gent/sdk"
@@ -14,9 +14,7 @@ const startCollecting = (
   Effect.gen(function* () {
     const events = yield* Ref.make<EventEnvelope[]>([])
     const ready = yield* Deferred.make<void>()
-    const fiber = yield* (
-      client.session.events(input) as Stream.Stream<EventEnvelope, unknown>
-    ).pipe(
+    const fiber = yield* client.session.events(input).pipe(
       Stream.runForEach((envelope) =>
         Effect.gen(function* () {
           yield* Ref.update(events, (current) => [...current, envelope])
@@ -51,11 +49,12 @@ const waitForCompletedTurn = (events: Ref.Ref<EventEnvelope[]>) =>
 const waitForTaggedEvent = (
   events: Ref.Ref<EventEnvelope[]>,
   tag: EventEnvelope["event"]["_tag"],
-  afterId?: number,
+  afterId = Option.none<number>(),
 ) =>
   waitFor(Ref.get(events), (current) =>
     current.some(
-      (envelope) => envelope.event._tag === tag && (afterId === undefined || envelope.id > afterId),
+      (envelope) =>
+        envelope.event._tag === tag && (Option.isNone(afterId) || envelope.id > afterId.value),
     ),
   )
 
@@ -119,7 +118,7 @@ describe("event stream contracts", () => {
                 .create({ sessionId: created.sessionId, name: "stream-ready-branch" })
                 .pipe(Effect.mapError(toTestFailure))
               const ready = yield* waitForTaggedEvent(live.events, "BranchCreated")
-              const readyId = ready[ready.length - 1]?.id
+              const readyId = Option.fromNullishOr(ready[ready.length - 1]?.id)
 
               yield* client.message
                 .send({
@@ -130,9 +129,9 @@ describe("event stream contracts", () => {
                 .pipe(Effect.mapError(toTestFailure))
 
               const firstTurn = yield* waitForTaggedEvent(live.events, "TurnCompleted", readyId)
-              const firstTurnMaxId = firstTurn[firstTurn.length - 1]?.id
+              const firstTurnMaxId = Option.fromNullishOr(firstTurn[firstTurn.length - 1]?.id)
 
-              expect(firstTurnMaxId).toBeDefined()
+              expect(Option.isSome(firstTurnMaxId)).toBe(true)
 
               // This batch asserts stream liveness, not actor command timing.
               // Use a session event outside the turn loop to prove the stream stays alive.
@@ -143,18 +142,18 @@ describe("event stream contracts", () => {
               const combined = yield* waitFor(
                 Ref.get(live.events),
                 (current) =>
-                  firstTurnMaxId !== undefined &&
+                  Option.isSome(firstTurnMaxId) &&
                   current.some(
                     (envelope) =>
-                      envelope.id > firstTurnMaxId && envelope.event._tag === "BranchCreated",
+                      envelope.id > firstTurnMaxId.value && envelope.event._tag === "BranchCreated",
                   ),
               )
 
               expect(
                 combined.some(
                   (envelope) =>
-                    firstTurnMaxId !== undefined &&
-                    envelope.id > firstTurnMaxId &&
+                    Option.isSome(firstTurnMaxId) &&
+                    envelope.id > firstTurnMaxId.value &&
                     envelope.event._tag === "BranchCreated",
                 ),
               ).toBe(true)
@@ -183,7 +182,7 @@ describe("event stream contracts", () => {
               const live = yield* startCollecting(client, {
                 sessionId: created.sessionId,
                 branchId: created.branchId,
-                ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
+                after: Option.getOrUndefined(Option.fromNullishOr(snapshot.lastEventId)),
               })
 
               yield* client.message
@@ -228,7 +227,7 @@ describe("event stream contracts", () => {
                 .create({ sessionId: created.sessionId, name: "stream-after-ready" })
                 .pipe(Effect.mapError(toTestFailure))
               const ready = yield* waitForTaggedEvent(firstLive.events, "BranchCreated")
-              const readyId = ready[ready.length - 1]?.id
+              const readyId = Option.fromNullishOr(ready[ready.length - 1]?.id)
 
               yield* client.message
                 .send({
@@ -243,19 +242,19 @@ describe("event stream contracts", () => {
                 "TurnCompleted",
                 readyId,
               )
-              const afterId = firstTurn[firstTurn.length - 1]?.id
+              const afterId = Option.fromNullishOr(firstTurn[firstTurn.length - 1]?.id)
 
-              expect(afterId).toBeDefined()
+              expect(Option.isSome(afterId)).toBe(true)
 
               const afterEvents = yield* startCollecting(client, {
                 sessionId: created.sessionId,
-                ...(afterId !== undefined ? { after: afterId } : {}),
+                after: Option.getOrUndefined(afterId),
               })
 
               const initialAfterEvents = yield* Ref.get(afterEvents.events)
               expect(
                 initialAfterEvents.every(
-                  (envelope) => afterId !== undefined && envelope.id > afterId,
+                  (envelope) => Option.isSome(afterId) && envelope.id > afterId.value,
                 ),
               ).toBe(true)
 
@@ -269,7 +268,7 @@ describe("event stream contracts", () => {
 
               expect(liveOnly.length).toBeGreaterThan(0)
               expect(
-                liveOnly.every((envelope) => afterId !== undefined && envelope.id > afterId),
+                liveOnly.every((envelope) => Option.isSome(afterId) && envelope.id > afterId.value),
               ).toBe(true)
               expect(liveOnly.some((envelope) => envelope.event._tag === "BranchCreated")).toBe(
                 true,

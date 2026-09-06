@@ -1,5 +1,5 @@
 import { BunFileSystem } from "@effect/platform-bun"
-import { Effect, FileSystem, ManagedRuntime } from "effect"
+import { Effect, FileSystem, ManagedRuntime, Option } from "effect"
 
 const runtime = ManagedRuntime.make(BunFileSystem.layer)
 const encoder = new TextEncoder()
@@ -39,12 +39,12 @@ export const writeFileString = (path: string, content: string) =>
     }),
   )
 
-export const readFileStringOrNull = (path: string): Promise<string | null> =>
+export const readFileStringOption = (path: string): Promise<Option.Option<string>> =>
   runtime.runPromise(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const exists = yield* fs.exists(path)
-      if (!exists) return null
-      return yield* fs.readFileString(path)
-    }).pipe(Effect.orElseSucceed(() => null)),
+      if (!exists) return Option.none()
+      return Option.some(yield* fs.readFileString(path))
+    }).pipe(Effect.orElseSucceed(() => Option.none())),
   )

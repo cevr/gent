@@ -4,8 +4,8 @@
 
 import { createSignal, createEffect, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useTerminalDimensions } from "@opentui/solid"
-import { Effect } from "effect"
+import { useTerminalDimensions } from "../terminal-dimensions"
+import { Effect, Match, Option } from "effect"
 import { useTheme } from "../theme/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { useScrollSync } from "../hooks/use-scroll-sync"
@@ -16,8 +16,8 @@ import { formatError } from "../utils/format-error"
 import { useScopedKeyboard } from "../keyboard/context"
 
 type PermissionsState =
-  | { _tag: "loading"; error?: string }
-  | { _tag: "ready"; rules: PermissionRule[]; selectedIndex: number; error?: string }
+  | { _tag: "loading"; error: Option.Option<string> }
+  | { _tag: "ready"; rules: PermissionRule[]; selectedIndex: number; error: Option.Option<string> }
 
 export interface PermissionsProps {
   onClose?: () => void
@@ -29,15 +29,20 @@ export function Permissions(props: PermissionsProps) {
   const dimensions = useTerminalDimensions()
   const { cast } = useRuntime()
 
-  const [state, setState] = createSignal<PermissionsState>({ _tag: "loading" })
-  let scrollRef: ScrollBoxRenderable | undefined = undefined
+  const [state, setState] = createSignal<PermissionsState>({
+    _tag: "loading",
+    error: Option.none(),
+  })
+  let scrollRef = Option.none<ScrollBoxRenderable>()
 
   useScrollSync(
     () => {
       const current = state()
-      return `perm-rule-${current._tag === "ready" ? current.selectedIndex : 0}`
+      let selectedIndex = 0
+      if (current._tag === "ready") selectedIndex = current.selectedIndex
+      return `perm-rule-${selectedIndex}`
     },
-    { getRef: () => scrollRef },
+    { getRef: () => Option.getOrUndefined(scrollRef) },
   )
 
   // Load rules on mount
@@ -47,15 +52,15 @@ export function Permissions(props: PermissionsProps) {
         Effect.tap((loaded) =>
           Effect.sync(() => {
             setState((current) => {
-              const selectedIndex =
-                current._tag === "ready"
-                  ? Math.min(current.selectedIndex, Math.max(0, loaded.length - 1))
-                  : 0
+              let selectedIndex = 0
+              if (current._tag === "ready") {
+                selectedIndex = Math.min(current.selectedIndex, Math.max(0, loaded.length - 1))
+              }
               return {
                 _tag: "ready",
                 rules: [...loaded],
                 selectedIndex,
-                error: undefined,
+                error: Option.none(),
               }
             })
           }),
@@ -64,17 +69,20 @@ export function Permissions(props: PermissionsProps) {
           Effect.sync(() => {
             setState((current) => {
               const error = formatError(err)
-              switch (current._tag) {
-                case "loading":
-                  return { _tag: "loading", error }
-                case "ready":
-                  return {
+              return Match.value(current).pipe(
+                Match.tagsExhaustive({
+                  loading: (): PermissionsState => ({
+                    _tag: "loading",
+                    error: Option.some(error),
+                  }),
+                  ready: (current): PermissionsState => ({
                     _tag: "ready",
                     rules: current.rules,
                     selectedIndex: current.selectedIndex,
-                    error,
-                  }
-              }
+                    error: Option.some(error),
+                  }),
+                }),
+              )
             })
           }),
         ),
@@ -85,45 +93,50 @@ export function Permissions(props: PermissionsProps) {
   const deleteSelected = () => {
     const current = state()
     if (current._tag !== "ready") return
-    const rule = current.rules[current.selectedIndex]
-    if (rule === undefined) return
+    const rule = Option.fromNullishOr(current.rules[current.selectedIndex])
+    if (Option.isNone(rule)) return
 
     cast(
-      clientCtx.client.permission.deleteRule({ tool: rule.tool, pattern: rule.pattern }).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            setState((prev) => {
-              if (prev._tag !== "ready") return prev
-              const nextRules = prev.rules.filter((_, i) => i !== prev.selectedIndex)
-              const nextIndex = Math.min(prev.selectedIndex, Math.max(0, nextRules.length - 1))
-              return {
-                _tag: "ready",
-                rules: nextRules,
-                selectedIndex: nextIndex,
-                error: prev.error,
-              }
-            })
-          }),
+      clientCtx.client.permission
+        .deleteRule({ tool: rule.value.tool, pattern: rule.value.pattern })
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              setState((prev) => {
+                if (prev._tag !== "ready") return prev
+                const nextRules = prev.rules.filter((_, i) => i !== prev.selectedIndex)
+                const nextIndex = Math.min(prev.selectedIndex, Math.max(0, nextRules.length - 1))
+                return {
+                  _tag: "ready",
+                  rules: nextRules,
+                  selectedIndex: nextIndex,
+                  error: prev.error,
+                }
+              })
+            }),
+          ),
+          Effect.catchEager((err) =>
+            Effect.sync(() => {
+              setState((prev) => {
+                const error = formatError(err)
+                return Match.value(prev).pipe(
+                  Match.tagsExhaustive({
+                    loading: (): PermissionsState => ({
+                      _tag: "loading",
+                      error: Option.some(error),
+                    }),
+                    ready: (prev): PermissionsState => ({
+                      _tag: "ready",
+                      rules: prev.rules,
+                      selectedIndex: prev.selectedIndex,
+                      error: Option.some(error),
+                    }),
+                  }),
+                )
+              })
+            }),
+          ),
         ),
-        Effect.catchEager((err) =>
-          Effect.sync(() => {
-            setState((prev) => {
-              const error = formatError(err)
-              switch (prev._tag) {
-                case "loading":
-                  return { _tag: "loading", error }
-                case "ready":
-                  return {
-                    _tag: "ready",
-                    rules: prev.rules,
-                    selectedIndex: prev.selectedIndex,
-                    error,
-                  }
-              }
-            })
-          }),
-        ),
-      ),
     )
   }
 
@@ -139,7 +152,8 @@ export function Permissions(props: PermissionsProps) {
     if (e.name === "up") {
       setState((prev) => {
         if (prev._tag !== "ready") return prev
-        const next = prev.selectedIndex > 0 ? prev.selectedIndex - 1 : prev.rules.length - 1
+        let next = prev.rules.length - 1
+        if (prev.selectedIndex > 0) next = prev.selectedIndex - 1
         return { _tag: "ready", rules: prev.rules, selectedIndex: next, error: prev.error }
       })
       return true
@@ -148,7 +162,8 @@ export function Permissions(props: PermissionsProps) {
     if (e.name === "down") {
       setState((prev) => {
         if (prev._tag !== "ready") return prev
-        const next = prev.selectedIndex < prev.rules.length - 1 ? prev.selectedIndex + 1 : 0
+        let next = 0
+        if (prev.selectedIndex < prev.rules.length - 1) next = prev.selectedIndex + 1
         return { _tag: "ready", rules: prev.rules, selectedIndex: next, error: prev.error }
       })
       return true
@@ -165,23 +180,34 @@ export function Permissions(props: PermissionsProps) {
   const panelHeight = () => Math.min(16, dimensions().height - 6)
   const left = () => Math.floor((dimensions().width - panelWidth()) / 2)
   const top = () => Math.floor((dimensions().height - panelHeight()) / 2)
-  const readyState = () => {
+  const readyState = (): Option.Option<Extract<PermissionsState, { _tag: "ready" }>> => {
     const current = state()
-    return current._tag === "ready" ? current : null
+    if (current._tag !== "ready") return Option.none()
+    return Option.some(current)
   }
-  const hasRules = () => {
-    const current = readyState()
-    return current !== null && current.rules.length > 0
-  }
+  const hasRules = () => Option.exists(readyState(), (current) => current.rules.length > 0)
 
   const formatRule = (rule: PermissionRule): string => {
     let action = "Ask"
     if (rule.action === "allow") action = "Allow"
     else if (rule.action === "deny") action = "Deny"
-    const pattern =
-      rule.pattern !== undefined && rule.pattern.length > 0 ? ` (${rule.pattern})` : ""
+    const patternValue = Option.fromNullishOr(rule.pattern)
+    let pattern = ""
+    if (Option.isSome(patternValue) && patternValue.value.length > 0) {
+      pattern = ` (${patternValue.value})`
+    }
     return `${action}: ${rule.tool}${pattern}`
   }
+
+  const emptyMessage = () => {
+    if (state()._tag === "loading") return "Loading permission rules..."
+    return "No permission rules configured"
+  }
+  const rules = () =>
+    Option.getOrElse(
+      Option.map(readyState(), (current) => current.rules),
+      () => [],
+    )
 
   return (
     <box flexDirection="column" width="100%" height="100%">
@@ -192,36 +218,38 @@ export function Permissions(props: PermissionsProps) {
         left={left()}
         top={top()}
       >
-        <ChromePanel.Error error={state().error} />
+        <ChromePanel.Error error={Option.getOrUndefined(state().error)} />
 
         <Show
           when={hasRules()}
           fallback={
             <ChromePanel.Section>
-              <text style={{ fg: theme.textMuted }}>
-                {state()._tag === "loading"
-                  ? "Loading permission rules..."
-                  : "No permission rules configured"}
-              </text>
+              <text style={{ fg: theme.textMuted }}>{emptyMessage()}</text>
             </ChromePanel.Section>
           }
         >
-          <ChromePanel.Body ref={scrollRef}>
-            <For each={readyState()?.rules ?? []}>
+          <ChromePanel.Body ref={(value) => (scrollRef = Option.some(value))}>
+            <For each={rules()}>
               {(rule, index) => {
-                const isSelected = () => {
-                  const current = readyState()
-                  return current !== null && current.selectedIndex === index()
+                const isSelected = () =>
+                  Option.exists(readyState(), (current) => current.selectedIndex === index())
+                const backgroundColor = () => {
+                  if (isSelected()) return theme.primary
+                  return "transparent"
+                }
+                const foregroundColor = () => {
+                  if (isSelected()) return theme.selectedListItemText
+                  return theme.text
                 }
                 return (
                   <box
                     id={`perm-rule-${index()}`}
-                    backgroundColor={isSelected() ? theme.primary : "transparent"}
+                    backgroundColor={backgroundColor()}
                     paddingLeft={1}
                   >
                     <text
                       style={{
-                        fg: isSelected() ? theme.selectedListItemText : theme.text,
+                        fg: foregroundColor(),
                       }}
                     >
                       {formatRule(rule)}

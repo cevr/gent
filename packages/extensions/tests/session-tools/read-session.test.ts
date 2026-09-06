@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test"
+import { Option } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   truncate,
@@ -54,7 +55,7 @@ describe("messagePartsDisplayText", () => {
       Prompt.toolCallPart({
         id: ToolCallId.make("tc1"),
         name: "read",
-        params: undefined,
+        params: Option.getOrUndefined(Option.none()),
         providerExecuted: false,
       }),
     ]
@@ -67,6 +68,7 @@ describe("messagePartsDisplayText", () => {
         id: ToolCallId.make("tc1"),
         name: "read",
         isFailure: false,
+        providerExecuted: false,
         result: "file contents here",
       }),
     ]
@@ -120,7 +122,7 @@ describe("renderSessionTree", () => {
   test("single branch → '# Branch: name' header + messages", () => {
     const branch = makeBranch(bid1, { name: "main" })
     const msg = makeMessage(bid1, "user", "hello")
-    const result = renderSessionTree([{ branch, messages: [msg] }], undefined)
+    const result = renderSessionTree([{ branch, messages: [msg] }], Option.none())
     expect(result).toContain("# Branch: main")
     expect(result).toContain("## user")
     expect(result).toContain("hello")
@@ -129,7 +131,7 @@ describe("renderSessionTree", () => {
   test("target branch → '[TARGET BRANCH]' marker", () => {
     const branch = makeBranch(bid1, { name: "main" })
     const msg = makeMessage(bid1, "user", "hello")
-    const result = renderSessionTree([{ branch, messages: [msg] }], bid1)
+    const result = renderSessionTree([{ branch, messages: [msg] }], Option.some(bid1))
     expect(result).toContain("[TARGET BRANCH]")
   })
 
@@ -141,7 +143,7 @@ describe("renderSessionTree", () => {
         { branch: parent, messages: [makeMessage(bid1, "user", "start")] },
         { branch: child, messages: [makeMessage(bid2, "assistant", "fixed")] },
       ],
-      undefined,
+      Option.none(),
     )
     expect(result).toContain("# Branch: main")
     expect(result).toContain("--- branch point: fix ---")

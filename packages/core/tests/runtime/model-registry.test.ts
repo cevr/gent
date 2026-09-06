@@ -7,13 +7,15 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  Option,
   Path,
   Ref,
   Schedule,
   Schema,
 } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
-import { Auth, AuthError, type AuthInfo } from "../../src/domain/auth.js"
+import { Auth, AuthError } from "../../src/domain/auth.js"
+import type { AuthInfo } from "../../src/domain/auth.js"
 import type { ModelDriverContribution, ProviderResolution } from "../../src/domain/driver.js"
 import { Model, ModelId, ProviderId } from "../../src/domain/model.js"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry.js"
@@ -54,6 +56,7 @@ const mixedRemoteCatalog = {
     },
   },
   brokenProvider: {
+    // oxlint-disable-next-line effect/noNullish -- Keep the null value required by this external data contract.
     models: null,
   },
 }
@@ -63,21 +66,28 @@ const passThroughDrivers = DriverRegistry.fromResolved({
   externalDrivers: new Map(),
 })
 
-const unusedResolution = (): ProviderResolution =>
-  AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel))
+const unusedResolution = (): Effect.Effect<ProviderResolution> =>
+  Effect.succeed(
+    AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel)),
+  )
 
-const missingAuthInfo: AuthInfo | undefined = undefined
-const authLayer = Layer.succeed(Auth, {
-  get: () => Effect.succeed(missingAuthInfo),
-  set: () => Effect.void,
-  remove: () => Effect.void,
-})
+const authLayer = Layer.succeed(
+  Auth,
+  Auth.of({
+    get: () => Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>())),
+    set: () => Effect.void,
+    remove: () => Effect.void,
+  }),
+)
 
-const failingReadAuthLayer = Layer.succeed(Auth, {
-  get: () => Effect.fail(new AuthError({ message: "read failed" })),
-  set: () => Effect.void,
-  remove: () => Effect.void,
-})
+const failingReadAuthLayer = Layer.succeed(
+  Auth,
+  Auth.of({
+    get: () => Effect.fail(new AuthError({ message: "read failed" })),
+    set: () => Effect.void,
+    remove: () => Effect.void,
+  }),
+)
 
 const makeHttpLayer = (responseText: string) =>
   Layer.succeed(
@@ -97,6 +107,7 @@ const makeDeferredHttpLayer = (
     HttpClient.HttpClient,
     HttpClient.make((request) =>
       Effect.gen(function* () {
+        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
         yield* Deferred.succeed(started, undefined).pipe(Effect.ignore)
         const body = yield* Deferred.await(response)
         return HttpClientResponse.fromWeb(request, new Response(body, { status: 200 }))
@@ -196,7 +207,7 @@ describe("model catalog resolution", () => {
         )
 
         const registry = yield* loadRegistry(tmpDir, encodeAnyJson({}))
-        const models = yield* registry.list()
+        const models = yield* registry.list
 
         expect(models).toHaveLength(1)
         expect(models[0]?.id).toBe(ModelId.make("openai/gpt-5.4"))
@@ -215,14 +226,14 @@ describe("model catalog resolution", () => {
 
         const registry = yield* loadRegistry(tmpDir, encodeAnyJson(remoteCatalog))
         yield* waitFor(
-          registry.list(),
+          registry.list,
           (models) => models.some((model) => model.id === "openai/gpt-5.4"),
           5_000,
           "background refresh to land",
         )
 
         const cached = yield* fs.readFileString(cachePath)
-        const decoded = yield* Schema.decodeUnknownEffect(CachedModelsJson)(cached)
+        const decoded = yield* Schema.decodeEffect(CachedModelsJson)(cached)
 
         expect(Array.isArray(decoded)).toBe(true)
         expect(decoded).toHaveLength(1)
@@ -242,7 +253,7 @@ describe("model catalog resolution", () => {
 
           const registry = yield* loadRegistry(tmpDir, encodeAnyJson(mixedRemoteCatalog))
           const models = yield* waitFor(
-            registry.list(),
+            registry.list,
             (models) => models.some((model) => model.id === "openai/gpt-5.4"),
             5_000,
             "background refresh to land",
@@ -265,18 +276,19 @@ describe("model catalog resolution", () => {
               name: "Typed filter",
               resolveModel: unusedResolution,
               listModels: (models) =>
-                models.map((model) =>
-                  model.provider === "openai"
-                    ? Model.make({ ...model, name: `${model.name} filtered` })
-                    : model,
-                ),
+                models.map((model) => {
+                  if (model.provider === "openai") {
+                    return Model.make({ ...model, name: `${model.name} filtered` })
+                  }
+                  return model
+                }),
             },
           ]),
         )
         const registry = Context.get(context, ModelRegistry)
 
         const models = yield* waitFor(
-          registry.list(),
+          registry.list,
           (models) => models.some((model) => model.name === "GPT-5.4 filtered"),
           5_000,
           "background refresh + filter to land",
@@ -310,7 +322,7 @@ describe("model catalog resolution", () => {
         )
         const registry = Context.get(context, ModelRegistry)
 
-        const error = yield* Effect.flip(registry.list())
+        const error = yield* Effect.flip(registry.list)
 
         expect(error._tag).toBe("DriverError")
         if (error._tag === "DriverError") {
@@ -345,7 +357,7 @@ describe("model catalog resolution", () => {
         )
         const registry = Context.get(context, ModelRegistry)
 
-        const error = yield* Effect.flip(registry.list())
+        const error = yield* Effect.flip(registry.list)
 
         expect(error._tag).toBe("ProviderAuthError")
         expect(filterCalled).toBe(false)
@@ -367,7 +379,7 @@ describe("model catalog resolution", () => {
         yield* fs.writeFileString(cachePath, '{"openai":{"models":{}}}')
 
         const registry = yield* loadRegistry(tmpDir, encodeAnyJson({}))
-        const models = yield* registry.list()
+        const models = yield* registry.list
 
         expect(models).toEqual([])
       }),
@@ -399,13 +411,13 @@ describe("model catalog resolution", () => {
         const registry = yield* loadDeferredRegistry(tmpDir, started, response)
         yield* Deferred.await(started)
 
-        const cachedModels = yield* registry.list()
+        const cachedModels = yield* registry.list
         expect(cachedModels).toHaveLength(1)
         expect(cachedModels[0]?.id).toBe(ModelId.make("openai/gpt-4.1"))
 
         yield* Deferred.succeed(response, encodeAnyJson(remoteCatalog))
         const refreshedModels = yield* waitFor(
-          registry.list(),
+          registry.list,
           (models) => models.some((model) => model.id === "openai/gpt-5.4"),
           5_000,
           "background model refresh",
@@ -438,7 +450,9 @@ describe("model catalog resolution", () => {
           HttpClient.make((request) =>
             Effect.gen(function* () {
               const n = yield* Ref.updateAndGet(callCount, (c) => c + 1)
-              const body = yield* Deferred.await(n === 1 ? freshResponse : staleResponse)
+              let response = staleResponse
+              if (n === 1) response = freshResponse
+              const body = yield* Deferred.await(response)
               return HttpClientResponse.fromWeb(request, new Response(body, { status: 200 }))
             }),
           ),
@@ -475,7 +489,7 @@ describe("model catalog resolution", () => {
         // and the forked startup refresh are both suspended on their
         // deferreds. (Startup refresh is auto-forked when the Live layer
         // builds; the test triggers list() separately.)
-        const listFiber = yield* Effect.forkChild(registry.list())
+        const listFiber = yield* Effect.forkChild(registry.list)
         yield* Effect.repeat(Ref.get(callCount), {
           until: (n) => n >= 2,
           schedule: Schedule.spaced("5 millis"),
@@ -498,7 +512,7 @@ describe("model catalog resolution", () => {
         // Under the buggy original Ref-based code the in-flight 4.1 write
         // overwrote the 5.4 write and this assertion would never converge.
         const freshList = yield* waitFor(
-          registry.list(),
+          registry.list,
           (models) => models.some((m) => m.id === "openai/gpt-5.4"),
           5_000,
           "refresh write after in-flight load completes",

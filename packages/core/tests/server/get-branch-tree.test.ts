@@ -9,7 +9,7 @@
  * service method or skip the typed-error surface.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, Layer, Option, Schema } from "effect"
+import { Cause, Effect, Layer, Option, Predicate, Schema } from "effect"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
 import { Branch, dateFromMillis } from "../../src/domain/message.js"
 import { StorageError } from "../../src/domain/storage-error.js"
@@ -21,16 +21,15 @@ const ROOT_ID = BranchId.make("branch-root")
 const CHILD_ID = BranchId.make("branch-child")
 const ORPHAN_ID = BranchId.make("branch-orphan")
 
-const makeBranch = (id: BranchId, parentBranchId: BranchId | undefined, createdMs: number) =>
-  new Branch({
+const makeBranch = (id: BranchId, createdMs: number, parentBranchId?: BranchId) => {
+  const base = {
     id,
     sessionId: SESSION_ID,
-    parentBranchId,
-    parentMessageId: undefined,
-    name: undefined,
-    summary: undefined,
     createdAt: dateFromMillis(createdMs),
-  })
+  }
+  if (Predicate.isUndefined(parentBranchId)) return new Branch(base)
+  return new Branch({ ...base, parentBranchId })
+}
 
 const die = (label: string) => (): Effect.Effect<never, StorageError, never> =>
   Effect.die(`${label} not wired in test`)
@@ -39,23 +38,26 @@ const branchStorageLayer = (
   branches: ReadonlyArray<Branch>,
   counts: ReadonlyMap<BranchId, number>,
 ) =>
-  Layer.succeed(BranchStorage, {
-    createBranch: die("createBranch"),
-    getBranch: die("getBranch"),
-    listBranches: () => Effect.succeed(branches),
-    deleteBranch: die("deleteBranch"),
-    updateBranchSummary: die("updateBranchSummary"),
-    countMessages: die("countMessages"),
-    countMessagesByBranches: () => Effect.succeed(counts),
-  })
+  Layer.succeed(
+    BranchStorage,
+    BranchStorage.of({
+      createBranch: die("createBranch"),
+      getBranch: die("getBranch"),
+      listBranches: () => Effect.succeed(branches),
+      deleteBranch: die("deleteBranch"),
+      updateBranchSummary: die("updateBranchSummary"),
+      countMessages: die("countMessages"),
+      countMessagesByBranches: () => Effect.succeed(counts),
+    }),
+  )
 
 describe("getBranchTree helper", () => {
   it.live("composes listBranches + countMessagesByBranches via buildBranchTree", () =>
     Effect.gen(function* () {
       const branches = [
-        makeBranch(ROOT_ID, undefined, 0),
-        makeBranch(CHILD_ID, ROOT_ID, 100),
-        makeBranch(ORPHAN_ID, undefined, 50),
+        makeBranch(ROOT_ID, 0),
+        makeBranch(CHILD_ID, 100, ROOT_ID),
+        makeBranch(ORPHAN_ID, 50),
       ]
       const counts = new Map<BranchId, number>([
         [ROOT_ID, 3],
@@ -63,6 +65,7 @@ describe("getBranchTree helper", () => {
         [ORPHAN_ID, 1],
       ])
       const tree = yield* getBranchTree(SESSION_ID).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(branchStorageLayer(branches, counts)),
       )
       // Assert exact equality against the pure builder. A regression
@@ -82,15 +85,19 @@ describe("getBranchTree helper", () => {
   it.live("propagates listBranches failures as StorageError", () =>
     Effect.gen(function* () {
       const failure = new StorageError({ message: "boom" })
-      const layer = Layer.succeed(BranchStorage, {
-        createBranch: die("createBranch"),
-        getBranch: die("getBranch"),
-        listBranches: () => Effect.fail(failure),
-        deleteBranch: die("deleteBranch"),
-        updateBranchSummary: die("updateBranchSummary"),
-        countMessages: die("countMessages"),
-        countMessagesByBranches: () => Effect.succeed(new Map<BranchId, number>()),
-      })
+      const layer = Layer.succeed(
+        BranchStorage,
+        BranchStorage.of({
+          createBranch: die("createBranch"),
+          getBranch: die("getBranch"),
+          listBranches: () => Effect.fail(failure),
+          deleteBranch: die("deleteBranch"),
+          updateBranchSummary: die("updateBranchSummary"),
+          countMessages: die("countMessages"),
+          countMessagesByBranches: () => Effect.succeed(new Map<BranchId, number>()),
+        }),
+      )
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const exit = yield* Effect.exit(getBranchTree(SESSION_ID).pipe(Effect.provide(layer)))
       expect(exit._tag).toBe("Failure")
       if (exit._tag !== "Failure") return
@@ -104,15 +111,19 @@ describe("getBranchTree helper", () => {
   it.live("propagates countMessagesByBranches failures as StorageError", () =>
     Effect.gen(function* () {
       const failure = new StorageError({ message: "count boom" })
-      const layer = Layer.succeed(BranchStorage, {
-        createBranch: die("createBranch"),
-        getBranch: die("getBranch"),
-        listBranches: () => Effect.succeed([makeBranch(ROOT_ID, undefined, 0)]),
-        deleteBranch: die("deleteBranch"),
-        updateBranchSummary: die("updateBranchSummary"),
-        countMessages: die("countMessages"),
-        countMessagesByBranches: () => Effect.fail(failure),
-      })
+      const layer = Layer.succeed(
+        BranchStorage,
+        BranchStorage.of({
+          createBranch: die("createBranch"),
+          getBranch: die("getBranch"),
+          listBranches: () => Effect.succeed([makeBranch(ROOT_ID, 0)]),
+          deleteBranch: die("deleteBranch"),
+          updateBranchSummary: die("updateBranchSummary"),
+          countMessages: die("countMessages"),
+          countMessagesByBranches: () => Effect.fail(failure),
+        }),
+      )
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const exit = yield* Effect.exit(getBranchTree(SESSION_ID).pipe(Effect.provide(layer)))
       expect(exit._tag).toBe("Failure")
       if (exit._tag !== "Failure") return

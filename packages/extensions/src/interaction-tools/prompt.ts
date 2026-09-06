@@ -53,7 +53,7 @@ export const PromptTool = tool({
         content: params.content,
         title: params.title,
       })
-      return { mode: "present" as const, status: "shown" as const }
+      return { mode: "present", status: "shown" }
     }
 
     if (params.mode === "confirm") {
@@ -61,7 +61,7 @@ export const PromptTool = tool({
         content: params.content,
         title: params.title,
       })
-      return { mode: "confirm" as const, decision }
+      return { mode: "confirm", decision }
     }
 
     // review mode
@@ -72,7 +72,7 @@ export const PromptTool = tool({
     })
 
     return {
-      mode: "review" as const,
+      mode: "review",
       ...result,
     }
   }),

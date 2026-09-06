@@ -1,6 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Effect } from "effect"
+import { Predicate, Effect, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { RelationshipStorage } from "@gent/core-internal/storage/relationship-storage"
@@ -18,6 +18,7 @@ import {
 
 const FIXED_NOW_MILLIS = 1_767_225_600_000
 const FIXED_NOW = dateFromMillis(FIXED_NOW_MILLIS)
+const MessageDetails = Schema.Struct({ iteration: Schema.Finite })
 
 describe("Messages", () => {
   it.live("creates and retrieves messages", () =>
@@ -97,6 +98,7 @@ describe("Messages", () => {
               id: toolCallId,
               name: "inspect",
               isFailure: false,
+              providerExecuted: false,
               result: { ok: true },
             }),
           ],
@@ -469,7 +471,7 @@ describe("Messages", () => {
       expect(message?.parts).toEqual([Prompt.textPart({ text: "first" })])
     }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
   )
-  it.live("orders messages by createdAt then id", () =>
+  it.live("preserves insertion order for equal timestamps in history and deletion", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
@@ -510,8 +512,25 @@ describe("Messages", () => {
         }),
       )
       const messagesResult = yield* messages.listMessages(BranchId.make("order-branch"))
-      expect(messagesResult[0]?.id).toBe(MessageId.make("a"))
-      expect(messagesResult[1]?.id).toBe(MessageId.make("b"))
+      expect(messagesResult.map((message) => message.id)).toEqual([
+        MessageId.make("b"),
+        MessageId.make("a"),
+      ])
+      const relationships = yield* RelationshipStorage
+      const detail = yield* relationships.getSessionDetail(SessionId.make("order-session"))
+      expect(detail.branches[0]?.messages.map((message) => message.id)).toEqual([
+        MessageId.make("b"),
+        MessageId.make("a"),
+      ])
+      const sql = yield* SqlClient.SqlClient
+      yield* sql.unsafe("VACUUM")
+      expect(
+        (yield* messages.listMessages(BranchId.make("order-branch"))).map((message) => message.id),
+      ).toEqual([MessageId.make("b"), MessageId.make("a")])
+      yield* messages.deleteMessages(BranchId.make("order-branch"), MessageId.make("b"))
+      expect(
+        (yield* messages.listMessages(BranchId.make("order-branch"))).map((message) => message.id),
+      ).toEqual([MessageId.make("b")])
     }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
   )
 })
@@ -557,13 +576,10 @@ describe("Message Metadata", () => {
       expect(m.metadata!.customType).toBe("review-status")
       expect(m.metadata!.extensionId).toBe("review-loop")
       expect(m.metadata!.hidden).toBe(true)
-      expect(
-        (
-          m.metadata!.details as {
-            iteration: number
-          }
-        ).iteration,
-      ).toBe(3)
+      const details = m.metadata!.details
+      expect(Schema.is(MessageDetails)(details)).toBe(true)
+      if (!Schema.is(MessageDetails)(details)) return
+      expect(details.iteration).toBe(3)
     }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
   )
   it.live("createMessageIfAbsent preserves metadata", () =>
@@ -656,6 +672,7 @@ describe("Message Metadata", () => {
           createdAt: FIXED_NOW,
         }),
       )
+      // oxlint-disable-next-line effect/noNullish -- Keep the null value required by this external data contract.
       yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, created_at, turn_duration_ms, metadata) VALUES (${"bad-meta-msg"}, ${"bad-meta-s"}, ${"bad-meta-b"}, ${null}, ${"assistant"}, ${FIXED_NOW_MILLIS}, ${null}, ${'{"customType":1}'})`
       const listExit = yield* Effect.exit(messages.listMessages(BranchId.make("bad-meta-b")))
       expect(listExit._tag).toBe("Failure")
@@ -711,7 +728,8 @@ describe("Message Metadata", () => {
         }),
       )
       const stored = yield* messages.getMessage(MessageId.make("interjection-msg"))
-      if (stored === undefined) throw new Error("expected interjection message")
+      if (Predicate.isUndefined(stored))
+        return yield* Effect.die(new Error("expected interjection message"))
       expect(stored._tag).toBe("interjection")
       expect(stored.role).toBe("user")
     }).pipe(Effect.provide(SqliteStorage.TestWithSql())),

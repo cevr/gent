@@ -1,4 +1,4 @@
-import { Deferred, Effect, Layer, Stream } from "effect"
+import { Predicate, Deferred, Effect, Layer, Stream } from "effect"
 import { ExtensionContext, hook } from "@gent/core/extensions/api"
 import { textStep } from "@gent/core-internal/debug/provider"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids"
@@ -48,8 +48,8 @@ export const collectSessionEvents = <A, E>(stream: Stream.Stream<A, E>) =>
     const closed = yield* Deferred.make<void>()
 
     yield* stream.pipe(
-      Stream.runForEach(() => Deferred.succeed(ready, undefined).pipe(Effect.ignore)),
-      Effect.ensuring(Deferred.succeed(closed, undefined).pipe(Effect.ignore)),
+      Stream.runForEach(() => Deferred.succeed(ready, void 0).pipe(Effect.ignore)),
+      Effect.ensuring(Deferred.succeed(closed, void 0).pipe(Effect.ignore)),
       Effect.forkScoped,
     )
 
@@ -57,46 +57,52 @@ export const collectSessionEvents = <A, E>(stream: Stream.Stream<A, E>) =>
     return closed
   })
 
-export const failingPublisherLayer = Layer.succeed(EventPublisher, {
-  append: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
-  deliver: () => Effect.void,
-  publish: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
-})
+export const failingPublisherLayer = Layer.succeed(
+  EventPublisher,
+  EventPublisher.of({
+    append: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
+    deliver: () => Effect.void,
+    publish: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
+  }),
+)
 
 export const sessionRuntimeLayer = (
   overrides: Partial<SessionRuntimeService> = {},
 ): Layer.Layer<SessionRuntime> =>
-  Layer.succeed(SessionRuntime, {
-    sendUserMessage: () => Effect.void,
-    steer: () => Effect.void,
-    respondInteraction: () => Effect.void,
-    runPrompt: () => Effect.void,
-    queueFollowUp: () => Effect.void,
-    requestExtension: () => Effect.void,
-    drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-    getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-    getMetrics: () =>
-      Effect.succeed({
-        turns: 0,
-        tokens: 0,
-        toolCalls: 0,
-        retries: 0,
-        durationMs: 0,
-        costUsd: 0,
-        lastInputTokens: 0,
-      }),
-    getState: () =>
-      Effect.succeed({
-        _tag: "Idle",
-        agent: AgentName.make("cowork"),
-        queue: emptyQueueSnapshot(),
-      }),
-    watchState: () => Effect.succeed(Stream.empty),
-    terminateSession: () => Effect.void,
-    ...overrides,
-  })
+  Layer.succeed(
+    SessionRuntime,
+    SessionRuntime.of({
+      sendUserMessage: () => Effect.void,
+      steer: () => Effect.void,
+      respondInteraction: () => Effect.void,
+      runPrompt: () => Effect.void,
+      queueFollowUp: () => Effect.void,
+      requestExtension: () => Effect.void,
+      drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+      getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+      getMetrics: () =>
+        Effect.succeed({
+          turns: 0,
+          tokens: 0,
+          toolCalls: 0,
+          retries: 0,
+          durationMs: 0,
+          costUsd: 0,
+          lastInputTokens: 0,
+        }),
+      getState: () =>
+        Effect.succeed({
+          _tag: "Idle",
+          agent: AgentName.make("cowork"),
+          queue: emptyQueueSnapshot(),
+        }),
+      watchState: () => Effect.succeed(Stream.empty),
+      terminateSession: () => Effect.void,
+      ...overrides,
+    }),
+  )
 
-export const failingSessionCommandsLayer = () => {
+const buildFailingSessionCommandsLayer = () => {
   const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
   const deps = Layer.mergeAll(
     storageLayer,
@@ -113,6 +119,10 @@ export const failingSessionCommandsLayer = () => {
     deps,
   )
 }
+
+export const failingSessionCommandsLayer = Layer.fresh(
+  Layer.unwrap(Effect.sync(buildFailingSessionCommandsLayer)),
+)
 
 export const createActiveSessionFixture = Effect.fn("createActiveSessionFixture")(
   function* (input: {
@@ -137,7 +147,7 @@ export const createActiveSessionFixture = Effect.fn("createActiveSessionFixture"
   },
 )
 
-export const sendFailingSessionCommandsLayer = () => {
+const buildSendFailingSessionCommandsLayer = () => {
   const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
   const failingRuntimeLayer = sessionRuntimeLayer({
     sendUserMessage: () => Effect.fail(new SessionRuntimeError({ message: "runtime failed" })),
@@ -158,7 +168,11 @@ export const sendFailingSessionCommandsLayer = () => {
   )
 }
 
-export const sessionCommandsLayer = () => {
+export const sendFailingSessionCommandsLayer = Layer.fresh(
+  Layer.unwrap(Effect.sync(buildSendFailingSessionCommandsLayer)),
+)
+
+const buildSessionCommandsLayer = () => {
   const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
   const deps = Layer.mergeAll(
     storageLayer,
@@ -176,6 +190,10 @@ export const sessionCommandsLayer = () => {
   )
 }
 
+export const sessionCommandsLayer = Layer.fresh(
+  Layer.unwrap(Effect.sync(buildSessionCommandsLayer)),
+)
+
 export const sessionRuntimeProbeLayer = (terminated: Array<SessionId>) =>
   sessionRuntimeLayer({
     terminateSession: (sessionId) =>
@@ -185,25 +203,30 @@ export const sessionRuntimeProbeLayer = (terminated: Array<SessionId>) =>
   })
 
 const sessionGovernanceProbeLayer = (restored?: Array<SessionId>) =>
-  Layer.succeed(AgentLoopSessionGovernance, {
-    markTerminated: () => Effect.void,
-    clearTerminated: (_workspaceId, sessionId) =>
-      Effect.sync(() => {
-        restored?.push(sessionId)
-      }),
-    isTerminated: () => Effect.succeed(false),
-  })
+  Layer.succeed(
+    AgentLoopSessionGovernance,
+    AgentLoopSessionGovernance.of({
+      markTerminated: () => Effect.void,
+      clearTerminated: (_workspaceId, sessionId) =>
+        Effect.sync(() => {
+          restored?.push(sessionId)
+        }),
+      isTerminated: () => Effect.succeed(false),
+    }),
+  )
 
 export const sessionCommandsLayerWithMachineProbe = (
   runtimeTerminated?: Array<SessionId>,
   runtimeRestored?: Array<SessionId>,
 ) => {
   const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
+  let runtimeLayer = sessionRuntimeLayer()
+  if (!Predicate.isUndefined(runtimeTerminated)) {
+    runtimeLayer = sessionRuntimeProbeLayer(runtimeTerminated)
+  }
   const deps = Layer.mergeAll(
     storageLayer,
-    runtimeTerminated === undefined
-      ? sessionRuntimeLayer()
-      : sessionRuntimeProbeLayer(runtimeTerminated),
+    runtimeLayer,
     sessionGovernanceProbeLayer(runtimeRestored),
     EventStore.Memory,
     EventPublisher.Test(),
@@ -242,10 +265,10 @@ export const failingDeleteSessionCommandsLayerWithMachineProbe = (
     SessionStorage,
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
-      return {
+      return SessionStorage.of({
         ...sessions,
         deleteSession: () => Effect.fail(new StorageError({ message: "delete failed" })),
-      }
+      })
     }),
   ).pipe(Layer.provide(storageLayer))
   const deps = Layer.mergeAll(
@@ -283,7 +306,7 @@ export const racySessionCommandsLayer = (params: {
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
       let fired = false
-      return {
+      return SessionStorage.of({
         ...sessions,
         deleteSession: (rootId: SessionId) =>
           Effect.gen(function* () {
@@ -309,7 +332,7 @@ export const racySessionCommandsLayer = (params: {
             }
             return yield* sessions.deleteSession(rootId)
           }),
-      }
+      })
     }),
   ).pipe(Layer.provide(storageLayer))
   const deps = Layer.mergeAll(
@@ -338,18 +361,21 @@ export const parentToolCallProbeExtension: LoadedExtension = {
       hook.turnProjection(() =>
         Effect.gen(function* () {
           const ctx = yield* ExtensionContext
-          return {
-            promptSections:
-              ctx.turn?.parentToolCallId === undefined
-                ? []
-                : [
-                    {
-                      id: "parent-tool-call-probe",
-                      content: `parentToolCallId:${ctx.turn.parentToolCallId}`,
-                      priority: 45,
-                    },
-                  ],
+          let promptSections: ReadonlyArray<{
+            readonly id: string
+            readonly content: string
+            readonly priority: number
+          }> = []
+          if (!Predicate.isUndefined(ctx.turn?.parentToolCallId)) {
+            promptSections = [
+              {
+                id: "parent-tool-call-probe",
+                content: `parentToolCallId:${ctx.turn.parentToolCallId}`,
+                priority: 45,
+              },
+            ]
           }
+          return { promptSections }
         }),
       ),
     ],

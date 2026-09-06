@@ -3,7 +3,7 @@
  * Effect-based — requires FileSystem and Path from the platform.
  * Used by both server (dependencies.ts) and TUI (context.tsx).
  */
-import { Effect, FileSystem, Path, Schema } from "effect"
+import { Effect, FileSystem, Option, Path, Schema } from "effect"
 
 const DisabledConfig = Schema.Struct({
   disabledExtensions: Schema.optional(Schema.Array(Schema.String)),
@@ -14,9 +14,9 @@ export const readDisabledFromFile = (filePath: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const text = yield* fs.readFileString(filePath)
-    const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(DisabledConfig))(text)
-    return decoded.disabledExtensions ?? []
-  }).pipe(Effect.catchEager(() => Effect.succeed([] as string[])))
+    const decoded = yield* Schema.decodeEffect(Schema.fromJsonString(DisabledConfig))(text)
+    return Option.getOrElse(Option.fromUndefinedOr(decoded.disabledExtensions), () => [])
+  }).pipe(Effect.catchEager(() => Effect.succeed<ReadonlyArray<string>>([])))
 
 /**
  * Read disabled extensions from user + project config.

@@ -18,7 +18,7 @@
  *
  * The `E` parameter is structurally constrained as `TaggedErrorLike` (carries
  * a `_tag` discriminator and extends `Error`) — the structural shape that
- * every `Schema.TaggedErrorClass` instance satisfies. Pairing this constraint
+ * every `Schema.TaggedError` instance satisfies. Pairing this constraint
  * with `@effect/language-service`'s `extendsNativeError` rule gives both
  * type-level and source-level enforcement. The `R` channel must be `never` (closed-over dependencies —
  * the boundary is not a way to launder ambient services).
@@ -36,7 +36,7 @@ declare const BoundaryBrand: unique symbol
 
 /**
  * Structural constraint on `SdkBoundary`'s error channel — must carry a `_tag`
- * discriminator. `Schema.TaggedErrorClass` produces classes that satisfy this
+ * discriminator. `Schema.TaggedError` produces classes that satisfy this
  * shape (each instance has `_tag: string`); plain `Error` subclasses do not.
  *
  * The constraint is structural rather than nominal because `Schema` does not
@@ -67,7 +67,7 @@ export const sdkBoundary = <A, E extends TaggedErrorLike>(
   _label: string,
   effect: Effect.Effect<A, E, never>,
 ): SdkBoundary<A, E> =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
+  // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The boundary factory applies the nominal marker after validating the closed Effect channel.
   effect as SdkBoundary<A, E>
 
 /**

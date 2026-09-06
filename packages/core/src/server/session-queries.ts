@@ -1,4 +1,4 @@
-import { Effect, Layer, Context } from "effect"
+import { Context, Effect, Layer, Option, Predicate } from "effect"
 import type { SessionId } from "../domain/ids.js"
 import type { Session, SessionTreeNode } from "../domain/message.js"
 import { projectMessagesWithToolInteractions } from "../domain/message-part-projection.js"
@@ -51,7 +51,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
         rootSessionId: SessionId,
       ) {
         const rootSession = yield* sessionStorage.getSession(rootSessionId)
-        if (rootSession === undefined) {
+        if (Predicate.isUndefined(rootSession)) {
           return yield* new NotFoundError({
             message: `Session not found: ${rootSessionId}`,
             entity: "session",
@@ -64,11 +64,11 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
         input: GetSessionSnapshotInput,
       ) {
         const session = yield* sessionStorage.getSession(input.sessionId)
-        if (session === undefined) {
+        if (Predicate.isUndefined(session)) {
           return yield* new NotFoundError({ message: "Session not found", entity: "session" })
         }
         const branch = yield* branchStorage.getBranch(input.branchId)
-        if (branch === undefined || branch.sessionId !== input.sessionId) {
+        if (Predicate.isUndefined(branch) || branch.sessionId !== input.sessionId) {
           return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
         }
 
@@ -126,7 +126,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           branchId: input.branchId,
           name: session.name,
           messages: snapshotState.projectedMessages,
-          lastEventId: snapshotState.lastEventId ?? null,
+          lastEventId: Option.getOrNull(Option.fromUndefinedOr(snapshotState.lastEventId)),
           reasoningLevel: session.reasoningLevel,
           activeBranchId: session.activeBranchId,
           runtime,

@@ -3,9 +3,9 @@
  * Tests identity route, connection tracking, idle shutdown, and reconnects.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Exit, Random, Scope } from "effect"
+import { Effect, Exit, Random, Schema, Scope } from "effect"
 import { extractText, Gent } from "@gent/sdk"
-import { createTempDirFixture } from "@gent/core-internal/test-utils/fixtures"
+import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures"
 import { toTestFailure, waitFor } from "./transport-harness-boundary"
 import {
   killProcess,
@@ -19,7 +19,6 @@ const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathnam
   /\/$/,
   "",
 )
-const makeTempDir = createTempDirFixture("gent-lifecycle-")
 const randomLifecyclePort = Random.nextIntBetween(19_000, 20_000)
 
 describe("server lifecycle", () => {
@@ -28,7 +27,7 @@ describe("server lifecycle", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const dataDir = makeTempDir()
+          const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
           const port = yield* randomLifecyclePort
           const { url, proc } = yield* Effect.acquireRelease(
             spawnServerOnPort({ dataDir, port }),
@@ -56,7 +55,7 @@ describe("server lifecycle", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const dataDir = makeTempDir()
+          const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
           const port = yield* randomLifecyclePort
           const { url, proc } = yield* Effect.acquireRelease(
             spawnServerOnPort({ dataDir, port }),
@@ -82,7 +81,7 @@ describe("server lifecycle", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const dataDir = makeTempDir()
+          const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
           const idleTimeoutMs = 500
           const port = yield* randomLifecyclePort
           const { url, proc } = yield* Effect.acquireRelease(
@@ -106,7 +105,7 @@ describe("server lifecycle", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const dataDir = makeTempDir()
+          const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
           const dbPath = `${dataDir}/data.db`
 
           const server1 = yield* Gent.server({
@@ -134,8 +133,10 @@ describe("server lifecycle", () => {
           ).pipe(Effect.mapError(toTestFailure))
           const identity = yield* Effect.tryPromise(() => response.json()).pipe(
             Effect.mapError(toTestFailure),
+            Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ pid: Schema.Finite }))),
+            Effect.mapError(toTestFailure),
           )
-          expect((identity as { pid: number }).pid).toBe(pid1)
+          expect(identity.pid).toBe(pid1)
         }),
       ),
     20_000,
@@ -146,8 +147,8 @@ describe("server lifecycle", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const cwdA = makeTempDir()
-          const cwdB = makeTempDir()
+          const cwdA = yield* makeTempDirectoryScoped("gent-lifecycle-")
+          const cwdB = yield* makeTempDirectoryScoped("gent-lifecycle-")
           const server = yield* Gent.server({
             cwd: cwdA,
             state: Gent.state.memory(),
@@ -206,7 +207,7 @@ describe("server lifecycle", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const dataDir = makeTempDir()
+          const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
           const idleTimeoutMs = 750
           const port = yield* randomLifecyclePort
           const { url, proc } = yield* Effect.acquireRelease(
@@ -247,7 +248,7 @@ describe("server lifecycle", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const dataDir = makeTempDir()
+          const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
           const port = yield* randomLifecyclePort
           const serverRef = yield* Effect.acquireRelease(
             spawnServerOnPort({ dataDir, port }).pipe(

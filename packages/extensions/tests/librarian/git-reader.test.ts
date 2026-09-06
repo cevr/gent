@@ -1,74 +1,40 @@
 import { describe, it, expect } from "effect-bun-test"
-import { beforeAll, afterAll } from "bun:test"
-import { Cause, Effect, Exit, Layer, Schema } from "effect"
+import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import { ExtensionContext, ExtensionId } from "@gent/core/extensions/api"
 import { GitReader, GitReaderError } from "../../src/librarian/index.js"
 import { $ } from "bun"
-import { runEffectBoundary } from "../run-effect-boundary.js"
+import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 
-const StubExtensionContext = Layer.succeed(ExtensionContext, {
-  extensionId: ExtensionId.make("@gent/librarian-test"),
-  sessionId: "test-session" as never,
-  branchId: "test-branch" as never,
-  cwd: "/tmp",
-  home: "/tmp",
-  Session: {} as never,
-  Agent: {} as never,
-  Interaction: {} as never,
-  Process: {
-    run: () => Effect.die("Process.run not provided in git-reader test"),
-    signalPid: () => Effect.die("Process.signalPid not provided"),
-    isPortFree: () => Effect.die("Process.isPortFree not provided"),
-    isPidAlive: () => Effect.die("Process.isPidAlive not provided"),
-    commandCandidates: (cmd: string) => [cmd],
-    parentEnv: {},
-  },
-  Files: {} as never,
-  FileLock: {} as never,
-  State: {} as never,
-  Dynamic: {} as never,
-})
+const StubExtensionContext = Layer.succeed(
+  ExtensionContext,
+  testToolContext({ extensionId: ExtensionId.make("@gent/librarian-test") }),
+)
 // ---------------------------------------------------------------------------
 // Fixture: create a real git repo with nested files
 // ---------------------------------------------------------------------------
-const FIXTURE_DIR = `/tmp/test-git-reader-fixture-${Bun.randomUUIDv7()}`
-const CLONE_FAIL_DIR = `/tmp/test-clone-fail-fixture-${Bun.randomUUIDv7()}`
-beforeAll(() =>
-  runEffectBoundary(
-    Effect.gen(function* () {
-      yield* Effect.promise(() => $`rm -rf ${FIXTURE_DIR}`.quiet())
-      yield* Effect.promise(() => $`mkdir -p ${FIXTURE_DIR}/src/utils`.quiet())
-      yield* Effect.promise(() => $`git -C ${FIXTURE_DIR} init`.quiet())
-      yield* Effect.promise(() =>
-        $`git -C ${FIXTURE_DIR} config user.email "test@test.com"`.quiet(),
-      )
-      yield* Effect.promise(() => $`git -C ${FIXTURE_DIR} config user.name "Test"`.quiet())
-      yield* Effect.promise(() =>
-        Bun.write(`${FIXTURE_DIR}/README.md`, "# Test Repo\n\nHello world.\n"),
-      )
-      yield* Effect.promise(() =>
-        Bun.write(`${FIXTURE_DIR}/src/index.ts`, 'export const main = () => "hello"\n'),
-      )
-      yield* Effect.promise(() =>
-        Bun.write(
-          `${FIXTURE_DIR}/src/utils/helpers.ts`,
-          "export const add = (a: number, b: number) => a + b\n",
-        ),
-      )
-      yield* Effect.promise(() => Bun.write(`${FIXTURE_DIR}/.gitignore`, "node_modules/\n"))
-      yield* Effect.promise(() =>
-        Bun.write(
-          `${FIXTURE_DIR}/icon.png`,
-          new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]),
-        ),
-      )
-      yield* Effect.promise(() => $`git -C ${FIXTURE_DIR} add -A`.quiet())
-      yield* Effect.promise(() => $`git -C ${FIXTURE_DIR} commit -m "initial commit"`.quiet())
-    }),
-  ),
-)
-afterAll(() => runEffectBoundary(Effect.promise(() => $`rm -rf ${FIXTURE_DIR}`.quiet())))
+const makeFixture = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const fixtureDir = yield* fs.makeTempDirectoryScoped()
+  yield* fs.makeDirectory(`${fixtureDir}/src/utils`, { recursive: true })
+  yield* Effect.promise(() => $`git -C ${fixtureDir} init`.quiet())
+  yield* Effect.promise(() => $`git -C ${fixtureDir} config user.email "test@test.com"`.quiet())
+  yield* Effect.promise(() => $`git -C ${fixtureDir} config user.name "Test"`.quiet())
+  yield* fs.writeFileString(`${fixtureDir}/README.md`, "# Test Repo\n\nHello world.\n")
+  yield* fs.writeFileString(`${fixtureDir}/src/index.ts`, 'export const main = () => "hello"\n')
+  yield* fs.writeFileString(
+    `${fixtureDir}/src/utils/helpers.ts`,
+    "export const add = (a: number, b: number) => a + b\n",
+  )
+  yield* fs.writeFileString(`${fixtureDir}/.gitignore`, "node_modules/\n")
+  yield* fs.writeFile(
+    `${fixtureDir}/icon.png`,
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]),
+  )
+  yield* Effect.promise(() => $`git -C ${fixtureDir} add -A`.quiet())
+  yield* Effect.promise(() => $`git -C ${fixtureDir} commit -m "initial commit"`.quiet())
+  return { fixtureDir, cloneFailDir: `${fixtureDir}/clone-fail` }
+})
 // ---------------------------------------------------------------------------
 // Layer
 // ---------------------------------------------------------------------------
@@ -78,10 +44,11 @@ const TestLayer = Layer.mergeAll(GitReader.Live, BunFileSystem.layer, StubExtens
 // ---------------------------------------------------------------------------
 describe("GitReader", () => {
   describe("listFiles", () => {
-    it.live("returns all files with full relative paths", () =>
+    it.scopedLive("returns all files with full relative paths", () =>
       Effect.gen(function* () {
+        const { fixtureDir } = yield* makeFixture
         const reader = yield* GitReader
-        const files = yield* reader.listFiles(FIXTURE_DIR)
+        const files = yield* reader.listFiles(fixtureDir)
         expect(files).toContain("README.md")
         expect(files).toContain("src/index.ts")
         expect(files).toContain("src/utils/helpers.ts")
@@ -90,10 +57,11 @@ describe("GitReader", () => {
         expect(files.length).toBe(5)
       }).pipe(Effect.provide(TestLayer)),
     )
-    it.live("paths are sorted depth-first", () =>
+    it.scopedLive("paths are sorted depth-first", () =>
       Effect.gen(function* () {
+        const { fixtureDir } = yield* makeFixture
         const reader = yield* GitReader
-        const files = yield* reader.listFiles(FIXTURE_DIR)
+        const files = yield* reader.listFiles(fixtureDir)
         const srcIdx = files.indexOf("src/index.ts")
         const helpersIdx = files.indexOf("src/utils/helpers.ts")
         // Both should be present (already checked above), just verify they have paths
@@ -101,15 +69,16 @@ describe("GitReader", () => {
         expect(helpersIdx).toBeGreaterThanOrEqual(0)
       }).pipe(Effect.provide(TestLayer)),
     )
-    it.live("no duplicate paths", () =>
+    it.scopedLive("no duplicate paths", () =>
       Effect.gen(function* () {
+        const { fixtureDir } = yield* makeFixture
         const reader = yield* GitReader
-        const files = yield* reader.listFiles(FIXTURE_DIR)
+        const files = yield* reader.listFiles(fixtureDir)
         const unique = new Set(files)
         expect(unique.size).toBe(files.length)
       }).pipe(Effect.provide(TestLayer)),
     )
-    it.live("fails on nonexistent repo", () =>
+    it.scopedLive("fails on nonexistent repo", () =>
       Effect.gen(function* () {
         const reader = yield* GitReader
         const result = yield* reader.listFiles("/tmp/nonexistent-repo-xyz").pipe(Effect.exit)
@@ -118,10 +87,11 @@ describe("GitReader", () => {
     )
   })
   describe("readFile", () => {
-    it.live("reads text file content", () =>
+    it.scopedLive("reads text file content", () =>
       Effect.gen(function* () {
+        const { fixtureDir } = yield* makeFixture
         const reader = yield* GitReader
-        const blob = yield* reader.readFile(FIXTURE_DIR, "README.md")
+        const blob = yield* reader.readFile(fixtureDir, "README.md")
         expect(blob.isBinary).toBe(false)
         expect(blob.size).toBeGreaterThan(0)
         const text = new TextDecoder().decode(blob.content)
@@ -129,19 +99,21 @@ describe("GitReader", () => {
         expect(text).toContain("Hello world.")
       }).pipe(Effect.provide(TestLayer)),
     )
-    it.live("reads nested file content", () =>
+    it.scopedLive("reads nested file content", () =>
       Effect.gen(function* () {
+        const { fixtureDir } = yield* makeFixture
         const reader = yield* GitReader
-        const blob = yield* reader.readFile(FIXTURE_DIR, "src/utils/helpers.ts")
+        const blob = yield* reader.readFile(fixtureDir, "src/utils/helpers.ts")
         expect(blob.isBinary).toBe(false)
         const text = new TextDecoder().decode(blob.content)
         expect(text).toContain("export const add")
       }).pipe(Effect.provide(TestLayer)),
     )
-    it.live("detects binary files", () =>
+    it.scopedLive("detects binary files", () =>
       Effect.gen(function* () {
+        const { fixtureDir } = yield* makeFixture
         const reader = yield* GitReader
-        const blob = yield* reader.readFile(FIXTURE_DIR, "icon.png")
+        const blob = yield* reader.readFile(fixtureDir, "icon.png")
         expect(blob.isBinary).toBe(true)
         expect(blob.size).toBe(9)
         // PNG magic bytes
@@ -149,22 +121,24 @@ describe("GitReader", () => {
         expect(blob.content[1]).toBe(0x50)
       }).pipe(Effect.provide(TestLayer)),
     )
-    it.live("fails on nonexistent file", () =>
+    it.scopedLive("fails on nonexistent file", () =>
       Effect.gen(function* () {
+        const { fixtureDir } = yield* makeFixture
         const reader = yield* GitReader
-        const result = yield* reader.readFile(FIXTURE_DIR, "nonexistent.ts").pipe(Effect.exit)
+        const result = yield* reader.readFile(fixtureDir, "nonexistent.ts").pipe(Effect.exit)
         expect(Exit.isFailure(result)).toBe(true)
         if (!Exit.isFailure(result)) return yield* Effect.die("expected readFile failure")
-        const reason = result.cause.reasons.find(Cause.isFailReason)
-        expect(reason !== undefined && Schema.is(GitReaderError)(reason.error)).toBe(true)
-        if (reason === undefined || !Schema.is(GitReaderError)(reason.error)) return
-        expect(reason.error.message).toBe("File not found: nonexistent.ts")
+        const reason = Option.fromNullishOr(result.cause.reasons.find(Cause.isFailReason))
+        expect(Option.exists(reason, (item) => Schema.is(GitReaderError)(item.error))).toBe(true)
+        if (Option.isNone(reason) || !Schema.is(GitReaderError)(reason.value.error)) return
+        expect(reason.value.error.message).toBe("File not found: nonexistent.ts")
       }).pipe(Effect.provide(TestLayer)),
     )
-    it.live("content is a copy (safe after GC)", () =>
+    it.scopedLive("content is a copy (safe after GC)", () =>
       Effect.gen(function* () {
+        const { fixtureDir } = yield* makeFixture
         const reader = yield* GitReader
-        const blob = yield* reader.readFile(FIXTURE_DIR, "README.md")
+        const blob = yield* reader.readFile(fixtureDir, "README.md")
         // Verify the content is a standalone Uint8Array, not a view into native memory
         expect(blob.content).toBeInstanceOf(Uint8Array)
         expect(blob.content.buffer.byteLength).toBe(blob.content.length)
@@ -172,11 +146,12 @@ describe("GitReader", () => {
     )
   })
   describe("clone", () => {
-    it.live("fails on invalid URL", () =>
+    it.scopedLive("fails on invalid URL", () =>
       Effect.gen(function* () {
+        const { cloneFailDir } = yield* makeFixture
         const reader = yield* GitReader
         const result = yield* reader
-          .clone("https://invalid.example.com/no-repo.git", CLONE_FAIL_DIR)
+          .clone("https://invalid.example.com/no-repo.git", cloneFailDir)
           .pipe(Effect.exit)
         expect(result._tag).toBe("Failure")
       }).pipe(Effect.provide(TestLayer)),

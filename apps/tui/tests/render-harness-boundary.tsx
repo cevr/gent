@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 
-import { beforeEach, afterEach } from "bun:test"
+import { afterEach } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, Layer, Scope, Context, Stream } from "effect"
+import { Context, Effect, Layer, Option, Scope, Stream } from "effect"
 import { testRender } from "@opentui/solid"
 import type { JSX } from "solid-js"
 import { RegistryProvider } from "../src/atom-solid"
@@ -14,6 +14,7 @@ import { WorkspaceProvider } from "../src/workspace/context"
 import { ClientProvider } from "../src/client"
 import type { DomainSession, GentNamespacedClient, GentRuntime, Session } from "../src/client"
 import { ExtensionUIProvider } from "../src/extensions/context"
+import { TerminalDimensionsProvider } from "../src/terminal-dimensions"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
 import { ConnectionState, emptyQueueSnapshot } from "@gent/sdk"
 import type { SessionRuntimeState } from "@gent/core-internal/server/transport-contract"
@@ -28,17 +29,20 @@ const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }
 
 type TestRenderSetup = Awaited<ReturnType<typeof testRender>>
 
-let currentSetup: TestRenderSetup | undefined
-let sharedServices: Context.Context<unknown> | undefined
-let sharedScope: Scope.Closeable | undefined
+let currentSetup: Option.Option<TestRenderSetup> = Option.none()
+let sharedServices: Option.Option<Context.Context<unknown>> = Option.none()
 const defaultWorkspaceCwd = new URL("../../..", import.meta.url).pathname
 
-type NamespaceOverrides = Partial<Record<string, Record<string, unknown>>>
+type MockMethod = (...args: ReadonlyArray<never>) => unknown
+type MockNamespace = { readonly [method: string]: MockMethod }
+type NamespaceOverrides = Partial<Record<string, Partial<MockNamespace>>>
 
 export const createMockClient = (overrides?: NamespaceOverrides): GentNamespacedClient => {
   const noRpcError = <A,>(value: A) => Effect.succeed(value)
+  const absent = Option.getOrUndefined(Option.none())
+  const nullValue = Option.getOrNull(Option.none())
 
-  const mocks: Record<string, Record<string, unknown>> = {
+  const mocks = {
     session: {
       create: () =>
         noRpcError({
@@ -47,8 +51,8 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
           name: "Test Session",
         }),
       list: () => noRpcError([]),
-      get: () => noRpcError(null),
-      delete: () => noRpcError(undefined),
+      get: () => noRpcError(nullValue),
+      delete: () => noRpcError(absent),
       getChildren: () => noRpcError([]),
       getTree: () =>
         noRpcError({
@@ -66,10 +70,10 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
           sessionId: SessionId.make("session-test"),
           branchId: BranchId.make("branch-test"),
           messages: [],
-          lastEventId: null,
-          reasoningLevel: undefined,
+          lastEventId: nullValue,
+          reasoningLevel: absent,
           runtime: {
-            _tag: "Idle" as const,
+            _tag: "Idle",
             agent: AgentName.make("cowork"),
             queue: emptyQueueSnapshot(),
           },
@@ -83,36 +87,36 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
             lastInputTokens: 0,
           },
         }),
-      updateReasoningLevel: () => noRpcError({ reasoningLevel: undefined }),
+      updateReasoningLevel: () => noRpcError({ reasoningLevel: absent }),
       events: () => Stream.empty,
-      watchRuntime: () => Stream.empty as Stream.Stream<SessionRuntimeState>,
+      watchRuntime: () => Stream.fromIterable<SessionRuntimeState>([]),
     },
     branch: {
       list: () => noRpcError([]),
       create: () => noRpcError({ branchId: BranchId.make("branch-test") }),
       getTree: () => noRpcError([]),
-      switch: () => noRpcError(undefined),
+      switch: () => noRpcError(absent),
       fork: () => noRpcError({ branchId: BranchId.make("branch-test") }),
     },
     message: {
-      send: () => noRpcError(undefined),
+      send: () => noRpcError(absent),
       list: () => noRpcError([]),
     },
     steer: {
-      command: () => noRpcError(undefined),
+      command: () => noRpcError(absent),
     },
     queue: {
       drain: () => noRpcError(emptyQueueSnapshot()),
       get: () => noRpcError(emptyQueueSnapshot()),
     },
     interaction: {
-      respondQuestions: () => noRpcError(undefined),
-      respondPrompt: () => noRpcError(undefined),
+      respondQuestions: () => noRpcError(absent),
+      respondPrompt: () => noRpcError(absent),
       respondHandoff: () => noRpcError({}),
     },
     permission: {
       listRules: () => noRpcError([]),
-      deleteRule: () => noRpcError(undefined),
+      deleteRule: () => noRpcError(absent),
     },
     model: {
       list: () => noRpcError([]),
@@ -122,11 +126,11 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
     },
     auth: {
       listProviders: () => noRpcError([]),
-      setKey: () => noRpcError(undefined),
-      deleteKey: () => noRpcError(undefined),
+      setKey: () => noRpcError(absent),
+      deleteKey: () => noRpcError(absent),
       listMethods: () => noRpcError({}),
-      authorize: () => noRpcError(null),
-      callback: () => noRpcError(undefined),
+      authorize: () => noRpcError(nullValue),
+      callback: () => noRpcError(absent),
     },
     task: {
       list: () => noRpcError([]),
@@ -141,10 +145,10 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
             filePath: "/tmp/effect-v4.md",
           },
         ]),
-      getContent: () => noRpcError(null),
+      getContent: () => noRpcError(nullValue),
     },
     extension: {
-      request: () => noRpcError(undefined),
+      request: () => noRpcError(absent),
       listSlashCommands: () => noRpcError([]),
       listStatus: () =>
         noRpcError({
@@ -153,32 +157,39 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
         }),
     },
     actor: {
-      sendUserMessage: () => noRpcError(undefined),
-      sendToolResult: () => noRpcError(undefined),
-      interrupt: () => noRpcError(undefined),
-      getState: () => noRpcError(undefined),
-      getMetrics: () => noRpcError(undefined),
+      sendUserMessage: () => noRpcError(absent),
+      sendToolResult: () => noRpcError(absent),
+      interrupt: () => noRpcError(absent),
+      getState: () => noRpcError(absent),
+      getMetrics: () => noRpcError(absent),
     },
-  }
+  } satisfies Record<string, MockNamespace>
 
-  return new Proxy({} as GentNamespacedClient, {
+  // eslint-disable-next-line effect/noAs -- Proxy keys are runtime namespace names; the mock preserves the typed client surface used by render tests.
+  return new Proxy(Object.create(null), {
     get(_target, ns: string) {
-      const base = mocks[ns] ?? {}
-      const extra = overrides?.[ns]
-      if (extra !== undefined) return { ...base, ...extra }
+      const base = Option.getOrElse(
+        Option.map(
+          Option.fromNullishOr(Object.entries(mocks).find(([key]) => key === ns)),
+          ([, value]) => value,
+        ),
+        () => ({}),
+      )
+      const extra = Option.fromNullishOr(overrides?.[ns])
+      if (Option.isSome(extra)) return { ...base, ...extra.value }
       return base
     },
   })
 }
 
 export const createMockRuntime = (): GentRuntime => ({
-  cast: (effect) => {
-    Effect.runFork(
-      effect as Effect.Effect<unknown, never, never> as Effect.Effect<void, never, never>,
-    )
+  cast: <A, E, R>(effect: Effect.Effect<A, E, R>) => {
+    Effect.runForkWith(Context.makeUnsafe<R>(new Map<string, never>()))(effect)
   },
-  fork: Effect.runFork as never,
-  run: Effect.runPromise as never,
+  fork: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.runForkWith(Context.makeUnsafe<R>(new Map<string, never>()))(effect),
+  run: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.runPromiseWith(Context.makeUnsafe<R>(new Map<string, never>()))(effect),
   lifecycle: {
     getState: () => ConnectionState.cases.connected.make({ generation: 0 }),
     subscribe: (listener) => {
@@ -190,30 +201,30 @@ export const createMockRuntime = (): GentRuntime => ({
   },
 })
 
-const toInitialSession = (session: DomainSession | Session | undefined): Session | undefined => {
-  if (session === undefined) return undefined
-  if ("sessionId" in session) return session
-  if (session.activeBranchId === undefined) return undefined
-  return {
-    sessionId: session.id,
-    branchId: session.activeBranchId,
-    name: session.name ?? "Unnamed",
-    reasoningLevel: session.reasoningLevel,
-  }
-}
+const toInitialSession = (
+  session: Option.Option<DomainSession | Session>,
+): Option.Option<Session> =>
+  Option.flatMap(session, (value) => {
+    if ("sessionId" in value) return Option.some(value)
+    return Option.map(Option.fromNullishOr(value.activeBranchId), (branchId) => ({
+      sessionId: value.id,
+      branchId,
+      name: Option.getOrElse(Option.fromNullishOr(value.name), () => "Unnamed"),
+      reasoningLevel: value.reasoningLevel,
+    }))
+  })
 
 const getServices = (): Promise<Context.Context<unknown>> => {
-  if (sharedServices !== undefined) return Effect.runPromise(Effect.succeed(sharedServices))
+  if (Option.isSome(sharedServices)) return Effect.runPromise(Effect.succeed(sharedServices.value))
   return Effect.runPromise(
     Effect.gen(function* () {
-      sharedScope = yield* Scope.make()
-      const context = yield* Layer.buildWithScope(BunServices.layer, sharedScope)
-      sharedServices = Context.add(
-        context,
-        Scope.Scope,
-        sharedScope,
-      ) as unknown as Context.Context<unknown>
-      return sharedServices
+      const scope = yield* Scope.make()
+      const context = yield* Layer.buildWithScope(BunServices.layer, scope)
+      const services = Context.makeUnsafe<unknown>(
+        Context.add(context, Scope.Scope, scope).mapUnsafe,
+      )
+      sharedServices = Option.some(services)
+      return services
     }),
   )
 }
@@ -238,52 +249,61 @@ export const renderWithProviders = (
 ): Promise<TestRenderSetup> =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const services =
-        options?.services === undefined
-          ? yield* Effect.promise(() => getServices())
-          : options.services
-      const client = options?.client ?? createMockClient()
-      const runtime = options?.runtime ?? createMockRuntime()
+      const suppliedServices = Option.fromNullishOr(options?.services)
+      let services: Context.Context<unknown>
+      if (Option.isSome(suppliedServices)) {
+        services = suppliedServices.value
+      } else {
+        services = yield* Effect.promise(() => getServices())
+      }
+      const client = Option.getOrElse(Option.fromNullishOr(options?.client), createMockClient)
+      const runtime = Option.getOrElse(Option.fromNullishOr(options?.runtime), createMockRuntime)
 
       const setup = yield* Effect.promise(() =>
         testRender(
           () => (
-            <RegistryProvider services={services}>
-              <KeyboardScopeProvider>
-                <ThemeProvider mode="dark">
-                  <EnvProvider env={{ visual: undefined, editor: undefined, shutdown: () => {} }}>
-                    <CommandProvider>
-                      <RouterProvider
-                        initialRoute={
-                          options?.initialRoute ??
-                          Route.session(
-                            SessionId.make("test-session"),
-                            BranchId.make("test-branch"),
-                          )
-                        }
-                      >
-                        <WorkspaceProvider
-                          cwd={options?.cwd ?? defaultWorkspaceCwd}
-                          home="/tmp"
-                          services={services}
+            <TerminalDimensionsProvider>
+              <RegistryProvider services={services}>
+                <KeyboardScopeProvider>
+                  <ThemeProvider mode="dark">
+                    <EnvProvider
+                      env={{ visual: Option.none(), editor: Option.none(), shutdown: () => {} }}
+                    >
+                      <CommandProvider>
+                        <RouterProvider
+                          initialRoute={
+                            options?.initialRoute ??
+                            Route.session(
+                              SessionId.make("test-session"),
+                              BranchId.make("test-branch"),
+                            )
+                          }
                         >
-                          <ClientProvider
-                            client={client}
-                            runtime={runtime}
+                          <WorkspaceProvider
+                            cwd={options?.cwd ?? defaultWorkspaceCwd}
+                            home="/tmp"
                             services={services}
-                            log={noopLog}
-                            initialSession={toInitialSession(options?.initialSession)}
-                            initialAgent={options?.initialAgent}
                           >
-                            <ExtensionUIProvider>{node()}</ExtensionUIProvider>
-                          </ClientProvider>
-                        </WorkspaceProvider>
-                      </RouterProvider>
-                    </CommandProvider>
-                  </EnvProvider>
-                </ThemeProvider>
-              </KeyboardScopeProvider>
-            </RegistryProvider>
+                            <ClientProvider
+                              client={client}
+                              runtime={runtime}
+                              services={services}
+                              log={noopLog}
+                              initialSession={Option.getOrUndefined(
+                                toInitialSession(Option.fromNullishOr(options?.initialSession)),
+                              )}
+                              initialAgent={options?.initialAgent}
+                            >
+                              <ExtensionUIProvider>{node()}</ExtensionUIProvider>
+                            </ClientProvider>
+                          </WorkspaceProvider>
+                        </RouterProvider>
+                      </CommandProvider>
+                    </EnvProvider>
+                  </ThemeProvider>
+                </KeyboardScopeProvider>
+              </RegistryProvider>
+            </TerminalDimensionsProvider>
           ),
           {
             width: options?.width ?? 80,
@@ -291,7 +311,7 @@ export const renderWithProviders = (
           },
         ),
       )
-      currentSetup = setup
+      currentSetup = Option.some(setup)
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.promise(() => setup.renderOnce())
       return setup
@@ -302,15 +322,12 @@ export const renderFrame = (setup: TestRenderSetup) =>
   setup.captureCharFrame().replaceAll("\u00a0", " ")
 
 export const destroyRenderSetup = (setup: TestRenderSetup) => {
-  if (currentSetup === setup) currentSetup = undefined
+  if (Option.isSome(currentSetup) && currentSetup.value === setup) currentSetup = Option.none()
   setup.renderer.destroy()
 }
 
-beforeEach(() => {
-  currentSetup = undefined
-})
-
+// eslint-disable-next-line effect/noTestLifecycleHooks -- OpenTUI renderers require synchronous per-test teardown at this shared test boundary.
 afterEach(() => {
-  if (currentSetup !== undefined) destroyRenderSetup(currentSetup)
-  currentSetup = undefined
+  if (Option.isSome(currentSetup)) destroyRenderSetup(currentSetup.value)
+  currentSetup = Option.none()
 })

@@ -33,6 +33,11 @@ const TurnSubmissionFields = {
   interactive: Schema.optional(Schema.Boolean),
 }
 
+const QueueFollowUpFields = {
+  ...WorkspaceFields,
+  message: Message,
+}
+
 const SteerFields = {
   ...WorkspaceFields,
   commandId: ActorCommandId,
@@ -142,6 +147,9 @@ export type TurnSubmissionInput = WorkspaceInput & {
   readonly agentOverride?: AgentName
   readonly runSpec?: RunSpec
   readonly interactive?: boolean
+}
+export type QueueFollowUpInput = WorkspaceInput & {
+  readonly message: MessageType
 }
 export type SteerInput = WorkspaceInput & {
   readonly commandId: ActorCommandId
@@ -261,10 +269,10 @@ export const AgentLoop = Actor.fromEntity(
       }),
     },
     QueueFollowUp: {
-      payload: TurnSubmissionFields,
+      payload: QueueFollowUpFields,
       success: Schema.Void,
       error: AgentLoopError,
-      id: (p: TurnSubmissionInput) => ({
+      id: (p: QueueFollowUpInput) => ({
         entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
         primaryKey: p.message.id,
       }),

@@ -16,7 +16,7 @@
  * @module
  */
 
-import { Cause, Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
+import { Predicate, Cause, Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import type { LoadedExtension } from "../../../domain/extension.js"
 import type { ExtensionId } from "../../../domain/ids.js"
 import type { ScheduledJobContribution } from "../../../domain/scheduled-job.js"
@@ -35,7 +35,7 @@ export interface SchedulerFailure {
   readonly error: string
 }
 
-export class SchedulerRuntimeError extends Schema.TaggedErrorClass<SchedulerRuntimeError>()(
+export class SchedulerRuntimeError extends Schema.TaggedError<SchedulerRuntimeError>()(
   "@gent/core-internal/runtime/extensions/resource-host/schedule-engine/SchedulerRuntimeError",
   {
     operation: Schema.Literals(["install", "remove"]),
@@ -56,7 +56,7 @@ const SchedulerStateJson = Schema.fromJsonString(SchedulerStateSchema)
 const decodeSchedulerState = Schema.decodeUnknownEffect(SchedulerStateJson)
 const encodeSchedulerState = Schema.encodeEffect(SchedulerStateJson)
 
-export interface CronRuntimeShape {
+export interface CronRuntimeApi {
   readonly install: (
     entryPath: string,
     schedule: string,
@@ -65,7 +65,7 @@ export interface CronRuntimeShape {
   readonly remove: (name: string) => Effect.Effect<void, SchedulerRuntimeError>
 }
 
-export class CronRuntime extends Context.Service<CronRuntime, CronRuntimeShape>()(
+export class CronRuntime extends Context.Service<CronRuntime, CronRuntimeApi>()(
   "@gent/core/src/runtime/extensions/resource-host/schedule-engine/CronRuntime",
 ) {
   static unavailable = (reason: string): Layer.Layer<CronRuntime> =>
@@ -101,9 +101,10 @@ interface DesiredScheduledJob {
   readonly script: string
 }
 
-const SCHEDULER_DIR = [".gent", "scheduler"] as const
-const JOBS_DIR = [...SCHEDULER_DIR, "jobs"] as const
-const STATE_FILE = [...SCHEDULER_DIR, "managed-jobs.json"] as const
+const SCHEDULER_DIR = [".gent", "scheduler"]
+const JOBS_DIR = [...SCHEDULER_DIR, "jobs"]
+const STATE_FILE = [...SCHEDULER_DIR, "managed-jobs.json"]
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 const sanitize = (value: string) => value.replace(/[^a-zA-Z0-9_-]+/g, "-")
 
@@ -124,21 +125,24 @@ const renderCommand = (
 const renderWrapperScript = (
   command: ReadonlyArray<string>,
   env: Readonly<Record<string, string>>,
-  cwd: string | undefined,
+  cwd: Option.Option<string>,
   name: string,
 ) => {
   const spawnOptions = [
     `stdout: "inherit"`,
     `stderr: "inherit"`,
     `stdin: "ignore"`,
-    `env: { ...process.env, ...${JSON.stringify(env)} }`,
-    ...(cwd !== undefined ? [`cwd: ${JSON.stringify(cwd)}`] : []),
+    `env: { ...process.env, ...${encodeJson(env)} }`,
+    ...Option.match(cwd, {
+      onNone: () => [],
+      onSome: (value) => [`cwd: ${encodeJson(value)}`],
+    }),
   ].join(",\n  ")
 
   // The emitted script runs in a spawned Bun subprocess (the scheduled job),
   // not inside the gent runtime — `process.exit` here is fine and is NOT a
   // GentPlatform.exit candidate.
-  return `const command = ${JSON.stringify(command)}\nconst proc = Bun.spawn(command, {\n  ${spawnOptions}\n})\nconst exitCode = await proc.exited\nif (exitCode !== 0) {\n  console.error(${JSON.stringify(`[scheduled-job] ${name} failed`)}, { exitCode, command })\n  // process.exit in the spawned scheduled-job script — not the gent runtime\n  process.exit(exitCode)\n}\n`
+  return `const command = ${encodeJson(command)}\nconst proc = Bun.spawn(command, {\n  ${spawnOptions}\n})\nconst exitCode = await proc.exited\nif (exitCode !== 0) {\n  console.error(${encodeJson(`[scheduled-job] ${name} failed`)}, { exitCode, command })\n  // process.exit in the spawned scheduled-job script — not the gent runtime\n  process.exit(exitCode)\n}\n`
 }
 
 const readState = (
@@ -216,7 +220,7 @@ const resolveDesiredJobs = (
         script: renderWrapperScript(
           renderCommand(baseCommand, schedule),
           env,
-          schedule.target.cwd,
+          Option.fromUndefinedOr(schedule.target.cwd),
           name,
         ),
       })
@@ -227,12 +231,13 @@ const resolveDesiredJobs = (
 export const reconcileScheduledJobs = (params: {
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly home: string
+  // oxlint-disable-next-line effect/noNullish -- The scheduler command is an optional host boundary input.
   readonly command: ScheduledJobCommand | undefined
   readonly env?: Readonly<Record<string, string>>
-  readonly runtime?: CronRuntimeShape
+  readonly runtime?: CronRuntimeApi
 }): Effect.Effect<ReadonlyArray<SchedulerFailure>, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
-    if (params.command === undefined) return []
+    if (Predicate.isUndefined(params.command)) return []
 
     const path = yield* Path.Path
     const fs = yield* FileSystem.FileSystem
@@ -241,18 +246,18 @@ export const reconcileScheduledJobs = (params: {
       params.extensions,
       params.command,
       schedulerHome,
-      params.env ?? {},
+      Option.getOrElse(Option.fromUndefinedOr(params.env), () => ({})),
     )
     const runtimeOption = yield* Effect.serviceOption(CronRuntime)
-    const runtime = params.runtime ?? Option.getOrUndefined(runtimeOption)
-    if (runtime === undefined && desired.length > 0) {
+    const runtime = Option.fromUndefinedOr(params.runtime).pipe(Option.orElse(() => runtimeOption))
+    if (Option.isNone(runtime) && desired.length > 0) {
       return desired.map((job) => ({
         extensionId: job.extensionId,
         jobId: job.jobId,
         error: "Cron runtime unavailable",
       }))
     }
-    if (runtime === undefined) return []
+    if (Option.isNone(runtime)) return []
 
     const statePath = path.join(schedulerHome, ...STATE_FILE)
     const previous = yield* readState(statePath)
@@ -261,7 +266,7 @@ export const reconcileScheduledJobs = (params: {
 
     for (const [name, scriptPath] of Object.entries(previous.jobs)) {
       if (desiredNames.has(name)) continue
-      yield* runtime.remove(name).pipe(Effect.catchEager(() => Effect.void))
+      yield* runtime.value.remove(name).pipe(Effect.catchEager(() => Effect.void))
       yield* fs.remove(scriptPath).pipe(Effect.catchEager(() => Effect.void))
     }
 
@@ -285,7 +290,9 @@ export const reconcileScheduledJobs = (params: {
         continue
       }
 
-      const exit = yield* runtime.install(job.scriptPath, job.schedule, job.name).pipe(Effect.exit)
+      const exit = yield* runtime.value
+        .install(job.scriptPath, job.schedule, job.name)
+        .pipe(Effect.exit)
 
       if (exit._tag === "Failure") {
         failures.push({

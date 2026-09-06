@@ -3,14 +3,14 @@
  * starting the real sidecar.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { ref, type TurnProjection } from "@gent/core/extensions/api"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { ExecutorExtension, EXECUTOR_EXTENSION_ID } from "../../src/executor/index.js"
 import { ExecutorRead, ExecutorRuntime, ExecutorWrite } from "../../src/executor/controller.js"
-import { ExecutorRpc } from "../../src/executor/protocol.js"
+import { ExecutorRpc, ExecutorSnapshotReply } from "../../src/executor/protocol.js"
 import { e2ePreset } from "../helpers/test-preset"
 
 const StartRef = ref(ExecutorRpc.Start)
@@ -22,24 +22,23 @@ describe("ExecutorExtension via RPC", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const connectedCwds: string[] = []
-        const fakeRuntime = {
-          snapshot: () =>
-            Effect.succeed({
-              status: "ready" as const,
-              baseUrl: "http://127.0.0.1:4788",
-              executorPrompt: "Use tools.describe before calls.",
-            }),
+        const fakeRuntime = ExecutorRuntime.of({
+          snapshot: Effect.succeed({
+            status: "ready",
+            baseUrl: "http://127.0.0.1:4788",
+            executorPrompt: "Use tools.describe before calls.",
+          }),
           connect: (cwd: string) =>
             Effect.sync(() => {
               connectedCwds.push(cwd)
             }),
-          disconnect: () => Effect.sync(() => connectedCwds.push("disconnected")),
-          turnProjection: () => Effect.succeed({} satisfies TurnProjection),
-        }
+          disconnect: Effect.sync(() => connectedCwds.push("disconnected")),
+          turnProjection: Effect.succeed({} satisfies TurnProjection),
+        })
         const executorLayer = Layer.mergeAll(
           Layer.succeed(ExecutorRuntime, fakeRuntime),
-          Layer.succeed(ExecutorWrite, fakeRuntime),
-          Layer.succeed(ExecutorRead, { snapshot: fakeRuntime.snapshot }),
+          Layer.succeed(ExecutorWrite, ExecutorWrite.of(fakeRuntime)),
+          Layer.succeed(ExecutorRead, ExecutorRead.of({ snapshot: fakeRuntime.snapshot })),
         )
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client, sessionId, branchId } = yield* createRpcHarness({
@@ -61,17 +60,14 @@ describe("ExecutorExtension via RPC", () => {
           input: "start",
         })
 
-        const snapshot = (yield* client.extension.request({
+        const rawSnapshot = yield* client.extension.request({
           sessionId,
           branchId,
           extensionId: SnapshotRef.extensionId,
           capabilityId: SnapshotRef.capabilityId,
           input: {},
-        })) as {
-          readonly status: string
-          readonly baseUrl?: string
-          readonly executorPrompt?: string
-        }
+        })
+        const snapshot = yield* Schema.decodeUnknownEffect(ExecutorSnapshotReply)(rawSnapshot)
         expect(snapshot).toMatchObject({
           status: "ready",
           baseUrl: "http://127.0.0.1:4788",

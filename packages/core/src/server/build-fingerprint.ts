@@ -42,7 +42,12 @@ const computeLocalFingerprintUncached: Effect.Effect<
     stdout: "pipe",
     stderr: "pipe",
   }).pipe(
-    Effect.map((r) => (r.exitCode === 0 ? r.stdout.trim() : "")),
+    Effect.map((r) => {
+      if (r.exitCode === 0) {
+        return r.stdout.trim()
+      }
+      return ""
+    }),
     Effect.catchTag("ProcessError", () => Effect.succeed("")),
   )
   if (result.length > 0) return `src-${result}`
@@ -50,14 +55,14 @@ const computeLocalFingerprintUncached: Effect.Effect<
   return "unknown"
 })
 
-export interface BuildFingerprintShape {
+export interface BuildFingerprintApi {
   /** Cached local fingerprint computation. Identical across yields within TTL. */
   readonly local: Effect.Effect<string>
   /** Resolved fingerprint — env override (`GENT_BUILD_FINGERPRINT`) wins, else local. */
   readonly resolved: Effect.Effect<string>
 }
 
-export class BuildFingerprint extends Context.Service<BuildFingerprint, BuildFingerprintShape>()(
+export class BuildFingerprint extends Context.Service<BuildFingerprint, BuildFingerprintApi>()(
   "@gent/core/src/server/build-fingerprint/BuildFingerprint",
 ) {
   static Live: Layer.Layer<
@@ -71,6 +76,7 @@ export class BuildFingerprint extends Context.Service<BuildFingerprint, BuildFin
         FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
       >()
       const cached = yield* Effect.cachedWithTTL(computeLocalFingerprintUncached, "1 hour")
+      // oxlint-disable-next-line effect/noInlineProvide -- Layer construction captures the services required by the cached computation.
       const local: Effect.Effect<string> = Effect.provide(cached, ctx)
       const resolved: Effect.Effect<string> = Effect.gen(function* () {
         const opt: Option.Option<string> = yield* Config.option(
@@ -79,14 +85,17 @@ export class BuildFingerprint extends Context.Service<BuildFingerprint, BuildFin
         if (Option.isSome(opt) && opt.value !== "") return opt.value
         return yield* local
       }).pipe(Effect.catchEager(() => local))
-      return { local, resolved }
+      return BuildFingerprint.of({ local, resolved })
     }),
   )
 
   /** Deterministic test layer. */
   static Test = (fingerprint = "test-fingerprint"): Layer.Layer<BuildFingerprint> =>
-    Layer.succeed(BuildFingerprint, {
-      local: Effect.succeed(fingerprint),
-      resolved: Effect.succeed(fingerprint),
-    })
+    Layer.succeed(
+      BuildFingerprint,
+      BuildFingerprint.of({
+        local: Effect.succeed(fingerprint),
+        resolved: Effect.succeed(fingerprint),
+      }),
+    )
 }

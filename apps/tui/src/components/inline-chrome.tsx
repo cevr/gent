@@ -1,12 +1,13 @@
 import { Show, type JSX } from "solid-js"
-import type { RGBA } from "@opentui/core"
+import { Option, Schema } from "effect"
+import type { MouseEvent, RGBA } from "@opentui/core"
 
 export interface InlineChromeRootProps {
   children: JSX.Element
   paddingLeft?: number
   marginTop?: number
   marginBottom?: number
-  onMouseDown?: (event: unknown) => void
+  onMouseDown?: (event: MouseEvent) => void
 }
 
 function Root(props: InlineChromeRootProps) {
@@ -35,6 +36,33 @@ export interface InlineChromeHeaderProps {
 }
 
 function Header(props: InlineChromeHeaderProps) {
+  const titleStyle = () => {
+    const color = Option.fromNullishOr(props.titleColor)
+    if (Option.isSome(color)) return { fg: color.value, bold: true }
+    return { bold: true }
+  }
+  const subtitleStyle = () =>
+    Option.fromNullishOr(props.subtitleColor).pipe(
+      Option.map((color) => ({ fg: color })),
+      Option.getOrUndefined,
+    )
+  const title = () => {
+    const text = Schema.decodeUnknownOption(Schema.String)(props.title)
+    if (Option.isSome(text)) return <span style={titleStyle()}>{text.value}</span>
+    return props.title
+  }
+  const subtitle = () => {
+    const href = Option.fromNullishOr(props.subtitleHref)
+    if (Option.isSome(href)) {
+      return (
+        <a href={href.value}>
+          <span style={subtitleStyle()}> {props.subtitle}</span>
+        </a>
+      )
+    }
+    return <span style={subtitleStyle()}> {props.subtitle}</span>
+  }
+
   return (
     <text>
       <span style={{ fg: props.accentColor }}>{"╭─["}</span>
@@ -42,34 +70,8 @@ function Header(props: InlineChromeHeaderProps) {
         {props.leading}
         <span style={{ fg: props.accentColor }}> </span>
       </Show>
-      {typeof props.title === "string" ? (
-        <span
-          style={
-            props.titleColor !== undefined ? { fg: props.titleColor, bold: true } : { bold: true }
-          }
-        >
-          {props.title}
-        </span>
-      ) : (
-        props.title
-      )}
-      <Show when={props.subtitle}>
-        {props.subtitleHref !== undefined ? (
-          <a href={props.subtitleHref}>
-            <span
-              style={props.subtitleColor !== undefined ? { fg: props.subtitleColor } : undefined}
-            >
-              {" "}
-              {props.subtitle}
-            </span>
-          </a>
-        ) : (
-          <span style={props.subtitleColor !== undefined ? { fg: props.subtitleColor } : undefined}>
-            {" "}
-            {props.subtitle}
-          </span>
-        )}
-      </Show>
+      {title()}
+      <Show when={props.subtitle}>{subtitle()}</Show>
       <span style={{ fg: props.accentColor }}>{"]"}</span>
       <Show when={props.trailing}>
         <span> </span>

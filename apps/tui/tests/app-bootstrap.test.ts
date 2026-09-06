@@ -13,6 +13,11 @@ import {
 } from "../src/app-bootstrap"
 import { createMockClient } from "./render-harness-boundary"
 
+const absent = Option.getOrUndefined(Option.none())
+const nullValue = Option.getOrNull(Option.none())
+const idleTag = "Idle" satisfies "Idle"
+const noAuthSource = "none" satisfies "none"
+
 const expectAppBootstrapFailure = (
   effect: Effect.Effect<unknown, AppBootstrapError | GentClientRpcError>,
 ) =>
@@ -20,11 +25,11 @@ const expectAppBootstrapFailure = (
     const exit = yield* Effect.exit(effect)
     expect(Exit.isFailure(exit)).toBe(true)
     if (!Exit.isFailure(exit)) return yield* Effect.die("expected app bootstrap failure")
-    const reason = exit.cause.reasons.find(Cause.isFailReason)
-    if (reason === undefined || !Schema.is(AppBootstrapError)(reason.error)) {
+    const reason = Option.fromUndefinedOr(exit.cause.reasons.find(Cause.isFailReason))
+    if (Option.isNone(reason) || !Schema.is(AppBootstrapError)(reason.value.error)) {
       return yield* Effect.die("expected AppBootstrapError")
     }
-    return reason.error
+    return reason.value.error
   })
 
 describe("resolveStartupAuthState", () => {
@@ -41,10 +46,10 @@ describe("resolveStartupAuthState", () => {
               sessionId: SessionId.make("session-a"),
               branchId: BranchId.make("branch-a"),
               messages: [],
-              lastEventId: null,
-              reasoningLevel: undefined,
+              lastEventId: nullValue,
+              reasoningLevel: absent,
               runtime: {
-                _tag: "Idle" as const,
+                _tag: idleTag,
                 agent: AgentName.make("deepwork"),
                 queue: emptyQueueSnapshot(),
               },
@@ -67,8 +72,8 @@ describe("resolveStartupAuthState", () => {
                 provider: "openai",
                 hasKey: false,
                 required: true,
-                source: "none" as const,
-                authType: undefined,
+                source: noAuthSource,
+                authType: absent,
               },
             ])
           },
@@ -83,9 +88,9 @@ describe("resolveStartupAuthState", () => {
           createdAt: dateFromMillis(0),
           updatedAt: dateFromMillis(0),
           cwd: "/tmp",
-          reasoningLevel: undefined,
-          parentSessionId: undefined,
-          parentBranchId: undefined,
+          reasoningLevel: absent,
+          parentSessionId: absent,
+          parentBranchId: absent,
         },
       }
       const auth = yield* resolveStartupAuthState({
@@ -113,10 +118,10 @@ describe("resolveStartupAuthState", () => {
               sessionId: SessionId.make("session-a"),
               branchId: BranchId.make("branch-a"),
               messages: [],
-              lastEventId: null,
-              reasoningLevel: undefined,
+              lastEventId: nullValue,
+              reasoningLevel: absent,
               runtime: {
-                _tag: "Idle" as const,
+                _tag: idleTag,
                 agent: AgentName.make("cowork"),
                 queue: emptyQueueSnapshot(),
               },
@@ -147,9 +152,9 @@ describe("resolveStartupAuthState", () => {
           createdAt: dateFromMillis(0),
           updatedAt: dateFromMillis(0),
           cwd: "/tmp",
-          reasoningLevel: undefined,
-          parentSessionId: undefined,
-          parentBranchId: undefined,
+          reasoningLevel: absent,
+          parentSessionId: absent,
+          parentBranchId: absent,
         },
         prompt: "hi",
       }
@@ -177,11 +182,11 @@ describe("resolveStartupAuthState", () => {
               sessionId: SessionId.make("session-a"),
               branchId: BranchId.make("branch-a"),
               messages: [],
-              lastEventId: null,
-              reasoningLevel: undefined,
+              lastEventId: nullValue,
+              reasoningLevel: absent,
               runtime: {
-                _tag: "Idle" as const,
-                agent: undefined,
+                _tag: idleTag,
+                agent: absent,
                 queue: emptyQueueSnapshot(),
               },
               metrics: {
@@ -211,9 +216,9 @@ describe("resolveStartupAuthState", () => {
           createdAt: dateFromMillis(0),
           updatedAt: dateFromMillis(0),
           cwd: "/tmp",
-          reasoningLevel: undefined,
-          parentSessionId: undefined,
-          parentBranchId: undefined,
+          reasoningLevel: absent,
+          parentSessionId: absent,
+          parentBranchId: absent,
         },
       }
       const auth = yield* resolveStartupAuthState({
@@ -250,9 +255,9 @@ describe("resolveStartupAuthState", () => {
           createdAt: dateFromMillis(0),
           updatedAt: dateFromMillis(0),
           cwd: "/tmp",
-          reasoningLevel: undefined,
-          parentSessionId: undefined,
-          parentBranchId: undefined,
+          reasoningLevel: absent,
+          parentSessionId: absent,
+          parentBranchId: absent,
         },
         branches: [
           {

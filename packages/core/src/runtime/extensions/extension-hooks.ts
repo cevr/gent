@@ -1,4 +1,4 @@
-import { Cause, Effect, type FileSystem, type Path } from "effect"
+import { Cause, Effect, Option, Predicate, Schema, type FileSystem, type Path } from "effect"
 import {
   SCOPE_PRECEDENCE,
   type ExtensionHook,
@@ -25,7 +25,7 @@ export interface CompiledExtensionHooks {
   readonly resolveSystemPrompt: (
     input: SystemPromptInput,
   ) => Effect.Effect<string, never, CurrentHookHostContext>
-  readonly resolveTurnProjection: () => Effect.Effect<
+  readonly resolveTurnProjection: Effect.Effect<
     ExtensionTurnProjection,
     never,
     CurrentHookHostContext | CurrentProjectionHookContext
@@ -44,6 +44,20 @@ export interface CompiledExtensionHooks {
 export interface ExtensionTurnProjection {
   readonly promptSections: ReadonlyArray<PromptSection>
   readonly policyFragments: ReadonlyArray<ToolPolicyFragment>
+}
+
+const ToolCallDenialSchema = Schema.TaggedStruct("deny", {
+  message: Schema.String,
+  result: Schema.optional(Schema.Unknown),
+})
+type ToolCallDenial = typeof ToolCallDenialSchema.Type
+
+const isToolCallDenial = (result: ToolCallPreflightResult): result is ToolCallDenial =>
+  Schema.is(ToolCallDenialSchema)(result)
+
+const toToolCallDenial = (result: ToolCallPreflightResult): Option.Option<ToolCallDenial> => {
+  if (isToolCallDenial(result)) return Option.some(result)
+  return Option.none()
 }
 
 interface RegisteredSystemPromptRewrite {
@@ -127,17 +141,17 @@ const provideProjectionContext = <A, E, R>(
 }
 
 const collectTurnProjection = (
-  projection: ExtensionTurnProjection | undefined,
+  projection: Option.Option<ExtensionTurnProjection>,
   sectionsById: Map<string, PromptSection>,
   policyFragments: ToolPolicyFragment[],
 ) => {
-  if (projection === undefined) return
-  for (const section of projection.promptSections) sectionsById.set(section.id, section)
-  for (const fragment of projection.policyFragments) policyFragments.push(fragment)
+  if (Option.isNone(projection)) return
+  for (const section of projection.value.promptSections) sectionsById.set(section.id, section)
+  for (const fragment of projection.value.policyFragments) policyFragments.push(fragment)
 }
 
 const runTurnProjectionHook = (slot: HookTurnProjectionSlot) =>
-  sealErasedEffect(
+  sealErasedEffect<Option.Option<ExtensionTurnProjection>, never>(
     () =>
       Effect.gen(function* () {
         const projection = yield* CurrentProjectionHookContext
@@ -148,10 +162,17 @@ const runTurnProjectionHook = (slot: HookTurnProjectionSlot) =>
           slot.extensionId,
           // @effect-diagnostics-next-line anyUnknownInErrorContext:off
           slot.handler().pipe(
-            Effect.map((projection) => ({
-              promptSections: projection.promptSections ?? [],
-              policyFragments: projection.toolPolicy !== undefined ? [projection.toolPolicy] : [],
-            })),
+            Effect.map((projection) => {
+              const promptSections = Option.getOrElse(
+                Option.fromUndefinedOr(projection.promptSections),
+                () => [],
+              )
+              let policyFragments: ReadonlyArray<ToolPolicyFragment> = []
+              if (!Predicate.isUndefined(projection.toolPolicy)) {
+                policyFragments = [projection.toolPolicy]
+              }
+              return Option.some({ promptSections, policyFragments })
+            }),
           ),
         )
       }),
@@ -162,7 +183,7 @@ const runTurnProjectionHook = (slot: HookTurnProjectionSlot) =>
             extensionId: slot.extensionId,
             error: String(error),
           }),
-          Effect.as(undefined),
+          Effect.as(Option.none()),
         ),
       onDefect: (defect) =>
         Effect.logWarning("extension.hook.turn-projection.defect").pipe(
@@ -170,13 +191,13 @@ const runTurnProjectionHook = (slot: HookTurnProjectionSlot) =>
             extensionId: slot.extensionId,
             defect: String(defect),
           }),
-          Effect.as(undefined),
+          Effect.as(Option.none()),
         ),
     },
   )
 
 const eraseHookEffect = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A> =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- hook effects cross the extension membrane; compile-time E/R are erased and resealed by sealErasedEffect at every invocation site
+  // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- Hook effects cross the extension membrane; compile-time E/R are erased and resealed by sealErasedEffect at every invocation site.
   effect as Effect.Effect<A>
 
 const collectHookSlot = (
@@ -197,7 +218,7 @@ const collectHookSlot = (
     case "turnProjection":
       slots.turnProjection.push({
         extensionId: ext.manifest.id,
-        handler: () => eraseHookEffect(slot.hook.handler(undefined)),
+        handler: () => eraseHookEffect(slot.hook.handler()),
       })
       return
     case "turnAfter":
@@ -274,17 +295,16 @@ export const compileExtensionHooks = (
         return current
       }),
 
-    resolveTurnProjection: () =>
-      Effect.gen(function* () {
-        const sectionsById = new Map<string, PromptSection>()
-        const policyFragments: ToolPolicyFragment[] = []
+    resolveTurnProjection: Effect.gen(function* () {
+      const sectionsById = new Map<string, PromptSection>()
+      const policyFragments: ToolPolicyFragment[] = []
 
-        for (const slot of turnProjectionSlots) {
-          collectTurnProjection(yield* runTurnProjectionHook(slot), sectionsById, policyFragments)
-        }
+      for (const slot of turnProjectionSlots) {
+        collectTurnProjection(yield* runTurnProjectionHook(slot), sectionsById, policyFragments)
+      }
 
-        return { promptSections: [...sectionsById.values()], policyFragments }
-      }),
+      return { promptSections: [...sectionsById.values()], policyFragments }
+    }),
 
     transformToolResult: (input) =>
       Effect.gen(function* () {
@@ -326,12 +346,12 @@ export const compileExtensionHooks = (
       Effect.gen(function* () {
         for (const slot of toolCallSlots) {
           const ctx = yield* CurrentHookHostContext
-          const decision = yield* sealErasedEffect(
+          const decision = yield* sealErasedEffect<Option.Option<ToolCallDenial>, never>(
             () =>
               provideLifecycleHostContext(
                 { ...ctx, extensionId: slot.extensionId },
                 // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-                eraseHookEffect(slot.handler(input)),
+                eraseHookEffect(slot.handler(input)).pipe(Effect.map(toToolCallDenial)),
               ),
             {
               onFailure: (error) =>
@@ -340,7 +360,7 @@ export const compileExtensionHooks = (
                     extensionId: slot.extensionId,
                     error: String(error),
                   }),
-                  Effect.as(undefined),
+                  Effect.as(Option.none()),
                 ),
               onDefect: (defect) =>
                 Effect.logWarning("extension.hook.tool-call.defect").pipe(
@@ -348,11 +368,11 @@ export const compileExtensionHooks = (
                     extensionId: slot.extensionId,
                     defect: String(defect),
                   }),
-                  Effect.as(undefined),
+                  Effect.as(Option.none()),
                 ),
             },
           )
-          if (decision?._tag === "deny") return decision
+          if (Option.isSome(decision)) return decision.value
         }
       }),
 

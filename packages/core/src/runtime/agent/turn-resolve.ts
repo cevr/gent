@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Option, Predicate } from "effect"
 import {
   AgentDefinition,
   DEFAULT_AGENT_NAME,
@@ -12,6 +12,9 @@ import { getToolId, type ToolCapability } from "../../domain/capability/tool.js"
 import { ErrorOccurred } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { type BranchId, type SessionId } from "../../domain/ids.js"
+import type { ResourceDescriptor } from "../../domain/resource-graph.js"
+import type { ResourceGenerationId } from "../../domain/resource-generation.js"
+import type { TurnProjection } from "../../domain/extension.js"
 import { compileSystemPrompt, type PromptSection } from "../../domain/prompt.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"
@@ -23,10 +26,23 @@ import { compileToolPolicy, ExtensionRegistry } from "../extensions/registry.js"
 import type { ResolvedTurn } from "./agent-loop.state.js"
 import { buildTurnPromptSections, resolveReasoning } from "./agent-loop.utils.js"
 import { CurrentExtensionHostContext } from "./current-extension-host-context.js"
+import type { ResourceGraphPublication } from "../extensions/resource-host/resource-graph-host.js"
+import type { RuntimeProfileCatalog } from "../profile.js"
+import {
+  dynamicToolEntry,
+  mergeResolvedToolEntries,
+  staticToolEntries,
+  type ResolvedToolCapability,
+} from "./tool-runner.js"
+import { attachToolBindingIdentity, bindingResourcesFromPlan } from "./tool-binding-replay.js"
 
 export interface ResolvedTurnContext extends ResolvedTurn {
   agent: AgentDefinition
   tools: ReadonlyArray<ToolCapability>
+  /** Exact owner and implementation selected for each advertised tool. */
+  toolBindings: ReadonlyMap<string, ResolvedToolCapability>
+  /** Exact resource generation captured for process-local source-mode replay. */
+  turnGenerationId?: ResourceGenerationId
 }
 
 /**
@@ -36,63 +52,91 @@ export interface ResolvedTurnContext extends ResolvedTurn {
  * (defaulting to `"native"` when omitted); model drivers are always native.
  * Returns `undefined` when no driver is set.
  */
-export const resolveDriverToolSurface: (
+const resolveDriverToolSurfaceOption = Effect.fn("TurnHelpers.resolveDriverToolSurface")(function* (
   agent: AgentDefinition,
-) => Effect.Effect<"native" | "codemode" | undefined, never, DriverRegistry> = Effect.fn(
-  "TurnHelpers.resolveDriverToolSurface",
-)(function* (agent) {
-  const driver = agent.driver
-  if (driver === undefined) return undefined
-  if (driver._tag === "model") return "native"
+) {
+  const driver = yield* Effect.succeed(Option.fromUndefinedOr(agent.driver))
+  if (Option.isNone(driver)) return Option.none<"native" | "codemode">()
+  if (driver.value._tag === "model") return Option.some<"native" | "codemode">("native")
   const driverRegistry = yield* DriverRegistry
-  const ext = yield* driverRegistry.getExternal(driver.id)
-  return ext?.toolSurface ?? "native"
+  const ext = yield* driverRegistry.getExternal(driver.value.id)
+  const surface: "native" | "codemode" = Option.match(Option.fromUndefinedOr(ext), {
+    onNone: () => "native",
+    onSome: (value) => Option.getOrElse(Option.fromUndefinedOr(value.toolSurface), () => "native"),
+  })
+  return Option.some(surface)
 })
 
-const hasAgentOverrides = (overrides: AgentRunOverrides | undefined) =>
-  overrides?.allowedTools !== undefined ||
-  overrides?.deniedTools !== undefined ||
-  overrides?.reasoningEffort !== undefined ||
-  overrides?.systemPromptAddendum !== undefined
+export const resolveDriverToolSurface = (agent: AgentDefinition) =>
+  resolveDriverToolSurfaceOption(agent).pipe(Effect.map(Option.getOrUndefined))
 
-const mergeStaticAndDynamicTools = (
-  staticTools: ReadonlyArray<ToolCapability>,
-  dynamicTools: ReadonlyArray<ToolCapability>,
-): ReadonlyArray<ToolCapability> => {
-  const winners = new Map<string, ToolCapability>()
-  for (const tool of staticTools) winners.set(String(getToolId(tool)), tool)
-  for (const tool of dynamicTools) winners.set(String(getToolId(tool)), tool)
-  return [...winners.values()]
-}
+const hasAgentOverrides = (overrides: Option.Option<AgentRunOverrides>) =>
+  Option.match(overrides, {
+    onNone: () => false,
+    onSome: (value) =>
+      !Predicate.isUndefined(value.allowedTools) ||
+      !Predicate.isUndefined(value.deniedTools) ||
+      !Predicate.isUndefined(value.reasoningEffort) ||
+      !Predicate.isUndefined(value.systemPromptAddendum),
+  })
 
 const mergeSystemPromptAddendum = (
-  base: string | undefined,
-  addendum: string | undefined,
-): string | undefined => {
-  if (addendum === undefined) return base
-  return base !== undefined ? `${base}\n\n${addendum}` : addendum
-}
+  base: Option.Option<string>,
+  addendum: Option.Option<string>,
+): Option.Option<string> =>
+  Option.match(addendum, {
+    onNone: () => base,
+    onSome: (value) =>
+      Option.match(base, {
+        onNone: () => Option.some(value),
+        onSome: (baseValue) => Option.some(`${baseValue}\n\n${value}`),
+      }),
+  })
 
 const applyAgentOverrides = (
   agent: AgentDefinition,
-  overrides: AgentRunOverrides | undefined,
+  overrides: Option.Option<AgentRunOverrides>,
 ): AgentDefinition => {
   if (!hasAgentOverrides(overrides)) return agent
 
-  const systemPromptAddendum = mergeSystemPromptAddendum(
-    agent.systemPromptAddendum,
-    overrides?.systemPromptAddendum,
-  )
-
-  return AgentDefinition.make({
-    ...agent,
-    ...(overrides?.allowedTools !== undefined ? { allowedTools: overrides.allowedTools } : {}),
-    ...(overrides?.deniedTools !== undefined ? { deniedTools: overrides.deniedTools } : {}),
-    ...(overrides?.reasoningEffort !== undefined
-      ? { reasoningEffort: overrides.reasoningEffort }
-      : {}),
-    ...(systemPromptAddendum !== agent.systemPromptAddendum ? { systemPromptAddendum } : {}),
+  const override = overrides
+  const systemPromptAddendum = Option.match(override, {
+    onNone: () => Option.fromUndefinedOr(agent.systemPromptAddendum),
+    onSome: (value) =>
+      mergeSystemPromptAddendum(
+        Option.fromUndefinedOr(agent.systemPromptAddendum),
+        Option.fromUndefinedOr(value.systemPromptAddendum),
+      ),
   })
+
+  return AgentDefinition.make(
+    Object.assign(
+      { ...agent },
+      Option.match(override, {
+        onNone: () => ({}),
+        onSome: (value) =>
+          Object.assign(
+            {},
+            Option.match(Option.fromUndefinedOr(value.allowedTools), {
+              onNone: () => ({}),
+              onSome: (allowedTools) => ({ allowedTools }),
+            }),
+            Option.match(Option.fromUndefinedOr(value.deniedTools), {
+              onNone: () => ({}),
+              onSome: (deniedTools) => ({ deniedTools }),
+            }),
+            Option.match(Option.fromUndefinedOr(value.reasoningEffort), {
+              onNone: () => ({}),
+              onSome: (reasoningEffort) => ({ reasoningEffort }),
+            }),
+          ),
+      }),
+      Option.match(systemPromptAddendum, {
+        onNone: () => ({}),
+        onSome: (value) => ({ systemPromptAddendum: value }),
+      }),
+    ),
+  )
 }
 
 export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function* (params: {
@@ -103,20 +147,24 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   sessionId: SessionId
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
+  turnPublication?: ResourceGraphPublication<RuntimeProfileCatalog>
+  hash: (input: string) => string
 }) {
   const extensionRegistry = yield* ExtensionRegistry
   const messageStorage = yield* MessageStorage
   const sessionStorage = yield* SessionStorage
   const eventPublisher = yield* EventPublisher
   const hostCtx = yield* CurrentExtensionHostContext
-  const currentAgent = params.agentOverride ?? params.currentAgent ?? DEFAULT_AGENT_NAME
+  const currentAgent = Option.getOrElse(Option.fromUndefinedOr(params.agentOverride), () =>
+    Option.getOrElse(Option.fromUndefinedOr(params.currentAgent), () => DEFAULT_AGENT_NAME),
+  )
   const rawMessages = yield* messageStorage
     .listMessages(params.branchId)
     .pipe(Effect.map((items) => [...items]))
   const resolvedExtensions = extensionRegistry.getResolved()
   const agents = [...resolvedExtensions.agents.values()]
   const agent = agents.find((entry) => entry.name === currentAgent)
-  if (agent === undefined) {
+  if (Predicate.isUndefined(agent)) {
     yield* eventPublisher
       .publish(
         ErrorOccurred.make({
@@ -126,9 +174,13 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
         }),
       )
       .pipe(Effect.orDie)
+    // oxlint-disable-next-line effect/noNullish -- Unknown agents are an expected resolution miss after the error event is published.
     return undefined
   }
-  const effectiveAgent = applyAgentOverrides(agent, params.runSpec?.overrides)
+  const effectiveAgent = applyAgentOverrides(
+    agent,
+    Option.fromUndefinedOr(params.runSpec?.overrides),
+  )
 
   // Resolve runtime driver routing — `agent.driver` (hardcoded) wins,
   // then `UserConfig.driverOverrides[agent.name]`, else default.
@@ -141,25 +193,28 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   // come from the launch cwd. `get(undefined)` falls back to the
   // launch-cwd cached config.
   const sessionConfig = yield* configService.get(hostCtx.cwd)
-  const driverOverrides = sessionConfig.driverOverrides ?? undefined
+  const driverOverrides = sessionConfig.driverOverrides
   const driverResolution = resolveAgentDriver(effectiveAgent, driverOverrides)
   // If config-routed and the agent had no hardcoded driver, the
   // override replaces it — `effectiveAgent` is otherwise unchanged.
-  const dispatchAgent =
-    driverResolution.source === "config"
-      ? AgentDefinition.make({ ...effectiveAgent, driver: driverResolution.driver })
-      : effectiveAgent
+  let dispatchAgent = effectiveAgent
+  if (driverResolution.source === "config") {
+    dispatchAgent = AgentDefinition.make({ ...effectiveAgent, driver: driverResolution.driver })
+  }
 
   // Derive extension projections from explicit prompt/message slots.
   const dynamicRegistryOption = yield* Effect.serviceOption(DynamicExtensionRegistry)
-  const dynamicTools =
-    dynamicRegistryOption._tag === "Some"
-      ? yield* dynamicRegistryOption.value.listTools(params.sessionId)
-      : []
-  const allTools = mergeStaticAndDynamicTools(
-    [...resolvedExtensions.modelCapabilities.values()],
+  let dynamicTools: ReadonlyArray<ResolvedToolCapability> = []
+  if (dynamicRegistryOption._tag === "Some") {
+    dynamicTools = yield* dynamicRegistryOption.value
+      .listToolEntries(params.sessionId)
+      .pipe(Effect.map((entries) => entries.map(dynamicToolEntry)))
+  }
+  const allToolEntries = mergeResolvedToolEntries(
+    staticToolEntries(extensionRegistry),
     dynamicTools,
   )
+  const allTools = allToolEntries.map((entry) => entry.capability)
   const turnCtx = {
     sessionId: params.sessionId,
     branchId: params.branchId,
@@ -185,13 +240,15 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     projection: projectionCtx,
     host: hostCtx,
   }
-  const projEval = yield* extensionRegistry.extensionHooks
-    .resolveTurnProjection()
-    .pipe(provideExtensionHookContext(hookCtx))
-  const extensionProjections = [
-    ...projEval.policyFragments.map((p) => ({ toolPolicy: p })),
-    ...(projEval.promptSections.length > 0 ? [{ promptSections: projEval.promptSections }] : []),
-  ]
+  const projEval = yield* extensionRegistry.extensionHooks.resolveTurnProjection.pipe(
+    provideExtensionHookContext(hookCtx),
+  )
+  const extensionProjections: TurnProjection[] = projEval.policyFragments.map((p) => ({
+    toolPolicy: p,
+  }))
+  if (projEval.promptSections.length > 0) {
+    extensionProjections.push({ promptSections: projEval.promptSections })
+  }
 
   // Resolve tools + extension prompt sections via ToolPolicy compiler
   const { tools, promptSections: extensionSections } = compileToolPolicy(
@@ -207,6 +264,30 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     },
     extensionProjections,
   )
+  let bindingResources: ReadonlyArray<ResourceDescriptor> = []
+  if (Predicate.isNotUndefined(params.turnPublication)) {
+    bindingResources = bindingResourcesFromPlan(
+      params.turnPublication.plan.descriptors,
+      params.turnPublication.plan.startOrder,
+    )
+  }
+  const bindingContext = {
+    extensions: resolvedExtensions.extensions,
+    resources: bindingResources,
+    publicationRevision: params.turnPublication?.publicationRevision,
+    hash: params.hash,
+  }
+  const entriesByToolId = new Map(
+    allToolEntries.map((entry) => [
+      String(getToolId(entry.capability)),
+      attachToolBindingIdentity(entry, bindingContext),
+    ]),
+  )
+  const toolBindings = new Map<string, ResolvedToolCapability>()
+  for (const tool of tools) {
+    const entry = entriesByToolId.get(String(getToolId(tool)))
+    if (Predicate.isNotUndefined(entry)) toolBindings.set(String(getToolId(tool)), entry)
+  }
 
   // Build tool-aware prompt, then run through explicit prompt slots.
   // We hand the slot layer both the compiled `basePrompt` (for append-only
@@ -231,7 +312,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
       interactive: params.interactive,
       driverSource: driverResolution.source,
       tools,
-      ...(driverToolSurface !== undefined ? { driverToolSurface } : {}),
+      driverToolSurface,
       sections,
     })
     .pipe(provideExtensionHookContext(hookCtx))
@@ -244,9 +325,11 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     messages,
     agent: dispatchAgent,
     tools,
+    toolBindings,
+    turnGenerationId: params.turnPublication?.generationId,
     systemPrompt,
     modelId: params.runSpec?.overrides?.modelId ?? resolveAgentModel(dispatchAgent),
-    reasoning: resolveReasoning(dispatchAgent, session?.reasoningLevel),
+    reasoning: Option.getOrUndefined(resolveReasoning(dispatchAgent, session?.reasoningLevel)),
     temperature: dispatchAgent.temperature,
     driver: dispatchAgent.driver,
     driverSource: driverResolution.source,

@@ -6,11 +6,12 @@
  * loop) so the mapping is exercised without a real session.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer, Path, Schema } from "effect"
+import { Effect, Layer, Option, Path, Schema } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { AcpAgentsExtension } from "../../src/acp-agents/index.js"
 import {
   AgentDefinition,
+  AgentName,
   ExternalDriverRef,
   ModelDriverRef,
 } from "@gent/core-internal/domain/agent"
@@ -18,7 +19,7 @@ import { tool, type SystemPromptInput, type ToolCapability } from "@gent/core/ex
 import { withSectionMarkers } from "@gent/core-internal/domain/prompt"
 import { provideTestSetupContext } from "@gent/core-internal/test-utils"
 const baseAgent = AgentDefinition.make({
-  name: "cowork" as never,
+  name: AgentName.make("cowork"),
 })
 const fakeTool: ToolCapability = tool({
   id: "echo",
@@ -39,10 +40,15 @@ const getSystemPrompt = Effect.gen(function* () {
         home: "/home/x",
       }),
     )
+    // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
     .pipe(Effect.provide(spawnerLayer))
-  const systemPrompt = contributions.hooks?.find((slot) => slot.kind === "systemPrompt")
-  if (systemPrompt === undefined) throw new Error("expected ACP systemPrompt hook")
-  return systemPrompt.hook.handler
+  const systemPrompt = Option.fromUndefinedOr(
+    contributions.hooks?.find((slot) => slot.kind === "systemPrompt"),
+  )
+  if (Option.isNone(systemPrompt)) {
+    return yield* Effect.die(new Error("expected ACP systemPrompt hook"))
+  }
+  return systemPrompt.value.hook.handler
 })
 const runHandler = (input: {
   readonly basePrompt: string

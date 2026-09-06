@@ -5,16 +5,28 @@ import { ModelId } from "@gent/core-internal/domain/model"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { dateFromMillis } from "@gent/core-internal/domain/message"
 import { onMount } from "solid-js"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { createMockClient, renderWithProviders } from "./render-harness-boundary"
 import { runEffectBoundary } from "./run-effect-boundary"
 import { useClient } from "../src/client"
 import type { ClientContextValue, SessionState } from "../src/client/context"
-class ClientSessionStateTestError extends Schema.TaggedErrorClass<ClientSessionStateTestError>()(
+class ClientSessionStateTestError extends Schema.TaggedError<ClientSessionStateTestError>()(
   "ClientSessionStateTestError",
   { message: Schema.String },
 ) {}
+
+const absent = Option.getOrUndefined(Option.none())
+const nullValue = Option.getOrNull(Option.none())
+
+const requireClient = (
+  context: Option.Option<ClientContextValue>,
+): Effect.Effect<ClientContextValue, ClientSessionStateTestError> => {
+  if (Option.isNone(context)) {
+    return Effect.fail(new ClientSessionStateTestError({ message: "client context not ready" }))
+  }
+  return Effect.succeed(context.value)
+}
 function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
   const client = useClient()
   onMount(() => {
@@ -43,14 +55,14 @@ const waitForState = (
   )
 const waitForAgentError = (
   setup: Awaited<ReturnType<typeof renderWithProviders>>,
-  read: () => string | null,
+  read: () => Option.Option<string>,
   remaining = 10,
 ): Promise<string> =>
   runEffectBoundary(
     Effect.gen(function* () {
       yield* Effect.promise(() => setup.renderOnce())
       const error = read()
-      if (error !== null) return error
+      if (Option.isSome(error)) return error.value
       if (remaining <= 1)
         return yield* new ClientSessionStateTestError({ message: "agent error did not surface" })
       return yield* Effect.promise(() => waitForAgentError(setup, read, remaining - 1))
@@ -59,8 +71,8 @@ const waitForAgentError = (
 describe("ClientProvider session lifecycle", () => {
   it.live("model list failures surface as agent errors", () =>
     Effect.gen(function* () {
-      let ctx: ClientContextValue | undefined
-      const client = createMockClient({
+      let ctx = Option.none<ClientContextValue>()
+      const mockClient = createMockClient({
         model: {
           list: () =>
             Effect.fail({
@@ -71,20 +83,22 @@ describe("ClientProvider session lifecycle", () => {
         },
       })
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = value)} />, {
-          client,
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          client: mockClient,
         }),
       )
-      if (ctx === undefined) throw new Error("client context not ready")
-      const error = yield* Effect.promise(() => waitForAgentError(setup, () => ctx!.error()))
+      const client = yield* requireClient(ctx)
+      const error = yield* Effect.promise(() =>
+        waitForAgentError(setup, () => Option.fromNullishOr(client.error())),
+      )
       expect(error).toBe("Driver model: openai: catalog filter failed")
     }),
   )
   it.live("switchSession activates the target session immediately and seeds the target agent", () =>
     Effect.gen(function* () {
-      let ctx: ClientContextValue | undefined
+      let ctx = Option.none<ClientContextValue>()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = value)} />, {
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
           initialSession: {
             id: SessionId.make("session-a"),
             activeBranchId: BranchId.make("branch-a"),
@@ -94,8 +108,8 @@ describe("ClientProvider session lifecycle", () => {
           },
         }),
       )
-      if (ctx === undefined) throw new Error("client context not ready")
-      ctx.switchSession(
+      const client = yield* requireClient(ctx)
+      client.switchSession(
         SessionId.make("session-b"),
         BranchId.make("branch-b"),
         "B",
@@ -104,7 +118,7 @@ describe("ClientProvider session lifecycle", () => {
       const state = yield* Effect.promise(() =>
         waitForState(
           setup,
-          () => ctx!.sessionState(),
+          () => client.sessionState(),
           (current) => current.status === "active",
         ),
       )
@@ -114,17 +128,17 @@ describe("ClientProvider session lifecycle", () => {
           sessionId: SessionId.make("session-b"),
           branchId: BranchId.make("branch-b"),
           name: "B",
-          reasoningLevel: undefined,
+          reasoningLevel: absent,
         },
       })
-      expect(ctx.agent()).toBe(AgentName.make("deepwork"))
+      expect(client.agent()).toBe(AgentName.make("deepwork"))
     }),
   )
   it.live("model() prefers snapshot.metrics.lastModelId over agent default", () =>
     Effect.gen(function* () {
-      let ctx: ClientContextValue | undefined
+      let ctx = Option.none<ClientContextValue>()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = value)} />, {
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
           initialSession: {
             id: SessionId.make("session-model"),
             activeBranchId: BranchId.make("branch-model"),
@@ -134,15 +148,15 @@ describe("ClientProvider session lifecycle", () => {
           },
         }),
       )
-      if (ctx === undefined) throw new Error("client context not ready")
-      ctx.applySessionSnapshot({
+      const client = yield* requireClient(ctx)
+      client.applySessionSnapshot({
         sessionId: SessionId.make("session-model"),
         branchId: BranchId.make("branch-model"),
         messages: [],
-        lastEventId: null,
-        reasoningLevel: undefined,
+        lastEventId: nullValue,
+        reasoningLevel: absent,
         runtime: {
-          _tag: "Idle" as const,
+          _tag: "Idle",
           agent: AgentName.make("cowork"),
           queue: emptyQueueSnapshot(),
         },
@@ -160,19 +174,19 @@ describe("ClientProvider session lifecycle", () => {
       yield* Effect.promise(() =>
         waitForState(
           setup,
-          () => ctx!.sessionState(),
+          () => client.sessionState(),
           (state) =>
-            state.status === "active" && ctx!.model() === "anthropic/claude-haiku-4-5-20251001",
+            state.status === "active" && client.model() === "anthropic/claude-haiku-4-5-20251001",
         ),
       )
-      expect(ctx.model()).toBe("anthropic/claude-haiku-4-5-20251001")
+      expect(client.model()).toBe("anthropic/claude-haiku-4-5-20251001")
     }),
   )
   it.live("applySessionSnapshot refreshes the active session metadata", () =>
     Effect.gen(function* () {
-      let ctx: ClientContextValue | undefined
+      let ctx = Option.none<ClientContextValue>()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = value)} />, {
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
           initialSession: {
             id: SessionId.make("session-refresh"),
             activeBranchId: BranchId.make("branch-refresh"),
@@ -182,16 +196,16 @@ describe("ClientProvider session lifecycle", () => {
           },
         }),
       )
-      if (ctx === undefined) throw new Error("client context not ready")
-      ctx.applySessionSnapshot({
+      const client = yield* requireClient(ctx)
+      client.applySessionSnapshot({
         sessionId: SessionId.make("session-refresh"),
         branchId: BranchId.make("branch-refresh"),
         name: "Fresh",
         messages: [],
-        lastEventId: null,
+        lastEventId: nullValue,
         reasoningLevel: "high",
         runtime: {
-          _tag: "Idle" as const,
+          _tag: "Idle",
           agent: AgentName.make("cowork"),
           queue: emptyQueueSnapshot(),
         },
@@ -208,7 +222,7 @@ describe("ClientProvider session lifecycle", () => {
       const state = yield* Effect.promise(() =>
         waitForState(
           setup,
-          () => ctx!.sessionState(),
+          () => client.sessionState(),
           (current) =>
             current.status === "active" &&
             current.session.name === "Fresh" &&
@@ -228,9 +242,9 @@ describe("ClientProvider session lifecycle", () => {
   )
   it.live("applySessionSnapshot ignores stale foreign identity snapshots", () =>
     Effect.gen(function* () {
-      let ctx: ClientContextValue | undefined
+      let ctx = Option.none<ClientContextValue>()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = value)} />, {
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
           initialSession: {
             id: SessionId.make("session-source"),
             activeBranchId: BranchId.make("branch-source"),
@@ -240,22 +254,22 @@ describe("ClientProvider session lifecycle", () => {
           },
         }),
       )
-      if (ctx === undefined) throw new Error("client context not ready")
-      ctx.switchSession(
+      const client = yield* requireClient(ctx)
+      client.switchSession(
         SessionId.make("session-target"),
         BranchId.make("branch-target"),
         "Target",
         AgentName.make("deepwork"),
       )
-      ctx.applySessionSnapshot({
+      client.applySessionSnapshot({
         sessionId: SessionId.make("session-source"),
         branchId: BranchId.make("branch-source"),
         name: "Foreign",
         messages: [],
-        lastEventId: null,
+        lastEventId: nullValue,
         reasoningLevel: "high",
         runtime: {
-          _tag: "Running" as const,
+          _tag: "Running",
           agent: AgentName.make("cowork"),
           queue: emptyQueueSnapshot(),
         },
@@ -273,7 +287,7 @@ describe("ClientProvider session lifecycle", () => {
       const state = yield* Effect.promise(() =>
         waitForState(
           setup,
-          () => ctx!.sessionState(),
+          () => client.sessionState(),
           (current) => current.status === "active",
         ),
       )
@@ -283,20 +297,20 @@ describe("ClientProvider session lifecycle", () => {
           sessionId: SessionId.make("session-target"),
           branchId: BranchId.make("branch-target"),
           name: "Target",
-          reasoningLevel: undefined,
+          reasoningLevel: absent,
         },
       })
-      expect(ctx.agent()).toBe(AgentName.make("deepwork"))
-      expect(ctx.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
-      expect(ctx.cost()).toBe(0)
-      expect(ctx.latestInputTokens()).toBe(0)
+      expect(client.agent()).toBe(AgentName.make("deepwork"))
+      expect(client.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
+      expect(client.cost()).toBe(0)
+      expect(client.latestInputTokens()).toBe(0)
     }),
   )
   it.live("applySessionSnapshot ignores stale snapshots for a previous branch", () =>
     Effect.gen(function* () {
-      let ctx: ClientContextValue | undefined
+      let ctx = Option.none<ClientContextValue>()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = value)} />, {
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
           initialSession: {
             id: SessionId.make("session-branch-race"),
             activeBranchId: BranchId.make("branch-old"),
@@ -306,22 +320,22 @@ describe("ClientProvider session lifecycle", () => {
           },
         }),
       )
-      if (ctx === undefined) throw new Error("client context not ready")
-      ctx.switchSession(
+      const client = yield* requireClient(ctx)
+      client.switchSession(
         SessionId.make("session-branch-race"),
         BranchId.make("branch-new"),
         "New",
         AgentName.make("deepwork"),
       )
-      ctx.applySessionSnapshot({
+      client.applySessionSnapshot({
         sessionId: SessionId.make("session-branch-race"),
         branchId: BranchId.make("branch-old"),
         name: "Old Snapshot",
         messages: [],
-        lastEventId: null,
+        lastEventId: nullValue,
         reasoningLevel: "medium",
         runtime: {
-          _tag: "Running" as const,
+          _tag: "Running",
           agent: AgentName.make("cowork"),
           queue: emptyQueueSnapshot(),
         },
@@ -339,7 +353,7 @@ describe("ClientProvider session lifecycle", () => {
       const state = yield* Effect.promise(() =>
         waitForState(
           setup,
-          () => ctx!.sessionState(),
+          () => client.sessionState(),
           (current) =>
             current.status === "active" && current.session.branchId === BranchId.make("branch-new"),
         ),
@@ -350,19 +364,19 @@ describe("ClientProvider session lifecycle", () => {
           sessionId: SessionId.make("session-branch-race"),
           branchId: BranchId.make("branch-new"),
           name: "New",
-          reasoningLevel: undefined,
+          reasoningLevel: absent,
         },
       })
-      expect(ctx.agent()).toBe(AgentName.make("deepwork"))
-      expect(ctx.cost()).toBe(0)
-      expect(ctx.latestInputTokens()).toBe(0)
+      expect(client.agent()).toBe(AgentName.make("deepwork"))
+      expect(client.cost()).toBe(0)
+      expect(client.latestInputTokens()).toBe(0)
     }),
   )
   it.live("switchSession clears stale lastModelId before re-hydration", () =>
     Effect.gen(function* () {
-      let ctx: ClientContextValue | undefined
+      let ctx = Option.none<ClientContextValue>()
       const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = value)} />, {
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
           initialSession: {
             id: SessionId.make("session-prev"),
             activeBranchId: BranchId.make("branch-prev"),
@@ -372,15 +386,15 @@ describe("ClientProvider session lifecycle", () => {
           },
         }),
       )
-      if (ctx === undefined) throw new Error("client context not ready")
-      ctx.applySessionSnapshot({
+      const client = yield* requireClient(ctx)
+      client.applySessionSnapshot({
         sessionId: SessionId.make("session-prev"),
         branchId: BranchId.make("branch-prev"),
         messages: [],
-        lastEventId: null,
-        reasoningLevel: undefined,
+        lastEventId: nullValue,
+        reasoningLevel: absent,
         runtime: {
-          _tag: "Idle" as const,
+          _tag: "Idle",
           agent: AgentName.make("cowork"),
           queue: emptyQueueSnapshot(),
         },
@@ -398,18 +412,18 @@ describe("ClientProvider session lifecycle", () => {
       yield* Effect.promise(() =>
         waitForState(
           setup,
-          () => ctx!.sessionState(),
+          () => client.sessionState(),
           (state) =>
-            state.status === "active" && ctx!.model() === "anthropic/claude-haiku-4-5-20251001",
+            state.status === "active" && client.model() === "anthropic/claude-haiku-4-5-20251001",
         ),
       )
-      ctx.switchSession(
+      client.switchSession(
         SessionId.make("session-next"),
         BranchId.make("branch-next"),
         "N",
         AgentName.make("deepwork"),
       )
-      expect(ctx.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
+      expect(client.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
     }),
   )
 })

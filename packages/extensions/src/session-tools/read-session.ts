@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import {
   AgentName,
   ExtensionContext,
@@ -14,13 +14,10 @@ import {
 
 // Read Session Error
 
-export class ReadSessionError extends Schema.TaggedErrorClass<ReadSessionError>()(
-  "ReadSessionError",
-  {
-    message: Schema.String,
-    cause: Schema.optional(Schema.Unknown),
-  },
-) {}
+export class ReadSessionError extends Schema.TaggedError<ReadSessionError>()("ReadSessionError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
 
 // Read Session Params
 
@@ -48,8 +45,8 @@ export const ReadSessionResult = Schema.Struct({
   extracted: Schema.Boolean,
   error: Schema.optional(Schema.String),
   goal: Schema.optional(Schema.String),
-  messageCount: Schema.optional(Schema.Number),
-  branchCount: Schema.optional(Schema.Number),
+  messageCount: Schema.optional(Schema.Finite),
+  branchCount: Schema.optional(Schema.Finite),
 })
 
 // Session tree rendering
@@ -58,7 +55,8 @@ const MAX_TOOL_ARG_CHARS = 500
 const MAX_TREE_CHARS = 120_000
 
 export function truncate(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max) + "…" : s
+  if (s.length > max) return s.slice(0, max) + "…"
+  return s
 }
 
 export const renderMessageParts = (parts: ReadonlyArray<Message["parts"][number]>): string =>
@@ -66,18 +64,20 @@ export const renderMessageParts = (parts: ReadonlyArray<Message["parts"][number]
 
 export function renderSessionTree(
   branches: ReadonlyArray<{ branch: Branch; messages: ReadonlyArray<Message> }>,
-  targetBranchId: string | undefined,
+  targetBranchId: Option.Option<string>,
 ): string {
   const lines: string[] = []
 
   for (const { branch, messages } of branches) {
-    const isTarget = branch.id === targetBranchId
-    const marker = isTarget ? " [TARGET BRANCH]" : ""
+    const isTarget = Option.contains(targetBranchId, branch.id)
+    let marker = ""
+    if (isTarget) marker = " [TARGET BRANCH]"
 
-    if (branch.parentBranchId !== undefined) {
-      lines.push(`\n--- branch point: ${branch.name ?? branch.id}${marker} ---`)
+    const branchName = Option.getOrElse(Option.fromNullishOr(branch.name), () => branch.id)
+    if (Option.isSome(Option.fromNullishOr(branch.parentBranchId))) {
+      lines.push(`\n--- branch point: ${branchName}${marker} ---`)
     } else {
-      lines.push(`# Branch: ${branch.name ?? branch.id}${marker}`)
+      lines.push(`# Branch: ${branchName}${marker}`)
     }
 
     for (const msg of messages) {
@@ -105,31 +105,36 @@ export const ReadSessionTool = tool({
     const ctx = yield* ExtensionContext
     const session = ctx.Session
     const tree = yield* session.getDetail(SessionId.make(params.sessionId)).pipe(
-      Effect.mapError(
-        (e) =>
-          new ReadSessionError({
-            message: e.message.includes("Session not found:")
-              ? `Failed to load session: ${e.message}. Ephemeral helper-agent runs are not persisted and cannot be read back with read_session.`
-              : `Failed to load session: ${e.message}`,
-            cause: e,
-          }),
-      ),
+      Effect.mapError((e) => {
+        let message = `Failed to load session: ${e.message}`
+        if (e.message.includes("Session not found:")) {
+          message +=
+            ". Ephemeral helper-agent runs are not persisted and cannot be read back with read_session."
+        }
+        return new ReadSessionError({ message, cause: e })
+      }),
     )
 
-    const targetBranchId = params.branchId ?? tree.branches[0]?.branch.id
+    const targetBranchId = Option.fromNullishOr(params.branchId).pipe(
+      Option.orElse(() =>
+        Option.fromNullishOr(tree.branches[0]).pipe(Option.map((entry) => entry.branch.id)),
+      ),
+    )
 
     // Render session tree as markdown
     let markdown = renderSessionTree(tree.branches, targetBranchId)
 
     // Truncate for AI extraction
     const truncated = headTailChars(markdown, MAX_TREE_CHARS)
-    if (truncated !== undefined) {
-      markdown = truncated.text
+    const truncatedOption = Option.fromNullishOr(truncated)
+    if (Option.isSome(truncatedOption)) {
+      markdown = truncatedOption.value.text
     }
 
     // If goal provided, use AI extraction
-    if (params.goal !== undefined) {
-      const prompt = `Here is a coding agent session transcript:\n\n${markdown}\n\n---\n\nExtract the information relevant to this goal: ${params.goal}`
+    const goal = Option.fromNullishOr(params.goal)
+    if (Option.isSome(goal)) {
+      const prompt = `Here is a coding agent session transcript:\n\n${markdown}\n\n---\n\nExtract the information relevant to this goal: ${goal.value}`
       const agent = ctx.Agent
       const summarizer = yield* requireAgent(AgentName.make("summarizer"))
       const result = yield* agent.run({
@@ -151,7 +156,7 @@ export const ReadSessionTool = tool({
         sessionId: params.sessionId,
         content: result.text,
         extracted: true,
-        goal: params.goal,
+        goal: goal.value,
       }
     }
 

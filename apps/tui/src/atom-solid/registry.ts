@@ -2,6 +2,8 @@ import { createRoot, getOwner, runWithOwner } from "solid-js"
 import type { Accessor, Owner } from "solid-js"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
+import * as Option from "effect/Option"
+import * as Predicate from "effect/Predicate"
 import type * as Fiber from "effect/Fiber"
 import type { Atom, AtomInstance, Writable, WritableInstance } from "./atom"
 
@@ -19,7 +21,7 @@ export interface Registry<Services = unknown> {
 }
 
 export interface RegistryOptionsWithoutServices {
-  readonly services?: undefined
+  readonly services?: never
   readonly maxEntries?: number
 }
 
@@ -37,43 +39,34 @@ export function make<Services>(options: RegistryOptionsWithServices<Services>): 
 export function make<Services>(
   options?: RegistryOptions<Services>,
 ): Registry<Services> | Registry<never> {
-  if (options?.services !== undefined) {
-    return new RegistryImpl(options.services, options.maxEntries)
+  const services = Option.fromNullishOr(options?.services)
+  if (Option.isSome(services)) {
+    return new RegistryImpl(services.value, options?.maxEntries)
   }
   return new RegistryImpl(Context.empty(), options?.maxEntries)
 }
 
 const isWritableInstance = <R, W>(instance: AtomInstance<R>): instance is WritableInstance<R, W> =>
-  "set" in instance && typeof instance.set === "function"
+  "set" in instance && Predicate.isFunction(instance.set)
 
 class RegistryImpl<Services> implements Registry<Services> {
   private readonly services: Context.Context<Services>
-  private readonly instances = new Map<object, AtomInstance<unknown>>()
-  private readonly refCounts = new Map<object, number>()
-  private readonly maxEntries: number | undefined
+  private readonly instances = new Map<Atom<unknown, Services>, AtomInstance<unknown>>()
+  private readonly refCounts = new Map<Atom<unknown, Services>, number>()
+  private readonly maxEntries: number
   private readonly shouldEvict: boolean
   private readonly owner: Owner
   private readonly disposeRoot: () => void
 
   constructor(services: Context.Context<Services>, maxEntries?: number) {
     this.services = services
-    this.maxEntries = maxEntries
-    this.shouldEvict = maxEntries !== undefined && maxEntries > 0
-    let owner: Owner | null = null
-    let disposeRoot: () => void = () => {}
-
-    createRoot((dispose) => {
-      owner = getOwner()
-      disposeRoot = dispose
-      return undefined
-    })
-
-    if (owner === null) {
-      throw new Error("Registry root owner not created")
-    }
-
-    this.owner = owner
-    this.disposeRoot = disposeRoot
+    this.maxEntries = maxEntries ?? 0
+    this.shouldEvict = this.maxEntries > 0
+    const root = createRoot((dispose) => ({ owner: Option.fromNullishOr(getOwner()), dispose }))
+    this.owner = Option.getOrElse(root.owner, () =>
+      Effect.runSync(Effect.die(new Error("Registry root owner not created"))),
+    )
+    this.disposeRoot = root.dispose
   }
 
   fork<A, E, R extends Services>(effect: Effect.Effect<A, E, R>): Fiber.Fiber<A, E> {
@@ -96,11 +89,11 @@ class RegistryImpl<Services> implements Registry<Services> {
   }
 
   refresh<A, R extends Services>(atom: Atom<A, R>): void {
-    const instance = this.instances.get(atom)
-    if (instance !== undefined) {
-      this.touch(atom, instance)
+    const instance = Option.fromNullishOr(this.instances.get(atom))
+    if (Option.isSome(instance)) {
+      this.touch(atom, instance.value)
+      instance.value.refresh?.()
     }
-    instance?.refresh?.()
   }
 
   mount<A, R extends Services>(atom: Atom<A, R>): () => void {
@@ -129,16 +122,16 @@ class RegistryImpl<Services> implements Registry<Services> {
   }
 
   private ensure<A, R extends Services>(atom: Atom<A, R>): AtomInstance<A> {
-    const existing = this.instances.get(atom)
-    if (existing !== undefined) {
-      this.touch(atom, existing)
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- cached atom identity owns the instance type relation
-      return existing as AtomInstance<A>
+    const existing = Option.fromNullishOr(this.instances.get(atom))
+    if (Option.isSome(existing)) {
+      this.touch(atom, existing.value)
+      // eslint-disable-next-line effect/noAs, @typescript-eslint/no-unsafe-type-assertion -- Atom identity keys the heterogeneous cache and preserves each instance value type.
+      return existing.value as AtomInstance<A>
     }
-    const created = runWithOwner(this.owner, () => atom.build(this))
-    if (created === undefined) {
-      throw new Error("Atom build returned no instance")
-    }
+    const created = Option.getOrElse(
+      Option.fromNullishOr(runWithOwner(this.owner, () => atom.build(this))),
+      () => Effect.runSync(Effect.die(new Error("Atom build returned no instance"))),
+    )
     this.instances.set(atom, created)
     this.evictIfNeeded()
     return created
@@ -149,44 +142,43 @@ class RegistryImpl<Services> implements Registry<Services> {
   ): WritableInstance<R, W> {
     const instance = this.ensure(atom)
     if (!isWritableInstance<R, W>(instance)) {
-      throw new Error("Atom is not writable")
+      return Effect.runSync(Effect.die(new Error("Atom is not writable")))
     }
     return instance
   }
 
-  private touch(key: object, instance?: AtomInstance<unknown>): void {
+  private touch(key: Atom<unknown, Services>, instance?: AtomInstance<unknown>): void {
     if (!this.shouldEvict) return
-    const value = instance ?? this.instances.get(key)
-    if (value === undefined) return
+    const value = Option.fromNullishOr(instance ?? this.instances.get(key))
+    if (Option.isNone(value)) return
     this.instances.delete(key)
-    this.instances.set(key, value)
+    this.instances.set(key, value.value)
   }
 
   private evictIfNeeded(): void {
     if (!this.shouldEvict) return
-    const maxEntries = this.maxEntries ?? 0
-    while (this.instances.size > maxEntries) {
+    while (this.instances.size > this.maxEntries) {
       const evictable = this.findEvictable()
-      if (evictable === null) return
-      this.instances.delete(evictable.key)
-      this.refCounts.delete(evictable.key)
-      evictable.instance.dispose?.()
+      if (Option.isNone(evictable)) return
+      this.instances.delete(evictable.value.key)
+      this.refCounts.delete(evictable.value.key)
+      evictable.value.instance.dispose?.()
     }
   }
 
-  private findEvictable(): {
-    key: object
+  private findEvictable(): Option.Option<{
+    key: Atom<unknown, Services>
     instance: AtomInstance<unknown>
-  } | null {
+  }> {
     for (const [key, instance] of this.instances) {
       if (!this.isMounted(key)) {
-        return { key, instance }
+        return Option.some({ key, instance })
       }
     }
-    return null
+    return Option.none()
   }
 
-  private isMounted(key: object): boolean {
+  private isMounted(key: Atom<unknown, Services>): boolean {
     return (this.refCounts.get(key) ?? 0) > 0
   }
 }

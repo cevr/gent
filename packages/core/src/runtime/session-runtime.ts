@@ -1,4 +1,5 @@
 import {
+  Predicate,
   Cause,
   Context,
   DateTime,
@@ -12,10 +13,9 @@ import {
   type Scope,
 } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
+import type { MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { SqlClient } from "effect/unstable/sql"
-import { ActorAddressResolver } from "effect-encore"
 import { AgentName, AgentRunError, RunSpecSchema, type RunSpec } from "../domain/agent.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import type { EventStore } from "../domain/event.js"
@@ -43,10 +43,14 @@ import type { ExtensionRegistry } from "./extensions/registry.js"
 import type { DriverRegistry } from "./extensions/driver-registry.js"
 import type { ModelRegistry } from "./model-registry.js"
 import type { ModelResolver } from "../providers/model-resolver.js"
+import type { ApprovalService } from "./approval-service.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { ToolRunner } from "./agent/tool-runner.js"
+import type { ToolCallBindingStorage } from "../storage/tool-call-binding-storage.js"
 import type { ConfigService } from "./config-service.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
+
+const SESSION_TERMINATION_CONCURRENCY = 16
 import type { SteerCommand as SteerCommandType } from "../domain/steer.js"
 import { resolveExistingSessionBranch } from "./session-runtime-context.js"
 import { AgentLoopError } from "./agent/agent-loop.state.js"
@@ -57,11 +61,11 @@ export {
   type SessionRuntimeState,
 } from "./agent/agent-loop.state.js"
 
-export class SessionRuntimeError extends Schema.TaggedErrorClass<SessionRuntimeError>()(
+export class SessionRuntimeError extends Schema.TaggedError<SessionRuntimeError>()(
   "SessionRuntimeError",
   {
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -166,6 +170,7 @@ export const SessionRuntimeSessionTarget = Schema.Struct({
 export type SessionRuntimeSessionTarget = typeof SessionRuntimeSessionTarget.Type
 
 type SessionRuntimeLayerRequirements =
+  | ApprovalService
   | Sharding.Sharding
   | ClusterMessageStorage.MessageStorage
   | EventStorage
@@ -182,6 +187,7 @@ type SessionRuntimeLayerRequirements =
   | SqlClient.SqlClient
   | ModelResolver
   | ToolRunner
+  | ToolCallBindingStorage
   | ConfigService
   | AgentLoopSessionGovernance
   | ChildProcessSpawner
@@ -241,13 +247,16 @@ const followUpMessageIdForSource = (input: {
   )
 const commandIdForRequestId = (requestId: string) => ActorCommandId.make(`message:${requestId}`)
 
-const wrapStreamSessionRuntimeError = (operation: string, error: unknown) =>
-  Schema.is(SessionRuntimeError)(error)
-    ? error
-    : new SessionRuntimeError({
-        message: `${operation} failed`,
-        cause: error,
-      })
+const wrapStreamSessionRuntimeError = (
+  operation: string,
+  error: Schema.Schema.Type<typeof Schema.Unknown>,
+) => {
+  if (Schema.is(SessionRuntimeError)(error)) return error
+  return new SessionRuntimeError({
+    message: `${operation} failed`,
+    cause: error,
+  })
+}
 
 interface RunPromptInput {
   readonly sessionId: SessionId
@@ -266,25 +275,14 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
   const actorClientFactory = yield* AgentLoopActor.Context
   const actorControl = yield* AgentLoopActor.Control
   const actorState = yield* AgentLoopActor.State
-  const actorAddressResolver = yield* ActorAddressResolver
   const agentLoopActorRefFor = (sessionId: SessionId, branchId: BranchId) =>
     Effect.gen(function* () {
       const workspaceId = yield* CurrentWorkspaceId
       return yield* actorClientFactory(entityIdOf(workspaceId, sessionId, branchId))
     })
-  const sharding = yield* Sharding.Sharding
-  const clusterMessageStorage = yield* ClusterMessageStorage.MessageStorage
   const agentLoopSessionGovernance = yield* AgentLoopSessionGovernance
   const platform = yield* GentPlatform
   const storageContext = yield* Effect.context<SessionStorage | BranchStorage>()
-  const actorContext = Context.empty().pipe(
-    Context.add(ActorAddressResolver, actorAddressResolver),
-    Context.add(AgentLoopActor.Context, actorClientFactory),
-    Context.add(ClusterMessageStorage.MessageStorage, clusterMessageStorage),
-    Context.add(Sharding.Sharding, sharding),
-  )
-  const provideActorProtocolServices = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.provide(effect, actorContext)
   // Every public session-scoped boundary (writes + reads) MUST validate the
   // durable `(sessionId, branchId)` target before proceeding. In-memory
   // tombstones do not survive restart, and branch ids are globally addressable
@@ -301,13 +299,13 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       Effect.provideContext(storageContext),
     )
 
-  const toAgentLoopError = (error: unknown) =>
-    Schema.is(AgentLoopError)(error)
-      ? error
-      : new AgentLoopError({
-          message: "AgentLoop state unavailable",
-          cause: error,
-        })
+  const toAgentLoopError = (error: Schema.Schema.Type<typeof Schema.Unknown>) => {
+    if (Schema.is(AgentLoopError)(error)) return error
+    return new AgentLoopError({
+      message: "AgentLoop state unavailable",
+      cause: error,
+    })
+  }
   const runPromptThroughActor = Effect.fn("SessionRuntime.runPromptThroughActor")(function* (
     input: RunPromptInput,
   ) {
@@ -321,25 +319,28 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     })
 
     const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-    return yield* ref
-      .execute(
-        AgentLoopActor.Run.make({
-          workspaceId: yield* CurrentWorkspaceId,
-          message: userMessage,
-          agentOverride: input.agentName,
-          runSpec: input.runSpec,
-          interactive: input.interactive,
-        }),
-      )
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new AgentRunError({
-              message: cause.message,
-              cause,
-            }),
-        ),
-      )
+    let payload = {
+      workspaceId: yield* CurrentWorkspaceId,
+      message: userMessage,
+      agentOverride: input.agentName,
+      // Actor operation payloads map optional schema fields to required
+      // `T | undefined` properties. Keep the fields explicit at this wire
+      // boundary so the operation encoder receives the expected shape.
+      runSpec: input.runSpec,
+      interactive: input.interactive,
+    }
+    if (Predicate.isNotUndefined(input.runSpec)) payload = { ...payload, runSpec: input.runSpec }
+    if (Predicate.isNotUndefined(input.interactive))
+      payload = { ...payload, interactive: input.interactive }
+    return yield* ref.execute(AgentLoopActor.Run.make(payload)).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AgentRunError({
+            message: cause.message,
+            cause,
+          }),
+      ),
+    )
   })
 
   const watchRuntimeState = Effect.fn("SessionRuntime.watchRuntimeState")(function* (
@@ -355,20 +356,23 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     sessionId: SessionId,
   ) {
     const workspaceId = yield* CurrentWorkspaceId
-    const branchIds = yield* actorState.listEntityIds().pipe(
+    const branchIds = yield* actorState.listEntityIds.pipe(
       Effect.flatMap((entityIds) =>
         Effect.forEach(entityIds, (entityId) => parseEntityId(entityId).pipe(Effect.option), {
-          concurrency: "unbounded",
+          concurrency: SESSION_TERMINATION_CONCURRENCY,
         }),
       ),
       Effect.map((targets) =>
-        targets.flatMap((target) =>
-          Option.isSome(target) &&
-          target.value.workspaceId === workspaceId &&
-          target.value.sessionId === sessionId
-            ? [target.value.branchId]
-            : [],
-        ),
+        targets.flatMap((target) => {
+          if (
+            Option.isSome(target) &&
+            target.value.workspaceId === workspaceId &&
+            target.value.sessionId === sessionId
+          ) {
+            return [target.value.branchId]
+          }
+          return []
+        }),
       ),
     )
     yield* Effect.forEach(
@@ -385,7 +389,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
             }),
           )
         }).pipe(Effect.ignore),
-      { concurrency: "unbounded", discard: true },
+      { concurrency: SESSION_TERMINATION_CONCURRENCY, discard: true },
     )
   })
 
@@ -399,14 +403,11 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         role: "user",
         parts: [Prompt.textPart({ text: input.content })],
         createdAt: yield* DateTime.nowAsDate,
-        ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+        metadata: input.metadata,
       })
       const payload = {
         workspaceId,
         message,
-        agentOverride: undefined,
-        runSpec: undefined,
-        interactive: undefined,
       }
       const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
       yield* ref.execute(AgentLoopActor.QueueFollowUp.make(payload)).pipe(
@@ -431,12 +432,16 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     input: SendUserMessagePayload,
   ) {
     yield* requireSessionBranch(input)
-    const commandId =
-      input.commandId ??
-      (input.requestId !== undefined
-        ? commandIdForRequestId(input.requestId)
-        : ActorCommandId.make(yield* platform.randomId))
-    const shouldHoldCompletion = input.requestId !== undefined || input.commandId !== undefined
+    let commandId: ActorCommandId
+    if (Predicate.isNotUndefined(input.commandId)) {
+      commandId = input.commandId
+    } else if (Predicate.isNotUndefined(input.requestId)) {
+      commandId = commandIdForRequestId(input.requestId)
+    } else {
+      commandId = ActorCommandId.make(yield* platform.randomId)
+    }
+    const shouldHoldCompletion =
+      !Predicate.isUndefined(input.requestId) || !Predicate.isUndefined(input.commandId)
     const messageId = userMessageIdForCommand(commandId)
     const message = Message.cases.regular.make({
       id: messageId,
@@ -447,18 +452,31 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       createdAt: yield* DateTime.nowAsDate,
     })
 
-    const payload = {
+    let payload = {
       workspaceId: yield* CurrentWorkspaceId,
       message,
+      // Actor operation payloads require optional fields explicitly.
+      // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
       agentOverride: input.agentOverride,
+      // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
       interactive: input.interactive,
+      // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
       runSpec: input.runSpec,
+    }
+    if (Predicate.isNotUndefined(input.agentOverride)) {
+      payload = { ...payload, agentOverride: input.agentOverride }
+    }
+    if (Predicate.isNotUndefined(input.interactive)) {
+      payload = { ...payload, interactive: input.interactive }
+    }
+    if (Predicate.isNotUndefined(input.runSpec)) {
+      payload = { ...payload, runSpec: input.runSpec }
     }
     const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
     if (shouldHoldCompletion) {
-      yield* provideActorProtocolServices(ref.execute(AgentLoopActor.SubmitAndWait.make(payload)))
+      yield* ref.execute(AgentLoopActor.SubmitAndWait.make(payload))
     } else {
-      yield* provideActorProtocolServices(ref.execute(AgentLoopActor.Submit.make(payload)))
+      yield* ref.execute(AgentLoopActor.Submit.make(payload))
     }
     yield* Effect.logInfo("session-runtime.message.submitted").pipe(
       Effect.annotateLogs({
@@ -510,37 +528,12 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         Effect.flatMap(() =>
           Effect.gen(function* () {
             const workspaceId = yield* CurrentWorkspaceId
-            const entityId = entityIdOf(workspaceId, input.sessionId, input.branchId)
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
             const payload = AgentLoopActor.RespondInteraction.make({
               ...input,
               workspaceId,
             })
-            yield* ref.send(payload)
-            yield* redeliverPendingActorMessages(input)
-            yield* provideActorProtocolServices(
-              ref.execute(
-                AgentLoopActor.GetState.make({
-                  ...input,
-                  workspaceId,
-                  commandId: ActorCommandId.make(yield* platform.randomId),
-                }),
-              ),
-            ).pipe(
-              Effect.timeoutOption("500 millis"),
-              Effect.catchCause(() => Effect.void),
-            )
-            const completed = yield* provideActorProtocolServices(
-              AgentLoopActor.RespondInteraction.waitFor(payload),
-            ).pipe(Effect.timeoutOption("500 millis"))
-            if (Option.isNone(completed)) {
-              yield* actorState
-                .get(entityId, { materialize: redeliverPendingActorMessages(input) })
-                .pipe(Effect.catchCause(() => Effect.void))
-              yield* provideActorProtocolServices(
-                AgentLoopActor.RespondInteraction.waitFor(payload),
-              ).pipe(Effect.timeoutOption("500 millis"), Effect.asVoid)
-            }
+            yield* ref.execute(payload)
           }),
         ),
         Effect.catchCause((cause) => Effect.fail(wrapError("respondInteraction failed", cause))),
@@ -565,10 +558,10 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
                 branchId: input.branchId,
                 extensionId: input.extensionId,
                 capabilityId: input.capabilityId,
-                input:
-                  input.input === undefined
-                    ? { _tag: "Missing" }
-                    : { _tag: "Present", value: input.input },
+                input: Option.match(Option.fromUndefinedOr(input.input), {
+                  onNone: () => ({ _tag: "Missing" }),
+                  onSome: (value) => ({ _tag: "Present", value }),
+                }),
                 workspaceId: yield* CurrentWorkspaceId,
                 commandId: ActorCommandId.make(yield* platform.randomId),
               }),
@@ -585,23 +578,19 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
             const commandId = ActorCommandId.make(input.requestId)
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
             const workspaceId = yield* CurrentWorkspaceId
-            yield* provideActorProtocolServices(
-              ref.execute(
-                AgentLoopActor.GetQueue.make({
-                  ...input,
-                  workspaceId,
-                  commandId: ActorCommandId.make(yield* platform.randomId),
-                }),
-              ),
+            yield* ref.execute(
+              AgentLoopActor.GetQueue.make({
+                ...input,
+                workspaceId,
+                commandId: ActorCommandId.make(yield* platform.randomId),
+              }),
             )
-            return yield* provideActorProtocolServices(
-              ref.execute(
-                AgentLoopActor.DrainQueue.make({
-                  ...input,
-                  workspaceId,
-                  commandId,
-                }),
-              ),
+            return yield* ref.execute(
+              AgentLoopActor.DrainQueue.make({
+                ...input,
+                workspaceId,
+                commandId,
+              }),
             )
           }),
         ),

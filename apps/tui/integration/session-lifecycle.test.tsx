@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { onMount } from "solid-js"
 import { App } from "../src/app"
 import { resolveInteractiveBootstrap } from "../src/app-bootstrap"
@@ -36,12 +36,7 @@ describe("session lifecycle", () => {
             const { client, runtime } = yield* Gent.test(
               baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
             )
-            let ctx:
-              | {
-                  client: ClientContextValue
-                  router: RouterContextValue
-                }
-              | undefined
+            let ctx = Option.none<{ client: ClientContextValue; router: RouterContextValue }>()
             // Pre-resolve bootstrap (same as main.tsx now does)
             const { bootstrap } = yield* resolveInteractiveBootstrap({
               client,
@@ -53,7 +48,7 @@ describe("session lifecycle", () => {
               renderWithProviders(
                 () => (
                   <>
-                    <StateProbe onReady={(c) => (ctx = c)} />
+                    <StateProbe onReady={(c) => (ctx = Option.some(c))} />
                     <App />
                   </>
                 ),
@@ -70,7 +65,9 @@ describe("session lifecycle", () => {
             )
             yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
             // Route should already be session
-            expect(ctx?.router.route()._tag).toBe("session")
+            expect(Option.isSome(ctx)).toBe(true)
+            if (Option.isNone(ctx)) return
+            expect(ctx.value.router.route()._tag).toBe("session")
             // waitForFrame polls until the composer renders — no pre-sleep
             // needed; the visible "ready/idle/❯" marker is the readiness signal.
             const frame = yield* waitForFrame(
@@ -95,12 +92,7 @@ describe("session lifecycle", () => {
             const { client, runtime } = yield* Gent.test(
               baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
             )
-            let ctx:
-              | {
-                  client: ClientContextValue
-                  router: RouterContextValue
-                }
-              | undefined
+            let ctx = Option.none<{ client: ClientContextValue; router: RouterContextValue }>()
             // Pre-resolve bootstrap
             const { bootstrap } = yield* resolveInteractiveBootstrap({
               client,
@@ -112,7 +104,7 @@ describe("session lifecycle", () => {
               renderWithProviders(
                 () => (
                   <>
-                    <StateProbe onReady={(c) => (ctx = c)} />
+                    <StateProbe onReady={(c) => (ctx = Option.some(c))} />
                     <App />
                   </>
                 ),
@@ -128,23 +120,40 @@ describe("session lifecycle", () => {
               ),
             )
             yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
+            yield* waitForFrame(
+              setup,
+              (frame) => frame.includes("ready") || frame.includes("idle") || frame.includes("❯"),
+              "composer visible before send",
+              3000,
+            )
             // Send a message through the client (simulates user input).
             // The downstream waitForFrame polls until the response arrives;
             // the response itself confirms the feed fiber was subscribed.
-            const session = ctx?.client.session()
-            expect(session).not.toBeNull()
-            if (session === null || session === undefined) return
-            yield* client.message.send({
-              sessionId: session.sessionId,
-              branchId: session.branchId,
-              content: "hello world",
-            })
+            expect(Option.isSome(ctx)).toBe(true)
+            if (Option.isNone(ctx)) return
+            const session = Option.fromNullishOr(ctx.value.client.session())
+            expect(Option.isSome(session)).toBe(true)
+            if (Option.isNone(session)) return
+            yield* client.message
+              .send({
+                sessionId: session.value.sessionId,
+                branchId: session.value.branchId,
+                content: "hello world",
+              })
+              .pipe(
+                Effect.timeout("2 seconds"),
+                Effect.mapError((error) => `message.send boundary: ${String(error)}`),
+              )
             // `LanguageModelLayers.debug` responds with a message containing the user's text
             // Wait for the response to appear in the rendered frame
             const frame = yield* waitForFrame(
               setup,
               (f) => f.includes("debug response") && f.includes("hello world"),
               "debug provider response",
+              3000,
+            ).pipe(
+              Effect.timeout("4 seconds"),
+              Effect.mapError((error) => `render/frame boundary: ${String(error)}`),
             )
             expect(frame).toContain("hello world")
           }),

@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { Route } from "../src/router"
 import { Session } from "../src/routes/session"
 import {
@@ -16,6 +16,7 @@ import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-mod
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { Gent } from "@gent/sdk"
 import { waitForFrame, makeSessionState, repoRoot } from "./helpers"
+const absentReasoningLevel = Option.getOrUndefined(Option.none())
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
   _baseLocalLayerWithProvider(p, { agents: AllBuiltinAgents, extraLayers: [GitReader.Test] })
 describe("session feed boundary", () => {
@@ -55,7 +56,7 @@ describe("session feed boundary", () => {
             // happen after the feed fiber is consuming events.
             yield* controls.waitForStreamStart
             // Emit all chunks + finish
-            yield* controls.emitAll()
+            yield* controls.emitAll
             // Wait for idle state with response content
             const responseFrame = yield* waitForFrame(
               setup,
@@ -126,10 +127,10 @@ describe("session feed boundary", () => {
             expect(frame).toContain("queue")
             expect(frame).toContain("[queued 1] queued follow-up")
             // Emit first turn's chunks to unblock
-            yield* controls.emitAll()
+            yield* controls.emitAll
             // The agent loop will dequeue the follow-up and start a model stream again.
             // The signal provider's shared queue needs tokens for the second turn too.
-            yield* controls.emitAll()
+            yield* controls.emitAll
           }),
         )
       }),
@@ -204,7 +205,7 @@ describe("session feed boundary", () => {
             sessionId,
             branchId,
             name: "Test Session",
-            reasoningLevel: undefined,
+            reasoningLevel: absentReasoningLevel,
           },
           initialRoute: Route.session(sessionId, branchId),
           cwd: repoRoot,

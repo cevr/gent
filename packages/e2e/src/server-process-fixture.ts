@@ -1,4 +1,5 @@
 import { Clock, Effect, Schema } from "effect"
+import * as Option from "effect/Option"
 
 const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathname).replace(
   /\/$/,
@@ -6,7 +7,7 @@ const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathnam
 )
 const serverEntry = `${repoRoot}/apps/server/src/main.ts`
 
-class ServerProcessFixtureError extends Schema.TaggedErrorClass<ServerProcessFixtureError>()(
+class ServerProcessFixtureError extends Schema.TaggedError<ServerProcessFixtureError>()(
   "@gent/e2e/src/server-process-fixture/ServerProcessFixtureError",
   { message: Schema.String },
 ) {}
@@ -16,6 +17,7 @@ const readReadyUrl = (proc: Bun.Subprocess): Effect.Effect<string, ServerProcess
     const chunks: string[] = []
     const decoder = new TextDecoder()
     const stdout = proc.stdout
+    // oxlint-disable-next-line effect/noNullish, effect/noRuntimeTypeof -- Bun stdout uses an external stream, fd, or absent union
     if (stdout === undefined || typeof stdout === "number") {
       resume(Effect.fail(new ServerProcessFixtureError({ message: "server stdout was not piped" })))
       return
@@ -33,8 +35,8 @@ const readReadyUrl = (proc: Bun.Subprocess): Effect.Effect<string, ServerProcess
         const match = chunks.join("").match(/GENT_SERVER_READY (.+)/)
         if (match) {
           reader.releaseLock()
-          const readyUrl = match[1]
-          if (readyUrl === undefined) {
+          const readyUrl = Option.fromNullishOr(match[1])
+          if (Option.isNone(readyUrl)) {
             resume(
               Effect.fail(
                 new ServerProcessFixtureError({
@@ -44,7 +46,7 @@ const readReadyUrl = (proc: Bun.Subprocess): Effect.Effect<string, ServerProcess
             )
             return
           }
-          resume(Effect.succeed(readyUrl.trim()))
+          resume(Effect.succeed(readyUrl.value.trim()))
         } else {
           pump()
         }
@@ -111,14 +113,10 @@ export const waitForExit = (pid: number, timeoutMs: number): Effect.Effect<numbe
   Effect.gen(function* () {
     const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
     const loop: Effect.Effect<number> = Effect.gen(function* () {
-      const alive = yield* Effect.sync(() => {
-        try {
-          process.kill(pid, 0)
-          return true
-        } catch {
-          return false
-        }
-      })
+      const alive = yield* Effect.try(() => process.kill(pid, 0)).pipe(
+        Effect.as(true),
+        Effect.catchEager(() => Effect.succeed(false)),
+      )
       if (!alive) return 0
       const now = yield* Clock.currentTimeMillis
       if (now >= deadline) return -1
@@ -150,4 +148,4 @@ export const waitUntil = (
 export const killProcess = (proc: Bun.Subprocess, signal?: NodeJS.Signals): Effect.Effect<void> =>
   Effect.sync(() => {
     proc.kill(signal)
-  }).pipe(Effect.catchCause(() => Effect.void))
+  }).pipe(Effect.ignoreCause)

@@ -27,7 +27,7 @@
  * doesn't, on the API-key branch).
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Effect, Ref, Schema, SynchronizedRef } from "effect"
+import { Clock, Effect, Option, Ref, Schema, SynchronizedRef } from "effect"
 import { buildAnthropicModelDriver as buildAnthropicModelDriverLive } from "../../src/anthropic/index.js"
 import {
   EMPTY_CREDENTIAL_CELL,
@@ -38,6 +38,7 @@ import { SYSTEM_IDENTITY_PREFIX } from "../../src/anthropic/oauth.js"
 import { type ProviderAuthInfo } from "@gent/core/extensions/api"
 import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
+import { encodeExternalJson, externalWireNull } from "../helpers/external-wire.js"
 import {
   makeFakeFetchState,
   oneGenerate,
@@ -84,39 +85,37 @@ const makeApiAuthInfo = (key: string): ProviderAuthInfo => ({
  */
 const anthropicHappyResponse = () => ({
   status: 200,
-  body: JSON.stringify({
+  body: encodeExternalJson({
     id: "msg_test_1",
     type: "message",
     role: "assistant",
     content: [{ type: "text", text: "ok" }],
     model: "claude-opus-4-6",
     stop_reason: "end_turn",
-    stop_sequence: null,
+    stop_sequence: externalWireNull,
     usage: {
       input_tokens: 1,
       output_tokens: 1,
-      cache_creation: null,
-      cache_creation_input_tokens: null,
-      cache_read_input_tokens: null,
-      inference_geo: null,
-      service_tier: null,
+      cache_creation: externalWireNull,
+      cache_creation_input_tokens: externalWireNull,
+      cache_read_input_tokens: externalWireNull,
+      inference_geo: externalWireNull,
+      service_tier: externalWireNull,
     },
   }),
 })
 const runOne = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState) =>
   oneGenerate(layer, state, anthropicHappyResponse).pipe(Effect.orDie)
-const JsonRecord = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
-const parsePayload = (body: string | undefined): Record<string, unknown> => {
-  expect(body).toBeDefined()
-  return Schema.decodeUnknownSync(JsonRecord)(body)
-}
+const JsonRecordSchema = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
+type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
+const parsePayload = (body: string): JsonRecord => Schema.decodeSync(JsonRecordSchema)(body)
 describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", () => {
   it.live("OAuth resolveModel layer reads Bearer from credentialCellRef the test owns", () =>
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
-      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, undefined)
+      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
       // Pre-seed the cred Ref directly (test owns it). If
       // `makeOauthAnthropicLayer` regressed to allocating its own internal
       // Ref via `AnthropicCredentialService.layer(authInfo)`, the
@@ -125,14 +124,14 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
       // assert the captured Authorization header reflects the seed, so
       // any regression that ignores the external Ref breaks the test.
       yield* SynchronizedRef.set(credentialCellRef, {
-        creds: {
+        creds: Option.some({
           accessToken: "seeded-bearer-token",
           refreshToken: "r",
           expiresAt: FUTURE_MS,
-        },
+        }),
         at: yield* Clock.currentTimeMillis,
       })
-      const model = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
+      const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       expect(fetchState.captured.length).toBeGreaterThan(0)
@@ -148,14 +147,16 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
           yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
         const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
         yield* SynchronizedRef.set(credentialCellRef, {
-          creds: { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
+          creds: Option.some({ accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS }),
           at: yield* Clock.currentTimeMillis,
         })
-        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, undefined)
-        const model = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
+        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+        const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState = makeFakeFetchState()
         yield* runOne(model, fetchState)
-        const payload = parsePayload(fetchState.captured.at(-1)?.body)
+        const payload = parsePayload(
+          Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)!.body)),
+        )
         // keychainClient injects the SYSTEM_IDENTITY_PREFIX block. If the
         // OAuth path stops being wrapped, the system block disappears.
         const systemBlocks = payload["system"]
@@ -171,15 +172,15 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
           yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
         const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
         yield* SynchronizedRef.set(credentialCellRef, {
-          creds: {
+          creds: Option.some({
             accessToken: "first-token",
             refreshToken: "r",
             expiresAt: FUTURE_MS,
-          },
+          }),
           at: yield* Clock.currentTimeMillis,
         })
-        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, undefined)
-        const model1 = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
+        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+        const model1 = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState1 = makeFakeFetchState()
         yield* runOne(model1, fetchState1)
         expect(fetchState1.captured.at(-1)!.headers["authorization"]).toBe("Bearer first-token")
@@ -189,14 +190,14 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
         // observing this update through the shared Ref. Asserting the second
         // request uses "second-token" pins the Ref-sharing semantics.
         yield* SynchronizedRef.set(credentialCellRef, {
-          creds: {
+          creds: Option.some({
             accessToken: "second-token",
             refreshToken: "r",
             expiresAt: FUTURE_MS,
-          },
+          }),
           at: yield* Clock.currentTimeMillis,
         })
-        const model2 = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
+        const model2 = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState2 = makeFakeFetchState()
         yield* runOne(model2, fetchState2)
         expect(fetchState2.captured.at(-1)!.headers["authorization"]).toBe("Bearer second-token")
@@ -208,7 +209,7 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
         yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
       yield* SynchronizedRef.set(credentialCellRef, {
-        creds: { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
+        creds: Option.some({ accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS }),
         at: yield* Clock.currentTimeMillis,
       })
       // Pre-seed beta exclusions so the model's default 1M-context beta
@@ -217,11 +218,11 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
       // include `context-1m-2025-08-07`.
       yield* Ref.set(betaCellRef, {
         map: new Map([["claude-opus-4-6", new Set(["context-1m-2025-08-07"])]]),
-        lastBetaFlags: undefined,
-        lastModelId: "claude-opus-4-6",
+        lastBetaFlags: Option.none(),
+        lastModelId: Option.some("claude-opus-4-6"),
       })
-      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, undefined)
-      const model = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
+      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+      const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       const sentBeta = fetchState.captured.at(-1)!.headers["anthropic-beta"] ?? ""
@@ -235,8 +236,8 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
-      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, undefined)
-      const model = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
+      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+      const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       const headers = fetchState.captured.at(-1)!.headers
@@ -251,11 +252,13 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
         const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
-        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, undefined)
-        const model = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
+        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+        const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
         const fetchState = makeFakeFetchState()
         yield* runOne(model, fetchState)
-        const payload = parsePayload(fetchState.captured.at(-1)?.body)
+        const payload = parsePayload(
+          Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)!.body)),
+        )
         // No keychainClient wrapper → no system block, no identity prefix
         // injection. The API-key branch must not wrap.
         expect(Bun.inspect(payload["system"] ?? "")).not.toContain(SYSTEM_IDENTITY_PREFIX)
@@ -266,8 +269,8 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
-      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, undefined)
-      const model = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
+      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+      const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       expect(yield* SynchronizedRef.get(credentialCellRef)).toBe(EMPTY_CREDENTIAL_CELL)

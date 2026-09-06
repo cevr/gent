@@ -53,7 +53,7 @@ describe("extractFirstUserMessageText", () => {
         {
           role: "user",
           content: [
-            { type: "image", text: undefined },
+            { type: "image" },
             { type: "text", text: "hello" },
             { type: "text", text: "second" },
           ],

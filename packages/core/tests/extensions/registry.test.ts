@@ -1,7 +1,9 @@
+import { ModelId } from "@gent/core-internal/domain/model"
 import { describe, test, expect, it } from "effect-bun-test"
-import { Effect, Layer, Schema } from "effect"
+import { Predicate, Effect, Layer, Schema } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
+import type { ExtensionContributions } from "@gent/core-internal/domain/contribution"
 import type { LoadedExtension, RunContext } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core-internal/domain/driver"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
@@ -52,10 +54,12 @@ const makeProvider = (providerId: string, name?: string): ModelDriverContributio
   id: providerId,
   name: name ?? providerId,
   resolveModel: (modelName) =>
-    AiModel.make(
-      providerId,
-      modelName,
-      Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel),
+    Effect.succeed(
+      AiModel.make(
+        providerId,
+        modelName,
+        Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel),
+      ),
     ),
 })
 // Static prompt sections live on capability leaf `prompt`. Build a synthetic
@@ -84,16 +88,20 @@ const makeExt = (
     ...(opts?.tools ?? []),
     ...(opts?.promptSections ?? []).map(promptSectionAsToolContribution),
   ]
+  let contributions: ExtensionContributions = {}
+  if (tools.length > 0) contributions = { ...contributions, tools }
+  if (!Predicate.isUndefined(opts?.requests))
+    contributions = { ...contributions, requests: opts.requests }
+  if (!Predicate.isUndefined(opts?.agents))
+    contributions = { ...contributions, agents: opts.agents }
+  if (!Predicate.isUndefined(opts?.modelDrivers)) {
+    contributions = { ...contributions, modelDrivers: opts.modelDrivers }
+  }
   return {
     manifest: { id: ExtensionId.make(id) },
     scope,
     sourcePath: `/test/${id}`,
-    contributions: {
-      ...(tools.length > 0 ? { tools } : {}),
-      ...(opts?.requests !== undefined ? { requests: opts.requests } : {}),
-      agents: opts?.agents,
-      modelDrivers: opts?.modelDrivers,
-    },
+    contributions,
   }
 }
 const makeSlashRequest = (
@@ -103,12 +111,17 @@ const makeSlashRequest = (
     readonly extensionId?: ExtensionId
   },
 ): RequestCapability => {
-  const extensionId = options?.extensionId ?? ExtensionId.make(`@test/${id}-slash`)
+  let extensionId = ExtensionId.make(`@test/${id}-slash`)
+  if (!Predicate.isUndefined(options?.extensionId)) extensionId = options.extensionId
+  let description = `${id} command`
+  if (!Predicate.isUndefined(options?.description)) description = options.description
+  let optionalDescription: Pick<RequestCapability, "description"> = {}
+  if (!Predicate.isUndefined(options?.description)) optionalDescription = { description }
   return request({
     id,
     extensionId,
-    slash: { name: id, description: options?.description ?? `${id} command` },
-    ...(options?.description !== undefined ? { description: options.description } : {}),
+    slash: { name: id, description },
+    ...optionalDescription,
     input: Schema.String,
     output: Schema.Void,
     execute: () => Effect.void,
@@ -161,7 +174,7 @@ describe("resolveExtensions", () => {
   test("later scope wins for same-name agent", () => {
     const builtinExplore = makeAgent("explore")
     const projectExplore = AgentDefinition.make({
-      name: "explore" as never,
+      name: AgentName.make("explore"),
       description: "project explore",
     })
     const resolved = resolveExtensions([
@@ -274,7 +287,7 @@ describe("resolveExtensions — disabled filtering", () => {
     const disabledSet = new Set(["@gent/agents"])
     const extensions = [
       makeExt("@gent/agents", "builtin", {
-        agents: [makeAgent("cowork", { model: "anthropic/claude-opus-4-6" as never })],
+        agents: [makeAgent("cowork", { model: ModelId.make("anthropic/claude-opus-4-6") })],
       }),
       makeExt("@gent/fs-tools", "builtin", { tools: [makeTool("read")] }),
     ]
@@ -299,7 +312,7 @@ describe("resolveExtensions — disabled filtering", () => {
     const extensions = [
       makeExt("@gent/todo", "builtin", { tools: [makeTool("add_todo")] }),
       makeExt("@gent/agents", "builtin", {
-        agents: [makeAgent("cowork", { model: "anthropic/claude-opus-4-6" as never })],
+        agents: [makeAgent("cowork", { model: ModelId.make("anthropic/claude-opus-4-6") })],
       }),
       makeExt("@gent/openai", "builtin", { modelDrivers: [makeProvider("openai")] }),
       makeExt("@gent/fs-tools", "builtin", { tools: [makeTool("read")] }),
@@ -343,7 +356,9 @@ describe("ExtensionRegistry", () => {
       ])
       const tools = [...registry.getResolved().modelCapabilities.values()]
       const tool = tools.find((capability) => String(getToolId(capability)) === "read")
-      expect(String(tool === undefined ? undefined : getToolId(tool))).toBe("read")
+      expect(tool).toBeDefined()
+      if (Predicate.isUndefined(tool)) return
+      expect(String(getToolId(tool))).toBe("read")
     }),
   )
   it.live("unregistered model capability name returns undefined", () =>
@@ -421,13 +436,13 @@ describe("ExtensionRegistry", () => {
   it.live("lists all agents including override winners", () =>
     Effect.gen(function* () {
       const cowork = AgentDefinition.make({
-        name: "cowork" as never,
-        model: "anthropic/claude-opus-4-6" as never,
+        name: AgentName.make("cowork"),
+        model: ModelId.make("anthropic/claude-opus-4-6"),
       })
       const explore = makeAgent("explore")
       const deepwork = AgentDefinition.make({
-        name: "deepwork" as never,
-        model: "openai/gpt-5.4" as never,
+        name: AgentName.make("deepwork"),
+        model: ModelId.make("openai/gpt-5.4"),
       })
       const registry = yield* buildRegistry([
         makeExt("a", "builtin", { agents: [cowork, explore, deepwork] }),
@@ -444,7 +459,7 @@ describe("ExtensionRegistry", () => {
       const readTool = makeTool("read")
       const bashTool = makeTool("bash")
       const agent = AgentDefinition.make({
-        name: "explore" as never,
+        name: AgentName.make("explore"),
         allowedTools: ["read"],
       })
       const registry = yield* buildRegistry([
@@ -452,7 +467,10 @@ describe("ExtensionRegistry", () => {
       ])
       const { tools } = compileRegistryPolicy(registry, agent)
       expect(tools.length).toBe(1)
-      expect(String(tools[0] === undefined ? undefined : getToolId(tools[0]))).toBe("read")
+      const firstTool = tools[0]
+      expect(firstTool).toBeDefined()
+      if (Predicate.isUndefined(firstTool)) return
+      expect(String(getToolId(firstTool))).toBe("read")
     }),
   )
   it.live("allowedTools restricts the resolved set to exactly the listed names", () =>
@@ -461,7 +479,7 @@ describe("ExtensionRegistry", () => {
       const bashTool = makeTool("bash")
       const editTool = makeTool("edit")
       const agent = AgentDefinition.make({
-        name: "explore" as never,
+        name: AgentName.make("explore"),
         allowedTools: ["read", "bash"],
       })
       const registry = yield* buildRegistry([
@@ -479,7 +497,7 @@ describe("ExtensionRegistry", () => {
       const readTool = makeTool("read")
       const writeTool = makeTool("write")
       const agent = AgentDefinition.make({
-        name: "cowork" as never,
+        name: AgentName.make("cowork"),
         deniedTools: ["write"],
       })
       const registry = yield* buildRegistry([
@@ -496,7 +514,7 @@ describe("ExtensionRegistry", () => {
       const readTool = makeTool("read")
       const secretTool = makeTool("secret")
       const agent = AgentDefinition.make({
-        name: "cowork" as never,
+        name: AgentName.make("cowork"),
         deniedTools: ["secret"],
       })
       const registry = yield* buildRegistry([
@@ -532,7 +550,7 @@ describe("ExtensionRegistry", () => {
           modelDrivers: [makeProvider("anthropic"), makeProvider("openai")],
         }),
       ])
-      const providers = yield* registry.listModels()
+      const providers = yield* registry.listModels
       expect(providers.length).toBe(2)
     }),
   )
@@ -546,12 +564,13 @@ describe("ExtensionRegistry", () => {
         const ext = yield* ExtensionRegistry
         const driver = yield* DriverRegistry
         return { ext, driver }
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       const tools = [...registries.ext.getResolved().modelCapabilities.values()]
       expect(tools.length).toBe(0)
       const agents = [...registries.ext.getResolved().agents.values()]
       expect(agents.length).toBe(0)
-      const providers = yield* registries.driver.listModels()
+      const providers = yield* registries.driver.listModels
       expect(providers.length).toBe(0)
     }),
   )
@@ -675,8 +694,9 @@ describe("resolveExtensions — slash command discovery", () => {
     const resolved = resolveExtensions([makeExt("@test/rich", "builtin", { tools: [cap] })])
     const resolvedTool = resolved.modelCapabilities.get("rich")
     expect(resolvedTool).toBeDefined()
-    expect(resolvedTool?.description).toBe("rich tool")
-    const metadata = resolvedTool !== undefined ? getToolMetadata(resolvedTool) : undefined
+    if (Predicate.isUndefined(resolvedTool)) return
+    expect(resolvedTool.description).toBe("rich tool")
+    const metadata = getToolMetadata(resolvedTool)
     expect(metadata?.promptSnippet).toBe("Snippet here.")
     expect(metadata?.promptGuidelines).toEqual(["use carefully", "log result"])
     expect(metadata?.interactive).toBe(true)

@@ -4,7 +4,7 @@ import picomatch from "picomatch"
 
 // Grep Tool Error
 
-export class GrepError extends Schema.TaggedErrorClass<GrepError>()("GrepError", {
+export class GrepError extends Schema.TaggedError<GrepError>()("GrepError", {
   message: Schema.String,
   pattern: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -32,12 +32,12 @@ export const GrepParams = Schema.Struct({
     }),
   ),
   context: Schema.optionalKey(
-    Schema.Number.annotate({
+    Schema.Finite.annotate({
       description: "Lines of context around matches",
     }),
   ),
   limit: Schema.optionalKey(
-    Schema.Number.annotate({
+    Schema.Finite.annotate({
       description: "Maximum number of matches (default: 100)",
     }),
   ),
@@ -47,7 +47,7 @@ export const GrepParams = Schema.Struct({
 
 export const GrepMatch = Schema.Struct({
   file: Schema.String,
-  line: Schema.Number,
+  line: Schema.Finite,
   content: Schema.String,
   context: Schema.optional(
     Schema.Struct({
@@ -77,10 +77,17 @@ export const GrepTool = tool({
   execute: Effect.fn("GrepTool.execute")(function* (params) {
     const ctx = yield* ExtensionContext
 
-    const basePath = params.path !== undefined ? ctx.Files.resolve(params.path) : ctx.cwd
+    const path = Option.fromNullishOr(params.path)
+    let basePath = ctx.cwd
+    if (Option.isSome(path)) {
+      basePath = ctx.Files.resolve(path.value)
+    }
     const limit = params.limit ?? 100
     const contextLines = params.context ?? 0
-    const flags = params.caseSensitive === false ? "gi" : "g"
+    let flags = "g"
+    if (params.caseSensitive === false) {
+      flags = "gi"
+    }
 
     const regex = yield* Effect.try({
       try: () => new RegExp(params.pattern, flags),
@@ -108,12 +115,12 @@ export const GrepTool = tool({
         const lines = content.split("\n")
 
         for (let i = 0; i < lines.length && matches.length < limit; i++) {
-          const line = lines[i]
-          if (line !== undefined && regex.test(line)) {
+          const line = Option.fromNullishOr(lines[i])
+          if (Option.isSome(line) && regex.test(line.value)) {
             const match: (typeof matches)[0] = {
               file: filePath,
               line: i + 1,
-              content: line,
+              content: line.value,
             }
 
             if (contextLines > 0) {

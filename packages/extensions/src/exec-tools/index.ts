@@ -22,11 +22,12 @@ export const ExecToolsExtension = defineExtension({
   tools: [BashTool],
   resources: [
     defineResource({
+      id: "@gent/exec-tools/background-bash",
       scope: "process",
       layer: BackgroundBashLayer,
       start: Effect.gen(function* () {
         const storage = yield* BackgroundBashStorage
-        yield* storage.reconcileInterrupted()
+        yield* storage.reconcileInterrupted
       }),
     }),
   ],

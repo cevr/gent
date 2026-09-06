@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Option } from "effect"
 import type {
   AuthAuthorization,
   AuthMethod,
@@ -6,6 +7,8 @@ import type {
 } from "@gent/core-internal/domain/auth"
 import { ProviderId } from "@gent/core-internal/domain/model"
 import { AuthState, transitionAuth } from "../src/routes/auth-state"
+
+const absent = Option.getOrUndefined(Option.none())
 
 const provider = {
   provider: ProviderId.make("anthropic"),
@@ -45,7 +48,7 @@ describe("auth-state", () => {
       methods,
       providerIndex: 0,
       deleting: false,
-      error: undefined,
+      error: absent,
     })
   })
 

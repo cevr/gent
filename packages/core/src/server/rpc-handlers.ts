@@ -1,4 +1,4 @@
-import { Clock, Effect, Layer, Stream, type Context } from "effect"
+import { Predicate, Clock, Effect, Layer, Option, Path, Schema, Stream, type Context } from "effect"
 import { GentRpcs } from "./rpcs"
 import type { DriverRef } from "../domain/agent.js"
 import { Auth, AuthApi, AuthGuard } from "../domain/auth.js"
@@ -19,6 +19,13 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
+import {
+  CanonicalCwd,
+  ResourceGraphCommandConflictError,
+  ResourceGraphDesiredCommand,
+  ResourceGraphExpectedRevisionError,
+} from "../domain/resource-graph-state.js"
+import { StorageError } from "../domain/storage-error.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
@@ -31,8 +38,11 @@ import { InteractionCommands } from "./interaction-commands.js"
 import { ServerIdentity } from "./server-identity.js"
 import { SessionCommands } from "./session-commands.js"
 import { SessionQueries } from "./session-queries.js"
+import { ResourceGraphCommandService } from "../runtime/extensions/resource-host/resource-graph-command.js"
+import { ResourceGraphApplyError } from "../runtime/extensions/resource-host/resource-graph-entity.js"
+import { ResourceGraphStorage } from "../storage/resource-graph-storage.js"
 import { getBranchTree } from "./session-utils.js"
-import { WorkspaceRpcMiddleware } from "./workspace-rpc.js"
+import { CurrentWorkspaceId, WorkspaceRpcMiddleware } from "./workspace-rpc.js"
 import {
   DriverInfo,
   DriverListResult,
@@ -58,6 +68,8 @@ import {
   type SubscribeEventsInput,
   type SwitchBranchInput,
   type UpdateSessionReasoningLevelInput,
+  type ResourceGraphGetInput,
+  type ResourceGraphSubmitInput,
 } from "./transport-contract.js"
 
 // ============================================================================
@@ -72,15 +84,18 @@ interface ResolvedSessionServices {
 const isPublicTransportEvent = (envelope: EventEnvelope) =>
   envelope.event._tag !== "MachineTaskSucceeded" && envelope.event._tag !== "MachineTaskFailed"
 
-const invalidateExternalDriversFor = (prev: DriverRef | undefined, next: DriverRef | undefined) =>
+const invalidateExternalDriversFor = (
+  prev: Option.Option<DriverRef>,
+  next: Option.Option<DriverRef>,
+) =>
   Effect.gen(function* () {
     const registry = yield* DriverRegistry
     const ids = new Set<string>()
-    if (prev?._tag === "external") ids.add(prev.id)
-    if (next?._tag === "external") ids.add(next.id)
+    if (Option.isSome(prev) && prev.value._tag === "external") ids.add(prev.value.id)
+    if (Option.isSome(next) && next.value._tag === "external") ids.add(next.value.id)
     for (const id of ids) {
       const driver = yield* registry.getExternal(id)
-      if (driver !== undefined) yield* driver.invalidate()
+      if (!Predicate.isUndefined(driver)) yield* driver.invalidate
     }
   })
 
@@ -113,6 +128,26 @@ const authPersistenceError = (
     cause,
   })
 
+// oxlint-disable-next-line effect/noUnknownParameters -- Encore send failures are not schema errors.
+const resourceGraphSubmitError = (cause: unknown) => {
+  if (Schema.is(StorageError)(cause)) return cause
+  if (Schema.is(ResourceGraphCommandConflictError)(cause)) return cause
+  if (Schema.is(ResourceGraphExpectedRevisionError)(cause)) return cause
+  return new StorageError({
+    message: `Failed to submit resource graph: ${String(cause)}`,
+    cause,
+  })
+}
+
+// oxlint-disable-next-line effect/noUnknownParameters -- Preview maps loader failures into the RPC schema.
+const resourceGraphPreviewError = (cause: unknown) => {
+  if (Schema.is(ResourceGraphApplyError)(cause)) return cause
+  return new ResourceGraphApplyError({
+    phase: "prepare",
+    message: `Failed to preview resource graph: ${String(cause)}`,
+  })
+}
+
 const extensionRequestError = (params: {
   readonly extensionId: ExtensionId
   readonly capabilityId: string
@@ -144,14 +179,14 @@ const RpcHandlers = GentRpcs.toLayer(
     const providerAuth = yield* ProviderAuth
     const extensionRegistry = yield* ExtensionRegistry
     const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
-    const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
     const sessionStorage = yield* SessionStorage
     const branchStorage = yield* BranchStorage
     const messageStorage = yield* MessageStorage
     const relationshipStorage = yield* RelationshipStorage
+    const resourceGraphCommands = yield* ResourceGraphCommandService
+    const resourceGraphStorage = yield* ResourceGraphStorage
+    const path = yield* Path.Path
     const connectionTrackerOpt = yield* Effect.serviceOption(ConnectionTracker)
-    const connectionTracker =
-      connectionTrackerOpt._tag === "Some" ? connectionTrackerOpt.value : undefined
     const serverIdentity = yield* ServerIdentity
     // Touching these Tags at layer-build keeps their requirements visible on the
     // RpcHandlers layer. RpcGroup.toLayer erases handler-residual R, so Tags only
@@ -161,20 +196,21 @@ const RpcHandlers = GentRpcs.toLayer(
     yield* DriverRegistry
 
     const loadSession = (sessionId: string) =>
-      sessionStorage
-        .getSession(SessionId.make(sessionId))
-        .pipe(Effect.orElseSucceed(() => undefined))
+      sessionStorage.getSession(SessionId.make(sessionId)).pipe(
+        Effect.map(Option.fromUndefinedOr),
+        Effect.orElseSucceed(() => Option.none()),
+      )
 
     const resolveProfileServices = (
-      cwd: string | undefined,
+      cwd: Option.Option<string>,
     ): Effect.Effect<ResolvedSessionServices> =>
       Effect.gen(function* () {
-        if (cwd === undefined || profileCache === undefined) {
+        if (Option.isNone(cwd) || Option.isNone(profileCacheOpt)) {
           return {
             registry: extensionRegistry,
           }
         }
-        const profile = yield* profileCache.resolve(cwd)
+        const profile = yield* profileCacheOpt.value.resolve(cwd.value)
         return {
           registry: profile.registryService,
           capabilityContext: profile.layerContext,
@@ -182,12 +218,13 @@ const RpcHandlers = GentRpcs.toLayer(
       })
 
     const resolveSessionServices = (
-      sessionId: string | undefined,
+      sessionId: Option.Option<string>,
     ): Effect.Effect<ResolvedSessionServices> =>
       Effect.gen(function* () {
-        if (sessionId === undefined) return yield* resolveProfileServices(undefined)
-        const session = yield* loadSession(sessionId)
-        return yield* resolveProfileServices(session?.cwd)
+        if (Option.isNone(sessionId)) return yield* resolveProfileServices(Option.none())
+        const session = yield* loadSession(sessionId.value)
+        const cwd = Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
+        return yield* resolveProfileServices(cwd)
       })
 
     return {
@@ -197,29 +234,29 @@ const RpcHandlers = GentRpcs.toLayer(
       "session.create": (input: CreateSessionInput) =>
         commands
           .createSession({
-            ...(input.name !== undefined ? { name: input.name } : {}),
-            ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-            ...(input.parentSessionId !== undefined
-              ? { parentSessionId: input.parentSessionId }
-              : {}),
-            ...(input.parentBranchId !== undefined ? { parentBranchId: input.parentBranchId } : {}),
-            ...(input.initialPrompt !== undefined ? { initialPrompt: input.initialPrompt } : {}),
-            ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
-            ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+            name: input.name,
+            cwd: input.cwd,
+            parentSessionId: input.parentSessionId,
+            parentBranchId: input.parentBranchId,
+            initialPrompt: input.initialPrompt,
+            agentOverride: input.agentOverride,
+            requestId: input.requestId,
           })
           .pipe(
             Effect.tap((result) => WideEvent.set({ sessionId: result.sessionId })),
             withWideEvent(
               WideEventBoundary.rpc("session.create", {
-                ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+                requestId: input.requestId,
               }),
             ),
           ),
 
-      "session.list": () => sessionStorage.listSessions(),
+      "session.list": () => sessionStorage.listSessions,
 
       "session.get": ({ sessionId }: SessionIdPayload) =>
-        sessionStorage.getSession(sessionId).pipe(Effect.map((session) => session ?? null)),
+        sessionStorage
+          .getSession(sessionId)
+          .pipe(Effect.map(Option.fromUndefinedOr), Effect.map(Option.getOrNull)),
 
       "session.delete": ({ sessionId }: SessionIdPayload) =>
         commands.deleteSession(sessionId).pipe(
@@ -251,14 +288,12 @@ const RpcHandlers = GentRpcs.toLayer(
           withWideEvent(WideEventBoundary.rpc("session.updateReasoningLevel")),
         ),
 
-      "session.events": ({ sessionId, branchId, after }: SubscribeEventsInput) =>
-        eventStore
-          .subscribe({
-            sessionId,
-            ...(branchId !== undefined ? { branchId } : {}),
-            ...(after !== undefined ? { after: EventId.make(after) } : {}),
-          })
-          .pipe(Stream.filter(isPublicTransportEvent)),
+      "session.events": ({ sessionId, branchId, after }: SubscribeEventsInput) => {
+        const subscription = { sessionId, branchId }
+        if (!Predicate.isUndefined(after))
+          Object.assign(subscription, { after: EventId.make(after) })
+        return eventStore.subscribe(subscription).pipe(Stream.filter(isPublicTransportEvent))
+      },
 
       "session.watchRuntime": (input: QueueTarget) => watchRuntimeStream(input),
 
@@ -268,14 +303,14 @@ const RpcHandlers = GentRpcs.toLayer(
         commands
           .createBranch({
             sessionId,
-            ...(name !== undefined ? { name } : {}),
-            ...(requestId !== undefined ? { requestId } : {}),
+            name,
+            requestId,
           })
           .pipe(
             Effect.tap((result) => WideEvent.set({ sessionId, branchId: result.branchId })),
             withWideEvent(
               WideEventBoundary.rpc("branch.create", {
-                ...(requestId !== undefined ? { requestId } : {}),
+                requestId,
               }),
             ),
           ),
@@ -294,14 +329,14 @@ const RpcHandlers = GentRpcs.toLayer(
             sessionId,
             fromBranchId,
             toBranchId,
-            ...(summarize !== undefined ? { summarize } : {}),
-            ...(requestId !== undefined ? { requestId } : {}),
+            summarize,
+            requestId,
           })
           .pipe(
             Effect.tap(() => WideEvent.set({ sessionId, fromBranchId, toBranchId })),
             withWideEvent(
               WideEventBoundary.rpc("branch.switch", {
-                ...(requestId !== undefined ? { requestId } : {}),
+                requestId,
               }),
             ),
           ),
@@ -312,8 +347,8 @@ const RpcHandlers = GentRpcs.toLayer(
             sessionId,
             fromBranchId,
             atMessageId,
-            ...(name !== undefined ? { name } : {}),
-            ...(requestId !== undefined ? { requestId } : {}),
+            name,
+            requestId,
           })
           .pipe(
             Effect.tap((result) =>
@@ -321,7 +356,7 @@ const RpcHandlers = GentRpcs.toLayer(
             ),
             withWideEvent(
               WideEventBoundary.rpc("branch.fork", {
-                ...(requestId !== undefined ? { requestId } : {}),
+                requestId,
               }),
             ),
           ),
@@ -339,15 +374,15 @@ const RpcHandlers = GentRpcs.toLayer(
             sessionId,
             branchId,
             content,
-            ...(agentOverride !== undefined ? { agentOverride } : {}),
-            ...(runSpec !== undefined ? { runSpec } : {}),
-            ...(requestId !== undefined ? { requestId } : {}),
+            agentOverride,
+            runSpec,
+            requestId,
           })
           .pipe(
             Effect.tap(() => WideEvent.set({ sessionId, branchId })),
             withWideEvent(
               WideEventBoundary.rpc("message.send", {
-                ...(requestId !== undefined ? { requestId } : {}),
+                requestId,
               }),
             ),
           ),
@@ -372,7 +407,7 @@ const RpcHandlers = GentRpcs.toLayer(
           Effect.tap(() => WideEvent.set({ sessionId, branchId })),
           withWideEvent(
             WideEventBoundary.rpc("queue.drain", {
-              ...(requestId !== undefined ? { requestId } : {}),
+              requestId,
             }),
           ),
         ),
@@ -397,7 +432,7 @@ const RpcHandlers = GentRpcs.toLayer(
             sessionId,
             branchId,
             approved,
-            ...(notes !== undefined ? { notes } : {}),
+            notes,
           })
           .pipe(
             Effect.tap(() => WideEvent.set({ sessionId, branchId, requestId, approved })),
@@ -405,28 +440,73 @@ const RpcHandlers = GentRpcs.toLayer(
           ),
 
       // ----------------------------------------------------------------------
+      // Durable resource graph
+      // ----------------------------------------------------------------------
+      "resourceGraph.submit": (input: ResourceGraphSubmitInput) =>
+        Effect.gen(function* () {
+          const workspaceId = yield* CurrentWorkspaceId
+          return yield* resourceGraphCommands
+            .submit(
+              ResourceGraphDesiredCommand.make({
+                ...input,
+                cwd: CanonicalCwd.make(path.resolve(input.cwd)),
+                workspaceId,
+              }),
+            )
+            .pipe(Effect.mapError(resourceGraphSubmitError))
+        }),
+
+      "resourceGraph.get": ({ cwd }: ResourceGraphGetInput) =>
+        Effect.gen(function* () {
+          const workspaceId = yield* CurrentWorkspaceId
+          const status = yield* resourceGraphStorage.get({
+            workspaceId,
+            cwd: CanonicalCwd.make(path.resolve(cwd)),
+          })
+          return Option.getOrNull(Option.fromUndefinedOr(status))
+        }),
+
+      "resourceGraph.preview": ({ cwd }: ResourceGraphGetInput) =>
+        Effect.gen(function* () {
+          const canonicalCwd = CanonicalCwd.make(path.resolve(cwd))
+          if (Option.isNone(profileCacheOpt)) {
+            return yield* new ResourceGraphApplyError({
+              phase: "prepare",
+              message: "Resource graph preview is unavailable without a profile cache",
+            })
+          }
+          return yield* profileCacheOpt.value
+            .preview(String(canonicalCwd))
+            .pipe(Effect.mapError(resourceGraphPreviewError))
+        }),
+
+      // ----------------------------------------------------------------------
       // Config / driver / model / auth / permission
       // ----------------------------------------------------------------------
       "permission.listRules": () =>
-        configService.get().pipe(Effect.map((c) => c.permissions ?? [])),
+        configService
+          .get()
+          .pipe(
+            Effect.map((c) => Option.getOrElse(Option.fromUndefinedOr(c.permissions), () => [])),
+          ),
 
       "permission.deleteRule": ({ tool, pattern }: DeletePermissionRuleInput) =>
         configService.removePermissionRule(tool, pattern),
 
-      "model.list": () => modelRegistry.list(),
+      "model.list": () => modelRegistry.list,
 
       "driver.list": () =>
         Effect.gen(function* () {
           const config = yield* configService.get()
           const driverRegistry = yield* DriverRegistry
-          const models = yield* driverRegistry.listModels()
-          const externals = yield* driverRegistry.listExternal()
+          const models = yield* driverRegistry.listModels
+          const externals = yield* driverRegistry.listExternal
           const agents = [...extensionRegistry.getResolved().agents.values()]
           const drivers = [
             ...models.map((driver) =>
               DriverInfo.cases.model.make({
                 id: driver.id,
-                ...(driver.name !== undefined ? { description: driver.name } : {}),
+                description: driver.name,
               }),
             ),
             ...externals.map((driver) =>
@@ -435,9 +515,13 @@ const RpcHandlers = GentRpcs.toLayer(
               }),
             ),
           ]
+          const overrides = Option.getOrElse(
+            Option.fromUndefinedOr(config.driverOverrides),
+            () => ({}),
+          )
           return new DriverListResult({
             drivers,
-            overrides: config.driverOverrides ?? {},
+            overrides,
             agents,
           })
         }),
@@ -445,9 +529,9 @@ const RpcHandlers = GentRpcs.toLayer(
       "driver.set": ({ agentName, driver }: SetDriverOverrideInput) =>
         Effect.gen(function* () {
           const driverRegistry = yield* DriverRegistry
-          if (driver._tag === "model" && driver.id !== undefined) {
+          if (driver._tag === "model" && !Predicate.isUndefined(driver.id)) {
             const found = yield* driverRegistry.getModel(driver.id)
-            if (found === undefined) {
+            if (Predicate.isUndefined(found)) {
               return yield* new NotFoundError({
                 entity: "driver",
                 message: `Unknown model driver "${driver.id}"`,
@@ -456,7 +540,7 @@ const RpcHandlers = GentRpcs.toLayer(
           }
           if (driver._tag === "external") {
             const found = yield* driverRegistry.getExternal(driver.id)
-            if (found === undefined) {
+            if (Predicate.isUndefined(found)) {
               return yield* new NotFoundError({
                 entity: "driver",
                 message: `Unknown external driver "${driver.id}"`,
@@ -467,7 +551,10 @@ const RpcHandlers = GentRpcs.toLayer(
           const prevConfig = yield* configService.get()
           const prevOverride = prevConfig.driverOverrides?.[agentName]
           yield* configService.setDriverOverride(agentName, driver)
-          yield* invalidateExternalDriversFor(prevOverride, driver)
+          yield* invalidateExternalDriversFor(
+            Option.fromUndefinedOr(prevOverride),
+            Option.some(driver),
+          )
         }),
 
       "driver.clear": ({ agentName }: ClearDriverOverrideInput) =>
@@ -475,31 +562,30 @@ const RpcHandlers = GentRpcs.toLayer(
           const prevConfig = yield* configService.get()
           const prevOverride = prevConfig.driverOverrides?.[agentName]
           yield* configService.clearDriverOverride(agentName)
-          yield* invalidateExternalDriversFor(prevOverride, undefined)
+          yield* invalidateExternalDriversFor(Option.fromUndefinedOr(prevOverride), Option.none())
         }),
 
       "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersInput) =>
         Effect.gen(function* () {
-          let cwd: string | undefined
-          if (sessionId !== undefined) {
+          let cwd = Option.none<string>()
+          if (!Predicate.isUndefined(sessionId)) {
             const session = yield* sessionStorage.getSession(SessionId.make(sessionId))
-            if (session === undefined) {
+            if (Predicate.isUndefined(session)) {
               return yield* new NotFoundError({
                 entity: "session",
                 message: "Session not found",
               })
             }
-            cwd = session?.cwd
+            cwd = Option.fromUndefinedOr(session.cwd)
           }
-          const config = yield* configService.get(cwd)
+          const config = yield* configService.get(Option.getOrUndefined(cwd))
+          const providerScope = {
+            agentName,
+            sessionId,
+            driverOverrides: config.driverOverrides,
+          }
           return yield* authGuard
-            .listProviders({
-              ...(agentName !== undefined ? { agentName } : {}),
-              ...(sessionId !== undefined ? { sessionId } : {}),
-              ...(config.driverOverrides !== undefined
-                ? { driverOverrides: config.driverOverrides }
-                : {}),
-            })
+            .listProviders(providerScope)
             .pipe(Effect.mapError((error) => authPersistenceError("read", "*", error)))
         }),
 
@@ -513,12 +599,10 @@ const RpcHandlers = GentRpcs.toLayer(
           .remove(provider)
           .pipe(Effect.mapError((error) => authPersistenceError("delete", provider, error))),
 
-      "auth.listMethods": () => providerAuth.listMethods(),
+      "auth.listMethods": () => providerAuth.listMethods,
 
       "auth.authorize": ({ sessionId, provider, method }: AuthorizeAuthInput) =>
-        providerAuth
-          .authorize(sessionId, provider, method)
-          .pipe(Effect.map((result) => result ?? null)),
+        providerAuth.authorize(sessionId, provider, method).pipe(Effect.map(Option.getOrNull)),
 
       "auth.callback": ({
         sessionId,
@@ -534,7 +618,7 @@ const RpcHandlers = GentRpcs.toLayer(
       // ----------------------------------------------------------------------
       "extension.listStatus": ({ sessionId }: OptionalSessionPayload) =>
         Effect.gen(function* () {
-          const { registry } = yield* resolveSessionServices(sessionId)
+          const { registry } = yield* resolveSessionServices(Option.fromUndefinedOr(sessionId))
           const activationStatuses = registry.getResolved().extensionStatuses
           return buildExtensionHealthSnapshot(activationStatuses)
         }),
@@ -574,14 +658,14 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>
         Effect.gen(function* () {
-          const { registry } = yield* resolveSessionServices(sessionId)
+          const { registry } = yield* resolveSessionServices(Option.fromUndefinedOr(sessionId))
           const dynamicRegistry = yield* Effect.serviceOption(DynamicExtensionRegistry)
-          const dynamicCommands =
-            dynamicRegistry._tag === "Some"
-              ? (yield* dynamicRegistry.value.listRequests(SessionId.make(sessionId)))
-                  .filter((entry) => entry.capability.slash !== undefined)
-                  .map((entry) => capabilityToCommand(entry.extensionId, entry.capability))
-              : []
+          let dynamicCommands: ReadonlyArray<ReturnType<typeof capabilityToCommand>> = []
+          if (Option.isSome(dynamicRegistry)) {
+            dynamicCommands = (yield* dynamicRegistry.value.listRequests(SessionId.make(sessionId)))
+              .filter((entry) => !Predicate.isUndefined(entry.capability.slash))
+              .map((entry) => capabilityToCommand(entry.extensionId, entry.capability))
+          }
           const commandsByName = new Map(
             listSlashCommands(registry.getResolved()).map((command) => [command.name, command]),
           )
@@ -605,8 +689,10 @@ const RpcHandlers = GentRpcs.toLayer(
       // ----------------------------------------------------------------------
       "runtime.status": () =>
         Effect.gen(function* () {
-          const connectionCount =
-            connectionTracker !== undefined ? yield* connectionTracker.count() : 0
+          let connectionCount = 0
+          if (Option.isSome(connectionTrackerOpt)) {
+            connectionCount = yield* connectionTrackerOpt.value.count
+          }
           return {
             serverId: serverIdentity.serverId,
             pid: serverIdentity.pid,

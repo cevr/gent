@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Option, Predicate, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
@@ -61,19 +61,20 @@ describe("Todo Storage", () => {
       const todo = makeTodo("t1", { description: "Do something", cwd: "/tmp" })
       yield* storage.createTodo(todo)
       const got = yield* storage.getTodo(TodoId.make("t1"))
-      expect(got).toBeDefined()
-      expect(got!.id).toBe(TodoId.make("t1"))
-      expect(got!.subject).toBe("Todo t1")
-      expect(got!.description).toBe("Do something")
-      expect(got!.status).toBe("pending")
-      expect(got!.cwd).toBe("/tmp")
+      expect(Option.isSome(got)).toBe(true)
+      if (Option.isNone(got)) return
+      expect(got.value.id).toBe(TodoId.make("t1"))
+      expect(got.value.subject).toBe("Todo t1")
+      expect(got.value.description).toBe("Do something")
+      expect(got.value.status).toBe("pending")
+      expect(got.value.cwd).toBe("/tmp")
     }))
 
   test("getTodo returns undefined for missing", () =>
     Effect.gen(function* () {
       const { storage } = yield* setup
       const got = yield* storage.getTodo(TodoId.make("nonexistent"))
-      expect(got).toBeUndefined()
+      expect(Option.isNone(got)).toBe(true)
     }))
 
   test("listTodos by session", () =>
@@ -100,8 +101,8 @@ describe("Todo Storage", () => {
       const { storage } = yield* setup
       yield* storage.createTodo(makeTodo("t1"))
       const updated = yield* storage.updateTodo(TodoId.make("t1"), { status: "in_progress" })
-      expect(updated).toBeDefined()
-      expect(updated!.status).toBe("in_progress")
+      expect(Option.isSome(updated)).toBe(true)
+      if (Option.isSome(updated)) expect(updated.value.status).toBe("in_progress")
     }))
 
   test("updateTodo rejects terminal status transitions at the write boundary", () =>
@@ -115,14 +116,15 @@ describe("Todo Storage", () => {
       const stored = yield* storage.getTodo(TodoId.make("t1"))
 
       expect(Schema.is(TodoTransitionError)(error)).toBe(true)
-      expect(stored?.status).toBe("stopped")
+      expect(Option.isSome(stored)).toBe(true)
+      if (Option.isSome(stored)) expect(stored.value.status).toBe("stopped")
     }))
 
   test("updateTodo returns undefined for missing", () =>
     Effect.gen(function* () {
       const { storage } = yield* setup
       const updated = yield* storage.updateTodo(TodoId.make("nonexistent"), { status: "completed" })
-      expect(updated).toBeUndefined()
+      expect(Option.isNone(updated)).toBe(true)
     }))
 
   test("deleteTodo removes todo", () =>
@@ -131,7 +133,7 @@ describe("Todo Storage", () => {
       yield* storage.createTodo(makeTodo("t1"))
       yield* storage.deleteTodo(TodoId.make("t1"))
       const got = yield* storage.getTodo(TodoId.make("t1"))
-      expect(got).toBeUndefined()
+      expect(Option.isNone(got)).toBe(true)
     }))
 
   test("todo with metadata roundtrips", () =>
@@ -139,8 +141,11 @@ describe("Todo Storage", () => {
       const { storage } = yield* setup
       yield* storage.createTodo(makeTodo("t1", { metadata: { key: "value", count: 42 } }))
       const got = yield* storage.getTodo(TodoId.make("t1"))
-      expect(got).toBeDefined()
-      const meta = got!.metadata as Record<string, unknown>
+      expect(Option.isSome(got)).toBe(true)
+      if (Option.isNone(got)) return
+      const meta = yield* Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Unknown))(
+        got.value.metadata,
+      )
       expect(meta["key"]).toBe("value")
       expect(meta["count"]).toBe(42)
     }))
@@ -152,16 +157,18 @@ describe("Todo Storage", () => {
       yield* storage.createTodo(makeTodo("child", { parentId: TodoId.make("parent") }))
 
       const child = yield* storage.getTodo(TodoId.make("child"))
-      expect(child?.parentId).toBe(TodoId.make("parent"))
+      expect(Option.getOrThrow(child).parentId).toBe(TodoId.make("parent"))
 
       const todos = yield* storage.listTodos(SessionId.make("s1"), BranchId.make("b1"))
       expect(todos.find((todo) => todo.id === TodoId.make("child"))?.parentId).toBe(
         TodoId.make("parent"),
       )
 
-      yield* storage.updateTodo(TodoId.make("child"), { parentId: null })
+      yield* storage.updateTodo(TodoId.make("child"), {
+        parentId: Option.getOrNull(Option.none()),
+      })
       const moved = yield* storage.getTodo(TodoId.make("child"))
-      expect(moved?.parentId).toBeUndefined()
+      expect(Predicate.isUndefined(Option.getOrThrow(moved).parentId)).toBe(true)
     }))
 
   test("nested todos must stay inside the same session branch", () =>
@@ -182,7 +189,7 @@ describe("Todo Storage", () => {
         .pipe(Effect.flip)
 
       expect(Schema.is(TodoStorageError)(error)).toBe(true)
-      expect(yield* storage.getTodo(TodoId.make("child"))).toBeUndefined()
+      expect(Option.isNone(yield* storage.getTodo(TodoId.make("child")))).toBe(true)
     }))
 
   test("moving a todo under its descendant is rejected", () =>
@@ -197,7 +204,7 @@ describe("Todo Storage", () => {
       const parent = yield* storage.getTodo(TodoId.make("parent"))
 
       expect(Schema.is(TodoStorageError)(error)).toBe(true)
-      expect(parent?.parentId).toBeUndefined()
+      expect(Predicate.isUndefined(Option.getOrThrow(parent).parentId)).toBe(true)
     }))
 })
 
@@ -254,7 +261,7 @@ describe("Todo Dependencies", () => {
       const error = yield* Effect.flip(storage.deleteTodo(TodoId.make("t1")))
 
       expect(error._tag).toBe("TodoStorageError")
-      expect(yield* storage.getTodo(TodoId.make("t1"))).toBeDefined()
+      expect(Option.isSome(yield* storage.getTodo(TodoId.make("t1")))).toBe(true)
       expect(yield* storage.getTodoDeps(TodoId.make("t2"))).toEqual([TodoId.make("t1")])
     }))
 
@@ -321,7 +328,7 @@ describe("Composite branch FK", () => {
       )
       expect(result._tag).toBe("TodoStorageError")
       const present = yield* todoStorage.getTodo(TodoId.make("t1"))
-      expect(present).toBeUndefined()
+      expect(Option.isNone(present)).toBe(true)
     }))
 })
 
@@ -336,8 +343,8 @@ describe("TodoStorageReadOnly", () => {
 
       const reader = yield* TodoStorageReadOnly
       const got = yield* reader.getTodo(TodoId.make("ro1"))
-      expect(got).toBeDefined()
-      expect(got!.description).toBe("read-only proof")
+      expect(Option.isSome(got)).toBe(true)
+      if (Option.isSome(got)) expect(got.value.description).toBe("read-only proof")
 
       const listed = yield* reader.listTodos(SessionId.make("s1"))
       expect(listed.some((t) => t.id === "ro1")).toBe(true)

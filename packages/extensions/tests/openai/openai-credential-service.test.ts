@@ -26,7 +26,7 @@ const makeCreds = (label: string, expires: number): OpenAICredentials => ({
   access: `${label}-access`,
   refresh: `${label}-refresh`,
   expires,
-  accountId: `${label}-account`,
+  accountId: Option.some(`${label}-account`),
 })
 interface IOState {
   refreshResult: (refreshToken: string) => Effect.Effect<OpenAICredentials, ProviderAuthError>
@@ -34,27 +34,18 @@ interface IOState {
 const makeIO = (state: IOState): OpenAICredentialIO => ({
   refresh: (rt) => Effect.suspend(() => state.refreshResult(rt)),
 })
+type PersistedCredentials = {
+  access: string
+  refresh: string
+  expires: number
+  accountId?: string
+}
 interface PersistState {
-  lastWritten:
-    | {
-        access: string
-        refresh: string
-        expires: number
-        accountId?: string
-      }
-    | undefined
+  lastWritten: Option.Option<PersistedCredentials>
   failNext: boolean | "typed"
 }
-const makeAuthInfo = (
-  state: PersistState,
-  initial?: Partial<OpenAICredentials>,
-): ProviderAuthInfo => ({
-  type: "oauth",
-  access: initial?.access ?? "seed-access",
-  refresh: initial?.refresh ?? "seed-refresh",
-  expires: initial?.expires ?? 0,
-  ...(initial?.accountId !== undefined ? { accountId: initial.accountId } : {}),
-  persist: (updated) =>
+const makeAuthInfo = (state: PersistState, credentials: OpenAICredentials): ProviderAuthInfo => {
+  const persist = (updated: PersistedCredentials) =>
     Effect.suspend(() => {
       if (state.failNext) {
         const failure = state.failNext
@@ -64,12 +55,25 @@ const makeAuthInfo = (
         }
         return Effect.die(new Error("simulated persist failure"))
       }
-      state.lastWritten = updated
+      state.lastWritten = Option.some(updated)
       return Effect.void
-    }),
-})
+    })
+  const base = {
+    type: "oauth",
+    access: credentials.access,
+    refresh: credentials.refresh,
+    expires: credentials.expires,
+    persist,
+  } satisfies ProviderAuthInfo
+  if (Option.isSome(credentials.accountId)) {
+    return { ...base, accountId: credentials.accountId.value }
+  }
+  return base
+}
 // TestClock starts at time 0, so `expires` values are absolute offsets.
 const FAR_FUTURE = 10 * 60 * 1000
+const COMPLETE = Option.getOrUndefined(Option.none<void>())
+const EMPTY_PERSISTED_CREDENTIALS = Option.none<PersistedCredentials>()
 const runWithTestClock = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
   Effect.scoped(eff).pipe(Effect.provide(TestClock.layer()))
 // ── Tests ──
@@ -83,12 +87,12 @@ describe("OpenAICredentialService — initial seed from authInfo", () => {
       const layer = OpenAICredentialService.layerFromIO(
         makeIO(state),
         makeAuthInfo(
-          { lastWritten: undefined, failNext: false },
+          { lastWritten: EMPTY_PERSISTED_CREDENTIALS, failNext: false },
           {
             access: "seed-access",
             refresh: "seed-refresh",
             expires: FAR_FUTURE,
-            accountId: "acct1",
+            accountId: Option.some("acct1"),
           },
         ),
       )
@@ -97,7 +101,8 @@ describe("OpenAICredentialService — initial seed from authInfo", () => {
           const svc = yield* OpenAICredentialService
           const result = yield* svc.getFresh
           expect(result.access).toBe("seed-access")
-          expect(result.accountId).toBe("acct1")
+          expect(result.accountId).toEqual(Option.some("acct1"))
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -120,6 +125,7 @@ describe("OpenAICredentialService — initial seed from authInfo", () => {
         Effect.gen(function* () {
           const svc = yield* OpenAICredentialService
           return yield* Effect.exit(svc.getFresh)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -144,18 +150,22 @@ describe("OpenAICredentialService — refresh on stale", () => {
         refreshResult: () =>
           Effect.gen(function* () {
             refreshCount += 1
-            yield* Deferred.succeed(refreshStarted, undefined)
+            yield* Deferred.succeed(refreshStarted, COMPLETE)
             yield* Deferred.await(releaseRefresh)
             return fresh
           }),
       }
-      const persistState: PersistState = { lastWritten: undefined, failNext: false }
+      const persistState: PersistState = {
+        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
+        failNext: false,
+      }
       const layer = OpenAICredentialService.layerFromIO(
         makeIO(state),
         makeAuthInfo(persistState, {
           access: "seed-access",
           refresh: "seed-refresh",
           expires: 30000,
+          accountId: Option.none(),
         }),
       )
       yield* runWithTestClock(
@@ -168,12 +178,15 @@ describe("OpenAICredentialService — refresh on stale", () => {
           yield* Effect.yieldNow
           yield* Effect.yieldNow
           expect(refreshCount).toBe(1)
-          yield* Deferred.succeed(releaseRefresh, undefined)
+          yield* Deferred.succeed(releaseRefresh, COMPLETE)
           const results = yield* Fiber.join(fiber)
           expect(results[0].access).toBe("fresh-access")
           expect(results[1].access).toBe("fresh-access")
           expect(refreshCount).toBe(1)
-          expect(persistState.lastWritten?.access).toBe("fresh-access")
+          expect(Option.map(persistState.lastWritten, (value) => value.access)).toEqual(
+            Option.some("fresh-access"),
+          )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -189,13 +202,17 @@ describe("OpenAICredentialService — refresh on stale", () => {
           return Effect.succeed(fresh)
         },
       }
-      const persistState: PersistState = { lastWritten: undefined, failNext: false }
+      const persistState: PersistState = {
+        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
+        failNext: false,
+      }
       const layer = OpenAICredentialService.layerFromIO(
         makeIO(state),
         makeAuthInfo(persistState, {
           access: "seed-access",
           refresh: "seed-refresh",
           expires: 30000,
+          accountId: Option.none(),
         }),
       )
       yield* runWithTestClock(
@@ -203,7 +220,10 @@ describe("OpenAICredentialService — refresh on stale", () => {
           const svc = yield* OpenAICredentialService
           const result = yield* svc.getFresh
           expect(result.access).toBe("fresh-access")
-          expect(persistState.lastWritten?.access).toBe("fresh-access")
+          expect(Option.map(persistState.lastWritten, (value) => value.access)).toEqual(
+            Option.some("fresh-access"),
+          )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -227,6 +247,7 @@ describe("OpenAICredentialService — refresh on stale", () => {
                 access: "rotated-access",
                 refresh: "rotated-refresh",
                 expires: 30000, // expiring soon so next get refreshes
+                accountId: Option.none(),
               })
             }
             if (phase === "second") {
@@ -237,16 +258,21 @@ describe("OpenAICredentialService — refresh on stale", () => {
               access: "third-access",
               refresh: "third-refresh",
               expires: FAR_FUTURE,
+              accountId: Option.none(),
             })
           },
         }
-        const persistState: PersistState = { lastWritten: undefined, failNext: false }
+        const persistState: PersistState = {
+          lastWritten: EMPTY_PERSISTED_CREDENTIALS,
+          failNext: false,
+        }
         const layer = OpenAICredentialService.layerFromIO(
           makeIO(state),
           makeAuthInfo(persistState, {
             access: "seed-access",
             refresh: "seed-refresh",
             expires: 30000,
+            accountId: Option.none(),
           }),
         )
         yield* runWithTestClock(
@@ -275,6 +301,7 @@ describe("OpenAICredentialService — refresh on stale", () => {
             const third = yield* svc.getFresh
             expect(third.access).toBe("third-access")
             expect(callTokens[2]).toBe("rotated-refresh")
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer)),
         )
       }),
@@ -285,27 +312,33 @@ describe("OpenAICredentialService — refresh on stale", () => {
         access: "fresh-access",
         refresh: "fresh-refresh",
         expires: FAR_FUTURE,
-        // intentionally omits accountId — must not blank the prior one
+        accountId: Option.none(),
       }
       const state: IOState = {
         refreshResult: () => Effect.succeed(refreshed),
       }
-      const persistState: PersistState = { lastWritten: undefined, failNext: false }
+      const persistState: PersistState = {
+        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
+        failNext: false,
+      }
       const layer = OpenAICredentialService.layerFromIO(
         makeIO(state),
         makeAuthInfo(persistState, {
           access: "seed-access",
           refresh: "seed-refresh",
           expires: 30000,
-          accountId: "prior-acct",
+          accountId: Option.some("prior-acct"),
         }),
       )
       yield* runWithTestClock(
         Effect.gen(function* () {
           const svc = yield* OpenAICredentialService
           const result = yield* svc.getFresh
-          expect(result.accountId).toBe("prior-acct")
-          expect(persistState.lastWritten?.accountId).toBe("prior-acct")
+          expect(result.accountId).toEqual(Option.some("prior-acct"))
+          expect(Option.map(persistState.lastWritten, (value) => value.accountId)).toEqual(
+            Option.some("prior-acct"),
+          )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -318,19 +351,21 @@ describe("OpenAICredentialService — cache hit/miss", () => {
       // second getFresh inside the 30s TTL must NOT call refresh again.
       const fresh1 = makeCreds("k1", FAR_FUTURE)
       const fresh2 = makeCreds("k2", FAR_FUTURE)
-      const callsRef: {
-        current: OpenAICredentials
-      } = { current: fresh1 }
+      const callsRef = { current: fresh1 } satisfies { current: OpenAICredentials }
       const state: IOState = {
         refreshResult: () => Effect.succeed(callsRef.current),
       }
-      const persistState: PersistState = { lastWritten: undefined, failNext: false }
+      const persistState: PersistState = {
+        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
+        failNext: false,
+      }
       const layer = OpenAICredentialService.layerFromIO(
         makeIO(state),
         makeAuthInfo(persistState, {
           access: "seed-access",
           refresh: "seed-refresh",
           expires: 30000,
+          accountId: Option.none(),
         }),
       )
       yield* runWithTestClock(
@@ -341,6 +376,7 @@ describe("OpenAICredentialService — cache hit/miss", () => {
           const second = yield* svc.getFresh
           expect(first.access).toBe("k1-access")
           expect(second.access).toBe("k1-access")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -353,13 +389,17 @@ describe("OpenAICredentialService — cache hit/miss", () => {
         refreshResult: () =>
           Effect.fail(new ProviderAuthError({ message: "should not be called" })),
       }
-      const persistState: PersistState = { lastWritten: undefined, failNext: false }
+      const persistState: PersistState = {
+        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
+        failNext: false,
+      }
       const layer = OpenAICredentialService.layerFromIO(
         makeIO(state),
         makeAuthInfo(persistState, {
           access: "seed-access",
           refresh: "seed-refresh",
           expires: FAR_FUTURE,
+          accountId: Option.none(),
         }),
       )
       yield* runWithTestClock(
@@ -370,6 +410,7 @@ describe("OpenAICredentialService — cache hit/miss", () => {
           const second = yield* svc.getFresh
           expect(first.access).toBe("seed-access")
           expect(second.access).toBe("seed-access")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -386,13 +427,17 @@ describe("OpenAICredentialService — invalidate", () => {
           return Effect.succeed(fresh)
         },
       }
-      const persistState: PersistState = { lastWritten: undefined, failNext: false }
+      const persistState: PersistState = {
+        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
+        failNext: false,
+      }
       const layer = OpenAICredentialService.layerFromIO(
         makeIO(state),
         makeAuthInfo(persistState, {
           access: "seed-access",
           refresh: "seed-refresh",
           expires: FAR_FUTURE,
+          accountId: Option.none(),
         }),
       )
       yield* runWithTestClock(
@@ -408,6 +453,7 @@ describe("OpenAICredentialService — invalidate", () => {
           const after = yield* svc.getFresh
           expect(after.access).toBe("fresh-access")
           expect(refreshCount).toBe(1)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -420,19 +466,24 @@ describe("OpenAICredentialService — durable persist failure", () => {
       const state: IOState = {
         refreshResult: () => Effect.succeed(fresh),
       }
-      const persistState: PersistState = { lastWritten: undefined, failNext: true }
+      const persistState: PersistState = {
+        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
+        failNext: true,
+      }
       const layer = OpenAICredentialService.layerFromIO(
         makeIO(state),
         makeAuthInfo(persistState, {
           access: "seed-access",
           refresh: "seed-refresh",
           expires: 30000,
+          accountId: Option.none(),
         }),
       )
       const result = yield* runWithTestClock(
         Effect.gen(function* () {
           const svc = yield* OpenAICredentialService
           return yield* Effect.exit(svc.getFresh)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -443,7 +494,7 @@ describe("OpenAICredentialService — durable persist failure", () => {
           expect(errOpt.value.message).toContain("Failed to persist refreshed OpenAI credentials")
         }
       }
-      expect(persistState.lastWritten).toBeUndefined()
+      expect(Option.isNone(persistState.lastWritten)).toBe(true)
     }),
   )
   it.live("typed write-back failure retries pending persist before API use", () =>
@@ -456,13 +507,17 @@ describe("OpenAICredentialService — durable persist failure", () => {
           return Effect.succeed(fresh)
         },
       }
-      const persistState: PersistState = { lastWritten: undefined, failNext: "typed" }
+      const persistState: PersistState = {
+        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
+        failNext: "typed",
+      }
       const layer = OpenAICredentialService.layerFromIO(
         makeIO(state),
         makeAuthInfo(persistState, {
           access: "seed-access",
           refresh: "seed-refresh",
           expires: 30000,
+          accountId: Option.none(),
         }),
       )
       yield* runWithTestClock(
@@ -480,7 +535,10 @@ describe("OpenAICredentialService — durable persist failure", () => {
           const retry = yield* svc.getFresh
           expect(retry.access).toBe("fresh-access")
           expect(refreshCount).toBe(1)
-          expect(persistState.lastWritten?.refresh).toBe("fresh-refresh")
+          expect(Option.map(persistState.lastWritten, (value) => value.refresh)).toEqual(
+            Option.some("fresh-refresh"),
+          )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -504,24 +562,30 @@ describe("OpenAICredentialService — invalidate preserves durable refresh token
               access: "rotated-access",
               refresh: "rotated-refresh",
               expires: FAR_FUTURE,
+              accountId: Option.none(),
             })
           }
           return Effect.succeed({
             access: "post-invalidate-access",
             refresh: "post-invalidate-refresh",
             expires: FAR_FUTURE,
+            accountId: Option.none(),
           })
         },
       }
       // persist defects on the first write — exactly the lossy path
       // the rotated token must survive.
-      const persistState: PersistState = { lastWritten: undefined, failNext: true }
+      const persistState: PersistState = {
+        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
+        failNext: true,
+      }
       const layer = OpenAICredentialService.layerFromIO(
         makeIO(state),
         makeAuthInfo(persistState, {
           access: "seed-access",
           refresh: "seed-refresh",
           expires: 30000, // forces refresh on first getFresh
+          accountId: Option.none(),
         }),
       )
       yield* runWithTestClock(
@@ -539,11 +603,12 @@ describe("OpenAICredentialService — invalidate preserves durable refresh token
             }
           }
           expect(callTokens[0]).toBe("seed-refresh")
-          expect(persistState.lastWritten).toBeUndefined()
+          expect(Option.isNone(persistState.lastWritten)).toBe(true)
           yield* svc.invalidate
           const second = yield* svc.getFresh
           expect(second.access).toBe("post-invalidate-access")
           expect(callTokens[1]).toBe("rotated-refresh")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -573,6 +638,7 @@ describe("OpenAICredentialService — invalidate preserves durable refresh token
               expect(errOpt.value.message).toContain("unavailable")
             }
           }
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -592,10 +658,14 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
             access: "rotated-access",
             refresh: "rotated-refresh",
             expires: FAR_FUTURE,
+            accountId: Option.none(),
           })
         },
       }
-      const persistState: PersistState = { lastWritten: undefined, failNext: false }
+      const persistState: PersistState = {
+        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
+        failNext: false,
+      }
       yield* Effect.scoped(
         Effect.gen(function* () {
           const cellRef = yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
@@ -606,6 +676,7 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
             const result = yield* svc.getFresh
             expect(result.access).toBe("rotated-access")
           }).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
             Effect.provide(
               OpenAICredentialService.layerFromRefAndIO(
                 cellRef,
@@ -614,6 +685,7 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
                   access: "build1-access",
                   refresh: "build1-refresh",
                   expires: 30000,
+                  accountId: Option.none(),
                 }),
               ),
             ),
@@ -628,6 +700,7 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
             expect(result.access).toBe("rotated-access")
             expect(result.access).not.toBe("build2-access")
           }).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
             Effect.provide(
               OpenAICredentialService.layerFromRefAndIO(
                 cellRef,
@@ -636,6 +709,7 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
                   access: "build2-access",
                   refresh: "build2-refresh",
                   expires: FAR_FUTURE, // even fresh — cell still wins
+                  accountId: Option.none(),
                 }),
               ),
             ),
@@ -643,7 +717,9 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
           // No additional refresh — build 2 read straight from cell.
           expect(refreshCount).toBe(1)
         }),
-      ).pipe(Effect.provide(TestClock.layer()), Effect.orDie)
+      )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        .pipe(Effect.provide(TestClock.layer()), Effect.orDie)
     }),
   )
   it.live("two layer builds sharing the same cellRef share the cache", () =>
@@ -659,11 +735,15 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
           return Effect.succeed(fresh)
         },
       }
-      const persistState: PersistState = { lastWritten: undefined, failNext: false }
+      const persistState: PersistState = {
+        lastWritten: EMPTY_PERSISTED_CREDENTIALS,
+        failNext: false,
+      }
       const authInfo = makeAuthInfo(persistState, {
         access: "seed-access",
         refresh: "seed-refresh",
         expires: 30000, // forces refresh on first getFresh
+        accountId: Option.none(),
       })
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -673,6 +753,7 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
             const svc = yield* OpenAICredentialService
             yield* svc.getFresh
           }).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
             Effect.provide(
               OpenAICredentialService.layerFromRefAndIO(cellRef, makeIO(state), authInfo),
             ),
@@ -683,13 +764,16 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
             const result = yield* svc.getFresh
             expect(result.access).toBe("fresh-access")
           }).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
             Effect.provide(
               OpenAICredentialService.layerFromRefAndIO(cellRef, makeIO(state), authInfo),
             ),
           )
           expect(refreshCount).toBe(1)
         }),
-      ).pipe(Effect.provide(TestClock.layer()), Effect.orDie)
+      )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        .pipe(Effect.provide(TestClock.layer()), Effect.orDie)
     }),
   )
 })

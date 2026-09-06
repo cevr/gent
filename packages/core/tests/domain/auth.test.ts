@@ -1,3 +1,4 @@
+import { ProviderId } from "@gent/core-internal/domain/model"
 /**
  * Locks the consolidated `domain/auth` module — `Auth` service +
  * `AuthGuard` service + the `Auth.Info` schema.
@@ -62,12 +63,14 @@ describe("Auth", () => {
         const writer = Effect.gen(function* () {
           const auth = yield* Auth
           yield* auth.set("openai", AuthInfo.cases.Api.make({ type: "api", key: "sk-on-disk" }))
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(Auth.Live(dir)))
         yield* writer
 
         const reader = Effect.gen(function* () {
           const auth = yield* Auth
           return yield* auth.get("openai")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(Auth.Live(dir)))
         const fetched = yield* reader
 
@@ -88,6 +91,7 @@ describe("Auth", () => {
         const result = yield* Effect.gen(function* () {
           const auth = yield* Auth
           return yield* auth.get("openai")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(Auth.Live(dir)))
         expect(result).toBeUndefined()
 
@@ -111,8 +115,8 @@ describe("Auth", () => {
       }).pipe(
         Effect.provide(
           AuthGuard.Test([
-            { provider: "has-key" as never, hasKey: true, required: true },
-            { provider: "needs-key" as never, hasKey: false, required: true },
+            { provider: ProviderId.make("has-key"), hasKey: true, required: true },
+            { provider: ProviderId.make("needs-key"), hasKey: false, required: true },
           ]),
         ),
       ),

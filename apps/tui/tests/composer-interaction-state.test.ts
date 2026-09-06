@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Option } from "effect"
 import {
   ComposerInteractionState,
   transitionComposerInteraction,
@@ -20,11 +21,13 @@ describe("transitionComposerInteraction", () => {
     )
 
     expect(next.draft).toBe("ask @dee")
-    expect(next.autocomplete).toEqual({
-      type: "@",
-      filter: "dee",
-      triggerPos: 4,
-    })
+    expect(next.autocomplete).toEqual(
+      Option.some({
+        type: "@",
+        filter: "dee",
+        triggerPos: 4,
+      }),
+    )
   })
 
   test("shell mode suppresses autocomplete until exit", () => {
@@ -38,7 +41,7 @@ describe("transitionComposerInteraction", () => {
     const exited = transitionComposerInteraction(edited, { _tag: "ExitShell" })
 
     expect(edited.mode).toBe("shell")
-    expect(edited.autocomplete).toBeNull()
+    expect(Option.isNone(edited.autocomplete)).toBe(true)
     expect(exited.mode).toBe("editing")
   })
 
@@ -48,7 +51,7 @@ describe("transitionComposerInteraction", () => {
       { _tag: "DraftChanged", text: "use $eff" },
       testContributions,
     )
-    expect(next.autocomplete).toEqual({ type: "$", filter: "eff", triggerPos: 4 })
+    expect(next.autocomplete).toEqual(Option.some({ type: "$", filter: "eff", triggerPos: 4 }))
   })
 
   test("does not detect unregistered prefix", () => {
@@ -57,7 +60,7 @@ describe("transitionComposerInteraction", () => {
       { _tag: "DraftChanged", text: "use #tag" },
       testContributions,
     )
-    expect(next.autocomplete).toBeNull()
+    expect(Option.isNone(next.autocomplete)).toBe(true)
   })
 
   test("detects custom inline prefix when registered", () => {
@@ -67,7 +70,7 @@ describe("transitionComposerInteraction", () => {
       { _tag: "DraftChanged", text: "use #tag" },
       custom,
     )
-    expect(next.autocomplete).toEqual({ type: "#", filter: "tag", triggerPos: 4 })
+    expect(next.autocomplete).toEqual(Option.some({ type: "#", filter: "tag", triggerPos: 4 }))
   })
 
   test("no contributions means no autocomplete detection", () => {
@@ -76,7 +79,7 @@ describe("transitionComposerInteraction", () => {
       { _tag: "DraftChanged", text: "ask @dee" },
       [],
     )
-    expect(next.autocomplete).toBeNull()
+    expect(Option.isNone(next.autocomplete)).toBe(true)
   })
 
   test("restore and clear draft close autocomplete", () => {
@@ -85,7 +88,7 @@ describe("transitionComposerInteraction", () => {
       { _tag: "DraftChanged", text: "/" },
       testContributions,
     )
-    expect(withAutocomplete.autocomplete).not.toBeNull()
+    expect(Option.isSome(withAutocomplete.autocomplete)).toBe(true)
 
     const restored = transitionComposerInteraction(withAutocomplete, {
       _tag: "RestoreDraft",
@@ -94,8 +97,8 @@ describe("transitionComposerInteraction", () => {
     const cleared = transitionComposerInteraction(restored, { _tag: "ClearDraft" })
 
     expect(restored.draft).toBe("previous prompt")
-    expect(restored.autocomplete).toBeNull()
+    expect(Option.isNone(restored.autocomplete)).toBe(true)
     expect(cleared.draft).toBe("")
-    expect(cleared.autocomplete).toBeNull()
+    expect(Option.isNone(cleared.autocomplete)).toBe(true)
   })
 })

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
-import { Cause, Effect, FileSystem, Layer, Path } from "effect"
+import { Cause, Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { LoadedArtifactIdentity } from "../../src/domain/extension.js"
 import type { GentExtension } from "../../src/domain/extension.js"
 import { ExtensionSetupContext } from "../../src/domain/extension-setup-context.js"
 import { discoverExtensions, setupExtension } from "../../src/runtime/extensions/loader"
@@ -17,9 +18,35 @@ const fsLayer = Layer.provideMerge(
   childProcessSpawnerLive,
 )
 
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
 describe("setupExtension", () => {
+  it.live("preserves the explicit loaded artifact identity", () =>
+    Effect.gen(function* () {
+      const artifactIdentity = LoadedArtifactIdentity.make("@gent/test-loader@artifact-1")
+      const extension: GentExtension = {
+        manifest: { id: ExtensionId.make("@gent/test-loader-artifact") },
+        artifactIdentity,
+        setup: Effect.succeed({}),
+      }
+
+      const loaded = yield* setupExtension(
+        {
+          extension,
+          scope: "user",
+          sourcePath: "/tmp/test-loader-artifact.ts",
+        },
+        "/tmp/project",
+        "/tmp/home",
+      )
+
+      expect(loaded.artifactIdentity).toBe(artifactIdentity)
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
   it.live("seals runtime-loaded setup failures to ExtensionLoadError", () =>
     Effect.gen(function* () {
+      // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions -- This malformed runtime setup is a boundary rejection fixture.
       const badSetup = Effect.fail("boom") as unknown as GentExtension["setup"]
       const extension: GentExtension = {
         manifest: { id: ExtensionId.make("@gent/test-loader") },
@@ -74,15 +101,67 @@ describe("setupExtension", () => {
     }).pipe(Effect.provide(fsLayer)),
   )
 
+  it.scopedLive("does not infer identity from mutable package metadata or cached modules", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const repositoryRoot = path.resolve(import.meta.dir, "../../..")
+      const packageDir = yield* fs.makeTempDirectoryScoped({
+        directory: repositoryRoot,
+        prefix: ".tmp-loader-package-",
+      })
+      yield* fs.writeFileString(
+        path.join(packageDir, "package.json"),
+        encodeJson({ name: "@gent/test-pinned", version: "1.2.3" }),
+      )
+      const extensionPath = path.join(packageDir, "extension.ts")
+      yield* fs.writeFileString(
+        extensionPath,
+        'import { Effect } from "effect"\nexport default { manifest: { id: "@gent/test-pinned-v1" }, setup: Effect.succeed({}) }\n',
+      )
+
+      const first = yield* discoverExtensions({
+        userDir: packageDir,
+        projectDir: "/nonexistent-project-dir-loader-test",
+      })
+      expect(first.loaded).toHaveLength(1)
+      expect(first.loaded[0]?.extension.artifactIdentity).toBeUndefined()
+
+      // The module path remains cached even though the source file changes.
+      // The loader must not attach a new identity to the old export.
+      yield* fs.writeFileString(
+        extensionPath,
+        'import { Effect } from "effect"\nexport default { manifest: { id: "@gent/test-pinned-v2" }, setup: Effect.succeed({}) }\n',
+      )
+      const second = yield* discoverExtensions({
+        userDir: packageDir,
+        projectDir: "/nonexistent-project-dir-loader-test",
+      })
+      expect(second.loaded[0]?.extension.artifactIdentity).toBeUndefined()
+
+      // A changed manifest is also not a proof that the already imported
+      // module changed. Replay remains explicitly unsupported.
+      yield* fs.writeFileString(
+        path.join(packageDir, "package.json"),
+        encodeJson({ name: "@gent/test-pinned", version: "2.0.0" }),
+      )
+      const third = yield* discoverExtensions({
+        userDir: packageDir,
+        projectDir: "/nonexistent-project-dir-loader-test",
+      })
+      expect(third.loaded[0]?.extension.artifactIdentity).toBeUndefined()
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
   // Blocking advisory: raw hand-rolled `{ manifest, setup }` (no `defineExtension`)
   // must yield the setup Tag to read context. There is no ctx-as-param escape.
   it.live("raw hand-rolled setup yields ExtensionSetupContext Tag to read narrowed shape", () =>
     Effect.gen(function* () {
       const captured = yield* Effect.sync(() => ({
-        cwd: undefined as string | undefined,
-        source: undefined as string | undefined,
-        home: undefined as string | undefined,
-        hasReadAuthority: false as boolean,
+        cwd: "",
+        source: "",
+        home: "",
+        hasReadAuthority: false,
       }))
       const extension: GentExtension = {
         manifest: { id: ExtensionId.make("@gent/test-raw-setup") },

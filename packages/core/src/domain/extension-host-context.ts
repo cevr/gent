@@ -10,12 +10,12 @@ import type {
 } from "./interaction-request"
 import type { Branch, Message, MessageMetadata, Session } from "./message"
 
-export class ExtensionHostError extends Schema.TaggedErrorClass<ExtensionHostError>()(
+export class ExtensionHostError extends Schema.TaggedError<ExtensionHostError>()(
   "ExtensionHostError",
   {
     operation: Schema.String,
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -26,7 +26,7 @@ export class ExtensionHostSearchResult extends Schema.Class<ExtensionHostSearchR
   sessionName: Schema.NullOr(Schema.String),
   branchId: BranchId,
   snippet: Schema.String,
-  createdAt: Schema.Number,
+  createdAt: Schema.Finite,
 }) {}
 
 // ---------------------------------------------------------------------------
@@ -71,6 +71,7 @@ export declare namespace ExtensionHostContext {
 
     readonly getSession: (
       sessionId?: SessionId,
+      // oxlint-disable-next-line effect/noNullish -- The host facade preserves undefined for a missing session.
     ) => Effect.Effect<Session | undefined, ExtensionHostError>
 
     readonly getDetail: (sessionId: SessionId) => Effect.Effect<

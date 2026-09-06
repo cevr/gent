@@ -29,6 +29,7 @@ describe("concurrency", () => {
                 maxRunning = Math.max(maxRunning, running)
                 events.push(`start:${name}`)
               })
+              // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
               if (running > 1) yield* Deferred.succeed(bothStarted, undefined)
               yield* Deferred.await(bothStarted).pipe(Effect.timeout("1 second"))
               yield* Effect.sync(() => {
@@ -75,6 +76,7 @@ describe("concurrency", () => {
           agentName: AgentName.make("cowork"),
           prompt: "run serial tools",
         })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(maxRunning).toBeGreaterThan(1)
       expect(events.length).toBe(4)

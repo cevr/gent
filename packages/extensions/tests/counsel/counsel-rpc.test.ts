@@ -15,6 +15,7 @@ import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { AgentRunResult, SessionId } from "@gent/core/extensions/api"
 import type { AgentName } from "@gent/core/extensions/api"
 import { e2ePreset } from "../helpers/test-preset"
+import { isToolResultFor } from "../helpers/tool-event.js"
 
 describe("CounselExtension via model turn", () => {
   it.live(
@@ -36,7 +37,7 @@ describe("CounselExtension via model turn", () => {
                   text: `counsel:${params.agent.name}:${params.prompt.slice(0, 32)}`,
                   sessionId: SessionId.make("counsel-child-session"),
                   agentName: params.agent.name,
-                  persistence: "ephemeral" as const,
+                  persistence: "ephemeral",
                 }),
               ),
           }
@@ -46,17 +47,14 @@ describe("CounselExtension via model turn", () => {
             subagentRunner,
           })
 
-          const toolEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
-            Stream.filter(
-              (envelope) =>
-                (envelope.event._tag === "ToolCallSucceeded" ||
-                  envelope.event._tag === "ToolCallFailed") &&
-                (envelope.event as { readonly toolName?: string }).toolName === "counsel",
-            ),
-            Stream.take(1),
-            Stream.runCollect,
-            Effect.forkScoped,
-          )
+          const toolEventFiber = yield* client.session
+            .events({ sessionId, branchId })
+            .pipe(
+              Stream.filter(isToolResultFor("counsel")),
+              Stream.take(1),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
 
           yield* client.message.send({
             sessionId,

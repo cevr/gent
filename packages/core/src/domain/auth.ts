@@ -18,10 +18,10 @@
  * is unreadable by this module. Users re-authenticate on next launch.
  */
 
-import { Context, Effect, Exit, Layer, Option, Schema } from "effect"
+import { Predicate, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import type { FileSystem, Path } from "effect"
 import { KeyValueStore } from "effect/unstable/persistence"
-import { ProviderId, parseModelProvider } from "./model.js"
+import { ProviderId, parseModelProvider, type ModelId } from "./model.js"
 import {
   AgentName,
   DriverRef,
@@ -77,7 +77,7 @@ export const AuthInfo = Schema.TaggedUnion({
     type: Schema.Literal("oauth"),
     access: Schema.String,
     refresh: Schema.String,
-    expires: Schema.Number,
+    expires: Schema.Finite,
     accountId: Schema.optional(Schema.String),
   },
 })
@@ -131,12 +131,13 @@ export type AuthProviderQuery = typeof AuthProviderQuery.Type
 
 // ── Auth service ────────────────────────────────────────────────────────
 
-export class AuthError extends Schema.TaggedErrorClass<AuthError>()("AuthError", {
+export class AuthError extends Schema.TaggedError<AuthError>()("AuthError", {
   message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
+  cause: Schema.optional(Schema.Defect()),
 }) {}
 
 export interface AuthService {
+  // oxlint-disable-next-line effect/noNullish -- Auth lookup uses undefined when a provider has no stored credentials.
   readonly get: (provider: string) => Effect.Effect<AuthInfo | undefined, AuthError>
   readonly set: (provider: string, info: AuthInfo) => Effect.Effect<void, AuthError>
   readonly remove: (provider: string) => Effect.Effect<void, AuthError>
@@ -160,6 +161,7 @@ export class Auth extends Context.Service<Auth, AuthService>()("@gent/core/src/d
         const discardInvalid = (
           provider: string,
           cause: unknown,
+          // oxlint-disable-next-line effect/noNullish -- Invalid stored credentials are discarded as an absent auth record.
         ): Effect.Effect<AuthInfo | undefined> =>
           Effect.logWarning("discarded invalid auth info").pipe(
             Effect.annotateLogs({ provider, cause: String(cause) }),
@@ -174,13 +176,14 @@ export class Auth extends Context.Service<Auth, AuthService>()("@gent/core/src/d
                   ),
                 ),
             ),
-            Effect.as(undefined as AuthInfo | undefined),
+            // oxlint-disable-next-line effect/noNullish -- Invalid stored credentials are discarded as an absent auth record.
+            Effect.as(undefined),
           )
 
         return Auth.of({
           get: (provider) =>
             store.get(provider).pipe(
-              Effect.map((opt) => (Option.isSome(opt) ? opt.value : undefined)),
+              Effect.map(Option.getOrUndefined),
               Effect.catchTag("SchemaError", (e) => discardInvalid(provider, e)),
               Effect.mapError(wrap("Failed to read auth info")),
             ),
@@ -230,12 +233,15 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
   // ↑ co-located with `Auth`; the deterministic-keys rule allows the
   //   secondary tag to keep `<file>/<ClassName>`.
   static Test = (providers: readonly AuthProviderInfo[] = []): Layer.Layer<AuthGuard> =>
-    Layer.succeed(AuthGuard, {
-      requiredProviders: () => Effect.succeed([]),
-      listProviders: () => Effect.succeed(providers),
-      missingRequiredProviders: () =>
-        Effect.succeed(providers.filter((p) => p.required && !p.hasKey).map((p) => p.provider)),
-    })
+    Layer.succeed(
+      AuthGuard,
+      AuthGuard.of({
+        requiredProviders: () => Effect.succeed([]),
+        listProviders: () => Effect.succeed(providers),
+        missingRequiredProviders: () =>
+          Effect.succeed(providers.filter((p) => p.required && !p.hasKey).map((p) => p.provider)),
+      }),
+    )
 
   /**
    * Live `AuthGuard`. The guard's logic is inseparable from the auth
@@ -256,7 +262,7 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
         const extensionRegistry = yield* ExtensionRegistry
         const driverRegistry = yield* DriverRegistry
 
-        const registeredProviders = yield* driverRegistry.listModels()
+        const registeredProviders = yield* driverRegistry.listModels
         const registeredIds = new Set(registeredProviders.map((p) => p.id))
 
         const requiredProviders = Effect.fn("AuthGuard.requiredProviders")(function* (
@@ -266,16 +272,19 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
           const modelPairExit = yield* Effect.exit(resolveDualModelPair(agents))
           const providers: ProviderId[] = []
           const seen = new Set<string>()
-          const modelIds = Exit.isSuccess(modelPairExit) ? [...modelPairExit.value] : []
+          const modelIds: ModelId[] = Exit.match(modelPairExit, {
+            onFailure: () => [],
+            onSuccess: (value) => [...value],
+          })
 
-          if (query.agentName !== undefined) {
+          if (!Predicate.isUndefined(query.agentName)) {
             const selectedAgent = agents.find((agent) => agent.name === query.agentName)
-            if (selectedAgent !== undefined) {
+            if (!Predicate.isUndefined(selectedAgent)) {
               const resolved = resolveAgentDriver(selectedAgent, query.driverOverrides)
               if (resolved.driver?._tag === "external") {
                 return providers
               }
-              if (selectedAgent.model !== undefined) {
+              if (!Predicate.isUndefined(selectedAgent.model)) {
                 modelIds.push(resolveAgentModel(selectedAgent))
               }
             }
@@ -283,9 +292,13 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
 
           for (const modelId of modelIds) {
             const provider = parseModelProvider(modelId)
-            if (provider !== undefined && registeredIds.has(provider) && !seen.has(provider)) {
-              providers.push(provider)
-              seen.add(provider)
+            if (
+              Option.isSome(provider) &&
+              registeredIds.has(provider.value) &&
+              !seen.has(provider.value)
+            ) {
+              providers.push(provider.value)
+              seen.add(provider.value)
             }
           }
 
@@ -302,12 +315,12 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
             const storedInfo = yield* auth.get(provider.id)
             const required = requiredSet.has(ProviderId.make(provider.id))
 
-            if (storedInfo !== undefined) {
+            if (!Predicate.isUndefined(storedInfo)) {
               providers.push({
                 provider: ProviderId.make(provider.id),
                 hasKey: true,
-                source: "stored" as const,
-                authType: storedInfo.type as AuthType,
+                source: "stored",
+                authType: storedInfo.type,
                 required,
               })
               continue

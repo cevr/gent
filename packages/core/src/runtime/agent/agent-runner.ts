@@ -1,7 +1,18 @@
-import { Cause, Duration, Effect, type FileSystem, Layer, type Path, Schema } from "effect"
+import {
+  Cause,
+  type Crypto,
+  Duration,
+  Effect,
+  type FileSystem,
+  Layer,
+  Option,
+  Predicate,
+  type Path,
+  Schema,
+} from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import type { SqlClient } from "effect/unstable/sql"
-import { makeProcessRunner } from "../../utils/run-process.js"
+import { makeProcessRunner, type RunProcessOptions } from "../../utils/run-process.js"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import { AgentSwitched, EventStore, type AgentEvent } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
@@ -13,7 +24,6 @@ import {
   makeRunSpec,
   resolveRunPersistence,
   type AgentName,
-  type RunSpec,
   RunSpecSchema,
 } from "../../domain/agent.js"
 import { SessionId, BranchId } from "../../domain/ids.js"
@@ -64,6 +74,7 @@ export const InProcessRunner = (
   | ModelRegistry
   | ChildProcessSpawner.ChildProcessSpawner
   | GentPlatform
+  | Crypto.Crypto
 > =>
   Layer.effect(
     AgentRunnerService,
@@ -92,22 +103,22 @@ export const InProcessRunner = (
           }),
         )
 
-      const runWithTimeout = <R>(effect: Effect.Effect<void, AgentRunError, R>) =>
-        runnerConfig.timeoutMs === undefined
-          ? effect
-          : effect.pipe(
-              Effect.timeoutOrElse({
-                duration: Duration.millis(runnerConfig.timeoutMs),
-                orElse: () =>
-                  Effect.fail(
-                    new AgentRunError({
-                      message: `Agent run timed out after ${runnerConfig.timeoutMs}ms`,
-                    }),
-                  ),
-              }),
-            )
+      const runWithTimeout = <R>(effect: Effect.Effect<void, AgentRunError, R>) => {
+        if (Predicate.isUndefined(runnerConfig.timeoutMs)) return effect
+        return effect.pipe(
+          Effect.timeoutOrElse({
+            duration: Duration.millis(runnerConfig.timeoutMs),
+            orElse: () =>
+              Effect.fail(
+                new AgentRunError({
+                  message: `Agent run timed out after ${runnerConfig.timeoutMs}ms`,
+                }),
+              ),
+          }),
+        )
+      }
 
-      return {
+      return AgentRunnerService.of({
         run: Effect.fn("AgentRunner.run")(function* (params) {
           const persistence = resolveRunPersistence(params.runSpec)
           const normalizedRunSpec = normalizeRunSpec(params.runSpec)
@@ -163,15 +174,13 @@ export const InProcessRunner = (
                   agentName: params.agent.name,
                 })
 
-                const durableRunSpec: RunSpec | undefined =
-                  toolCallId !== undefined
-                    ? makeRunSpec({
-                        persistence: normalizedRunSpec?.persistence,
-                        overrides: normalizedRunSpec?.overrides,
-                        tags: normalizedRunSpec?.tags,
-                        parentToolCallId: toolCallId,
-                      })
-                    : normalizedRunSpec
+                let durableRunSpec = normalizedRunSpec
+                if (Predicate.isNotUndefined(toolCallId)) {
+                  durableRunSpec = makeRunSpec({
+                    ...normalizedRunSpec,
+                    parentToolCallId: toolCallId,
+                  })
+                }
                 yield* runWithTimeout(
                   sessionRuntime.runPrompt({
                     sessionId,
@@ -179,7 +188,7 @@ export const InProcessRunner = (
                     agentName: params.agent.name,
                     prompt: params.prompt,
                     interactive: false,
-                    ...(durableRunSpec !== undefined ? { runSpec: durableRunSpec } : {}),
+                    runSpec: durableRunSpec,
                   }),
                 )
 
@@ -195,8 +204,8 @@ export const InProcessRunner = (
                   agentName: params.agent.name,
                   sessionId,
                 })
-                const preview =
-                  success.text.length > 200 ? success.text.slice(0, 200) + "…" : success.text
+                let preview = success.text
+                if (preview.length > 200) preview = preview.slice(0, 200) + "…"
                 yield* durableRuntime.publishAgentRunSucceeded({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
@@ -205,7 +214,7 @@ export const InProcessRunner = (
                   agentName: params.agent.name,
                   usage: success.usage,
                   preview,
-                  savedPath,
+                  savedPath: Option.getOrUndefined(savedPath),
                 })
 
                 yield* WideEvent.set({
@@ -213,7 +222,10 @@ export const InProcessRunner = (
                   toolCallCount: success.toolCalls?.length ?? 0,
                 })
 
-                return AgentRunResult.cases.success.make({ ...success, savedPath })
+                return AgentRunResult.cases.success.make({
+                  ...success,
+                  savedPath: Option.getOrUndefined(savedPath),
+                })
               }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
 
               return run.pipe(
@@ -234,7 +246,7 @@ export const InProcessRunner = (
             Effect.catchCause(handleUnexpectedFailure),
           )
         }),
-      }
+      })
     }),
   )
 
@@ -260,6 +272,7 @@ export const SubprocessRunner = (
   | ModelRegistry
   | ChildProcessSpawner.ChildProcessSpawner
   | GentPlatform
+  | Crypto.Crypto
 > =>
   Layer.effect(
     AgentRunnerService,
@@ -274,7 +287,7 @@ export const SubprocessRunner = (
       const platform = yield* GentPlatform
       const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
 
-      return {
+      return AgentRunnerService.of({
         run: Effect.fn("AgentRunner.run")(function* (params) {
           const persistence = resolveRunPersistence(params.runSpec)
           const toolCallId = params.runSpec?.parentToolCallId
@@ -312,67 +325,50 @@ export const SubprocessRunner = (
                 yield* WideEvent.set({ childSessionId: sessionId })
 
                 // Capture trace context for subprocess propagation
-                const currentSpan = yield* Effect.currentParentSpan.pipe(
-                  Effect.orElseSucceed(() => undefined),
-                )
+                const currentSpan = yield* Effect.currentParentSpan.pipe(Effect.option)
 
                 const binary = config.subprocessBinaryPath ?? "gent"
                 // Merge parentToolCallId into runSpec for subprocess
-                const subprocessRunSpec: RunSpec | undefined =
-                  toolCallId !== undefined
-                    ? makeRunSpec({
-                        persistence: params.runSpec?.persistence,
-                        overrides: params.runSpec?.overrides,
-                        tags: params.runSpec?.tags,
-                        parentToolCallId: toolCallId,
-                      })
-                    : params.runSpec
-                const runSpecJson =
-                  subprocessRunSpec !== undefined
-                    ? yield* Schema.encodeEffect(Schema.fromJsonString(RunSpecSchema))(
-                        subprocessRunSpec,
-                      )
-                    : undefined
-                const args = [
-                  binary,
-                  "--headless",
-                  "--session",
-                  sessionId,
-                  ...(config.sharedServerUrl !== undefined
-                    ? ["--connect", config.sharedServerUrl]
-                    : []),
-                  ...(runSpecJson !== undefined ? ["--run-spec", runSpecJson] : []),
-                  params.prompt,
-                ]
+                let subprocessRunSpec = params.runSpec
+                if (Predicate.isNotUndefined(toolCallId)) {
+                  subprocessRunSpec = makeRunSpec({
+                    ...params.runSpec,
+                    parentToolCallId: toolCallId,
+                  })
+                }
+                const args = ["--headless", "--session", sessionId]
+                if (Predicate.isNotUndefined(config.sharedServerUrl)) {
+                  args.push("--connect", config.sharedServerUrl)
+                }
+                if (Predicate.isNotUndefined(subprocessRunSpec)) {
+                  const runSpecJson = yield* Schema.encodeEffect(
+                    Schema.fromJsonString(RunSpecSchema),
+                  )(subprocessRunSpec)
+                  args.push("--run-spec", runSpecJson)
+                }
+                args.push(params.prompt)
 
                 const parentEnv = yield* platform.env
-                const env: Record<string, string | undefined> = {
+                const env: NonNullable<RunProcessOptions["env"]> = {
                   ...parentEnv,
-                  ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
-                  ...(config.sharedServerUrl !== undefined
-                    ? { GENT_SHARED_SERVER_URL: config.sharedServerUrl }
-                    : {}),
-                  ...(currentSpan !== undefined
-                    ? {
-                        GENT_TRACE_ID: currentSpan.traceId,
-                        GENT_PARENT_SPAN_ID: currentSpan.spanId,
-                      }
-                    : {}),
+                  GENT_DB_PATH: config.dbPath,
+                  GENT_SHARED_SERVER_URL: config.sharedServerUrl,
+                }
+                if (Option.isSome(currentSpan)) {
+                  env["GENT_TRACE_ID"] = currentSpan.value.traceId
+                  env["GENT_PARENT_SPAN_ID"] = currentSpan.value.spanId
                 }
 
-                const [exitCode, stderrText] = yield* processRunner
-                  .run(binary, args.slice(1), {
+                const { exitCode, stderr: stderrText } = yield* processRunner
+                  .run(binary, args, {
                     cwd: params.cwd,
                     env,
                     stdout: "pipe",
                     stderr: "pipe",
                   })
                   .pipe(
-                    Effect.map(
-                      (result) => [result.exitCode, result.stderr] as readonly [number, string],
-                    ),
                     Effect.catchTag("ProcessError", () =>
-                      Effect.succeed([1, "Subprocess failed"] as readonly [number, string]),
+                      Effect.succeed({ exitCode: 1, stderr: "Subprocess failed" }),
                     ),
                   )
 
@@ -385,11 +381,10 @@ export const SubprocessRunner = (
                     agentName: params.agent.name,
                   })
 
+                  let error = `Subprocess exited with code ${exitCode}`
+                  if (stderrText.length > 0) error = stderrText.trim()
                   return AgentRunResult.cases.error.make({
-                    error:
-                      stderrText.length > 0
-                        ? stderrText.trim()
-                        : `Subprocess exited with code ${exitCode}`,
+                    error,
                     sessionId,
                     agentName: params.agent.name,
                     persistence,
@@ -408,8 +403,8 @@ export const SubprocessRunner = (
                   agentName: params.agent.name,
                   sessionId,
                 })
-                const preview =
-                  success.text.length > 200 ? success.text.slice(0, 200) + "…" : success.text
+                let preview = success.text
+                if (preview.length > 200) preview = preview.slice(0, 200) + "…"
                 yield* durableRuntime.publishAgentRunSucceeded({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
@@ -418,7 +413,7 @@ export const SubprocessRunner = (
                   agentName: params.agent.name,
                   usage: success.usage,
                   preview,
-                  savedPath,
+                  savedPath: Option.getOrUndefined(savedPath),
                 })
 
                 yield* WideEvent.set({
@@ -426,7 +421,10 @@ export const SubprocessRunner = (
                   toolCallCount: success.toolCalls?.length ?? 0,
                 })
 
-                return AgentRunResult.cases.success.make({ ...success, savedPath })
+                return AgentRunResult.cases.success.make({
+                  ...success,
+                  savedPath: Option.getOrUndefined(savedPath),
+                })
               }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
 
               return run.pipe(
@@ -456,6 +454,6 @@ export const SubprocessRunner = (
             }),
           )
         }),
-      }
+      })
     }),
   )

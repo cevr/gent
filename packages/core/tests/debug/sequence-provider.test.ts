@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Effect, Fiber, Schema, Stream } from "effect"
+import { Cause, Effect, Fiber, Option, Schema, Stream } from "effect"
 import {
   textStep,
   toolCallStep,
@@ -45,22 +45,29 @@ const callProvider = Effect.gen(function* () {
     toolkit: testToolkit,
     disableToolCallResolution: true,
   }).pipe(Stream.runCollect)
-  return Array.from(parts) as ReadonlyArray<Response.AnyPart>
+  return Array.from(parts) satisfies ReadonlyArray<Response.AnyPart>
 })
 
 describe("LanguageModelLayers.sequence", () => {
   it.scoped("single text step emits correctly", () =>
     Effect.gen(function* () {
       const { layer, controls } = yield* LanguageModelLayers.sequence([textStep("hello")])
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const parts = yield* Effect.provide(callProvider, layer)
 
       expect(parts.length).toBe(2)
       expect(parts[0]?.type).toBe("text-delta")
-      expect(parts[0]?.type === "text-delta" ? parts[0].delta : undefined).toBe("hello")
+      const first = Option.fromUndefinedOr(parts[0])
+      expect(Option.isSome(first)).toBe(true)
+      if (Option.isNone(first) || first.value.type !== "text-delta") return
+      expect(first.value.delta).toBe("hello")
       expect(parts[1]?.type).toBe("finish")
-      expect(parts[1]?.type === "finish" ? parts[1].reason : undefined).toBe("stop")
+      const finish = Option.fromUndefinedOr(parts[1])
+      expect(Option.isSome(finish)).toBe(true)
+      if (Option.isNone(finish) || finish.value.type !== "finish") return
+      expect(finish.value.reason).toBe("stop")
 
-      yield* controls.assertDone()
+      yield* controls.assertDone
     }),
   )
 
@@ -72,16 +79,25 @@ describe("LanguageModelLayers.sequence", () => {
         toolCallStep("my_tool", { key: "value" }),
       ])
 
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const c1 = yield* Effect.provide(callProvider, layer)
-      expect(c1[0]?.type === "text-delta" ? c1[0].delta : undefined).toBe("first")
+      const first = Option.fromUndefinedOr(c1[0])
+      expect(Option.isSome(first)).toBe(true)
+      if (Option.isNone(first) || first.value.type !== "text-delta") return
+      expect(first.value.delta).toBe("first")
 
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const c2 = yield* Effect.provide(callProvider, layer)
-      expect(c2[0]?.type === "text-delta" ? c2[0].delta : undefined).toBe("second")
+      const second = Option.fromUndefinedOr(c2[0])
+      expect(Option.isSome(second)).toBe(true)
+      if (Option.isNone(second) || second.value.type !== "text-delta") return
+      expect(second.value.delta).toBe("second")
 
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const c3 = yield* Effect.provide(callProvider, layer)
       expect(c3[0]?.type).toBe("tool-call")
 
-      yield* controls.assertDone()
+      yield* controls.assertDone
     }),
   )
 
@@ -96,9 +112,11 @@ describe("LanguageModelLayers.sequence", () => {
       const fiber = yield* Effect.forkScoped(controls.waitForCall(1))
 
       // Call 0
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       yield* Effect.provide(callProvider, layer)
 
       // Call 1 — should resolve waitForCall(1)
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const streamFiber = yield* Effect.forkScoped(Effect.provide(callProvider, layer))
       yield* Fiber.join(fiber)
 
@@ -112,6 +130,7 @@ describe("LanguageModelLayers.sequence", () => {
       const { layer, controls } = yield* LanguageModelLayers.sequence([gatedStep])
 
       // Start stream — will block on gate
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const collectFiber = yield* Effect.forkScoped(Effect.provide(callProvider, layer))
 
       // Confirm call started
@@ -122,7 +141,10 @@ describe("LanguageModelLayers.sequence", () => {
 
       const parts = yield* Fiber.join(collectFiber)
       expect(parts.length).toBe(2)
-      expect(parts[0]?.type === "text-delta" ? parts[0].delta : undefined).toBe("gated")
+      const first = Option.fromUndefinedOr(parts[0])
+      expect(Option.isSome(first)).toBe(true)
+      if (Option.isNone(first) || first.value.type !== "text-delta") return
+      expect(first.value.delta).toBe("gated")
     }),
   )
 
@@ -131,9 +153,11 @@ describe("LanguageModelLayers.sequence", () => {
       const { layer } = yield* LanguageModelLayers.sequence([textStep("only")])
 
       // Consume the one step
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       yield* Effect.provide(callProvider, layer)
 
       // Second call should fail
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const exit = yield* Effect.exit(Effect.provide(callProvider, layer))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -145,14 +169,18 @@ describe("LanguageModelLayers.sequence", () => {
 
   it.scoped("assertOptions fires and can fail the stream", () =>
     Effect.gen(function* () {
+      const context = yield* Effect.context()
       const step: SequenceStep = {
         ...textStep("guarded"),
         assertOptions: (options) => {
-          if (options.tools.length === 3) throw new Error("wrong options")
+          if (options.tools.length === 3) {
+            return Effect.runSyncWith(context)(Effect.die(new Error("wrong options")))
+          }
         },
       }
       const { layer } = yield* LanguageModelLayers.sequence([step])
 
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const exit = yield* Effect.exit(Effect.provide(callProvider, layer))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -166,7 +194,7 @@ describe("LanguageModelLayers.sequence", () => {
     Effect.gen(function* () {
       const { controls } = yield* LanguageModelLayers.sequence([textStep("a"), textStep("b")])
 
-      const result = yield* Effect.exit(controls.assertDone())
+      const result = yield* Effect.exit(controls.assertDone)
       expect(result._tag).toBe("Failure")
     }),
   )
@@ -179,8 +207,10 @@ describe("LanguageModelLayers.sequence", () => {
       ])
 
       expect(yield* controls.callCount).toBe(0)
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       yield* Effect.provide(callProvider, layer)
       expect(yield* controls.callCount).toBe(1)
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       yield* Effect.provide(callProvider, layer)
       expect(yield* controls.callCount).toBe(2)
     }),
@@ -191,12 +221,16 @@ describe("LanguageModelLayers.sequence", () => {
       const { layer } = yield* LanguageModelLayers.sequence([
         toolCallStep("my_tool", { status: "continue" }),
       ])
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const parts = yield* Effect.provide(callProvider, layer)
 
       expect(parts.length).toBe(2)
       expect(parts[0]?.type).toBe("tool-call")
       expect(parts[1]?.type).toBe("finish")
-      expect(parts[1]?.type === "finish" ? parts[1].reason : undefined).toBe("tool-calls")
+      const finish = Option.fromUndefinedOr(parts[1])
+      expect(Option.isSome(finish)).toBe(true)
+      if (Option.isNone(finish) || finish.value.type !== "finish") return
+      expect(finish.value.reason).toBe("tool-calls")
     }),
   )
 
@@ -205,6 +239,7 @@ describe("LanguageModelLayers.sequence", () => {
       const { layer } = yield* LanguageModelLayers.sequence([
         textThenToolCallStep("thinking...", "my_tool", { ok: true }),
       ])
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const parts = yield* Effect.provide(callProvider, layer)
 
       expect(parts.length).toBe(3)
@@ -222,6 +257,7 @@ describe("LanguageModelLayers.sequence", () => {
           { toolName: "tool_b", input: { x: 1 } },
         ),
       ])
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const parts = yield* Effect.provide(callProvider, layer)
 
       expect(parts.length).toBe(3)

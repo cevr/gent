@@ -5,7 +5,13 @@
  * stringify-throws fallback.
  */
 import { describe, expect, test } from "bun:test"
+import { Effect, Schema } from "effect"
 import { inspectForMcp } from "../../src/acp-agents/mcp-codemode.js"
+
+interface CircularFixture {
+  readonly a: number
+  self?: CircularFixture
+}
 
 describe("inspectForMcp", () => {
   test("renders plain JSON-able values", () => {
@@ -15,8 +21,8 @@ describe("inspectForMcp", () => {
   })
 
   test("substitutes [Circular] for self-referential objects", () => {
-    const obj: Record<string, unknown> = { a: 1 }
-    obj["self"] = obj
+    const obj: CircularFixture = { a: 1 }
+    obj.self = obj
     const out = inspectForMcp(obj)
     expect(out).toContain('"self": "[Circular]"')
     expect(out).toContain('"a": 1')
@@ -37,12 +43,10 @@ describe("inspectForMcp", () => {
     // A getter that throws at access time triggers JSON.stringify's
     // throw path, which inspectForMcp catches and falls back to
     // `String(value)`.
-    const exploding: Record<string, unknown> = {}
+    const exploding = Schema.decodeSync(Schema.Record(Schema.String, Schema.Unknown))({})
     Object.defineProperty(exploding, "boom", {
       enumerable: true,
-      get: () => {
-        throw new Error("nope")
-      },
+      get: () => Effect.runSync(Effect.die(new Error("nope"))),
     })
     expect(inspectForMcp(exploding)).toBe("[object Object]")
   })

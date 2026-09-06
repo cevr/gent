@@ -45,13 +45,13 @@ describe("AutoExtension via RPC", () => {
         })
         expect(active).toBe(true)
 
-        const snapshot = (yield* client.extension.request({
+        const snapshot = yield* client.extension.request({
           sessionId,
           branchId,
           extensionId: SnapshotRef.extensionId,
           capabilityId: SnapshotRef.capabilityId,
           input: {},
-        })) as { readonly active: boolean; readonly phase?: string; readonly goal?: string }
+        })
         expect(snapshot).toMatchObject({
           active: true,
           phase: "working",

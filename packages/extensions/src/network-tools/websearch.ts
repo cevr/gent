@@ -1,10 +1,10 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Predicate, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { tool } from "@gent/core/extensions/api"
 
 // WebSearch Error
 
-export class WebSearchError extends Schema.TaggedErrorClass<WebSearchError>()("WebSearchError", {
+export class WebSearchError extends Schema.TaggedError<WebSearchError>()("WebSearchError", {
   message: Schema.String,
   query: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -17,7 +17,7 @@ export const WebSearchParams = Schema.Struct({
     description: "Web search query",
   }),
   numResults: Schema.optionalKey(
-    Schema.Number.annotate({
+    Schema.Finite.annotate({
       description: "Number of search results to return (default: 8)",
     }),
   ),
@@ -64,17 +64,18 @@ const McpResponseSchema = Schema.Struct({
       isError: Schema.optional(Schema.Boolean),
     }),
   ),
-  error: Schema.optional(Schema.Struct({ code: Schema.Number, message: Schema.String })),
+  error: Schema.optional(Schema.Struct({ code: Schema.Finite, message: Schema.String })),
 })
 type McpResponse = typeof McpResponseSchema.Type
 
 const decodeMcpResponse = Schema.decodeUnknownEffect(Schema.fromJsonString(McpResponseSchema))
 
 /** Extract search result text from an MCP response object */
-function extractResult(data: McpResponse): string | undefined {
-  if (data.error !== undefined) return undefined
-  if (data.result?.isError === true) return undefined
-  return data.result?.content?.[0]?.text
+function extractResult(data: McpResponse): Option.Option<string> {
+  if (Option.isSome(Option.fromNullishOr(data.error))) return Option.none()
+  const result = Option.fromNullishOr(data.result)
+  if (Option.isNone(result) || result.value.isError === true) return Option.none()
+  return Option.fromNullishOr(result.value.content[0]).pipe(Option.map((item) => item.text))
 }
 
 // WebSearch Tool
@@ -96,9 +97,12 @@ export const WebSearchTool = tool({
         name: "web_search_exa",
         arguments: {
           query: params.query,
-          numResults: params.numResults ?? DEFAULT_NUM_RESULTS,
+          numResults: Option.getOrElse(
+            Option.fromNullishOr(params.numResults),
+            () => DEFAULT_NUM_RESULTS,
+          ),
           livecrawl: "fallback",
-          type: params.type ?? "auto",
+          type: Option.getOrElse(Option.fromNullishOr(params.type), () => "auto"),
         },
       },
     }
@@ -125,7 +129,10 @@ export const WebSearchTool = tool({
               })
             }
 
-            const contentType = response.headers["content-type"] ?? ""
+            const contentType = Option.getOrElse(
+              Option.fromNullishOr(response.headers["content-type"]),
+              () => "",
+            )
             const responseText = yield* response.text
 
             const parseMcpJson = (raw: string) =>
@@ -144,8 +151,11 @@ export const WebSearchTool = tool({
             if (contentType.includes("application/json")) {
               const data = yield* parseMcpJson(responseText)
               const text = extractResult(data)
-              if (text !== undefined) return text
-              const errMsg = data.error?.message ?? "Unknown error"
+              if (Option.isSome(text)) return text.value
+              const errMsg = Option.fromNullishOr(data.error).pipe(
+                Option.map((error) => error.message),
+                Option.getOrElse(() => "Unknown error"),
+              )
               return yield* new WebSearchError({
                 message: `Exa MCP error: ${errMsg}`,
                 query: params.query,
@@ -157,7 +167,7 @@ export const WebSearchTool = tool({
               if (line.startsWith("data: ")) {
                 const data = yield* parseMcpJson(line.substring(6))
                 const text = extractResult(data)
-                if (text !== undefined) return text
+                if (Option.isSome(text)) return text.value
               }
             }
 
@@ -166,15 +176,17 @@ export const WebSearchTool = tool({
         ),
         Effect.timeout(TIMEOUT_MS),
         Effect.catchEager((e) => {
-          if ("_tag" in e && e._tag === "TimeoutError") {
+          if (Predicate.isTagged("TimeoutError")(e)) {
             return Effect.fail(
               new WebSearchError({ message: "Search request timed out", query: params.query }),
             )
           }
-          if ("_tag" in e && e._tag === "WebSearchError") return Effect.fail(e as WebSearchError)
+          if (Predicate.isTagged("WebSearchError")(e)) return Effect.fail(e)
+          let message = String(e)
+          if (e instanceof Error) message = e.message
           return Effect.fail(
             new WebSearchError({
-              message: `Search failed: ${e instanceof Error ? e.message : String(e)}`,
+              message: `Search failed: ${message}`,
               query: params.query,
               cause: e,
             }),

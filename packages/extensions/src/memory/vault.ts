@@ -6,7 +6,17 @@
  */
 
 import type { PlatformError } from "effect"
-import { DateTime, Effect, FileSystem, Layer, Option, Path, Schema, Context } from "effect"
+import {
+  Predicate,
+  DateTime,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schema,
+  Context,
+} from "effect"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
 // ── Types ──
@@ -58,51 +68,64 @@ const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/
 export const parseFrontmatter = (
   content: string,
   fallbackIsoDate: string,
-): { frontmatter: MemoryFrontmatter; body: string } | undefined => {
-  const match = content.match(FRONTMATTER_RE)
-  if (match === null) return undefined
+): Option.Option<{ frontmatter: MemoryFrontmatter; body: string }> => {
+  const match = Option.fromNullishOr(content.match(FRONTMATTER_RE))
+  if (Option.isNone(match)) return Option.none()
 
-  const yamlBlock = match[1] ?? ""
-  const body = match[2] ?? ""
+  const yamlBlock = Option.getOrElse(Option.fromNullishOr(match.value[1]), () => "")
+  const body = Option.getOrElse(Option.fromNullishOr(match.value[2]), () => "")
 
-  const fm: Record<string, unknown> = {}
+  const fm = new Map<string, unknown>()
   for (const line of yamlBlock.split("\n")) {
     const colonIdx = line.indexOf(":")
     if (colonIdx === -1) continue
     const key = line.slice(0, colonIdx).trim()
     let value: unknown = line.slice(colonIdx + 1).trim()
     // Parse arrays: [tag1, tag2]
-    if (typeof value === "string" && value.startsWith("[") && value.endsWith("]")) {
+    if (Predicate.isString(value) && value.startsWith("[") && value.endsWith("]")) {
       value = value
         .slice(1, -1)
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean)
     }
-    fm[key] = value
+    fm.set(key, value)
   }
 
-  const scope =
-    typeof fm["scope"] === "string" && isMemoryScope(fm["scope"]) ? fm["scope"] : "global"
-  const source =
-    typeof fm["source"] === "string" && isMemorySource(fm["source"]) ? fm["source"] : "agent"
+  const scopeValue = fm.get("scope")
+  let scope: MemoryScope = "global"
+  if (Predicate.isString(scopeValue) && isMemoryScope(scopeValue)) scope = scopeValue
+  const sourceValue = fm.get("source")
+  let source: MemorySource = "agent"
+  if (Predicate.isString(sourceValue) && isMemorySource(sourceValue)) source = sourceValue
+  const tagsValue = fm.get("tags")
+  const createdValue = fm.get("created")
+  const updatedValue = fm.get("updated")
 
-  return {
+  let tags: ReadonlyArray<string> = []
+  if (Array.isArray(tagsValue)) {
+    tags = tagsValue.filter((t): t is string => Predicate.isString(t))
+  }
+  let created = fallbackIsoDate
+  if (Predicate.isString(createdValue)) created = createdValue
+  let updated = fallbackIsoDate
+  if (Predicate.isString(updatedValue)) updated = updatedValue
+
+  return Option.some({
     frontmatter: {
       scope,
-      tags: Array.isArray(fm["tags"])
-        ? fm["tags"].filter((t): t is string => typeof t === "string")
-        : [],
-      created: typeof fm["created"] === "string" ? fm["created"] : fallbackIsoDate,
-      updated: typeof fm["updated"] === "string" ? fm["updated"] : fallbackIsoDate,
+      tags,
+      created,
+      updated,
       source,
     },
     body,
-  }
+  })
 }
 
 export const serializeFrontmatter = (fm: MemoryFrontmatter): string => {
-  const tags = fm.tags.length > 0 ? `[${fm.tags.join(", ")}]` : "[]"
+  let tags = "[]"
+  if (fm.tags.length > 0) tags = `[${fm.tags.join(", ")}]`
   return [
     "---",
     `scope: ${fm.scope}`,
@@ -123,7 +146,7 @@ const extractSummary = (body: string): string => {
   const lines = body.trimStart().split("\n")
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i]
-    if (line === undefined) continue
+    if (Predicate.isUndefined(line)) continue
     const trimmed = line.trim()
     if (trimmed.length > 0) return trimmed.slice(0, 120)
   }
@@ -136,7 +159,8 @@ export const projectKey = (repoRoot: string): Effect.Effect<string, never, GentP
   Effect.gen(function* () {
     const platform = yield* GentPlatform
     const lastSlash = repoRoot.lastIndexOf("/")
-    const basename = lastSlash === -1 ? repoRoot : repoRoot.slice(lastSlash + 1)
+    let basename = repoRoot
+    if (lastSlash !== -1) basename = repoRoot.slice(lastSlash + 1)
     const hash = platform.hash("sha256", repoRoot).slice(0, 6)
     return `${basename}-${hash}`
   })
@@ -144,7 +168,8 @@ export const projectKey = (repoRoot: string): Effect.Effect<string, never, GentP
 export const projectDisplayName = (key: string): string => {
   // Strip the -<hash> suffix
   const dashIdx = key.lastIndexOf("-")
-  return dashIdx > 0 ? key.slice(0, dashIdx) : key
+  if (dashIdx > 0) return key.slice(0, dashIdx)
+  return key
 }
 
 // ── Service interface ──
@@ -157,7 +182,7 @@ export const projectDisplayName = (key: string): string => {
  * The Live/Test layers for `MemoryVault` provide BOTH this Tag and the
  * write-capable `MemoryVault` Tag from the same underlying service value.
  */
-export interface MemoryVaultReadOnlyShape {
+export interface MemoryVaultReadOnlyApi {
   readonly vaultPath: string
   readonly list: (
     scope?: MemoryScope,
@@ -171,7 +196,7 @@ export interface MemoryVaultReadOnlyShape {
   ) => Effect.Effect<ReadonlyArray<MemoryEntry>, PlatformError.PlatformError>
 }
 
-export interface MemoryVaultShape extends MemoryVaultReadOnlyShape {
+export interface MemoryVaultApi extends MemoryVaultReadOnlyApi {
   readonly write: (
     relativePath: string,
     frontmatter: MemoryFrontmatter,
@@ -185,7 +210,7 @@ export interface MemoryVaultShape extends MemoryVaultReadOnlyShape {
   ) => Effect.Effect<void, PlatformError.PlatformError>
 }
 
-export class MemoryVault extends Context.Service<MemoryVault, MemoryVaultShape>()(
+export class MemoryVault extends Context.Service<MemoryVault, MemoryVaultApi>()(
   "@gent/extensions/src/memory/vault/MemoryVault",
 ) {}
 
@@ -195,7 +220,7 @@ export class MemoryVault extends Context.Service<MemoryVault, MemoryVaultShape>(
  */
 export class MemoryVaultReadOnly extends Context.Service<
   MemoryVaultReadOnly,
-  MemoryVaultReadOnlyShape
+  MemoryVaultReadOnlyApi
 >()("@gent/extensions/src/memory/vault/MemoryVaultReadOnly") {}
 export type MemoryVaultReadOnlyTag = typeof MemoryVaultReadOnly
 
@@ -208,7 +233,7 @@ const buildScopeIndex = (entries: ReadonlyArray<MemoryEntry>): string => {
 
 export const makeMemoryVault = (
   vaultPath: string,
-): Effect.Effect<MemoryVaultShape, never, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<MemoryVaultApi, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
@@ -216,22 +241,23 @@ export const makeMemoryVault = (
 
     const listMdFiles = (dir: string): Effect.Effect<ReadonlyArray<string>> =>
       fs.exists(dir).pipe(
-        Effect.flatMap((exists) =>
-          exists
-            ? fs.readDirectory(dir).pipe(
-                Effect.map((entries) =>
-                  entries
-                    .filter((name) => name.endsWith(".md") && name !== "index.md")
-                    .slice()
-                    .sort(),
-                ),
-              )
-            : Effect.succeed<ReadonlyArray<string>>([]),
-        ),
-        Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+        Effect.flatMap((exists) => {
+          if (exists) {
+            return fs.readDirectory(dir).pipe(
+              Effect.map((entries) =>
+                entries
+                  .filter((name) => name.endsWith(".md") && name !== "index.md")
+                  .slice()
+                  .sort(),
+              ),
+            )
+          }
+          return Effect.succeed<ReadonlyArray<string>>([])
+        }),
+        Effect.orElseSucceed(() => []),
       )
 
-    const list: MemoryVaultShape["list"] = (scope, project) =>
+    const list: MemoryVaultApi["list"] = (scope, project) =>
       Effect.gen(function* () {
         const fallbackIsoDate = (yield* DateTime.nowAsDate).toISOString()
         const entries: MemoryEntry[] = []
@@ -242,27 +268,24 @@ export const makeMemoryVault = (
             for (const file of files) {
               const relPath = `${pathPrefix}/${file}`
               const fullPath = abs(relPath)
-              const content = yield* fs.readFileString(fullPath).pipe(
-                Effect.map((c): string | undefined => c),
-                Effect.orElseSucceed(() => undefined),
-              )
-              if (content === undefined) continue
-              const parsed = parseFrontmatter(content, fallbackIsoDate)
-              if (parsed === undefined) continue
+              const content = yield* fs.readFileString(fullPath).pipe(Effect.option)
+              if (Option.isNone(content)) continue
+              const parsed = parseFrontmatter(content.value, fallbackIsoDate)
+              if (Option.isNone(parsed)) continue
               entries.push({
                 path: relPath,
-                title: extractTitle(parsed.body),
-                summary: extractSummary(parsed.body),
-                frontmatter: parsed.frontmatter,
+                title: extractTitle(parsed.value.body),
+                summary: extractSummary(parsed.value.body),
+                frontmatter: parsed.value.frontmatter,
               })
             }
           })
 
-        if (scope === undefined || scope === "global") {
+        if (Predicate.isUndefined(scope) || scope === "global") {
           yield* scan("global", "global")
         }
-        if (scope === undefined || scope === "project") {
-          if (project !== undefined) {
+        if (Predicate.isUndefined(scope) || scope === "project") {
+          if (Predicate.isNotUndefined(project)) {
             yield* scan(`project/${project}`, `project/${project}`)
           } else {
             const projectDir = path.join(vaultPath, "project")
@@ -272,7 +295,7 @@ export const makeMemoryVault = (
             if (projectExists) {
               const dirEntries = yield* fs
                 .readDirectory(projectDir)
-                .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>))
+                .pipe(Effect.orElseSucceed(() => []))
               for (const name of dirEntries) {
                 const stat = yield* fs.stat(path.join(projectDir, name)).pipe(Effect.option)
                 if (Option.isSome(stat) && stat.value.type === "Directory") {
@@ -283,10 +306,10 @@ export const makeMemoryVault = (
           }
         }
 
-        return entries as ReadonlyArray<MemoryEntry>
+        return entries
       })
 
-    const read: MemoryVaultShape["read"] = (relativePath) => fs.readFileString(abs(relativePath))
+    const read: MemoryVaultApi["read"] = (relativePath) => fs.readFileString(abs(relativePath))
 
     const rebuildScopeIndex = (scopeDir: string, entries: ReadonlyArray<MemoryEntry>) =>
       Effect.gen(function* () {
@@ -295,9 +318,9 @@ export const makeMemoryVault = (
         const dirExists = yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))
         if (!dirExists) return
 
-        const newContent = `# ${
-          scopeDir === "global" ? "Global" : projectDisplayName(path.basename(scopeDir))
-        } Memories\n\n${buildScopeIndex(entries)}`
+        let title = projectDisplayName(path.basename(scopeDir))
+        if (scopeDir === "global") title = "Global"
+        const newContent = `# ${title} Memories\n\n${buildScopeIndex(entries)}`
         const existing = yield* fs.readFileString(indexPath).pipe(Effect.orElseSucceed(() => ""))
         if (existing !== newContent) {
           yield* fs.writeFileString(indexPath, newContent)
@@ -313,10 +336,13 @@ export const makeMemoryVault = (
           if (!e.path.startsWith("project/")) continue
           const parts = e.path.split("/")
           const projName = parts[1]
-          if (projName === undefined) continue
-          const group = projectGroups.get(projName) ?? []
+          if (Predicate.isUndefined(projName)) continue
+          let group = projectGroups.get(projName)
+          if (Predicate.isUndefined(group)) {
+            group = []
+            projectGroups.set(projName, group)
+          }
           group.push(e)
-          projectGroups.set(projName, group)
         }
 
         let content = "# Memory Vault\n\n"
@@ -344,7 +370,7 @@ export const makeMemoryVault = (
         } else if (relativePath.startsWith("project/")) {
           const parts = relativePath.split("/")
           const projName = parts[1]
-          if (projName !== undefined) {
+          if (Predicate.isNotUndefined(projName)) {
             yield* rebuildScopeIndex(
               `project/${projName}`,
               allEntries.filter((e) => e.path.startsWith(`project/${projName}/`)),
@@ -354,7 +380,7 @@ export const makeMemoryVault = (
         yield* rebuildRootIndex(allEntries)
       })
 
-    const write: MemoryVaultShape["write"] = (relativePath, frontmatter, body) =>
+    const write: MemoryVaultApi["write"] = (relativePath, frontmatter, body) =>
       Effect.gen(function* () {
         const fullPath = abs(relativePath)
         const dir = path.dirname(fullPath)
@@ -367,7 +393,7 @@ export const makeMemoryVault = (
         yield* rebuildIndexForPath(relativePath)
       })
 
-    const remove: MemoryVaultShape["remove"] = (relativePath) =>
+    const remove: MemoryVaultApi["remove"] = (relativePath) =>
       Effect.gen(function* () {
         const fullPath = abs(relativePath)
         const exists = yield* fs.exists(fullPath).pipe(Effect.orElseSucceed(() => false))
@@ -377,7 +403,7 @@ export const makeMemoryVault = (
         yield* rebuildIndexForPath(relativePath)
       })
 
-    const search: MemoryVaultShape["search"] = (query, scope, project) =>
+    const search: MemoryVaultApi["search"] = (query, scope, project) =>
       Effect.gen(function* () {
         const entries = yield* list(scope, project)
         const lowerQuery = query.toLowerCase()
@@ -391,18 +417,15 @@ export const makeMemoryVault = (
             results.push(e)
             continue
           }
-          const content = yield* fs.readFileString(abs(e.path)).pipe(
-            Effect.map((c): string | undefined => c),
-            Effect.orElseSucceed(() => undefined),
-          )
-          if (content !== undefined && content.toLowerCase().includes(lowerQuery)) {
+          const content = yield* fs.readFileString(abs(e.path)).pipe(Effect.option)
+          if (Option.isSome(content) && content.value.toLowerCase().includes(lowerQuery)) {
             results.push(e)
           }
         }
-        return results as ReadonlyArray<MemoryEntry>
+        return results
       })
 
-    const ensureDirs: MemoryVaultShape["ensureDirs"] = (project) =>
+    const ensureDirs: MemoryVaultApi["ensureDirs"] = (project) =>
       Effect.gen(function* () {
         yield* fs
           .makeDirectory(path.join(vaultPath, "global"), { recursive: true })
@@ -410,25 +433,25 @@ export const makeMemoryVault = (
         yield* fs
           .makeDirectory(path.join(vaultPath, "project"), { recursive: true })
           .pipe(Effect.asVoid)
-        if (project !== undefined) {
+        if (Predicate.isNotUndefined(project)) {
           yield* fs
             .makeDirectory(path.join(vaultPath, "project", project), { recursive: true })
             .pipe(Effect.asVoid)
         }
       })
 
-    const rebuildIndex: MemoryVaultShape["rebuildIndex"] = (scope, project) =>
+    const rebuildIndex: MemoryVaultApi["rebuildIndex"] = (scope, project) =>
       Effect.gen(function* () {
         const scopedEntries = yield* list(scope, project)
         const allEntries = yield* list()
-        if (scope === "global" || scope === undefined) {
+        if (scope === "global" || Predicate.isUndefined(scope)) {
           yield* rebuildScopeIndex(
             "global",
             allEntries.filter((e) => e.path.startsWith("global/")),
           )
         }
-        if (scope === "project" || scope === undefined) {
-          if (project !== undefined) {
+        if (scope === "project" || Predicate.isUndefined(scope)) {
+          if (Predicate.isNotUndefined(project)) {
             yield* rebuildScopeIndex(
               `project/${project}`,
               scopedEntries.filter((e) => e.path.startsWith(`project/${project}/`)),
@@ -441,7 +464,7 @@ export const makeMemoryVault = (
             if (projectExists) {
               const dirEntries = yield* fs
                 .readDirectory(projectDir)
-                .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>))
+                .pipe(Effect.orElseSucceed(() => []))
               for (const name of dirEntries) {
                 const stat = yield* fs.stat(path.join(projectDir, name)).pipe(Effect.option)
                 if (Option.isSome(stat) && stat.value.type === "Directory") {
@@ -474,7 +497,7 @@ const defaultVaultPath = (home: string) =>
  * projection; it is not a public capability system.
  */
 const layerFor = (
-  buildVault: Effect.Effect<MemoryVaultShape, never, FileSystem.FileSystem | Path.Path>,
+  buildVault: Effect.Effect<MemoryVaultApi, never, FileSystem.FileSystem | Path.Path>,
 ): Layer.Layer<MemoryVault | MemoryVaultReadOnly, never, FileSystem.FileSystem | Path.Path> =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -486,7 +509,7 @@ const layerFor = (
           list: vault.list,
           read: vault.read,
           search: vault.search,
-        } satisfies MemoryVaultReadOnlyShape),
+        } satisfies MemoryVaultReadOnlyApi),
       )
     }),
   )

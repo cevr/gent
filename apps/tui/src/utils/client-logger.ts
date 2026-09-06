@@ -8,10 +8,10 @@
  *   shutdown paths only (after Effect runtime is torn down).
  */
 
-import { DateTime, Effect, Option } from "effect"
+import { DateTime, Effect, Exit, Option, Schema } from "effect"
 import type { Context } from "effect"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- Synchronous shutdown logging runs after the Effect runtime closes.
 
 import { LOG_DIR, buildLogPaths } from "@gent/core-internal/runtime/log-paths"
 
@@ -21,47 +21,41 @@ import { LOG_DIR, buildLogPaths } from "@gent/core-internal/runtime/log-paths"
 // filename prefix.
 export const CLIENT_LOG_PATH = buildLogPaths(process.cwd()).client
 
-try {
-  mkdirSync(LOG_DIR, { recursive: true })
-} catch {}
+Effect.runSync(Effect.ignore(Effect.try(() => mkdirSync(LOG_DIR, { recursive: true }))))
 
 // Clock-bypass: `shutdownLog` runs after Effect runtime teardown, so we
 // cannot yield `Clock.currentTimeMillis` here. `Date.now()` is the standard
 // sync-land alternative.
-const isoNow = () =>
-  // @effect-diagnostics-next-line globalDate:off -- shutdown path, no Effect runtime to yield Clock from
-  DateTime.make(Date.now()).pipe(
-    Option.match({
-      onNone: () => "unknown",
-      onSome: DateTime.formatIso,
-    }),
-  )
+const isoNow = () => DateTime.formatIso(DateTime.nowUnsafe())
+const encodeLogEntry = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 /** Synchronous log — survives process.exit(). Use for shutdown paths only. */
-export const shutdownLog = (msg: string, data?: Record<string, unknown>) => {
-  const entry: Record<string, unknown> = {
-    ts: isoNow(),
-    level: "info",
-    source: "client",
-    msg,
-    ...data,
-  }
-  try {
-    appendFileSync(CLIENT_LOG_PATH, JSON.stringify(entry) + "\n")
-  } catch {}
+export const shutdownLog = (msg: string, data?: Schema.JsonObject) => {
+  const entry = new Map<string, Schema.Json>(
+    Object.entries(Option.fromNullishOr(data).pipe(Option.getOrElse(() => ({})))),
+  )
+  entry.set("ts", isoNow())
+  entry.set("level", "info")
+  entry.set("source", "client")
+  entry.set("msg", msg)
+  Effect.runSync(
+    Effect.ignore(
+      Effect.try(() =>
+        appendFileSync(CLIENT_LOG_PATH, encodeLogEntry(Object.fromEntries(entry)) + "\n"),
+      ),
+    ),
+  )
 }
 
 export const clearClientLog = () => {
-  try {
-    writeFileSync(CLIENT_LOG_PATH, "")
-  } catch {}
+  Effect.runSync(Effect.ignore(Effect.try(() => writeFileSync(CLIENT_LOG_PATH, ""))))
 }
 
 export interface ClientLog {
-  debug: (msg: string, data?: Record<string, unknown>) => void
-  info: (msg: string, data?: Record<string, unknown>) => void
-  warn: (msg: string, data?: Record<string, unknown>) => void
-  error: (msg: string, data?: Record<string, unknown>) => void
+  debug: (msg: string, data?: Schema.JsonObject) => void
+  info: (msg: string, data?: Schema.JsonObject) => void
+  warn: (msg: string, data?: Schema.JsonObject) => void
+  error: (msg: string, data?: Schema.JsonObject) => void
 }
 
 /**
@@ -70,20 +64,18 @@ export interface ClientLog {
  * Falls back to shutdownLog if the Effect runtime throws (e.g. during teardown).
  */
 export const createClientLog = (services: Context.Context<unknown>): ClientLog => {
-  const fork = Effect.runForkWith(services as Context.Context<never>)
+  const fork = Effect.runForkWith(services)
 
   const makeLogFn =
     (effectLog: (msg: string) => Effect.Effect<void>) =>
-    (msg: string, data?: Record<string, unknown>) => {
-      try {
-        if (data !== undefined && Object.keys(data).length > 0) {
-          fork(effectLog(msg).pipe(Effect.annotateLogs(data)))
-        } else {
-          fork(effectLog(msg))
-        }
-      } catch {
-        shutdownLog(msg, data)
+    (msg: string, data?: Schema.JsonObject) => {
+      const logData = Option.fromNullishOr(data)
+      let logEffect = effectLog(msg)
+      if (Option.isSome(logData) && Object.keys(logData.value).length > 0) {
+        logEffect = effectLog(msg).pipe(Effect.annotateLogs(logData.value))
       }
+      const exit = Effect.runSyncExit(Effect.sync(() => fork(logEffect)))
+      if (Exit.isFailure(exit)) shutdownLog(msg, data)
     }
 
   return {

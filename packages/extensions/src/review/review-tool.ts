@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import {
   AgentDefinition,
   AgentName,
@@ -18,7 +18,7 @@ import {
 import { requireText, runCommand as runCommandBase } from "../workflow-helpers.js"
 import { saveArtifactBestEffort } from "../artifacts/store.js"
 
-export class ReviewError extends Schema.TaggedErrorClass<ReviewError>()("ReviewError", {
+export class ReviewError extends Schema.TaggedError<ReviewError>()("ReviewError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
@@ -27,7 +27,7 @@ const REVIEW_EXTENSION_ID = ExtensionId.make("@gent/review")
 
 export const ReviewComment = Schema.Struct({
   file: Schema.String,
-  line: Schema.optional(Schema.Number),
+  line: Schema.optional(Schema.Finite),
   severity: Schema.Literals(["critical", "high", "medium", "low"]),
   type: Schema.Literals(["bug", "suggestion", "style"]),
   text: Schema.String,
@@ -36,6 +36,7 @@ export const ReviewComment = Schema.Struct({
 export type ReviewComment = typeof ReviewComment.Type
 
 export const ReviewOutput = Schema.Array(ReviewComment)
+const encodeReviewOutput = Schema.encodeSync(Schema.fromJsonString(ReviewOutput))
 
 export const ReviewParams = Schema.Struct({
   description: Schema.optionalKey(
@@ -69,10 +70,10 @@ export const ReviewResult = Schema.Struct({
   mode: Schema.Literals(["report", "fix"]),
   comments: ReviewOutput,
   summary: Schema.Struct({
-    critical: Schema.Number,
-    high: Schema.Number,
-    medium: Schema.Number,
-    low: Schema.Number,
+    critical: Schema.Finite,
+    high: Schema.Finite,
+    medium: Schema.Finite,
+    low: Schema.Finite,
   }),
   raw: Schema.String,
   session: Schema.optional(Schema.String),
@@ -111,7 +112,7 @@ const reviewAgent = AgentDefinition.make({
 })
 
 const decodeReviewComments = (text: string) =>
-  Schema.decodeUnknownEffect(Schema.fromJsonString(ReviewOutput))(text).pipe(
+  Schema.decodeEffect(Schema.fromJsonString(ReviewOutput))(text).pipe(
     Effect.catchEager((cause) =>
       Effect.logWarning("review.decodeComments.failed").pipe(
         Effect.annotateLogs({ error: String(cause), rawLength: text.length }),
@@ -147,26 +148,34 @@ const resolveReviewInput = (params: {
   files?: ReadonlyArray<string>
   diffSpec?: string
 }) => {
-  if (params.content !== undefined && params.content.trim() !== "") {
-    return Effect.succeed(params.content)
+  const content = Option.fromNullishOr(params.content)
+  if (Option.isSome(content) && content.value.trim() !== "") {
+    return Effect.succeed(content.value)
   }
 
-  const args =
-    params.diffSpec !== undefined
-      ? ["git", "diff", params.diffSpec]
-      : ["git", "diff", "--", ...(params.files ?? [])]
+  const diffSpec = Option.fromNullishOr(params.diffSpec)
+  const files = Option.getOrElse(Option.fromNullishOr(params.files), () => [])
+  let args = ["git", "diff", "--", ...files]
+  if (Option.isSome(diffSpec)) args = ["git", "diff", diffSpec.value]
 
-  if (params.diffSpec !== undefined && params.files !== undefined && params.files.length > 0) {
-    args.push("--", ...params.files)
+  if (Option.isSome(diffSpec) && files.length > 0) {
+    args.push("--", ...files)
   }
 
   return runShellCommand(args)
 }
 
+const intentSection = (description: Option.Option<string>): ReadonlyArray<string> => {
+  if (Option.isSome(description) && description.value !== "") {
+    return ["", "## Intent", description.value]
+  }
+  return []
+}
+
 const buildReviewPrompt = (reviewInput: string, description?: string) =>
   [
     "Review the following code changes adversarially.",
-    ...(description !== undefined && description !== "" ? ["", "## Intent", description] : []),
+    ...intentSection(Option.fromNullishOr(description)),
     "",
     "## Changes",
     reviewInput,
@@ -180,7 +189,7 @@ const buildReviewPrompt = (reviewInput: string, description?: string) =>
 const buildAdversarialPrompt = (peerReview: string, reviewInput: string, description?: string) =>
   [
     "Critique this review. Challenge assumptions, re-score overblown findings, and surface what it missed.",
-    ...(description !== undefined && description !== "" ? ["", "## Intent", description] : []),
+    ...intentSection(Option.fromNullishOr(description)),
     "",
     "## Changes",
     reviewInput,
@@ -203,7 +212,7 @@ const buildSynthesisPrompt = (
 ) =>
   [
     "Synthesize these adversarial reviews into the final review result.",
-    ...(description !== undefined && description !== "" ? ["", "## Intent", description] : []),
+    ...intentSection(Option.fromNullishOr(description)),
     "",
     "## Changes",
     reviewInput,
@@ -229,10 +238,10 @@ const buildSynthesisPrompt = (
 const buildExecutePrompt = (comments: ReadonlyArray<ReviewComment>, description?: string) =>
   [
     "Fix the issues identified in this review.",
-    ...(description !== undefined && description !== "" ? ["", "## Intent", description] : []),
+    ...intentSection(Option.fromNullishOr(description)),
     "",
     "## Findings",
-    JSON.stringify(comments, null, 2),
+    encodeReviewOutput(comments),
     "",
     "## Instructions",
     "Work through the findings in small batches grouped by file or dependency.",
@@ -248,12 +257,12 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   description?: string
 }) {
   const ctx = yield* ExtensionContext
-  const agents = yield* ctx.Agent.listAgents()
+  const agents = yield* ctx.Agent.listAgents
   const [modelA, modelB] = yield* resolveDualModelPair(agents)
   const reviewPrompt = buildReviewPrompt(params.reviewInput, params.description)
   const reviewOverrides = {
-    allowedTools: ["grep", "glob", "read", "memory_search"] as const,
-    deniedTools: ["bash"] as const,
+    allowedTools: ["grep", "glob", "read", "memory_search"],
+    deniedTools: ["bash"],
   }
 
   const runAgent = (prompt: string, modelId: typeof modelA) =>
@@ -268,7 +277,7 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
     })
 
   const [reviewResultA, reviewResultB] = yield* Effect.all(
-    [runAgent(reviewPrompt, modelA), runAgent(reviewPrompt, modelB)] as const,
+    [runAgent(reviewPrompt, modelA), runAgent(reviewPrompt, modelB)],
     { concurrency: 2 },
   )
   const reviewA = yield* requireText(reviewResultA, "review-A")
@@ -278,7 +287,7 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
     [
       runAgent(buildAdversarialPrompt(reviewA, params.reviewInput, params.description), modelB),
       runAgent(buildAdversarialPrompt(reviewB, params.reviewInput, params.description), modelA),
-    ] as const,
+    ],
     { concurrency: 2 },
   )
   const critiqueOfA = yield* requireText(critiqueResultOfA, "critique-of-A")
@@ -297,12 +306,15 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   )
   const raw = yield* requireText(synthesisResult, "synthesize")
   const comments = yield* decodeReviewComments(raw)
+  let sessionId = Option.none<ReturnType<typeof getDurableAgentRunSessionId>>()
+  if (synthesisResult._tag === "success") {
+    sessionId = Option.fromNullishOr(getDurableAgentRunSessionId(synthesisResult))
+  }
 
   return {
     comments,
     raw,
-    sessionId:
-      synthesisResult._tag === "success" ? getDurableAgentRunSessionId(synthesisResult) : undefined,
+    sessionId,
   }
 })
 
@@ -355,7 +367,9 @@ export const ReviewTool = tool({
         comments: report.comments,
         summary,
         raw: report.raw,
-        session: report.sessionId !== undefined ? `session://${report.sessionId}` : undefined,
+        session: Option.getOrUndefined(
+          report.sessionId.pipe(Option.map((id) => `session://${id}`)),
+        ),
       }
     }
 
@@ -370,7 +384,8 @@ export const ReviewTool = tool({
       prompt: buildExecutePrompt(report.comments, params.description),
       runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: ctx.toolCallId }),
     })
-    const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
+    let execOutput = "Execution failed."
+    if (execResult._tag === "success") execOutput = execResult.text
 
     return { mode, comments: report.comments, summary, raw: report.raw, output: execOutput }
   }),
@@ -393,12 +408,14 @@ export const ReviewExtension = defineExtension({
       execute: (input: string) =>
         Effect.gen(function* () {
           const ctx = yield* ExtensionContext
+          let content =
+            "Use the review tool in report mode on the most recent changes. Focus on correctness, edge cases, and architectural issues."
+          if (input.trim().length > 0) {
+            content = `Use the review tool in report mode: ${input.trim()}`
+          }
           yield* ctx.Session.queueFollowUp({
             sourceId: "review-command",
-            content:
-              input.trim().length > 0
-                ? `Use the review tool in report mode: ${input.trim()}`
-                : "Use the review tool in report mode on the most recent changes. Focus on correctness, edge cases, and architectural issues.",
+            content,
           })
         }).pipe(
           Effect.mapError(

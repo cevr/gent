@@ -2,7 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Path, type Scope } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 // @effect-diagnostics nodeBuiltinImport:off
 import { hostname, tmpdir } from "node:os"
 import { Gent } from "../src/client"
@@ -35,7 +35,8 @@ const provideFs = <A, E>(
 const makeTmpHomeScoped = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const dir = path.join(tmpdir(), `gent-server-lock-test-${Bun.randomUUIDv7()}`)
+  const platform = yield* GentPlatform
+  const dir = path.join(tmpdir(), `gent-server-lock-test-${yield* platform.randomId}`)
   yield* fs.makeDirectory(dir, { recursive: true })
   yield* Effect.addFinalizer(() => fs.remove(dir, { recursive: true }).pipe(Effect.ignore))
   return dir
@@ -59,7 +60,6 @@ describe("Build Fingerprint", () => {
       const bf = yield* BuildFingerprint
       const fp = yield* bf.local
       expect(fp).toBeTruthy()
-      expect(typeof fp).toBe("string")
       expect(fp.length).toBeGreaterThan(0)
     }).pipe(Effect.provide(PlatformLayer)),
   )
@@ -77,7 +77,6 @@ describe("Build Fingerprint", () => {
     Effect.gen(function* () {
       const bf = yield* BuildFingerprint
       const fp = yield* bf.resolved
-      expect(typeof fp).toBe("string")
       expect(fp.length).toBeGreaterThan(0)
     }).pipe(Effect.provide(PlatformLayer)),
   )
@@ -149,6 +148,7 @@ describe("Server Lock", () => {
         const entry = makeEntry({ dbPath, buildFingerprint })
         const fakeOwner = yield* Effect.acquireRelease(
           Effect.sync(() =>
+            // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun identity fixture server
             Bun.serve({
               port: 0,
               fetch: (request) => {
@@ -222,6 +222,7 @@ describe("Server Lock Ownership", () => {
         })
         const fakeOwner = yield* Effect.acquireRelease(
           Effect.sync(() =>
+            // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun identity fixture server
             Bun.serve({
               port: 0,
               fetch: (request) => {
@@ -247,15 +248,16 @@ describe("Server Lock Ownership", () => {
         })
         yield* writeServerLock(home, entryWithEndpoint)
 
-        const signals: Array<{ pid: number; signal: string | number | undefined }> = []
-        const originalKill = Reflect.get(process, "kill") as typeof process.kill
-        const replacement = ((pid: number, signal?: string | number) => {
+        const signals: Array<{ pid: number; signal: string | number }> = []
+        // oxlint-disable-next-line typescript/unbound-method -- this test restores the exact host function after its signal trap
+        const originalKill = process.kill
+        const replacement: typeof process.kill = (pid: number, signal?: string | number) => {
           if (signal === "SIGTERM") {
             signals.push({ pid, signal })
             return true
           }
           return originalKill(pid, signal)
-        }) as typeof process.kill
+        }
 
         yield* Effect.acquireRelease(
           Effect.sync(() => {
@@ -284,20 +286,21 @@ describe("signalIfIdentityOwned", () => {
   const withSignalTrap = <A, E, R>(
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<
-    { readonly result: A; readonly signals: ReadonlyArray<string | number | undefined> },
+    { readonly result: A; readonly signals: ReadonlyArray<string | number> },
     E,
     R | Scope.Scope
   > =>
     Effect.gen(function* () {
-      const signals: Array<string | number | undefined> = []
-      const originalKill = Reflect.get(process, "kill") as typeof process.kill
-      const replacement = ((pid: number, signal?: string | number) => {
+      const signals: Array<string | number> = []
+      // oxlint-disable-next-line typescript/unbound-method -- this test restores the exact host function after its signal trap
+      const originalKill = process.kill
+      const replacement: typeof process.kill = (pid: number, signal?: string | number) => {
         if (pid === process.pid && signal === "SIGTERM") {
           signals.push(signal)
           return true
         }
         return originalKill(pid, signal)
-      }) as typeof process.kill
+      }
 
       yield* Effect.acquireRelease(
         Effect.sync(() => {

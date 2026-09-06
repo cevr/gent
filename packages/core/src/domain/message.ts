@@ -1,17 +1,14 @@
-import { DateTime, Schema, SchemaGetter as Getter } from "effect"
+import { Predicate, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SessionId, BranchId, MessageId, ToolCallId } from "./ids"
 import { ReasoningEffort } from "./agent"
 
-export const dateFromMillis = (millis: number): Date =>
-  Schema.decodeUnknownSync(DateFromNumber)(millis)
+export const dateFromMillis = (millis: number): Date => Schema.decodeSync(DateFromNumber)(millis)
 
-export const DateFromNumber = Schema.DateTimeUtcFromMillis.pipe(
-  Schema.decodeTo(Schema.DateValid, {
-    decode: Getter.transform(DateTime.toDateUtc),
-    encode: Getter.dateTimeUtcFromInput(),
-  }),
-)
+// Actor payloads are already materialized domain values, while persisted and
+// transport inputs use epoch milliseconds. Accept both forms and encode Dates
+// back to numbers at boundaries that request encoding.
+export const DateFromNumber = Schema.Union([Schema.DateFromMillis, Schema.Date])
 
 export const decodeDateFromMillis = Schema.decodeUnknownEffect(DateFromNumber)
 
@@ -63,7 +60,7 @@ const MessageFields = {
   role: MessageRole,
   parts: Schema.Array(MessagePart),
   createdAt: DateFromNumber,
-  turnDurationMs: Schema.optional(Schema.Number),
+  turnDurationMs: Schema.optional(Schema.Finite),
   metadata: Schema.optional(MessageMetadata),
 }
 
@@ -97,6 +94,22 @@ export const ProjectedMessage = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type ProjectedMessage = Schema.Schema.Type<typeof ProjectedMessage>
 
+const messageFields = (message: Message) => {
+  const optional: { -readonly [K in "turnDurationMs" | "metadata"]?: Message[K] } = {}
+  if (Predicate.isNotUndefined(message.turnDurationMs))
+    optional.turnDurationMs = message.turnDurationMs
+  if (Predicate.isNotUndefined(message.metadata)) optional.metadata = message.metadata
+  return {
+    id: message.id,
+    sessionId: message.sessionId,
+    branchId: message.branchId,
+    role: message.role,
+    parts: message.parts,
+    createdAt: message.createdAt,
+    ...optional,
+  }
+}
+
 export const copyMessageToBranch = (
   message: Message,
   params: {
@@ -106,18 +119,14 @@ export const copyMessageToBranch = (
   },
 ): Message => {
   const fields = {
+    ...messageFields(message),
     id: params.id,
     sessionId: params.sessionId ?? message.sessionId,
     branchId: params.branchId,
-    role: message.role,
-    parts: message.parts,
-    createdAt: message.createdAt,
-    ...(message.turnDurationMs !== undefined ? { turnDurationMs: message.turnDurationMs } : {}),
-    ...(message.metadata !== undefined ? { metadata: message.metadata } : {}),
   }
-  return message._tag === "interjection"
-    ? Message.cases.interjection.make({ ...fields, role: "user" })
-    : Message.cases.regular.make(fields)
+  if (message._tag === "interjection")
+    return Message.cases.interjection.make({ ...fields, role: "user" })
+  return Message.cases.regular.make(fields)
 }
 
 export const projectMessage = (
@@ -125,19 +134,12 @@ export const projectMessage = (
   toolInteractions: ReadonlyArray<ToolInteraction>,
 ): ProjectedMessage => {
   const fields = {
-    id: message.id,
-    sessionId: message.sessionId,
-    branchId: message.branchId,
-    role: message.role,
-    parts: message.parts,
-    createdAt: message.createdAt,
+    ...messageFields(message),
     toolInteractions,
-    ...(message.turnDurationMs !== undefined ? { turnDurationMs: message.turnDurationMs } : {}),
-    ...(message.metadata !== undefined ? { metadata: message.metadata } : {}),
   }
-  return message._tag === "interjection"
-    ? ProjectedMessage.cases.interjection.make({ ...fields, role: "user" })
-    : ProjectedMessage.cases.regular.make(fields)
+  if (message._tag === "interjection")
+    return ProjectedMessage.cases.interjection.make({ ...fields, role: "user" })
+  return ProjectedMessage.cases.regular.make(fields)
 }
 
 // Session
@@ -201,7 +203,7 @@ interface BranchTreeNodeEncoded {
 
 export const BranchTreeNode: Schema.Codec<BranchTreeNode, BranchTreeNodeEncoded> = Schema.Struct({
   branch: Branch,
-  messageCount: Schema.Number,
+  messageCount: Schema.Finite,
   children: Schema.Array(
     Schema.suspend((): Schema.Codec<BranchTreeNode, BranchTreeNodeEncoded> => BranchTreeNode),
   ),

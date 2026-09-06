@@ -1,3 +1,4 @@
+import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { describe, expect, it } from "effect-bun-test"
 /**
  * Executor integration tests — tool execution with mocked services,
@@ -7,7 +8,7 @@ import { describe, expect, it } from "effect-bun-test"
  * durability" test is gone. Public commands exercise the typed Executor
  * RPC/controller services end-to-end.
  */
-import { Context, Deferred, Effect, Layer } from "effect"
+import { Context, Deferred, Effect, Layer, Option, Schema } from "effect"
 import { narrowR } from "../helpers/effect"
 import { BunServices } from "@effect/platform-bun"
 import {
@@ -27,16 +28,15 @@ import {
 } from "../../src/domain/extension-setup-context.js"
 import {
   type ExecutorMcpToolResult,
+  type ExecutorEndpoint,
   type ResolvedExecutorSettings,
+  ExecutorSidecarError,
   ExecutorSettingsDefaults,
   EXECUTOR_EXTENSION_ID,
 } from "../../../extensions/src/executor/domain.js"
 import { ExecutorMcpBridge } from "../../../extensions/src/executor/mcp-bridge.js"
 import { ExecutorSidecar } from "../../../extensions/src/executor/sidecar.js"
-import {
-  ExecutorRpc,
-  type ExecutorSnapshotReply,
-} from "../../../extensions/src/executor/protocol.js"
+import { ExecutorRpc, ExecutorSnapshotReply } from "../../../extensions/src/executor/protocol.js"
 import {
   ExecutorControllerLive,
   ExecutorRead,
@@ -64,16 +64,16 @@ const readySnapshot: ExecutorSnapshotReply = {
 const notReadySnapshot: ExecutorSnapshotReply = {
   status: "idle",
 }
-const makeExecutorReadLayer = (snapshot: ExecutorSnapshotReply | undefined) =>
-  Layer.succeed(ExecutorRead, {
-    snapshot: () =>
-      snapshot === undefined
-        ? Effect.die("executor snapshot unavailable")
-        : Effect.succeed(snapshot),
-  })
+const makeExecutorReadLayer = (snapshot: ExecutorSnapshotReply) =>
+  Layer.succeed(
+    ExecutorRead,
+    ExecutorRead.of({
+      snapshot: Effect.succeed(snapshot),
+    }),
+  )
 const makeToolLayer = (
   bridgeLayer: Layer.Layer<ExecutorMcpBridge>,
-  snapshot: ExecutorSnapshotReply | undefined,
+  snapshot: ExecutorSnapshotReply,
 ) => Layer.merge(bridgeLayer, makeExecutorReadLayer(snapshot))
 const makeToolCtx = () => testToolContext({})
 const successResult: ExecutorMcpToolResult = {
@@ -83,22 +83,24 @@ const successResult: ExecutorMcpToolResult = {
 }
 const errorResult: ExecutorMcpToolResult = {
   text: "Tool not found: nonexistent",
+  // oxlint-disable-next-line effect/noNullish -- Keep the null value required by this external data contract.
   structuredContent: null,
   isError: true,
 }
 const waitingResult: ExecutorMcpToolResult = {
   text: "Waiting for approval",
+  // oxlint-disable-next-line effect/noNullish -- Keep the null value required by this external data contract.
   structuredContent: null,
   isError: false,
   executionId: "exec-abc-123",
 }
 // ── Runtime lifecycle helpers ──
 const mockEndpoint = {
-  mode: "local" as const,
+  mode: "local",
   baseUrl: "http://127.0.0.1:4788",
   ownedByGent: true,
   scope: { id: "scope-1", name: "test", dir: "/test" },
-}
+} satisfies ExecutorEndpoint
 const mockInspection = {
   instructions: "Use tools.search to discover APIs",
   tools: [{ name: "execute" }],
@@ -113,10 +115,7 @@ const makeExecutorExtension = (overrides?: {
   sidecar?: Parameters<typeof ExecutorSidecar.Test>[0]
   bridge?: Parameters<typeof ExecutorMcpBridge.Test>[0]
   settings?: Partial<ResolvedExecutorSettings>
-}): {
-  extension: LoadedExtension
-  layer: Layer.Layer<never>
-} => {
+}) => {
   const settings: ResolvedExecutorSettings = {
     ...ExecutorSettingsDefaults,
     ...overrides?.settings,
@@ -140,13 +139,14 @@ const makeExecutorExtension = (overrides?: {
       requests: [ExecutorRpc.Start, ExecutorRpc.Stop, ExecutorRpc.GetSnapshot],
       resources: [
         defineResource({
+          id: "test/executor-integration/controller",
           scope: "process",
           layer: executorLayer,
         }),
       ],
     },
   }
-  return { extension, layer: sidecarBridgeLayer as Layer.Layer<never> }
+  return { extension }
 }
 const makeRuntimeLayer = (extension: LoadedExtension) => {
   const resolved = resolveExtensions([extension])
@@ -158,21 +158,20 @@ const makeRuntimeLayer = (extension: LoadedExtension) => {
 }
 const executorSnapshot = Effect.gen(function* () {
   const executor = yield* ExecutorRead
-  return yield* executor.snapshot()
+  return yield* executor.snapshot
 })
 const waitForExecutorStatus = (status: ExecutorSnapshotReply["status"]) =>
   Effect.gen(function* () {
     const executor = yield* ExecutorRead
-    return yield* waitFor(
-      executor
-        .snapshot()
-        .pipe(
-          Effect.catchEager(() => Effect.succeed(undefined as ExecutorSnapshotReply | undefined)),
-        ),
-      (snap) => snap?.status === status,
+    yield* waitFor(
+      executor.snapshot.pipe(
+        Effect.asSome,
+        Effect.catchEager(() => Effect.succeed(Option.none<ExecutorSnapshotReply>())),
+      ),
+      (snap) => Option.isSome(snap) && snap.value.status === status,
       3000,
       `executor status = ${status}`,
-    ).pipe(Effect.catchEager(() => Effect.succeed(undefined as never)))
+    )
   })
 // ── Tool tests ──
 describe("Executor tools", () => {
@@ -184,6 +183,7 @@ describe("Executor tools", () => {
       const ctx = makeToolCtx()
       const result = yield* narrowR(
         runToolWithCtx(ExecuteTool, { code: "tools.search({ query: 'api' })" }, ctx).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(makeToolLayer(bridgeLayer, readySnapshot)),
         ),
       )
@@ -200,6 +200,7 @@ describe("Executor tools", () => {
       const exit = yield* Effect.exit(
         narrowR(
           runToolWithCtx(ExecuteTool, { code: "bad()" }, ctx).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
             Effect.provide(makeToolLayer(bridgeLayer, readySnapshot)),
           ),
         ),
@@ -216,6 +217,7 @@ describe("Executor tools", () => {
       const exit = yield* Effect.exit(
         narrowR(
           runToolWithCtx(ExecuteTool, { code: "x" }, ctx).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
             Effect.provide(makeToolLayer(bridgeLayer, notReadySnapshot)),
           ),
         ),
@@ -231,6 +233,7 @@ describe("Executor tools", () => {
       const ctx = makeToolCtx()
       const result = yield* narrowR(
         runToolWithCtx(ExecuteTool, { code: "api.call()" }, ctx).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(makeToolLayer(bridgeLayer, readySnapshot)),
         ),
       )
@@ -243,7 +246,7 @@ describe("Executor tools", () => {
       const captured: {
         executionId: string
         action: string
-        content?: Record<string, unknown>
+        content?: object
       }[] = []
       const bridgeLayer = ExecutorMcpBridge.Test({
         resume: (_baseUrl, executionId, action, content) => {
@@ -257,10 +260,11 @@ describe("Executor tools", () => {
           ResumeTool,
           {
             executionId: "exec-1",
-            action: "accept" as "accept" | "decline" | "cancel",
+            action: "accept" satisfies "accept" | "decline" | "cancel",
             content: '{"approved": true}',
           },
           ctx,
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         ).pipe(Effect.provide(makeToolLayer(bridgeLayer, readySnapshot))),
       )
       expect(captured).toHaveLength(1)
@@ -281,10 +285,11 @@ describe("Executor tools", () => {
             ResumeTool,
             {
               executionId: "exec-1",
-              action: "accept" as "accept" | "decline" | "cancel",
+              action: "accept" satisfies "accept" | "decline" | "cancel",
               content: "not valid json{{{",
             },
             ctx,
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           ).pipe(Effect.provide(makeToolLayer(bridgeLayer, readySnapshot))),
         ),
       )
@@ -303,9 +308,10 @@ describe("Executor tools", () => {
             ResumeTool,
             {
               executionId: "exec-1",
-              action: "decline" as "accept" | "decline" | "cancel",
+              action: "decline" satisfies "accept" | "decline" | "cancel",
             },
             ctx,
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           ).pipe(Effect.provide(makeToolLayer(bridgeLayer, notReadySnapshot))),
         ),
       )
@@ -316,7 +322,7 @@ describe("Executor tools", () => {
 // ── Runtime lifecycle ──
 //
 // The runtime owns state and drives sidecar connection fibers directly.
-// Snapshot reads route through `ExecutorRead.snapshot()` and
+// Snapshot reads route through `ExecutorRead.snapshot` and
 // `ExecutorWrite` commands.
 describe("Executor runtime lifecycle", () => {
   it.live(
@@ -358,7 +364,13 @@ describe("Executor runtime lifecycle", () => {
     () => {
       const { extension } = makeExecutorExtension({
         sidecar: {
-          resolveEndpoint: () => Effect.fail(new Error("port exhausted") as never),
+          resolveEndpoint: () =>
+            Effect.fail(
+              new ExecutorSidecarError({
+                code: "PORT_EXHAUSTED",
+                message: "port exhausted",
+              }),
+            ),
           resolveSettings: () => Effect.succeed(ExecutorSettingsDefaults),
         },
       })
@@ -406,7 +418,7 @@ describe("Executor runtime lifecycle", () => {
           yield* waitForExecutorStatus("ready")
           const before = yield* executorSnapshot
           expect(before.status).toBe("ready")
-          yield* executor.disconnect()
+          yield* executor.disconnect
           yield* waitForExecutorStatus("idle")
           const after = yield* executorSnapshot
           expect(after.status).toBe("idle")
@@ -446,18 +458,20 @@ describe("Executor runtime lifecycle", () => {
               capabilityId: "executor-start",
               input: "",
             })
-            const ready = (yield* waitFor(
-              client.extension.request({
-                sessionId: createdSessionId,
-                branchId: createdBranchId,
-                extensionId: EXECUTOR_EXTENSION_ID,
-                capabilityId: "executor.snapshot",
-                input: {},
-              }) as Effect.Effect<ExecutorSnapshotReply, never, never>,
+            const ready = yield* waitFor(
+              client.extension
+                .request({
+                  sessionId: createdSessionId,
+                  branchId: createdBranchId,
+                  extensionId: EXECUTOR_EXTENSION_ID,
+                  capabilityId: "executor.snapshot",
+                  input: {},
+                })
+                .pipe(Effect.flatMap(Schema.decodeUnknownEffect(ExecutorSnapshotReply))),
               (snapshot) => snapshot.status === "ready",
               3000,
               "executor public command ready",
-            )) as ExecutorSnapshotReply
+            )
             expect(ready.status).toBe("ready")
             yield* client.extension.request({
               sessionId: createdSessionId,
@@ -466,18 +480,20 @@ describe("Executor runtime lifecycle", () => {
               capabilityId: "executor-stop",
               input: "",
             })
-            const idle = (yield* waitFor(
-              client.extension.request({
-                sessionId: createdSessionId,
-                branchId: createdBranchId,
-                extensionId: EXECUTOR_EXTENSION_ID,
-                capabilityId: "executor.snapshot",
-                input: {},
-              }) as Effect.Effect<ExecutorSnapshotReply, never, never>,
+            const idle = yield* waitFor(
+              client.extension
+                .request({
+                  sessionId: createdSessionId,
+                  branchId: createdBranchId,
+                  extensionId: EXECUTOR_EXTENSION_ID,
+                  capabilityId: "executor.snapshot",
+                  input: {},
+                })
+                .pipe(Effect.flatMap(Schema.decodeUnknownEffect(ExecutorSnapshotReply))),
               (snapshot) => snapshot.status === "idle",
               3000,
               "executor public command idle",
-            )) as ExecutorSnapshotReply
+            )
             expect(idle.status).toBe("idle")
           }).pipe(Effect.timeout("8 seconds")),
         ),
@@ -494,7 +510,14 @@ describe("Executor runtime lifecycle", () => {
         sidecar: {
           resolveEndpoint: () => {
             callCount++
-            if (callCount === 1) return Effect.fail(new Error("first try fails") as never)
+            if (callCount === 1) {
+              return Effect.fail(
+                new ExecutorSidecarError({
+                  code: "PORT_EXHAUSTED",
+                  message: "first try fails",
+                }),
+              )
+            }
             return Effect.succeed(mockEndpoint)
           },
           resolveSettings: () => Effect.succeed(ExecutorSettingsDefaults),
@@ -538,20 +561,17 @@ describe("Executor runtime lifecycle", () => {
 
             yield* first.connect("/first")
             yield* waitFor(
-              first
-                .snapshot()
-                .pipe(
-                  Effect.catchEager(() =>
-                    Effect.succeed(undefined as ExecutorSnapshotReply | undefined),
-                  ),
-                ),
-              (snapshot) => snapshot?.status === "ready",
+              first.snapshot.pipe(
+                Effect.asSome,
+                Effect.catchEager(() => Effect.succeed(Option.none<ExecutorSnapshotReply>())),
+              ),
+              (snapshot) => Option.isSome(snapshot) && snapshot.value.status === "ready",
               3000,
               "first executor ready",
             )
 
-            expect((yield* first.snapshot()).status).toBe("ready")
-            expect((yield* second.snapshot()).status).toBe("idle")
+            expect((yield* first.snapshot).status).toBe("ready")
+            expect((yield* second.snapshot).status).toBe("idle")
           }).pipe(Effect.timeout("8 seconds")),
         ),
       ),
@@ -584,15 +604,17 @@ describe("Executor runtime lifecycle", () => {
             // Wait until the runtime enters Connecting (autoStart fired).
             yield* waitForExecutorStatus("connecting")
             // Disconnect mid-handshake.
-            yield* executor.disconnect()
+            yield* executor.disconnect
             // Runtime should land on Idle promptly (Connecting → Idle).
             yield* waitForExecutorStatus("idle")
             // Now release the (cancelled) in-flight handshake. If it races
             // back to Ready, the regression has reappeared.
+            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
             yield* Deferred.succeed(sidecarGate, undefined)
             yield* Effect.yieldNow
             const final = yield* executorSnapshot
             expect(final.status).toBe("idle")
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(makeRuntimeLayer(extension)))
         }).pipe(Effect.timeout("8 seconds")),
       ),
@@ -648,42 +670,40 @@ describe("Executor runtime lifecycle", () => {
             const layerContext = yield* Layer.build(makeRuntimeLayer(extension))
             const compiled = compileExtensionHooks([extension])
             yield* waitFor(
-              Context.get(layerContext, ExecutorRead)
-                .snapshot()
-                .pipe(
-                  Effect.catchEager(() =>
-                    Effect.succeed(undefined as ExecutorSnapshotReply | undefined),
-                  ),
-                ),
-              (snapshot) => snapshot?.status === "ready",
+              Context.get(layerContext, ExecutorRead).snapshot.pipe(
+                Effect.asSome,
+                Effect.catchEager(() => Effect.succeed(Option.none<ExecutorSnapshotReply>())),
+              ),
+              (snapshot) => Option.isSome(snapshot) && snapshot.value.status === "ready",
               3000,
               "built-in executor ready",
             )
 
             const hookCtx = {
               projection: {
-                sessionId: "executor-projection-session" as never,
-                branchId: "executor-projection-branch" as never,
+                sessionId: SessionId.make("executor-projection-session"),
+                branchId: BranchId.make("executor-projection-branch"),
                 cwd: "/test",
                 home: "/test-home",
                 turn: {
-                  sessionId: "executor-projection-session" as never,
-                  branchId: "executor-projection-branch" as never,
+                  sessionId: SessionId.make("executor-projection-session"),
+                  branchId: BranchId.make("executor-projection-branch"),
                   agent: getBuiltinAgent("cowork")!,
                   allTools: [],
                   agentName: AgentName.make("cowork"),
                 },
               },
               host: testExtensionHostContext({
-                sessionId: "executor-projection-session" as never,
-                branchId: "executor-projection-branch" as never,
+                sessionId: SessionId.make("executor-projection-session"),
+                branchId: BranchId.make("executor-projection-branch"),
                 cwd: "/test",
                 home: "/test-home",
               }),
             }
-            const projection = yield* compiled
-              .resolveTurnProjection()
-              .pipe(provideExtensionHookContext(hookCtx), Effect.provideContext(layerContext))
+            const projection = yield* compiled.resolveTurnProjection.pipe(
+              provideExtensionHookContext(hookCtx),
+              Effect.provideContext(layerContext),
+            )
 
             expect(projection.promptSections.map((section) => section.id)).toContain(
               "executor-guidance",

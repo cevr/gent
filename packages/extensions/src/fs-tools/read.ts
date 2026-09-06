@@ -3,7 +3,7 @@ import { ExtensionContext, tool } from "@gent/core/extensions/api"
 
 // Read Tool Error
 
-export class ReadError extends Schema.TaggedErrorClass<ReadError>()("ReadError", {
+export class ReadError extends Schema.TaggedError<ReadError>()("ReadError", {
   message: Schema.String,
   path: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -16,12 +16,12 @@ export const ReadParams = Schema.Struct({
     description: "Absolute path to file to read",
   }),
   offset: Schema.optionalKey(
-    Schema.Number.annotate({
+    Schema.Finite.annotate({
       description: "Line number to start reading from (1-indexed)",
     }),
   ),
   limit: Schema.optionalKey(
-    Schema.Number.annotate({
+    Schema.Finite.annotate({
       description: "Maximum number of lines to read",
     }),
   ),
@@ -32,7 +32,7 @@ export const ReadParams = Schema.Struct({
 export const ReadResult = Schema.Struct({
   content: Schema.String,
   path: Schema.String,
-  lineCount: Schema.Number,
+  lineCount: Schema.Finite,
   truncated: Schema.Boolean,
 })
 

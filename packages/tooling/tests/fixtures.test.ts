@@ -17,7 +17,7 @@
  */
 
 import { expect } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { describe as effectDescribe, it } from "effect-bun-test"
 import { readFile } from "node:fs/promises"
 import { resolve as pathResolve } from "node:path"
@@ -37,7 +37,10 @@ const countViolations = (diagnostics: ReadonlyArray<Diagnostic>, ruleId: string)
   const tail = ruleId.replace(/^gent\//, "")
   const codeForm = `gent(${tail})`
   return diagnostics.filter((d) => {
-    const code = d.code ?? d.rule_id ?? ""
+    const code = Option.getOrElse(
+      Option.firstSomeOf([Option.fromNullishOr(d.code), Option.fromNullishOr(d.rule_id)]),
+      () => "",
+    )
     return code === codeForm || code === ruleId || code.endsWith(`(${tail})`)
   }).length
 }
@@ -47,42 +50,29 @@ const REPO_ROOT = pathResolve(import.meta.dir, "..", "..", "..")
 const readTextFile = (relativePath: string): Effect.Effect<string> =>
   Effect.promise(() => readFile(pathResolve(REPO_ROOT, relativePath), "utf8"))
 
-const readJsonFile = (relativePath: string): Effect.Effect<unknown> =>
-  Effect.map(readTextFile(relativePath), (content) => JSON.parse(content))
+const TypeScriptConfig = Schema.Struct({
+  compilerOptions: Schema.Struct({
+    plugins: Schema.Array(
+      Schema.Struct({
+        name: Schema.optional(Schema.String),
+        diagnosticSeverity: Schema.optional(
+          Schema.Struct({ extendsNativeError: Schema.optional(Schema.String) }),
+        ),
+      }),
+    ),
+  }),
+})
 
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === "object" && value !== null
-
-const getRecordField = (
-  value: unknown,
-  field: string,
-): Effect.Effect<Readonly<Record<string, unknown>>> => {
-  if (!isRecord(value)) {
-    return Effect.fail(new Error(`expected object before reading "${field}"`))
-  }
-  const fieldValue = value[field]
-  if (!isRecord(fieldValue)) {
-    return Effect.fail(new Error(`expected object at "${field}"`))
-  }
-  return Effect.succeed(fieldValue)
-}
-
-const getArrayField = (value: unknown, field: string): Effect.Effect<ReadonlyArray<unknown>> => {
-  if (!isRecord(value)) {
-    return Effect.fail(new Error(`expected object before reading "${field}"`))
-  }
-  const fieldValue = value[field]
-  if (!Array.isArray(fieldValue)) {
-    return Effect.fail(new Error(`expected array at "${field}"`))
-  }
-  return Effect.succeed(fieldValue)
-}
+const readTypeScriptConfig = (relativePath: string) =>
+  readTextFile(relativePath).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(TypeScriptConfig))),
+  )
 
 const LIVE_RULES_REQUIRING_FIXTURES = [
   "gent/no-projection-writes",
   "gent/no-runpromise-outside-boundary",
   "gent/no-define-extension-throw",
-] as const
+] satisfies ReadonlyArray<string>
 
 interface RuleCase {
   readonly rule: string
@@ -201,9 +191,10 @@ const assertProcessed = (run: OxlintRun, fixtureFile: string): void => {
   // indicates a config error or ignore-pattern oversight, not a passing
   // test.
   const seen = run.report.diagnostics.some((d) => d.filename === fixtureFile)
-  if (!seen && run.report.number_of_files < CASES.length) {
-    throw new Error(`oxlint did not process fixture "${fixtureFile}". stderr:\n${run.stderr}`)
-  }
+  expect(
+    seen || run.report.number_of_files >= CASES.length,
+    `oxlint did not process fixture "${fixtureFile}". stderr:\n${run.stderr}`,
+  ).toBeTrue()
 }
 
 effectDescribe("custom lint rules", () => {
@@ -212,22 +203,22 @@ effectDescribe("custom lint rules", () => {
   // adding a CASES entry adds 2× per-test runs and pushes the suite
   // toward the test budget. `Effect.cached` produces a `Effect<Effect<...>>`
   // — yield once at module init, then reuse the inner effect across tests.
-  const loadRunsRef: { current: Effect.Effect<readonly [OxlintRun, OxlintRun]> | undefined } = {
-    current: undefined,
+  interface LoadRunsRef {
+    current: Option.Option<Effect.Effect<readonly [OxlintRun, OxlintRun]>>
   }
+  const loadRunsRef: LoadRunsRef = { current: Option.none() }
   const loadRuns = Effect.gen(function* () {
-    if (loadRunsRef.current === undefined) {
-      loadRunsRef.current = yield* Effect.cached(
-        Effect.all(
-          [
-            Effect.promise(() => runOxlint(CASES.map((c) => c.invalid))),
-            Effect.promise(() => runOxlint(CASES.map((c) => c.valid))),
-          ],
-          { concurrency: "unbounded" },
+    if (Option.isNone(loadRunsRef.current)) {
+      loadRunsRef.current = Option.some(
+        yield* Effect.cached(
+          Effect.all(
+            [runOxlint(CASES.map((c) => c.invalid)), runOxlint(CASES.map((c) => c.valid))],
+            { concurrency: "unbounded" },
+          ),
         ),
       )
     }
-    return yield* loadRunsRef.current
+    return yield* loadRunsRef.current.value
   })
 
   for (const c of CASES) {
@@ -241,11 +232,10 @@ effectDescribe("custom lint rules", () => {
         expect(invalidRun.exitCode).not.toBe(0)
         const fileDiagnostics = filterByFile(invalidRun.report, c.invalid)
         const violations = countViolations(fileDiagnostics, c.rule)
-        if (c.expectedCount !== undefined) {
-          expect(violations).toBe(c.expectedCount)
-        } else {
-          expect(violations).toBeGreaterThan(0)
-        }
+        Option.match(Option.fromNullishOr(c.expectedCount), {
+          onNone: () => expect(violations).toBeGreaterThan(0),
+          onSome: (expectedCount) => expect(violations).toBe(expectedCount),
+        })
       }),
     )
 
@@ -272,7 +262,7 @@ effectDescribe("custom lint rules", () => {
 
   it.live("gent/no-bun-outside-adapter allows adapter files", () =>
     Effect.gen(function* () {
-      const run = yield* Effect.promise(() => runOxlint(["runtime/fallback-adapter.ts"]))
+      const run = yield* runOxlint(["runtime/fallback-adapter.ts"])
       expect(run.exitCode).toBe(0)
       expect(countViolations(run.report.diagnostics, "gent/no-bun-outside-adapter")).toBe(0)
     }),
@@ -282,10 +272,12 @@ effectDescribe("custom lint rules", () => {
     Effect.gen(function* () {
       const rules = new Map(CASES.map((c) => [c.rule, c]))
       for (const rule of LIVE_RULES_REQUIRING_FIXTURES) {
-        const c = rules.get(rule)
-        expect(c).toBeDefined()
-        expect(c?.invalid).toMatch(/\.invalid/)
-        expect(c?.valid).toMatch(/\.valid|boundary|platform-bun/)
+        const ruleCase = Option.fromNullishOr(rules.get(rule))
+        expect(Option.isSome(ruleCase)).toBeTrue()
+        if (Option.isSome(ruleCase)) {
+          expect(ruleCase.value.invalid).toMatch(/\.invalid/)
+          expect(ruleCase.value.valid).toMatch(/\.valid|boundary|platform-bun/)
+        }
       }
       yield* Effect.void
     }),
@@ -294,17 +286,21 @@ effectDescribe("custom lint rules", () => {
   it.live("retired all-errors-are-tagged surface is covered by extendsNativeError", () =>
     Effect.gen(function* () {
       const [tsconfigJson, oxlintConfig] = yield* Effect.all(
-        [readJsonFile("tsconfig.json"), readTextFile(".oxlintrc.json")],
+        [readTypeScriptConfig("tsconfig.json"), readTextFile(".oxlintrc.json")],
         { concurrency: "unbounded" },
       )
 
-      const compilerOptions = yield* getRecordField(tsconfigJson, "compilerOptions")
-      const plugins = yield* getArrayField(compilerOptions, "plugins")
-      const effectPlugin = plugins.find(
-        (plugin) => isRecord(plugin) && plugin.name === "@effect/language-service",
+      const effectPlugin = Option.fromNullishOr(
+        tsconfigJson.compilerOptions.plugins.find(
+          (plugin) => plugin.name === "@effect/language-service",
+        ),
       )
-      const diagnosticSeverity = yield* getRecordField(effectPlugin, "diagnosticSeverity")
-      expect(diagnosticSeverity.extendsNativeError).toBe("error")
+      const extendsNativeError = Option.flatMap(effectPlugin, (plugin) =>
+        Option.flatMap(Option.fromNullishOr(plugin.diagnosticSeverity), (severity) =>
+          Option.fromNullishOr(severity.extendsNativeError),
+        ),
+      )
+      expect(Option.getOrElse(extendsNativeError, () => "missing")).toBe("error")
 
       expect(oxlintConfig).not.toContain("gent/all-errors-are-tagged")
     }),

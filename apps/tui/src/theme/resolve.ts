@@ -1,69 +1,53 @@
 import { RGBA, type TerminalColors } from "@opentui/core"
-import type { Theme, ThemeColors, ThemeJson, ColorValue } from "./types"
+import { Effect, Option, Predicate, Record } from "effect"
+import type { Theme, ThemeJson, ColorValue } from "./types"
 
 /**
  * Resolve a theme JSON to concrete RGBA values for a given mode
  */
 export function resolveTheme(theme: ThemeJson, mode: "dark" | "light"): Theme {
   const defs = theme.defs ?? {}
+  const themeColors = new Map(Object.entries(theme.theme))
 
-  function resolveColor(c: ColorValue): RGBA {
+  function resolveColor(c: ColorValue | number): RGBA {
     if (c instanceof RGBA) return c
-    if (typeof c === "string") {
+    if (Predicate.isString(c)) {
       if (c === "transparent" || c === "none") return RGBA.fromInts(0, 0, 0, 0)
       if (c.startsWith("#")) return RGBA.fromHex(c)
-      if (defs[c] != null) {
-        return resolveColor(defs[c])
+      const definition = Record.get(defs, c)
+      if (Option.isSome(definition)) {
+        return resolveColor(definition.value)
       }
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
-      const themeColor = theme.theme[c as keyof ThemeColors]
-      if (themeColor !== undefined) {
-        return resolveColor(themeColor)
-      } else {
-        throw new Error(`Color reference "${c}" not found in defs or theme`)
+      const themeColor = Option.fromNullishOr(themeColors.get(c))
+      if (Option.isSome(themeColor)) {
+        return resolveColor(themeColor.value)
       }
+      return Effect.runSync(
+        Effect.die(new Error(`Color reference "${c}" not found in defs or theme`)),
+      )
     }
-    if (typeof c === "number") {
+    if (Predicate.isNumber(c)) {
       return ansiToRgba(c)
     }
     return resolveColor(c[mode])
   }
 
-  const resolved = Object.fromEntries(
-    Object.entries(theme.theme)
-      .filter(
-        ([key]) =>
-          key !== "selectedListItemText" && key !== "backgroundMenu" && key !== "thinkingOpacity",
-      )
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
-      .map(([key, value]) => [key, resolveColor(value as ColorValue)]),
-  ) as Partial<ThemeColors>
-
-  // Handle selectedListItemText separately since it's optional
-  const selectedListItemTextValue = theme.theme.selectedListItemText
-  const hasSelectedListItemText = selectedListItemTextValue !== undefined
-  if (hasSelectedListItemText) {
-    resolved.selectedListItemText = resolveColor(selectedListItemTextValue)
-  } else if (resolved.background !== undefined) {
-    resolved.selectedListItemText = resolved.background
-  }
-
-  // Handle backgroundMenu - optional with fallback to backgroundElement
-  if (theme.theme.backgroundMenu !== undefined) {
-    resolved.backgroundMenu = resolveColor(theme.theme.backgroundMenu)
-  } else if (resolved.backgroundElement !== undefined) {
-    resolved.backgroundMenu = resolved.backgroundElement
-  }
-
-  // Handle thinkingOpacity - optional with default of 0.6
-  const thinkingOpacity = theme.theme.thinkingOpacity ?? 0.6
-
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
+  const { selectedListItemText, backgroundMenu, thinkingOpacity, ...colors } = theme.theme
+  const resolved = Record.map(colors, resolveColor)
+  const selectedText = Option.fromNullishOr(selectedListItemText)
   return {
     ...resolved,
-    _hasSelectedListItemText: hasSelectedListItemText,
-    thinkingOpacity,
-  } as Theme
+    selectedListItemText: Option.match(selectedText, {
+      onNone: () => resolved.background,
+      onSome: resolveColor,
+    }),
+    backgroundMenu: Option.match(Option.fromNullishOr(backgroundMenu), {
+      onNone: () => resolved.backgroundElement,
+      onSome: resolveColor,
+    }),
+    _hasSelectedListItemText: Option.isSome(selectedText),
+    thinkingOpacity: thinkingOpacity ?? 0.6,
+  }
 }
 
 /**
@@ -99,7 +83,10 @@ function ansiToRgba(code: number): RGBA {
     const b = index % 6
     const g = Math.floor(index / 6) % 6
     const r = Math.floor(index / 36)
-    const val = (x: number) => (x === 0 ? 0 : x * 40 + 55)
+    const val = (x: number) => {
+      if (x === 0) return 0
+      return x * 40 + 55
+    }
     return RGBA.fromInts(val(r), val(g), val(b))
   }
 
@@ -131,8 +118,8 @@ export function generateSystemTheme(colors: TerminalColors, mode: "dark" | "ligh
   const isDark = mode === "dark"
 
   const col = (i: number) => {
-    const value = colors.palette[i]
-    if (value !== undefined && value !== null && value.length > 0) return RGBA.fromHex(value)
+    const value = Option.fromNullishOr(colors.palette[i])
+    if (Option.isSome(value) && value.value.length > 0) return RGBA.fromHex(value.value)
     return ansiToRgba(i)
   }
 
@@ -155,7 +142,8 @@ export function generateSystemTheme(colors: TerminalColors, mode: "dark" | "ligh
     greenBright: col(10),
   }
 
-  const diffAlpha = isDark ? 0.22 : 0.14
+  let diffAlpha = 0.14
+  if (isDark) diffAlpha = 0.22
   const diffAddedBg = tint(bg, ansiColors.green, diffAlpha)
   const diffRemovedBg = tint(bg, ansiColors.red, diffAlpha)
   const diffAddedLineNumberBg = tint(gray(3), ansiColors.green, diffAlpha)
@@ -219,7 +207,9 @@ export function generateSystemTheme(colors: TerminalColors, mode: "dark" | "ligh
   }
 }
 
-function generateGrayScale(bg: RGBA, isDark: boolean): Record<number, RGBA> {
+type GrayScale = Record<number, RGBA>
+
+function generateGrayScale(bg: RGBA, isDark: boolean): GrayScale {
   const grays: Record<number, RGBA> = {}
   const bgR = bg.r * 255
   const bgG = bg.g * 255
@@ -268,9 +258,11 @@ function generateMutedTextColor(bg: RGBA, isDark: boolean): RGBA {
 
   let grayValue: number
   if (isDark) {
-    grayValue = bgLum < 10 ? 180 : Math.min(Math.floor(160 + bgLum * 0.3), 200)
+    grayValue = 180
+    if (bgLum >= 10) grayValue = Math.min(Math.floor(160 + bgLum * 0.3), 200)
   } else {
-    grayValue = bgLum > 245 ? 75 : Math.max(Math.floor(100 - (255 - bgLum) * 0.2), 60)
+    grayValue = 75
+    if (bgLum <= 245) grayValue = Math.max(Math.floor(100 - (255 - bgLum) * 0.2), 60)
   }
 
   return RGBA.fromInts(grayValue, grayValue, grayValue)

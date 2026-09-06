@@ -8,20 +8,21 @@ import { Model, ModelId, ProviderId } from "@gent/core-internal/domain/model"
 import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { ModelRegistry } from "../../src/runtime/model-registry"
+import { ModelRegistry, TEST_MODEL_CONTEXT_LIMIT_TOKENS } from "../../src/runtime/model-registry"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { baseLocalLayerWithProvider } from "@gent/core-internal/test-utils/in-process-layer"
 const cowork = AgentDefinition.make({
-  name: "cowork" as never,
-  model: "test/priced" as never,
+  name: AgentName.make("cowork"),
+  model: ModelId.make("test/priced"),
 })
 const modelWithPricing = new Model({
   id: ModelId.make("test/priced"),
   name: "Priced Test",
   provider: ProviderId.make("test"),
+  contextLength: TEST_MODEL_CONTEXT_LIMIT_TOKENS,
   pricing: { input: 3, output: 15 }, // $3/M in, $15/M out
 })
 const makeLayer = (
@@ -74,13 +75,13 @@ describe("SessionRuntime metrics", () => {
           yield* runtime.runPrompt({
             sessionId,
             branchId,
-            agentName: AgentName.make("cowork") as never,
+            agentName: AgentName.make("cowork"),
             prompt: "first",
           })
           yield* runtime.runPrompt({
             sessionId,
             branchId,
-            agentName: AgentName.make("cowork") as never,
+            agentName: AgentName.make("cowork"),
             prompt: "second",
           })
           const envelopes = yield* events.listEvents({ sessionId, branchId })
@@ -98,6 +99,7 @@ describe("SessionRuntime metrics", () => {
             )
           const metrics = yield* runtime.getMetrics({ sessionId, branchId })
           return { streamEndeds, metrics }
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
       )
       expect(result.streamEndeds.length).toBeGreaterThanOrEqual(1)
@@ -122,12 +124,13 @@ describe("SessionRuntime metrics", () => {
           yield* runtime.runPrompt({
             sessionId,
             branchId,
-            agentName: AgentName.make("cowork") as never,
+            agentName: AgentName.make("cowork"),
             prompt: "one",
           })
           const first = yield* runtime.getMetrics({ sessionId, branchId })
           const second = yield* runtime.getMetrics({ sessionId, branchId })
           return { first, second }
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
       )
       // Two reads over the same event log must return the same cost. The cost
@@ -144,6 +147,7 @@ describe("SessionRuntime metrics", () => {
         id: ModelId.make("test/priced"),
         name: "No Pricing",
         provider: ProviderId.make("test"),
+        contextLength: TEST_MODEL_CONTEXT_LIMIT_TOKENS,
       })
       const result = yield* narrowR(
         Effect.gen(function* () {
@@ -153,7 +157,7 @@ describe("SessionRuntime metrics", () => {
           yield* runtime.runPrompt({
             sessionId,
             branchId,
-            agentName: AgentName.make("cowork") as never,
+            agentName: AgentName.make("cowork"),
             prompt: "one",
           })
           const envelopes = yield* events.listEvents({ sessionId, branchId })
@@ -171,6 +175,7 @@ describe("SessionRuntime metrics", () => {
             )
           const metrics = yield* runtime.getMetrics({ sessionId, branchId })
           return { streamEndeds, metrics }
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayer(providerLayer, [unpriced])), Effect.timeout("4 seconds")),
       )
       for (const ev of result.streamEndeds) {

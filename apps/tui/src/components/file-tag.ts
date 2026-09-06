@@ -1,3 +1,10 @@
+import { Option } from "effect"
+
+interface FileTagGroup {
+  readonly tag: string
+  readonly extensions: ReadonlyArray<string>
+}
+
 const fileTagGroups = [
   { tag: "[ts]", extensions: ["ts", "tsx"] },
   { tag: "[js]", extensions: ["js", "jsx"] },
@@ -11,14 +18,18 @@ const fileTagGroups = [
   { tag: "[yaml]", extensions: ["yaml", "yml"] },
   { tag: "[toml]", extensions: ["toml"] },
   { tag: "[sh]", extensions: ["sh", "bash", "zsh"] },
-] as const
+] satisfies ReadonlyArray<FileTagGroup>
 
 const fileTagByExtension = new Map<string, string>(
-  fileTagGroups.flatMap(({ tag, extensions }) => extensions.map((ext) => [ext, tag] as const)),
+  fileTagGroups.flatMap(({ tag, extensions }) =>
+    extensions.map((ext): readonly [string, string] => [ext, tag]),
+  ),
 )
 
 export function getFileTag(path: string): string {
-  const ext = path.split(".").pop()?.toLowerCase()
-  if (ext === undefined) return ""
-  return fileTagByExtension.get(ext) ?? ""
+  const extension = Option.fromNullishOr(path.split(".").pop()).pipe(
+    Option.map((value) => value.toLowerCase()),
+    Option.flatMap((value) => Option.fromNullishOr(fileTagByExtension.get(value))),
+  )
+  return Option.getOrElse(extension, () => "")
 }

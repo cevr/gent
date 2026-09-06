@@ -21,6 +21,7 @@ import { AgentRunResult, SessionId } from "@gent/core/extensions/api"
 import type { AgentName } from "@gent/core/extensions/api"
 import { GitReader } from "../../src/librarian/index.js"
 import { e2ePreset } from "../helpers/test-preset"
+import { isToolResultFor } from "../helpers/tool-event.js"
 
 const ensureRepoCache = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -51,7 +52,7 @@ describe("ResearchExtension via model turn", () => {
                   text: "Effect uses fibers for concurrency. See src/Fiber.ts:42.",
                   sessionId: SessionId.make("research-child-session"),
                   agentName: params.agent.name,
-                  persistence: "ephemeral" as const,
+                  persistence: "ephemeral",
                 }),
               ),
           }
@@ -62,17 +63,14 @@ describe("ResearchExtension via model turn", () => {
             extraLayers: [GitReader.Test],
           })
 
-          const toolEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
-            Stream.filter(
-              (envelope) =>
-                (envelope.event._tag === "ToolCallSucceeded" ||
-                  envelope.event._tag === "ToolCallFailed") &&
-                (envelope.event as { readonly toolName?: string }).toolName === "research",
-            ),
-            Stream.take(1),
-            Stream.runCollect,
-            Effect.forkScoped,
-          )
+          const toolEventFiber = yield* client.session
+            .events({ sessionId, branchId })
+            .pipe(
+              Stream.filter(isToolResultFor("research")),
+              Stream.take(1),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
 
           yield* client.message.send({
             sessionId,

@@ -1,3 +1,4 @@
+import { Option, Predicate } from "effect"
 import type { ExtensionStatusInfo } from "../domain/extension.js"
 import {
   ExtensionHealth,
@@ -9,16 +10,24 @@ export const buildExtensionHealthSnapshot = (
   activationStatuses: ReadonlyArray<ExtensionStatusInfo>,
 ): ExtensionHealthSnapshot => {
   const extensions = activationStatuses.map((status) => {
-    const schedulerFailures = status.scheduledJobFailures ?? []
-    const activationFailure =
-      status.status === "failed"
-        ? ExtensionHealthIssue.cases["activation-failed"].make({
-            phase: status.phase,
-            error: status.error,
-          })
-        : undefined
+    const schedulerFailures = Option.getOrElse(
+      Option.fromUndefinedOr(status.scheduledJobFailures),
+      () => [],
+    )
+    let activationFailure = Option.none<ExtensionHealthIssue>()
+    if (status.status === "failed") {
+      activationFailure = Option.some(
+        ExtensionHealthIssue.cases["activation-failed"].make({
+          phase: status.phase,
+          error: status.error,
+        }),
+      )
+    }
     const issues = [
-      ...(activationFailure !== undefined ? [activationFailure] : []),
+      ...Option.match(activationFailure, {
+        onNone: () => [],
+        onSome: (issue) => [issue],
+      }),
       ...schedulerFailures.map((failure) =>
         ExtensionHealthIssue.cases["scheduled-job-failed"].make({
           jobId: failure.jobId,
@@ -34,22 +43,24 @@ export const buildExtensionHealthSnapshot = (
     }
 
     const [firstIssue, ...remainingIssues] = issues
-    return firstIssue === undefined
-      ? ExtensionHealth.cases.healthy.make(payload)
-      : ExtensionHealth.cases.degraded.make({
-          ...payload,
-          issues: [firstIssue, ...remainingIssues],
-        })
+    if (Predicate.isUndefined(firstIssue)) {
+      return ExtensionHealth.cases.healthy.make(payload)
+    }
+    return ExtensionHealth.cases.degraded.make({
+      ...payload,
+      issues: [firstIssue, ...remainingIssues],
+    })
   })
 
   const healthyExtensions = extensions.filter(ExtensionHealth.guards.healthy)
   const degradedExtensions = extensions.filter(ExtensionHealth.guards.degraded)
   const [firstDegraded, ...remainingDegraded] = degradedExtensions
 
-  return firstDegraded === undefined
-    ? ExtensionHealthSnapshot.cases.healthy.make({ extensions: healthyExtensions })
-    : ExtensionHealthSnapshot.cases.degraded.make({
-        healthyExtensions,
-        degradedExtensions: [firstDegraded, ...remainingDegraded],
-      })
+  if (Predicate.isUndefined(firstDegraded)) {
+    return ExtensionHealthSnapshot.cases.healthy.make({ extensions: healthyExtensions })
+  }
+  return ExtensionHealthSnapshot.cases.degraded.make({
+    healthyExtensions,
+    degradedExtensions: [firstDegraded, ...remainingDegraded],
+  })
 }

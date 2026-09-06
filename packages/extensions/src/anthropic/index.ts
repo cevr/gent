@@ -1,5 +1,15 @@
 import { BunServices } from "@effect/platform-bun"
-import { Clock, Config, Effect, Layer, Option, Redacted, Ref, SynchronizedRef } from "effect"
+import {
+  Clock,
+  Config,
+  Effect,
+  Layer,
+  Option,
+  Redacted,
+  Ref,
+  Schema,
+  SynchronizedRef,
+} from "effect"
 import {
   AuthMethod,
   defineExtension,
@@ -7,8 +17,8 @@ import {
   ProviderAuthError,
   type ModelDriverContribution,
   type ProviderAuthInfo,
+  type ProviderAuthorizationResult,
   type ProviderHints,
-  type ProviderResolution,
 } from "@gent/core/extensions/api"
 import {
   freshEnoughForUse,
@@ -29,16 +39,14 @@ import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-
 import { buildKeychainTransformClient } from "./keychain-transform.js"
 import {
   AnthropicPlatform,
+  makeAnthropicKeychainEnv,
   type AnthropicKeychainEnv,
-  type AnthropicPlatformShape,
+  type AnthropicPlatformApi,
 } from "./platform-adapter.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 
-const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
-  Effect.gen(function* () {
-    const opt = yield* Config.option(Config.string(name))
-    return Option.getOrUndefined(opt)
-  }).pipe(Effect.orElseSucceed(() => undefined))
+const readOptionalEnv = (name: string): Effect.Effect<Option.Option<string>> =>
+  Config.option(Config.string(name)).pipe(Effect.orElseSucceed(() => Option.none()))
 
 // Credential cache + refresh logic live in `AnthropicCredentialService`
 // (Effect-native). The OAuth path provides this service into the layer
@@ -46,22 +54,27 @@ const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
 // from it per-request via `mapRequestEffect`.
 
 // Maps gent reasoning level to Anthropic effort (Anthropic caps at "high")
-const ANTHROPIC_EFFORT: Record<string, "low" | "medium" | "high"> = {
-  minimal: "low",
-  low: "low",
-  medium: "medium",
-  high: "high",
-  xhigh: "high",
-}
+const ANTHROPIC_EFFORT = new Map<string, "low" | "medium" | "high">([
+  ["minimal", "low"],
+  ["low", "low"],
+  ["medium", "medium"],
+  ["high", "high"],
+  ["xhigh", "high"],
+])
 
-const buildAnthropicConfig = (hints?: ProviderHints) => {
-  const config: Record<string, unknown> = {}
-  if (hints?.maxTokens !== undefined) config["max_tokens"] = hints.maxTokens
-  if (hints?.temperature !== undefined) config["temperature"] = hints.temperature
-  if (hints?.reasoning !== undefined && hints.reasoning !== "none") {
-    const effort = ANTHROPIC_EFFORT[hints.reasoning]
-    if (effort !== undefined) {
-      config["output_config"] = { effort }
+type AnthropicConfig = Required<Parameters<typeof AnthropicLanguageModel.layer>[0]>["config"]
+
+const buildAnthropicConfig = (hints: Option.Option<ProviderHints>): AnthropicConfig => {
+  let config: AnthropicConfig = {}
+  if (Option.isSome(hints)) {
+    const maxTokens = Option.fromNullishOr(hints.value.maxTokens)
+    if (Option.isSome(maxTokens)) config = { ...config, max_tokens: maxTokens.value }
+    const temperature = Option.fromNullishOr(hints.value.temperature)
+    if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
+    const reasoning = Option.fromNullishOr(hints.value.reasoning)
+    if (Option.isSome(reasoning) && reasoning.value !== "none") {
+      const effort = Option.fromNullishOr(ANTHROPIC_EFFORT.get(reasoning.value))
+      if (Option.isSome(effort)) config = { ...config, output_config: { effort: effort.value } }
     }
   }
   return config
@@ -75,11 +88,7 @@ const buildAnthropicConfig = (hints?: ProviderHints) => {
  * billing-header system blocks + identity prefix, which API-key users
  * are not on the hook for.
  */
-const makeApiKeyAnthropicLayer = (
-  modelName: string,
-  config: Record<string, unknown>,
-  apiKey: string,
-) => {
+const makeApiKeyAnthropicLayer = (modelName: string, config: AnthropicConfig, apiKey: string) => {
   const clientLayer = AnthropicClient.layer({
     apiKey: Redacted.make(apiKey),
   }).pipe(Layer.provide(FetchHttpClient.layer))
@@ -109,11 +118,11 @@ const makeApiKeyAnthropicLayer = (
  */
 const makeOauthAnthropicLayer = (
   modelName: string,
-  config: Record<string, unknown>,
-  authInfo: ProviderAuthInfo | undefined,
+  config: AnthropicConfig,
+  authInfo: ProviderAuthInfo,
   credentialCellRef: CredentialCacheCellRef,
   betaCellRef: Ref.Ref<BetaCacheCell>,
-  platform: AnthropicPlatformShape,
+  platform: AnthropicPlatformApi,
 ) => {
   const credentialLayer = AnthropicCredentialService.layerFromRefAndIO(
     credentialCellRef,
@@ -135,7 +144,7 @@ const makeOauthAnthropicLayer = (
     }),
   ).pipe(Layer.provide(credentialLayer), Layer.provide(cacheLayer))
 
-  const wrappedClient = makeKeychainClientLayer().pipe(
+  const wrappedClient = makeKeychainClientLayer.pipe(
     Layer.provide(clientLayer),
     Layer.provide(BunGentPlatformLive),
     Layer.provide(Layer.succeed(AnthropicPlatform, platform)),
@@ -156,59 +165,62 @@ const makeOauthAnthropicLayer = (
 export const buildAnthropicModelDriver = (
   credentialCellRef: CredentialCacheCellRef,
   betaCellRef: Ref.Ref<BetaCacheCell>,
-  envApiKey: string | undefined,
-  platform: AnthropicPlatformShape,
+  envApiKey: Option.Option<string>,
+  platform: AnthropicPlatformApi,
 ): ModelDriverContribution => ({
   id: "anthropic",
   name: "Anthropic",
-  resolveModel: (modelName, authInfo, hints): ProviderResolution => {
-    // Precedence: stored API key > env API key > keychain/OAuth
-    const storedApiKey =
-      authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
-    const apiKey = storedApiKey ?? envApiKey
+  resolveModel: (modelName, authInfo, hints) =>
+    Effect.gen(function* () {
+      const auth = Option.fromNullishOr(authInfo)
+      // Precedence: stored API key > env API key > keychain/OAuth
+      let apiKey = envApiKey
+      if (Option.isSome(auth) && auth.value.type === "api") {
+        apiKey = Option.fromNullishOr(auth.value.key)
+      }
 
-    const config = buildAnthropicConfig(hints)
+      const config = buildAnthropicConfig(Option.fromNullishOr(hints))
 
-    if (apiKey !== undefined) {
+      if (Option.isSome(apiKey)) {
+        return AiModel.make(
+          "anthropic",
+          modelName,
+          makeApiKeyAnthropicLayer(modelName, config, apiKey.value),
+        )
+      }
+
+      // Fail closed — no stored API key, no env var, and no stored OAuth.
+      // (The OAuth layer builds over `authInfo` — with `authInfo` absent
+      // it builds an unauthenticated client that fails late as a generic
+      // HTTP error, masking the real auth failure for non-TUI callers.
+      // Keychain fallback is handled by the extension's `authorize` flow
+      // upstream; by the time we reach `resolveModel`, any valid creds
+      // have already been staged into `authInfo`.)
+      if (Option.isNone(auth) || auth.value.type !== "oauth") {
+        return yield* new ProviderAuthError({
+          message:
+            "Anthropic credentials unavailable: no Claude Code OAuth, stored API key, or ANTHROPIC_API_KEY env var",
+        })
+      }
+
+      // OAuth path: per-resolveModel layer build wires the
+      // extension-closure-owned cache cells into a fresh credential
+      // service + beta cache layer pair. The Refs are shared across all
+      // calls, so cross-request beta learning and credential cache reuse
+      // survive.
       return AiModel.make(
         "anthropic",
         modelName,
-        makeApiKeyAnthropicLayer(modelName, config, apiKey),
+        makeOauthAnthropicLayer(
+          modelName,
+          config,
+          auth.value,
+          credentialCellRef,
+          betaCellRef,
+          platform,
+        ),
       )
-    }
-
-    // Fail closed — no stored API key, no env var, and no stored OAuth.
-    // (The OAuth layer builds over `authInfo` — with `authInfo` absent
-    // it builds an unauthenticated client that fails late as a generic
-    // HTTP error, masking the real auth failure for non-TUI callers.
-    // Keychain fallback is handled by the extension's `authorize` flow
-    // upstream; by the time we reach `resolveModel`, any valid creds
-    // have already been staged into `authInfo`.)
-    if (authInfo?.type !== "oauth") {
-      throw new ProviderAuthError({
-        message:
-          "Anthropic credentials unavailable: no Claude Code OAuth, stored API key, or ANTHROPIC_API_KEY env var",
-      })
-    }
-
-    // OAuth path: per-resolveModel layer build wires the
-    // extension-closure-owned cache cells into a fresh credential
-    // service + beta cache layer pair. The Refs are shared across all
-    // calls, so cross-request beta learning and credential cache reuse
-    // survive.
-    return AiModel.make(
-      "anthropic",
-      modelName,
-      makeOauthAnthropicLayer(
-        modelName,
-        config,
-        authInfo,
-        credentialCellRef,
-        betaCellRef,
-        platform,
-      ),
-    )
-  },
+    }),
   auth: {
     methods: [
       AuthMethod.make({ type: "oauth", label: "Claude Code" }),
@@ -216,7 +228,7 @@ export const buildAnthropicModelDriver = (
     ],
     authorize: (ctx) =>
       Effect.gen(function* () {
-        if (ctx.methodIndex !== 0) return undefined
+        if (ctx.methodIndex !== 0) return Option.none()
         // The Claude Code authorize flow targets the primary
         // account by default. PRIMARY_CLAUDE_SERVICE is spelled
         // out here so a future audit-grep finds every "default"
@@ -236,17 +248,18 @@ export const buildAnthropicModelDriver = (
           refresh: creds.refreshToken,
           expires: creds.expiresAt,
         })
-        return {
-          url: "" as string,
-          method: "done" as const,
-        }
+        return Option.some({
+          url: "",
+          method: "done",
+        } satisfies ProviderAuthorizationResult)
       }).pipe(
         Effect.catchDefect((cause) =>
           Effect.fail(
             new ProviderAuthError({
-              message: `Anthropic authorization failed: ${
-                cause instanceof Error ? cause.message : String(cause)
-              }`,
+              message: `Anthropic authorization failed: ${Option.match(
+                Schema.decodeUnknownOption(Schema.instanceOf(Error))(cause),
+                { onNone: () => String(cause), onSome: (error) => error.message },
+              )}`,
               cause,
             }),
           ),
@@ -262,12 +275,12 @@ export const AnthropicExtension = defineExtension({
   modelDrivers: () =>
     Effect.gen(function* () {
       const ctx = yield* ExtensionSetupContext
-      const env: AnthropicKeychainEnv = {
+      const env: AnthropicKeychainEnv = makeAnthropicKeychainEnv({
         betaFlags: yield* readOptionalEnv("ANTHROPIC_BETA_FLAGS"),
         cliVersion: yield* readOptionalEnv("ANTHROPIC_CLI_VERSION"),
         entrypoint: yield* readOptionalEnv("CLAUDE_CODE_ENTRYPOINT"),
         userAgent: yield* readOptionalEnv("ANTHROPIC_USER_AGENT"),
-      }
+      })
 
       const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
       const platform = AnthropicPlatform.fromSetup(ctx, env)

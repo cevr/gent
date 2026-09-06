@@ -7,7 +7,7 @@ import { InteractionCommands } from "./interaction-commands.js"
 import { SessionCommands } from "./session-commands.js"
 import { SessionQueries } from "./session-queries.js"
 import { ConnectionTracker, type ConnectionTrackerService } from "./connection-tracker.js"
-import { ServerIdentity, type ServerIdentityShape } from "./server-identity.js"
+import { ServerIdentity, type ServerIdentityApi } from "./server-identity.js"
 import { buildServerRoutes } from "./server-routes.js"
 import { RpcHandlersLive } from "./rpc-handlers.js"
 import { GentLogger, GentLogLevel } from "../runtime/logger.js"
@@ -39,7 +39,7 @@ type ServerRootServices =
 
 export interface ServerRootConfig {
   readonly dependencies: DependenciesConfig
-  readonly identity: Omit<ServerIdentityShape, "startedAt"> & {
+  readonly identity: Omit<ServerIdentityApi, "startedAt"> & {
     readonly startedAt?: number
   }
 }

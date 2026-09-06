@@ -1,9 +1,13 @@
 import { describe, test, expect } from "bun:test"
 import * as Prompt from "effect/unstable/ai/Prompt"
+import { Option } from "effect"
 import { extractText, extractImages, type Message as DomainMessage } from "@gent/sdk"
 import { dateFromMillis, Message, type MessagePart } from "@gent/core-internal/domain/message"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { projectMessagesWithToolInteractions } from "@gent/core-internal/domain/message-part-projection"
+
+const absent = Option.getOrUndefined(Option.none())
+let messageIndex = 0
 
 describe("extractText", () => {
   test("extracts text from text part", () => {
@@ -102,20 +106,22 @@ describe("extractImages", () => {
 describe("projectMessagesWithToolInteractions", () => {
   const makeMsg = (role: "user" | "assistant" | "tool", parts: MessagePart[]): DomainMessage =>
     Message.cases.regular.make({
-      id: MessageId.make(Bun.randomUUIDv7()),
+      id: MessageId.make(`message-sdk-utilities-${messageIndex++}`),
       sessionId: SessionId.make("s1"),
       branchId: BranchId.make("b1"),
       role,
       parts,
       createdAt: dateFromMillis(0),
-      turnDurationMs: undefined,
+      turnDurationMs: absent,
     })
 
-  const toolResult = (id: string, value: unknown, isError = false): MessagePart =>
+  type ToolResultValue = string | { readonly files: ReadonlyArray<string> }
+  const toolResult = (id: string, value: ToolResultValue, isError = false): MessagePart =>
     Prompt.toolResultPart({
       id: ToolCallId.make(id),
       name: "test-tool",
       isFailure: isError,
+      providerExecuted: false,
       result: value,
     })
 
@@ -145,16 +151,16 @@ describe("projectMessagesWithToolInteractions", () => {
         toolName: "read",
         status: "running",
         input: { path: "/foo" },
-        summary: undefined,
-        output: undefined,
+        summary: absent,
+        output: absent,
       },
       {
         id: ToolCallId.make("tc2"),
         toolName: "edit",
         status: "running",
         input: { path: "/bar" },
-        summary: undefined,
-        output: undefined,
+        summary: absent,
+        output: absent,
       },
     ])
   })
@@ -229,8 +235,7 @@ describe("projectMessagesWithToolInteractions", () => {
     ]
 
     const result = projectMessagesWithToolInteractions(messages)[0]!.toolInteractions[0]!
-    const summary = result.summary
-    if (summary === undefined) throw new Error("expected projected tool summary")
+    const summary = Option.getOrElse(Option.fromNullishOr(result.summary), () => "")
     expect(summary.length).toBe(103) // 100 + "..."
     expect(summary.endsWith("...")).toBe(true)
     expect(result.output).toBe(longText) // full output preserved

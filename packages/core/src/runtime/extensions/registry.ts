@@ -1,4 +1,13 @@
-import { Context, Effect, type FileSystem, Layer, type Path, Schema } from "effect"
+import {
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  type FileSystem,
+  type Path,
+  Schema,
+} from "effect"
 import type { AgentDefinition } from "../../domain/agent.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../../domain/driver.js"
 import type { ExtensionId, RpcId } from "../../domain/ids.js"
@@ -83,6 +92,7 @@ export interface CompiledRpcRegistry {
   readonly run: (
     extensionId: ExtensionId,
     capabilityId: RpcId | string,
+    // oxlint-disable-next-line effect/noUnknownParameters -- The selected capability schema validates this erased transport payload.
     input: unknown,
   ) => Effect.Effect<
     unknown,
@@ -96,12 +106,12 @@ type ScheduledJobFailureByExtension = ReadonlyMap<string, ReadonlyArray<Schedule
 /** Compile a keyed bucket from sorted extensions. Later scope wins. */
 const compileBucket = <T>(
   sorted: ReadonlyArray<LoadedExtension>,
-  pickBucket: (ext: LoadedExtension) => ReadonlyArray<T> | undefined,
+  pickBucket: (ext: LoadedExtension) => ReadonlyArray<T>,
   getKey: (item: T) => string,
 ): Map<string, T> => {
   const result = new Map<string, T>()
   for (const ext of sorted) {
-    const items = pickBucket(ext) ?? []
+    const items = pickBucket(ext)
     for (const item of items) {
       const key = getKey(item)
       result.set(key, item)
@@ -118,14 +128,17 @@ const compileCapabilityWinners = (
     // Sorted scope-ascending; later writes win. Iterate every typed bucket
     // for each extension so a later-scope contribution from any bucket
     // shadows an earlier registration with the same id.
-    for (const cap of ext.contributions.tools ?? []) {
+    for (const cap of Option.getOrElse(Option.fromUndefinedOr(ext.contributions.tools), () => [])) {
       winners.set(String(getToolId(cap)), {
         kind: "tool",
         extensionId: ext.manifest.id,
         capability: cap,
       })
     }
-    for (const cap of ext.contributions.requests ?? []) {
+    for (const cap of Option.getOrElse(
+      Option.fromUndefinedOr(ext.contributions.requests),
+      () => [],
+    )) {
       winners.set(String(cap.id), { kind: "rpc", extensionId: ext.manifest.id, capability: cap })
     }
   }
@@ -138,7 +151,7 @@ const compileSlashCommands = (
   const commands: SlashCommand[] = []
   for (const entry of winners.values()) {
     if (entry.kind !== "rpc") continue
-    if (entry.capability.slash === undefined) continue
+    if (Predicate.isUndefined(entry.capability.slash)) continue
     commands.push(capabilityToCommand(entry.extensionId, entry.capability))
   }
   return commands
@@ -149,10 +162,16 @@ const compileCapabilityEntries = (
 ): ReadonlyArray<RegisteredCapabilityEntry> => {
   const entries: RegisteredCapabilityEntry[] = []
   for (const ext of sorted) {
-    for (const capability of ext.contributions.tools ?? []) {
+    for (const capability of Option.getOrElse(
+      Option.fromUndefinedOr(ext.contributions.tools),
+      () => [],
+    )) {
       entries.push({ kind: "tool", extensionId: ext.manifest.id, capability })
     }
-    for (const capability of ext.contributions.requests ?? []) {
+    for (const capability of Option.getOrElse(
+      Option.fromUndefinedOr(ext.contributions.requests),
+      () => [],
+    )) {
       entries.push({ kind: "rpc", extensionId: ext.manifest.id, capability })
     }
   }
@@ -163,59 +182,54 @@ const resolveCapabilityEntry = (
   entries: ReadonlyArray<RegisteredCapabilityEntry>,
   extensionId: ExtensionId,
   capabilityId: RpcId | string,
-): RegisteredCapabilityEntry | undefined => {
+): Option.Option<RegisteredCapabilityEntry> => {
   for (let i = entries.length - 1; i >= 0; i--) {
     const candidate = entries[i]
-    const candidateId =
-      candidate?.kind === "tool" ? getToolId(candidate.capability) : candidate?.capability.id
-    if (
-      candidate !== undefined &&
-      candidate.extensionId === extensionId &&
-      candidateId === capabilityId
-    ) {
-      return candidate
-    }
+    if (Predicate.isUndefined(candidate)) continue
+    let candidateId: string
+    if (candidate.kind === "tool") candidateId = getToolId(candidate.capability)
+    else candidateId = candidate.capability.id
+    if (candidate.extensionId === extensionId && candidateId === capabilityId)
+      return Option.some(candidate)
   }
-  return undefined
+  return Option.none()
 }
 
 export const runExtensionCapability = (
   extensionId: ExtensionId,
   capabilityId: RpcId | string,
   capability: RequestCapability,
+  // oxlint-disable-next-line effect/noUnknownParameters -- Erased request inputs are decoded by the capability-owned schema below.
   input: unknown,
 ) =>
   Effect.gen(function* () {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- erased schema boundary for heterogeneously typed extension leaves
-    const decodedInput = yield* Schema.decodeUnknownEffect(capability.input as Schema.Any)(
-      input,
-    ).pipe(
-      Effect.catchEager((e) =>
-        Effect.fail(
-          new CapabilityErrorClass({
-            extensionId,
-            capabilityId,
-            reason: `input decode failed: ${String(e)}`,
-          }),
-        ),
-      ),
-    )
+    const decodedInputOption = Schema.decodeUnknownOption(capability.input)(input)
+    if (Option.isNone(decodedInputOption)) {
+      return yield* new CapabilityErrorClass({
+        extensionId,
+        capabilityId,
+        reason: "input decode failed",
+      })
+    }
+    const decodedInput = decodedInputOption.value
 
     const output = yield* sealErasedEffect(
       () =>
         // @effect-diagnostics-next-line anyUnknownInErrorContext:off
         capability.effect(decodedInput),
       {
-        onFailure: (error) =>
-          Schema.is(CapabilityErrorClass)(error)
-            ? Effect.fail(error)
-            : Effect.fail(
-                new CapabilityErrorClass({
-                  extensionId,
-                  capabilityId,
-                  reason: `handler failure: ${String(error)}`,
-                }),
-              ),
+        onFailure: (error) => {
+          if (Schema.is(CapabilityErrorClass)(error)) {
+            return Effect.fail(error)
+          }
+          return Effect.fail(
+            new CapabilityErrorClass({
+              extensionId,
+              capabilityId,
+              reason: `handler failure: ${String(error)}`,
+            }),
+          )
+        },
         onDefect: (defect) =>
           Effect.fail(
             new CapabilityErrorClass({
@@ -227,18 +241,14 @@ export const runExtensionCapability = (
       },
     )
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- erased schema boundary for heterogeneously typed extension leaves
-    yield* Schema.encodeUnknownEffect(capability.output as Schema.Any)(output).pipe(
-      Effect.catchEager((e) =>
-        Effect.fail(
-          new CapabilityErrorClass({
-            extensionId,
-            capabilityId,
-            reason: `output validation failed: ${String(e)}`,
-          }),
-        ),
-      ),
-    )
+    const encodedOutput = Schema.encodeOption(capability.output)(output)
+    if (Option.isNone(encodedOutput)) {
+      return yield* new CapabilityErrorClass({
+        extensionId,
+        capabilityId,
+        reason: "output validation failed",
+      })
+    }
     return output
   })
 
@@ -247,13 +257,13 @@ const compileRpcRegistry = (
 ): CompiledRpcRegistry => ({
   run: Effect.fn("CompiledRpcRegistry.run")(function* (extensionId, capabilityId, input) {
     const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)
-    if (entry === undefined || entry.kind !== "rpc") {
+    if (Option.isNone(entry) || entry.value.kind !== "rpc") {
       return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
     }
     const hostCtx = yield* CurrentExtensionHostContext
     return yield* provideExtensionServices(
       { ...hostCtx, extensionId },
-      runExtensionCapability(extensionId, capabilityId, entry.capability, input),
+      runExtensionCapability(extensionId, capabilityId, entry.value.capability, input),
     )
   }),
 })
@@ -267,24 +277,91 @@ const sortExtensionsByScope = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
+const scheduledFailuresFor = (
+  id: ExtensionId,
+  failures: ScheduledJobFailureByExtension,
+): Option.Option<ReadonlyArray<ScheduledJobFailureInfo>> => Option.fromUndefinedOr(failures.get(id))
+
+const activeExtensionStatus = (
+  extension: LoadedExtension,
+  scheduledJobFailures: ScheduledJobFailureByExtension,
+): ExtensionStatusInfo => {
+  const base = {
+    manifest: extension.manifest,
+    scope: extension.scope,
+    sourcePath: extension.sourcePath,
+    status: "active",
+  } satisfies ExtensionStatusInfo
+  return Object.assign(
+    base,
+    Option.match(scheduledFailuresFor(extension.manifest.id, scheduledJobFailures), {
+      onNone: () => ({}),
+      onSome: (value) => ({ scheduledJobFailures: value }),
+    }),
+  )
+}
+
+const failedExtensionStatus = (
+  failure: FailedExtension,
+  scheduledJobFailures: ScheduledJobFailureByExtension,
+): ExtensionStatusInfo => {
+  const base = {
+    ...failure,
+    status: "failed",
+  } satisfies ExtensionStatusInfo
+  return Object.assign(
+    base,
+    Option.match(scheduledFailuresFor(failure.manifest.id, scheduledJobFailures), {
+      onNone: () => ({}),
+      onSome: (value) => ({ scheduledJobFailures: value }),
+    }),
+  )
+}
+
 export const capabilityToCommand = (
   extensionId: ExtensionId,
   cap: RequestCapability,
 ): SlashCommand => {
-  const slash = cap.slash
-  const description = slash?.description ?? cap.description
-  const displayName = slash?.name
-  const category = slash?.category
-  const keybind = slash?.keybind
-  return {
-    name: slash?.trigger ?? String(cap.id),
-    ...(displayName !== undefined ? { displayName } : {}),
-    ...(description !== undefined ? { description } : {}),
-    ...(category !== undefined ? { category } : {}),
-    ...(keybind !== undefined ? { keybind } : {}),
-    extensionId,
-    capabilityId: String(cap.id),
-  }
+  const slash = Option.fromUndefinedOr(cap.slash)
+  const name = Option.match(slash, {
+    onNone: () => String(cap.id),
+    onSome: (value) =>
+      Option.getOrElse(Option.fromUndefinedOr(value.trigger), () => String(cap.id)),
+  })
+  const description = Option.match(slash, {
+    onNone: () => Option.fromUndefinedOr(cap.description),
+    onSome: (value) =>
+      Option.match(Option.fromUndefinedOr(value.description), {
+        onNone: () => Option.fromUndefinedOr(cap.description),
+        onSome: Option.some,
+      }),
+  })
+  const displayName = Option.flatMap(slash, (value) => Option.fromUndefinedOr(value.name))
+  const category = Option.flatMap(slash, (value) => Option.fromUndefinedOr(value.category))
+  const keybind = Option.flatMap(slash, (value) => Option.fromUndefinedOr(value.keybind))
+  return Object.assign(
+    {
+      name,
+      extensionId,
+      capabilityId: String(cap.id),
+    },
+    Option.match(displayName, {
+      onNone: () => ({}),
+      onSome: (value) => ({ displayName: value }),
+    }),
+    Option.match(description, {
+      onNone: () => ({}),
+      onSome: (value) => ({ description: value }),
+    }),
+    Option.match(category, {
+      onNone: () => ({}),
+      onSome: (value) => ({ category: value }),
+    }),
+    Option.match(keybind, {
+      onNone: () => ({}),
+      onSome: (value) => ({ keybind: value }),
+    }),
+  )
 }
 
 /** Compile prevalidated extensions into an immutable resolved snapshot. */
@@ -311,17 +388,17 @@ export const resolveExtensions = (
 
   const agents = compileBucket(
     sorted,
-    (e) => e.contributions.agents,
+    (e) => Option.getOrElse(Option.fromUndefinedOr(e.contributions.agents), () => []),
     (a) => a.name,
   )
   const modelDrivers = compileBucket(
     sorted,
-    (e) => e.contributions.modelDrivers,
+    (e) => Option.getOrElse(Option.fromUndefinedOr(e.contributions.modelDrivers), () => []),
     (d) => d.id,
   )
   const externalDrivers = compileBucket(
     sorted,
-    (e) => e.contributions.externalDrivers,
+    (e) => Option.getOrElse(Option.fromUndefinedOr(e.contributions.externalDrivers), () => []),
     (d) => d.id,
   )
 
@@ -332,8 +409,10 @@ export const resolveExtensions = (
   // (Dynamic prompt content is assembled per-turn by ExtensionHooks, not here.)
   const promptSectionsMap = new Map<string, PromptSection>()
   for (const { capability: cap } of capabilityWinners.values()) {
-    const prompt = isToolCapability(cap) ? getToolMetadata(cap).prompt : cap.prompt
-    if (prompt) promptSectionsMap.set(prompt.id, prompt)
+    let prompt = Option.none<PromptSection>()
+    if (isToolCapability(cap)) prompt = Option.fromUndefinedOr(getToolMetadata(cap).prompt)
+    else prompt = Option.fromUndefinedOr(cap.prompt)
+    if (Option.isSome(prompt)) promptSectionsMap.set(prompt.value.id, prompt.value)
   }
 
   // Permission rules are collected from WINNERS, not raw extractions:
@@ -349,22 +428,8 @@ export const resolveExtensions = (
 
   const extensionHooks = compileExtensionHooks(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
-    ...sorted.map((ext) => ({
-      manifest: ext.manifest,
-      scope: ext.scope,
-      sourcePath: ext.sourcePath,
-      status: "active" as const,
-      ...(scheduledJobFailures.has(ext.manifest.id)
-        ? { scheduledJobFailures: scheduledJobFailures.get(ext.manifest.id) }
-        : {}),
-    })),
-    ...mergedFailures.map((failure) => ({
-      ...failure,
-      status: "failed" as const,
-      ...(scheduledJobFailures.has(failure.manifest.id)
-        ? { scheduledJobFailures: scheduledJobFailures.get(failure.manifest.id) }
-        : {}),
-    })),
+    ...sorted.map((ext) => activeExtensionStatus(ext, scheduledJobFailures)),
+    ...mergedFailures.map((failure) => failedExtensionStatus(failure, scheduledJobFailures)),
   ]
 
   return {
@@ -390,6 +455,54 @@ export interface CompiledToolPolicy {
   readonly promptSections: ReadonlyArray<PromptSection>
 }
 
+const applyToolProjection = (
+  tools: ToolCapability[],
+  projection: TurnProjection,
+  allToolsByName: ReadonlyMap<string, ToolCapability>,
+): ToolCapability[] => {
+  const policy = Option.fromUndefinedOr(projection.toolPolicy)
+  if (Option.isNone(policy)) return tools
+
+  const overrideSet = Option.fromUndefinedOr(policy.value.overrideSet)
+  if (Option.isSome(overrideSet)) {
+    return overrideSet.value.flatMap((name) => {
+      const tool = allToolsByName.get(name)
+      if (Predicate.isUndefined(tool)) return []
+      return [tool]
+    })
+  }
+
+  const include = Option.fromUndefinedOr(policy.value.include)
+  if (Option.isSome(include)) {
+    const existing = new Set(tools.map((tool) => String(getToolId(tool))))
+    for (const name of include.value) {
+      if (existing.has(name)) continue
+      const tool = allToolsByName.get(name)
+      if (Predicate.isUndefined(tool)) continue
+      tools.push(tool)
+      existing.add(name)
+    }
+  }
+
+  const exclude = Option.fromUndefinedOr(policy.value.exclude)
+  if (Option.isSome(exclude)) {
+    const excludeSet = new Set(exclude.value)
+    return tools.filter((tool) => !excludeSet.has(String(getToolId(tool))))
+  }
+  return tools
+}
+
+const collectProjectionPromptSections = (
+  projections: ReadonlyArray<TurnProjection>,
+): PromptSection[] => {
+  const sections: PromptSection[] = []
+  for (const projection of projections) {
+    const promptSections = Option.fromUndefinedOr(projection.promptSections)
+    if (Option.isSome(promptSections)) sections.push(...promptSections.value)
+  }
+  return sections
+}
+
 /**
  * Compile the active tool set and prompt sections for a turn.
  *
@@ -412,33 +525,7 @@ export const compileToolPolicy = (
 
   // 2. Extension projection fragments (overrideSet is exclusive — include/exclude ignored when set)
   for (const projection of extensionProjections) {
-    const policy = projection.toolPolicy
-    if (policy === undefined) continue
-
-    if (policy.overrideSet !== undefined) {
-      // Replace the full tool list from the known tool universe
-      tools = policy.overrideSet.flatMap((name) => {
-        const t = allToolsByName.get(name)
-        return t !== undefined ? [t] : []
-      })
-    } else {
-      if (policy.include !== undefined) {
-        const existing = new Set(tools.map((t) => String(getToolId(t))))
-        for (const name of policy.include) {
-          if (!existing.has(name)) {
-            const t = allToolsByName.get(name)
-            if (t !== undefined) {
-              tools.push(t)
-              existing.add(name)
-            }
-          }
-        }
-      }
-      if (policy.exclude !== undefined) {
-        const excludeSet = new Set(policy.exclude)
-        tools = tools.filter((t) => !excludeSet.has(String(getToolId(t))))
-      }
-    }
+    tools = applyToolProjection(tools, projection, allToolsByName)
   }
 
   // 4. Re-apply agent deny list — extensions can't escape denials
@@ -449,15 +536,7 @@ export const compileToolPolicy = (
     tools = tools.filter((t) => getToolMetadata(t).interactive !== true)
   }
 
-  // 6. Collect extension-contributed prompt sections
-  const promptSections: PromptSection[] = []
-  for (const projection of extensionProjections) {
-    if (projection.promptSections !== undefined) {
-      promptSections.push(...projection.promptSections)
-    }
-  }
-
-  return { tools, promptSections }
+  return { tools, promptSections: collectProjectionPromptSections(extensionProjections) }
 }
 
 // Extension Registry Service
@@ -474,10 +553,13 @@ export class ExtensionRegistry extends Context.Service<
   ExtensionRegistryService
 >()("@gent/core/src/runtime/extensions/registry/ExtensionRegistry") {
   static fromResolved = (resolved: ResolvedExtensions): Layer.Layer<ExtensionRegistry> =>
-    Layer.succeed(ExtensionRegistry, {
-      extensionHooks: resolved.extensionHooks,
-      getResolved: () => resolved,
-    })
+    Layer.succeed(
+      ExtensionRegistry,
+      ExtensionRegistry.of({
+        extensionHooks: resolved.extensionHooks,
+        getResolved: () => resolved,
+      }),
+    )
 
   static Test = (): Layer.Layer<ExtensionRegistry> =>
     ExtensionRegistry.fromResolved(resolveExtensions([]))
@@ -494,14 +576,14 @@ const filterToolsForAgent = (
 ): ToolCapability[] => {
   let tools: ToolCapability[]
 
-  if (agent.allowedTools !== undefined) {
+  if (!Predicate.isUndefined(agent.allowedTools)) {
     const names = new Set(agent.allowedTools)
     tools = allTools.filter((t) => names.has(String(getToolId(t))))
   } else {
     tools = [...allTools]
   }
 
-  if (agent.deniedTools !== undefined) {
+  if (!Predicate.isUndefined(agent.deniedTools)) {
     tools = applyDenyFilter(tools, agent)
   }
 
@@ -513,7 +595,7 @@ const applyDenyFilter = (
   tools: ReadonlyArray<ToolCapability>,
   agent: AgentDefinition,
 ): ToolCapability[] => {
-  if (agent.deniedTools === undefined) return [...tools]
+  if (Predicate.isUndefined(agent.deniedTools)) return [...tools]
   const denied = new Set(agent.deniedTools)
   return tools.filter((t) => !denied.has(String(getToolId(t))))
 }

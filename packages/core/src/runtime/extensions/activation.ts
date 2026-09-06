@@ -1,5 +1,5 @@
-import { Cause, Effect, Exit, Layer, Scope } from "effect"
-import type { FileSystem, Path } from "effect"
+import { Cause, Effect, Exit, Layer, Option, Predicate, Scope } from "effect"
+import type { Context, FileSystem, Path } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { GentPlatform } from "../gent-platform.js"
 import type {
@@ -14,12 +14,13 @@ import {
   rpcCapabilities,
 } from "../../domain/contribution.js"
 import { getToolMetadata, isToolCapability } from "../../domain/capability/tool.js"
+import { hasMessage } from "../../domain/guards.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
 const modelToolCount = (contribs: ExtensionContributions): number =>
   modelCapabilities(contribs).length
 import { resolveExtensions, type ResolvedExtensions } from "./registry.js"
-import type { DiscoveredExtension } from "./loader.js"
+import type { DiscoveredBuiltinExtension, DiscoveredExtension } from "./loader.js"
 import { setupExtension } from "./loader.js"
 import {
   reconcileScheduledJobs,
@@ -35,9 +36,22 @@ export interface ExtensionActivationResult {
   readonly failed: ReadonlyArray<FailedExtension>
 }
 
+/**
+ * Process resources successfully built during extension reconciliation.
+ *
+ * The context is carried into the profile runtime so lifecycle resources are
+ * not built a second time. The extension key is stable data, not an object
+ * identity cache key.
+ */
+export interface ActivatedResourceContext {
+  readonly extension: LoadedExtension
+  readonly context: Context.Context<unknown>
+}
+
 export interface ExtensionReconciliationResult {
   readonly resolved: ResolvedExtensions
   readonly scheduledJobFailures: ReadonlyArray<SchedulerFailure>
+  readonly resourceContexts: ReadonlyArray<ActivatedResourceContext>
 }
 
 const toFailedExtension = (
@@ -56,10 +70,10 @@ const toFailedExtension = (
   error,
 })
 
-const formatFailure = (error: unknown): string =>
-  typeof error === "object" && error !== null && "message" in error
-    ? String((error as { readonly message: unknown }).message)
-    : String(error)
+const formatFailure = (error: Parameters<typeof hasMessage>[0]): string => {
+  if (hasMessage(error)) return error.message
+  return String(error)
+}
 
 export const setupBuiltinExtensions = (params: {
   readonly extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
@@ -82,9 +96,9 @@ export const setupBuiltinExtensions = (params: {
 
       const discovered = {
         extension,
-        scope: "builtin" as const,
+        scope: "builtin",
         sourcePath: "builtin",
-      }
+      } satisfies DiscoveredBuiltinExtension
 
       const exit = yield* setupExtension(discovered, params.cwd, params.home).pipe(Effect.exit)
       if (exit._tag === "Success") {
@@ -176,7 +190,7 @@ export const setupDiscoveredExtensions = (params: {
     return { active, failed }
   })
 
-const extensionKey = (ext: Pick<LoadedExtension, "scope" | "manifest" | "sourcePath">) =>
+export const extensionKey = (ext: Pick<LoadedExtension, "scope" | "manifest" | "sourcePath">) =>
   `${ext.scope}:${ext.manifest.id}:${ext.sourcePath}`
 
 const formatConflicts = (
@@ -189,6 +203,27 @@ const formatConflicts = (
     .map((ext) => `"${ext.manifest.id}"`)
     .join(", ")}`
 
+const collectDuplicateExtensionIds = (
+  extensions: ReadonlyArray<LoadedExtension>,
+  addFailure: (extension: LoadedExtension, error: string) => void,
+): void => {
+  const idsByScope = new Map<LoadedExtension["scope"], Map<string, LoadedExtension[]>>()
+  for (const extension of extensions) {
+    const scopeMap = idsByScope.get(extension.scope) ?? new Map<string, LoadedExtension[]>()
+    const sameId = scopeMap.get(extension.manifest.id) ?? []
+    sameId.push(extension)
+    scopeMap.set(extension.manifest.id, sameId)
+    idsByScope.set(extension.scope, scopeMap)
+  }
+  for (const [scope, scopeMap] of idsByScope) {
+    for (const [id, sameId] of scopeMap) {
+      if (sameId.length <= 1) continue
+      const error = `Duplicate extension id "${id}" in scope "${scope}"`
+      for (const extension of sameId) addFailure(extension, error)
+    }
+  }
+}
+
 export const collectValidationFailures = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): ReadonlyMap<string, { ext: LoadedExtension; errors: ReadonlyArray<string> }> => {
@@ -197,32 +232,18 @@ export const collectValidationFailures = (
   const addFailure = (ext: LoadedExtension, error: string) => {
     const key = extensionKey(ext)
     const current = failures.get(key)
-    if (current === undefined) {
+    if (Predicate.isUndefined(current)) {
       failures.set(key, { ext, errors: [error] })
       return
     }
     if (!current.errors.includes(error)) current.errors.push(error)
   }
 
-  const idsByScope = new Map<LoadedExtension["scope"], Map<string, LoadedExtension[]>>()
-  for (const ext of extensions) {
-    const scopeMap = idsByScope.get(ext.scope) ?? new Map<string, LoadedExtension[]>()
-    const sameId = scopeMap.get(ext.manifest.id) ?? []
-    sameId.push(ext)
-    scopeMap.set(ext.manifest.id, sameId)
-    idsByScope.set(ext.scope, scopeMap)
-  }
-  for (const [scope, scopeMap] of idsByScope) {
-    for (const [id, sameId] of scopeMap) {
-      if (sameId.length <= 1) continue
-      const error = `Duplicate extension id "${id}" in scope "${scope}"`
-      for (const ext of sameId) addFailure(ext, error)
-    }
-  }
+  collectDuplicateExtensionIds(extensions, addFailure)
 
   const collectScopedCollisions = <T>(
     pickItems: (contribs: ExtensionContributions) => ReadonlyArray<T>,
-    getKey: (item: T) => string | undefined,
+    getKey: (item: T) => Option.Option<string>,
     label: string,
   ) => {
     const byScope = new Map<LoadedExtension["scope"], Map<string, LoadedExtension[]>>()
@@ -231,12 +252,12 @@ export const collectValidationFailures = (
       const seen = new Set<string>()
       for (const item of pickItems(ext.contributions)) {
         const key = getKey(item)
-        if (key === undefined) continue
-        if (seen.has(key)) continue
-        seen.add(key)
-        const existing = scopeMap.get(key) ?? []
+        if (Option.isNone(key)) continue
+        if (seen.has(key.value)) continue
+        seen.add(key.value)
+        const existing = scopeMap.get(key.value) ?? []
         existing.push(ext)
-        scopeMap.set(key, existing)
+        scopeMap.set(key.value, existing)
       }
       byScope.set(ext.scope, scopeMap)
     }
@@ -253,40 +274,51 @@ export const collectValidationFailures = (
   // Tool collisions: same-scope same-id model-callable tool leaves.
   collectScopedCollisions(
     (cs) => modelCapabilities(cs),
-    (cap) => (isToolCapability(cap) ? getToolMetadata(cap).id : undefined),
+    (cap) => {
+      if (isToolCapability(cap)) {
+        return Option.some(getToolMetadata(cap).id)
+      }
+      return Option.none()
+    },
     "tool",
   )
   collectScopedCollisions(
     (cs) => rpcCapabilities(cs),
-    (cap) => cap.id,
+    (cap) => Option.some(cap.id),
     "rpc",
   )
   collectScopedCollisions(
     (cs) => cs.agents ?? [],
-    (agent) => agent.name,
+    (agent) => Option.some(agent.name),
     "agent",
   )
   collectScopedCollisions(
     (cs) => cs.modelDrivers ?? [],
-    (driver) => driver.id,
+    (driver) => Option.some(driver.id),
     "model driver",
   )
   collectScopedCollisions(
     (cs) => cs.externalDrivers ?? [],
-    (driver) => driver.id,
+    (driver) => Option.some(driver.id),
     "external driver",
   )
   // Static prompt sections live on capability leaf `prompt`. Collision check
   // uses prompt-section id dedup.
   collectScopedCollisions(
-    (cs) =>
-      [
-        ...(cs.tools ?? []).map((tool) =>
-          isToolCapability(tool) ? getToolMetadata(tool).prompt : undefined,
-        ),
-        ...(cs.requests ?? []).map((rpc) => rpc.prompt),
-      ].filter((p): p is PromptSection => p !== undefined),
-    (section) => section.id,
+    (cs) => {
+      const sections: PromptSection[] = []
+      for (const tool of cs.tools ?? []) {
+        if (!isToolCapability(tool)) continue
+        const prompt = Option.fromUndefinedOr(getToolMetadata(tool).prompt)
+        if (Option.isSome(prompt)) sections.push(prompt.value)
+      }
+      for (const rpc of cs.requests ?? []) {
+        const prompt = Option.fromUndefinedOr(rpc.prompt)
+        if (Option.isSome(prompt)) sections.push(prompt.value)
+      }
+      return sections
+    },
+    (section) => Option.some(section.id),
     "prompt section",
   )
 
@@ -324,7 +356,7 @@ export const validateLoadedExtensions = (
     const failed: FailedExtension[] = []
     for (const ext of extensions) {
       const failure = failures.get(extensionKey(ext))
-      if (failure === undefined) {
+      if (Predicate.isUndefined(failure)) {
         active.push(ext)
         continue
       }
@@ -351,6 +383,7 @@ const activateProcessResources = (
   {
     readonly active: ReadonlyArray<LoadedExtension>
     readonly failed: ReadonlyArray<FailedExtension>
+    readonly resourceContexts: ReadonlyArray<ActivatedResourceContext>
   },
   never,
   Scope.Scope
@@ -358,10 +391,12 @@ const activateProcessResources = (
   Effect.gen(function* () {
     const active: LoadedExtension[] = []
     const failed: FailedExtension[] = []
+    const resourceContexts: ActivatedResourceContext[] = []
 
     for (const ext of extensions) {
       const hasLifecycle = collectResourceEntries([ext], "process").some(
-        ({ resource }) => resource.start !== undefined || resource.stop !== undefined,
+        ({ resource }) =>
+          !Predicate.isUndefined(resource.start) || !Predicate.isUndefined(resource.stop),
       )
       if (!hasLifecycle) {
         active.push(ext)
@@ -375,6 +410,7 @@ const activateProcessResources = (
       ).pipe(Effect.exit)
       if (Exit.isSuccess(exit)) {
         active.push(ext)
+        resourceContexts.push({ extension: ext, context: exit.value })
         yield* Effect.addFinalizer(() => Scope.close(resourceScope, Exit.void))
         continue
       }
@@ -392,13 +428,14 @@ const activateProcessResources = (
       )
     }
 
-    return { active, failed }
+    return { active, failed, resourceContexts }
   })
 
 export const reconcileLoadedExtensions = (params: {
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions?: ReadonlyArray<FailedExtension>
   readonly home: string
+  // oxlint-disable-next-line effect/noNullish -- The scheduler command is an optional host boundary input.
   readonly command: ScheduledJobCommand | undefined
   readonly env?: Readonly<Record<string, string>>
   readonly schedulerRuntime?: Parameters<typeof reconcileScheduledJobs>[0]["runtime"]
@@ -409,7 +446,40 @@ export const reconcileLoadedExtensions = (params: {
 > =>
   Effect.gen(function* () {
     const validated = yield* validateLoadedExtensions(params.extensions)
-    const activated = yield* activateProcessResources(validated.active)
+    return yield* reconcileExtensionDeclarations({
+      declarations: {
+        active: validated.active,
+        failed: [...(params.failedExtensions ?? []), ...validated.failed],
+      },
+      home: params.home,
+      command: params.command,
+      env: params.env,
+      schedulerRuntime: params.schedulerRuntime,
+    })
+  })
+
+/**
+ * Activate and reconcile declarations that already passed validation.
+ *
+ * Declaration loading is intentionally separate from this boundary. This
+ * operation owns process resource acquisition, lifecycle hooks, and scheduled
+ * job reconciliation. It keeps startup failure isolation unchanged while
+ * allowing callers to inspect declarations without starting them.
+ */
+export const reconcileExtensionDeclarations = (params: {
+  readonly declarations: ExtensionActivationResult
+  readonly home: string
+  // oxlint-disable-next-line effect/noNullish -- The scheduler command is an optional host boundary input.
+  readonly command: ScheduledJobCommand | undefined
+  readonly env?: Readonly<Record<string, string>>
+  readonly schedulerRuntime?: Parameters<typeof reconcileScheduledJobs>[0]["runtime"]
+}): Effect.Effect<
+  ExtensionReconciliationResult,
+  never,
+  Scope.Scope | FileSystem.FileSystem | Path.Path
+> =>
+  Effect.gen(function* () {
+    const activated = yield* activateProcessResources(params.declarations.active)
     const scheduledJobFailures = yield* reconcileScheduledJobs({
       extensions: activated.active,
       home: params.home,
@@ -418,30 +488,36 @@ export const reconcileLoadedExtensions = (params: {
       runtime: params.schedulerRuntime,
     })
 
-    const allFailed = [...(params.failedExtensions ?? []), ...validated.failed, ...activated.failed]
+    const allFailed = [...params.declarations.failed, ...activated.failed]
     const resolved = resolveExtensions(
       activated.active,
       allFailed,
       groupScheduledJobFailures(scheduledJobFailures),
     )
 
+    type ReconciliationSummaryFields = {
+      active: number
+      failed: number
+      activeIds: string
+      failedDetails?: string
+    }
+    const summaryFields: ReconciliationSummaryFields = {
+      active: activated.active.length,
+      failed: allFailed.length,
+      activeIds: activated.active.map((ext) => ext.manifest.id).join(", "),
+    }
+    if (allFailed.length > 0) {
+      summaryFields.failedDetails = allFailed
+        .map((f) => `${f.manifest.id}(${f.phase}): ${f.error}`)
+        .join("; ")
+    }
     yield* Effect.logInfo("extension.reconciliation.summary").pipe(
-      Effect.annotateLogs({
-        active: activated.active.length,
-        failed: allFailed.length,
-        activeIds: activated.active.map((ext) => ext.manifest.id).join(", "),
-        ...(allFailed.length > 0
-          ? {
-              failedDetails: allFailed
-                .map((f) => `${f.manifest.id}(${f.phase}): ${f.error}`)
-                .join("; "),
-            }
-          : {}),
-      }),
+      Effect.annotateLogs(summaryFields),
     )
 
     return {
       resolved,
       scheduledJobFailures,
+      resourceContexts: activated.resourceContexts,
     }
   })

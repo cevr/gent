@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Option, Random, Ref } from "effect"
+import { Clock, Context, Effect, Layer, Option, Crypto, Ref } from "effect"
 import { type BranchId, ArtifactId, type SessionId } from "@gent/core/extensions/api"
 import type { Artifact, ContentPatch, ReadQuery } from "../artifacts-protocol.js"
 
@@ -11,31 +11,31 @@ export interface ArtifactSaveInput {
   readonly sourceTool: string
   readonly content: string
   readonly path?: string
-  readonly metadata?: Readonly<Record<string, unknown>>
+  readonly metadata?: Artifact["metadata"]
   readonly branchId?: BranchId
 }
 
 export interface ArtifactUpdateInput {
   readonly id: ArtifactId
   readonly patch?: ContentPatch
-  readonly metadata?: Readonly<Record<string, unknown>>
+  readonly metadata?: Artifact["metadata"]
   readonly status?: Artifact["status"]
   readonly label?: string
 }
 
-interface ArtifactsReadShape {
+interface ArtifactsReadService {
   readonly read: (
     sessionId: SessionId,
     branchId: BranchId,
     query: ReadQuery,
-  ) => Effect.Effect<Artifact | null>
+  ) => Effect.Effect<Option.Option<Artifact>>
   readonly list: (
     sessionId: SessionId,
     branchId: BranchId,
   ) => Effect.Effect<ReadonlyArray<Artifact>>
 }
 
-interface ArtifactsWriteShape extends ArtifactsReadShape {
+interface ArtifactsWriteService extends ArtifactsReadService {
   readonly save: (
     sessionId: SessionId,
     branchId: BranchId,
@@ -45,25 +45,25 @@ interface ArtifactsWriteShape extends ArtifactsReadShape {
     sessionId: SessionId,
     branchId: BranchId,
     input: ArtifactUpdateInput,
-  ) => Effect.Effect<Artifact | null>
+  ) => Effect.Effect<Option.Option<Artifact>>
   readonly clear: (sessionId: SessionId, branchId: BranchId, id: ArtifactId) => Effect.Effect<void>
 }
 
-export class ArtifactsRead extends Context.Service<ArtifactsRead, ArtifactsReadShape>()(
+export class ArtifactsRead extends Context.Service<ArtifactsRead, ArtifactsReadService>()(
   "@gent/extensions/src/artifacts/store/ArtifactsRead",
 ) {}
 
-export class ArtifactsWrite extends Context.Service<ArtifactsWrite, ArtifactsWriteShape>()(
+export class ArtifactsWrite extends Context.Service<ArtifactsWrite, ArtifactsWriteService>()(
   "@gent/extensions/src/artifacts/store/ArtifactsWrite",
 ) {}
 
-const applyPatch = (content: string, patch: ContentPatch): string =>
-  patch.replaceAll === true
-    ? content.replaceAll(patch.find, patch.replace)
-    : content.replace(patch.find, patch.replace)
+const applyPatch = (content: string, patch: ContentPatch): string => {
+  if (patch.replaceAll === true) return content.replaceAll(patch.find, patch.replace)
+  return content.replace(patch.find, patch.replace)
+}
 
 const sessionItems = (state: ArtifactsState, sessionId: SessionId): ReadonlyArray<Artifact> =>
-  state.sessions[sessionId] ?? []
+  Option.fromNullishOr(state.sessions[sessionId]).pipe(Option.getOrElse(() => []))
 
 const setSessionItems = (
   state: ArtifactsState,
@@ -75,11 +75,13 @@ const readArtifact = (
   items: ReadonlyArray<Artifact>,
   branchId: BranchId,
   query: ReadQuery,
-): Artifact | null => {
+): Option.Option<Artifact> => {
   if (query._tag === "ById") {
-    return items.find((a) => a.id === query.id && a.branchId === branchId) ?? null
+    return Option.fromNullishOr(items.find((a) => a.id === query.id && a.branchId === branchId))
   }
-  return items.find((a) => a.sourceTool === query.sourceTool && a.branchId === branchId) ?? null
+  return Option.fromNullishOr(
+    items.find((a) => a.sourceTool === query.sourceTool && a.branchId === branchId),
+  )
 }
 
 const listArtifacts = (
@@ -93,13 +95,17 @@ const saveArtifact = (
   input: ArtifactSaveInput,
   now: number,
   id: ArtifactId,
-): { readonly items: ReadonlyArray<Artifact>; readonly artifact: Artifact } => {
+): ArtifactSaveMutation => {
   const existingIdx = items.findIndex(
     (a) => a.sourceTool === input.sourceTool && a.branchId === branchId,
   )
-  const existing = existingIdx >= 0 ? items[existingIdx] : undefined
+  let existing = Option.none<Artifact>()
+  if (existingIdx >= 0) existing = Option.fromNullishOr(items[existingIdx])
   const artifact: Artifact = {
-    id: existing?.id ?? id,
+    id: existing.pipe(
+      Option.map((value) => value.id),
+      Option.getOrElse(() => id),
+    ),
     label: input.label,
     sourceTool: input.sourceTool,
     content: input.content,
@@ -107,14 +113,30 @@ const saveArtifact = (
     status: "active",
     metadata: input.metadata,
     branchId,
-    createdAt: existing?.createdAt ?? now,
+    createdAt: existing.pipe(
+      Option.map((value) => value.createdAt),
+      Option.getOrElse(() => now),
+    ),
     updatedAt: now,
   }
-  const nextItems =
-    existingIdx >= 0
-      ? items.map((a, i) => (i === existingIdx ? artifact : a))
-      : [...items, artifact]
+  let nextItems = [...items, artifact]
+  if (existingIdx >= 0) {
+    nextItems = items.map((value, index) => {
+      if (index === existingIdx) return artifact
+      return value
+    })
+  }
   return { items: nextItems, artifact }
+}
+
+interface ArtifactSaveMutation {
+  readonly items: ReadonlyArray<Artifact>
+  readonly artifact: Artifact
+}
+
+interface ArtifactMutation {
+  readonly items: ReadonlyArray<Artifact>
+  readonly artifact: Option.Option<Artifact>
 }
 
 const updateArtifact = (
@@ -122,72 +144,85 @@ const updateArtifact = (
   branchId: BranchId,
   input: ArtifactUpdateInput,
   now: number,
-): { readonly items: ReadonlyArray<Artifact>; readonly artifact: Artifact | null } => {
+): ArtifactMutation => {
   const idx = items.findIndex((a) => a.id === input.id && a.branchId === branchId)
-  const existing = idx >= 0 ? items[idx] : undefined
-  if (existing === undefined) return { items, artifact: null }
+  let existing = Option.none<Artifact>()
+  if (idx >= 0) existing = Option.fromNullishOr(items[idx])
+  if (Option.isNone(existing)) return { items, artifact: Option.none() }
+  const patch = Option.fromNullishOr(input.patch)
+  const metadata = Option.fromNullishOr(input.metadata)
+  const status = Option.fromNullishOr(input.status)
+  const label = Option.fromNullishOr(input.label)
+  let content = existing.value.content
+  if (Option.isSome(patch)) {
+    content = applyPatch(existing.value.content, patch.value)
+  }
   const artifact: Artifact = {
-    ...existing,
-    content:
-      input.patch !== undefined ? applyPatch(existing.content, input.patch) : existing.content,
-    metadata: input.metadata !== undefined ? input.metadata : existing.metadata,
-    status: input.status !== undefined ? input.status : existing.status,
-    label: input.label !== undefined ? input.label : existing.label,
+    ...existing.value,
+    content,
+    metadata: Option.getOrElse(metadata, () => existing.value.metadata),
+    status: Option.getOrElse(status, () => existing.value.status),
+    label: Option.getOrElse(label, () => existing.value.label),
     updatedAt: now,
   }
   return {
-    items: items.map((a, i) => (i === idx ? artifact : a)),
-    artifact,
+    items: items.map((value, index) => {
+      if (index === idx) return artifact
+      return value
+    }),
+    artifact: Option.some(artifact),
   }
 }
 
-export const ArtifactsStoreLive: Layer.Layer<ArtifactsRead | ArtifactsWrite> = Layer.unwrap(
-  Effect.gen(function* () {
-    const ref = yield* Ref.make<ArtifactsState>({ sessions: {} })
-    const write = {
-      read: (sessionId, branchId, query) =>
-        Ref.get(ref).pipe(
-          Effect.map((state) => readArtifact(sessionItems(state, sessionId), branchId, query)),
-        ),
-      list: (sessionId, branchId) =>
-        Ref.get(ref).pipe(
-          Effect.map((state) => listArtifacts(sessionItems(state, sessionId), branchId)),
-        ),
-      save: (sessionId, branchId, input) =>
-        Effect.gen(function* () {
-          const now = yield* Clock.currentTimeMillis
-          const id = ArtifactId.make(yield* Random.nextUUIDv4)
-          return yield* Ref.modify(ref, (state) => {
-            const result = saveArtifact(sessionItems(state, sessionId), branchId, input, now, id)
-            return [result.artifact, setSessionItems(state, sessionId, result.items)]
-          })
-        }),
-      update: (sessionId, branchId, input) =>
-        Effect.gen(function* () {
-          const now = yield* Clock.currentTimeMillis
-          return yield* Ref.modify(ref, (state) => {
-            const result = updateArtifact(sessionItems(state, sessionId), branchId, input, now)
-            return [result.artifact, setSessionItems(state, sessionId, result.items)]
-          })
-        }),
-      clear: (sessionId, branchId, id) =>
-        Ref.update(ref, (state) =>
-          setSessionItems(
-            state,
-            sessionId,
-            sessionItems(state, sessionId).filter(
-              (artifact) => artifact.id !== id || artifact.branchId !== branchId,
+export const ArtifactsStoreLive: Layer.Layer<ArtifactsRead | ArtifactsWrite, never, Crypto.Crypto> =
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const crypto = yield* Crypto.Crypto
+      const ref = yield* Ref.make<ArtifactsState>({ sessions: {} })
+      const write = {
+        read: (sessionId, branchId, query) =>
+          Ref.get(ref).pipe(
+            Effect.map((state) => readArtifact(sessionItems(state, sessionId), branchId, query)),
+          ),
+        list: (sessionId, branchId) =>
+          Ref.get(ref).pipe(
+            Effect.map((state) => listArtifacts(sessionItems(state, sessionId), branchId)),
+          ),
+        save: (sessionId, branchId, input) =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            const id = ArtifactId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie))
+            return yield* Ref.modify(ref, (state) => {
+              const result = saveArtifact(sessionItems(state, sessionId), branchId, input, now, id)
+              return [result.artifact, setSessionItems(state, sessionId, result.items)]
+            })
+          }),
+        update: (sessionId, branchId, input) =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            return yield* Ref.modify(ref, (state) => {
+              const result = updateArtifact(sessionItems(state, sessionId), branchId, input, now)
+              return [result.artifact, setSessionItems(state, sessionId, result.items)]
+            })
+          }),
+        clear: (sessionId, branchId, id) =>
+          Ref.update(ref, (state) =>
+            setSessionItems(
+              state,
+              sessionId,
+              sessionItems(state, sessionId).filter(
+                (artifact) => artifact.id !== id || artifact.branchId !== branchId,
+              ),
             ),
           ),
-        ),
-    } satisfies ArtifactsWriteShape
-    const read = {
-      read: write.read,
-      list: write.list,
-    } satisfies ArtifactsReadShape
-    return Layer.merge(Layer.succeed(ArtifactsWrite, write), Layer.succeed(ArtifactsRead, read))
-  }),
-)
+      } satisfies ArtifactsWriteService
+      const read = {
+        read: write.read,
+        list: write.list,
+      } satisfies ArtifactsReadService
+      return Layer.merge(Layer.succeed(ArtifactsWrite, write), Layer.succeed(ArtifactsRead, read))
+    }),
+  )
 
 export const saveArtifactBestEffort = Effect.fn("Artifacts.saveBestEffort")(function* (
   sessionId: SessionId,

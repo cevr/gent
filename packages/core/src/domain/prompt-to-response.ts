@@ -6,7 +6,7 @@ import { normalizeResponseParts } from "./response-part-normalization.js"
 
 export const messagePartToPromptPart = (
   part: MessagePart,
-): Prompt.UserMessagePart | Prompt.AssistantMessagePart | Prompt.ToolMessagePart | undefined => {
+): Prompt.UserMessagePart | Prompt.AssistantMessagePart | Prompt.ToolMessagePart => {
   switch (part.type) {
     case "text":
       return Prompt.textPart({ text: part.text })
@@ -122,10 +122,12 @@ export const responsePartsFromMessages = (
             }
           })
         case "tool":
-          return message.parts.flatMap(
-            (part): ReadonlyArray<Response.AnyPart> =>
-              part.type === "tool-result" ? [toolResultPartToResponsePart(part)] : [],
-          )
+          return message.parts.flatMap((part): ReadonlyArray<Response.AnyPart> => {
+            if (part.type === "tool-result") {
+              return [toolResultPartToResponsePart(part)]
+            }
+            return []
+          })
         default:
           return []
       }

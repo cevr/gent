@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Clock, Deferred, Effect, Exit, Layer, Path, Scope } from "effect"
+import { Clock, Deferred, Effect, Exit, Layer, Option, Path, Scope } from "effect"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BackgroundBashSupervisorLive, BashTool } from "../../src/exec-tools/bash.js"
 import {
@@ -40,11 +40,11 @@ const makeProcessLayerWithFailingMarkFailed = <A, E>(storageLayer: Layer.Layer<A
     BackgroundBashStorage,
     Effect.gen(function* () {
       const storage = yield* BackgroundBashStorage
-      return {
+      return BackgroundBashStorage.of({
         ...storage,
         markFailed: () =>
           Effect.fail(new BackgroundBashStorageError({ message: "failure state did not commit" })),
-      }
+      })
     }),
   ).pipe(Layer.provideMerge(BackgroundBashStorage.Live))
   return BackgroundBashSupervisorLive.pipe(
@@ -55,8 +55,7 @@ const makeProcessLayerWithFailingMarkFailed = <A, E>(storageLayer: Layer.Layer<A
 
 const makePlatformLayer = () =>
   makeProcessLayer(SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)))
-const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) =>
-  Effect.provide(e, makePlatformLayer()) as Effect.Effect<A, E, never>
+const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) => Effect.provide(e, makePlatformLayer())
 
 const processTestTimeout = 5_000
 const withProcessTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -72,7 +71,7 @@ const stubCtx = testToolContext({
   home: "/tmp",
   Agent: {
     run: dieStub("run"),
-    listAgents: dieStub("listAgents"),
+    listAgents: Effect.die("listAgents not wired in test"),
   },
   Session: {
     listMessages: dieStub("listMessages"),
@@ -80,7 +79,7 @@ const stubCtx = testToolContext({
     getDetail: dieStub("getDetail"),
     renameCurrent: dieStub("renameCurrent"),
     search: dieStub("search"),
-    listBranches: dieStub("listBranches"),
+    listBranches: Effect.die("listBranches not wired in test"),
     queueFollowUp: dieStub("queueFollowUp"),
   },
   Interaction: {
@@ -169,14 +168,13 @@ describe("BashTool execution", () => {
                 updatedAt: now,
               }),
             ),
-          listBranches: () =>
-            Effect.succeed([
-              new Branch({
-                id: stubCtx.branchId,
-                sessionId: stubCtx.sessionId,
-                createdAt: now,
-              }),
-            ]),
+          listBranches: Effect.succeed([
+            new Branch({
+              id: stubCtx.branchId,
+              sessionId: stubCtx.sessionId,
+              createdAt: now,
+            }),
+          ]),
           queueFollowUp: (params) => Deferred.succeed(sent, params),
         })
         const result = yield* runToolWithCtx(
@@ -212,14 +210,13 @@ describe("BashTool execution", () => {
                 updatedAt: now,
               }),
             ),
-          listBranches: () =>
-            Effect.succeed([
-              new Branch({
-                id: stubCtx.branchId,
-                sessionId: stubCtx.sessionId,
-                createdAt: now,
-              }),
-            ]),
+          listBranches: Effect.succeed([
+            new Branch({
+              id: stubCtx.branchId,
+              sessionId: stubCtx.sessionId,
+              createdAt: now,
+            }),
+          ]),
           queueFollowUp: (params) => Deferred.succeed(sent, params),
         })
         const scope = yield* Scope.make()
@@ -246,8 +243,8 @@ describe("BashTool execution", () => {
         const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
         const ctx = withSession(stubCtx, {
           ...stubCtx.Session,
-          getSession: () => Effect.sync((): Session | undefined => undefined),
-          listBranches: () => Effect.succeed([]),
+          getSession: () => Effect.sync(() => Option.getOrUndefined(Option.none<Session>())),
+          listBranches: Effect.succeed([]),
           queueFollowUp: (params) => Deferred.succeed(sent, params),
         })
 
@@ -283,14 +280,13 @@ describe("BashTool execution", () => {
                   updatedAt: now,
                 }),
               ),
-            listBranches: () =>
-              Effect.succeed([
-                new Branch({
-                  id: stubCtx.branchId,
-                  sessionId: stubCtx.sessionId,
-                  createdAt: now,
-                }),
-              ]),
+            listBranches: Effect.succeed([
+              new Branch({
+                id: stubCtx.branchId,
+                sessionId: stubCtx.sessionId,
+                createdAt: now,
+              }),
+            ]),
             queueFollowUp: (params) => Deferred.succeed(sent, params),
           },
         )
@@ -306,7 +302,7 @@ describe("BashTool execution", () => {
             branchId: ctx.branchId,
             toolCallId,
             command: "printf stored-terminal",
-            cwd: ctx.cwd,
+            cwd: Option.some(ctx.cwd),
           })
           expect(claim._tag).toBe("Started")
           yield* storage.markCompleted(
@@ -314,6 +310,7 @@ describe("BashTool execution", () => {
             { exitCode: 0, message: "stored output" },
           )
         }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(
             Layer.mergeAll(
               storageLayer,
@@ -326,7 +323,9 @@ describe("BashTool execution", () => {
           BashTool,
           { command: "printf should-not-run", run_in_background: true },
           ctx,
-        ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+        )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          .pipe(Effect.provide(makeProcessLayer(storageLayer)))
         expect(retried.exitCode).toBe(0)
 
         const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
@@ -358,14 +357,13 @@ describe("BashTool execution", () => {
                   updatedAt: now,
                 }),
               ),
-            listBranches: () =>
-              Effect.succeed([
-                new Branch({
-                  id: stubCtx.branchId,
-                  sessionId: stubCtx.sessionId,
-                  createdAt: now,
-                }),
-              ]),
+            listBranches: Effect.succeed([
+              new Branch({
+                id: stubCtx.branchId,
+                sessionId: stubCtx.sessionId,
+                createdAt: now,
+              }),
+            ]),
             queueFollowUp: (params) => Deferred.succeed(sent, params),
           },
         )
@@ -382,7 +380,9 @@ describe("BashTool execution", () => {
             run_in_background: true,
           },
           ctx,
-        ).pipe(Effect.provide(makeProcessLayerWithFailingMarkFailed(storageLayer)))
+        )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          .pipe(Effect.provide(makeProcessLayerWithFailingMarkFailed(storageLayer)))
         expect(result.exitCode).toBe(0)
 
         const followUp = yield* Effect.exit(Deferred.await(sent).pipe(Effect.timeout("250 millis")))
@@ -409,14 +409,13 @@ describe("BashTool execution", () => {
                   updatedAt: now,
                 }),
               ),
-            listBranches: () =>
-              Effect.succeed([
-                new Branch({
-                  id: stubCtx.branchId,
-                  sessionId: stubCtx.sessionId,
-                  createdAt: now,
-                }),
-              ]),
+            listBranches: Effect.succeed([
+              new Branch({
+                id: stubCtx.branchId,
+                sessionId: stubCtx.sessionId,
+                createdAt: now,
+              }),
+            ]),
             queueFollowUp: (params) => Deferred.succeed(sent, params),
           },
         )
@@ -437,14 +436,18 @@ describe("BashTool execution", () => {
 
         yield* Effect.gen(function* () {
           const storage = yield* BackgroundBashStorage
-          yield* storage.reconcileInterrupted()
-        }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))))
+          yield* storage.reconcileInterrupted
+        })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          .pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))))
 
         const retried = yield* runToolWithCtx(
           BashTool,
           { command: "printf should-not-run", run_in_background: true },
           ctx,
-        ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+        )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          .pipe(Effect.provide(makeProcessLayer(storageLayer)))
         expect(retried.exitCode).toBe(0)
 
         const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))

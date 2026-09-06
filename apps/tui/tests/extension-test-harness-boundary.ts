@@ -1,6 +1,5 @@
-import { Deferred, Effect, Layer, ManagedRuntime } from "effect"
+import { Deferred, Effect, Layer, ManagedRuntime, Option } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import type { GentNamespacedClient, GentRuntime } from "@gent/sdk"
 import type { EventEnvelope } from "@gent/core-internal/domain/event"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import {
@@ -12,7 +11,7 @@ import {
 } from "../src/extensions/client-services"
 import {
   makeClientTransportLayer,
-  type ClientShellTransportShape,
+  type ClientShellTransportDefinition,
 } from "../src/extensions/client-transport"
 import type {
   AnyExtensionClientModule,
@@ -20,12 +19,15 @@ import type {
   ClientContributions,
   ClientRuntime,
 } from "../src/extensions/client-facets.js"
+import { createMockClient, createMockRuntime } from "./render-harness-boundary"
 
 export type ActiveClientSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
+// eslint-disable-next-line effect/noNullish -- Test harness ref mirrors the SDK's absent active-session state.
 export type ActiveClientSessionRef = { value: ActiveClientSession | undefined }
 
 export interface ClientExtensionHarnessOptions {
-  readonly transport?: ClientShellTransportShape
+  readonly transport?: ClientShellTransportDefinition
+  // eslint-disable-next-line effect/noNullish -- Test harness mirrors ClientTransport's optional callback.
   readonly currentSession?: () => ActiveClientSession | undefined
   readonly activeSession?: ActiveClientSessionRef
   readonly requestDeferred?: Deferred.Deferred<unknown, never>
@@ -42,24 +44,19 @@ export const makeActiveSessionRef = (value?: ActiveClientSession): ActiveClientS
 
 export const makeClientTestTransport = (
   opts: ClientExtensionHarnessOptions = {},
-): ClientShellTransportShape => {
-  const client = {
+): ClientShellTransportDefinition => {
+  const client = createMockClient({
     extension: {
       request: () => {
-        if (opts.requestEffect !== undefined) return opts.requestEffect()
-        if (opts.requestDeferred !== undefined) return waitForDeferred(opts.requestDeferred)
+        const requestEffect = Option.fromNullishOr(opts.requestEffect)
+        if (Option.isSome(requestEffect)) return requestEffect.value().pipe(Effect.orDie)
+        const requestDeferred = Option.fromNullishOr(opts.requestDeferred)
+        if (Option.isSome(requestDeferred)) return waitForDeferred(requestDeferred.value)
         return Effect.succeed(opts.requestReply)
       },
-      listSlashCommands: () => Effect.succeed([]),
     },
-  } as unknown as GentNamespacedClient
-  const runtime = {
-    cast: <A, E>(effect: Effect.Effect<A, E, never>): void => {
-      Effect.runFork(effect)
-    },
-    fork: Effect.runFork,
-    run: <A, E>(effect: Effect.Effect<A, E, never>): Promise<A> => Effect.runPromise(effect),
-  } as unknown as GentRuntime
+  })
+  const runtime = createMockRuntime()
   return {
     client,
     runtime,
@@ -92,14 +89,14 @@ export const makeClientExtensionRuntime = (
         },
       }),
       makeClientDriverLayer({
-        list: () => Effect.succeed({ drivers: [], overrides: {} }),
+        list: Effect.succeed({ drivers: [], overrides: {} }),
         set: () => Effect.void,
         clear: () => Effect.void,
       }),
       makeClientComposerLayer({
         state: () => ({
           draft: "",
-          mode: "editing" as const,
+          mode: "editing" satisfies "editing",
           inputFocused: false,
           autocompleteOpen: false,
         }),
@@ -112,12 +109,7 @@ export const makeClientExtensionRuntime = (
 export const runClientExtensionSetup = (
   runtime: ClientRuntime,
   extension: AnyExtensionClientModule,
-): Effect.Effect<ClientContributions> =>
-  Effect.promise(() =>
-    runtime.runPromise(
-      extension.setup as unknown as Effect.Effect<ClientContributions, never, never>,
-    ),
-  )
+): Effect.Effect<ClientContributions> => Effect.promise(() => runtime.runPromise(extension.setup))
 
 export const runClientExtensionSetupWithRuntime = (
   extension: AnyExtensionClientModule,
@@ -134,7 +126,4 @@ export const findBorderLabel = (
   position: BorderLabelPosition,
 ) => contributions.borderLabels?.find((entry) => entry.position === position)
 
-export const makeClientRuntime = (): ClientRuntime =>
-  ManagedRuntime.make(
-    Layer.merge(BunFileSystem.layer, BunServices.layer),
-  ) as unknown as ClientRuntime
+export const makeClientRuntime = (): ClientRuntime => makeClientExtensionRuntime()

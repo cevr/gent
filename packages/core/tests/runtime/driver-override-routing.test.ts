@@ -33,7 +33,7 @@ describe("configured driver override routing", () => {
       const result = resolveAgentDriver(cowork, driverOverrides)
       expect(result.source).toBe("config")
       expect(result.driver?._tag).toBe("external")
-      expect((result.driver as ExternalDriverRef).id).toBe("acp-claude-code")
+      expect(result.driver?.id).toBe("acp-claude-code")
     }).pipe(
       Effect.provide(
         ConfigService.Test(
@@ -53,7 +53,7 @@ describe("configured driver override routing", () => {
       const { driverOverrides } = yield* cfg.get()
       const result = resolveAgentDriver(hardcoded, driverOverrides)
       expect(result.source).toBe("agent")
-      expect((result.driver as ExternalDriverRef).id).toBe("acp-claude-code")
+      expect(result.driver?.id).toBe("acp-claude-code")
     }).pipe(
       Effect.provide(
         ConfigService.Test(

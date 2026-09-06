@@ -1,9 +1,13 @@
 import { Effect, Layer } from "effect"
-import type { Exit } from "effect"
+import type { Exit, Schema } from "effect"
+
+type ErasedValue = Schema.Schema.Type<typeof Schema.Unknown>
 
 export interface ErasedEffectHandlers<A, E> {
-  readonly onFailure: (error: unknown) => Effect.Effect<A, E>
-  readonly onDefect: (defect: unknown) => Effect.Effect<A, E>
+  // This alias marks the intentional unknown channel at the single host
+  // membrane. The extension effect is parsed or handled after this point.
+  readonly onFailure: (error: ErasedValue) => Effect.Effect<A, E>
+  readonly onDefect: (defect: ErasedValue) => Effect.Effect<A, E>
 }
 
 /**
@@ -27,7 +31,7 @@ export const sealErasedEffect = <A, E>(
     Effect.catchDefect(handlers.onDefect),
   )
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-  return sealed as Effect.Effect<A, E> // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  return sealed as Effect.Effect<A, E> // oxlint-disable-line effect/noAs, typescript/no-unsafe-type-assertion -- The membrane re-seals the extension effect after erasing its runtime channels. // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
 }
 
 /**
@@ -40,24 +44,22 @@ export const exitErasedEffect = <A>(
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off
   const exit = Effect.exit(Effect.suspend(effect))
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-  return exit as Effect.Effect<Exit.Exit<A, unknown>> // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  return exit as Effect.Effect<Exit.Exit<A, unknown>> // oxlint-disable-line effect/noAs, typescript/no-unsafe-type-assertion -- The membrane exposes the raw exit after erasing the extension effect channels. // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
-export type ErasedResourceLayer = Layer.Layer<any>
+export type ErasedResourceLayer = Layer.Layer<any, never, never>
 
 /**
  * Resource-host call sites keep the old narrower return type (`Layer.Layer<any>`)
- * so resource layers do not leak an `unknown` requirement channel into tests.
+ * so resource layers do not leak their heterogeneous error or requirement
+ * channels into tests.
  */
-export const eraseResourceLayer = (
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
-  layer: Layer.Layer<any, any, any>,
-): ErasedResourceLayer => {
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-  const erased = layer as ErasedResourceLayer // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+export const eraseResourceLayer = <A, E, R>(layer: Layer.Layer<A, E, R>): ErasedResourceLayer => {
+  // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The resource membrane intentionally erases heterogeneous service output and requirements.
+  const erased = layer as unknown as ErasedResourceLayer // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   return erased
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+// oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The empty layer is the erased identity for heterogeneous resource composition.
 export const emptyErasedResourceLayer: ErasedResourceLayer = Layer.empty as ErasedResourceLayer

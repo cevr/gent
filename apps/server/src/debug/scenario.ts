@@ -1,4 +1,4 @@
-import { Clock, DateTime, Effect, Ref, Schema } from "effect"
+import { Clock, DateTime, Effect, Option, Ref, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   AgentSwitched,
@@ -31,10 +31,7 @@ import { ExtensionRegistry } from "@gent/core-internal/runtime/extensions/regist
 import { provideCurrentHostCtx } from "@gent/core-internal/runtime/agent/current-extension-host-context.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment.js"
-import type {
-  CapabilityError,
-  CapabilityNotFoundError,
-} from "@gent/core-internal/domain/capability.js"
+import type { CapabilityRef } from "@gent/core-internal/domain/capability.js"
 import { ref } from "@gent/core/extensions/api"
 import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension.js"
 import {
@@ -58,14 +55,15 @@ export interface DebugScenarioParams {
 const makeText = (text: string) => Prompt.textPart({ text })
 
 const asToolCallId = (value: string) => ToolCallId.make(value)
-const DebugJson = Schema.fromJsonString(Schema.Unknown)
+const DebugJson = Schema.fromJsonString(Schema.Json)
 const encodeDebugJson = Schema.encodeSync(DebugJson)
 
-const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: unknown) =>
+const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: Schema.Json) =>
   Prompt.toolResultPart({
     id: toolCallId,
     name: toolName,
     isFailure: false,
+    providerExecuted: false,
     result: value,
   })
 
@@ -591,6 +589,7 @@ const runTodoLifecycle = (params: DebugScenarioParams) =>
     const homeDirectory = yield* gentPlatform.homeDirectory
     const parentEnv = yield* gentPlatform.env
     const pathListSeparator = yield* gentPlatform.pathListSeparator
+    const absent = Option.getOrUndefined(Option.none())
     const ctx = {
       sessionId: params.sessionId,
       branchId: params.branchId,
@@ -601,6 +600,7 @@ const runTodoLifecycle = (params: DebugScenarioParams) =>
         execPath,
         homeDirectory,
         parentEnv,
+        randomId: gentPlatform.randomId,
         pathListSeparator,
         commandCandidates: gentPlatform.commandCandidates,
         isPortFree: gentPlatform.isPortFree,
@@ -625,55 +625,49 @@ const runTodoLifecycle = (params: DebugScenarioParams) =>
       },
       session: {
         listMessages: () => Effect.succeed([]),
-        getSession: () => Effect.sync(() => undefined),
+        getSession: () => Effect.succeed(absent),
         getDetail: () => Effect.die("debug scenario session.getDetail unavailable"),
         renameCurrent: () => Effect.succeed({ renamed: false }),
         search: () => Effect.succeed([]),
-        queueFollowUp: () => Effect.sync(() => undefined),
+        queueFollowUp: () => Effect.succeed(absent),
         listBranches: () => Effect.succeed([]),
       },
       interaction: {
         approve: () => Effect.die("debug scenario interaction.approve unavailable"),
-        present: () => Effect.sync(() => undefined),
-        confirm: () => Effect.succeed("no" as const),
+        present: () => Effect.succeed(absent),
+        confirm: (): Effect.Effect<"no"> => Effect.succeed("no"),
         review: () => Effect.die("debug scenario interaction.review unavailable"),
       },
     }
 
-    const invoke = <T>(
-      ref: {
-        readonly extensionId: string
-        readonly capabilityId: string
-      },
-      input: unknown,
-    ): Effect.Effect<T, CapabilityError | CapabilityNotFoundError> => {
-      const e = rpcRegistry
-        .run(ExtensionId.make(ref.extensionId), RpcId.make(ref.capabilityId), input)
-        .pipe(provideCurrentHostCtx(ctx))
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-      return e as Effect.Effect<T, CapabilityError | CapabilityNotFoundError>
-    }
+    const invoke = <Input, Output>(requestRef: CapabilityRef<Input, Output>, input: Input) =>
+      rpcRegistry
+        .run(ExtensionId.make(requestRef.extensionId), RpcId.make(requestRef.capabilityId), input)
+        .pipe(
+          provideCurrentHostCtx(ctx),
+          Effect.flatMap((value) =>
+            Schema.decodeUnknownEffect(requestRef.output)(value).pipe(Effect.orDie),
+          ),
+        )
 
     while (true) {
-      const existing = yield* invoke<ReadonlyArray<{ readonly id: string }>>(TodoListRef, {})
+      const existing = yield* invoke(TodoListRef, {})
       for (const todo of existing) {
-        yield* invoke<null>(TodoDeleteRef, { todoId: todo.id }).pipe(
-          Effect.catchEager(() => Effect.void),
-        )
+        yield* invoke(TodoDeleteRef, { todoId: todo.id }).pipe(Effect.catchEager(() => Effect.void))
       }
 
-      const inspect = yield* invoke<{ readonly id: string }>(TodoCreateRef, {
+      const inspect = yield* invoke(TodoCreateRef, {
         subject: "Inspect codebase",
       })
-      const verify = yield* invoke<{ readonly id: string }>(TodoCreateRef, {
+      const verify = yield* invoke(TodoCreateRef, {
         subject: "Run verification",
       })
-      const summarize = yield* invoke<{ readonly id: string }>(TodoCreateRef, {
+      const summarize = yield* invoke(TodoCreateRef, {
         subject: "Summarize outcome",
       })
 
-      const setStatus = (todoId: string, status: "in_progress" | "completed") =>
-        invoke<unknown>(TodoUpdateRef, { todoId, status })
+      const setStatus = (todoId: typeof inspect.id, status: "in_progress" | "completed") =>
+        invoke(TodoUpdateRef, { todoId, status })
 
       yield* setStatus(inspect.id, "in_progress")
       yield* Effect.sleep("2 seconds")
@@ -687,7 +681,7 @@ const runTodoLifecycle = (params: DebugScenarioParams) =>
       yield* Effect.sleep("2 seconds")
 
       const deleteTodo = (todoId: string) =>
-        invoke<null>(TodoDeleteRef, { todoId }).pipe(Effect.catchEager(() => Effect.void))
+        invoke(TodoDeleteRef, { todoId }).pipe(Effect.catchEager(() => Effect.void))
 
       yield* deleteTodo(inspect.id)
       yield* deleteTodo(verify.id)

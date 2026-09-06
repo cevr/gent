@@ -13,7 +13,7 @@
  * No Deferred, no blocked fiber. Interactions survive server restarts.
  */
 
-import { Clock, Effect, Ref, Schema } from "effect"
+import { Clock, Effect, Option, Predicate, Ref, Schema } from "effect"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { EventStoreError } from "./event"
 import { BranchId, InteractionRequestId, SessionId } from "./ids"
@@ -40,16 +40,16 @@ export type ApprovalDecision = Schema.Schema.Type<typeof ApprovalDecisionSchema>
 // Interaction pending signal
 // ============================================================================
 
-export class InteractionPendingError extends Schema.TaggedErrorClass<InteractionPendingError>(
-  "@gent/core-internal/domain/interaction-request/InteractionPendingError",
+export class InteractionPendingError extends Schema.TaggedError<InteractionPendingError>(
+  "@gent/core/src/domain/interaction-request/InteractionPendingError",
 )("InteractionPendingError", {
   requestId: InteractionRequestId,
   sessionId: SessionId,
   branchId: BranchId,
 }) {}
 
-export class InteractionRequestMismatchError extends Schema.TaggedErrorClass<InteractionRequestMismatchError>(
-  "@gent/core-internal/domain/interaction-request/InteractionRequestMismatchError",
+export class InteractionRequestMismatchError extends Schema.TaggedError<InteractionRequestMismatchError>(
+  "@gent/core/src/domain/interaction-request/InteractionRequestMismatchError",
 )("InteractionRequestMismatchError", {
   message: Schema.String,
   expectedRequestId: Schema.optional(InteractionRequestId),
@@ -73,12 +73,12 @@ export const InteractionRequestRecord = Schema.Struct({
   paramsJson: Schema.String,
   decisionJson: Schema.optional(Schema.String),
   status: InteractionRequestStatus,
-  createdAt: Schema.Number,
+  createdAt: Schema.Finite,
 })
 export type InteractionRequestRecord = typeof InteractionRequestRecord.Type
 
 /** All interaction records use this type — the old per-handler types are gone */
-export const INTERACTION_TYPE = "approval" as const
+export const INTERACTION_TYPE = "approval"
 
 const interactionJsonCodec = Schema.fromJsonString(ApprovalRequestSchema)
 const decisionJsonCodec = Schema.fromJsonString(ApprovalDecisionSchema)
@@ -99,7 +99,7 @@ export const encodeInteractionParams = (
 export const decodeInteractionParams = (
   paramsJson: string,
 ): Effect.Effect<ApprovalRequest, EventStoreError> =>
-  Schema.decodeUnknownEffect(interactionJsonCodec)(paramsJson).pipe(
+  Schema.decodeEffect(interactionJsonCodec)(paramsJson).pipe(
     Effect.mapError(
       (cause) =>
         new EventStoreError({
@@ -125,7 +125,7 @@ export const encodeInteractionDecision = (
 export const decodeInteractionDecision = (
   decisionJson: string,
 ): Effect.Effect<ApprovalDecision, EventStoreError> =>
-  Schema.decodeUnknownEffect(decisionJsonCodec)(decisionJson).pipe(
+  Schema.decodeEffect(decisionJsonCodec)(decisionJson).pipe(
     Effect.mapError(
       (cause) =>
         new EventStoreError({
@@ -147,6 +147,7 @@ export interface InteractionService {
   readonly pendingRequestId: (ctx: {
     sessionId: SessionId
     branchId: BranchId
+    // oxlint-disable-next-line effect/noNullish -- The public interaction lookup preserves undefined for no pending request.
   }) => Effect.Effect<InteractionRequestId | undefined>
   readonly respond: (requestId: InteractionRequestId) => Effect.Effect<void, EventStoreError>
   /** Store a resolution for cold-mode resumption (keyed by requestId) */
@@ -187,6 +188,7 @@ export interface InteractionServiceConfig {
     requestId: InteractionRequestId,
     decision: ApprovalDecision,
   ) => Effect.Effect<void, EventStoreError>
+  // oxlint-disable-next-line effect/noNullish -- Auto-resolution may be absent when interaction requires a user decision.
   readonly autoResolve?: (params: ApprovalRequest) => ApprovalDecision | undefined
   /** Storage callbacks — omit for in-memory-only (tests) */
   readonly storage?: InteractionStorageConfig
@@ -217,10 +219,10 @@ export const makeInteractionService = (
     const takeStoredResolution = (ctxKey: string) =>
       Ref.modify(state, (current) => {
         const requestId = current.pendingByContext.get(ctxKey)
-        if (requestId === undefined) return [undefined, current]
+        if (Predicate.isUndefined(requestId)) return [Option.none(), current]
 
         const decision = current.storedResolutions.get(requestId)
-        if (decision === undefined) return [undefined, current]
+        if (Predicate.isUndefined(decision)) return [Option.none(), current]
 
         const storedResolutions = new Map(current.storedResolutions)
         storedResolutions.delete(requestId)
@@ -228,7 +230,7 @@ export const makeInteractionService = (
         pendingByContext.delete(ctxKey)
 
         return [
-          { requestId, decision },
+          Option.some({ requestId, decision }),
           {
             storedResolutions,
             pendingByContext,
@@ -247,7 +249,7 @@ export const makeInteractionService = (
     return {
       storeResolution: (requestId, decision) =>
         Effect.gen(function* () {
-          if (config.storage !== undefined) {
+          if (!Predicate.isUndefined(config.storage)) {
             const decisionJson = yield* encodeInteractionDecision(decision)
             yield* config.storage.decide(requestId, decisionJson)
           }
@@ -259,7 +261,7 @@ export const makeInteractionService = (
         ctx: { sessionId: SessionId; branchId: BranchId },
       ) {
         const auto = config.autoResolve?.(params)
-        if (auto !== undefined) return auto
+        if (!Predicate.isUndefined(auto)) return auto
 
         // Check for a stored resolution (cold interaction resumption).
         // The tool re-calls present() after the machine resumes. The resolution
@@ -267,17 +269,17 @@ export const makeInteractionService = (
         // through the context reverse lookup.
         const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
         const stored = yield* takeStoredResolution(ctxKey)
-        if (stored !== undefined) {
-          if (config.storage !== undefined) {
-            yield* config.storage.resolve(stored.requestId)
+        if (Option.isSome(stored)) {
+          if (!Predicate.isUndefined(config.storage)) {
+            yield* config.storage.resolve(stored.value.requestId)
           }
-          return stored.decision
+          return stored.value.decision
         }
 
         const requestId = InteractionRequestId.make(yield* platform.randomId)
 
         // Persist to storage before publishing event (crash-safe)
-        if (config.storage !== undefined) {
+        if (!Predicate.isUndefined(config.storage)) {
           const paramsJson = yield* encodeInteractionParams(params)
           yield* config.storage.persist({
             requestId,
@@ -309,9 +311,17 @@ export const makeInteractionService = (
         ),
 
       respond: Effect.fn("InteractionService.respond")(function* (requestId: InteractionRequestId) {
-        if (config.storage !== undefined) {
+        if (!Predicate.isUndefined(config.storage)) {
           yield* config.storage.resolve(requestId)
         }
+        yield* Ref.update(state, (current) => ({
+          storedResolutions: new Map(
+            [...current.storedResolutions].filter(([id]) => id !== requestId),
+          ),
+          pendingByContext: new Map(
+            [...current.pendingByContext].filter(([, id]) => id !== requestId),
+          ),
+        }))
         // onRespond is optional — events can be published here if needed
         // but the primary response path is storeResolution + machine wake
       }),
@@ -326,7 +336,7 @@ export const makeInteractionService = (
         // the stored resolution by sessionId:branchId → requestId.
         const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
         yield* setPending(ctxKey, requestId)
-        if (decision !== undefined) {
+        if (!Predicate.isUndefined(decision)) {
           yield* setResolution(requestId, decision)
           return
         }

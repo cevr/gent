@@ -9,7 +9,7 @@
  *
  * @module
  */
-import { Deferred, Effect, Ref, Schema, Stream } from "effect"
+import { Predicate, Deferred, Effect, Option, Ref, Schema, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import {
   ExternalToolRunner,
@@ -69,7 +69,7 @@ export interface AcpSessionManager {
   ) => Effect.Effect<AcpManagedSession, AcpError | AcpClosedError>
   readonly invalidate: (key: ExternalSessionKey) => Effect.Effect<void>
   readonly invalidateDriver: (driverId: string) => Effect.Effect<void>
-  readonly disposeAll: () => Effect.Effect<void>
+  readonly disposeAll: Effect.Effect<void>
 }
 
 // ── ACP → Response part mapping ──
@@ -82,45 +82,49 @@ export const makeAcpResponsePartMapper = (): AcpResponsePartMapper => ({
   toolNamesById: new Map(),
 })
 
-/** Extract text from an ACP content block. Returns undefined for non-text content. */
-const extractTextFromContent = (content: unknown): string | undefined => {
-  if (typeof content !== "object" || content === null) return undefined
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-  const c = content as Record<string, unknown>
-  return c["type"] === "text" && typeof c["text"] === "string" ? c["text"] : undefined
-}
+const AcpPayload = Schema.Record(Schema.String, Schema.Unknown)
+const decodeAcpPayload = Schema.decodeUnknownOption(AcpPayload)
+const AcpTextContent = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String })
+const decodeAcpTextContent = Schema.decodeUnknownOption(AcpTextContent)
+
+/** Extract text from an ACP content block. Return None for non-text content. */
+const extractTextFromContent = (content: SessionNotification["update"]): Option.Option<string> =>
+  decodeAcpTextContent(content).pipe(Option.map((block) => block.text))
 
 /**
  * Extract the tool-result `output` payload from an ACP tool_call_update.
  *
  * ACP wire shape: `content: [{ type: "content", content: { type, ... } }, ...]`.
  * We surface text content as a `string` and other content blocks as their
- * raw structured form. Returns `undefined` if no recognizable content is
+ * raw structured form. Returns `None` if no recognizable content is
  * present so callers can fall back to `null` in the transcript.
  */
-const extractToolResultOutput = (obj: Record<string, unknown>): unknown => {
+const extractToolResultOutput = (
+  obj: typeof AcpPayload.Type,
+): Option.Option<SessionNotification["update"]> => {
   const blocks = obj["content"]
-  if (!Array.isArray(blocks) || blocks.length === 0) return undefined
+  if (!Array.isArray(blocks) || blocks.length === 0) return Option.none()
   const texts: Array<string> = []
   const others: Array<unknown> = []
   for (const block of blocks) {
-    if (typeof block !== "object" || block === null) continue
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-    const wrapper = block as Record<string, unknown>
-    const inner = wrapper["content"] ?? wrapper
+    const wrapper = decodeAcpPayload(block)
+    if (Option.isNone(wrapper)) continue
+    const inner = wrapper.value["content"] ?? wrapper.value
     const text = extractTextFromContent(inner)
-    if (text !== undefined) {
-      texts.push(text)
+    if (Option.isSome(text)) {
+      texts.push(text.value)
     } else {
       others.push(inner)
     }
   }
-  if (texts.length > 0 && others.length === 0) return texts.join("")
-  if (texts.length === 0 && others.length === 0) return undefined
-  if (others.length === 1 && texts.length === 0) return others[0]
-  return [...texts.map((text) => ({ type: "text", text })), ...others]
+  if (texts.length > 0 && others.length === 0) return Option.some(texts.join(""))
+  if (texts.length === 0 && others.length === 0) return Option.none()
+  if (others.length === 1 && texts.length === 0) return Option.some(others[0])
+  return Option.some([...texts.map((text) => ({ type: "text", text })), ...others])
 }
 
+// The Effect AI response contract requires explicit undefined token counters and metadata.
+/* oxlint-disable effect/noNullish */
 const finishPart = (stopReason: string): TurnStreamPart =>
   Response.makePart("finish", {
     reason: toResponseFinishReason(stopReason),
@@ -143,82 +147,88 @@ const emptyUsage = (): Response.Usage =>
     },
   })
 
+/* oxlint-enable effect/noNullish */
 /** Map a tool_call_update to a response part based on status. */
 const mapToolCallUpdate = (
-  obj: Record<string, unknown>,
+  obj: typeof AcpPayload.Type,
   mapper: AcpResponsePartMapper,
-): TurnStreamPart | undefined => {
-  const toolCallId = typeof obj["toolCallId"] === "string" ? obj["toolCallId"] : undefined
-  const status = typeof obj["status"] === "string" ? obj["status"] : undefined
-  if (toolCallId === undefined) return undefined
+): Option.Option<TurnStreamPart> => {
+  const toolCallId = obj["toolCallId"]
+  const status = obj["status"]
+  if (!Predicate.isString(toolCallId)) return Option.none()
   const toolName = mapper.toolNamesById.get(toolCallId) ?? "external"
   if (status === "completed") {
-    const output = extractToolResultOutput(obj) ?? null
-    return Response.makePart("tool-result", {
-      id: toolCallId,
-      name: toolName,
-      result: output,
-      encodedResult: output,
-      isFailure: false,
-      providerExecuted: false,
-      preliminary: false,
-    })
+    const output = Option.getOrNull(extractToolResultOutput(obj))
+    return Option.some(
+      Response.makePart("tool-result", {
+        id: toolCallId,
+        name: toolName,
+        result: output,
+        encodedResult: output,
+        isFailure: false,
+        providerExecuted: false,
+        preliminary: false,
+      }),
+    )
   }
   if (status === "failed") {
-    const error = typeof obj["error"] === "string" ? obj["error"] : "tool failed"
-    return Response.makePart("tool-result", {
-      id: toolCallId,
-      name: toolName,
-      result: error,
-      encodedResult: { error },
-      isFailure: true,
-      providerExecuted: false,
-      preliminary: false,
-    })
+    let error = "tool failed"
+    if (Predicate.isString(obj["error"])) error = obj["error"]
+    return Option.some(
+      Response.makePart("tool-result", {
+        id: toolCallId,
+        name: toolName,
+        result: error,
+        encodedResult: { error },
+        isFailure: true,
+        providerExecuted: false,
+        preliminary: false,
+      }),
+    )
   }
-  return undefined
+  return Option.none()
 }
 
 /** @internal Exported for testing. */
 export const mapAcpUpdateToResponsePart = (
   notification: SessionNotification,
   mapper: AcpResponsePartMapper = makeAcpResponsePartMapper(),
-): TurnStreamPart | undefined => {
-  const update = notification.update
-  if (typeof update !== "object" || update === null) return undefined
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-  const obj = update as Record<string, unknown>
+): Option.Option<TurnStreamPart> => {
+  const decoded = decodeAcpPayload(notification.update)
+  if (Option.isNone(decoded)) return Option.none()
+  const obj = decoded.value
   const kind = obj["sessionUpdate"]
 
   switch (kind) {
     case "agent_message_chunk": {
       const text = extractTextFromContent(obj["content"])
-      return text !== undefined
-        ? Response.makePart("text-delta", { id: "acp-text", delta: text })
-        : undefined
+      return Option.map(text, (delta) => Response.makePart("text-delta", { id: "acp-text", delta }))
     }
     case "agent_thought_chunk": {
       const text = extractTextFromContent(obj["content"])
-      return text !== undefined
-        ? Response.makePart("reasoning-delta", { id: "acp-reasoning", delta: text })
-        : undefined
+      return Option.map(text, (delta) =>
+        Response.makePart("reasoning-delta", { id: "acp-reasoning", delta }),
+      )
     }
     case "tool_call": {
-      const toolCallId = typeof obj["toolCallId"] === "string" ? obj["toolCallId"] : undefined
-      if (toolCallId === undefined) return undefined
-      const toolName = typeof obj["title"] === "string" ? obj["title"] : "unknown"
+      const toolCallId = obj["toolCallId"]
+      if (!Predicate.isString(toolCallId)) return Option.none()
+      let toolName = "unknown"
+      if (Predicate.isString(obj["title"])) toolName = obj["title"]
       mapper.toolNamesById.set(toolCallId, toolName)
-      return Response.makePart("tool-call", {
-        id: toolCallId,
-        name: toolName,
-        params: {},
-        providerExecuted: false,
-      })
+      return Option.some(
+        Response.makePart("tool-call", {
+          id: toolCallId,
+          name: toolName,
+          params: {},
+          providerExecuted: false,
+        }),
+      )
     }
     case "tool_call_update":
       return mapToolCallUpdate(obj, mapper)
     default:
-      return undefined
+      return Option.none()
   }
 }
 
@@ -236,7 +246,7 @@ export const makeAcpTurnExecutor = (
       // core owns actual tool execution through ExternalToolRunner.
       const services = yield* Effect.context<never>()
       const toolRunner = yield* ExternalToolRunner
-      const pendingInteraction = yield* Ref.make<InteractionPendingError | undefined>(undefined)
+      const pendingInteraction = yield* Ref.make(Option.none<InteractionPendingError>())
       const runTool: CodemodeConfig["runTool"] = makeAcpRunTool({
         runTool: toolRunner.runTool,
       })
@@ -246,7 +256,7 @@ export const makeAcpTurnExecutor = (
         runTool,
         onInteractionPending: makeAcpInteractionPendingNotifier({
           services,
-          notify: (pending) => Ref.set(pendingInteraction, pending),
+          notify: (pending) => Ref.set(pendingInteraction, Option.some(pending)),
         }),
       }
 
@@ -258,11 +268,11 @@ export const makeAcpTurnExecutor = (
       const session = yield* manager
         .getOrCreate(key, config, ctx.cwd, ctx.systemPrompt, codemodeConfig)
         .pipe(
-          Effect.mapError((e) =>
-            Schema.is(AcpClosedError)(e)
-              ? new TurnError({ message: `driver invalidated: ${e.reason}`, cause: e })
-              : new TurnError({ message: e.message }),
-          ),
+          Effect.mapError((e) => {
+            if (Schema.is(AcpClosedError)(e))
+              return new TurnError({ message: `driver invalidated: ${e.reason}`, cause: e })
+            return new TurnError({ message: e.message })
+          }),
         )
 
       // Signal for when the prompt completes
@@ -285,9 +295,8 @@ export const makeAcpTurnExecutor = (
       // assistant turns directly. Bare last-user would silently drop
       // history across cache misses / driver swaps.
       const lastUser = findLastUserMessage(ctx.messages)
-      const promptText = session.created
-        ? composePromptWithTranscript(ctx.messages, lastUser)
-        : renderLiveUserPrompt(lastUser)
+      let promptText = renderLiveUserPrompt(lastUser)
+      if (session.created) promptText = composePromptWithTranscript(ctx.messages, lastUser)
 
       // Fork the prompt call — runs concurrently with the update stream.
       // On failure, fail the deferred so the stream doesn't hang. An
@@ -301,16 +310,16 @@ export const makeAcpTurnExecutor = (
         })
         .pipe(
           Effect.tap((result) => Deferred.succeed(promptDone, result.stopReason)),
-          Effect.catchEager((e) =>
-            Deferred.fail(
-              promptDone,
-              Schema.is(AcpClosedError)(e)
-                ? new TurnError({ message: `driver invalidated: ${e.reason}`, cause: e })
-                : new TurnError({
-                    message: Schema.is(AcpError)(e) ? e.message : String(e),
-                  }),
-            ),
-          ),
+          Effect.catchEager((e) => {
+            if (Schema.is(AcpClosedError)(e))
+              return Deferred.fail(
+                promptDone,
+                new TurnError({ message: `driver invalidated: ${e.reason}`, cause: e }),
+              )
+            let message = String(e)
+            if (Schema.is(AcpError)(e)) message = e.message
+            return Deferred.fail(promptDone, new TurnError({ message }))
+          }),
           Effect.forkScoped,
         )
 
@@ -319,13 +328,13 @@ export const makeAcpTurnExecutor = (
       // Stream updates until the prompt completes
       const updateStream: Stream.Stream<TurnStreamPart, TurnError> = session.conn.updates.pipe(
         Stream.map((notification) => mapAcpUpdateToResponsePart(notification, mapper)),
-        Stream.filter((part): part is TurnStreamPart => part !== undefined),
+        Stream.filter(Option.isSome),
+        Stream.map((part) => part.value),
         Stream.interruptWhen(Deferred.await(promptDone)),
-        Stream.mapError((e) =>
-          Schema.is(AcpError)(e)
-            ? new TurnError({ message: e.message })
-            : new TurnError({ message: String(e) }),
-        ),
+        Stream.mapError((e) => {
+          if (Schema.is(AcpError)(e)) return new TurnError({ message: e.message })
+          return new TurnError({ message: String(e) })
+        }),
       )
 
       // After updates drain, emit the terminal finish part.
@@ -334,10 +343,11 @@ export const makeAcpTurnExecutor = (
           Deferred.await(promptDone).pipe(
             Effect.flatMap((stopReason) =>
               Ref.get(pendingInteraction).pipe(
-                Effect.flatMap((pending) =>
-                  pending === undefined
-                    ? Effect.succeed(finishPart(stopReason))
-                    : Effect.fail(pending),
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.succeed(finishPart(stopReason)),
+                    onSome: Effect.fail,
+                  }),
                 ),
               ),
             ),
@@ -346,11 +356,10 @@ export const makeAcpTurnExecutor = (
 
       return Stream.concat(updateStream, finishedStream)
     }).pipe(
-      Effect.mapError((e) =>
-        Schema.is(TurnError)(e) || Schema.is(InteractionPendingError)(e)
-          ? e
-          : new TurnError({ message: String(e) }),
-      ),
+      Effect.mapError((e) => {
+        if (Schema.is(TurnError)(e) || Schema.is(InteractionPendingError)(e)) return e
+        return new TurnError({ message: String(e) })
+      }),
     )
 
     return Stream.unwrap(runTurn)

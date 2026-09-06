@@ -15,9 +15,9 @@
  * @module
  */
 
-import { Context, type Effect, Schema } from "effect"
+import { Context, Predicate, type Effect, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
-import { type ToolCapability as ToolCapabilityShape } from "../capability.js"
+import { type ToolCapability as ToolCapabilityApi } from "../capability.js"
 import { ToolId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
@@ -35,11 +35,14 @@ export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unk
   readonly interactive?: boolean
   readonly permissionRules?: ReadonlyArray<PermissionRule>
   readonly prompt?: PromptSection
+  // oxlint-disable-next-line effect/noUnknownParameters -- Runtime tool inputs are decoded by the owning schema at execution.
   readonly effect: (input: unknown) => Effect.Effect<Output, Error, never>
 }
 
+// oxlint-disable-next-line effect/noNullish -- The metadata annotation is absent on native tools outside the Gent factory.
 export const GentToolMetadataTag = Context.Reference<GentToolMetadata | undefined>(
   "@gent/core/src/domain/capability/tool/GentToolMetadata",
+  // oxlint-disable-next-line effect/noNullish -- Native tools do not carry Gent metadata.
   { defaultValue: () => undefined },
 )
 
@@ -48,29 +51,43 @@ export const GentToolMetadataTag = Context.Reference<GentToolMetadata | undefine
  * tools annotated with Gent execution metadata. Runtime code reads Gent-only
  * fields from the annotation instead of widening Effect's tool surface.
  */
-export type ToolCapability<Input = unknown, Output = unknown, Error = unknown> = AiTool.Any & {
+type GentParametersSchema = Schema.Decoder<unknown, never>
+type GentResultSchema = Schema.Encoder<unknown, never>
+type GentFailureSchema = Schema.Codec<Error, unknown, never, never>
+
+type GentAiTool = AiTool.Tool<
+  string,
+  {
+    readonly parameters: GentParametersSchema
+    readonly success: GentResultSchema
+    readonly failure: GentFailureSchema
+    readonly failureMode: "error"
+  },
+  never
+>
+
+export type ToolCapability<Input = unknown, Output = unknown, Error = unknown> = GentAiTool & {
   readonly [ToolCapabilityBrand]: true
   readonly [ToolCapabilityType]?: {
     readonly input: Input
     readonly output: Output
     readonly error: Error
   }
-} & ToolCapabilityShape
+} & ToolCapabilityApi
 
+// oxlint-disable-next-line effect/noNullish -- Native tools do not carry Gent metadata.
 export const getToolMetadataOption = (tool: AiTool.Any): GentToolMetadata | undefined =>
   Context.get(tool.annotations, GentToolMetadataTag)
 
+// oxlint-disable-next-line effect/noUnknownParameters -- Native Effect tools are narrowed by their runtime predicates below.
 export const isToolCapability = (value: unknown): value is ToolCapability => {
-  const tag =
-    typeof value === "object" && value !== null && "_tag" in value ? value._tag : undefined
   if (
     !(AiTool.isUserDefined(value) || AiTool.isDynamic(value) || AiTool.isProviderDefined(value)) ||
-    !(ToolCapabilityBrand in value) ||
-    tag !== "tool"
+    !(ToolCapabilityBrand in value)
   ) {
     return false
   }
-  return getToolMetadataOption(value) !== undefined
+  return !Predicate.isUndefined(getToolMetadataOption(value))
 }
 
 /**
@@ -80,7 +97,7 @@ export const isToolCapability = (value: unknown): value is ToolCapability => {
  * programmer-misuse-only signal — no runtime code can construct a `ToolCapability`
  * without metadata through the public `tool({...})` factory.
  */
-export class ToolMetadataMissingError extends Schema.TaggedErrorClass<ToolMetadataMissingError>()(
+export class ToolMetadataMissingError extends Schema.TaggedError<ToolMetadataMissingError>()(
   "ToolMetadataMissingError",
   {
     toolName: Schema.String,
@@ -95,10 +112,11 @@ export const getToolMetadata = <Input, Output, Error>(
   tool: ToolCapability<Input, Output, Error>,
 ): GentToolMetadata<Input, Output, Error> => {
   const metadata = getToolMetadataOption(tool)
-  if (metadata === undefined) {
+  if (Predicate.isUndefined(metadata)) {
+    // oxlint-disable-next-line effect/noThrowStatement -- Missing Gent metadata is programmer misuse of the synchronous accessor.
     throw new ToolMetadataMissingError({ toolName: tool.name })
   }
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ToolCapability carries Input/Output as a phantom type; annotation storage is intentionally heterogeneous.
+  // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- Annotation storage is heterogeneous; the branded ToolCapability carries the requested phantom types.
   return metadata as GentToolMetadata<Input, Output, Error>
 }
 
@@ -176,9 +194,13 @@ export const tool = <
 >(
   input: ToolInput<Params, Output, Error, Deps>,
 ): ToolCapability<Schema.Schema.Type<Params>, Schema.Schema.Type<Output>, Error> => {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
-  const params = input.params as Schema.Schema<Schema.Schema.Type<Params>>
+  const params = input.params
   const id = ToolId.make(input.id)
+  type MutableMetadata = {
+    -readonly [
+      K in keyof GentToolMetadata<Schema.Schema.Type<Params>, Schema.Schema.Type<Output>, Error>
+    ]?: GentToolMetadata<Schema.Schema.Type<Params>, Schema.Schema.Type<Output>, Error>[K]
+  }
   const metadata: GentToolMetadata<
     Schema.Schema.Type<Params>,
     Schema.Schema.Type<Output>,
@@ -188,18 +210,23 @@ export const tool = <
     readonly: input.readonly === true,
     input: input.params,
     output: input.output,
-    ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),
-    ...(input.promptGuidelines !== undefined ? { promptGuidelines: input.promptGuidelines } : {}),
-    ...(input.interactive !== undefined ? { interactive: input.interactive } : {}),
-    ...(input.permissionRules !== undefined ? { permissionRules: input.permissionRules } : {}),
-    ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
     effect: (params) => {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
-      const decoded = params as Schema.Schema.Type<Params>
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- factory erases author service requirements; runtime provides them at execution boundaries.
+      const decoded = Schema.decodeUnknownSync(input.params)(params)
+      // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The factory erases author service requirements; the runtime provides them at execution boundaries.
       return input.execute(decoded) as Effect.Effect<Schema.Schema.Type<Output>, Error, never>
     },
   }
+  const mutableMetadata: MutableMetadata = metadata
+  if (Predicate.isNotUndefined(input.promptSnippet))
+    mutableMetadata.promptSnippet = input.promptSnippet
+  if (Predicate.isNotUndefined(input.promptGuidelines)) {
+    mutableMetadata.promptGuidelines = input.promptGuidelines
+  }
+  if (Predicate.isNotUndefined(input.interactive)) mutableMetadata.interactive = input.interactive
+  if (Predicate.isNotUndefined(input.permissionRules)) {
+    mutableMetadata.permissionRules = input.permissionRules
+  }
+  if (Predicate.isNotUndefined(input.prompt)) mutableMetadata.prompt = input.prompt
 
   const native = AiTool.dynamic(input.id, {
     description: input.description,
@@ -209,7 +236,8 @@ export const tool = <
     .annotate(GentToolMetadataTag, metadata)
     .annotate(AiTool.Readonly, metadata.readonly)
     .annotate(AiTool.Destructive, input.destructive === true)
-  const capability: ToolCapabilityShape = {
+  type MutableCapability = { -readonly [K in keyof ToolCapabilityApi]: ToolCapabilityApi[K] }
+  const capability: MutableCapability = {
     _tag: "tool",
     id,
     readonly: metadata.readonly,
@@ -218,18 +246,25 @@ export const tool = <
     native,
     effect: metadata.effect,
     description: input.description,
-    ...(metadata.promptSnippet !== undefined ? { promptSnippet: metadata.promptSnippet } : {}),
-    ...(metadata.promptGuidelines !== undefined
-      ? { promptGuidelines: metadata.promptGuidelines }
-      : {}),
-    ...(metadata.interactive !== undefined ? { interactive: metadata.interactive } : {}),
-    ...(metadata.permissionRules !== undefined
-      ? { permissionRules: metadata.permissionRules }
-      : {}),
-    ...(metadata.prompt !== undefined ? { prompt: metadata.prompt } : {}),
     metadata,
   }
-  const branded = Object.assign(native, capability, { [ToolCapabilityBrand]: true as const })
+  if (Predicate.isNotUndefined(metadata.promptSnippet)) {
+    capability.promptSnippet = metadata.promptSnippet
+  }
+  if (Predicate.isNotUndefined(metadata.promptGuidelines)) {
+    capability.promptGuidelines = metadata.promptGuidelines
+  }
+  if (Predicate.isNotUndefined(metadata.interactive)) capability.interactive = metadata.interactive
+  if (Predicate.isNotUndefined(metadata.permissionRules)) {
+    capability.permissionRules = metadata.permissionRules
+  }
+  if (Predicate.isNotUndefined(metadata.prompt)) capability.prompt = metadata.prompt
+  const brand: ToolCapability<
+    Schema.Schema.Type<Params>,
+    Schema.Schema.Type<Output>,
+    Error
+  >[typeof ToolCapabilityBrand] = true
+  const branded = Object.assign(native, capability, { [ToolCapabilityBrand]: brand })
 
   return branded
 }

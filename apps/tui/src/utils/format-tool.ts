@@ -1,3 +1,6 @@
+import { Option, Schema } from "effect"
+import type { ToolInput } from "./parse-tool-output"
+
 export function formatTokens(count: number): string {
   if (count < 1000) return count.toString()
   if (count < 10000) return `${(count / 1000).toFixed(1)}k`
@@ -15,38 +18,56 @@ export function formatUsageStats(
   model?: string,
 ): string {
   const parts: string[] = []
-  if (usage.turns !== undefined && usage.turns > 0)
-    parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`)
-  if (usage.input !== undefined && usage.input > 0) parts.push(`↑${formatTokens(usage.input)}`)
-  if (usage.output !== undefined && usage.output > 0) parts.push(`↓${formatTokens(usage.output)}`)
-  if (usage.cost !== undefined && usage.cost > 0) parts.push(`$${usage.cost.toFixed(4)}`)
-  if (model !== undefined) parts.push(model)
+  const turns = Option.fromNullishOr(usage.turns)
+  if (Option.isSome(turns) && turns.value > 0) {
+    let label = "turn"
+    if (turns.value > 1) label = "turns"
+    parts.push(`${turns.value} ${label}`)
+  }
+  const input = Option.fromNullishOr(usage.input)
+  if (Option.isSome(input) && input.value > 0) parts.push(`↑${formatTokens(input.value)}`)
+  const output = Option.fromNullishOr(usage.output)
+  if (Option.isSome(output) && output.value > 0) parts.push(`↓${formatTokens(output.value)}`)
+  const cost = Option.fromNullishOr(usage.cost)
+  if (Option.isSome(cost) && cost.value > 0) parts.push(`$${cost.value.toFixed(4)}`)
+  const modelName = Option.fromNullishOr(model)
+  if (Option.isSome(modelName)) parts.push(modelName.value)
   return parts.join(" ")
 }
 
-export const truncate = (value: string, max: number): string =>
-  value.length > max ? `${value.slice(0, Math.max(0, max - 3))}...` : value
-
-export function shortenPath(p: string, home?: string): string {
-  return home !== undefined && home.length > 0 && p.startsWith(home)
-    ? `~${p.slice(home.length)}`
-    : p
+export const truncate = (value: string, max: number): string => {
+  if (value.length > max) return `${value.slice(0, Math.max(0, max - 3))}...`
+  return value
 }
 
-function getStringArg(args: Record<string, unknown>, ...keys: string[]): string {
+export function shortenPath(p: string, home?: string): string {
+  const homePath = Option.fromNullishOr(home)
+  if (Option.isSome(homePath) && homePath.value.length > 0 && p.startsWith(homePath.value)) {
+    return `~${p.slice(homePath.value.length)}`
+  }
+  return p
+}
+
+const decodeToolArgs = Schema.decodeUnknownOption(Schema.JsonObject)
+const decodeString = Schema.decodeUnknownOption(Schema.String)
+const decodeNumber = Schema.decodeUnknownOption(Schema.Finite)
+
+function getStringArg(args: Schema.JsonObject, ...keys: string[]): string {
   for (const key of keys) {
-    const value = args[key]
-    if (typeof value === "string") return value
+    const value = decodeString(args[key])
+    if (Option.isSome(value)) return value.value
   }
   return ""
 }
 
-function getNumberArg(args: Record<string, unknown>, key: string): number | undefined {
-  const value = args[key]
-  return typeof value === "number" ? value : undefined
+function getNumberArg(args: Schema.JsonObject, key: string) {
+  return decodeNumber(args[key])
 }
 
-function getPathArg(args: Record<string, unknown>): string {
+const optionsHome = (options?: ToolArgSummaryOptions) =>
+  Option.fromNullishOr(options).pipe(Option.flatMap((value) => Option.fromNullishOr(value.home)))
+
+function getPathArg(args: Schema.JsonObject): string {
   return getStringArg(args, "file_path", "path")
 }
 
@@ -59,35 +80,37 @@ interface ToolArgSummaryOptions {
   readonly home?: string
 }
 
-function summarizeRead(args: Record<string, unknown>, options?: ToolArgSummaryOptions): string {
+function summarizeRead(args: Schema.JsonObject, options?: ToolArgSummaryOptions): string {
   const rawPath = getPathArg(args)
   if (rawPath.length === 0) return ""
 
-  let text = shortenPath(rawPath, options?.home)
+  let text = shortenPath(rawPath, Option.getOrUndefined(optionsHome(options)))
   const offset = getNumberArg(args, "offset")
   const limit = getNumberArg(args, "limit")
-  if (offset === undefined && limit === undefined) return text
+  if (Option.isNone(offset) && Option.isNone(limit)) return text
 
-  const startLine = offset ?? 1
-  const endLine = limit !== undefined ? startLine + limit - 1 : undefined
+  const startLine = Option.getOrElse(offset, () => 1)
+  let endLine = Option.none<number>()
+  if (Option.isSome(limit)) endLine = Option.some(startLine + limit.value - 1)
   text += `:${startLine}`
-  if (endLine !== undefined) text += `-${endLine}`
+  if (Option.isSome(endLine)) text += `-${endLine.value}`
   return text
 }
 
-function summarizeWrite(args: Record<string, unknown>, options?: ToolArgSummaryOptions): string {
+function summarizeWrite(args: Schema.JsonObject, options?: ToolArgSummaryOptions): string {
   const rawPath = getPathArg(args)
   if (rawPath.length === 0) return ""
 
   const content = getStringArg(args, "content")
-  const lines = content.length > 0 ? content.split("\n").length : 0
-  let text = shortenPath(rawPath, options?.home)
+  let lines = 0
+  if (content.length > 0) lines = content.split("\n").length
+  let text = shortenPath(rawPath, Option.getOrUndefined(optionsHome(options)))
   if (lines > 1) text += ` (${lines} lines)`
   return text
 }
 
 function summarizeScopedPattern(
-  args: Record<string, unknown>,
+  args: Schema.JsonObject,
   options?: ToolArgSummaryOptions,
   patternPrefix = "",
   patternSuffix = "",
@@ -95,25 +118,25 @@ function summarizeScopedPattern(
   const pattern = getStringArg(args, "pattern")
   if (pattern.length === 0) return ""
   const rawPath = getStringArg(args, "path") || "."
-  return `${patternPrefix}${pattern}${patternSuffix} in ${shortenPath(rawPath, options?.home)}`
+  return `${patternPrefix}${pattern}${patternSuffix} in ${shortenPath(rawPath, Option.getOrUndefined(optionsHome(options)))}`
 }
 
-function summarizeDelegate(args: Record<string, unknown>): string {
+function summarizeDelegate(args: Schema.JsonObject): string {
   const agent = getStringArg(args, "agent")
   const todo = getStringArg(args, "todo")
-  const todos = Array.isArray(args["todos"]) ? args["todos"] : undefined
-  const chain = Array.isArray(args["chain"]) ? args["chain"] : undefined
+  const todos = Option.liftPredicate(args["todos"], Array.isArray)
+  const chain = Option.liftPredicate(args["chain"], Array.isArray)
 
-  if (todos !== undefined) return `${todos.length} parallel`
-  if (chain !== undefined) return `${chain.length} chain`
+  if (Option.isSome(todos)) return `${todos.value.length} parallel`
+  if (Option.isSome(chain)) return `${chain.value.length} chain`
   if (agent.length === 0) return ""
   if (todo.length === 0) return agent
   return `${agent}:${truncateText(todo, 40)}`
 }
 
-type ToolArgFormatter = (args: Record<string, unknown>, options?: ToolArgSummaryOptions) => string
+type ToolArgFormatter = (args: Schema.JsonObject, options?: ToolArgSummaryOptions) => string
 
-const toolArgFormatters: Record<string, ToolArgFormatter> = {
+const toolArgFormatters = {
   bash: (args) => {
     const command = getStringArg(args, "command", "cmd")
     if (command.length === 0) return ""
@@ -123,7 +146,10 @@ const toolArgFormatters: Record<string, ToolArgFormatter> = {
   write: summarizeWrite,
   edit: (args, options) => {
     const rawPath = getPathArg(args)
-    return rawPath.length > 0 ? shortenPath(rawPath, options?.home) : ""
+    if (rawPath.length > 0) {
+      return shortenPath(rawPath, Option.getOrUndefined(optionsHome(options)))
+    }
+    return ""
   },
   grep: (args, options) => summarizeScopedPattern(args, options, "/", "/"),
   glob: (args, options) => summarizeScopedPattern(args, options),
@@ -139,7 +165,8 @@ const toolArgFormatters: Record<string, ToolArgFormatter> = {
   counsel: (args) => {
     const mode = getStringArg(args, "mode")
     const prompt = truncateText(getStringArg(args, "prompt"), 40)
-    return mode.length > 0 ? `${mode}: ${prompt}` : prompt
+    if (mode.length > 0) return `${mode}: ${prompt}`
+    return prompt
   },
   skills: (args) => {
     const names = args["names"]
@@ -151,14 +178,18 @@ const toolArgFormatters: Record<string, ToolArgFormatter> = {
   search_sessions: (args) => truncateText(getStringArg(args, "query"), 50),
   read_session: (args) => truncateText(getStringArg(args, "goal"), 50),
   handoff: (args) => truncateText(getStringArg(args, "reason"), 50),
-}
+} satisfies Record<string, ToolArgFormatter>
+const toolArgFormattersByName = new Map<string, ToolArgFormatter>(Object.entries(toolArgFormatters))
 
 export function toolArgSummary(
   toolName: string,
-  args: Record<string, unknown>,
+  input: ToolInput,
   options?: ToolArgSummaryOptions,
 ): string {
-  const formatter = toolArgFormatters[toolName.toLowerCase()]
-  if (formatter === undefined) return ""
-  return formatter(args, options)
+  const args = decodeToolArgs(input)
+  if (Option.isNone(args)) return ""
+  const formatter = toolArgFormattersByName.get(toolName.toLowerCase())
+  const selected = Option.fromNullishOr(formatter)
+  if (Option.isNone(selected)) return ""
+  return selected.value(args.value, options)
 }

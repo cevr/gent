@@ -30,15 +30,16 @@ describe("prettyLogger", () => {
       const lines: string[] = []
       const captureConsole = {
         ...globalThis.console,
-        error: (line: unknown) => {
-          lines.push(String(line))
+        error: (...args: ReadonlyArray<unknown>) => {
+          lines.push(args.map(String).join(" "))
         },
-      } as unknown as Console.Console
+      } satisfies Console.Console
 
       const minLevel = Layer.effectContext(Effect.succeed(Context.make(MinimumLogLevel, "Info")))
 
       yield* Effect.logInfo("hello-from-test").pipe(
         Effect.provideService(Console.Console, captureConsole),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(Layer.mergeAll(GentLoggerPretty, minLevel)),
       )
 

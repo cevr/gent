@@ -1,3 +1,4 @@
+import { AgentName } from "@gent/core-internal/domain/agent"
 /**
  * Extension surface regression locks (compile-time).
  *
@@ -32,14 +33,14 @@ import {
 
 class WriteCapableService extends Context.Service<
   WriteCapableService,
-  { readonly write: () => Effect.Effect<void> }
+  { readonly write: Effect.Effect<void> }
 >()("@gent/core/tests/extensions/extension-surface-locks.test/WriteCapableService") {}
 
-interface ReadOnlyShape {
-  readonly read: () => Effect.Effect<string>
+interface ReadOnlyApi {
+  readonly read: Effect.Effect<string>
 }
 
-class ReadOnlyService extends Context.Service<ReadOnlyService, ReadOnlyShape>()(
+class ReadOnlyService extends Context.Service<ReadOnlyService, ReadOnlyApi>()(
   "@gent/core/tests/extensions/extension-surface-locks.test/ReadOnlyService",
 ) {}
 
@@ -148,7 +149,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
       execute: () =>
         Effect.gen(function* () {
           const svc = yield* ReadOnlyService
-          return yield* svc.read()
+          return yield* svc.read
         }),
     })
 
@@ -182,7 +183,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
       execute: () =>
         Effect.gen(function* () {
           const svc = yield* WriteCapableService
-          yield* svc.write()
+          yield* svc.write
           return "x"
         }),
     })
@@ -278,7 +279,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
 
 describe("Effect-purity locks (compile-time)", () => {
   test("tool.execute MUST return Effect — Promise handler rejected", () => {
-    const promiseString = Bun.file("/dev/null").text()
+    const promiseString = Bun.file("/dev/null").text() // oxlint-disable-line effect/noGlobals -- This host call creates a Promise solely for the compile-time rejection lock.
     tool({
       id: "ok",
       description: "ok",
@@ -295,7 +296,7 @@ describe("Effect-purity locks (compile-time)", () => {
       id: "bad-read-tool",
       description: "bad",
       // @ts-expect-error — tools import services instead of declaring read/write needs
-      needs: [{ tag: "todo", access: "write" }] as const,
+      needs: [{ tag: "todo", access: "write" }],
       params: Schema.Struct({}),
       output: Schema.String,
       execute: () => Effect.succeed("x"),
@@ -435,7 +436,7 @@ describe("Effect-purity locks (compile-time)", () => {
       id: "hook-handler-params-lock",
       hooks: [
         // @ts-expect-error — host authority comes from ExtensionContext, not a ctx parameter
-        hook.turnAfter((_input: PublicExtensionApi.TurnAfterInput, _ctx: unknown) => Effect.void),
+        hook.turnAfter((_input: PublicExtensionApi.TurnAfterInput, _ctx: unknown) => Effect.void), // oxlint-disable-line effect/noUnknownParameters -- This invalid contract deliberately checks that a ctx parameter is rejected.
       ],
     })
     expect(true).toBe(true)
@@ -489,7 +490,7 @@ describe("Effect-purity locks (compile-time)", () => {
     // @ts-expect-error — direct tool-effect extraction is a test helper, not authoring API
     type _BadGetToolEffect = typeof PublicExtensionApi.getToolEffect
     // @ts-expect-error — package shape validation is host loader plumbing, not authoring API
-    type _BadValidatePackageShape = typeof PublicExtensionApi.validatePackageShape
+    type _BadValidateExtensionPackage = typeof PublicExtensionApi.validateExtensionPackage
     // @ts-expect-error — request refs are read via ref(...); the symbol stays private
     type _BadCapabilityRefSymbol = typeof PublicExtensionApi.CAPABILITY_REF
     // @ts-expect-error — read/write authority is host facade behavior, not author branding ceremony
@@ -497,7 +498,7 @@ describe("Effect-purity locks (compile-time)", () => {
     // @ts-expect-error — read/write authority is host facade behavior, not author branding ceremony
     type _BadWithReadOnly = typeof PublicExtensionApi.withReadOnly
     // @ts-expect-error — read/write authority is host facade behavior, not author branding ceremony
-    type _BadReadOnly = PublicExtensionApi.ReadOnly<ReadOnlyShape>
+    type _BadReadOnly = PublicExtensionApi.ReadOnly<ReadOnlyApi>
     // @ts-expect-error — read/write authority is host facade behavior, not author branding ceremony
     type _BadReadOnlyTag = PublicExtensionApi.ReadOnlyTag
     expect(true).toBe(true)
@@ -591,7 +592,7 @@ describe("Effect-purity locks (compile-time)", () => {
     const okValue: SetupField = Effect.succeed({})
     void okValue
     // @ts-expect-error — `setup` is no longer a thunk; ctx-as-param escape was removed
-    const badThunk: SetupField = (_ctx: unknown) => Effect.succeed({})
+    const badThunk: SetupField = (_ctx: unknown) => Effect.succeed({}) // oxlint-disable-line effect/noUnknownParameters -- This invalid contract deliberately checks that setup is not a ctx thunk.
     void badThunk
     // @ts-expect-error — `setup` is no longer a thunk; zero-arg thunks are also rejected
     const badZeroArg: SetupField = () => Effect.succeed({})
@@ -654,7 +655,7 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("hooks.systemPrompt MUST return Effect — Promise handler rejected", () => {
-    const promiseString = Bun.file("/dev/null").text()
+    const promiseString = Bun.file("/dev/null").text() // oxlint-disable-line effect/noGlobals -- This host call creates a Promise solely for the compile-time rejection lock.
     defineExtension({
       id: "bad-prompt-hook",
       hooks: [
@@ -667,7 +668,7 @@ describe("Effect-purity locks (compile-time)", () => {
 
   test("extension hooks and lifecycle hooks reject Promise handlers", () => {
     // gent/no-sleep: allow source a `Promise<void>` value purely for type-level assignability check below
-    const promiseVoid = Bun.sleep(0)
+    const promiseVoid = Bun.sleep(0) // oxlint-disable-line effect/noGlobals -- This host call creates a Promise solely for the compile-time rejection lock.
     defineExtension({
       id: "purity-hook",
       hooks: [
@@ -676,12 +677,14 @@ describe("Effect-purity locks (compile-time)", () => {
       ],
     })
     defineResource({
+      id: "test/extension-surface-locks/start-promise",
       scope: "process",
       layer: Layer.empty,
       // @ts-expect-error — Promise must not be assignable to Effect Resource.start
       start: promiseVoid,
     })
     defineResource({
+      id: "test/extension-surface-locks/stop-promise",
       scope: "process",
       layer: Layer.empty,
       // @ts-expect-error — Promise must not be assignable to Effect Resource.stop
@@ -708,10 +711,11 @@ describe("Effect-purity locks (compile-time)", () => {
       ],
       resources: [
         defineResource({
+          id: "test/extension-surface-locks/valid-resource",
           scope: "process",
           layer: Layer.succeed(ReadOnlyService, {
-            read: () => Effect.succeed(""),
-          } satisfies ReadOnlyShape),
+            read: Effect.succeed(""),
+          } satisfies ReadOnlyApi),
           start: Effect.void,
           stop: Effect.void,
         }),
@@ -720,11 +724,11 @@ describe("Effect-purity locks (compile-time)", () => {
         {
           id: "j",
           cron: "0 0 * * *",
-          target: { agent: "cowork" as never, prompt: "hi" },
+          target: { agent: AgentName.make("cowork"), prompt: "hi" },
         },
       ],
     })
 
-    expect(ext.manifest.id as string).toBe("purity-positive")
+    expect(String(ext.manifest.id)).toBe("purity-positive")
   })
 })

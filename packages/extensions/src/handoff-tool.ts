@@ -9,7 +9,7 @@ import {
 
 // Handoff Tool Error
 
-export class HandoffError extends Schema.TaggedErrorClass<HandoffError>()("HandoffError", {
+export class HandoffError extends Schema.TaggedError<HandoffError>()("HandoffError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}

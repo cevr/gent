@@ -9,17 +9,13 @@ import {
 import type { Accessor, JSX, ParentProps } from "solid-js"
 import type * as Cause from "effect/Cause"
 import type * as Context from "effect/Context"
+import * as Option from "effect/Option"
+import * as Predicate from "effect/Predicate"
 import type { Atom, Writable } from "./atom"
 import * as Registry from "./registry"
 import type { Result } from "./result"
 
-let _defaultRegistry: Registry.Registry<unknown> | undefined
-const defaultRegistry = (() => {
-  if (_defaultRegistry === undefined) {
-    _defaultRegistry = Registry.make()
-  }
-  return _defaultRegistry
-})()
+const defaultRegistry: Registry.Registry<unknown> = Registry.make()
 
 type AtomInput<A, Services = never> = Atom<A, Services> | Accessor<Atom<A, Services>>
 
@@ -29,18 +25,23 @@ type WritableInput<R, W, Services = never> =
 
 const isAtomAccessor = <A, Services>(
   atom: AtomInput<A, Services>,
-): atom is Accessor<Atom<A, Services>> => typeof atom === "function"
+): atom is Accessor<Atom<A, Services>> => Predicate.isFunction(atom)
 
-const toAccessor = <A, Services>(atom: AtomInput<A, Services>): Accessor<Atom<A, Services>> =>
-  isAtomAccessor(atom) ? atom : () => atom
+const toAccessor = <A, Services>(atom: AtomInput<A, Services>): Accessor<Atom<A, Services>> => {
+  if (isAtomAccessor(atom)) return atom
+  return () => atom
+}
 
 const isWritableAccessor = <R, W, Services>(
   atom: WritableInput<R, W, Services>,
-): atom is Accessor<Writable<R, W, Services>> => typeof atom === "function"
+): atom is Accessor<Writable<R, W, Services>> => Predicate.isFunction(atom)
 
 const toWritableAccessor = <R, W, Services>(
   atom: WritableInput<R, W, Services>,
-): Accessor<Writable<R, W, Services>> => (isWritableAccessor(atom) ? atom : () => atom)
+): Accessor<Writable<R, W, Services>> => {
+  if (isWritableAccessor(atom)) return atom
+  return () => atom
+}
 
 export interface RegistryProviderProps<Services = unknown> extends ParentProps {
   readonly registry?: Registry.Registry<Services>
@@ -73,7 +74,9 @@ export interface RegistryScope<Services> {
     atom: AtomInput<Result<A, E>, AtomServices>,
   ) => {
     readonly result: Accessor<Result<A, E>>
+    // eslint-disable-next-line effect/noNullish -- Solid accessors omit absent JSX content with undefined.
     readonly value: () => A | undefined
+    // eslint-disable-next-line effect/noNullish -- Solid accessors omit absent JSX content with undefined.
     readonly error: () => Cause.Cause<E> | undefined
     readonly loading: () => boolean
   }
@@ -140,7 +143,7 @@ const makeRegistryHooks = <Services>(useRegistry: () => Registry.Registry<Servic
 
   const useAtom = <R, W, AtomServices extends Services = never>(
     atom: WritableInput<R, W, AtomServices>,
-  ) => {
+  ): readonly [Accessor<R>, (next: W | ((value: R) => W)) => void] => {
     const registry = useRegistry()
     const atomAccessor = toWritableAccessor(atom)
     mountAtom(registry, atomAccessor)
@@ -148,7 +151,7 @@ const makeRegistryHooks = <Services>(useRegistry: () => Registry.Registry<Servic
     const set = (next: W | ((value: R) => W)) => {
       registry.set(atomAccessor(), next)
     }
-    return [value, set] as const
+    return [value, set]
   }
 
   const useAtomResult = <A, E, AtomServices extends Services = never>(
@@ -157,11 +160,15 @@ const makeRegistryHooks = <Services>(useRegistry: () => Registry.Registry<Servic
     const result = useAtomValue(atom)
     const value = () => {
       const current = result()
-      return current._tag === "Success" ? current.value : undefined
+      if (current._tag === "Success") return current.value
+      // eslint-disable-next-line effect/noNullish -- Preserve the Solid accessor absence contract.
+      return undefined
     }
     const error = () => {
       const current = result()
-      return current._tag === "Failure" ? current.cause : undefined
+      if (current._tag === "Failure") return current.cause
+      // eslint-disable-next-line effect/noNullish -- Preserve the Solid accessor absence contract.
+      return undefined
     }
     const loading = () => {
       const current = result()
@@ -186,12 +193,15 @@ export const makeRegistryScope = <Services>(defaultValue: Registry.Registry<Serv
   const useRegistry = (): Registry.Registry<Services> => useContext(RegistryContext)
 
   const RegistryProvider = (props: RegistryProviderProps<Services>): JSX.Element => {
-    const registry =
-      props.registry ??
-      (props.services === undefined
-        ? defaultValue
-        : Registry.make({ services: props.services, maxEntries: props.maxEntries }))
-    const shouldDispose = props.registry === undefined && props.services !== undefined
+    const providedRegistry = Option.fromNullishOr(props.registry)
+    const services = Option.fromNullishOr(props.services)
+    const registry = Option.getOrElse(providedRegistry, () =>
+      Option.match(services, {
+        onNone: () => defaultValue,
+        onSome: (services) => Registry.make({ services, maxEntries: props.maxEntries }),
+      }),
+    )
+    const shouldDispose = Option.isNone(providedRegistry) && Option.isSome(services)
 
     onCleanup(() => {
       if (shouldDispose) registry.dispose()

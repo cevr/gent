@@ -15,7 +15,7 @@
  * the ACP extension is disabled — useful for clearing a stale override.
  */
 
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { defineClientExtension, clientCommandContribution } from "../client-facets.js"
 import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core-internal/domain/agent.js"
 import { ClientDriver, ClientShell } from "../client-services"
@@ -46,20 +46,20 @@ export default defineClientExtension("@gent/driver-ui", {
           shell.sendMessage(USAGE)
           return
         }
-        const rawAgentName = parts[0]
-        const driverArg = parts[1]
-        if (rawAgentName === undefined || driverArg === undefined) {
+        const rawAgentName = Option.fromNullishOr(parts[0])
+        const driverArg = Option.fromNullishOr(parts[1])
+        if (Option.isNone(rawAgentName) || Option.isNone(driverArg)) {
           shell.sendMessage(USAGE)
           return
         }
-        const agentName = AgentName.make(rawAgentName)
-        if (driverArg === "default" || driverArg === "clear") {
+        const agentName = AgentName.make(rawAgentName.value)
+        if (driverArg.value === "default" || driverArg.value === "clear") {
           void shell
             .run(driverClient.clear({ agentName }))
             .then(() => {
               shell.sendMessage(`Cleared driver override for "${agentName}".`)
             })
-            .catch((err: unknown) => {
+            .catch((err) => {
               shell.sendMessage(`Failed to clear driver override: ${String(err)}`)
             })
           return
@@ -67,30 +67,32 @@ export default defineClientExtension("@gent/driver-ui", {
         void shell
           .run(
             Effect.gen(function* () {
-              const { drivers } = yield* driverClient.list()
-              const matches = drivers.filter((driver) => driver.id === driverArg)
+              const { drivers } = yield* driverClient.list
+              const matches = drivers.filter((driver) => driver.id === driverArg.value)
               if (matches.length === 0) {
-                shell.sendMessage(`Unknown driver "${driverArg}".`)
+                shell.sendMessage(`Unknown driver "${driverArg.value}".`)
                 return false
               }
               if (matches.length > 1) {
-                shell.sendMessage(`Ambiguous driver "${driverArg}".`)
+                shell.sendMessage(`Ambiguous driver "${driverArg.value}".`)
                 return false
               }
-              const [match] = matches
-              if (match === undefined) return false
-              const driver =
-                match._tag === "external"
-                  ? ExternalDriverRef.make({ id: match.id })
-                  : ModelDriverRef.make({ id: match.id })
+              const match = Option.fromNullishOr(matches[0])
+              if (Option.isNone(match)) return false
+              const driver = (() => {
+                if (match.value._tag === "external") {
+                  return ExternalDriverRef.make({ id: match.value.id })
+                }
+                return ModelDriverRef.make({ id: match.value.id })
+              })()
               yield* driverClient.set({ agentName, driver })
               return true
             }),
           )
           .then((changed) => {
-            if (changed) shell.sendMessage(`Set "${agentName}" → driver "${driverArg}".`)
+            if (changed) shell.sendMessage(`Set "${agentName}" → driver "${driverArg.value}".`)
           })
-          .catch((err: unknown) => {
+          .catch((err) => {
             shell.sendMessage(`Failed to set driver: ${String(err)}`)
           })
       },

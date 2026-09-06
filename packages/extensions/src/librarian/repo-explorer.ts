@@ -1,9 +1,9 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Predicate, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
-import { ExtensionContext, tool } from "@gent/core/extensions/api"
+import { ExtensionContext, tool, type ExtensionContextService } from "@gent/core/extensions/api"
 import * as esGit from "es-git"
 
-export class GitReaderError extends Schema.TaggedErrorClass<GitReaderError>()("GitReaderError", {
+export class GitReaderError extends Schema.TaggedError<GitReaderError>()("GitReaderError", {
   message: Schema.String,
   operation: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -12,10 +12,12 @@ export class GitReaderError extends Schema.TaggedErrorClass<GitReaderError>()("G
 type Credential =
   | { type: "SSHKeyFromPath"; username: string; privateKeyPath: string; publicKeyPath?: string }
   | { type: "Plain"; username: string; password: string }
+type GitCloneFetchOptions = { depth?: number; credential?: Credential }
+type GitRemoteFetchOptions = { credential?: Credential }
 
 const resolveCredential = (
   url: string,
-): Effect.Effect<Credential | undefined, never, ExtensionContext> =>
+): Effect.Effect<Option.Option<Credential>, never, ExtensionContext> =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     const home = ctx.home
@@ -24,45 +26,47 @@ const resolveCredential = (
       if (yield* ctx.Files.exists(ed25519).pipe(Effect.orElseSucceed(() => false))) {
         const ed25519Pub = `${home}/.ssh/id_ed25519.pub`
         const hasPub = yield* ctx.Files.exists(ed25519Pub).pipe(Effect.orElseSucceed(() => false))
-        return {
-          type: "SSHKeyFromPath" as const,
+        const credential: Credential = {
+          type: "SSHKeyFromPath",
           username: "git",
           privateKeyPath: ed25519,
-          publicKeyPath: hasPub ? ed25519Pub : undefined,
-        } satisfies Credential
+        }
+        if (hasPub && credential.type === "SSHKeyFromPath") credential.publicKeyPath = ed25519Pub
+        return Option.some(credential)
       }
       const rsa = `${home}/.ssh/id_rsa`
       if (yield* ctx.Files.exists(rsa).pipe(Effect.orElseSucceed(() => false))) {
         const rsaPub = `${home}/.ssh/id_rsa.pub`
         const hasPub = yield* ctx.Files.exists(rsaPub).pipe(Effect.orElseSucceed(() => false))
-        return {
-          type: "SSHKeyFromPath" as const,
+        const credential: Credential = {
+          type: "SSHKeyFromPath",
           username: "git",
           privateKeyPath: rsa,
-          publicKeyPath: hasPub ? rsaPub : undefined,
-        } satisfies Credential
+        }
+        if (hasPub && credential.type === "SSHKeyFromPath") credential.publicKeyPath = rsaPub
+        return Option.some(credential)
       }
-      return undefined
+      return Option.none()
     }
 
     if (url.includes("github.com")) {
       const result = yield* ctx.Process.run("gh", ["auth", "token"], {
         stdout: "pipe",
         stderr: "pipe",
-      }).pipe(Effect.orElseSucceed(() => undefined))
-      if (result !== undefined && result.exitCode === 0) {
-        const trimmed = result.stdout.trim()
+      }).pipe(Effect.option)
+      if (Option.isSome(result) && result.value.exitCode === 0) {
+        const trimmed = result.value.stdout.trim()
         if (trimmed.length > 0) {
-          return {
-            type: "Plain" as const,
+          return Option.some({
+            type: "Plain",
             username: "x-access-token",
             password: trimmed,
-          } satisfies Credential
+          } satisfies Credential)
         }
       }
     }
-    return undefined
-  }).pipe(Effect.orElseSucceed(() => undefined))
+    return Option.none()
+  }).pipe(Effect.orElseSucceed(() => Option.none()))
 
 export interface GitReaderService {
   readonly clone: (
@@ -85,130 +89,147 @@ export interface GitReaderService {
 export class GitReader extends Context.Service<GitReader, GitReaderService>()(
   "@gent/extensions/src/librarian/repo-explorer/GitReader",
 ) {
-  static Live: Layer.Layer<GitReader> = Layer.succeed(GitReader, {
-    clone: Effect.fn("GitReader.clone")(function* (url, dest, options) {
-      const credential = yield* resolveCredential(url)
-      yield* Effect.tryPromise({
-        try: () =>
-          esGit.cloneRepository(url, dest, {
-            fetch: { depth: options?.depth, credential },
-            branch: options?.ref,
-          }),
-        catch: (e) => new GitReaderError({ message: String(e), operation: "clone", cause: e }),
-      })
-    }),
+  static Live: Layer.Layer<GitReader> = Layer.succeed(
+    GitReader,
+    GitReader.of({
+      clone: Effect.fn("GitReader.clone")(function* (url, dest, options) {
+        const credential = yield* resolveCredential(url)
+        const fetchOptions: GitCloneFetchOptions = {
+          depth: options?.depth,
+        }
+        if (Option.isSome(credential)) fetchOptions.credential = credential.value
+        yield* Effect.tryPromise({
+          try: () =>
+            esGit.cloneRepository(url, dest, {
+              fetch: fetchOptions,
+              branch: options?.ref,
+            }),
+          catch: (e) => new GitReaderError({ message: String(e), operation: "clone", cause: e }),
+        })
+      }),
 
-    fetch: Effect.fn("GitReader.fetch")(function* (repoPath) {
-      const repo = yield* Effect.tryPromise({
-        try: () => esGit.openRepository(repoPath),
-        catch: (e) => new GitReaderError({ message: String(e), operation: "fetch.open", cause: e }),
-      })
-      const remote = repo.getRemote("origin")
-      const credential = yield* resolveCredential(remote.url())
-      yield* Effect.tryPromise({
-        try: () =>
-          remote.fetch(["refs/heads/*:refs/remotes/origin/*"], {
-            fetch: { credential },
-          }),
-        catch: (e) => new GitReaderError({ message: String(e), operation: "fetch", cause: e }),
-      })
-      yield* Effect.try({
-        try: () => {
-          const headOid = repo.revparseSingle("origin/HEAD")
-          const headCommit = repo.getCommit(headOid)
-          repo.setHeadDetached(headCommit)
-          repo.checkoutHead({ force: true })
-        },
-        catch: (e) =>
-          new GitReaderError({ message: String(e), operation: "fetch.checkout", cause: e }),
-      })
-    }),
+      fetch: Effect.fn("GitReader.fetch")(function* (repoPath) {
+        const repo = yield* Effect.tryPromise({
+          try: () => esGit.openRepository(repoPath),
+          catch: (e) =>
+            new GitReaderError({ message: String(e), operation: "fetch.open", cause: e }),
+        })
+        const remote = repo.getRemote("origin")
+        const credential = yield* resolveCredential(remote.url())
+        const fetchOptions: GitRemoteFetchOptions = {}
+        if (Option.isSome(credential)) fetchOptions.credential = credential.value
+        yield* Effect.tryPromise({
+          try: () =>
+            remote.fetch(["refs/heads/*:refs/remotes/origin/*"], {
+              fetch: fetchOptions,
+            }),
+          catch: (e) => new GitReaderError({ message: String(e), operation: "fetch", cause: e }),
+        })
+        yield* Effect.try({
+          try: () => {
+            const headOid = repo.revparseSingle("origin/HEAD")
+            const headCommit = repo.getCommit(headOid)
+            repo.setHeadDetached(headCommit)
+            repo.checkoutHead({ force: true })
+          },
+          catch: (e) =>
+            new GitReaderError({ message: String(e), operation: "fetch.checkout", cause: e }),
+        })
+      }),
 
-    listFiles: Effect.fn("GitReader.listFiles")(function* (repoPath, ref) {
-      const repo = yield* Effect.tryPromise({
-        try: () => esGit.openRepository(repoPath),
-        catch: (e) =>
-          new GitReaderError({ message: String(e), operation: "listFiles.open", cause: e }),
-      })
-      return yield* Effect.try({
-        try: () => {
-          const oid = repo.revparseSingle(ref ?? "HEAD")
-          const commit = repo.getCommit(oid)
-          const files: string[] = []
-          const walk = (tree: ReturnType<typeof commit.tree>, prefix: string) => {
-            for (const entry of tree.iter()) {
-              const fullPath = prefix ? `${prefix}/${entry.name()}` : entry.name()
-              if (entry.type() === "Blob") {
-                files.push(fullPath)
-              } else if (entry.type() === "Tree") {
-                const subtree = repo.findTree(entry.id())
-                if (subtree !== null) walk(subtree, fullPath)
+      listFiles: Effect.fn("GitReader.listFiles")(function* (repoPath, ref) {
+        const repo = yield* Effect.tryPromise({
+          try: () => esGit.openRepository(repoPath),
+          catch: (e) =>
+            new GitReaderError({ message: String(e), operation: "listFiles.open", cause: e }),
+        })
+        return yield* Effect.try({
+          try: () => {
+            const oid = repo.revparseSingle(ref ?? "HEAD")
+            const commit = repo.getCommit(oid)
+            const files: string[] = []
+            const walk = (tree: ReturnType<typeof commit.tree>, prefix: string) => {
+              for (const entry of tree.iter()) {
+                let fullPath = entry.name()
+                if (prefix) fullPath = `${prefix}/${entry.name()}`
+                if (entry.type() === "Blob") {
+                  files.push(fullPath)
+                } else if (entry.type() === "Tree") {
+                  const subtree = Option.fromNullishOr(repo.findTree(entry.id()))
+                  if (Option.isSome(subtree)) walk(subtree.value, fullPath)
+                }
               }
             }
-          }
-          walk(commit.tree(), "")
-          return files
-        },
-        catch: (e) => new GitReaderError({ message: String(e), operation: "listFiles", cause: e }),
-      })
-    }),
-
-    readFile: Effect.fn("GitReader.readFile")(function* (repoPath, filePath, ref) {
-      const repo = yield* Effect.tryPromise({
-        try: () => esGit.openRepository(repoPath),
-        catch: (e) =>
-          new GitReaderError({ message: String(e), operation: "readFile.open", cause: e }),
-      })
-      const entry = yield* Effect.try({
-        try: () => {
-          const oid = repo.revparseSingle(ref ?? "HEAD")
-          const commit = repo.getCommit(oid)
-          const tree = commit.tree()
-          return tree.getPath(filePath)
-        },
-        catch: (e) =>
-          new GitReaderError({
-            message: String(e),
-            operation: "readFile.lookup",
-            cause: e,
-          }),
-      })
-      if (entry === null || entry === undefined) {
-        return yield* new GitReaderError({
-          message: `File not found: ${filePath}`,
-          operation: "readFile",
+            walk(commit.tree(), "")
+            return files
+          },
+          catch: (e) =>
+            new GitReaderError({ message: String(e), operation: "listFiles", cause: e }),
         })
-      }
-      const blob = yield* Effect.try({
-        try: () => entry.toObject(repo).peelToBlob(),
-        catch: (e) =>
-          new GitReaderError({ message: String(e), operation: "readFile.blob", cause: e }),
-      })
-      if (blob === null || blob === undefined) {
-        return yield* new GitReaderError({
-          message: `Not a blob: ${filePath}`,
-          operation: "readFile",
-        })
-      }
-      return {
-        content: new Uint8Array(blob.content()),
-        size: Number(blob.size()),
-        isBinary: blob.isBinary(),
-      }
-    }),
-  })
+      }),
 
-  static Test: Layer.Layer<GitReader> = Layer.succeed(GitReader, {
-    clone: () => Effect.void,
-    fetch: () => Effect.void,
-    listFiles: () => Effect.succeed([]),
-    readFile: () => Effect.succeed({ content: new Uint8Array(), size: 0, isBinary: false }),
-  })
+      readFile: Effect.fn("GitReader.readFile")(function* (repoPath, filePath, ref) {
+        const repo = yield* Effect.tryPromise({
+          try: () => esGit.openRepository(repoPath),
+          catch: (e) =>
+            new GitReaderError({ message: String(e), operation: "readFile.open", cause: e }),
+        })
+        const entry = yield* Effect.try({
+          try: () => {
+            const oid = repo.revparseSingle(ref ?? "HEAD")
+            const commit = repo.getCommit(oid)
+            const tree = commit.tree()
+            return tree.getPath(filePath)
+          },
+          catch: (e) =>
+            new GitReaderError({
+              message: String(e),
+              operation: "readFile.lookup",
+              cause: e,
+            }),
+        })
+        const entryOption = Option.fromNullishOr(entry)
+        if (Option.isNone(entryOption)) {
+          return yield* new GitReaderError({
+            message: `File not found: ${filePath}`,
+            operation: "readFile",
+          })
+        }
+        const blob = yield* Effect.try({
+          try: () => entryOption.value.toObject(repo).peelToBlob(),
+          catch: (e) =>
+            new GitReaderError({ message: String(e), operation: "readFile.blob", cause: e }),
+        })
+        const blobOption = Option.fromNullishOr(blob)
+        if (Option.isNone(blobOption)) {
+          return yield* new GitReaderError({
+            message: `Not a blob: ${filePath}`,
+            operation: "readFile",
+          })
+        }
+        return {
+          content: new Uint8Array(blobOption.value.content()),
+          size: Number(blobOption.value.size()),
+          isBinary: blobOption.value.isBinary(),
+        }
+      }),
+    }),
+  )
+
+  static Test: Layer.Layer<GitReader> = Layer.succeed(
+    GitReader,
+    GitReader.of({
+      clone: () => Effect.void,
+      fetch: () => Effect.void,
+      listFiles: () => Effect.succeed([]),
+      readFile: () => Effect.succeed({ content: new Uint8Array(), size: 0, isBinary: false }),
+    }),
+  )
 }
 
 // RepoExplorer Tool Error
 
-export class RepoExplorerError extends Schema.TaggedErrorClass<RepoExplorerError>()(
+export class RepoExplorerError extends Schema.TaggedError<RepoExplorerError>()(
   "RepoExplorerError",
   {
     message: Schema.String,
@@ -257,7 +278,7 @@ export const RepoExplorerResult = Schema.Struct({
   matches: Schema.optional(Schema.Array(Schema.String)),
   files: Schema.optional(Schema.Array(Schema.String)),
   content: Schema.optional(Schema.String),
-  size: Schema.optional(Schema.Number),
+  size: Schema.optional(Schema.Finite),
   isBinary: Schema.optional(Schema.Boolean),
   info: Schema.optional(Schema.Unknown),
   message: Schema.optional(Schema.String),
@@ -270,7 +291,7 @@ export const RepoExplorerResult = Schema.Struct({
 export interface ParsedSpec {
   type: "github" | "npm" | "pypi" | "crates"
   name: string
-  version: string | undefined
+  version?: string
 }
 
 export function parseSpec(spec: string): ParsedSpec {
@@ -280,7 +301,7 @@ export function parseSpec(spec: string): ParsedSpec {
     if (atIdx > 0) {
       return { type: "npm", name: rest.slice(0, atIdx), version: rest.slice(atIdx + 1) }
     }
-    return { type: "npm", name: rest, version: undefined }
+    return { type: "npm", name: rest }
   }
   if (spec.startsWith("pypi:")) {
     const rest = spec.slice(5)
@@ -288,7 +309,7 @@ export function parseSpec(spec: string): ParsedSpec {
     if (atIdx > 0) {
       return { type: "pypi", name: rest.slice(0, atIdx), version: rest.slice(atIdx + 1) }
     }
-    return { type: "pypi", name: rest, version: undefined }
+    return { type: "pypi", name: rest }
   }
   if (spec.startsWith("crates:")) {
     const rest = spec.slice(7)
@@ -296,14 +317,14 @@ export function parseSpec(spec: string): ParsedSpec {
     if (atIdx > 0) {
       return { type: "crates", name: rest.slice(0, atIdx), version: rest.slice(atIdx + 1) }
     }
-    return { type: "crates", name: rest, version: undefined }
+    return { type: "crates", name: rest }
   }
   // Default: GitHub
   const atIdx = spec.lastIndexOf("@")
   if (atIdx > 0) {
     return { type: "github", name: spec.slice(0, atIdx), version: spec.slice(atIdx + 1) }
   }
-  return { type: "github", name: spec, version: undefined }
+  return { type: "github", name: spec }
 }
 
 /** Resolve cache path for a spec. */
@@ -314,11 +335,11 @@ export const getRepoCachePath = (home: string, spec: string): string => {
     case "github":
       return `${cacheDir}/${parsed.name}`
     case "npm":
-      return `${cacheDir}/npm/${parsed.name}/${parsed.version ?? "latest"}`
+      return `${cacheDir}/npm/${parsed.name}/${Option.getOrElse(Option.fromNullishOr(parsed.version), () => "latest")}`
     case "pypi":
-      return `${cacheDir}/pypi/${parsed.name}/${parsed.version ?? "latest"}`
+      return `${cacheDir}/pypi/${parsed.name}/${Option.getOrElse(Option.fromNullishOr(parsed.version), () => "latest")}`
     case "crates":
-      return `${cacheDir}/crates/${parsed.name}/${parsed.version ?? "latest"}`
+      return `${cacheDir}/crates/${parsed.name}/${Option.getOrElse(Option.fromNullishOr(parsed.version), () => "latest")}`
   }
 }
 
@@ -359,12 +380,111 @@ const ensureCached = (cachePath: string, spec: string) =>
     const ctx = yield* ExtensionContext
     yield* ctx.Files.exists(cachePath).pipe(
       Effect.mapError(() => new RepoExplorerError({ message: "Failed to check path", spec })),
-      Effect.flatMap((exists) =>
-        exists
-          ? Effect.void
-          : Effect.fail(new RepoExplorerError({ message: "Not cached. Use fetch first.", spec })),
-      ),
+      Effect.flatMap((exists) => {
+        if (exists) return Effect.void
+        return Effect.fail(new RepoExplorerError({ message: "Not cached. Use fetch first.", spec }))
+      }),
     )
+  })
+
+const fetchRepoAction = (
+  params: typeof RepoExplorerParams.Type,
+  ctx: ExtensionContextService,
+  gitReader: GitReaderService,
+  cachePath: string,
+  parsed: ParsedSpec,
+) =>
+  Effect.gen(function* () {
+    yield* ctx.Files.makeDirectory(ctx.Files.dirname(cachePath), { recursive: true }).pipe(
+      Effect.ignore,
+    )
+
+    if (parsed.type === "github") {
+      const exists = yield* ctx.Files.exists(cachePath).pipe(Effect.orElseSucceed(() => false))
+      if (exists) {
+        if (params.update === true) {
+          yield* gitReader.fetch(cachePath).pipe(
+            Effect.mapError(
+              (e) =>
+                new RepoExplorerError({
+                  message: `Failed to update: ${e.message}`,
+                  spec: params.spec,
+                  cause: e,
+                }),
+            ),
+          )
+        }
+      } else {
+        const url = `https://github.com/${parsed.name}.git`
+        yield* gitReader.clone(url, cachePath, { depth: 100, ref: parsed.version }).pipe(
+          Effect.mapError(
+            (e) =>
+              new RepoExplorerError({
+                message: `Failed to fetch: ${e.message}`,
+                spec: params.spec,
+                cause: e,
+              }),
+          ),
+        )
+      }
+    } else if (parsed.type === "npm") {
+      yield* ctx.Files.makeDirectory(cachePath, { recursive: true }).pipe(
+        Effect.mapError(
+          (e) =>
+            new RepoExplorerError({
+              message: `Failed to create cache directory: ${e}`,
+              spec: params.spec,
+              cause: e,
+            }),
+        ),
+      )
+      let versionSuffix = ""
+      if (Predicate.isNotUndefined(parsed.version)) versionSuffix = `@${parsed.version}`
+      yield* ctx.Process.run("npm", [
+        "pack",
+        `${parsed.name}${versionSuffix}`,
+        "--pack-destination",
+        cachePath,
+      ]).pipe(
+        Effect.mapError(
+          (e) =>
+            new RepoExplorerError({
+              message: `Failed to fetch npm: ${e.message}`,
+              spec: params.spec,
+              cause: e,
+            }),
+        ),
+      )
+      const tarballs = yield* ctx.Files.readDirectory(cachePath).pipe(
+        Effect.mapError(
+          (e) =>
+            new RepoExplorerError({
+              message: `Failed to read cache directory: ${e}`,
+              spec: params.spec,
+              cause: e,
+            }),
+        ),
+      )
+      const tarball = tarballs.find((f) => f.endsWith(".tgz"))
+      if (Predicate.isNotUndefined(tarball)) {
+        yield* ctx.Process.run("tar", [
+          "-xzf",
+          ctx.Files.join(cachePath, tarball),
+          "-C",
+          cachePath,
+        ]).pipe(
+          Effect.mapError(
+            (e) =>
+              new RepoExplorerError({
+                message: `Failed to extract npm tarball: ${e.message}`,
+                spec: params.spec,
+                cause: e,
+              }),
+          ),
+        )
+      }
+    }
+    return { path: cachePath, message: "Fetched successfully" }
   })
 
 // RepoExplorer Tool
@@ -385,96 +505,7 @@ export const RepoTool = tool({
 
     switch (params.action) {
       case "fetch": {
-        yield* ctx.Files.makeDirectory(ctx.Files.dirname(cachePath), { recursive: true }).pipe(
-          Effect.ignore,
-        )
-
-        if (parsed.type === "github") {
-          const exists = yield* ctx.Files.exists(cachePath).pipe(Effect.orElseSucceed(() => false))
-          if (exists) {
-            if (params.update === true) {
-              yield* gitReader.fetch(cachePath).pipe(
-                Effect.mapError(
-                  (e) =>
-                    new RepoExplorerError({
-                      message: `Failed to update: ${e.message}`,
-                      spec: params.spec,
-                      cause: e,
-                    }),
-                ),
-              )
-            }
-          } else {
-            const url = `https://github.com/${parsed.name}.git`
-            yield* gitReader.clone(url, cachePath, { depth: 100, ref: parsed.version }).pipe(
-              Effect.mapError(
-                (e) =>
-                  new RepoExplorerError({
-                    message: `Failed to fetch: ${e.message}`,
-                    spec: params.spec,
-                    cause: e,
-                  }),
-              ),
-            )
-          }
-        } else if (parsed.type === "npm") {
-          yield* ctx.Files.makeDirectory(cachePath, { recursive: true }).pipe(
-            Effect.mapError(
-              (e) =>
-                new RepoExplorerError({
-                  message: `Failed to create cache directory: ${e}`,
-                  spec: params.spec,
-                  cause: e,
-                }),
-            ),
-          )
-          const versionSuffix = parsed.version !== undefined ? `@${parsed.version}` : ""
-          yield* ctx.Process.run("npm", [
-            "pack",
-            `${parsed.name}${versionSuffix}`,
-            "--pack-destination",
-            cachePath,
-          ]).pipe(
-            Effect.mapError(
-              (e) =>
-                new RepoExplorerError({
-                  message: `Failed to fetch npm: ${e.message}`,
-                  spec: params.spec,
-                  cause: e,
-                }),
-            ),
-          )
-          const tarballs = yield* ctx.Files.readDirectory(cachePath).pipe(
-            Effect.mapError(
-              (e) =>
-                new RepoExplorerError({
-                  message: `Failed to read cache directory: ${e}`,
-                  spec: params.spec,
-                  cause: e,
-                }),
-            ),
-          )
-          const tarball = tarballs.find((f) => f.endsWith(".tgz"))
-          if (tarball !== undefined) {
-            yield* ctx.Process.run("tar", [
-              "-xzf",
-              ctx.Files.join(cachePath, tarball),
-              "-C",
-              cachePath,
-            ]).pipe(
-              Effect.mapError(
-                (e) =>
-                  new RepoExplorerError({
-                    message: `Failed to extract npm tarball: ${e.message}`,
-                    spec: params.spec,
-                    cause: e,
-                  }),
-              ),
-            )
-          }
-        }
-        // pypi/crates: simplified - would need pip download / cargo fetch
-        return { path: cachePath, message: "Fetched successfully" }
+        return yield* fetchRepoAction(params, ctx, gitReader, cachePath, parsed)
       }
 
       case "path": {
@@ -483,7 +514,7 @@ export const RepoTool = tool({
       }
 
       case "search": {
-        if (params.query === undefined || params.query === "") {
+        if (Predicate.isUndefined(params.query) || params.query === "") {
           return yield* new RepoExplorerError({
             message: "Query required for search",
             spec: params.spec,
@@ -496,10 +527,11 @@ export const RepoTool = tool({
           params.query,
           cachePath,
         ]).pipe(
-          Effect.map((res) =>
-            res.exitCode === 0 ? res.stdout.trim().split("\n").filter(Boolean) : [],
-          ),
-          Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+          Effect.map((res) => {
+            if (res.exitCode === 0) return res.stdout.trim().split("\n").filter(Boolean)
+            return []
+          }),
+          Effect.orElseSucceed(() => []),
         )
         return { path: cachePath, matches: [...matches] }
       }
@@ -521,7 +553,7 @@ export const RepoTool = tool({
       }
 
       case "read": {
-        if (params.filePath === undefined || params.filePath === "") {
+        if (Predicate.isUndefined(params.filePath) || params.filePath === "") {
           return yield* new RepoExplorerError({
             message: "filePath required for read action",
             spec: params.spec,

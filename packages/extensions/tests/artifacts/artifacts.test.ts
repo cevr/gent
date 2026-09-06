@@ -1,13 +1,14 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
-import { ref } from "@gent/core/extensions/api"
+import { Effect, Schema } from "effect"
+import { ref, type CapabilityRef } from "@gent/core/extensions/api"
 import { ArtifactId, BranchId, type SessionId } from "@gent/core-internal/domain/ids"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { ArtifactsExtension } from "../../src/artifacts/index.js"
-import { ArtifactRpc, type Artifact } from "../../src/artifacts-protocol.js"
+import { ArtifactRpc } from "../../src/artifacts-protocol.js"
 import { e2ePreset } from "../helpers/test-preset.js"
+import type { GentClientRpcError } from "@gent/core-internal/server/rpcs"
 
 const forgedBranchId = BranchId.make("art-test-branch")
 
@@ -17,33 +18,27 @@ const UpdateRef = ref(ArtifactRpc.Update)
 const ClearRef = ref(ArtifactRpc.Clear)
 const ListRef = ref(ArtifactRpc.List)
 
-type ArtifactCapabilityRef =
-  | typeof SaveRef
-  | typeof ReadRef
-  | typeof UpdateRef
-  | typeof ClearRef
-  | typeof ListRef
-
-type ArtifactClientError = object
+type ArtifactClientError = GentClientRpcError
+type ArtifactRequest = <Input, Output>(
+  capability: CapabilityRef<Input, Output>,
+  input: Input,
+) => Effect.Effect<Output, ArtifactClientError>
 
 const withArtifactsClient = <A>(
   fn: (ctx: {
     readonly branchId: BranchId
-    readonly request: (
-      capability: ArtifactCapabilityRef,
-      input: unknown,
-    ) => Effect.Effect<unknown, ArtifactClientError>
-    readonly requestAtBranch: (
+    readonly request: ArtifactRequest
+    readonly requestAtBranch: <Input, Output>(
       branchId: BranchId,
-      capability: ArtifactCapabilityRef,
-      input: unknown,
-    ) => Effect.Effect<unknown, ArtifactClientError>
-    readonly requestInSession: (
+      capability: CapabilityRef<Input, Output>,
+      input: Input,
+    ) => Effect.Effect<Output, ArtifactClientError>
+    readonly requestInSession: <Input, Output>(
       sessionId: SessionId,
       branchId: BranchId,
-      capability: ArtifactCapabilityRef,
-      input: unknown,
-    ) => Effect.Effect<unknown, ArtifactClientError>
+      capability: CapabilityRef<Input, Output>,
+      input: Input,
+    ) => Effect.Effect<Output, ArtifactClientError>
     readonly createBranch: (name: string) => Effect.Effect<BranchId, ArtifactClientError>
     readonly createSession: () => Effect.Effect<
       {
@@ -69,29 +64,47 @@ const withArtifactsClient = <A>(
       return yield* fn({
         branchId: transportBranchId,
         request: (capability, input) =>
-          client.extension.request({
-            sessionId,
-            branchId: transportBranchId,
-            extensionId: capability.extensionId,
-            capabilityId: capability.capabilityId,
-            input,
-          }) as Effect.Effect<unknown, ArtifactClientError>,
+          client.extension
+            .request({
+              sessionId,
+              branchId: transportBranchId,
+              extensionId: capability.extensionId,
+              capabilityId: capability.capabilityId,
+              input,
+            })
+            .pipe(
+              Effect.flatMap((output) =>
+                Schema.decodeUnknownEffect(capability.output)(output).pipe(Effect.orDie),
+              ),
+            ),
         requestAtBranch: (branchId, capability, input) =>
-          client.extension.request({
-            sessionId,
-            branchId,
-            extensionId: capability.extensionId,
-            capabilityId: capability.capabilityId,
-            input,
-          }) as Effect.Effect<unknown, ArtifactClientError>,
+          client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: capability.extensionId,
+              capabilityId: capability.capabilityId,
+              input,
+            })
+            .pipe(
+              Effect.flatMap((output) =>
+                Schema.decodeUnknownEffect(capability.output)(output).pipe(Effect.orDie),
+              ),
+            ),
         requestInSession: (sessionId, branchId, capability, input) =>
-          client.extension.request({
-            sessionId,
-            branchId,
-            extensionId: capability.extensionId,
-            capabilityId: capability.capabilityId,
-            input,
-          }) as Effect.Effect<unknown, ArtifactClientError>,
+          client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: capability.extensionId,
+              capabilityId: capability.capabilityId,
+              input,
+            })
+            .pipe(
+              Effect.flatMap((output) =>
+                Schema.decodeUnknownEffect(capability.output)(output).pipe(Effect.orDie),
+              ),
+            ),
         createBranch: (name) =>
           client.branch.create({ sessionId, name }).pipe(Effect.map((result) => result.branchId)),
         createSession: () => client.session.create({ cwd: "/tmp" }),
@@ -103,12 +116,12 @@ describe("Artifacts extension", () => {
   it.live("Save creates an artifact and returns it", () =>
     withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        const result = (yield* request(SaveRef, {
+        const result = yield* request(SaveRef, {
           label: "Auth migration plan",
           sourceTool: "plan",
           content: "## Step 1\nDo the thing",
           branchId: forgedBranchId,
-        })) as Artifact
+        })
         expect(result.label).toBe("Auth migration plan")
         expect(result.sourceTool).toBe("plan")
         expect(result.content).toBe("## Step 1\nDo the thing")
@@ -122,23 +135,23 @@ describe("Artifacts extension", () => {
   it.live("Save upserts by sourceTool + branchId", () =>
     withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        const first = (yield* request(SaveRef, {
+        const first = yield* request(SaveRef, {
           label: "Plan v1",
           sourceTool: "plan",
           content: "original",
           branchId,
-        })) as Artifact
-        const second = (yield* request(SaveRef, {
+        })
+        const second = yield* request(SaveRef, {
           label: "Plan v2",
           sourceTool: "plan",
           content: "updated",
           branchId,
-        })) as Artifact
+        })
         expect(second.id).toBe(first.id)
         expect(second.label).toBe("Plan v2")
         expect(second.content).toBe("updated")
 
-        const list = (yield* request(ListRef, { branchId })) as ReadonlyArray<Artifact>
+        const list = yield* request(ListRef, { branchId })
         expect(list).toHaveLength(1)
       }),
     ),
@@ -159,7 +172,7 @@ describe("Artifacts extension", () => {
           content: "audit content",
           branchId,
         })
-        const list = (yield* request(ListRef, { branchId })) as ReadonlyArray<Artifact>
+        const list = yield* request(ListRef, { branchId })
         expect(list).toHaveLength(2)
       }),
     ),
@@ -168,15 +181,15 @@ describe("Artifacts extension", () => {
   it.live("Read by id returns the artifact", () =>
     withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        const saved = (yield* request(SaveRef, {
+        const saved = yield* request(SaveRef, {
           label: "Test",
           sourceTool: "test",
           content: "hello",
           branchId,
-        })) as Artifact
-        const read = (yield* request(ReadRef, {
-          query: { _tag: "ById" as const, id: saved.id },
-        })) as Artifact | null
+        })
+        const read = yield* request(ReadRef, {
+          query: { _tag: "ById", id: saved.id },
+        })
         expect(read).not.toBeNull()
         expect(read?.content).toBe("hello")
       }),
@@ -192,9 +205,9 @@ describe("Artifacts extension", () => {
           content: "findings",
           branchId,
         })
-        const read = (yield* request(ReadRef, {
-          query: { _tag: "BySource" as const, sourceTool: "review", branchId },
-        })) as Artifact | null
+        const read = yield* request(ReadRef, {
+          query: { _tag: "BySource", sourceTool: "review", branchId },
+        })
         expect(read).not.toBeNull()
         expect(read?.content).toBe("findings")
       }),
@@ -210,9 +223,9 @@ describe("Artifacts extension", () => {
           content: "branch",
           branchId: forgedBranchId,
         })
-        const read = (yield* request(ReadRef, {
-          query: { _tag: "BySource" as const, sourceTool: "plan", branchId: forgedBranchId },
-        })) as Artifact | null
+        const read = yield* request(ReadRef, {
+          query: { _tag: "BySource", sourceTool: "plan", branchId: forgedBranchId },
+        })
         expect(read).not.toBeNull()
         expect(read?.branchId).toBe(branchId)
         expect(read?.content).toBe("branch")
@@ -224,7 +237,7 @@ describe("Artifacts extension", () => {
     withArtifactsClient(({ request }) =>
       Effect.gen(function* () {
         const read = yield* request(ReadRef, {
-          query: { _tag: "ById" as const, id: ArtifactId.make("nonexistent") },
+          query: { _tag: "ById", id: ArtifactId.make("nonexistent") },
         })
         expect(read).toBeNull()
       }),
@@ -234,16 +247,16 @@ describe("Artifacts extension", () => {
   it.live("Update patches content", () =>
     withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        const saved = (yield* request(SaveRef, {
+        const saved = yield* request(SaveRef, {
           label: "Plan",
           sourceTool: "plan",
           content: "- [ ] step 1\n- [ ] step 2",
           branchId,
-        })) as Artifact
-        const updated = (yield* request(UpdateRef, {
+        })
+        const updated = yield* request(UpdateRef, {
           id: saved.id,
           patch: { find: "- [ ] step 1", replace: "- [x] step 1" },
-        })) as Artifact | null
+        })
         expect(updated?.content).toBe("- [x] step 1\n- [ ] step 2")
       }),
     ),
@@ -252,16 +265,16 @@ describe("Artifacts extension", () => {
   it.live("Update with replaceAll patches all occurrences", () =>
     withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        const saved = (yield* request(SaveRef, {
+        const saved = yield* request(SaveRef, {
           label: "Plan",
           sourceTool: "plan",
           content: "TODO: a\nTODO: b\nTODO: c",
           branchId,
-        })) as Artifact
-        const updated = (yield* request(UpdateRef, {
+        })
+        const updated = yield* request(UpdateRef, {
           id: saved.id,
           patch: { find: "TODO", replace: "DONE", replaceAll: true },
-        })) as Artifact | null
+        })
         expect(updated?.content).toBe("DONE: a\nDONE: b\nDONE: c")
       }),
     ),
@@ -270,16 +283,16 @@ describe("Artifacts extension", () => {
   it.live("Update changes status", () =>
     withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        const saved = (yield* request(SaveRef, {
+        const saved = yield* request(SaveRef, {
           label: "Plan",
           sourceTool: "plan",
           content: "done",
           branchId,
-        })) as Artifact
-        const updated = (yield* request(UpdateRef, {
+        })
+        const updated = yield* request(UpdateRef, {
           id: saved.id,
-          status: "resolved" as const,
-        })) as Artifact | null
+          status: "resolved",
+        })
         expect(updated?.status).toBe("resolved")
       }),
     ),
@@ -297,14 +310,14 @@ describe("Artifacts extension", () => {
   it.live("Clear removes an artifact", () =>
     withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
-        const saved = (yield* request(SaveRef, {
+        const saved = yield* request(SaveRef, {
           label: "Temp",
           sourceTool: "test",
           content: "x",
           branchId,
-        })) as Artifact
+        })
         yield* request(ClearRef, { id: saved.id })
-        const list = (yield* request(ListRef, { branchId })) as ReadonlyArray<Artifact>
+        const list = yield* request(ListRef, { branchId })
         expect(list).toHaveLength(0)
       }),
     ),
@@ -323,15 +336,15 @@ describe("Artifacts extension", () => {
         })
         yield* request(SaveRef, { label: "C", sourceTool: "audit", content: "c" })
 
-        const filtered = (yield* request(ListRef, {
+        const filtered = yield* request(ListRef, {
           branchId: otherBranch,
-        })) as ReadonlyArray<Artifact>
+        })
         expect(filtered).toHaveLength(2)
         expect(filtered.map((artifact) => artifact.label).sort()).toEqual(["A", "C"])
 
-        const otherFiltered = (yield* requestAtBranch(otherBranch, ListRef, {
+        const otherFiltered = yield* requestAtBranch(otherBranch, ListRef, {
           branchId,
-        })) as ReadonlyArray<Artifact>
+        })
         expect(otherFiltered).toHaveLength(1)
         expect(otherFiltered[0]?.label).toBe("B")
       }),
@@ -353,13 +366,8 @@ describe("Artifacts extension", () => {
           content: "second",
         })
 
-        const firstList = (yield* request(ListRef, {})) as ReadonlyArray<Artifact>
-        const secondList = (yield* requestInSession(
-          second.sessionId,
-          second.branchId,
-          ListRef,
-          {},
-        )) as ReadonlyArray<Artifact>
+        const firstList = yield* request(ListRef, {})
+        const secondList = yield* requestInSession(second.sessionId, second.branchId, ListRef, {})
         expect(firstList.map((artifact) => artifact.label)).toEqual(["First session"])
         expect(secondList.map((artifact) => artifact.label)).toEqual(["Second session"])
       }),

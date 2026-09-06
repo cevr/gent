@@ -8,7 +8,7 @@
  * @module
  */
 
-import { Cause, Effect, Exit, Layer, Schema } from "effect"
+import { Predicate, Cause, Effect, Exit, Layer, Schema } from "effect"
 import type { LoadedExtension } from "../../../domain/extension.js"
 import type { ExtensionId } from "../../../domain/ids.js"
 import type { AnyResourceContribution, ResourceScope } from "../../../domain/resource.js"
@@ -24,13 +24,10 @@ export interface ResourceEntry {
   readonly resource: AnyResourceContribution
 }
 
-class ResourceStartError extends Schema.TaggedErrorClass<ResourceStartError>()(
-  "ResourceStartError",
-  {
-    extensionId: Schema.String,
-    cause: Schema.String,
-  },
-) {}
+class ResourceStartError extends Schema.TaggedError<ResourceStartError>()("ResourceStartError", {
+  extensionId: Schema.String,
+  cause: Schema.String,
+}) {}
 
 export const collectResourceEntries = (
   extensions: ReadonlyArray<LoadedExtension>,
@@ -46,8 +43,9 @@ export const mergeResourceServiceLayers = (
   entries: ReadonlyArray<ResourceEntry>,
 ): ErasedResourceLayer =>
   entries.reduce<ErasedResourceLayer>(
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.
-    (acc, { resource }) => Layer.merge(acc, eraseResourceLayer(resource.layer)),
+    (acc, { resource }) =>
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.
+      Layer.merge(acc, eraseResourceLayer(resource.layer)),
     emptyErasedResourceLayer,
   )
 
@@ -56,7 +54,10 @@ export const buildResourceServiceLayer = (
   scope: ResourceScope = "process",
 ): ErasedResourceLayer => {
   const entries = collectResourceEntries(extensions, scope)
-  return entries.length === 0 ? emptyErasedResourceLayer : mergeResourceServiceLayers(entries)
+  if (entries.length === 0) {
+    return emptyErasedResourceLayer
+  }
+  return mergeResourceServiceLayers(entries)
 }
 
 const buildLifecycleLayer = (
@@ -66,7 +67,7 @@ const buildLifecycleLayer = (
     Effect.gen(function* () {
       for (const entry of entries) {
         const start = entry.resource.start
-        if (start !== undefined) {
+        if (!Predicate.isUndefined(start)) {
           // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.
           const exit = yield* exitErasedEffect(() => start)
           if (Exit.isFailure(exit)) {
@@ -83,7 +84,7 @@ const buildLifecycleLayer = (
           }
         }
         const stop = entry.resource.stop
-        if (stop !== undefined) {
+        if (!Predicate.isUndefined(stop)) {
           // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.
           yield* Effect.addFinalizer(() => exitErasedEffect(() => stop).pipe(Effect.asVoid))
         }
@@ -100,7 +101,8 @@ export const buildResourceLayer = (
 
   const serviceLayers = mergeResourceServiceLayers(entries)
   const hasLifecycle = entries.some(
-    ({ resource }) => resource.start !== undefined || resource.stop !== undefined,
+    ({ resource }) =>
+      !Predicate.isUndefined(resource.start) || !Predicate.isUndefined(resource.stop),
   )
   if (!hasLifecycle) return serviceLayers
 

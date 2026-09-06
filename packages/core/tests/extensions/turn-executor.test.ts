@@ -5,7 +5,7 @@
  * handling.
  */
 import { describe, test, expect, it } from "effect-bun-test"
-import { Effect, Stream } from "effect"
+import { Predicate, Effect, Stream } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -30,14 +30,16 @@ const makeExt = (
     executor: TurnExecutor
   }>,
 ): LoadedExtension => {
-  const drivers = externalDrivers?.map((d) => ({ ...d, invalidate: () => Effect.void }))
+  const drivers = externalDrivers?.map((d) => ({ ...d, invalidate: Effect.void }))
+  let contributions: ExtensionContributions = {}
+  if (!Predicate.isUndefined(drivers) && drivers.length > 0) {
+    contributions = { externalDrivers: drivers }
+  }
   return {
     manifest: { id: ExtensionId.make(id) },
-    scope: "builtin" as const,
+    scope: "builtin",
     sourcePath: `/test/${id}`,
-    contributions: (drivers !== undefined && drivers.length > 0
-      ? { externalDrivers: drivers }
-      : {}) as ExtensionContributions,
+    contributions,
   }
 }
 describe("ExternalDriver registry", () => {
@@ -85,6 +87,7 @@ describe("ExternalDriver registry", () => {
       const driver = yield* Effect.gen(function* () {
         const registry = yield* DriverRegistry
         return yield* registry.getExternal("test-executor")
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(registryLayer))
       expect(driver?.executor).toBe(echoExecutor)
     }),
@@ -99,6 +102,7 @@ describe("ExternalDriver registry", () => {
       const result = yield* Effect.gen(function* () {
         const registry = yield* DriverRegistry
         return yield* registry.getExternal("nonexistent")
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(registryLayer))
       expect(result).toBeUndefined()
     }),

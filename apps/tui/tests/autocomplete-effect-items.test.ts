@@ -10,13 +10,13 @@
  * `NoActiveSessionError` that the popup adapter normalizes to `[]`.
  */
 import { describe, it, test, expect } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { ExtensionId, ref, request } from "@gent/core/extensions/api"
 import type { AutocompleteContribution, AutocompleteItem } from "../src/extensions/client-facets.js"
 import {
   ClientTransport,
-  type ClientShellTransportShape,
-  type ClientTransportShape,
+  type ClientShellTransportDefinition,
+  type ClientTransportDefinition,
   NoActiveSessionError,
   requestExtension,
 } from "../src/extensions/client-transport"
@@ -27,7 +27,10 @@ import {
   makeClientTestTransport,
 } from "./extension-test-harness-boundary"
 import { runRuntimeEffectBoundary, runRuntimeExitBoundary } from "./run-effect-boundary"
-class AutocompleteTestError extends Schema.TaggedErrorClass<AutocompleteTestError>()(
+
+const absent = Option.getOrUndefined(Option.none())
+const emptyItems: ReadonlyArray<AutocompleteItem> = []
+class AutocompleteTestError extends Schema.TaggedError<AutocompleteTestError>()(
   "AutocompleteTestError",
   { message: Schema.String },
 ) {}
@@ -38,18 +41,21 @@ const ListThingsRpc = request({
   output: Schema.Array(Schema.String),
   execute: () => Effect.succeed([]),
 })
+// eslint-disable-next-line effect/noNullish -- fake transport mirrors the SDK's absent session callback.
+type FakeSession =
+  | {
+      sessionId: SessionId
+      branchId: BranchId
+    }
+  // eslint-disable-next-line effect/noNullish -- fake transport mirrors the SDK's absent session callback.
+  | undefined
 const makeFakeTransport = (
   opts: {
-    readonly currentSession?: () =>
-      | {
-          sessionId: SessionId
-          branchId: BranchId
-        }
-      | undefined
+    readonly currentSession?: () => FakeSession
     readonly requestReply?: unknown
     readonly requestEffect?: () => Effect.Effect<unknown, Error>
   } = {},
-): ClientShellTransportShape =>
+): ClientShellTransportDefinition =>
   makeClientTestTransport({
     currentSession:
       opts.currentSession ??
@@ -60,7 +66,7 @@ const makeFakeTransport = (
     requestEffect: opts.requestEffect,
     requestReply: opts.requestReply ?? [],
   })
-const makeTestRuntime = (transport: ClientShellTransportShape) =>
+const makeTestRuntime = (transport: ClientShellTransportDefinition) =>
   makeClientExtensionRuntime({ transport })
 describe("autocomplete Effect items() through ClientTransport", () => {
   it.live("Effect items yielding ClientTransport resolves via runtime.runPromise", () =>
@@ -76,7 +82,9 @@ describe("autocomplete Effect items() through ClientTransport", () => {
             // Touch the transport so the test proves the service resolved.
             const session = t.currentSession()
             expect(session).toBeDefined()
-            return [{ id: filter, label: `got:${filter}` }] as const
+            return [
+              { id: filter, label: `got:${filter}` },
+            ] satisfies ReadonlyArray<AutocompleteItem>
           }),
       }
       const result = yield* Effect.promise(() =>
@@ -88,7 +96,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
   )
   it.live("requestExtension fails with NoActiveSessionError when no session active", () =>
     Effect.gen(function* () {
-      const transport = makeFakeTransport({ currentSession: () => undefined })
+      const transport = makeFakeTransport({ currentSession: () => absent })
       const runtime = makeTestRuntime(transport)
       const exit = yield* Effect.promise(() =>
         runRuntimeExitBoundary(runtime, requestExtension(ref(ListThingsRpc), {})),
@@ -107,7 +115,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       // The popup wraps `runAutocompleteItems(...).catch(() => [])` per
       // `autocomplete-popup.tsx:70`. Prove that pattern still produces an empty
       // array when the underlying transport call fails (no active session).
-      const transport = makeFakeTransport({ currentSession: () => undefined })
+      const transport = makeFakeTransport({ currentSession: () => absent })
       const runtime = makeTestRuntime(transport)
       const contribution: AutocompleteContribution = {
         prefix: "$",
@@ -115,12 +123,12 @@ describe("autocomplete Effect items() through ClientTransport", () => {
         items: (_filter: string) =>
           Effect.gen(function* () {
             const reply = yield* requestExtension(ref(ListThingsRpc), {})
-            return reply.map((label) => ({ id: label, label })) as readonly AutocompleteItem[]
+            return reply.map((label) => ({ id: label, label }))
           }),
       }
       const result = yield* Effect.tryPromise(() =>
         runAutocompleteItems(contribution, "filter", runtime),
-      ).pipe(Effect.catchEager(() => Effect.succeed([] as readonly AutocompleteItem[])))
+      ).pipe(Effect.catchEager(() => Effect.succeed(emptyItems)))
       expect(result).toEqual([])
       yield* Effect.promise(() => runtime.dispose())
     }),
@@ -138,7 +146,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
   )
   it.live("popup adapter pattern: requestExtension failure normalizes to []", () =>
     Effect.gen(function* () {
-      const transport = makeFakeTransport({ currentSession: () => undefined })
+      const transport = makeFakeTransport({ currentSession: () => absent })
       const runtime = makeTestRuntime(transport)
       const contribution: AutocompleteContribution = {
         prefix: "$",
@@ -146,12 +154,12 @@ describe("autocomplete Effect items() through ClientTransport", () => {
         items: (_filter: string) =>
           Effect.gen(function* () {
             const reply = yield* requestExtension(ref(ListThingsRpc), {})
-            return reply.map((label) => ({ id: label, label })) as readonly AutocompleteItem[]
+            return reply.map((label) => ({ id: label, label }))
           }),
       }
       const result = yield* Effect.tryPromise(() =>
         runAutocompleteItems(contribution, "filter", runtime),
-      ).pipe(Effect.catchEager(() => Effect.succeed([] as readonly AutocompleteItem[])))
+      ).pipe(Effect.catchEager(() => Effect.succeed(emptyItems)))
       expect(result).toEqual([])
       yield* Effect.promise(() => runtime.dispose())
     }),
@@ -197,8 +205,8 @@ describe("autocomplete Effect items() through ClientTransport", () => {
     Effect.gen(function* () {
       const transport = makeFakeTransport()
       const runtime = makeTestRuntime(transport)
-      const resolved: ClientTransportShape = yield* Effect.promise(() =>
-        runRuntimeEffectBoundary<ClientTransportShape, never, ClientTransport>(
+      const resolved: ClientTransportDefinition = yield* Effect.promise(() =>
+        runRuntimeEffectBoundary<ClientTransportDefinition, never, ClientTransport>(
           runtime,
           Effect.gen(function* () {
             yield* Effect.void
@@ -207,8 +215,8 @@ describe("autocomplete Effect items() through ClientTransport", () => {
         ),
       )
       expect(resolved.currentSession()).toEqual({
-        sessionId: SessionId.make("sess-1") as SessionId,
-        branchId: BranchId.make("branch-1") as BranchId,
+        sessionId: SessionId.make("sess-1"),
+        branchId: BranchId.make("branch-1"),
       })
       expect("run" in resolved).toBe(false)
       expect("cast" in resolved).toBe(false)

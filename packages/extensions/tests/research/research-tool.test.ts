@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Path } from "effect"
+import { Effect, FileSystem, Layer, Option, Path } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
 import { ResearchTool } from "../../src/research/research-tool.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
@@ -30,13 +30,17 @@ const makeCtx = (overrides: {
     home: TEST_HOME,
     Agent: {
       run: overrides.agentRun,
-      listAgents: () => Effect.succeed(AllBuiltinAgents),
+      listAgents: Effect.succeed(AllBuiltinAgents),
     },
   })
 
 const platformLayer = Layer.mergeAll(BunFileSystem.layer, Path.layer, GitReader.Test)
 const withRepoFixtures = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   ensureRepoFixtures.pipe(Effect.andThen(effect))
+const repoLabel = (prompt: string) => {
+  if (prompt.includes("effect-ts")) return "effect"
+  return "zio"
+}
 
 describe("ResearchTool", () => {
   it.live("single repo returns direct response", () => {
@@ -47,7 +51,7 @@ describe("ResearchTool", () => {
             text: "Effect uses fibers for concurrency. See src/Fiber.ts:42.",
             sessionId: SessionId.make("research-1"),
             agentName: params.agent.name,
-            persistence: "ephemeral" as const,
+            persistence: "ephemeral",
           }),
         ),
     })
@@ -69,30 +73,28 @@ describe("ResearchTool", () => {
   })
 
   it.live("multiple repos triggers synthesis with model B", () => {
-    let synthesisModelId: string | undefined
+    let synthesisModelId = Option.none<string>()
     const prompts: string[] = []
     const ctx = makeCtx({
       agentRun: (params) => {
         prompts.push(params.prompt)
-        if (params.runSpec?.overrides?.modelId !== undefined) {
-          synthesisModelId = params.runSpec.overrides.modelId
-        }
+        synthesisModelId = Option.fromUndefinedOr(params.runSpec?.overrides?.modelId)
         if (params.prompt.includes("Synthesize")) {
           return Effect.succeed(
             AgentRunResult.cases.success.make({
               text: "Comparative analysis: both use fiber-based concurrency.",
               sessionId: SessionId.make("synthesis"),
               agentName: params.agent.name,
-              persistence: "ephemeral" as const,
+              persistence: "ephemeral",
             }),
           )
         }
         return Effect.succeed(
           AgentRunResult.cases.success.make({
-            text: `Findings for ${params.prompt.includes("effect-ts") ? "effect" : "zio"}.`,
+            text: `Findings for ${repoLabel(params.prompt)}.`,
             sessionId: SessionId.make("worker"),
             agentName: params.agent.name,
-            persistence: "ephemeral" as const,
+            persistence: "ephemeral",
           }),
         )
       },
@@ -111,7 +113,7 @@ describe("ResearchTool", () => {
         Effect.map((result) => {
           expect(result.response).toContain("Comparative analysis")
           expect(result.repoCount).toBe(2)
-          expect(synthesisModelId).toBe("openai/gpt-5.4")
+          expect(synthesisModelId).toEqual(Option.some("openai/gpt-5.4"))
           expect(prompts.some((p) => p.includes("Synthesize"))).toBe(true)
         }),
         Effect.provide(platformLayer),
@@ -129,7 +131,7 @@ describe("ResearchTool", () => {
             text: "Found scheduler patterns.",
             sessionId: SessionId.make("focus"),
             agentName: params.agent.name,
-            persistence: "ephemeral" as const,
+            persistence: "ephemeral",
           }),
         )
       },

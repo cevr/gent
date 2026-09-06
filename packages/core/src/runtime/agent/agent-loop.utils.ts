@@ -12,7 +12,7 @@ import {
   messageSingleText,
 } from "../../domain/message-part-projection.js"
 import { type ActorCommandId, MessageId, ToolCallId } from "../../domain/ids.js"
-import { Schema } from "effect"
+import { Option, Predicate, Schema } from "effect"
 import { compileSystemPrompt, withSectionMarkers, type PromptSection } from "../../domain/prompt.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
 
@@ -35,7 +35,7 @@ export const buildTurnPromptSections = (
   const sections: PromptSection[] = [...baseSections]
 
   // Agent addendum
-  if (agent.systemPromptAddendum !== undefined && agent.systemPromptAddendum !== "") {
+  if (!Predicate.isUndefined(agent.systemPromptAddendum) && agent.systemPromptAddendum !== "") {
     sections.push({
       id: "agent-addendum",
       content: `## Agent: ${agent.name}\n${agent.systemPromptAddendum}`,
@@ -50,7 +50,7 @@ export const buildTurnPromptSections = (
 
   // Tool list — tools with promptSnippet get listed explicitly
   const snippets = toolsWithMetadata
-    .filter((tool) => tool.metadata.promptSnippet !== undefined)
+    .filter((tool) => !Predicate.isUndefined(tool.metadata.promptSnippet))
     .map((tool) => `- **${tool.id}**: ${tool.metadata.promptSnippet}`)
   if (snippets.length > 0) {
     // Wrap with section sentinels so the ACP codemode prompt slot can swap
@@ -89,10 +89,13 @@ export const buildTurnPromptSections = (
   // Internal agents are hidden — only user-facing agents appear as delegation targets
   const INTERNAL_AGENTS = new Set(["auditor", "architect", "summarizer", "title", "librarian"])
   const hasDelegate = toolsWithMetadata.some((tool) => tool.id === "delegate")
-  if (hasDelegate && delegationTargets !== undefined && delegationTargets.length > 0) {
+  if (hasDelegate && !Predicate.isUndefined(delegationTargets) && delegationTargets.length > 0) {
     const targets = delegationTargets
       .filter(
-        (a) => a.name !== agent.name && a.description !== undefined && !INTERNAL_AGENTS.has(a.name),
+        (a) =>
+          a.name !== agent.name &&
+          !Predicate.isUndefined(a.description) &&
+          !INTERNAL_AGENTS.has(a.name),
       )
       .map((a) => `- **${a.name}**: ${a.description}`)
     if (targets.length > 0) {
@@ -105,7 +108,7 @@ export const buildTurnPromptSections = (
   }
 
   // Extension-contributed sections
-  if (extraSections !== undefined) {
+  if (!Predicate.isUndefined(extraSections)) {
     for (const s of extraSections) {
       sections.push(s)
     }
@@ -133,15 +136,15 @@ export const buildTurnPrompt = (
 export const resolveReasoning = (
   agent: AgentDefinition,
   sessionOverride?: string,
-): ReasoningEffortType | undefined => {
-  if (sessionOverride !== undefined && isReasoningEffort(sessionOverride)) {
-    return sessionOverride
+): Option.Option<ReasoningEffortType> => {
+  if (!Predicate.isUndefined(sessionOverride) && isReasoningEffort(sessionOverride)) {
+    return Option.some(sessionOverride)
   }
-  return agent.reasoningEffort
+  return Option.fromUndefinedOr(agent.reasoningEffort)
 }
 
-export const getSingleText = (message: Message): string | undefined =>
-  messageSingleText(message.parts)
+export const getSingleText = (message: Message): Option.Option<string> =>
+  Option.fromUndefinedOr(messageSingleText(message.parts))
 
 export const messageText = (message: Message): string =>
   messagePartsTextLines(message.parts).join("\n")

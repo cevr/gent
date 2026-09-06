@@ -1,8 +1,9 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option, Predicate } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { StorageError } from "../domain/storage-error.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
+// oxlint-disable-next-line effect/noUnknownParameters -- SQL effects expose unknown failure causes at this storage boundary.
 const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
 
 /**
@@ -22,6 +23,7 @@ export const sanitizeFts5Query = (raw: string): string => {
 
 export interface SearchResult {
   readonly sessionId: string
+  // oxlint-disable-next-line effect/noNullish -- This storage result mirrors a nullable SQL session name.
   readonly sessionName: string | null
   readonly branchId: string
   readonly snippet: string
@@ -55,18 +57,27 @@ export class SearchStorage extends Context.Service<SearchStorage, SearchStorageS
           dateAfter?: number
           dateBefore?: number
         },
-      ) =>
-        sql.and([
-          sql`s.workspace_id = ${workspaceId}`,
-          ...(options?.sessionId !== undefined ? [sql`m.session_id = ${options.sessionId}`] : []),
-          ...(options?.dateAfter !== undefined ? [sql`m.created_at > ${options.dateAfter}`] : []),
-          ...(options?.dateBefore !== undefined ? [sql`m.created_at < ${options.dateBefore}`] : []),
-        ])
+      ) => {
+        const conditions = [sql`s.workspace_id = ${workspaceId}`]
+        if (!Predicate.isUndefined(options?.sessionId)) {
+          conditions.push(sql`m.session_id = ${options.sessionId}`)
+        }
+        if (!Predicate.isUndefined(options?.dateAfter)) {
+          conditions.push(sql`m.created_at > ${options.dateAfter}`)
+        }
+        if (!Predicate.isUndefined(options?.dateBefore)) {
+          conditions.push(sql`m.created_at < ${options.dateBefore}`)
+        }
+        return sql.and(conditions)
+      }
 
-      return {
+      return SearchStorage.of({
         searchMessages: Effect.fn("SearchStorage.searchMessages")(
           function* (query, options) {
-            const limit = options?.limit ?? 20
+            const limit = Option.match(Option.fromUndefinedOr(options?.limit), {
+              onNone: () => 20,
+              onSome: (value) => value,
+            })
 
             const ftsQuery = sanitizeFts5Query(query)
             if (ftsQuery.length === 0) return []
@@ -75,6 +86,7 @@ export class SearchStorage extends Context.Service<SearchStorage, SearchStorageS
 
             const rows = yield* sql<{
               session_id: string
+              // oxlint-disable-next-line effect/noNullish -- Raw SQL rows preserve the database NULL representation.
               session_name: string | null
               branch_id: string
               snippet_text: string
@@ -103,7 +115,7 @@ export class SearchStorage extends Context.Service<SearchStorage, SearchStorageS
           },
           Effect.mapError(mapError("Failed to search messages")),
         ),
-      }
+      })
     }),
   )
 }

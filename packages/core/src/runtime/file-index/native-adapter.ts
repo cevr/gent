@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Layer, Path } from "effect"
+import { Effect, FileSystem, Layer, Option, Path, Result } from "effect"
 import {
   FileIndex,
   FileIndexError,
@@ -43,10 +43,9 @@ export const ensureDbDir: Effect.Effect<
 // Using it directly removes the JS-side 50ms `Effect.sleep` poll loop —
 // scan completion is a single FFI rendezvous, not a busy-wait.
 const waitForScan = (finder: FileFinder, timeoutMs: number): Effect.Effect<boolean> =>
-  Effect.sync(() => {
-    const result = finder.waitForScan(timeoutMs)
-    return result.ok && result.value
-  })
+  Effect.promise(() => finder.waitForScan(timeoutMs)).pipe(
+    Effect.map((result) => result.ok && result.value),
+  )
 
 // ---------------------------------------------------------------------------
 // Native FileIndex implementation
@@ -69,9 +68,9 @@ const makeNativeService = (
       modifiedMs: item.modified * 1000,
     })
 
-    const getOrCreate = (cwd: string): FinderEntry | undefined => {
-      const existing = finders.get(cwd)
-      if (existing !== undefined) return existing
+    const getOrCreate = (cwd: string): Option.Option<FinderEntry> => {
+      const existing = Option.fromUndefinedOr(finders.get(cwd))
+      if (Option.isSome(existing)) return existing
 
       const result = NativeFileFinder.create({
         basePath: cwd,
@@ -80,33 +79,34 @@ const makeNativeService = (
         aiMode: true,
       })
 
-      if (!result.ok) return undefined
+      if (!result.ok) return Option.none()
 
       const entry: FinderEntry = { finder: result.value, scanned: false }
       finders.set(cwd, entry)
-      return entry
+      return Option.some(entry)
     }
 
     const service: FileIndexService = {
       listFiles: (params) =>
         Effect.gen(function* () {
           const entry = getOrCreate(params.cwd)
-          if (entry === undefined) {
+          if (Option.isNone(entry)) {
             return yield* new FileIndexError({
               message: "failed to create finder",
               cwd: params.cwd,
             })
           }
+          const finderEntry = entry.value
 
-          if (!entry.scanned) {
-            const completed = yield* waitForScan(entry.finder, params.waitForScanMs ?? 5000)
+          if (!finderEntry.scanned) {
+            const completed = yield* waitForScan(finderEntry.finder, params.waitForScanMs ?? 5000)
             if (!completed) {
               return yield* new FileIndexError({
                 message: "scan timed out",
                 cwd: params.cwd,
               })
             }
-            entry.scanned = true
+            finderEntry.scanned = true
           }
 
           const pageSize = 200
@@ -116,7 +116,7 @@ const makeNativeService = (
 
           // eslint-disable-next-line no-constant-condition -- cursor loop exits on empty page or backend error
           while (true) {
-            const result = entry.finder.fileSearch("", { pageSize, pageIndex })
+            const result = finderEntry.finder.fileSearch("", { pageSize, pageIndex })
             if (!result.ok) {
               return yield* new FileIndexError({
                 message: `fileSearch failed: ${result.error}`,
@@ -139,11 +139,8 @@ const makeNativeService = (
 
     const finalize: Effect.Effect<void> = Effect.sync(() => {
       for (const [, entry] of finders) {
-        try {
-          entry.finder.destroy()
-        } catch {
-          // Ignore cleanup errors
-        }
+        // Cleanup is best effort. The native module can throw during teardown.
+        Result.try(() => entry.finder.destroy())
       }
       finders.clear()
     })

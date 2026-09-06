@@ -1,30 +1,21 @@
 /** @jsxImportSource @opentui/solid */
 
-import { isRecord } from "@gent/core-internal/domain/guards.js"
 import type { InteractionRendererProps } from "../../extensions/client-facets.js"
 import { OptionList } from "./option-list"
+import { Option, Schema } from "effect"
 
-interface PromptMetadata {
-  type: "prompt"
-  mode?: "present" | "confirm" | "review"
-  title?: string
-  path?: string
-}
+const decodeMetadata = Schema.decodeUnknownOption(
+  Schema.Struct({
+    type: Schema.Literal("prompt"),
+    mode: Schema.optional(Schema.Literals(["present", "confirm", "review"])),
+    title: Schema.optional(Schema.String),
+    path: Schema.optional(Schema.String),
+  }),
+)
 
-const parseMetadata = (metadata: unknown): PromptMetadata | undefined => {
-  if (!isRecord(metadata) || metadata["type"] !== "prompt") return undefined
-  return {
-    type: "prompt",
-    mode:
-      metadata["mode"] === "present" ||
-      metadata["mode"] === "confirm" ||
-      metadata["mode"] === "review"
-        ? metadata["mode"]
-        : undefined,
-    title: typeof metadata["title"] === "string" ? metadata["title"] : undefined,
-    path: typeof metadata["path"] === "string" ? metadata["path"] : undefined,
-  }
-}
+type InteractionMetadata = InteractionRendererProps["event"]["metadata"]
+const parseMetadata = (metadata: InteractionMetadata) =>
+  Option.getOrUndefined(decodeMetadata(metadata))
 
 export function PromptRenderer(props: InteractionRendererProps) {
   const meta = () => parseMetadata(props.event.metadata)
@@ -44,16 +35,22 @@ export function PromptRenderer(props: InteractionRendererProps) {
       question={props.event.text}
       options={options()}
       onSubmit={(selections) => {
-        const sel = selections[0]?.toLowerCase() ?? "no"
+        const sel = Option.fromNullishOr(selections[0]).pipe(
+          Option.map((value) => value.toLowerCase()),
+          Option.getOrElse(() => "no"),
+        )
         if (sel === "edit") {
           props.resolve({ approved: true, notes: "edit" })
           return
         }
-        const freeform = selections.find((s) => !["yes", "no", "edit"].includes(s.toLowerCase()))
-        props.resolve({
-          approved: sel === "yes",
-          ...(freeform !== undefined ? { notes: freeform } : {}),
-        })
+        const freeform = Option.fromNullishOr(
+          selections.find((value) => !["yes", "no", "edit"].includes(value.toLowerCase())),
+        )
+        if (Option.isSome(freeform)) {
+          props.resolve({ approved: sel === "yes", notes: freeform.value })
+          return
+        }
+        props.resolve({ approved: sel === "yes" })
       }}
       onCancel={() => props.resolve({ approved: false })}
     />

@@ -1,9 +1,15 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
 import { CounselTool } from "../../src/counsel/counsel-tool.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { AgentRunResult, SessionId, type ExtensionContextService } from "@gent/core/extensions/api"
+import {
+  AgentRunResult,
+  ModelId,
+  SessionId,
+  type ExtensionContextService,
+  type RunSpec,
+} from "@gent/core/extensions/api"
 import { runToolWithCtx } from "@gent/core-internal/test-utils"
 import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
 
@@ -15,24 +21,26 @@ const makeCtx = (overrides: {
   testToolContext({
     Agent: {
       run: overrides.agentRun,
-      listAgents: () => Effect.succeed(AllBuiltinAgents),
+      listAgents: Effect.succeed(AllBuiltinAgents),
     },
   })
 
+type RunOverrides = NonNullable<RunSpec["overrides"]>
+
 describe("CounselTool", () => {
   it.live("standard mode uses medium reasoning and model B", () => {
-    let capturedOverrides: Record<string, unknown> | undefined
+    let capturedOverrides = Option.none<RunOverrides>()
     let capturedPrompt = ""
     const ctx = makeCtx({
       agentRun: (params) => {
-        capturedOverrides = params.runSpec?.overrides as Record<string, unknown> | undefined
+        capturedOverrides = Option.fromNullishOr(params.runSpec?.overrides)
         capturedPrompt = params.prompt
         return Effect.succeed(
           AgentRunResult.cases.success.make({
             text: "Looks good, minor concern about error handling.",
             sessionId: SessionId.make("counsel-session"),
             agentName: params.agent.name,
-            persistence: "ephemeral" as const,
+            persistence: "ephemeral",
           }),
         )
       },
@@ -41,16 +49,12 @@ describe("CounselTool", () => {
     return narrowR(
       runToolWithCtx(CounselTool, { prompt: "Is this approach sound?" }, ctx).pipe(
         Effect.map((result) => {
+          const overrides = Option.getOrThrow(capturedOverrides)
           expect(capturedPrompt).toContain("Is this approach sound?")
-          expect(capturedOverrides?.["modelId"]).toBe("openai/gpt-5.4")
-          expect(capturedOverrides?.["reasoningEffort"]).toBe("medium")
-          expect(capturedOverrides?.["allowedTools"]).toEqual([
-            "grep",
-            "glob",
-            "read",
-            "memory_search",
-          ])
-          expect(capturedOverrides?.["systemPromptAddendum"]).toContain("focused second opinion")
+          expect(overrides["modelId"]).toBe(ModelId.make("openai/gpt-5.4"))
+          expect(overrides["reasoningEffort"]).toBe("medium")
+          expect(overrides["allowedTools"]).toEqual(["grep", "glob", "read", "memory_search"])
+          expect(overrides["systemPromptAddendum"]).toContain("focused second opinion")
           expect(result.mode).toBe("standard")
           expect(result.response).toBe("Looks good, minor concern about error handling.")
         }),
@@ -59,16 +63,16 @@ describe("CounselTool", () => {
   })
 
   it.live("deep mode uses high reasoning and expanded tools", () => {
-    let capturedOverrides: Record<string, unknown> | undefined
+    let capturedOverrides = Option.none<RunOverrides>()
     const ctx = makeCtx({
       agentRun: (params) => {
-        capturedOverrides = params.runSpec?.overrides as Record<string, unknown> | undefined
+        capturedOverrides = Option.fromNullishOr(params.runSpec?.overrides)
         return Effect.succeed(
           AgentRunResult.cases.success.make({
             text: "After thorough analysis...",
             sessionId: SessionId.make("counsel-deep"),
             agentName: params.agent.name,
-            persistence: "ephemeral" as const,
+            persistence: "ephemeral",
           }),
         )
       },
@@ -77,9 +81,10 @@ describe("CounselTool", () => {
     return narrowR(
       runToolWithCtx(CounselTool, { prompt: "Review this architecture", mode: "deep" }, ctx).pipe(
         Effect.map((result) => {
-          expect(capturedOverrides?.["modelId"]).toBe("openai/gpt-5.4")
-          expect(capturedOverrides?.["reasoningEffort"]).toBe("high")
-          expect(capturedOverrides?.["allowedTools"]).toEqual([
+          const overrides = Option.getOrThrow(capturedOverrides)
+          expect(overrides["modelId"]).toBe(ModelId.make("openai/gpt-5.4"))
+          expect(overrides["reasoningEffort"]).toBe("high")
+          expect(overrides["allowedTools"]).toEqual([
             "grep",
             "glob",
             "read",
@@ -87,7 +92,7 @@ describe("CounselTool", () => {
             "websearch",
             "webfetch",
           ])
-          expect(capturedOverrides?.["systemPromptAddendum"]).toContain("thorough second opinion")
+          expect(overrides["systemPromptAddendum"]).toContain("thorough second opinion")
           expect(result.mode).toBe("deep")
           expect(result.response).toBe("After thorough analysis...")
         }),
@@ -105,7 +110,7 @@ describe("CounselTool", () => {
             text: "Noted.",
             sessionId: SessionId.make("counsel-ctx"),
             agentName: params.agent.name,
-            persistence: "ephemeral" as const,
+            persistence: "ephemeral",
           }),
         )
       },
@@ -146,18 +151,18 @@ describe("CounselTool", () => {
   })
 
   it.live("uses counsel-worker agent with ephemeral persistence via runSpec", () => {
-    let capturedAgent: { name: string } | undefined
-    let capturedRunPersistence: string | undefined
+    let capturedAgent = Option.none<{ name: string }>()
+    let capturedRunPersistence = Option.none<string>()
     const ctx = makeCtx({
       agentRun: (params) => {
-        capturedAgent = { name: params.agent.name }
-        capturedRunPersistence = params.runSpec?.persistence
+        capturedAgent = Option.some({ name: params.agent.name })
+        capturedRunPersistence = Option.fromUndefinedOr(params.runSpec?.persistence)
         return Effect.succeed(
           AgentRunResult.cases.success.make({
             text: "Opinion here.",
             sessionId: SessionId.make("ephemeral-session"),
             agentName: params.agent.name,
-            persistence: "ephemeral" as const,
+            persistence: "ephemeral",
           }),
         )
       },
@@ -166,8 +171,10 @@ describe("CounselTool", () => {
     return narrowR(
       runToolWithCtx(CounselTool, { prompt: "thoughts?" }, ctx).pipe(
         Effect.map(() => {
-          expect(capturedAgent?.name).toBe("counsel-worker")
-          expect(capturedRunPersistence).toBe("ephemeral")
+          expect(Option.map(capturedAgent, (agent) => agent.name)).toEqual(
+            Option.some("counsel-worker"),
+          )
+          expect(capturedRunPersistence).toEqual(Option.some("ephemeral"))
         }),
       ),
     )

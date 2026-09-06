@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { ExtensionContext, tool, type Question } from "@gent/core/extensions/api"
 
 const AnswersSchema = Schema.fromJsonString(Schema.Array(Schema.Array(Schema.String)))
@@ -6,7 +6,7 @@ const decodeAnswers = Schema.decodeUnknownEffect(AnswersSchema)
 
 const parseAnswers = (notes: string): Effect.Effect<ReadonlyArray<ReadonlyArray<string>>> =>
   decodeAnswers(notes).pipe(
-    Effect.orElseSucceed(() => [[notes]] as ReadonlyArray<ReadonlyArray<string>>),
+    Effect.orElseSucceed((): ReadonlyArray<ReadonlyArray<string>> => [[notes]]),
   )
 
 // AskUser Params — canonical questions[] input
@@ -54,9 +54,14 @@ export const AskUserResult = Schema.Struct({
 const formatQuestionsText = (questions: ReadonlyArray<Question>): string =>
   questions
     .map((q, i) => {
-      const header = q.header !== undefined ? `[${q.header}] ` : ""
-      const options =
-        q.options !== undefined ? `\nOptions: ${q.options.map((o) => o.label).join(", ")}` : ""
+      const header = Option.fromNullishOr(q.header).pipe(
+        Option.map((value) => `[${value}] `),
+        Option.getOrElse(() => ""),
+      )
+      const options = Option.fromNullishOr(q.options).pipe(
+        Option.map((values) => `\nOptions: ${values.map((option) => option.label).join(", ")}`),
+        Option.getOrElse(() => ""),
+      )
       return `${i + 1}. ${header}${q.question}${options}`
     })
     .join("\n")
@@ -78,8 +83,11 @@ export const AskUserTool = tool({
     if (!decision.approved) {
       return { answers: [], cancelled: true }
     }
-    const answers =
-      decision.notes !== undefined ? yield* parseAnswers(decision.notes) : [[] as string[]]
+    const notes = Option.fromNullishOr(decision.notes)
+    let answers: ReadonlyArray<ReadonlyArray<string>> = [[]]
+    if (Option.isSome(notes)) {
+      answers = yield* parseAnswers(notes.value)
+    }
     return { answers }
   }),
 })

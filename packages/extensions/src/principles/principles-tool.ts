@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { defineExtension, tool } from "@gent/core/extensions/api"
 import { loadPrinciples, PRINCIPLE_NAMES } from "./data.js"
 
@@ -34,15 +34,18 @@ export const PrinciplesTool = tool({
   execute: (params) =>
     Effect.sync(() => {
       const principles = loadPrinciples()
-      const names = params.names === "all" ? PRINCIPLE_NAMES : params.names
+      let names = params.names
+      if (params.names === "all") {
+        names = PRINCIPLE_NAMES
+      }
 
       const results: string[] = []
       const notFound: string[] = []
 
       for (const name of names) {
-        const content = principles.get(name)
-        if (content !== undefined) {
-          results.push(content)
+        const content = Option.fromNullishOr(principles.get(name))
+        if (Option.isSome(content)) {
+          results.push(content.value)
         } else {
           notFound.push(name)
         }

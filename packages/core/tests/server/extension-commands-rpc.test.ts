@@ -1,7 +1,10 @@
 import { describe, expect, it } from "effect-bun-test"
+import { BunServices } from "@effect/platform-bun"
 import {
+  Predicate,
   Cause,
   Context,
+  Deferred,
   Effect,
   Exit,
   Fiber,
@@ -9,7 +12,9 @@ import {
   Layer,
   MutableRef,
   Option,
+  Path,
   Schema,
+  Scope,
   Stream,
 } from "effect"
 import { MinimumLogLevel } from "effect/References"
@@ -20,7 +25,12 @@ import {
   type LoadedExtension,
 } from "../../src/domain/extension.js"
 import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import {
+  finishPart,
+  LanguageModelLayers,
+  textDeltaPart,
+} from "@gent/core-internal/test-utils/language-model"
+import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import {
   ExtensionRegistry,
   listSlashCommands,
@@ -31,14 +41,18 @@ import { ApprovalService } from "../../src/runtime/approval-service"
 import { createToolTestLayer } from "@gent/core-internal/test-utils/extension-harness"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
 import { SlashCommandInfo } from "@gent/core-internal/server/transport-contract"
+import { ToolCallSucceeded } from "@gent/core-internal/domain/event"
 import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-preset"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { defineResource } from "@gent/core-internal/domain/resource"
+import type { PermissionService } from "../../src/domain/permission"
 import {
   CapabilityError,
+  defineExtension,
   ExtensionContext,
   ExtensionSetupContext,
   request,
@@ -46,20 +60,27 @@ import {
 } from "@gent/core/extensions/api"
 import * as ExtensionApi from "@gent/core/extensions/api"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
+import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 import { ConfigService } from "../../src/runtime/config-service"
+import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
+import { ProcessRunnerLive } from "../../src/utils/run-process"
 import { TodoStorage } from "../../../extensions/src/todo-storage.js"
 import { WideEventLogger, type LogEvent } from "../../src/runtime/wide-event-boundary"
 import DynamicScratchpadExtension from "../../../../examples/extensions/dynamic-scratchpad.js"
+import { ExtensionProtocolError } from "../../src/server/errors"
 class ProfileToken extends Context.Service<
   ProfileToken,
   {
-    readonly read: () => Effect.Effect<string, never, never>
+    readonly read: Effect.Effect<string, never, never>
   }
 >()("@gent/core/tests/server/extension-commands-rpc.test/ProfileToken") {}
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const expectExtensionProtocolFailure = (cause: Cause.Cause<unknown>, message?: string) => {
-  const error = Cause.squash(cause) as { readonly _tag?: string; readonly message?: string }
+  const error = Cause.squash(cause)
+  expect(Schema.is(ExtensionProtocolError)(error)).toBe(true)
+  if (!Schema.is(ExtensionProtocolError)(error)) return
   expect(error._tag).toBe("ExtensionProtocolError")
-  if (message !== undefined) expect(error.message).toBe(message)
+  if (!Predicate.isUndefined(message)) expect(error.message).toBe(message)
 }
 describe("extension command RPCs", () => {
   const invoked: Array<{
@@ -107,8 +128,8 @@ describe("extension command RPCs", () => {
     }),
   )
   const allowAllPermission = {
-    check: () => Effect.succeed("allowed" as const),
-  }
+    check: () => Effect.succeed("allowed" satisfies "allowed"),
+  } satisfies PermissionService
   const makeProfile = (cwd: string, extensions: ReadonlyArray<LoadedExtension>) =>
     Effect.gen(function* () {
       const resolved = resolveExtensions(extensions)
@@ -142,9 +163,8 @@ describe("extension command RPCs", () => {
       ],
     },
   })
-  it.live(
-    "listSlashCommands returns registered commands",
-    () =>
+  it.live("listSlashCommands returns registered commands", () =>
+    narrowR(
       Effect.gen(function* () {
         const registry = yield* ExtensionRegistry
         const cmds = listSlashCommands(registry.getResolved())
@@ -152,7 +172,8 @@ describe("extension command RPCs", () => {
         expect(testCmds).toHaveLength(2)
         expect(testCmds.find((c) => c.name === "greet")?.description).toBe("Say hello")
         expect(testCmds.find((c) => c.name === "noop")?.description).toBe("noop")
-      }).pipe(Effect.provide(layer)) as Effect.Effect<void, never, never>,
+      }).pipe(Effect.provide(layer)),
+    ),
   )
   it.live("RPC listSlashCommands + request round-trip through the transport boundary", () =>
     Effect.gen(function* () {
@@ -483,23 +504,27 @@ describe("extension command RPCs", () => {
         contributions: {
           resources: [
             defineResource({
+              id: "test/extension-commands-rpc/profile-token",
               tag: ProfileToken,
               scope: "process",
-              layer: Layer.succeed(ProfileToken, {
-                read: () => Effect.succeed("profile-token"),
-              }),
+              layer: Layer.succeed(
+                ProfileToken,
+                ProfileToken.of({
+                  read: Effect.succeed("profile-token"),
+                }),
+              ),
             }),
           ],
           requests: [
             request({
               id: "read-profile-token",
-              extensionId: ExtensionId.make("@test/profile-service-request") as ExtensionId,
+              extensionId: ExtensionId.make("@test/profile-service-request"),
               input: Schema.String,
               output: Schema.String,
               execute: () =>
                 Effect.gen(function* () {
                   const token = yield* ProfileToken
-                  return yield* token.read()
+                  return yield* token.read
                 }),
             }),
           ],
@@ -545,23 +570,27 @@ describe("extension command RPCs", () => {
           return {
             resources: [
               defineResource({
+                id: "test/extension-commands-rpc/live-profile-token",
                 tag: ProfileToken,
                 scope: "process",
-                layer: Layer.succeed(ProfileToken, {
-                  read: () => Effect.succeed(`live:${ctx.cwd}`),
-                }),
+                layer: Layer.succeed(
+                  ProfileToken,
+                  ProfileToken.of({
+                    read: Effect.succeed(`live:${ctx.cwd}`),
+                  }),
+                ),
               }),
             ],
             requests: [
               request({
                 id: "read-live-profile-token",
-                extensionId: ExtensionId.make("@test/live-profile-service-request") as ExtensionId,
+                extensionId: ExtensionId.make("@test/live-profile-service-request"),
                 input: Schema.String,
                 output: Schema.String,
                 execute: () =>
                   Effect.gen(function* () {
                     const token = yield* ProfileToken
-                    return yield* token.read()
+                    return yield* token.read
                   }),
               }),
             ],
@@ -570,19 +599,25 @@ describe("extension command RPCs", () => {
       }
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const sessionProfileCacheLayer = SessionProfileCache.Live({
-            home,
-            platform: "test",
-            extensions: [ext],
-          }).pipe(
-            Layer.provide(
-              Layer.mergeAll(
-                BunPlatformLive,
-                ConfigService.Test(),
-                SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
+          const sessionProfileCacheLayer = Layer.unwrap(
+            Effect.map(Effect.scope, (scope) =>
+              SessionProfileCache.Live({
+                home,
+                platform: "test",
+                extensions: [ext],
+              }).pipe(
+                Layer.provide(
+                  Layer.mergeAll(
+                    BunPlatformLive,
+                    ConfigService.Test(),
+                    SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
+                  ),
+                ),
+                Layer.orDie,
+                Layer.provide(Layer.succeed(Scope.Scope, scope)),
               ),
             ),
-          ) as Layer.Layer<SessionProfileCache>
+          )
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
@@ -599,6 +634,469 @@ describe("extension command RPCs", () => {
             branchId,
           })
           expect(result).toBe(`live:${profileCwd}`)
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+  it.scopedLive("RPC resource use drains before a live profile replacement", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const platform = yield* GentPlatform
+      const home = yield* fs.makeTempDirectoryScoped()
+      const profileCwd = yield* fs.makeTempDirectoryScoped()
+      const configPath = path.join(home, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(configPath), { recursive: true })
+      yield* fs.writeFileString(configPath, encodeJson({ permissions: [] }))
+
+      const readStarted = yield* Deferred.make<void>()
+      const releaseRead = yield* Deferred.make<void>()
+      const resourceStopped = yield* Deferred.make<void>()
+      const ext: GentExtension = {
+        manifest: { id: ExtensionId.make("@test/live-profile-drain") },
+        setup: Effect.gen(function* () {
+          const ctx = yield* ExtensionSetupContext
+          return {
+            resources: [
+              defineResource({
+                id: "test/extension-commands-rpc/live-profile-drain-token",
+                tag: ProfileToken,
+                scope: "process",
+                layer: Layer.effect(
+                  ProfileToken,
+                  Effect.acquireRelease(
+                    Effect.succeed(
+                      ProfileToken.of({
+                        read: Effect.gen(function* () {
+                          yield* Deferred.succeed(readStarted, void 0)
+                          yield* Deferred.await(releaseRead)
+                          return `drained:${ctx.cwd}`
+                        }),
+                      }),
+                    ),
+                    () => Deferred.succeed(resourceStopped, void 0),
+                  ),
+                ),
+              }),
+            ],
+            requests: [
+              request({
+                id: "read-live-profile-drain-token",
+                extensionId: ExtensionId.make("@test/live-profile-drain"),
+                input: Schema.String,
+                output: Schema.String,
+                execute: () =>
+                  Effect.gen(function* () {
+                    const token = yield* ProfileToken
+                    return yield* token.read
+                  }),
+              }),
+            ],
+          }
+        }),
+      }
+
+      const runtimeEnvironmentLive = RuntimeEnvironment.Live({
+        cwd: profileCwd,
+        home,
+        platform: "test",
+      })
+      const configServiceLive = ConfigService.Live.pipe(
+        Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
+      )
+      const processRunnerLive = ProcessRunnerLive.pipe(Layer.provide(BunServices.layer))
+      const sessionProfileCacheLayer = Layer.unwrap(
+        Effect.map(Effect.scope, (scope) =>
+          SessionProfileCache.Live({
+            home,
+            platform: "test",
+            extensions: [ext],
+          }).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                BunServices.layer,
+                processRunnerLive,
+                configServiceLive,
+                SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
+              ),
+            ),
+            Layer.orDie,
+            Layer.provide(Layer.succeed(Scope.Scope, scope)),
+          ),
+        ),
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const cacheContext = yield* Layer.build(sessionProfileCacheLayer)
+          const cache = Context.get(cacheContext, SessionProfileCache)
+          const requestWorkspace = WorkspaceId.make(
+            platform.hash("sha256", path.resolve(process.cwd())),
+          )
+          const initial = yield* cache
+            .resolve(profileCwd)
+            .pipe(Effect.provideService(CurrentWorkspaceId, requestWorkspace))
+          const initialPublication = Option.fromUndefinedOr(initial.publication)
+          expect(Option.isSome(initialPublication)).toBe(true)
+
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [],
+            sessionProfileCacheLayer: Layer.succeed(SessionProfileCache, cache),
+            cwd: profileCwd,
+          })
+          const requestFiber = yield* client.extension
+            .request({
+              sessionId,
+              extensionId: ExtensionId.make("@test/live-profile-drain"),
+              capabilityId: "read-live-profile-drain-token",
+              input: "token",
+              branchId,
+            })
+            .pipe(Effect.forkChild)
+          const earlyRequest = yield* Fiber.await(requestFiber).pipe(
+            Effect.timeoutOption("500 millis"),
+          )
+          expect(Option.isNone(earlyRequest)).toBe(true)
+          yield* Deferred.await(readStarted)
+
+          yield* fs.writeFileString(
+            configPath,
+            encodeJson({ disabledExtensions: ["@test/live-profile-drain"] }),
+          )
+          const refreshing = yield* cache
+            .refresh(profileCwd)
+            .pipe(Effect.provideService(CurrentWorkspaceId, requestWorkspace), Effect.forkChild)
+          const earlyRefresh = yield* Fiber.await(refreshing).pipe(
+            Effect.timeoutOption("100 millis"),
+          )
+          expect(Option.isNone(earlyRefresh)).toBe(true)
+          expect(Option.isNone(yield* Deferred.poll(resourceStopped))).toBe(true)
+
+          yield* Deferred.succeed(releaseRead, void 0)
+          const result = yield* Fiber.join(requestFiber)
+          expect(result).toBe(`drained:${profileCwd}`)
+          expect(Exit.isSuccess(yield* Fiber.await(refreshing))).toBe(true)
+          yield* Deferred.await(resourceStopped)
+        }).pipe(
+          Effect.ensuring(Deferred.succeed(releaseRead, void 0).pipe(Effect.asVoid)),
+          Effect.timeout("4 seconds"),
+        ),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+  it.scopedLive("cancelling a leased turn reaches idle before the next turn", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const platform = yield* GentPlatform
+      const home = yield* fs.makeTempDirectoryScoped()
+      const profileCwd = yield* fs.makeTempDirectoryScoped()
+      const configPath = path.join(home, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(configPath), { recursive: true })
+      yield* fs.writeFileString(configPath, encodeJson({ permissions: [] }))
+
+      const streamStarted = yield* Deferred.make<void>()
+      const resourceStopped = yield* Deferred.make<void>()
+      const agentExtension = defineExtension({
+        id: "@test/live-profile-agents",
+        agents: e2ePreset.agents,
+      })
+      const ext: GentExtension = {
+        manifest: { id: ExtensionId.make("@test/live-profile-cancel") },
+        setup: Effect.succeed({
+          resources: [
+            defineResource({
+              id: "test/extension-commands-rpc/live-profile-cancel-token",
+              tag: ProfileToken,
+              scope: "process",
+              layer: Layer.effect(
+                ProfileToken,
+                Effect.acquireRelease(
+                  Effect.succeed(ProfileToken.of({ read: Effect.succeed("unused") })),
+                  () => Deferred.succeed(resourceStopped, void 0),
+                ),
+              ),
+            }),
+          ],
+        }),
+      }
+
+      let streamCall = 0
+      const providerLayer = LanguageModelLayers.testStream(() =>
+        Effect.gen(function* () {
+          const call = streamCall
+          streamCall += 1
+          if (call === 0) {
+            yield* Deferred.succeed(streamStarted, void 0)
+            return Stream.never
+          }
+          return Stream.fromIterable([
+            textDeltaPart("recovered after cancellation"),
+            finishPart({ finishReason: "stop" }),
+          ])
+        }),
+      )
+      const runtimeEnvironmentLive = RuntimeEnvironment.Live({
+        cwd: profileCwd,
+        home,
+        platform: "test",
+      })
+      const configServiceLive = ConfigService.Live.pipe(
+        Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
+      )
+      const processRunnerLive = ProcessRunnerLive.pipe(Layer.provide(BunServices.layer))
+      const sessionProfileCacheLayer = Layer.unwrap(
+        Effect.map(Effect.scope, (scope) =>
+          SessionProfileCache.Live({
+            home,
+            platform: "test",
+            extensions: [agentExtension, ext],
+          }).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                BunServices.layer,
+                processRunnerLive,
+                configServiceLive,
+                SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
+              ),
+            ),
+            Layer.orDie,
+            Layer.provide(Layer.succeed(Scope.Scope, scope)),
+          ),
+        ),
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const cacheContext = yield* Layer.build(sessionProfileCacheLayer)
+          const cache = Context.get(cacheContext, SessionProfileCache)
+          const requestWorkspace = WorkspaceId.make(
+            platform.hash("sha256", path.resolve(process.cwd())),
+          )
+          const initial = yield* cache
+            .resolve(profileCwd)
+            .pipe(Effect.provideService(CurrentWorkspaceId, requestWorkspace))
+          expect(Option.isSome(Option.fromUndefinedOr(initial.publication))).toBe(true)
+
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [],
+            sessionProfileCacheLayer: Layer.succeed(SessionProfileCache, cache),
+            cwd: profileCwd,
+          })
+          const errorEvents = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter((envelope) => envelope.event._tag === "ErrorOccurred"),
+            Stream.runHead,
+            Effect.forkScoped,
+          )
+          const firstMessage = yield* client.message
+            .send({
+              sessionId,
+              branchId,
+              content: "hold this turn",
+            })
+            .pipe(Effect.forkChild)
+          yield* Deferred.await(streamStarted)
+          yield* Fiber.join(firstMessage)
+
+          yield* fs.writeFileString(
+            configPath,
+            encodeJson({ disabledExtensions: ["@test/live-profile-cancel"] }),
+          )
+          const refreshing = yield* cache
+            .refresh(profileCwd, { retireMode: "cancel" })
+            .pipe(Effect.provideService(CurrentWorkspaceId, requestWorkspace), Effect.forkChild)
+          const refreshExit = yield* Fiber.await(refreshing)
+          expect(Exit.isSuccess(refreshExit)).toBe(true)
+          if (Exit.isFailure(refreshExit)) return
+          yield* Deferred.await(resourceStopped)
+          const idle = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (snapshot) => snapshot.runtime._tag === "Idle",
+            2_000,
+            "cancelled leased turn reaches idle",
+          )
+          expect(idle.runtime._tag).toBe("Idle")
+          const errorEventExit = yield* Fiber.await(errorEvents).pipe(
+            Effect.timeoutOption("1 second"),
+          )
+          expect(Option.isSome(errorEventExit)).toBe(true)
+          if (Option.isNone(errorEventExit)) return
+          expect(Exit.isSuccess(errorEventExit.value)).toBe(true)
+          if (Exit.isFailure(errorEventExit.value)) return
+          expect(Option.isSome(errorEventExit.value.value)).toBe(true)
+          if (Option.isNone(errorEventExit.value.value)) return
+          expect(errorEventExit.value.value.value.event._tag).toBe("ErrorOccurred")
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "recover after cancellation",
+          })
+          const recovered = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (snapshot) =>
+              snapshot.runtime._tag === "Idle" &&
+              snapshot.messages.some((message) =>
+                message.parts.some(
+                  (part) => part.type === "text" && part.text === "recovered after cancellation",
+                ),
+              ),
+            2_000,
+            "next turn completes after cancellation",
+          )
+          expect(
+            recovered.messages.some((message) =>
+              message.parts.some(
+                (part) => part.type === "text" && part.text === "recovered after cancellation",
+              ),
+            ),
+          ).toBe(true)
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+  it.scopedLive("interaction parking releases the publication lease", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const platform = yield* GentPlatform
+      const home = yield* fs.makeTempDirectoryScoped()
+      const profileCwd = yield* fs.makeTempDirectoryScoped()
+      const configPath = path.join(home, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(configPath), { recursive: true })
+      yield* fs.writeFileString(configPath, encodeJson({ permissions: [] }))
+
+      const resourceStopped = yield* Deferred.make<void>()
+      const agentExtension = defineExtension({
+        id: "@test/live-profile-agents-interaction",
+        agents: e2ePreset.agents,
+      })
+      const ext: GentExtension = {
+        manifest: { id: ExtensionId.make("@test/live-profile-interaction") },
+        setup: Effect.succeed({
+          resources: [
+            defineResource({
+              id: "test/extension-commands-rpc/live-profile-interaction-token",
+              tag: ProfileToken,
+              scope: "process",
+              layer: Layer.effect(
+                ProfileToken,
+                Effect.acquireRelease(
+                  Effect.succeed(ProfileToken.of({ read: Effect.succeed("unused") })),
+                  () => Deferred.succeed(resourceStopped, void 0),
+                ),
+              ),
+            }),
+          ],
+          tools: [
+            tool({
+              id: "live-profile-interaction-tool",
+              description: "Park a turn for approval",
+              params: Schema.Struct({ text: Schema.String }),
+              output: Schema.Struct({ approved: Schema.Boolean }),
+              execute: (params) =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  const decision = yield* ctx.Interaction.approve({ text: params.text })
+                  return { approved: decision.approved }
+                }),
+            }),
+          ],
+        }),
+      }
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("live-profile-interaction-tool", { text: "park this turn" }),
+      ])
+      const runtimeEnvironmentLive = RuntimeEnvironment.Live({
+        cwd: profileCwd,
+        home,
+        platform: "test",
+      })
+      const configServiceLive = ConfigService.Live.pipe(
+        Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
+      )
+      const processRunnerLive = ProcessRunnerLive.pipe(Layer.provide(BunServices.layer))
+      const sessionProfileCacheLayer = Layer.unwrap(
+        Effect.map(Effect.scope, (scope) =>
+          SessionProfileCache.Live({
+            home,
+            platform: "test",
+            extensions: [agentExtension, ext],
+          }).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                BunServices.layer,
+                processRunnerLive,
+                configServiceLive,
+                SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
+              ),
+            ),
+            Layer.orDie,
+            Layer.provide(Layer.succeed(Scope.Scope, scope)),
+          ),
+        ),
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const cacheContext = yield* Layer.build(sessionProfileCacheLayer)
+          const cache = Context.get(cacheContext, SessionProfileCache)
+          const requestWorkspace = WorkspaceId.make(
+            platform.hash("sha256", path.resolve(process.cwd())),
+          )
+          const initial = yield* cache
+            .resolve(profileCwd)
+            .pipe(Effect.provideService(CurrentWorkspaceId, requestWorkspace))
+          expect(Option.isSome(Option.fromUndefinedOr(initial.publication))).toBe(true)
+
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [],
+            durableApproval: true,
+            sessionProfileCacheLayer: Layer.succeed(SessionProfileCache, cache),
+            cwd: profileCwd,
+          })
+          const interactionFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+            Stream.runHead,
+            Effect.forkScoped,
+          )
+          const interactionMessage = yield* client.message
+            .send({
+              sessionId,
+              branchId,
+              content: "request approval",
+            })
+            .pipe(Effect.forkChild)
+          const presented = yield* Fiber.join(interactionFiber)
+          expect(Option.isSome(presented)).toBe(true)
+          const waiting = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (snapshot) => snapshot.runtime._tag === "WaitingForInteraction",
+            2_000,
+            "interaction turn parks",
+          )
+          expect(waiting.runtime._tag).toBe("WaitingForInteraction")
+          yield* Fiber.join(interactionMessage)
+
+          yield* fs.writeFileString(
+            configPath,
+            encodeJson({ disabledExtensions: ["@test/live-profile-interaction"] }),
+          )
+          yield* cache
+            .refresh(profileCwd)
+            .pipe(
+              Effect.provideService(CurrentWorkspaceId, requestWorkspace),
+              Effect.timeout("2 seconds"),
+            )
+          yield* Deferred.await(resourceStopped)
+          expect(Option.isSome(yield* Deferred.poll(resourceStopped))).toBe(true)
         }).pipe(Effect.timeout("4 seconds")),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
@@ -714,8 +1212,9 @@ describe("extension command RPCs", () => {
                       profileStorageAvailable: Option.isSome(todoStorage),
                       extensionContextProcessAvailable: Exit.isSuccess(processExit),
                       extensionContextFollowUpQueued: Exit.isSuccess(followUpExit),
-                      extensionContextParentEnvIsObject:
-                        typeof extensionCtx.Process.parentEnv === "object",
+                      extensionContextParentEnvIsObject: Predicate.isObjectOrArray(
+                        extensionCtx.Process.parentEnv,
+                      ),
                     }
                   }),
                 ),
@@ -737,6 +1236,7 @@ describe("extension command RPCs", () => {
             branchId,
             extensionId,
             capabilityId: "inspect",
+            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
             input: undefined,
           })
           expect(result).toEqual({
@@ -868,6 +1368,7 @@ describe("extension command RPCs", () => {
             branchId,
             extensionId,
             capabilityId: "install-dynamic",
+            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
             input: undefined,
           })
 
@@ -932,8 +1433,8 @@ describe("extension command RPCs", () => {
         const toolEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
           Stream.filter(
             (envelope) =>
-              envelope.event._tag === "ToolCallSucceeded" &&
-              (envelope.event as { readonly toolName?: string }).toolName === "scratchpad_append",
+              Schema.is(ToolCallSucceeded)(envelope.event) &&
+              envelope.event.toolName === "scratchpad_append",
           ),
           Stream.take(1),
           Stream.runCollect,

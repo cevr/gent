@@ -6,7 +6,8 @@
  */
 
 import { createSignal } from "solid-js"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "../terminal-dimensions"
+import { Option } from "effect"
 import { ref } from "@gent/core/extensions/api"
 import { AutoRpc } from "@gent/extensions/client.js"
 import { ChromePanel } from "../components/chrome-panel"
@@ -26,17 +27,16 @@ export function AutoGoalOverlay(props: { open: boolean; onClose: () => void }) {
   const submit = () => {
     const text = goal().trim()
     if (text === "") return
-    const sid = clientCtx.session()?.sessionId
-    const bid = clientCtx.session()?.branchId
-    if (sid === undefined || bid === undefined) return
+    const session = Option.fromNullishOr(clientCtx.session())
+    if (Option.isNone(session)) return
     const startRef = ref(AutoRpc.StartAuto)
     clientCtx.runtime.cast(
       clientCtx.client.extension.request({
-        sessionId: sid,
+        sessionId: session.value.sessionId,
         extensionId: startRef.extensionId,
         capabilityId: startRef.capabilityId,
         input: { goal: text },
-        branchId: bid,
+        branchId: session.value.branchId,
       }),
     )
     setGoal("")
@@ -57,8 +57,9 @@ export function AutoGoalOverlay(props: { open: boolean; onClose: () => void }) {
       setGoal((prev) => prev.slice(0, -1))
       return true
     }
-    if (e.sequence !== undefined && e.sequence.length === 1 && !e.ctrl && !e.meta) {
-      setGoal((prev) => prev + e.sequence)
+    const sequence = Option.fromNullishOr(e.sequence)
+    if (Option.isSome(sequence) && sequence.value.length === 1 && !e.ctrl && !e.meta) {
+      setGoal((prev) => prev + sequence.value)
       return true
     }
     return false

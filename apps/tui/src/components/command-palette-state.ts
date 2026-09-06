@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Array, Match, type Option, Predicate, Schema } from "effect"
 import type { Accessor } from "solid-js"
 
 /** A menu item in the command palette. */
@@ -19,6 +19,7 @@ export interface PaletteItem {
 export interface PaletteLevel {
   readonly id: string
   readonly title: string
+  // eslint-disable-next-line effect/noNullish -- Solid Resource returns undefined while its request is pending.
   readonly source: Accessor<readonly PaletteItem[] | undefined>
   readonly onEnter?: () => void
 }
@@ -29,17 +30,18 @@ export interface CommandPaletteState {
   readonly searchQuery: string
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null
-
-const PaletteLevelSchema = Schema.declare<PaletteLevel>(
-  (value): value is PaletteLevel =>
-    isRecord(value) &&
-    typeof value["id"] === "string" &&
-    typeof value["title"] === "string" &&
-    typeof value["source"] === "function" &&
-    (value["onEnter"] === undefined || typeof value["onEnter"] === "function"),
+const PaletteSourceSchema = Schema.declare<PaletteLevel["source"]>(
+  (value): value is PaletteLevel["source"] => Predicate.isFunction(value),
 )
+const PaletteOnEnterSchema = Schema.declare<() => void>((value): value is () => void =>
+  Predicate.isFunction(value),
+)
+const PaletteLevelSchema = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  source: PaletteSourceSchema,
+  onEnter: Schema.optionalKey(PaletteOnEnterSchema),
+})
 
 export const CommandPaletteEvent = Schema.TaggedUnion({
   Open: { rootLevel: PaletteLevelSchema },
@@ -49,8 +51,8 @@ export const CommandPaletteEvent = Schema.TaggedUnion({
   SearchTyped: { char: Schema.String },
   SearchBackspaced: {},
   ClearSearch: {},
-  MoveUp: { itemCount: Schema.Number },
-  MoveDown: { itemCount: Schema.Number },
+  MoveUp: { itemCount: Schema.Finite },
+  MoveDown: { itemCount: Schema.Finite },
 })
 export type CommandPaletteEvent = Schema.Schema.Type<typeof CommandPaletteEvent>
 
@@ -60,8 +62,8 @@ const initial = (): CommandPaletteState => ({
   searchQuery: "",
 })
 
-const currentLevel = (state: CommandPaletteState): PaletteLevel | undefined =>
-  state.levelStack[state.levelStack.length - 1]
+const currentLevel = (state: CommandPaletteState): Option.Option<PaletteLevel> =>
+  Array.last(state.levelStack)
 
 const pushLevel = (state: CommandPaletteState, level: PaletteLevel): CommandPaletteState => ({
   ...state,
@@ -70,15 +72,15 @@ const pushLevel = (state: CommandPaletteState, level: PaletteLevel): CommandPale
   searchQuery: "",
 })
 
-const popLevel = (state: CommandPaletteState): CommandPaletteState =>
-  state.levelStack.length <= 1
-    ? state
-    : {
-        ...state,
-        levelStack: state.levelStack.slice(0, -1),
-        selectedIndex: 0,
-        searchQuery: "",
-      }
+const popLevel = (state: CommandPaletteState): CommandPaletteState => {
+  if (state.levelStack.length <= 1) return state
+  return {
+    ...state,
+    levelStack: state.levelStack.slice(0, -1),
+    selectedIndex: 0,
+    searchQuery: "",
+  }
+}
 
 const setSearchQuery = (state: CommandPaletteState, searchQuery: string): CommandPaletteState => ({
   ...state,
@@ -93,14 +95,18 @@ const moveSelection = (
 ): CommandPaletteState => {
   if (itemCount <= 0) return state
   if (direction === "up") {
+    let selectedIndex = itemCount - 1
+    if (state.selectedIndex > 0) selectedIndex = state.selectedIndex - 1
     return {
       ...state,
-      selectedIndex: state.selectedIndex > 0 ? state.selectedIndex - 1 : itemCount - 1,
+      selectedIndex,
     }
   }
+  let selectedIndex = 0
+  if (state.selectedIndex < itemCount - 1) selectedIndex = state.selectedIndex + 1
   return {
     ...state,
-    selectedIndex: state.selectedIndex < itemCount - 1 ? state.selectedIndex + 1 : 0,
+    selectedIndex,
   }
 }
 
@@ -113,24 +119,17 @@ export function transitionCommandPalette(
   state: CommandPaletteState,
   event: CommandPaletteEvent,
 ): CommandPaletteState {
-  switch (event._tag) {
-    case "Open":
-      return { ...initial(), levelStack: [event.rootLevel] }
-    case "Close":
-      return initial()
-    case "PushLevel":
-      return pushLevel(state, event.level)
-    case "PopLevel":
-      return popLevel(state)
-    case "SearchTyped":
-      return setSearchQuery(state, state.searchQuery + event.char)
-    case "SearchBackspaced":
-      return setSearchQuery(state, state.searchQuery.slice(0, -1))
-    case "ClearSearch":
-      return setSearchQuery(state, "")
-    case "MoveUp":
-      return moveSelection(state, event.itemCount, "up")
-    case "MoveDown":
-      return moveSelection(state, event.itemCount, "down")
-  }
+  return Match.value(event).pipe(
+    Match.tagsExhaustive({
+      Open: (event) => ({ ...initial(), levelStack: [event.rootLevel] }),
+      Close: () => initial(),
+      PushLevel: (event) => pushLevel(state, event.level),
+      PopLevel: () => popLevel(state),
+      SearchTyped: (event) => setSearchQuery(state, state.searchQuery + event.char),
+      SearchBackspaced: () => setSearchQuery(state, state.searchQuery.slice(0, -1)),
+      ClearSearch: () => setSearchQuery(state, ""),
+      MoveUp: (event) => moveSelection(state, event.itemCount, "up"),
+      MoveDown: (event) => moveSelection(state, event.itemCount, "down"),
+    }),
+  )
 }

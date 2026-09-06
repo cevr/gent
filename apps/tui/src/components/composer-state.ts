@@ -23,7 +23,7 @@ export type ComposerState =
 
 export const ComposerState = {
   idle: (): ComposerState => ({ _tag: "idle" }),
-} as const
+}
 
 export const ComposerEvent = Schema.TaggedUnion({
   EnterInteraction: { interaction: InteractionPresented },
@@ -45,33 +45,32 @@ export interface TransitionResult {
 }
 
 export function transition(state: ComposerState, event: ComposerEvent): TransitionResult {
-  switch (event._tag) {
-    case "EnterInteraction":
-      return { state: { _tag: "interaction", interaction: event.interaction } }
-
-    case "ResolveInteraction":
-      if (state._tag !== "interaction") return { state }
-      return {
-        state: ComposerState.idle(),
-        effect: {
-          _tag: "DispatchInteractionResult",
-          interaction: state.interaction,
-          result: event.result,
-        },
-      }
-
-    case "CancelInteraction":
-      if (state._tag !== "interaction") return { state }
-      // Cancel resolves with the tag-specific cancel variant
-      return cancelInteraction(state.interaction)
-
-    case "DismissInteraction":
-      if (state._tag !== "interaction") return { state }
-      if (!("requestId" in state.interaction) || state.interaction.requestId !== event.requestId) {
-        return { state }
-      }
-      return { state: ComposerState.idle() }
+  if (event._tag === "EnterInteraction") {
+    return { state: { _tag: "interaction", interaction: event.interaction } }
   }
+
+  if (event._tag === "ResolveInteraction") {
+    if (state._tag !== "interaction") return { state }
+    return {
+      state: ComposerState.idle(),
+      effect: {
+        _tag: "DispatchInteractionResult",
+        interaction: state.interaction,
+        result: event.result,
+      },
+    }
+  }
+
+  if (event._tag === "CancelInteraction") {
+    if (state._tag !== "interaction") return { state }
+    return cancelInteraction(state.interaction)
+  }
+
+  if (state._tag !== "interaction") return { state }
+  if (!("requestId" in state.interaction) || state.interaction.requestId !== event.requestId) {
+    return { state }
+  }
+  return { state: ComposerState.idle() }
 }
 
 function cancelInteraction(interaction: ActiveInteraction): TransitionResult {

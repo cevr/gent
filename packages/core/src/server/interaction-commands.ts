@@ -1,4 +1,4 @@
-import { Effect, Layer, Context } from "effect"
+import { Predicate, Effect, Layer, Context } from "effect"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InteractionResolved } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
@@ -45,11 +45,12 @@ export class InteractionCommands extends Context.Service<
 
           const pendingRequestId = yield* approvalService.pendingRequestId(input)
           if (pendingRequestId !== input.requestId) {
+            let message = "Interaction response requestId does not match the pending request"
+            if (Predicate.isUndefined(pendingRequestId)) {
+              message = "No pending interaction request exists for this session branch"
+            }
             return yield* new InteractionRequestMismatchError({
-              message:
-                pendingRequestId === undefined
-                  ? "No pending interaction request exists for this session branch"
-                  : "Interaction response requestId does not match the pending request",
+              message,
               expectedRequestId: pendingRequestId,
               actualRequestId: input.requestId,
               sessionId: input.sessionId,
@@ -60,7 +61,7 @@ export class InteractionCommands extends Context.Service<
           // 1. Store resolution durably so re-entering present() finds it
           yield* approvalService.storeResolution(input.requestId, {
             approved: input.approved,
-            ...(input.notes !== undefined ? { notes: input.notes } : {}),
+            notes: input.notes,
           })
           // 2. Wake the machine. present() marks the row resolved only when the
           //    tool consumes the durable decision.
@@ -77,7 +78,7 @@ export class InteractionCommands extends Context.Service<
                 branchId: input.branchId,
                 requestId: input.requestId,
                 approved: input.approved,
-                ...(input.notes !== undefined ? { notes: input.notes } : {}),
+                notes: input.notes,
               }),
             )
             .pipe(Effect.catchEager(() => Effect.void))

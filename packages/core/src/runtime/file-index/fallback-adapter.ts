@@ -15,8 +15,9 @@ type PathMatcher = (path: string) => boolean
 
 export type GitignoreCacheRef = TxRef.TxRef<HashMap.HashMap<string, ReadonlyArray<PathMatcher>>>
 
-export const makeGitignoreCacheRef = (): Effect.Effect<GitignoreCacheRef> =>
-  TxRef.make(HashMap.empty<string, ReadonlyArray<PathMatcher>>())
+export const makeGitignoreCacheRef: Effect.Effect<GitignoreCacheRef> = TxRef.make(
+  HashMap.empty<string, ReadonlyArray<PathMatcher>>(),
+)
 
 const parseGitignorePatterns = (content: string): PathMatcher[] => {
   const patterns: PathMatcher[] = []
@@ -66,8 +67,8 @@ export const makeFallbackService = (
         if (cached._tag === "Some") return cached.value
 
         const patterns = yield* fs.readFileString(path.join(cwd, ".gitignore")).pipe(
-          Effect.map((content) => parseGitignorePatterns(content) as ReadonlyArray<PathMatcher>),
-          Effect.orElseSucceed(() => [] as ReadonlyArray<PathMatcher>),
+          Effect.map(parseGitignorePatterns),
+          Effect.orElseSucceed((): ReadonlyArray<PathMatcher> => []),
         )
         yield* TxRef.update(cacheRef, (m) => HashMap.set(m, cwd, patterns))
         return patterns
@@ -93,7 +94,12 @@ export const makeFallbackService = (
               )
 
             for (const entry of entries) {
-              const relativePath = relativeDir.length === 0 ? entry : `${relativeDir}/${entry}`
+              let relativePath = relativeDir
+              if (relativeDir.length === 0) {
+                relativePath = entry
+              } else {
+                relativePath = `${relativeDir}/${entry}`
+              }
               if (isGitignored(relativePath, ignorePatterns)) continue
 
               const absPath = path.join(absoluteDir, entry)
@@ -152,7 +158,7 @@ export const FallbackFileIndexLive: Layer.Layer<
 > = Layer.effect(
   FileIndex,
   Effect.gen(function* () {
-    const cacheRef = yield* makeGitignoreCacheRef()
+    const cacheRef = yield* makeGitignoreCacheRef
     return yield* makeFallbackService(cacheRef)
   }),
 )

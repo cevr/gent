@@ -17,6 +17,7 @@ import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { e2ePreset } from "../helpers/test-preset"
+import { isToolResultFor } from "../helpers/tool-event.js"
 
 describe("InteractionToolsExtension via model turn", () => {
   it.live(
@@ -40,17 +41,14 @@ describe("InteractionToolsExtension via model turn", () => {
             providerLayer,
           })
 
-          const toolEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
-            Stream.filter(
-              (envelope) =>
-                (envelope.event._tag === "ToolCallSucceeded" ||
-                  envelope.event._tag === "ToolCallFailed") &&
-                (envelope.event as { readonly toolName?: string }).toolName === "ask_user",
-            ),
-            Stream.take(1),
-            Stream.runCollect,
-            Effect.forkScoped,
-          )
+          const toolEventFiber = yield* client.session
+            .events({ sessionId, branchId })
+            .pipe(
+              Stream.filter(isToolResultFor("ask_user")),
+              Stream.take(1),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
 
           yield* client.message.send({
             sessionId,
@@ -87,17 +85,14 @@ describe("InteractionToolsExtension via model turn", () => {
             providerLayer,
           })
 
-          const toolEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
-            Stream.filter(
-              (envelope) =>
-                (envelope.event._tag === "ToolCallSucceeded" ||
-                  envelope.event._tag === "ToolCallFailed") &&
-                (envelope.event as { readonly toolName?: string }).toolName === "prompt",
-            ),
-            Stream.take(1),
-            Stream.runCollect,
-            Effect.forkScoped,
-          )
+          const toolEventFiber = yield* client.session
+            .events({ sessionId, branchId })
+            .pipe(
+              Stream.filter(isToolResultFor("prompt")),
+              Stream.take(1),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
 
           yield* client.message.send({
             sessionId,
@@ -135,17 +130,14 @@ describe("InteractionToolsExtension via model turn", () => {
             providerLayer,
           })
 
-          const toolEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
-            Stream.filter(
-              (envelope) =>
-                (envelope.event._tag === "ToolCallSucceeded" ||
-                  envelope.event._tag === "ToolCallFailed") &&
-                (envelope.event as { readonly toolName?: string }).toolName === "prompt",
-            ),
-            Stream.take(1),
-            Stream.runCollect,
-            Effect.forkScoped,
-          )
+          const toolEventFiber = yield* client.session
+            .events({ sessionId, branchId })
+            .pipe(
+              Stream.filter(isToolResultFor("prompt")),
+              Stream.take(1),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
 
           yield* client.message.send({
             sessionId,

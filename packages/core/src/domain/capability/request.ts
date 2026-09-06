@@ -13,10 +13,10 @@
  * @module
  */
 
-import { type Effect, type Schema } from "effect"
+import { Option, type Effect, type Schema } from "effect"
 import { ExtensionId, RpcId, type ExtensionId as ExtensionIdType } from "../ids.js"
 import {
-  type RequestCapability as RequestCapabilityShape,
+  type RequestCapability as RequestCapabilityApi,
   type ErasedCapabilityEffect,
   type CapabilityEffect,
   type CapabilityRef,
@@ -35,13 +35,13 @@ const RequestCapabilityBrand: unique symbol = Symbol("@gent/core/RequestCapabili
 declare const RequestCapabilityType: unique symbol
 
 interface RequestRefState<Input = unknown, Output = unknown> {
-  extensionId: ExtensionIdType | undefined
+  extensionId: Option.Option<ExtensionIdType>
   readonly capabilityId: RpcId
-  readonly input: Schema.Schema<Input>
-  readonly output: Schema.Schema<Output>
+  readonly input: Schema.Codec<Input, unknown, never, never>
+  readonly output: Schema.Codec<Output, unknown, never, never>
 }
 
-export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabilityShape & {
+export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabilityApi & {
   readonly [RequestCapabilityBrand]: true
   readonly [RequestCapabilityType]?: {
     readonly input: Input
@@ -52,8 +52,8 @@ export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabi
   readonly slash?: RequestInput<Input, Output>["slash"]
   readonly description?: string
   readonly prompt?: PromptSection
-  readonly input: Schema.Schema<Input>
-  readonly output: Schema.Schema<Output>
+  readonly input: Schema.Codec<Input, unknown, never, never>
+  readonly output: Schema.Codec<Output, unknown, never, never>
   readonly effect: ErasedCapabilityEffect<CapabilityError>
   readonly [REQUEST_REF]: CapabilityRef<Input, Output>
   readonly [REQUEST_REF_STATE]: RequestRefState<Input, Output>
@@ -67,9 +67,9 @@ export interface RequestInput<Input = unknown, Output = unknown, R = never> {
    *  the extension factory binds refs to the enclosing extension id. */
   readonly extensionId?: ExtensionIdType
   /** Schema for validating `input` at the boundary. */
-  readonly input: Schema.Schema<Input>
+  readonly input: Schema.Codec<Input, unknown, never, never>
   /** Schema for validating `output` at the boundary. */
-  readonly output: Schema.Schema<Output>
+  readonly output: Schema.Codec<Output, unknown, never, never>
   /** Static system-prompt section bundled with this request. */
   readonly prompt?: PromptSection
   /** Human-readable description for registry/listing surfaces. */
@@ -99,16 +99,17 @@ export function request<Input, Output, R = never>(
 export function request(input: {
   readonly id: string
   readonly extensionId?: ExtensionIdType
-  readonly input: Schema.Schema<unknown>
-  readonly output: Schema.Schema<unknown>
+  readonly input: Schema.Codec<unknown, unknown, never, never>
+  readonly output: Schema.Codec<unknown, unknown, never, never>
   readonly prompt?: PromptSection
   readonly description?: string
   readonly slash?: RequestInput<unknown, unknown>["slash"]
+  // oxlint-disable-next-line effect/noUnknownParameters -- Implementation overload accepts the erased runtime payload before schema dispatch.
   readonly execute: (input: unknown) => Effect.Effect<unknown, CapabilityError, unknown>
 }): RequestCapability {
   const rpcId = RpcId.make(input.id)
   const refState: RequestRefState = {
-    extensionId: input.extensionId,
+    extensionId: Option.fromUndefinedOr(input.extensionId),
     capabilityId: rpcId,
     input: input.input,
     output: input.output,
@@ -118,35 +119,36 @@ export function request(input: {
   // overload signatures (above) constrain Input/Output to `Schema.Schema<X>`
   // which has `DecodingServices: never`. The cast is at the implementation
   // signature only; type-safety is restored by the public overloads.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- implementation-signature widening; overload signatures preserve typed ref
+  // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The implementation overload erases the author schema types; public overloads restore them.
   const refValue = {
     get extensionId() {
-      if (refState.extensionId === undefined) {
+      if (Option.isNone(refState.extensionId)) {
+        // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- Reading an unbound capability reference is programmer misuse.
         throw new Error(
           `request "${String(rpcId)}" is not bound to an extension; include it in defineExtension({ id, requests }) before reading ref(...)`,
         )
       }
-      return refState.extensionId
+      return refState.extensionId.value
     },
     capabilityId: refState.capabilityId,
     input: refState.input,
     output: refState.output,
   } as unknown as CapabilityRef
-  const capability: RequestCapabilityShape = {
+  const capability: RequestCapabilityApi = {
     _tag: "request",
     id: rpcId,
     public: true,
-    ...(input.slash !== undefined ? { slash: input.slash } : {}),
-    ...(input.description !== undefined ? { description: input.description } : {}),
+    slash: input.slash,
+    description: input.description,
     input: input.input,
     output: input.output,
-    ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+    prompt: input.prompt,
     effect: input.execute,
     ref: refValue,
   }
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- RequestCapability brand applied at factory boundary
+  // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The factory applies its private brand and typed reference at the runtime membrane.
   return Object.assign(capability, {
-    [RequestCapabilityBrand]: true as const,
+    [RequestCapabilityBrand]: true,
     [REQUEST_REF]: refValue,
     [REQUEST_REF_STATE]: refState,
   }) as unknown as RequestCapability
@@ -156,7 +158,7 @@ export const bindRequestCapabilityExtension = <Input, Output>(
   capability: RequestCapability<Input, Output>,
   extensionId: ExtensionIdType,
 ): RequestCapability<Input, Output> => {
-  capability[REQUEST_REF_STATE].extensionId = extensionId
+  capability[REQUEST_REF_STATE].extensionId = Option.some(extensionId)
   return capability
 }
 

@@ -10,7 +10,7 @@
  * reach `autoProtocol.onInit` replay and crash the extension.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import { AutoJournal } from "../../src/auto/journal.js"
 const autoJournalLayer = Layer.merge(BunFileSystem.layer, Path.layer)
@@ -30,7 +30,9 @@ describe("AutoJournal row decoding", () => {
       const journalPath = yield* Effect.gen(function* () {
         const svc = yield* AutoJournal
         return yield* svc.start({ goal: "decode-test", maxIterations: 3 })
-      }).pipe(Effect.provide(live))
+      })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        .pipe(Effect.provide(live))
       // Append a mix of rows: one valid checkpoint, one bogus-JSON line,
       // one JSON-valid-but-wrong-shape line, one valid review.
       yield* fs.writeFileString(
@@ -51,16 +53,18 @@ describe("AutoJournal row decoding", () => {
       )
       const result = yield* Effect.gen(function* () {
         const svc = yield* AutoJournal
-        return yield* svc.readActive()
-      }).pipe(Effect.provide(live))
-      expect(result).toBeDefined()
-      if (result === undefined) return
+        return yield* svc.readActive
+      })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        .pipe(Effect.provide(live))
+      expect(Option.isSome(result)).toBe(true)
+      if (Option.isNone(result)) return
       // Good rows: ConfigRow (start) + checkpoint iter 1 + review iter 2 = 3.
       // Bad rows (unparseable JSON, wrong status enum) must be dropped.
-      expect(result.rows.length).toBe(3)
-      expect(result.rows[0]?.type).toBe("config")
-      expect(result.rows[1]?.type).toBe("checkpoint")
-      expect(result.rows[2]?.type).toBe("review")
+      expect(result.value.rows.length).toBe(3)
+      expect(result.value.rows[0]?.type).toBe("config")
+      expect(result.value.rows[1]?.type).toBe("checkpoint")
+      expect(result.value.rows[2]?.type).toBe("review")
     }).pipe(Effect.provide(autoJournalLayer)),
   )
 })

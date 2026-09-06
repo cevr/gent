@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
 import { onMount } from "solid-js"
-import { Clock, Deferred, Effect, Schema } from "effect"
+import { Clock, Deferred, Effect, Option, Schema } from "effect"
 import { ProviderAuthError } from "@gent/core-internal/domain/driver"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { dateFromMillis } from "@gent/core-internal/domain/message"
@@ -14,14 +14,31 @@ import { createMockClient, createMockRuntime, renderWithProviders } from "./rend
 import { renderFrame, waitForRenderedFrame } from "./helpers-boundary"
 import { runEffectBoundary } from "./run-effect-boundary"
 import { AgentName } from "@gent/core-internal/domain/agent"
+import { useTerminalDimensions } from "../src/terminal-dimensions"
+
 type AppAuthRenderSetup = Awaited<ReturnType<typeof renderWithProviders>>
 
-class MessageTimeoutError extends Schema.TaggedErrorClass<MessageTimeoutError>()(
-  "MessageTimeoutError",
-  {
-    message: Schema.String,
-  },
-) {}
+class MessageTimeoutError extends Schema.TaggedError<MessageTimeoutError>()("MessageTimeoutError", {
+  message: Schema.String,
+}) {}
+
+const absent = Option.getOrUndefined(Option.none())
+const nullValue = Option.getOrNull(Option.none())
+const apiMethod = { label: "API key", type: "api" } satisfies { label: string; type: "api" }
+
+const authSource = (hasKey: boolean): "stored" | "none" => {
+  if (hasKey) return "stored"
+  return "none"
+}
+
+const requireClient = (
+  context: Option.Option<ClientContextValue>,
+): Effect.Effect<ClientContextValue, MessageTimeoutError> => {
+  if (Option.isNone(context)) {
+    return Effect.fail(new MessageTimeoutError({ message: "client context not ready" }))
+  }
+  return Effect.succeed(context.value)
+}
 
 const waitForMessage = (
   setup: AppAuthRenderSetup,
@@ -54,10 +71,49 @@ function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => 
   })
   return <box />
 }
+
+function TerminalDimensionsProbe() {
+  const dimensions = useTerminalDimensions()
+  return <text>{`${dimensions().width}x${dimensions().height}`}</text>
+}
+
 describe("App auth gate", () => {
+  it.live("shares one terminal resize source across App and cleans it up", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App missingAuthProviders={[]} />
+              <TerminalDimensionsProbe />
+            </>
+          ),
+          {
+            initialSession: {
+              id: SessionId.make("session-resize"),
+              activeBranchId: BranchId.make("branch-resize"),
+              name: "Resize",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+          },
+        ),
+      )
+      expect(setup.renderer.listenerCount("resize")).toBe(1)
+      expect(renderFrame(setup)).toContain("80x24")
+
+      setup.renderer.resize(100, 30)
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("100x30")
+
+      setup.renderer.destroy()
+      expect(setup.renderer.listenerCount("resize")).toBe(0)
+    }),
+  )
+
   it.live("rechecks auth requirements when the selected agent changes", () =>
     Effect.gen(function* () {
-      let ctx: ClientContextValue | undefined
+      let ctx = Option.none<ClientContextValue>()
       const calls: Array<{
         agentName?: string
       }> = []
@@ -72,7 +128,7 @@ describe("App auth gate", () => {
                   hasKey: false,
                   required: true,
                   source: "none",
-                  authType: undefined,
+                  authType: absent,
                 },
               ])
             }
@@ -80,7 +136,7 @@ describe("App auth gate", () => {
           },
           listMethods: () =>
             Effect.succeed({
-              openai: [{ label: "API key", type: "api" as const }],
+              openai: [apiMethod],
             }),
         },
       })
@@ -90,7 +146,7 @@ describe("App auth gate", () => {
           () => (
             <>
               <App missingAuthProviders={[]} />
-              <ClientProbe onReady={(value) => (ctx = value)} />
+              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
           {
@@ -106,8 +162,8 @@ describe("App auth gate", () => {
           },
         ),
       )
-      if (ctx === undefined) throw new Error("client context not ready")
-      ctx.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
+      const clientContext = yield* requireClient(ctx)
+      clientContext.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
       const frame = yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
@@ -137,7 +193,7 @@ describe("App auth gate", () => {
                   hasKey: false,
                   required: true,
                   source: "none",
-                  authType: undefined,
+                  authType: absent,
                 },
               ])
             }
@@ -145,7 +201,7 @@ describe("App auth gate", () => {
           },
           listMethods: () =>
             Effect.succeed({
-              openai: [{ label: "API key", type: "api" as const }],
+              openai: [apiMethod],
             }),
         },
       })
@@ -258,7 +314,7 @@ describe("App auth gate", () => {
           hasKey: boolean
           required: boolean
           source: string
-          authType: undefined
+          authType: typeof absent
         }>
       >()
       const sentMessages: Array<{
@@ -269,7 +325,7 @@ describe("App auth gate", () => {
           listProviders: () => Deferred.await(providersDeferred),
           listMethods: () =>
             Effect.succeed({
-              openai: [{ label: "API key", type: "api" as const }],
+              openai: [apiMethod],
             }),
         },
         message: {
@@ -309,7 +365,7 @@ describe("App auth gate", () => {
           hasKey: false,
           required: true,
           source: "none",
-          authType: undefined,
+          authType: absent,
         },
       ])
       // Auth overlay should appear
@@ -340,7 +396,7 @@ describe("App auth gate", () => {
             ),
           listMethods: () =>
             Effect.succeed({
-              openai: [{ label: "API key", type: "api" as const }],
+              openai: [apiMethod],
             }),
         },
         message: {
@@ -393,9 +449,14 @@ describe("App auth gate", () => {
               authChecks += 1
             }).pipe(
               Effect.flatMap(() =>
-                authChecks === 1
-                  ? Effect.fail(new ProviderAuthError({ message: "temporary auth lookup failed" }))
-                  : Effect.succeed([]),
+                (() => {
+                  if (authChecks === 1) {
+                    return Effect.fail(
+                      new ProviderAuthError({ message: "temporary auth lookup failed" }),
+                    )
+                  }
+                  return Effect.succeed([])
+                })(),
               ),
             ),
           listMethods: () => Effect.succeed({}),
@@ -442,9 +503,14 @@ describe("App auth gate", () => {
               authChecks += 1
             }).pipe(
               Effect.flatMap(() =>
-                authChecks < 3
-                  ? Effect.fail(new ProviderAuthError({ message: "temporary auth lookup failed" }))
-                  : Effect.succeed([]),
+                (() => {
+                  if (authChecks < 3) {
+                    return Effect.fail(
+                      new ProviderAuthError({ message: "temporary auth lookup failed" }),
+                    )
+                  }
+                  return Effect.succeed([])
+                })(),
               ),
             ),
           listMethods: () => Effect.succeed({}),
@@ -513,11 +579,11 @@ describe("App auth gate", () => {
                 sessionId,
                 branchId,
                 messages: [],
-                lastEventId: null,
-                reasoningLevel: undefined,
+                lastEventId: nullValue,
+                reasoningLevel: absent,
                 runtime: {
-                  _tag: "Idle" as const,
-                  agent: "cowork" as const,
+                  _tag: "Idle",
+                  agent: "cowork",
                   queue: emptyQueueSnapshot(),
                 },
                 metrics: {
@@ -563,8 +629,8 @@ describe("App auth gate", () => {
                   provider: "openai",
                   hasKey: hasOpenAiKey,
                   required: true,
-                  source: hasOpenAiKey ? ("stored" as const) : ("none" as const),
-                  authType: undefined,
+                  source: authSource(hasOpenAiKey),
+                  authType: absent,
                 },
               ]
               if (hasOpenAiKey || initialAuthCheckResolved) return Effect.succeed(providers)
@@ -572,7 +638,7 @@ describe("App auth gate", () => {
             },
             listMethods: () =>
               Effect.succeed({
-                openai: [{ label: "API key", type: "api" as const }],
+                openai: [apiMethod],
               }),
             setKey: ({ key }: { readonly key: string }) =>
               Effect.sync(() => {
@@ -649,7 +715,7 @@ describe("App auth gate", () => {
         yield* Effect.promise(() => setup.renderOnce())
         expect(sentMessages).toEqual([])
         initialAuthCheckResolved = true
-        yield* Deferred.succeed(initialAuthCheck, undefined)
+        yield* Deferred.succeed(initialAuthCheck, void 0)
         yield* Effect.promise(() =>
           waitForRenderedFrame(setup, (frame) => frame.includes("API Keys"), "auth gate"),
         )
@@ -704,7 +770,7 @@ describe("App auth gate", () => {
   )
   it.live("stale auth checks cannot reopen the auth gate after key save", () =>
     Effect.gen(function* () {
-      let ctx: ClientContextValue | undefined
+      let ctx = Option.none<ClientContextValue>()
       let hasOpenAiKey = false
       let sessionAuthChecks = 0
       const staleSessionCheck = yield* Deferred.make<
@@ -713,7 +779,7 @@ describe("App auth gate", () => {
           hasKey: boolean
           required: boolean
           source: string
-          authType: undefined
+          authType: typeof absent
         }>
       >()
       const sentMessages: Array<{
@@ -726,7 +792,8 @@ describe("App auth gate", () => {
             readonly sessionId?: SessionId
             readonly agentName?: string
           }) => {
-            if (input.sessionId !== undefined) {
+            const sessionId = Option.fromNullishOr(input.sessionId)
+            if (Option.isSome(sessionId)) {
               sessionAuthChecks++
               if (sessionAuthChecks === 1) {
                 return Effect.succeed([
@@ -734,8 +801,8 @@ describe("App auth gate", () => {
                     provider: "openai",
                     hasKey: false,
                     required: true,
-                    source: "none" as const,
-                    authType: undefined,
+                    source: authSource(false),
+                    authType: absent,
                   },
                 ])
               }
@@ -745,8 +812,8 @@ describe("App auth gate", () => {
                   provider: "openai",
                   hasKey: hasOpenAiKey,
                   required: true,
-                  source: hasOpenAiKey ? ("stored" as const) : ("none" as const),
-                  authType: undefined,
+                  source: authSource(hasOpenAiKey),
+                  authType: absent,
                 },
               ])
             }
@@ -755,14 +822,14 @@ describe("App auth gate", () => {
                 provider: "openai",
                 hasKey: hasOpenAiKey,
                 required: true,
-                source: hasOpenAiKey ? ("stored" as const) : ("none" as const),
-                authType: undefined,
+                source: authSource(hasOpenAiKey),
+                authType: absent,
               },
             ])
           },
           listMethods: () =>
             Effect.succeed({
-              openai: [{ label: "API key", type: "api" as const }],
+              openai: [apiMethod],
             }),
           setKey: ({ key }: { readonly key: string }) =>
             Effect.sync(() => {
@@ -782,7 +849,7 @@ describe("App auth gate", () => {
           () => (
             <>
               <App missingAuthProviders={["openai"]} />
-              <ClientProbe onReady={(value) => (ctx = value)} />
+              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
           {
@@ -806,11 +873,11 @@ describe("App auth gate", () => {
           },
         ),
       )
-      if (ctx === undefined) throw new Error("client context not ready")
+      const clientContext = yield* requireClient(ctx)
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => frame.includes("API Keys"), "auth gate"),
       )
-      ctx.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
+      clientContext.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
       yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
@@ -840,7 +907,7 @@ describe("App auth gate", () => {
           hasKey: false,
           required: true,
           source: "none",
-          authType: undefined,
+          authType: absent,
         },
       ])
       // gent/no-sleep: allow real-clock gap so the resumed-send fiber resolves before assertion

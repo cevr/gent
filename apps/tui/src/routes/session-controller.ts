@@ -1,16 +1,9 @@
-import {
-  createContext,
-  createEffect,
-  createMemo,
-  createSignal,
-  on,
-  onCleanup,
-  useContext,
-} from "solid-js"
+import { createContext, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { useRenderer } from "@opentui/solid"
-import { Effect, Fiber, Random, Schedule } from "effect"
+import { DateTime, Effect, Fiber, Option, Random, Schedule } from "effect"
 import { useEnv } from "../env/context"
 import { shutdownLog } from "../utils/client-logger"
+import { useRequiredContext } from "../utils/solid-context"
 import type { ActiveInteraction } from "@gent/core-internal/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids.js"
 import type { Message, SessionItem } from "../components/message-list"
@@ -39,7 +32,7 @@ import { useRuntime } from "../hooks/use-runtime"
 import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useRouter } from "../router"
-import { formatError, type UiError } from "../utils/format-error"
+import { formatError } from "../utils/format-error"
 import { useExtensionUI } from "../extensions/context"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useChildSessions } from "../hooks/use-child-sessions"
@@ -107,8 +100,11 @@ export interface SessionController {
   onPromptSearchEvent: (event: Extract<SessionUiEvent, { _tag: "PromptSearch" }>["event"]) => void
 }
 
-const getTreeOverlay = (state: ReturnType<typeof SessionUiState.initial>["overlay"]) =>
-  state._tag === "tree" ? state.tree : null
+const getTreeOverlay = (state: ReturnType<typeof SessionUiState.initial>["overlay"]) => {
+  if (state._tag === "tree") return state.tree
+  // eslint-disable-next-line effect/noNullish -- SessionTree uses null to represent a closed overlay.
+  return null
+}
 
 export function createSessionController(props: {
   sessionId: SessionId
@@ -142,7 +138,7 @@ export function createSessionController(props: {
   const ESC_DOUBLE_TAP_MS = 1_000
   let lastEscTime = 0
   const handleEsc = (): boolean => {
-    const now = performance.timeOrigin + performance.now()
+    const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
     if (now - lastEscTime < ESC_DOUBLE_TAP_MS) {
       exit()
       return true
@@ -151,21 +147,24 @@ export function createSessionController(props: {
     return false
   }
   const QUIT_CHAIN_WINDOW_MS = 1_000
-  let quitArmed: { id: string; at: number } | null = null
+  let quitArmed: Option.Option<{ id: string; at: number }> = Option.none()
   const quitChain = {
     trigger: (id: string, actions?: { first?: () => void; second: () => void }) => {
-      const now = performance.timeOrigin + performance.now()
-      const isSecond = quitArmed?.id === id && now - quitArmed.at < QUIT_CHAIN_WINDOW_MS
+      const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
+      const isSecond = Option.exists(
+        quitArmed,
+        (armed) => armed.id === id && now - armed.at < QUIT_CHAIN_WINDOW_MS,
+      )
       if (isSecond) {
-        quitArmed = null
+        quitArmed = Option.none()
         actions?.second()
         return
       }
-      quitArmed = { id, at: now }
+      quitArmed = Option.some({ id, at: now })
       actions?.first?.()
     },
     reset: () => {
-      quitArmed = null
+      quitArmed = Option.none()
     },
   }
   const history = usePromptHistory()
@@ -190,27 +189,38 @@ export function createSessionController(props: {
     on(
       () => client.agent(),
       (agentName) => {
-        if (props.debugMode || agentName === undefined) return
-        const version = controllerState().authCheckVersion + 1
-        updateControllerState(beginAuthCheck)
-        client.runtime.cast(
-          client.client.auth.listProviders({ agentName, sessionId: props.sessionId }).pipe(
-            Effect.tap((providers) =>
-              Effect.sync(() => {
-                const missing = providers.some((p) => p.required && !p.hasKey)
-                updateControllerState((state) =>
-                  completeAuthCheck(state, { version, agent: agentName, missing }),
-                )
-              }),
-            ),
-            Effect.catchEager((error) =>
-              Effect.sync(() => {
-                updateControllerState((state) => failAuthCheck(state, version))
-                client.setError(`Authentication check failed: ${formatAuthGateError(error)}`)
-              }),
-            ),
-          ),
-        )
+        if (props.debugMode) return
+        Option.match(Option.fromNullishOr(agentName), {
+          onNone: () => {},
+          onSome: (resolvedAgent) => {
+            const version = controllerState().authCheckVersion + 1
+            updateControllerState(beginAuthCheck)
+            client.runtime.cast(
+              client.client.auth
+                .listProviders({ agentName: resolvedAgent, sessionId: props.sessionId })
+                .pipe(
+                  Effect.tap((providers) =>
+                    Effect.sync(() => {
+                      const missing = providers.some((p) => p.required && !p.hasKey)
+                      updateControllerState((state) =>
+                        completeAuthCheck(state, {
+                          version,
+                          agent: resolvedAgent,
+                          missing,
+                        }),
+                      )
+                    }),
+                  ),
+                  Effect.catchEager((error) =>
+                    Effect.sync(() => {
+                      updateControllerState((state) => failAuthCheck(state, version))
+                      client.setError(`Authentication check failed: ${formatAuthGateError(error)}`)
+                    }),
+                  ),
+                ),
+            )
+          },
+        })
       },
       { defer: false },
     ),
@@ -265,41 +275,38 @@ export function createSessionController(props: {
         !command.paletteOpen() &&
         !promptSearch.isOpen() &&
         uiState().overlay._tag === "none",
-      autocompleteOpen: is.autocomplete !== null,
+      autocompleteOpen: Option.isSome(is.autocomplete),
     }
   })
 
-  const handleComposerEffect = (effect: ComposerEffect | undefined) => {
-    if (effect === undefined) return
-    const { interaction, result } = effect
+  const handleComposerEffect = (effect: Option.Option<ComposerEffect>) => {
+    if (Option.isNone(effect)) return
+    const { interaction, result } = effect.value
+    const request = {
+      requestId: interaction.requestId,
+      sessionId: props.sessionId,
+      branchId: props.branchId,
+      approved: result.approved,
+    }
+    const requestWithNotes = Option.match(Option.fromNullishOr(result.notes), {
+      onNone: () => request,
+      onSome: (notes) => ({ ...request, notes }),
+    })
     cast(
-      client.client.interaction
-        .respondInteraction({
-          requestId: interaction.requestId,
-          sessionId: props.sessionId,
-          branchId: props.branchId,
-          approved: result.approved,
-          ...(result.notes !== undefined ? { notes: result.notes } : {}),
-        })
-        .pipe(
-          Effect.tapError((error: unknown) =>
-            Effect.sync(() => {
-              client.setError(
-                typeof error === "object" && error !== null
-                  ? // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
-                    formatError(error as UiError)
-                  : String(error),
-              )
-            }),
-          ),
+      client.client.interaction.respondInteraction(requestWithNotes).pipe(
+        Effect.tapError((error) =>
+          Effect.sync(() => {
+            client.setError(formatError(error))
+          }),
         ),
+      ),
     )
   }
 
   const dispatchComposer = (event: ComposerEvent) => {
     const result = transition(composerState(), event)
     setComposerState(result.state)
-    handleComposerEffect(result.effect)
+    handleComposerEffect(Option.fromNullishOr(result.effect))
   }
 
   const onInteraction = (interaction: ActiveInteraction) => {
@@ -346,13 +353,13 @@ export function createSessionController(props: {
       ),
   })
 
-  const activity = () => {
-    if (!client.isStreaming()) return { phase: "idle" as const, turn: feed.turnCount() }
-    const tool = feed.activeTool()
-    if (tool !== undefined) {
-      return { phase: "tool" as const, turn: feed.turnCount(), toolInfo: tool }
+  const activity = (): ReturnType<SessionController["activity"]> => {
+    if (!client.isStreaming()) return { phase: "idle", turn: feed.turnCount() }
+    const tool = Option.fromNullishOr(feed.activeTool())
+    if (Option.isSome(tool)) {
+      return { phase: "tool", turn: feed.turnCount(), toolInfo: tool.value }
     }
-    return { phase: "thinking" as const, turn: feed.turnCount() }
+    return { phase: "thinking", turn: feed.turnCount() }
   }
 
   createEffect(() => {
@@ -406,25 +413,28 @@ export function createSessionController(props: {
     const nextActivity = activity()
     switch (nextActivity.phase) {
       case "idle":
-        return nextActivity.turn > 0 ? "idle" : "ready"
+        if (nextActivity.turn > 0) return "idle"
+        return "ready"
       case "thinking":
         return activityDecor.word
       case "tool":
-        return nextActivity.toolInfo ?? "working"
+        return nextActivity.toolInfo
     }
   })
 
   const openSessionTree = () => {
     cast(
       Effect.gen(function* () {
-        const sessions = yield* client.listSessions()
+        const sessions = yield* client.listSessions
         const byId = new Map(sessions.map((session) => [session.id, session]))
         let rootId = props.sessionId
-        let current = byId.get(props.sessionId)
-        while (current?.parentSessionId !== undefined) {
-          const parent = byId.get(current.parentSessionId)
-          if (parent === undefined) break
-          rootId = parent.id
+        let current = Option.fromNullishOr(byId.get(props.sessionId))
+        while (Option.isSome(current)) {
+          const parentId = Option.fromNullishOr(current.value.parentSessionId)
+          if (Option.isNone(parentId)) break
+          const parent = Option.fromNullishOr(byId.get(parentId.value))
+          if (Option.isNone(parent)) break
+          rootId = parent.value.id
           current = parent
         }
 
@@ -466,14 +476,14 @@ export function createSessionController(props: {
 
   const onRestoreQueue = () => {
     cast(
-      client.drainQueuedMessages().pipe(
+      client.drainQueuedMessages.pipe(
         Effect.tap(({ steering, followUp }) =>
           Effect.sync(() => {
-            const text = queuedDraftText({ steering, followUp })
-            if (text === undefined) return
+            const text = Option.fromNullishOr(queuedDraftText({ steering, followUp }))
+            if (Option.isNone(text)) return
             onComposerInteraction(
               ComposerInteractionEvent.cases.RestoreDraft.make({
-                text,
+                text: text.value,
               }),
             )
             updateControllerState(clearQueue)
@@ -499,7 +509,10 @@ export function createSessionController(props: {
     executeSlashCommand(cmd, args, command.commands()).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {
-          if (result.error !== undefined) client.setError(result.error)
+          Option.match(Option.fromNullishOr(result.error), {
+            onNone: () => {},
+            onSome: (error) => client.setError(error),
+          })
         }),
       ),
       Effect.asVoid,
@@ -510,14 +523,25 @@ export function createSessionController(props: {
     dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({}))
     if (currentOverlay._tag !== "tree") return
 
-    const nextSession = currentOverlay.sessions.find((session) => session.id === sessionId)
-    if (nextSession === undefined || nextSession.activeBranchId === undefined) {
+    const nextSession = Option.fromNullishOr(
+      currentOverlay.sessions.find((session) => session.id === sessionId),
+    )
+    if (Option.isNone(nextSession)) {
+      client.setError("Session tree entry missing active branch")
+      return
+    }
+    const activeBranchId = Option.fromNullishOr(nextSession.value.activeBranchId)
+    if (Option.isNone(activeBranchId)) {
       client.setError("Session tree entry missing active branch")
       return
     }
 
-    client.switchSession(nextSession.id, nextSession.activeBranchId, nextSession.name ?? "Unnamed")
-    router.navigateToSession(nextSession.id, nextSession.activeBranchId)
+    client.switchSession(
+      nextSession.value.id,
+      activeBranchId.value,
+      nextSession.value.name ?? "Unnamed",
+    )
+    router.navigateToSession(nextSession.value.id, activeBranchId.value)
   }
 
   const onForkSelect = (messageId: MessageId) => {
@@ -651,8 +675,8 @@ export function createSessionController(props: {
 export const SessionControllerContext = createContext<SessionController>()
 
 export function useSessionController(): SessionController {
-  const ctx = useContext(SessionControllerContext)
-  if (ctx === undefined)
-    throw new Error("useSessionController must be used within SessionControllerContext.Provider")
-  return ctx
+  return useRequiredContext(
+    SessionControllerContext,
+    "useSessionController must be used within SessionControllerContext.Provider",
+  )
 }

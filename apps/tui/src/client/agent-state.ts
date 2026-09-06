@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import type * as Option from "effect/Option"
 import type { AgentName } from "@gent/core-internal/domain/agent.js"
 import type { ModelId } from "@gent/core-internal/domain/model.js"
 
@@ -11,7 +12,7 @@ export const AgentStatus = Schema.Union([
 export type AgentStatus = Schema.Schema.Type<typeof AgentStatus>
 
 export interface AgentState {
-  agent: AgentName | undefined
+  agent: Option.Option<AgentName>
   status: AgentStatus
   cost: number
   /**
@@ -20,5 +21,5 @@ export interface AgentState {
    * `StreamEnded`. Falls back to the agent's default model only when no
    * stream has ended yet for the active session.
    */
-  lastModelId: ModelId | undefined
+  lastModelId: Option.Option<ModelId>
 }

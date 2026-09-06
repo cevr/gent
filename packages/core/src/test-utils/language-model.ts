@@ -1,4 +1,15 @@
-import { Deferred, Duration, Effect, Layer, Queue, Ref, Stream, Schema } from "effect"
+import {
+  Predicate,
+  Deferred,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Queue,
+  Ref,
+  Stream,
+  Schema,
+} from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -15,8 +26,8 @@ export type LanguageModelStreamPart<Tools extends LanguageModelToolMap = Languag
   Response.StreamPart<Tools>
 
 export interface SignalLanguageModelControls {
-  readonly emitNext: () => Effect.Effect<void>
-  readonly emitAll: () => Effect.Effect<void>
+  readonly emitNext: Effect.Effect<void>
+  readonly emitAll: Effect.Effect<void>
   readonly waitForStreamStart: Effect.Effect<void>
 }
 
@@ -34,7 +45,7 @@ export interface SequenceLanguageModelControls {
   readonly waitForCall: (index: number) => Effect.Effect<void>
   readonly emitAll: (index: number) => Effect.Effect<void>
   readonly callCount: Effect.Effect<number>
-  readonly assertDone: () => Effect.Effect<void>
+  readonly assertDone: Effect.Effect<void>
 }
 
 export const DebugSlowLanguageModelDelayMs = 250
@@ -49,6 +60,7 @@ export const textDeltaPart = (
 
 export const toolCallPart = (
   toolName: string,
+  // oxlint-disable-next-line effect/noUnknownParameters -- Tool arguments enter the Effect AI codec as unknown JSON data.
   input: unknown,
   options?: { toolCallId?: ToolCallId },
 ): LanguageModelStreamPart =>
@@ -72,17 +84,23 @@ export const finishPart = (params: {
     reason: params.finishReason,
     usage: new Response.Usage({
       inputTokens: {
+        // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent token count in this wire fixture.
         uncached: undefined,
         total: params.usage?.inputTokens,
+        // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent token count in this wire fixture.
         cacheRead: undefined,
+        // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent token count in this wire fixture.
         cacheWrite: undefined,
       },
       outputTokens: {
         total: params.usage?.outputTokens,
+        // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent token count in this wire fixture.
         text: undefined,
+        // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent token count in this wire fixture.
         reasoning: undefined,
       },
     }),
+    // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent response in this wire fixture.
     response: undefined,
   })
 
@@ -136,7 +154,7 @@ const extractLatestUserText = (promptInput: Prompt.RawInput): string => {
   const latest = [...Prompt.make(promptInput).content]
     .reverse()
     .find((message) => message.role === "user")
-  if (latest === undefined) return ""
+  if (Predicate.isUndefined(latest)) return ""
   return latest.content
     .filter((part): part is Prompt.TextPart => part.type === "text")
     .map((part) => part.text)
@@ -228,7 +246,8 @@ const debug = (options?: { delayMs?: number; retries?: boolean }) => {
       Effect.suspend(() => {
         const latestUserText = extractLatestUserText(modelOptions.prompt)
         const seen = attempts.get(latestUserText) ?? 0
-        const retryBudget = retries ? retryBudgetFor(latestUserText) : 0
+        let retryBudget = 0
+        if (retries) retryBudget = retryBudgetFor(latestUserText)
 
         if (seen < retryBudget) {
           attempts.set(latestUserText, seen + 1)
@@ -242,20 +261,22 @@ const debug = (options?: { delayMs?: number; retries?: boolean }) => {
   })
 }
 
-let failingCache: Layer.Layer<LanguageModel.LanguageModel> | undefined
+let failingCache = Option.none<Layer.Layer<LanguageModel.LanguageModel>>()
 const failing = () => {
-  if (failingCache === undefined) {
-    failingCache = makeLanguageModelLayer({
+  if (Option.isNone(failingCache)) {
+    const layer = makeLanguageModelLayer({
       streamText: () => Stream.fail(aiError("Failing.streamText", "provider exploded")),
       generateText: () => Effect.fail(aiError("Failing.generateText", "provider exploded")),
     })
+    failingCache = Option.some(layer)
+    return layer
   }
-  return failingCache
+  return failingCache.value
 }
 
 const signal = (reply: string, options?: { inputTokens?: number; outputTokens?: number }) =>
   Effect.gen(function* () {
-    const gate = yield* Queue.unbounded<null>()
+    const gate = yield* Queue.unbounded<"continue">()
     const streamStarted = yield* Deferred.make<void>()
 
     const parts = reply
@@ -287,8 +308,8 @@ const signal = (reply: string, options?: { inputTokens?: number; outputTokens?: 
     })
 
     const controls: SignalLanguageModelControls = {
-      emitNext: () => Queue.offer(gate, null).pipe(Effect.asVoid),
-      emitAll: () => Effect.forEach(allParts, () => Queue.offer(gate, null).pipe(Effect.asVoid)),
+      emitNext: Queue.offer(gate, "continue").pipe(Effect.asVoid),
+      emitAll: Effect.forEach(allParts, () => Queue.offer(gate, "continue").pipe(Effect.asVoid)),
       waitForStreamStart: Deferred.await(streamStarted),
     }
 
@@ -304,7 +325,7 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
 
     yield* Effect.forEach(steps, (step, i) => {
       const gate = emitGates[i]
-      if (step.gated || gate === undefined) return Effect.void
+      if (step.gated || Predicate.isUndefined(gate)) return Effect.void
       return Deferred.succeed(gate, void 0)
     })
 
@@ -324,7 +345,7 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
           const started = callStarted[idx] ?? callStarted[0]
           const gate = emitGates[idx] ?? emitGates[0]
 
-          if (started !== undefined) yield* Deferred.succeed(started, void 0)
+          if (!Predicate.isUndefined(started)) yield* Deferred.succeed(started, void 0)
 
           if (step?.assertOptions) {
             yield* Effect.try({
@@ -337,7 +358,7 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
             })
           }
 
-          if (gate !== undefined) {
+          if (!Predicate.isUndefined(gate)) {
             return Stream.fromEffect(Deferred.await(gate)).pipe(
               Stream.flatMap(() => Stream.fromIterable(step?.parts ?? [])),
             )
@@ -350,15 +371,15 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
       Effect.gen(function* () {
         const idx = yield* Ref.getAndUpdate(requestIndexRef, (n) => n + 1)
         const step = steps[idx] ?? steps[0]
-        if (step?.assertRequest === undefined) return
+        if (Predicate.isUndefined(step?.assertRequest)) return
         yield* Effect.try({
-          try: () =>
-            step.assertRequest?.({
-              model: String(request.modelId),
-              ...(request.hints?.reasoning !== undefined
-                ? { reasoning: request.hints.reasoning }
-                : {}),
-            }),
+          try: () => {
+            const model = String(request.modelId)
+            if (!Predicate.isUndefined(request.hints?.reasoning)) {
+              return step.assertRequest?.({ model, reasoning: request.hints.reasoning })
+            }
+            return step.assertRequest?.({ model })
+          },
           catch: (e) =>
             new ProviderError({
               message: `Sequence language model: assertRequest failed at step ${idx}: ${e}`,
@@ -373,7 +394,7 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
     const controls: SequenceLanguageModelControls = {
       waitForCall: (index) => {
         const deferred = callStarted[index]
-        if (index < 0 || index >= steps.length || deferred === undefined) {
+        if (index < 0 || index >= steps.length || Predicate.isUndefined(deferred)) {
           return Effect.die(
             new Error(`waitForCall: index ${index} out of range [0, ${steps.length})`),
           )
@@ -382,22 +403,21 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
       },
       emitAll: (index) => {
         const deferred = emitGates[index]
-        if (index < 0 || index >= steps.length || deferred === undefined) {
+        if (index < 0 || index >= steps.length || Predicate.isUndefined(deferred)) {
           return Effect.die(new Error(`emitAll: index ${index} out of range [0, ${steps.length})`))
         }
         return Deferred.succeed(deferred, void 0)
       },
       callCount: Ref.get(indexRef),
-      assertDone: () =>
-        Effect.gen(function* () {
-          const consumed = yield* Ref.get(indexRef)
-          if (consumed >= steps.length) return
-          return yield* Effect.die(
-            new Error(
-              `Sequence language model: ${steps.length - consumed} unconsumed steps (consumed ${consumed}/${steps.length})`,
-            ),
-          )
-        }),
+      assertDone: Effect.gen(function* () {
+        const consumed = yield* Ref.get(indexRef)
+        if (consumed >= steps.length) return
+        return yield* Effect.die(
+          new Error(
+            `Sequence language model: ${steps.length - consumed} unconsumed steps (consumed ${consumed}/${steps.length})`,
+          ),
+        )
+      }),
     }
 
     return { layer, controls }

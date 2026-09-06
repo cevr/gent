@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
 import { createEffect, onMount } from "solid-js"
-import { Effect } from "effect"
+import { Effect, Option, Predicate } from "effect"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { dateFromMillis } from "@gent/core-internal/domain/message"
 import { CommandPalette } from "../../src/components/command-palette"
@@ -11,6 +11,8 @@ import { useClient } from "../../src/client"
 import type { ClientContextValue } from "../../src/client/context"
 import { createMockClient, renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
+
+const absent = Option.getOrUndefined(Option.none())
 
 function OpenPaletteOnMount() {
   const command = useCommand()
@@ -59,8 +61,8 @@ describe("CommandPalette renderer", () => {
 
   it.live("switches sessions through the sessions palette", () =>
     Effect.gen(function* () {
-      let ctx: ClientContextValue | undefined
-      let router: RouterContextValue | undefined
+      let ctx: Option.Option<ClientContextValue> = Option.none()
+      let router: Option.Option<RouterContextValue> = Option.none()
       const alphaSessionId = SessionId.make("session-alpha")
       const alphaBranchId = BranchId.make("branch-alpha")
       const betaSessionId = SessionId.make("session-beta")
@@ -91,8 +93,8 @@ describe("CommandPalette renderer", () => {
           () => (
             <>
               <OpenPaletteOnMount />
-              <ClientProbe onReady={(value) => (ctx = value)} />
-              <RouterProbe onReady={(value) => (router = value)} />
+              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+              <RouterProbe onReady={(value) => (router = Option.some(value))} />
             </>
           ),
           {
@@ -110,8 +112,8 @@ describe("CommandPalette renderer", () => {
           },
         ),
       )
-      if (ctx === undefined || router === undefined) {
-        throw new Error("client or router context not ready")
+      if (Option.isNone(ctx) || Option.isNone(router)) {
+        return yield* Effect.die("client or router context not ready")
       }
       yield* Effect.promise(() =>
         waitForRenderedFrame(
@@ -138,19 +140,19 @@ describe("CommandPalette renderer", () => {
           "sessions palette closed",
         ),
       )
-      expect(router.route()).toEqual(Route.session(betaSessionId, betaBranchId))
-      expect(ctx.session()).toEqual({
+      expect(router.value.route()).toEqual(Route.session(betaSessionId, betaBranchId))
+      expect(ctx.value.session()).toEqual({
         sessionId: betaSessionId,
         branchId: betaBranchId,
         name: "Beta",
-        reasoningLevel: undefined,
+        reasoningLevel: absent,
       })
     }),
   )
 
   it.live("creates palette sessions with workspace cwd", () =>
     Effect.gen(function* () {
-      let router: RouterContextValue | undefined
+      let router: Option.Option<RouterContextValue> = Option.none()
       const createdSessionId = SessionId.make("session-created")
       const createdBranchId = BranchId.make("branch-created")
       const createInputs: Array<{
@@ -176,7 +178,7 @@ describe("CommandPalette renderer", () => {
           () => (
             <>
               <OpenPaletteOnMount />
-              <RouterProbe onReady={(value) => (router = value)} />
+              <RouterProbe onReady={(value) => (router = Option.some(value))} />
             </>
           ),
           {
@@ -187,7 +189,7 @@ describe("CommandPalette renderer", () => {
           },
         ),
       )
-      if (router === undefined) throw new Error("router context not ready")
+      if (Option.isNone(router)) return yield* Effect.die("router context not ready")
       yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
@@ -212,9 +214,11 @@ describe("CommandPalette renderer", () => {
         ),
       )
       expect(createInputs).toHaveLength(1)
-      expect(createInputs[0]?.cwd).toBe(workspaceCwd)
-      expect(typeof createInputs[0]?.requestId).toBe("string")
-      expect(router.route()).toEqual(Route.session(createdSessionId, createdBranchId))
+      const firstInput = Option.fromNullishOr(createInputs[0])
+      if (Option.isNone(firstInput)) return yield* Effect.die("session create was not called")
+      expect(firstInput.value.cwd).toBe(workspaceCwd)
+      expect(Predicate.isString(firstInput.value.requestId)).toBe(true)
+      expect(router.value.route()).toEqual(Route.session(createdSessionId, createdBranchId))
     }),
   )
 })

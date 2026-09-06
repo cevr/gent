@@ -3,7 +3,8 @@
  * tool calls and message history for TUI development/testing.
  */
 
-import { Clock, Effect } from "effect"
+import { Clock, Effect, Option } from "effect"
+import type { Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Branch, Message, Session, dateFromMillis } from "../domain/message.js"
 import { SessionStorage } from "../storage/session-storage.js"
@@ -16,25 +17,27 @@ export interface DebugSessionInfo {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly name: string
-  readonly reasoningLevel: undefined
 }
+
+type DebugValue = Schema.Schema.Type<typeof Schema.Unknown>
 
 const makeText = (text: string) => Prompt.textPart({ text })
 
 const asToolCallId = (value: string) => ToolCallId.make(value)
 
-const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: unknown) =>
+const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: DebugValue) =>
   Prompt.toolResultPart({
     id: toolCallId,
     name: toolName,
     isFailure: false,
+    providerExecuted: false,
     result: value,
   })
 
 const makeToolCall = (params: {
   readonly id: ToolCallId
   readonly name: string
-  readonly params: unknown
+  readonly params: DebugValue
 }) => Prompt.toolCallPart({ ...params, providerExecuted: false })
 
 export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) {
@@ -326,7 +329,6 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   return {
     sessionId,
     branchId,
-    name: session.name ?? "debug scenario",
-    reasoningLevel: undefined,
+    name: Option.getOrElse(Option.fromUndefinedOr(session.name), () => "debug scenario"),
   } satisfies DebugSessionInfo
 })

@@ -3,6 +3,8 @@
  */
 
 import { toolArgSummary } from "../utils/format-tool.js"
+import { getString } from "../utils/parse-tool-output.js"
+import type { ToolInput } from "../utils/parse-tool-output.js"
 
 /**
  * Format seconds into human readable time string
@@ -31,7 +33,7 @@ export function truncatePath(path: string, maxLen = 40): string {
 }
 
 // Tool-specific spinner animations (fixed width: 3 chars)
-export const TOOL_SPINNERS: Record<string, readonly string[]> = {
+export const TOOL_SPINNERS = {
   // File operations - scanning dots
   read: [".  ", ".. ", "..."],
   glob: [".  ", ".. ", "..."],
@@ -46,18 +48,15 @@ export const TOOL_SPINNERS: Record<string, readonly string[]> = {
   fetch: ["~  ", "~~ ", "~~~"],
   // Default - classic spinner
   default: [" | ", " / ", " - ", " \\ "],
-}
+} satisfies Record<string, readonly string[]>
+const toolSpinnersByName = new Map<string, readonly string[]>(Object.entries(TOOL_SPINNERS))
 
 /**
  * Get spinner frames for a tool by name
  */
 export function getSpinnerFrames(toolName: string): readonly string[] {
   const name = toolName.toLowerCase()
-  return TOOL_SPINNERS[name] ?? TOOL_SPINNERS["default"] ?? [" | "]
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object"
+  return toolSpinnersByName.get(name) ?? TOOL_SPINNERS.default
 }
 
 /**
@@ -68,20 +67,21 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  */
 export function formatToolInput(
   toolName: string,
-  input: unknown,
+  input: ToolInput,
   cwd = ".",
   home?: string,
 ): string {
-  if (!isRecord(input)) return ""
   const name = toolName.toLowerCase()
 
   // glob/grep: cwd fallback needs to happen before toolArgSummary
   if (name === "glob" || name === "grep") {
-    const pattern = typeof input["pattern"] === "string" ? input["pattern"] : ""
+    const pattern = getString(input, "pattern")
     if (pattern.length === 0) return ""
-    const searchPath =
-      typeof input["path"] === "string" ? truncatePath(input["path"], 30) : truncatePath(cwd, 30)
-    const prefix = name === "grep" ? `/${pattern}/` : pattern
+    const path = getString(input, "path")
+    let searchPath = truncatePath(cwd, 30)
+    if (path.length > 0) searchPath = truncatePath(path, 30)
+    let prefix = pattern
+    if (name === "grep") prefix = `/${pattern}/`
     return `${prefix} in ${searchPath}`
   }
 

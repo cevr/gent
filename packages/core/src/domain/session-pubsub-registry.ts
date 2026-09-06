@@ -1,4 +1,4 @@
-import { Effect, HashMap, PubSub, type Scope, TxRef } from "effect"
+import { Effect, HashMap, Option, PubSub, type Scope, TxRef } from "effect"
 import type { EventEnvelope } from "./event.js"
 import { getEventSessionId } from "./event.js"
 import type { SessionId } from "./ids.js"
@@ -52,7 +52,6 @@ export const makeSessionPubSubRegistry: Effect.Effect<SessionPubSubRegistry> = E
 
     const broadcast = (envelope: EventEnvelope): Effect.Effect<void> => {
       const eventSessionId = getEventSessionId(envelope.event)
-      if (eventSessionId === undefined) return Effect.void
       return Effect.gen(function* () {
         const ps = yield* getOrCreate(eventSessionId)
         yield* PubSub.publish(ps, envelope)
@@ -63,10 +62,10 @@ export const makeSessionPubSubRegistry: Effect.Effect<SessionPubSubRegistry> = E
       Effect.gen(function* () {
         const removed = yield* TxRef.modify(sessionsRef, (current) => {
           const found = HashMap.get(current, sessionId)
-          if (found._tag === "None") return [undefined, current]
-          return [found.value, HashMap.remove(current, sessionId)] as const
+          if (found._tag === "None") return [Option.none<PubSub.PubSub<EventEnvelope>>(), current]
+          return [Option.some(found.value), HashMap.remove(current, sessionId)]
         })
-        if (removed !== undefined) yield* PubSub.shutdown(removed)
+        if (Option.isSome(removed)) yield* PubSub.shutdown(removed.value)
       })
 
     return { subscribe, broadcast, remove }

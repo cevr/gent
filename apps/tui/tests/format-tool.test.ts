@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test"
+import { Option } from "effect"
 import os from "node:os"
 import {
   formatTokens,
@@ -8,6 +9,8 @@ import {
 } from "../src/utils/format-tool.js"
 
 const HOME = os.homedir()
+const absent = Option.getOrUndefined(Option.none())
+const nullValue = Option.getOrNull(Option.none())
 
 describe("formatTokens", () => {
   test("small counts returned as-is", () => {
@@ -43,7 +46,7 @@ describe("formatUsageStats", () => {
 
   test("omits zero/undefined fields", () => {
     expect(formatUsageStats({ input: 0, output: 0, cost: 0 })).toBe("")
-    expect(formatUsageStats({ input: undefined })).toBe("")
+    expect(formatUsageStats({ input: absent })).toBe("")
   })
 
   test("formats all populated fields", () => {
@@ -201,11 +204,11 @@ describe("toolArgSummary", () => {
   test("degrades gracefully on bad input types", () => {
     expect(toolArgSummary("grep", { pattern: "ok", path: {} })).toBe("/ok/ in .")
     expect(toolArgSummary("glob", { pattern: "*.ts", path: 123 })).toBe("*.ts in .")
-    expect(toolArgSummary("read", { file_path: "/tmp/f.ts", offset: "bad", limit: null })).toBe(
-      "/tmp/f.ts",
-    )
+    expect(
+      toolArgSummary("read", { file_path: "/tmp/f.ts", offset: "bad", limit: nullValue }),
+    ).toBe("/tmp/f.ts")
     expect(toolArgSummary("bash", { command: 123 })).toBe("")
-    expect(toolArgSummary("read", { file_path: null })).toBe("")
+    expect(toolArgSummary("read", { file_path: nullValue })).toBe("")
   })
 
   test("unknown tool returns empty", () => {

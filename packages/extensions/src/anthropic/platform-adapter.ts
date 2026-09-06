@@ -1,4 +1,4 @@
-import { Context } from "effect"
+import { Context, Option } from "effect"
 import type { PublicExtensionSetupContext } from "@gent/core/extensions/api"
 
 type ExtensionHostProcess = PublicExtensionSetupContext["Process"]
@@ -16,15 +16,29 @@ export interface AnthropicKeychainEnv {
   readonly userAgent?: string
 }
 
-export interface AnthropicPlatformShape {
+export const makeAnthropicKeychainEnv = (options: {
+  readonly betaFlags: Option.Option<string>
+  readonly cliVersion: Option.Option<string>
+  readonly entrypoint: Option.Option<string>
+  readonly userAgent: Option.Option<string>
+}): AnthropicKeychainEnv => {
+  let env: AnthropicKeychainEnv = {}
+  if (Option.isSome(options.betaFlags)) env = { ...env, betaFlags: options.betaFlags.value }
+  if (Option.isSome(options.cliVersion)) env = { ...env, cliVersion: options.cliVersion.value }
+  if (Option.isSome(options.entrypoint)) env = { ...env, entrypoint: options.entrypoint.value }
+  if (Option.isSome(options.userAgent)) env = { ...env, userAgent: options.userAgent.value }
+  return env
+}
+
+export interface AnthropicPlatformApi {
   readonly platform: string
   readonly home: string
-  readonly parentEnv: Record<string, string | undefined>
+  readonly parentEnv: PublicExtensionSetupContext["Process"]["parentEnv"]
   readonly runProcess: ExtensionHostProcess["runProcess"]
   readonly env: AnthropicKeychainEnv
 }
 
-export class AnthropicPlatform extends Context.Service<AnthropicPlatform, AnthropicPlatformShape>()(
+export class AnthropicPlatform extends Context.Service<AnthropicPlatform, AnthropicPlatformApi>()(
   "@gent/extensions/src/anthropic/platform-adapter/AnthropicPlatform",
 ) {
   /**
@@ -38,7 +52,7 @@ export class AnthropicPlatform extends Context.Service<AnthropicPlatform, Anthro
   static readonly fromSetup = (
     ctx: PublicExtensionSetupContext,
     env: AnthropicKeychainEnv,
-  ): AnthropicPlatformShape =>
+  ): AnthropicPlatformApi =>
     AnthropicPlatform.of({
       platform: ctx.host.osInfo.platform,
       home: ctx.host.homeDirectory,

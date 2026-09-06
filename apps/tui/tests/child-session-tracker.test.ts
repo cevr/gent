@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Fiber, Schema, Stream } from "effect"
+import { Effect, Fiber, Option, Schema, Stream } from "effect"
 import { AgentName } from "@gent/core-internal/domain/agent"
 import { AgentEvent, EventStore } from "@gent/core-internal/domain/event"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
@@ -9,7 +9,7 @@ import {
   type ChildSessionTrackerService,
 } from "../src/services/child-session-tracker"
 
-class ChildSessionTrackerTimeoutError extends Schema.TaggedErrorClass<ChildSessionTrackerTimeoutError>()(
+class ChildSessionTrackerTimeoutError extends Schema.TaggedError<ChildSessionTrackerTimeoutError>()(
   "ChildSessionTrackerTimeoutError",
   { message: Schema.String },
 ) {}
@@ -23,9 +23,9 @@ const waitForEntry = (
     attempts: number,
   ): Effect.Effect<ChildSessionEntry, ChildSessionTrackerTimeoutError> =>
     Effect.gen(function* () {
-      const entries = yield* tracker.getAll()
-      const entry = entries.get(childSessionId)
-      if (entry !== undefined && predicate(entry)) return entry
+      const entries = yield* tracker.getAll
+      const entry = Option.fromUndefinedOr(entries.get(childSessionId))
+      if (Option.isSome(entry) && predicate(entry.value)) return entry.value
       if (attempts <= 0) {
         return yield* new ChildSessionTrackerTimeoutError({
           message: `child session ${childSessionId} did not settle`,

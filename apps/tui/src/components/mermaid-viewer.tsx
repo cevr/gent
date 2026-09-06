@@ -4,7 +4,8 @@
  */
 
 import { createSignal, Show, createMemo, createEffect } from "solid-js"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "../terminal-dimensions"
+import { Option } from "effect"
 import { useTheme } from "../theme/index"
 import { renderMermaidToAscii, extractMermaidBlocks } from "../utils/mermaid"
 import { useScopedKeyboard } from "../keyboard/context"
@@ -41,14 +42,14 @@ export function MermaidViewer(props: MermaidViewerProps) {
 
   const currentDiagram = createMemo(() => {
     const idx = state().diagramIndex
-    return props.diagrams[idx]
+    return Option.fromNullishOr(props.diagrams[idx])
   })
 
   const visibleContent = createMemo(() => {
     const diagram = currentDiagram()
-    if (diagram === undefined) return ""
+    if (Option.isNone(diagram)) return ""
 
-    const lines = diagram.rendered.split("\n")
+    const lines = diagram.value.rendered.split("\n")
     const startLine = state().panY
     const startCol = state().panX
     const viewHeight = dimensions().height - 3 // Leave room for header/footer
@@ -187,14 +188,15 @@ export function collectDiagrams(
   width: number,
 ): MermaidDiagram[] {
   const diagrams: MermaidDiagram[] = []
-  const renderWidth = width > 0 ? width : 120
+  let renderWidth = 120
+  if (width > 0) renderWidth = width
 
   for (const msg of messages) {
     const blocks = extractMermaidBlocks(msg.content)
     for (const block of blocks) {
       const rendered = renderMermaidToAscii(block.source, renderWidth)
-      if (rendered !== undefined) {
-        diagrams.push({ source: block.source, rendered })
+      if (Option.isSome(rendered)) {
+        diagrams.push({ source: block.source, rendered: rendered.value })
       }
     }
   }

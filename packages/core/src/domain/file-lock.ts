@@ -5,7 +5,7 @@ interface LockEntry {
   readonly refcount: number
 }
 
-export interface FileLockShape {
+export interface FileLockApi {
   readonly withLock: <A, E, R>(
     path: string,
     effect: Effect.Effect<A, E, R>,
@@ -13,10 +13,10 @@ export interface FileLockShape {
   /** Number of paths currently locked or queued for lock. Refcount-bounded —
    *  drops back to 0 once all callers release. Exposed for diagnostics +
    *  regression-locking the eviction invariant. */
-  readonly currentSize: () => Effect.Effect<number>
+  readonly currentSize: Effect.Effect<number>
 }
 
-export class FileLockService extends Context.Service<FileLockService, FileLockShape>()(
+export class FileLockService extends Context.Service<FileLockService, FileLockApi>()(
   "@gent/core/src/domain/file-lock/FileLockService",
 ) {
   static layer = Layer.effect(
@@ -38,10 +38,10 @@ export class FileLockService extends Context.Service<FileLockService, FileLockSh
           const found = HashMap.get(current, resolved)
           if (found._tag === "Some") {
             const bumped: LockEntry = { sem: found.value.sem, refcount: found.value.refcount + 1 }
-            return [found.value.sem, HashMap.set(current, resolved, bumped)] as const
+            return [found.value.sem, HashMap.set(current, resolved, bumped)]
           }
           const entry: LockEntry = { sem: fresh, refcount: 1 }
-          return [fresh, HashMap.set(current, resolved, entry)] as const
+          return [fresh, HashMap.set(current, resolved, entry)]
         })
         return { sem, resolved }
       })
@@ -62,7 +62,7 @@ export class FileLockService extends Context.Service<FileLockService, FileLockSh
             ({ sem }) => TxSemaphore.withPermits(sem, 1, effect),
             ({ resolved }) => release(resolved),
           ),
-        currentSize: () => TxRef.get(locksRef).pipe(Effect.map((m) => HashMap.size(m))),
+        currentSize: TxRef.get(locksRef).pipe(Effect.map((m) => HashMap.size(m))),
       })
     }),
   )

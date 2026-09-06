@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Clock, Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect"
+import { Clock, Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -11,6 +11,7 @@ import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
+import { ApprovalService } from "../../../src/runtime/approval-service"
 import {
   finishPart,
   LanguageModelLayers,
@@ -19,11 +20,11 @@ import {
 import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import { textStep } from "@gent/core-internal/debug/provider"
 import {
+  AgentEvent,
   EventEnvelope,
   EventId,
   EventStore,
   EventStoreError,
-  type AgentEvent,
 } from "@gent/core-internal/domain/event"
 import { EventPublisher, EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
@@ -61,6 +62,7 @@ describe("run completion", () => {
         )
         const state = yield* agentLoop.getState({ sessionId, branchId })
         expect(state._tag).toBe("Idle")
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer)))
     }),
   )
@@ -77,7 +79,8 @@ describe("streaming", () => {
           return Effect.succeed(
             Stream.fromEffect(
               Effect.gen(function* () {
-                yield* Deferred.succeed(firstStarted, undefined)
+                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+                yield* Deferred.succeed(firstStarted, void 0)
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
               }),
@@ -99,8 +102,10 @@ describe("streaming", () => {
           expect(finishedB._tag).toBe("Some")
           const statusA = fiberA.pollUnsafe()
           expect(statusA).toBeUndefined()
-          yield* Deferred.succeed(gate, undefined)
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+          yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiberA)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -116,7 +121,8 @@ describe("streaming", () => {
           return Effect.succeed(
             Stream.fromEffect(
               Effect.gen(function* () {
-                yield* Deferred.succeed(firstStarted, undefined)
+                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+                yield* Deferred.succeed(firstStarted, void 0)
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
               }),
@@ -129,11 +135,11 @@ describe("streaming", () => {
         EventStorage,
         Effect.gen(function* () {
           const eventStorage = yield* EventStorage
-          return {
+          return EventStorage.of({
             ...eventStorage,
             getLatestEvent: (input) =>
               eventStorage.getLatestEvent(input).pipe(Effect.delay("5 millis")),
-          }
+          })
         }),
       )
       const baseStorageLayer = SqliteStorage.TestWithSql()
@@ -147,6 +153,7 @@ describe("streaming", () => {
         ConfigService.Test(),
         EventStore.Memory,
         ToolRunner.Test(),
+        ApprovalService.Test(),
         BunServices.layer,
         ModelRegistry.Test(),
         GentPlatform.Test(),
@@ -176,9 +183,11 @@ describe("streaming", () => {
           const queuedB = yield* Fiber.join(fiberB).pipe(Effect.timeoutOption("200 millis"))
           expect(queuedB._tag).toBe("Some")
           expect(calls).toBe(1)
-          yield* Deferred.succeed(gate, undefined)
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+          yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiberA)
           expect(calls).toBe(2)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -192,12 +201,17 @@ describe("streaming", () => {
       let calls = 0
       const providerLayer = LanguageModelLayers.testStream(() => {
         calls += 1
-        const gate = calls === 1 ? gateA : gateB
-        const started = calls === 1 ? startedA : startedB
+        let gate = gateB
+        let started = startedB
+        if (calls === 1) {
+          gate = gateA
+          started = startedA
+        }
         return Effect.succeed(
           Stream.fromEffect(
             Effect.gen(function* () {
-              yield* Deferred.succeed(started, undefined)
+              // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+              yield* Deferred.succeed(started, void 0)
               yield* Deferred.await(gate)
               return finishPart({ finishReason: "stop" })
             }),
@@ -224,9 +238,12 @@ describe("streaming", () => {
           expect(finishedA._tag).toBe("Some")
           const statusB = fiberB.pollUnsafe()
           expect(statusB).toBeUndefined()
-          yield* Deferred.succeed(gateA, undefined)
-          yield* Deferred.succeed(gateB, undefined)
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+          yield* Deferred.succeed(gateA, void 0)
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+          yield* Deferred.succeed(gateB, void 0)
           yield* Fiber.join(fiberB)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -242,7 +259,8 @@ describe("streaming", () => {
           return Effect.succeed(
             Stream.fromEffect(
               Effect.gen(function* () {
-                yield* Deferred.succeed(firstStarted, undefined)
+                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+                yield* Deferred.succeed(firstStarted, void 0)
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
               }),
@@ -263,7 +281,8 @@ describe("streaming", () => {
           yield* Deferred.await(firstStarted)
           yield* runAgentLoop(agentLoop, second)
           yield* runAgentLoop(agentLoop, third)
-          yield* Deferred.succeed(gate, undefined)
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+          yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiber)
           const messages = yield* messageStorage.listMessages(BranchId.make("b1"))
           const userTexts = messages
@@ -275,6 +294,7 @@ describe("streaming", () => {
                 .join("\n"),
             )
           expect(userTexts).toEqual(["first", "second\nthird"])
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -293,22 +313,15 @@ describe("streaming", () => {
             agentLoop,
             makeMessage(SessionId.make("s1"), BranchId.make("b1"), "inspect me"),
           )
-          const calls = yield* recorder.getCalls()
+          const calls = yield* recorder.getCalls
           const publishedEvents = calls
             .filter((call) => call.service === "EventStore" && call.method === "append")
-            .map(
-              (call) =>
-                (
-                  call.args as
-                    | {
-                        _tag?: string
-                      }
-                    | undefined
-                )?._tag,
-            )
-            .filter((tag): tag is string => tag !== undefined)
+            .map((call) => Schema.decodeUnknownOption(AgentEvent)(call.args))
+            .filter(Option.isSome)
+            .map(({ value }) => value._tag)
           expect(publishedEvents).toContain("StreamStarted")
           expect(publishedEvents).toContain("TurnCompleted")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -318,20 +331,25 @@ describe("streaming", () => {
       const providerLayer = scriptedProvider([
         [textDeltaPart("not committed"), finishPart({ finishReason: "stop" })],
       ])
-      const failingPublisherLayer = Layer.succeed(EventPublisher, {
-        append: (event: AgentEvent) =>
-          event._tag === "MessageReceived" && event.message.role === "assistant"
-            ? Effect.fail(new EventStoreError({ message: "append failed" }))
-            : Effect.gen(function* () {
-                return EventEnvelope.make({
-                  id: EventId.make(0),
-                  event,
-                  createdAt: yield* Clock.currentTimeMillis,
-                })
-              }),
-        deliver: () => Effect.void,
-        publish: () => Effect.void,
-      })
+      const failingPublisherLayer = Layer.succeed(
+        EventPublisher,
+        EventPublisher.of({
+          append: (event: AgentEvent) => {
+            if (event._tag === "MessageReceived" && event.message.role === "assistant") {
+              return Effect.fail(new EventStoreError({ message: "append failed" }))
+            }
+            return Effect.gen(function* () {
+              return EventEnvelope.make({
+                id: EventId.make(0),
+                event,
+                createdAt: yield* Clock.currentTimeMillis,
+              })
+            })
+          },
+          deliver: () => Effect.void,
+          publish: () => Effect.void,
+        }),
+      )
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
@@ -344,6 +362,7 @@ describe("streaming", () => {
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(exit._tag).toBe("Failure")
         expect(assistant).toBeUndefined()
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
     }),
   )
@@ -352,20 +371,25 @@ describe("streaming", () => {
       const providerLayer = scriptedProvider([
         [textDeltaPart("committed before finalize"), finishPart({ finishReason: "stop" })],
       ])
-      const failingPublisherLayer = Layer.succeed(EventPublisher, {
-        append: (event: AgentEvent) =>
-          event._tag === "TurnCompleted"
-            ? Effect.fail(new EventStoreError({ message: "append failed" }))
-            : Effect.gen(function* () {
-                return EventEnvelope.make({
-                  id: EventId.make(0),
-                  event,
-                  createdAt: yield* Clock.currentTimeMillis,
-                })
-              }),
-        deliver: () => Effect.void,
-        publish: () => Effect.void,
-      })
+      const failingPublisherLayer = Layer.succeed(
+        EventPublisher,
+        EventPublisher.of({
+          append: (event: AgentEvent) => {
+            if (event._tag === "TurnCompleted") {
+              return Effect.fail(new EventStoreError({ message: "append failed" }))
+            }
+            return Effect.gen(function* () {
+              return EventEnvelope.make({
+                id: EventId.make(0),
+                event,
+                createdAt: yield* Clock.currentTimeMillis,
+              })
+            })
+          },
+          deliver: () => Effect.void,
+          publish: () => Effect.void,
+        }),
+      )
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         const messageStorage = yield* MessageStorage
@@ -378,6 +402,7 @@ describe("streaming", () => {
         const user = yield* messageStorage.getMessage(message.id)
         expect(exit._tag).toBe("Failure")
         expect(user?.turnDurationMs).toBeUndefined()
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
     }),
   )
@@ -438,7 +463,8 @@ describe("streaming", () => {
           return Effect.succeed(
             Stream.fromEffect(
               Effect.gen(function* () {
-                yield* Deferred.succeed(firstStarted, undefined)
+                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+                yield* Deferred.succeed(firstStarted, void 0)
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
               }),
@@ -464,12 +490,14 @@ describe("streaming", () => {
             message: "steer now",
             agent: AgentName.make("deepwork"),
           })
-          yield* Deferred.succeed(gate, undefined)
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+          yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiber)
           expect(providerCalls.length).toBe(3)
           expect(providerCalls[0]!.latestUserText).toBe("first")
           expect(providerCalls[1]!.latestUserText).toBe("steer now")
           expect(providerCalls[2]!.latestUserText).toBe("queued")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -485,7 +513,8 @@ describe("streaming", () => {
           return Effect.succeed(
             Stream.fromEffect(
               Effect.gen(function* () {
-                yield* Deferred.succeed(firstStarted, undefined)
+                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+                yield* Deferred.succeed(firstStarted, void 0)
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
               }),
@@ -527,8 +556,10 @@ describe("streaming", () => {
             branchId: BranchId.make("b1"),
           })
           expect(secondSnapshot).toEqual(snapshot)
-          yield* Deferred.succeed(gate, undefined)
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+          yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiber)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -544,26 +575,23 @@ describe("streaming", () => {
           Prompt.make(options.prompt)
             .content.slice()
             .reverse()
-            .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
-            .find(
-              (part: unknown): part is Prompt.TextPart =>
-                typeof part === "object" &&
-                part !== null &&
-                (
-                  part as {
-                    type?: unknown
-                  }
-                ).type === "text",
-            )?.text ?? ""
+            .flatMap((message) => {
+              if (Array.isArray(message.content)) {
+                return message.content
+              }
+              return []
+            })
+            .find(Schema.is(Prompt.TextPart))?.text ?? ""
         providerCalls.push(latestUserText)
         streamCalls += 1
         if (streamCalls === 1) {
           return Effect.succeed(
             Stream.fromEffect(
               Effect.gen(function* () {
+                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
                 yield* Deferred.succeed(firstStarted, undefined)
                 yield* Deferred.await(gate)
-                return undefined
+                return
               }),
             ).pipe(
               Stream.flatMap(() =>
@@ -600,6 +628,7 @@ describe("streaming", () => {
           expect(snapshotWhileRunning.followUp).toEqual([
             expect.objectContaining({ _tag: "follow-up", content: "queued after failure" }),
           ])
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(gate, undefined)
           yield* Fiber.join(fiber).pipe(Effect.exit)
           expect(providerCalls).toEqual(["first", "queued after failure"])
@@ -608,6 +637,7 @@ describe("streaming", () => {
             branchId: BranchId.make("b1"),
           })
           expect(snapshotAfterFailure).toEqual(emptyQueueSnapshot())
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -644,6 +674,7 @@ describe("streaming", () => {
         expect(tags).not.toContain("ErrorOccurred")
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant?.parts).toEqual([Prompt.textPart({ text: "after retry" })])
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }),
   )
@@ -662,7 +693,9 @@ describe("streaming", () => {
                   Response.makePart("response-metadata", {
                     id: "response-before-output",
                     modelId: "test",
+                    // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
                     timestamp: undefined,
+                    // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
                     request: undefined,
                   }),
                   Response.makePart("text-start", { id: "text-before-output" }),
@@ -694,6 +727,7 @@ describe("streaming", () => {
             assistantMessageIdForTurn(message.id, 1),
           )
           expect(assistant?.parts).toEqual([Prompt.textPart({ text: "after metadata retry" })])
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
       }),
   )
@@ -725,6 +759,7 @@ describe("streaming", () => {
         expect(tags).toContain("TurnCompleted")
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeUndefined()
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }),
   )
@@ -763,6 +798,7 @@ describe("streaming", () => {
         expect(tags).toContain("ErrorOccurred")
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant?.parts).toEqual([Prompt.textPart({ text: "partial answer" })])
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }),
   )
@@ -773,6 +809,7 @@ describe("streaming", () => {
         Effect.succeed(
           Stream.fromIterable([
             textDeltaPart("partial answer"),
+            // oxlint-disable-next-line effect/noNewError -- This stream fixture models a native provider error part.
             Response.makePart("error", { error: new Error("native response part failed") }),
             textDeltaPart("unreachable"),
           ]),
@@ -799,6 +836,7 @@ describe("streaming", () => {
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
         expect(assistant?.parts).toEqual([Prompt.textPart({ text: "partial answer" })])
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }),
   )

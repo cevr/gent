@@ -1,5 +1,5 @@
 import type { PlatformError } from "effect"
-import { Context, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
+import { Context, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
 
 // Skill Schema
 
@@ -23,8 +23,11 @@ export class Skill extends Schema.Class<Skill>("Skill")({
 // resource start, not a method on the read interface.
 
 export interface SkillsService {
-  readonly list: () => Effect.Effect<ReadonlyArray<Skill>>
-  readonly get: (name: string, level?: SkillLevel) => Effect.Effect<Skill | undefined>
+  readonly list: Effect.Effect<ReadonlyArray<Skill>>
+  readonly get: (
+    name: string,
+    level: Option.Option<SkillLevel>,
+  ) => Effect.Effect<Option.Option<Skill>>
 }
 
 export class Skills extends Context.Service<Skills, SkillsService>()(
@@ -40,6 +43,7 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
+        const ignored = Option.fromNullishOr(options.ignored)
 
         const skillsRef = yield* Ref.make<Skill[]>([])
 
@@ -61,10 +65,13 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
               if (stat.type === "File" && entry.endsWith(".md")) {
                 const content = yield* fs.readFileString(filePath)
                 const parsed = parseSkillFile(content, entry)
-                if (parsed !== null && options.ignored?.includes(parsed.name) !== true) {
+                if (
+                  Option.isSome(parsed) &&
+                  !Option.exists(ignored, (names) => names.includes(parsed.value.name))
+                ) {
                   result.push(
                     new Skill({
-                      ...parsed,
+                      ...parsed.value,
                       filePath,
                       level,
                     }),
@@ -77,10 +84,13 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
                 if (skillExists) {
                   const content = yield* fs.readFileString(skillPath)
                   const parsed = parseSkillFile(content, entry)
-                  if (parsed !== null && options.ignored?.includes(parsed.name) !== true) {
+                  if (
+                    Option.isSome(parsed) &&
+                    !Option.exists(ignored, (names) => names.includes(parsed.value.name))
+                  ) {
                     result.push(
                       new Skill({
-                        ...parsed,
+                        ...parsed.value,
                         filePath: skillPath,
                         level,
                       }),
@@ -99,9 +109,9 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
           while (true) {
             const gitDir = path.join(dir, ".git")
             const exists = yield* fs.exists(gitDir)
-            if (exists) return dir
+            if (exists) return Option.some(dir)
             const parent = path.dirname(dir)
-            if (parent === dir) return undefined
+            if (parent === dir) return Option.none<string>()
             dir = parent
           }
         })
@@ -128,7 +138,7 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
           // Walk from cwd up to git root, collecting skill dirs at each ancestor.
           // Closest to cwd wins dedup within local level.
           const gitRoot = yield* findGitRoot
-          const stopAt = gitRoot ?? options.cwd
+          const stopAt = Option.getOrElse(gitRoot, () => options.cwd)
 
           const localDirs: string[] = []
           let current = options.cwd
@@ -160,19 +170,22 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
         // Initial load
         yield* Ref.set(skillsRef, yield* loadAllSkills)
 
-        return {
-          list: () => Ref.get(skillsRef),
+        return Skills.of({
+          list: Ref.get(skillsRef),
           get: (name, level) =>
             Ref.get(skillsRef).pipe(Effect.map((skills) => resolveSkillName(skills, name, level))),
-        } satisfies SkillsService
+        })
       }),
     )
 
   static Test = (testSkills: ReadonlyArray<Skill> = []): Layer.Layer<Skills> =>
-    Layer.succeed(Skills, {
-      list: () => Effect.succeed(testSkills),
-      get: (name, level) => Effect.succeed(resolveSkillName([...testSkills], name, level)),
-    } satisfies SkillsService)
+    Layer.succeed(
+      Skills,
+      Skills.of({
+        list: Effect.succeed(testSkills),
+        get: (name, level) => Effect.succeed(resolveSkillName([...testSkills], name, level)),
+      }),
+    )
 }
 
 // Resolve a skill name with optional level qualifier
@@ -180,8 +193,8 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
 export function resolveSkillName(
   skills: ReadonlyArray<Skill>,
   name: string,
-  level?: SkillLevel,
-): Skill | undefined {
+  level: Option.Option<SkillLevel>,
+): Option.Option<Skill> {
   // Parse "$skill:level" syntax
   const colonIdx = name.lastIndexOf(":")
   let parsedName = name
@@ -190,7 +203,7 @@ export function resolveSkillName(
     const suffix = name.slice(colonIdx + 1)
     if (suffix === "local" || suffix === "global") {
       parsedName = name.slice(0, colonIdx)
-      parsedLevel = suffix
+      parsedLevel = Option.some(suffix)
     }
   }
 
@@ -199,14 +212,19 @@ export function resolveSkillName(
     parsedName = parsedName.slice(1)
   }
 
-  if (parsedLevel !== undefined) {
-    return skills.find((s) => s.name === parsedName && s.level === parsedLevel)
+  if (Option.isSome(parsedLevel)) {
+    return Option.fromNullishOr(
+      skills.find((s) => s.name === parsedName && s.level === parsedLevel.value),
+    )
   }
 
   // No level specified: local first, then global
-  return (
-    skills.find((s) => s.name === parsedName && s.level === "local") ??
-    skills.find((s) => s.name === parsedName && s.level === "global")
+  return Option.fromNullishOr(
+    skills.find((s) => s.name === parsedName && s.level === "local"),
+  ).pipe(
+    Option.orElse(() =>
+      Option.fromNullishOr(skills.find((s) => s.name === parsedName && s.level === "global")),
+    ),
   )
 }
 
@@ -215,7 +233,7 @@ export function resolveSkillName(
 export function parseSkillFile(
   content: string,
   filename: string,
-): { name: string; description: string; content: string } | null {
+): Option.Option<{ name: string; description: string; content: string }> {
   const lines = content.split("\n")
 
   // Check for YAML frontmatter
@@ -232,14 +250,14 @@ export function parseSkillFile(
       const nameMatch = frontmatter.match(/^name:\s*(.+)$/m)
       const descMatch = frontmatter.match(/^description:\s*(.+)$/m)
 
-      const nameValue = nameMatch?.[1]
-      const descValue = descMatch?.[1]
-      if (nameValue !== undefined && descValue !== undefined) {
-        return {
-          name: nameValue.trim(),
-          description: descValue.trim(),
+      const nameValue = Option.fromNullishOr(nameMatch?.[1])
+      const descValue = Option.fromNullishOr(descMatch?.[1])
+      if (Option.isSome(nameValue) && Option.isSome(descValue)) {
+        return Option.some({
+          name: nameValue.value.trim(),
+          description: descValue.value.trim(),
           content: body,
-        }
+        })
       }
     }
   }
@@ -253,11 +271,14 @@ export function parseSkillFile(
     ?.replace(/^#.*\n/, "")
     .trim()
 
-  return {
+  return Option.some({
     name,
-    description: firstPara?.slice(0, 100) ?? `Skill: ${name}`,
+    description: Option.getOrElse(
+      Option.fromNullishOr(firstPara).pipe(Option.map((value) => value.slice(0, 100))),
+      () => `Skill: ${name}`,
+    ),
     content,
-  }
+  })
 }
 
 // Format skills for system prompt

@@ -18,8 +18,8 @@ export function transitionPromptSearchRoute(
     state: result.state,
     effects: result.effects
       .filter((effect) => effect._tag === "Preview")
-      .map((effect) => ({
-        _tag: "RestoreComposer" as const,
+      .map((effect): PromptSearchRouteEffect => ({
+        _tag: "RestoreComposer",
         text: effect.text,
       })),
   }

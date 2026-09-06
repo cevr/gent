@@ -1,3 +1,4 @@
+import { Predicate } from "effect"
 /**
  * Excerpt-based windowing for tool output.
  *
@@ -54,7 +55,7 @@ export function windowItems<T>(
   const merged: Array<[number, number]> = []
   for (const range of ranges) {
     const last = merged[merged.length - 1]
-    if (last === undefined || range[0] > last[1] + 1) {
+    if (Predicate.isUndefined(last) || range[0] > last[1] + 1) {
       merged.push([range[0], range[1]])
     } else {
       last[1] = Math.max(last[1], range[1])
@@ -72,7 +73,7 @@ export function windowItems<T>(
     }
     for (let i = start; i <= end; i++) {
       const item = items[i]
-      if (item !== undefined) result.push(item)
+      if (!Predicate.isUndefined(item)) result.push(item)
     }
     cursor = end + 1
   }
@@ -91,7 +92,7 @@ export function windowItems<T>(
  */
 export function headTailExcerpts(head: number, tail: number): Excerpt[] {
   return [
-    { focus: "head" as const, context: head },
-    { focus: "tail" as const, context: tail },
+    { focus: "head", context: head },
+    { focus: "tail", context: tail },
   ]
 }

@@ -20,7 +20,7 @@ import {
 } from "./ids.js"
 
 /** Failure raised by a Capability handler. Carries audience + id for diagnostics. */
-export class CapabilityError extends Schema.TaggedErrorClass<CapabilityError>()(
+export class CapabilityError extends Schema.TaggedError<CapabilityError>()(
   "@gent/core/src/domain/capability/CapabilityError",
   {
     extensionId: ExtensionId,
@@ -30,7 +30,7 @@ export class CapabilityError extends Schema.TaggedErrorClass<CapabilityError>()(
 ) {}
 
 /** Failure raised when a Capability is invoked with an id that has no contribution. */
-export class CapabilityNotFoundError extends Schema.TaggedErrorClass<CapabilityNotFoundError>()(
+export class CapabilityNotFoundError extends Schema.TaggedError<CapabilityNotFoundError>()(
   "@gent/core/src/domain/capability/CapabilityNotFoundError",
   {
     extensionId: ExtensionId,

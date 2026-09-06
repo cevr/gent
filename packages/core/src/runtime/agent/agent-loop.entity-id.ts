@@ -19,7 +19,7 @@
  * @module
  */
 
-import { Effect, Schema } from "effect"
+import { Effect, Option, Result, Schema } from "effect"
 import { BranchId, SessionId } from "../../domain/ids.js"
 import { WorkspaceId } from "../../server/workspace-rpc.js"
 import { AgentLoopError } from "./agent-loop.state.js"
@@ -41,7 +41,8 @@ export const parseEntityId = (
 > =>
   Effect.gen(function* () {
     const firstSep = entityId.indexOf(":")
-    const secondSep = firstSep < 0 ? -1 : entityId.indexOf(":", firstSep + 1)
+    let secondSep = -1
+    if (firstSep >= 0) secondSep = entityId.indexOf(":", firstSep + 1)
     if (firstSep < 0 || secondSep < 0) {
       return yield* new AgentLoopError({
         message: `Invalid entity id (expected workspace/session/branch): ${entityId}`,
@@ -51,26 +52,26 @@ export const parseEntityId = (
     const rawSession = entityId.slice(firstSep + 1, secondSep)
     const rawBranch = entityId.slice(secondSep + 1)
     const workspaceRaw = decodeOrFail(rawWorkspace)
-    if (workspaceRaw === undefined) {
+    if (Option.isNone(workspaceRaw)) {
       return yield* new AgentLoopError({
         message: `Invalid entity id (workspaceId decode): ${entityId}`,
       })
     }
     const sessionRaw = decodeOrFail(rawSession)
-    if (sessionRaw === undefined) {
+    if (Option.isNone(sessionRaw)) {
       return yield* new AgentLoopError({
         message: `Invalid entity id (sessionId decode): ${entityId}`,
       })
     }
     const branchRaw = decodeOrFail(rawBranch)
-    if (branchRaw === undefined) {
+    if (Option.isNone(branchRaw)) {
       return yield* new AgentLoopError({
         message: `Invalid entity id (branchId decode): ${entityId}`,
       })
     }
-    const workspaceId = yield* decodeWorkspaceId(workspaceRaw, entityId)
-    const sessionId = yield* decodeSessionId(sessionRaw, entityId)
-    const branchId = yield* decodeBranchId(branchRaw, entityId)
+    const workspaceId = yield* decodeWorkspaceId(workspaceRaw.value, entityId)
+    const sessionId = yield* decodeSessionId(sessionRaw.value, entityId)
+    const branchId = yield* decodeBranchId(branchRaw.value, entityId)
     return {
       workspaceId,
       sessionId,
@@ -78,19 +79,14 @@ export const parseEntityId = (
     }
   })
 
-const decodeOrFail = (raw: string): string | undefined => {
-  try {
-    return decodeURIComponent(raw)
-  } catch {
-    return undefined
-  }
-}
+const decodeOrFail = (raw: string): Option.Option<string> =>
+  Result.try(() => decodeURIComponent(raw)).pipe(Result.getSuccess)
 
 const decodeWorkspaceId = (
   raw: string,
   entityId: string,
 ): Effect.Effect<WorkspaceId, AgentLoopError> =>
-  Schema.decodeUnknownEffect(WorkspaceId)(raw).pipe(
+  Schema.decodeEffect(WorkspaceId)(raw).pipe(
     Effect.mapError(
       (cause) =>
         new AgentLoopError({
@@ -101,7 +97,7 @@ const decodeWorkspaceId = (
   )
 
 const decodeSessionId = (raw: string, entityId: string): Effect.Effect<SessionId, AgentLoopError> =>
-  Schema.decodeUnknownEffect(SessionId)(raw).pipe(
+  Schema.decodeEffect(SessionId)(raw).pipe(
     Effect.mapError(
       (cause) =>
         new AgentLoopError({
@@ -112,7 +108,7 @@ const decodeSessionId = (raw: string, entityId: string): Effect.Effect<SessionId
   )
 
 const decodeBranchId = (raw: string, entityId: string): Effect.Effect<BranchId, AgentLoopError> =>
-  Schema.decodeUnknownEffect(BranchId)(raw).pipe(
+  Schema.decodeEffect(BranchId)(raw).pipe(
     Effect.mapError(
       (cause) =>
         new AgentLoopError({

@@ -25,6 +25,27 @@ export type {
   SessionTreeNode,
 } from "@gent/core-internal/server/transport-contract.js"
 
+// Durable resource-graph repair values. These schemas let a control client
+// validate a snapshot previewed from the target declarations before submit.
+export {
+  CanonicalCwd,
+  ResourceGraphExtensionSource,
+  ResourceGraphRevision,
+  ResourceGraphSnapshot,
+  ResourceGraphSource,
+} from "@gent/core-internal/domain/resource-graph-state.js"
+export type {
+  ResourceGraphExtensionSource as ResourceGraphExtensionSourceType,
+  ResourceGraphSnapshot as ResourceGraphSnapshotType,
+  ResourceGraphSource as ResourceGraphSourceType,
+} from "@gent/core-internal/domain/resource-graph-state.js"
+export {
+  ResourceDescriptor,
+  ResourceId,
+  ResourceRevision,
+} from "@gent/core-internal/domain/resource-graph.js"
+export type { ResourceDescriptor as ResourceDescriptorType } from "@gent/core-internal/domain/resource-graph.js"
+
 // Client constructors
 export {
   Gent,
@@ -33,6 +54,8 @@ export {
   type GentClientRpcError,
   type GentClientBundle,
 } from "./client.js"
+
+export { RequestId } from "@gent/core-internal/domain/ids.js"
 
 // Namespaced client + runtime types
 export type { GentNamespacedClient, GentRuntime } from "./namespaced-client.js"

@@ -1,3 +1,4 @@
+import { Option } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
 import { responseFilePartToImagePart } from "./message-image-conversion.js"
@@ -14,50 +15,70 @@ export interface MessagePartProjection {
   readonly tool: ReadonlyArray<Prompt.ToolResultPart | Prompt.ToolApprovalResponsePart>
 }
 
-export const responsePartToAssistantMessagePart = (
-  part: Response.AnyPart,
-):
+type AssistantMessagePart =
   | Prompt.TextPart
   | Prompt.ReasoningPart
   | Prompt.FilePart
   | Prompt.ToolCallPart
   | Prompt.ToolApprovalRequestPart
-  | undefined => {
+
+const responsePartToAssistantMessagePartOption = (
+  part: Response.AnyPart,
+): Option.Option<AssistantMessagePart> => {
   switch (part.type) {
     case "text":
-      return Prompt.textPart({ text: part.text })
+      return Option.some(Prompt.textPart({ text: part.text }))
     case "reasoning":
-      return Prompt.reasoningPart({ text: part.text })
+      return Option.some(Prompt.reasoningPart({ text: part.text }))
     case "file":
       return responseFilePartToImagePart(part)
     case "tool-call":
-      return Prompt.toolCallPart({
-        id: part.id,
-        name: part.name,
-        params: part.params,
-        providerExecuted: part.providerExecuted,
-      })
+      return Option.some(
+        Prompt.toolCallPart({
+          id: part.id,
+          name: part.name,
+          params: part.params,
+          providerExecuted: part.providerExecuted,
+        }),
+      )
     case "tool-approval-request":
-      return Prompt.toolApprovalRequestPart({
-        approvalId: part.approvalId,
-        toolCallId: part.toolCallId,
-      })
+      return Option.some(
+        Prompt.toolApprovalRequestPart({
+          approvalId: part.approvalId,
+          toolCallId: part.toolCallId,
+        }),
+      )
     default:
-      return undefined
+      return Option.none()
   }
+}
+
+export const responsePartToAssistantMessagePart = (
+  part: Response.AnyPart,
+  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+): AssistantMessagePart | undefined =>
+  Option.getOrUndefined(responsePartToAssistantMessagePartOption(part))
+
+const responsePartToToolResultPartOption = (
+  part: Response.AnyPart,
+): Option.Option<Prompt.ToolResultPart> => {
+  if (part.type !== "tool-result" || part.preliminary === true) return Option.none()
+  return Option.some(
+    Prompt.toolResultPart({
+      id: part.id,
+      name: part.name,
+      isFailure: part.isFailure,
+      providerExecuted: false,
+      result: part.encodedResult,
+    }),
+  )
 }
 
 export const responsePartToToolResultPart = (
   part: Response.AnyPart,
+  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
 ): Prompt.ToolResultPart | undefined =>
-  part.type === "tool-result" && part.preliminary !== true
-    ? Prompt.toolResultPart({
-        id: part.id,
-        name: part.name,
-        isFailure: part.isFailure,
-        result: part.encodedResult,
-      })
-    : undefined
+  Option.getOrUndefined(responsePartToToolResultPartOption(part))
 
 export const projectResponsePartsToMessageParts = (
   parts: ReadonlyArray<Response.AnyPart>,
@@ -73,13 +94,13 @@ export const projectResponsePartsToMessageParts = (
   const tool: Array<Prompt.ToolResultPart | Prompt.ToolApprovalResponsePart> = []
 
   for (const part of normalized) {
-    const assistantPart = responsePartToAssistantMessagePart(part)
-    if (assistantPart !== undefined) {
-      assistant.push(assistantPart)
+    const assistantPart = responsePartToAssistantMessagePartOption(part)
+    if (Option.isSome(assistantPart)) {
+      assistant.push(assistantPart.value)
       continue
     }
-    const toolPart = responsePartToToolResultPart(part)
-    if (toolPart !== undefined) tool.push(toolPart)
+    const toolPart = responsePartToToolResultPartOption(part)
+    if (Option.isSome(toolPart)) tool.push(toolPart.value)
   }
 
   return { assistant, tool }
@@ -87,7 +108,7 @@ export const projectResponsePartsToMessageParts = (
 
 const responsePartsToPromptAssistantMessage = (
   parts: ReadonlyArray<Response.AnyPart>,
-): Prompt.AssistantMessage | undefined => {
+): Option.Option<Prompt.AssistantMessage> => {
   const content: Prompt.AssistantMessagePart[] = []
 
   for (const part of parts) {
@@ -124,27 +145,28 @@ const responsePartsToPromptAssistantMessage = (
     }
   }
 
-  return content.length > 0 ? Prompt.assistantMessage({ content }) : undefined
+  if (content.length === 0) return Option.none()
+  return Option.some(Prompt.assistantMessage({ content }))
 }
 
 const responsePartsToPromptToolMessage = (
   parts: ReadonlyArray<Response.AnyPart>,
-): Prompt.ToolMessage | undefined => {
-  const content = parts.flatMap(
-    (part): ReadonlyArray<Prompt.ToolMessagePart> =>
-      part.type === "tool-result" && part.preliminary !== true
-        ? [
-            Prompt.toolResultPart({
-              id: part.id,
-              name: part.name,
-              isFailure: part.isFailure,
-              result: part.encodedResult,
-            }),
-          ]
-        : [],
-  )
+): Option.Option<Prompt.ToolMessage> => {
+  const content = parts.flatMap((part): ReadonlyArray<Prompt.ToolMessagePart> => {
+    if (part.type !== "tool-result" || part.preliminary === true) return []
+    return [
+      Prompt.toolResultPart({
+        id: part.id,
+        name: part.name,
+        isFailure: part.isFailure,
+        providerExecuted: false,
+        result: part.encodedResult,
+      }),
+    ]
+  })
 
-  return content.length > 0 ? Prompt.toolMessage({ content }) : undefined
+  if (content.length === 0) return Option.none()
+  return Option.some(Prompt.toolMessage({ content }))
 }
 
 export const promptFromResponseParts = (parts: ReadonlyArray<Response.AnyPart>): Prompt.Prompt => {
@@ -156,7 +178,7 @@ export const promptFromResponseParts = (parts: ReadonlyArray<Response.AnyPart>):
   const promptMessages: Prompt.Message[] = []
   const assistant = responsePartsToPromptAssistantMessage(normalized)
   const tool = responsePartsToPromptToolMessage(normalized)
-  if (assistant !== undefined) promptMessages.push(assistant)
-  if (tool !== undefined) promptMessages.push(tool)
+  if (Option.isSome(assistant)) promptMessages.push(assistant.value)
+  if (Option.isSome(tool)) promptMessages.push(tool.value)
   return Prompt.fromMessages(promptMessages)
 }

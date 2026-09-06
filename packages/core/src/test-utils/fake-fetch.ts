@@ -18,7 +18,7 @@
  * reference consumer. The pattern matches the precedent at
  * `packages/extensions/src/openai/index.ts:111` (`Layer.succeed(FetchHttpClient.Fetch, ...)`).
  */
-import { Effect, Layer } from "effect"
+import { Predicate, Effect, Layer, Option } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import { FetchHttpClient } from "effect/unstable/http"
 
@@ -26,7 +26,7 @@ export interface CapturedRequest {
   url: string
   method: string
   headers: Record<string, string>
-  body: string | undefined
+  body?: string
 }
 
 export interface FakeFetchState {
@@ -39,8 +39,8 @@ export const makeFakeFetchState = (): FakeFetchState => ({ captured: [] })
 /** Last captured request. Throws if zero requests were captured. */
 export const lastRequest = (state: FakeFetchState): CapturedRequest => {
   const last = state.captured[state.captured.length - 1]
-  if (last === undefined) {
-    throw new Error("fake-fetch: no requests captured")
+  if (Predicate.isUndefined(last)) {
+    return Effect.runSync(Effect.die(new Error("fake-fetch: no requests captured")))
   }
   return last
 }
@@ -69,7 +69,7 @@ export const makeFakeFetch =
   ): FakeFetchFn =>
   (input: globalThis.RequestInfo | globalThis.URL, init?: globalThis.RequestInit) => {
     let url: string
-    if (typeof input === "string") url = input
+    if (Predicate.isString(input)) url = input
     else if (input instanceof URL) url = input.href
     else url = input.url
 
@@ -83,31 +83,34 @@ export const makeFakeFetch =
       for (const [k, v] of headerInit) {
         headers[k.toLowerCase()] = v
       }
-    } else if (headerInit !== undefined && headerInit !== null) {
+    } else if (!Predicate.isUndefined(headerInit) && !Predicate.isNull(headerInit)) {
       for (const [k, v] of Object.entries(headerInit)) {
-        if (typeof v === "string") headers[k.toLowerCase()] = v
+        if (Predicate.isString(v)) headers[k.toLowerCase()] = v
       }
     }
 
-    let bodyText: string | undefined
-    if (typeof init?.body === "string") bodyText = init.body
-    else if (init?.body instanceof Uint8Array) bodyText = new TextDecoder().decode(init.body)
-    else bodyText = undefined
+    let bodyText = Option.none<string>()
+    if (Predicate.isString(init?.body)) bodyText = Option.some(init.body)
+    else if (init?.body instanceof Uint8Array)
+      bodyText = Option.some(new TextDecoder().decode(init.body))
 
     const captured: CapturedRequest = {
       url,
       method: init?.method ?? "GET",
       headers,
-      body: bodyText,
+      body: Option.getOrUndefined(bodyText),
     }
     state.captured.push(captured)
 
     const response = responder(captured)
-    return Promise.resolve(
-      new Response(response.body, {
-        status: response.status,
-        headers: response.headers ?? { "content-type": "application/json" },
-      }),
+    // oxlint-disable-next-line gent/no-runpromise-outside-boundary -- This adapter implements the Promise-based Fetch interface.
+    return Effect.runPromise(
+      Effect.succeed(
+        new Response(response.body, {
+          status: response.status,
+          headers: response.headers ?? { "content-type": "application/json" },
+        }),
+      ),
     )
   }
 
@@ -123,8 +126,10 @@ export const fakeFetchLayer = (
     body: string
   },
 ): Layer.Layer<never, never, never> =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-  Layer.succeed(FetchHttpClient.Fetch, makeFakeFetch(state, responder) as never)
+  Layer.succeed(
+    FetchHttpClient.Fetch,
+    Object.assign(makeFakeFetch(state, responder), { preconnect: () => {} }),
+  )
 
 /**
  * Build the Effect that drives one `LanguageModel.generateText({prompt})`

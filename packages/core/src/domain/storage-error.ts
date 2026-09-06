@@ -14,7 +14,7 @@
  */
 import { Schema } from "effect"
 
-export class StorageError extends Schema.TaggedErrorClass<StorageError>()("StorageError", {
+export class StorageError extends Schema.TaggedError<StorageError>()("StorageError", {
   message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
+  cause: Schema.optional(Schema.Defect()),
 }) {}

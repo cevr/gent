@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test"
+import { Option } from "effect"
 import {
   getFiletype,
   countDiffLines,
@@ -27,8 +28,8 @@ describe("getFiletype", () => {
   })
 
   test("returns undefined for unknown extensions", () => {
-    expect(getFiletype("foo.xyz")).toBe(undefined)
-    expect(getFiletype("foo.cpp")).toBe(undefined)
+    expect(Option.isNone(Option.fromUndefinedOr(getFiletype("foo.xyz")))).toBe(true)
+    expect(Option.isNone(Option.fromUndefinedOr(getFiletype("foo.cpp")))).toBe(true)
   })
 
   test("handles paths with multiple dots", () => {
@@ -37,8 +38,8 @@ describe("getFiletype", () => {
   })
 
   test("handles paths without extension", () => {
-    expect(getFiletype("Makefile")).toBe(undefined)
-    expect(getFiletype("/bin/bash")).toBe(undefined)
+    expect(Option.isNone(Option.fromUndefinedOr(getFiletype("Makefile")))).toBe(true)
+    expect(Option.isNone(Option.fromUndefinedOr(getFiletype("/bin/bash")))).toBe(true)
   })
 })
 
@@ -111,7 +112,8 @@ describe("getEditUnifiedDiff", () => {
   })
 
   test("returns null for null input", () => {
-    expect(getEditUnifiedDiff(null)).toBeNull()
+    const absentInput = Option.getOrNull(Option.none())
+    expect(Option.isNone(Option.fromNullishOr(getEditUnifiedDiff(absentInput)))).toBe(true)
   })
 
   test("returns null for non-object input", () => {

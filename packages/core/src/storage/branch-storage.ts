@@ -4,13 +4,13 @@
  * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Predicate, Schema } from "effect"
 import { Model } from "effect/unstable/schema"
 import type { Branch } from "../domain/message.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 import { SqlClient, SqlModel } from "effect/unstable/sql"
-import { branchFromRow, type BranchRow } from "./sqlite/rows.js"
+import { branchFromRow, toSqlNull, type BranchRow } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 class BranchTable extends Model.Class<BranchTable>("BranchTable")({
@@ -20,11 +20,12 @@ class BranchTable extends Model.Class<BranchTable>("BranchTable")({
   parent_message_id: Schema.NullOr(MessageId),
   name: Schema.NullOr(Schema.String),
   summary: Schema.NullOr(Schema.String),
-  created_at: Schema.Number,
+  created_at: Schema.Finite,
 }) {}
 
 export interface BranchStorageService {
   readonly createBranch: (branch: Branch) => Effect.Effect<Branch, StorageError>
+  // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
   readonly getBranch: (id: BranchId) => Effect.Effect<Branch | undefined, StorageError>
   readonly listBranches: (
     sessionId: SessionId,
@@ -67,7 +68,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
                 message: `Session not found in current workspace: ${branch.sessionId}`,
               })
             }
-            if (branch.parentBranchId !== undefined) {
+            if (!Predicate.isUndefined(branch.parentBranchId)) {
               const parentRows = yield* sql<{
                 id: BranchId
               }>`SELECT b.id
@@ -85,10 +86,10 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
             yield* branchRepository.insertVoid({
               id: branch.id,
               session_id: branch.sessionId,
-              parent_branch_id: branch.parentBranchId ?? null,
-              parent_message_id: branch.parentMessageId ?? null,
-              name: branch.name ?? null,
-              summary: branch.summary ?? null,
+              parent_branch_id: toSqlNull(branch.parentBranchId),
+              parent_message_id: toSqlNull(branch.parentMessageId),
+              name: toSqlNull(branch.name),
+              summary: toSqlNull(branch.summary),
               created_at: branch.createdAt.getTime(),
             })
             return branch
@@ -105,7 +106,8 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
               JOIN sessions s ON s.id = b.session_id
               WHERE b.id = ${id} AND s.workspace_id = ${workspaceId}`
             const row = rows[0]
-            if (row === undefined) return undefined
+            // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
+            if (Predicate.isUndefined(row)) return undefined
             return yield* branchFromRow(row)
           },
           Effect.mapError(mapError("Failed to get branch")),

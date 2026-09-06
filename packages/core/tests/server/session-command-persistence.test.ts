@@ -24,11 +24,9 @@ describe("session command persistence", () => {
       const commands = yield* SessionCommands
       const logMessages: string[] = []
       const captureLogger = Logger.make(({ message }) => {
-        logMessages.push(
-          Array.isArray(message)
-            ? message.map((entry) => String(entry)).join(" ")
-            : String(message),
-        )
+        let rendered = String(message)
+        if (Array.isArray(message)) rendered = message.map((entry) => String(entry)).join(" ")
+        logMessages.push(rendered)
       })
 
       const exit = yield* Effect.exit(
@@ -38,6 +36,7 @@ describe("session command persistence", () => {
             branchId: BranchId.make("send-runtime-failure-branch"),
             content: "fail loudly",
           })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           .pipe(Effect.provide(Logger.layer([captureLogger]))),
       )
 
@@ -51,7 +50,7 @@ describe("session command persistence", () => {
         }
       }
       expect(logMessages).not.toContain("session.messageSent")
-    }).pipe(Effect.provide(sendFailingSessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sendFailingSessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("rolls back session and branch creation when event publication fails", () =>
@@ -63,9 +62,9 @@ describe("session command persistence", () => {
       const exit = yield* Effect.exit(commands.createSession({ cwd: "/tmp/rollback" }))
 
       expect(exit._tag).toBe("Failure")
-      expect(yield* sessions.listSessions()).toHaveLength(0)
+      expect(yield* sessions.listSessions).toHaveLength(0)
       expect(yield* branches.listBranches(SessionId.make("missing"))).toHaveLength(0)
-    }).pipe(Effect.provide(failingSessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(failingSessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("rolls back forked branch and copied messages when event publication fails", () =>
@@ -110,7 +109,7 @@ describe("session command persistence", () => {
       expect(exit._tag).toBe("Failure")
       expect(yield* branches.listBranches(sessionId)).toHaveLength(1)
       expect(yield* messages.listMessages(branchId)).toHaveLength(1)
-    }).pipe(Effect.provide(failingSessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(failingSessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("rolls back session rename when event publication fails", () =>
@@ -135,7 +134,7 @@ describe("session command persistence", () => {
 
       expect(exit._tag).toBe("Failure")
       expect((yield* sessions.getSession(sessionId))?.name).toBe("before")
-    }).pipe(Effect.provide(failingSessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(failingSessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("rolls back active branch switch when event publication fails", () =>
@@ -169,7 +168,7 @@ describe("session command persistence", () => {
 
       expect(exit._tag).toBe("Failure")
       expect((yield* sessions.getSession(sessionId))?.activeBranchId).toBe(fromBranchId)
-    }).pipe(Effect.provide(failingSessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(failingSessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("rejects active branch switch to a branch outside the session", () =>
@@ -215,7 +214,7 @@ describe("session command persistence", () => {
         expect(fail?.error._tag).toBe("NotFoundError")
       }
       expect((yield* sessions.getSession(sessionId))?.activeBranchId).toBe(fromBranchId)
-    }).pipe(Effect.provide(failingSessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(failingSessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("rolls back reasoning setting when event publication fails", () =>
@@ -242,7 +241,7 @@ describe("session command persistence", () => {
 
       expect(exit._tag).toBe("Failure")
       expect((yield* sessions.getSession(sessionId))?.reasoningLevel).toBeUndefined()
-    }).pipe(Effect.provide(failingSessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(failingSessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("deletes only non-active branches owned by the session", () =>
@@ -273,7 +272,7 @@ describe("session command persistence", () => {
 
       expect(yield* branches.getBranch(deletedBranchId)).toBeUndefined()
       expect(yield* branches.getBranch(activeBranchId)).toBeDefined()
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("rejects session creation with parent branch but no parent session", () =>
@@ -288,8 +287,8 @@ describe("session command persistence", () => {
       )
 
       expect(exit._tag).toBe("Failure")
-      expect(yield* sessions.listSessions()).toHaveLength(0)
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+      expect(yield* sessions.listSessions).toHaveLength(0)
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("rejects deleting a branch with child branches", () =>
@@ -337,7 +336,7 @@ describe("session command persistence", () => {
       }
       expect(yield* branches.getBranch(parentBranchId)).toBeDefined()
       expect(yield* branches.getBranch(childBranchId)).toBeDefined()
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("rejects deleting a branch with child sessions", () =>
@@ -381,7 +380,7 @@ describe("session command persistence", () => {
       }
       expect(yield* branches.getBranch(parentBranchId)).toBeDefined()
       expect(yield* sessions.getSession(child.sessionId)).toBeDefined()
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("rejects deleting the active branch even when it is not the caller branch", () =>
@@ -419,7 +418,7 @@ describe("session command persistence", () => {
         expect(fail?.error._tag).toBe("InvalidStateError")
       }
       expect(yield* branches.getBranch(activeBranchId)).toBeDefined()
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("rejects destructive branch mutation across sessions", () =>
@@ -465,7 +464,7 @@ describe("session command persistence", () => {
         expect(fail?.error._tag).toBe("NotFoundError")
       }
       expect(yield* branches.getBranch(otherBranchId)).toBeDefined()
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("deleteMessages only mutates branches owned by the session", () =>
@@ -513,7 +512,7 @@ describe("session command persistence", () => {
 
       const remaining = yield* messages.listMessages(branchId)
       expect(remaining.map((message) => message.id)).toEqual([firstMessageId])
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("deleteMessages rejects a cursor from another session", () =>
@@ -580,6 +579,6 @@ describe("session command persistence", () => {
       expect((yield* messages.listMessages(branchId)).map((message) => message.id)).toEqual([
         ownerMessageId,
       ])
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 })

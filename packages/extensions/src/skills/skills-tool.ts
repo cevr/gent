@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { Skills, resolveSkillName } from "./skills.js"
 import { tool } from "@gent/core/extensions/api"
 
@@ -32,11 +32,14 @@ export const SkillsTool = tool({
   output: SkillsResult,
   execute: Effect.fn("SkillsTool.execute")(function* (params) {
     const skills = yield* Skills
-    const allSkills = yield* skills.list()
+    const allSkills = yield* skills.list
+    const level = Option.fromNullishOr(params.level)
 
     if (params.names === "all") {
-      const filtered =
-        params.level !== undefined ? allSkills.filter((s) => s.level === params.level) : allSkills
+      let filtered = allSkills
+      if (Option.isSome(level)) {
+        filtered = allSkills.filter((skill) => skill.level === level.value)
+      }
       if (filtered.length === 0) return "[No skills available]"
       return filtered.map((s) => `## ${s.name} (${s.level})\n\n${s.content}`).join("\n\n---\n\n")
     }
@@ -45,9 +48,9 @@ export const SkillsTool = tool({
     const notFound: string[] = []
 
     for (const name of params.names) {
-      const skill = resolveSkillName(allSkills, name, params.level)
-      if (skill !== undefined) {
-        results.push(`## ${skill.name} (${skill.level})\n\n${skill.content}`)
+      const skill = resolveSkillName(allSkills, name, Option.fromNullishOr(params.level))
+      if (Option.isSome(skill)) {
+        results.push(`## ${skill.value.name} (${skill.value.level})\n\n${skill.value.content}`)
       } else {
         notFound.push(name)
       }

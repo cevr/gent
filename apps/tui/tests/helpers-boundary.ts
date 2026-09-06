@@ -5,7 +5,7 @@ export { renderFrame }
 
 type TestSetup = Awaited<ReturnType<typeof renderWithProviders>>
 
-class RenderFrameTimeoutError extends Schema.TaggedErrorClass<RenderFrameTimeoutError>()(
+class RenderFrameTimeoutError extends Schema.TaggedError<RenderFrameTimeoutError>()(
   "RenderFrameTimeoutError",
   {
     message: Schema.String,

@@ -3,21 +3,33 @@
  * with the current textarea content, returning the edited result.
  */
 
-import { Effect, FileSystem } from "effect"
+import { Effect, FileSystem, Option, Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { runProcess } from "@gent/core-internal/utils/run-process"
 
-export function resolveEditor(visual: string | undefined, editor: string | undefined): string {
-  return visual || editor || "vi"
+export function resolveEditor(
+  visual: Option.Option<string>,
+  editor: Option.Option<string>,
+): string {
+  return visual.pipe(
+    Option.filter((value) => value.length > 0),
+    Option.orElse(() => editor.pipe(Option.filter((value) => value.length > 0))),
+    Option.getOrElse(() => "vi"),
+  )
 }
 
 /** Split editor string into command + args (handles "code --wait", etc.) */
 export function parseEditorCommand(editor: string): [string, ...string[]] {
   const parts = editor.trim().split(/\s+/)
-  const cmd = parts[0]
-  if (cmd === undefined || cmd.length === 0) return ["vi"]
-  return [cmd, ...parts.slice(1)]
+  const cmd = Option.fromNullishOr(parts[0])
+  if (Option.isNone(cmd) || cmd.value.length === 0) return ["vi"]
+  return [cmd.value, ...parts.slice(1)]
 }
+
+const EditorProcessOutcome = Schema.TaggedUnion({
+  ExitCode: { value: Schema.Finite },
+  SpawnError: { message: Schema.String },
+})
 
 export type EditorResult =
   | { _tag: "applied"; content: string }
@@ -65,17 +77,19 @@ export const openExternalEditor = (
         stdout: "inherit",
         stderr: "inherit",
       }).pipe(
-        Effect.map((r) => r.exitCode),
+        Effect.map((result) =>
+          EditorProcessOutcome.cases.ExitCode.make({ value: result.exitCode }),
+        ),
         Effect.catchTag("ProcessError", (e) =>
-          Effect.succeed({ _tag: "spawn-error" as const, message: e.message }),
+          Effect.succeed(EditorProcessOutcome.cases.SpawnError.make({ message: e.message })),
         ),
         Effect.ensuring(Effect.sync(resume)),
       )
 
-      if (typeof editorOutcome !== "number") {
+      if (editorOutcome._tag === "SpawnError") {
         return { _tag: "error", message: `Editor failed: ${editorOutcome.message}` }
       }
-      if (editorOutcome !== 0) {
+      if (editorOutcome.value !== 0) {
         return { _tag: "cancelled" }
       }
 

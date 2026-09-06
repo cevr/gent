@@ -175,7 +175,7 @@ describe("runtime slots", () => {
           hook.toolCall(() => Effect.undefined),
           hook.toolCall(() =>
             Effect.succeed({
-              _tag: "deny" as const,
+              _tag: "deny",
               message: "blocked by hook",
               result: { error: "blocked" },
             }),
@@ -186,7 +186,7 @@ describe("runtime slots", () => {
         hooks: [
           hook.toolCall(() =>
             Effect.succeed({
-              _tag: "deny" as const,
+              _tag: "deny",
               message: "project should not run",
             }),
           ),

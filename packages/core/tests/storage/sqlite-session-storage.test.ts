@@ -56,7 +56,7 @@ describe("Sessions", () => {
           updatedAt: FIXED_NOW,
         }),
       )
-      const sessionsResult = yield* sessions.listSessions()
+      const sessionsResult = yield* sessions.listSessions
       expect(sessionsResult.length).toBe(2)
     }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
   )
@@ -78,7 +78,7 @@ describe("Sessions", () => {
           updatedAt: dateFromMillis(now + 1),
         }),
       )
-      const sessionsResult = yield* sessions.listSessions()
+      const sessionsResult = yield* sessions.listSessions
       expect(sessionsResult.map((session) => session.id)).toEqual([
         SessionId.make("s2"),
         SessionId.make("s1"),
@@ -174,6 +174,7 @@ describe("Sessions", () => {
         expect(busyTimeout[0]?.timeout).toBe(5000)
         expect(walAutocheckpoint[0]?.wal_autocheckpoint).toBe(1000)
         expect(foreignKeys[0]?.foreign_keys).toBe(1)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.provide(BunServices.layer)),
   )
@@ -208,7 +209,11 @@ describe("Sessions", () => {
           "durable_operations",
           "durable_operation_integrity",
           "agent_loop_queue_integrity",
+          "tool_call_bindings",
+          "resource_graph_state",
+          "message_insertion_order",
         ])
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       // Reboot — migrator must not re-run the init migration.
@@ -229,7 +234,85 @@ describe("Sessions", () => {
           "durable_operations",
           "durable_operation_integrity",
           "agent_loop_queue_integrity",
+          "tool_call_bindings",
+          "resource_graph_state",
+          "message_insertion_order",
         ])
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(layer))
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+  it.scoped("upgrades equal-time message order without changing stored content", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const layer = SqliteStorage.LiveWithSql(path.join(dir, "gent.db")).pipe(
+        Layer.provide(BunFileSystem.layer),
+        Layer.provide(BunServices.layer),
+        Layer.provide(GentPlatform.Test()),
+      )
+      const sessionId = SessionId.make("order-upgrade-session")
+      const branchId = BranchId.make("order-upgrade-branch")
+      yield* Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
+        yield* sessions.createSession(
+          new Session({ id: sessionId, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
+        )
+        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: FIXED_NOW }))
+        for (const id of ["step9", "step10"]) {
+          yield* messages.createMessage(
+            Message.cases.regular.make({
+              id: MessageId.make(id),
+              sessionId,
+              branchId,
+              role: "assistant",
+              parts: [Prompt.textPart({ text: id })],
+              createdAt: FIXED_NOW,
+            }),
+          )
+        }
+        // Restore the version-10 schema in this temporary test database.
+        const sql = yield* SqlClient.SqlClient
+        yield* sql.unsafe("DROP TRIGGER messages_assign_insertion_order")
+        yield* sql.unsafe("DROP INDEX idx_messages_branch_created")
+        yield* sql.unsafe("DROP INDEX idx_messages_insertion_order")
+        yield* sql.unsafe("ALTER TABLE messages DROP COLUMN insertion_order")
+        yield* sql.unsafe(
+          "CREATE INDEX idx_messages_branch_created ON messages(branch_id, created_at, id)",
+        )
+        yield* sql.unsafe("DELETE FROM gent_storage_migrations WHERE migration_id = 11")
+        // oxlint-disable-next-line effect/noInlineProvide -- Each operation opens a fresh database owner.
+      }).pipe(Effect.provide(layer))
+      yield* Effect.gen(function* () {
+        const messages = yield* MessageStorage
+        const before = yield* messages.listMessages(branchId)
+        expect(before.map((message) => message.id)).toEqual([
+          MessageId.make("step9"),
+          MessageId.make("step10"),
+        ])
+        expect(before.map((message) => message.parts)).toEqual([
+          [Prompt.textPart({ text: "step9" })],
+          [Prompt.textPart({ text: "step10" })],
+        ])
+        yield* messages.createMessageIfAbsent(
+          Message.cases.regular.make({
+            id: MessageId.make("step11"),
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: "next turn" })],
+            createdAt: FIXED_NOW,
+          }),
+        )
+        expect((yield* messages.listMessages(branchId)).map((message) => message.id)).toEqual([
+          MessageId.make("step9"),
+          MessageId.make("step10"),
+          MessageId.make("step11"),
+        ])
+        // oxlint-disable-next-line effect/noInlineProvide -- Each operation opens a fresh database owner.
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.provide(BunServices.layer)),
   )
@@ -249,6 +332,7 @@ describe("Sessions", () => {
             updated_at INTEGER NOT NULL
           )
         `)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(BunSqliteClient.layer({ filename: dbPath })))
 
       const layer = SqliteStorage.LiveWithSql(dbPath).pipe(
@@ -271,6 +355,7 @@ describe("Sessions", () => {
       const sql = yield* SqlClient.SqlClient
       const now = FIXED_NOW_MILLIS
       const branchExit = yield* Effect.exit(
+        // oxlint-disable-next-line effect/noNullish -- Keep the null value required by this external data contract.
         sql`INSERT INTO branches (id, session_id, name, created_at) VALUES (${"orphan-branch"}, ${"missing-session"}, ${null}, ${now})`,
       )
       expect(branchExit._tag).toBe("Failure")
@@ -282,6 +367,7 @@ describe("Sessions", () => {
         }),
       )
       const messageExit = yield* Effect.exit(
+        // oxlint-disable-next-line effect/noNullish -- Keep the null value required by this external data contract.
         sql`INSERT INTO messages (id, session_id, branch_id, role, created_at, turn_duration_ms) VALUES (${"orphan-message"}, ${"fk-session"}, ${"missing-branch"}, ${"user"}, ${now}, ${null})`,
       )
       expect(messageExit._tag).toBe("Failure")
@@ -697,9 +783,9 @@ describe("Sessions", () => {
       const [cascadedIds, childExits] = yield* Effect.all(
         [
           sessions.deleteSession(parentId),
-          Effect.forEach(childIds, createChild, { concurrency: "unbounded" }),
+          Effect.forEach(childIds, createChild, { concurrency: 16 }),
         ],
-        { concurrency: "unbounded" },
+        { concurrency: 2 },
       )
       // Invariant 1+2: parent is gone, and parent is in the returned set.
       const parentRows = yield* sql<{

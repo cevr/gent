@@ -20,6 +20,7 @@ const assertForeignKeyIntegrity = Effect.fn("Storage.assertForeignKeyIntegrity")
   const sql = yield* SqlClient.SqlClient
   const rows = yield* sql<{
     table: string
+    // oxlint-disable-next-line effect/noNullish -- SQLite reports a missing foreign-key rowid as NULL.
     rowid: number | null
     parent: string
     fkid: number
@@ -213,13 +214,16 @@ const agentLoopQueueMigration = Effect.gen(function* () {
   `)
 })
 
+// oxlint-disable-next-line effect/noUnknownParameters -- SQLite drivers expose unknown failure causes.
 const sqliteMessageIncludes = (error: unknown, expected: string) =>
   String(error).toLowerCase().includes(expected.toLowerCase())
 
+// oxlint-disable-next-line effect/noUnknownParameters -- SQLite drivers expose unknown failure causes.
 const isAlreadyAppliedSqliteError = (error: unknown) =>
   sqliteMessageIncludes(error, "duplicate column name") ||
   sqliteMessageIncludes(error, "already exists")
 
+// oxlint-disable-next-line effect/noUnknownParameters -- SQLite drivers expose unknown failure causes.
 const ignoreAlreadyAppliedSqliteError =
   (migration: string, operation: string) =>
   <E, R>(effect: Effect.Effect<void, E, R>): Effect.Effect<void, E, R> =>
@@ -370,9 +374,93 @@ const agentLoopQueueIntegrityMigration = Effect.gen(function* () {
   yield* sql.unsafe(`ALTER TABLE agent_loop_queues_next RENAME TO agent_loop_queues`)
 })
 
+const toolCallBindingsMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  yield* sql.unsafe(`
+    CREATE TABLE tool_call_bindings (
+      assistant_message_id TEXT NOT NULL,
+      tool_call_id TEXT NOT NULL,
+      binding_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (assistant_message_id, tool_call_id),
+      FOREIGN KEY (assistant_message_id) REFERENCES messages(id) ON DELETE CASCADE
+    )
+  `)
+  yield* sql.unsafe(
+    `CREATE INDEX idx_tool_call_bindings_tool_call ON tool_call_bindings(tool_call_id)`,
+  )
+})
+
+const resourceGraphStateMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  yield* sql.unsafe(`
+    CREATE TABLE resource_graph_state (
+      workspace_id TEXT NOT NULL,
+      cwd TEXT NOT NULL,
+      desired_revision TEXT NOT NULL,
+      desired_sequence INTEGER NOT NULL CHECK (desired_sequence > 0),
+      desired_json TEXT NOT NULL,
+      applied_revision TEXT,
+      applied_sequence INTEGER,
+      state TEXT NOT NULL CHECK (state IN ('pending', 'applying', 'applied', 'failed')),
+      failure_json TEXT,
+      command_id TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (workspace_id, cwd),
+      CHECK (applied_sequence IS NULL OR applied_sequence > 0),
+      CHECK ((applied_revision IS NULL) = (applied_sequence IS NULL))
+    )
+  `)
+  yield* sql.unsafe(`
+    CREATE TABLE resource_graph_commands (
+      workspace_id TEXT NOT NULL,
+      cwd TEXT NOT NULL,
+      command_id TEXT NOT NULL,
+      desired_sequence INTEGER NOT NULL CHECK (desired_sequence > 0),
+      command_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (workspace_id, cwd, command_id),
+      FOREIGN KEY (workspace_id, cwd)
+        REFERENCES resource_graph_state(workspace_id, cwd)
+        ON DELETE CASCADE
+    )
+  `)
+  yield* sql.unsafe(
+    `CREATE INDEX idx_resource_graph_state_workspace ON resource_graph_state(workspace_id, cwd)`,
+  )
+  yield* sql.unsafe(
+    `CREATE INDEX idx_resource_graph_commands_workspace ON resource_graph_commands(workspace_id, cwd, created_at)`,
+  )
+})
+
+const messageInsertionOrderMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  // Persist the tie-break: implicit rowids can change when SQLite runs VACUUM.
+  yield* sql.unsafe(`ALTER TABLE messages ADD COLUMN insertion_order INTEGER NOT NULL DEFAULT 0`)
+  yield* sql.unsafe(`UPDATE messages SET insertion_order = rowid`)
+  yield* sql.unsafe(`CREATE UNIQUE INDEX idx_messages_insertion_order ON messages(insertion_order)`)
+  yield* sql.unsafe(`
+    CREATE TRIGGER messages_assign_insertion_order AFTER INSERT ON messages
+    WHEN NEW.insertion_order = 0
+    BEGIN
+      UPDATE messages
+      SET insertion_order = (SELECT COALESCE(MAX(insertion_order), 0) + 1 FROM messages)
+      WHERE id = NEW.id;
+    END
+  `)
+  yield* sql.unsafe(`DROP INDEX idx_messages_branch_created`)
+  yield* sql.unsafe(
+    `CREATE INDEX idx_messages_branch_created ON messages(branch_id, created_at, insertion_order)`,
+  )
+})
+
+// oxlint-disable-next-line effect/noUnknownParameters -- SQLite migrations expose unknown failure causes.
 const wrapMigrationError = (error: unknown): StorageError =>
   new StorageError({ message: "Storage migration failed", cause: error })
 
+// oxlint-disable-next-line effect/noUnknownParameters -- SQLite pragmas expose unknown failure causes.
 const wrapPragmaError = (error: unknown): StorageError =>
   new StorageError({ message: "Storage pragma initialization failed", cause: error })
 
@@ -382,11 +470,12 @@ const StoragePragmaLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
 const StorageCompatibilityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   Layer.effectDiscard(
     assertMigrationStateCompatible().pipe(
-      Effect.mapError((error) =>
-        isStorageError(error)
-          ? error
-          : new StorageError({ message: "Storage compatibility check failed", cause: error }),
-      ),
+      Effect.mapError((error) => {
+        if (isStorageError(error)) {
+          return error
+        }
+        return new StorageError({ message: "Storage compatibility check failed", cause: error })
+      }),
     ),
   )
 
@@ -401,6 +490,9 @@ const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient>
       "006_durable_operations": durableOperationsMigration,
       "007_durable_operation_integrity": durableOperationIntegrityMigration,
       "008_agent_loop_queue_integrity": agentLoopQueueIntegrityMigration,
+      "009_tool_call_bindings": toolCallBindingsMigration,
+      "010_resource_graph_state": resourceGraphStateMigration,
+      "011_message_insertion_order": messageInsertionOrderMigration,
     }),
     table: "gent_storage_migrations",
   }).pipe(
@@ -412,11 +504,12 @@ const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient>
 const StorageIntegrityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   Layer.effectDiscard(
     assertForeignKeyIntegrity().pipe(
-      Effect.mapError((error) =>
-        isStorageError(error)
-          ? error
-          : new StorageError({ message: "Storage integrity check failed", cause: error }),
-      ),
+      Effect.mapError((error) => {
+        if (isStorageError(error)) {
+          return error
+        }
+        return new StorageError({ message: "Storage integrity check failed", cause: error })
+      }),
     ),
   )
 

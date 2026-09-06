@@ -11,7 +11,7 @@
  * world and the Effect runtime.
  */
 
-import { Effect, Schema } from "effect"
+import { Effect, Option, Predicate, Schema } from "effect"
 import type {
   AnyExtensionClientModule,
   ClientContributions,
@@ -25,19 +25,21 @@ import {
   type ResolvedTuiExtensions,
 } from "./resolve"
 
-const getClientModuleError = (value: unknown): string | undefined => {
-  if (typeof value !== "object" || value === null) return "module must export an object"
+// eslint-disable-next-line effect/noUnknownParameters -- dynamic imports are parsed at this module boundary.
+const getClientModuleError = (value: unknown): Option.Option<string> => {
+  if (!Predicate.isObject(value)) return Option.some("module must export an object")
   const id = Reflect.get(value, "id")
-  if (typeof id !== "string") return "missing id"
+  if (!Predicate.isString(id)) return Option.some("missing id")
   const setup = Reflect.get(value, "setup")
-  if (!Effect.isEffect(setup)) return "setup must be an Effect value"
-  return undefined
+  if (!Effect.isEffect(setup)) return Option.some("setup must be an Effect value")
+  return Option.none()
 }
 
+// eslint-disable-next-line effect/noUnknownParameters -- dynamic imports are parsed at this module boundary.
 const isExtensionClientModule = (value: unknown): value is AnyExtensionClientModule =>
-  getClientModuleError(value) === undefined
+  Option.isNone(getClientModuleError(value))
 
-class TuiExtensionImportError extends Schema.TaggedErrorClass<TuiExtensionImportError>()(
+class TuiExtensionImportError extends Schema.TaggedError<TuiExtensionImportError>()(
   "TuiExtensionImportError",
   {
     message: Schema.String,
@@ -75,15 +77,17 @@ const setupLoadedExtension = (params: {
   readonly scope: LoadedTuiExtension["scope"]
   readonly filePath: string
   readonly runtime: ClientRuntime
-}): Effect.Effect<LoadedTuiExtension | undefined> =>
+}): Effect.Effect<Option.Option<LoadedTuiExtension>> =>
   Effect.tryPromise({
     try: () =>
-      invokeSetup(params.module, params.runtime).then((contributions) => ({
-        id: params.module.id,
-        scope: params.scope,
-        filePath: params.filePath,
-        contributions,
-      })),
+      invokeSetup(params.module, params.runtime).then((contributions) =>
+        Option.some({
+          id: params.module.id,
+          scope: params.scope,
+          filePath: params.filePath,
+          contributions,
+        }),
+      ),
     catch: (cause) =>
       new ClientSetupError({
         extensionId: params.module.id,
@@ -93,39 +97,55 @@ const setupLoadedExtension = (params: {
   }).pipe(
     Effect.catch((cause: ClientSetupError) =>
       Effect.log(`[tui-ext] Setup failed for ${params.filePath}: ${cause.message}`).pipe(
-        Effect.as(undefined),
+        Effect.as(Option.none()),
       ),
     ),
   )
 
 /** Import module and validate shape — does NOT call setup() */
+function loadExtensionModule(filePath: string) {
+  // gent/no-dynamic-imports: allow TUI extension modules are discovered from user/project files at runtime
+  return import(filePath)
+}
+
 const importExtension = (
   entry: DiscoveredTuiExtension,
-): Effect.Effect<ImportedExtension | undefined> =>
+): Effect.Effect<Option.Option<ImportedExtension>> =>
   Effect.gen(function* () {
     const mod = yield* Effect.tryPromise({
-      // gent/no-dynamic-imports: allow TUI extension modules are discovered from user/project files at runtime
-      try: () => import(entry.filePath),
+      try: () => loadExtensionModule(entry.filePath),
       catch: (cause) =>
         new TuiExtensionImportError({
           message: `Failed to load ${entry.filePath}`,
           cause,
         }),
     })
-    const candidate = mod.default ?? mod
+    const candidate = Option.getOrElse(Option.fromNullishOr(mod.default), () => mod)
 
     const error = getClientModuleError(candidate)
-    if (error !== undefined || !isExtensionClientModule(candidate)) {
-      yield* Effect.log(`[tui-ext] Skipping ${entry.filePath}: ${error ?? "invalid module shape"}`)
-      return undefined
+    if (Option.isSome(error) || !isExtensionClientModule(candidate)) {
+      yield* Effect.log(
+        `[tui-ext] Skipping ${entry.filePath}: ${Option.getOrElse(error, () => "invalid module shape")}`,
+      )
+      return Option.none()
     }
 
-    return { module: candidate, scope: entry.scope, filePath: entry.filePath }
+    return Option.some({ module: candidate, scope: entry.scope, filePath: entry.filePath })
   }).pipe(
     Effect.catch((err: TuiExtensionImportError) =>
-      Effect.log(`[tui-ext] Failed to load ${entry.filePath}: ${err}`).pipe(Effect.as(undefined)),
+      Effect.log(`[tui-ext] Failed to load ${entry.filePath}: ${err}`).pipe(
+        Effect.as(Option.none()),
+      ),
     ),
   )
+
+const collectSome = <A>(values: ReadonlyArray<Option.Option<A>>): ReadonlyArray<A> => {
+  const out: A[] = []
+  for (const value of values) {
+    if (Option.isSome(value)) out.push(value.value)
+  }
+  return out
+}
 
 /**
  * Load all TUI extensions: discover files, import modules, resolve with scope precedence.
@@ -150,7 +170,7 @@ export const loadTuiExtensions = (opts: {
 }): Promise<ResolvedTuiExtensions> =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const disabledSet = new Set(opts.disabled ?? [])
+      const disabledSet = new Set(Option.getOrElse(Option.fromNullishOr(opts.disabled), () => []))
 
       // Discovery runs through the runtime so `FileSystem`/`Path` come from the
       // same Layer that powers Effect-typed extension setups. This is the only
@@ -163,35 +183,33 @@ export const loadTuiExtensions = (opts: {
       )
 
       // Import user/project modules, then filter by disabled before calling setup()
-      const imported = yield* Effect.all(discovered.map((entry) => importExtension(entry)))
-      const enabled = imported
-        .filter((r): r is ImportedExtension => r !== undefined)
-        .filter((r) => !disabledSet.has(r.module.id))
+      const imported = yield* Effect.forEach(discovered, (entry) => importExtension(entry))
+      const enabled = collectSome(imported).filter((r) => !disabledSet.has(r.module.id))
 
       // Builtins: pre-imported, just filter disabled and call setup()
-      const builtinLoaded: LoadedTuiExtension[] = yield* Effect.all(
-        (opts.builtins ?? [])
-          .filter((ext) => !disabledSet.has(ext.id))
-          .map((ext) =>
-            setupLoadedExtension({
-              module: ext,
-              scope: "builtin",
-              filePath: `builtin:${ext.id}`,
-              runtime: opts.runtime,
-            }),
-          ),
-      ).pipe(Effect.map((loaded) => loaded.filter((ext) => ext !== undefined)))
+      const builtinLoaded: ReadonlyArray<LoadedTuiExtension> = yield* Effect.forEach(
+        Option.getOrElse(Option.fromNullishOr(opts.builtins), () => []).filter(
+          (ext) => !disabledSet.has(ext.id),
+        ),
+        (ext) =>
+          setupLoadedExtension({
+            module: ext,
+            scope: "builtin",
+            filePath: `builtin:${ext.id}`,
+            runtime: opts.runtime,
+          }),
+      ).pipe(Effect.map((loaded) => collectSome(loaded)))
 
-      const externalLoaded: LoadedTuiExtension[] = yield* Effect.all(
-        enabled.map((ext) =>
+      const externalLoaded: ReadonlyArray<LoadedTuiExtension> = yield* Effect.forEach(
+        enabled,
+        (ext) =>
           setupLoadedExtension({
             module: ext.module,
             scope: ext.scope,
             filePath: ext.filePath,
             runtime: opts.runtime,
           }),
-        ),
-      ).pipe(Effect.map((loaded) => loaded.filter((ext) => ext !== undefined)))
+      ).pipe(Effect.map((loaded) => collectSome(loaded)))
 
       const resolved = resolveTuiExtensions([...builtinLoaded, ...externalLoaded])
 

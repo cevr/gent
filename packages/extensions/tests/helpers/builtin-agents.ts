@@ -11,5 +11,5 @@ export const AllBuiltinAgents: ReadonlyArray<AgentDefinition> = [
   librarian,
 ]
 
-export const getBuiltinAgent = (name: string): AgentDefinition | undefined =>
+export const getBuiltinAgent = (name: string) =>
   AllBuiltinAgents.find((agent) => agent.name === name)

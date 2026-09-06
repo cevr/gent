@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, MutableRef, References } from "effect"
+import { Predicate, Effect, MutableRef, References } from "effect"
 import {
   WideEvent,
   WideEventBoundary,
@@ -60,7 +60,7 @@ describe("wide-event-boundary", () => {
         expect(a["branchId"]).toBe("br-1")
         expect(a["model"]).toBe("claude-4")
         expect(a["status"]).toBe("ok")
-        expect(typeof a["durationMs"]).toBe("number")
+        expect(Predicate.isNumber(a["durationMs"])).toBe(true)
       }),
     )
 

@@ -6,7 +6,7 @@
  *  - failures/defects are isolated so later extensions still run
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type {
@@ -15,21 +15,19 @@ import type {
   ProjectionTurnContext,
 } from "../../src/domain/extension.js"
 import { hook } from "../../src/domain/extension.js"
-import { ExtensionId } from "@gent/core-internal/domain/ids"
+import { BranchId, SessionId, ExtensionId } from "@gent/core-internal/domain/ids"
 import { ProjectionError } from "@gent/core/extensions/api"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { provideExtensionHookContext } from "../../src/runtime/extensions/extension-hook-context"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 
 const turnCtx: ExtensionTurnContext = {
-  sessionId: "s" as ExtensionTurnContext["sessionId"],
-  branchId: "b" as ExtensionTurnContext["branchId"],
-  agent: getBuiltinAgent("cowork"),
+  sessionId: SessionId.make("s"),
+  branchId: BranchId.make("b"),
+  agent: Option.getOrThrow(Option.fromUndefinedOr(getBuiltinAgent("cowork"))),
   allTools: [],
   interactive: true,
-  cwd: "/tmp",
-  home: "/tmp",
-} as unknown as ExtensionTurnContext
+}
 
 const turnEvalCtx: ProjectionTurnContext = {
   sessionId: turnCtx.sessionId,
@@ -86,9 +84,9 @@ describe("turn projection hooks", () => {
         ),
       ])
 
-      const result = yield* compiled
-        .resolveTurnProjection()
-        .pipe(provideExtensionHookContext(hookCtx))
+      const result = yield* compiled.resolveTurnProjection.pipe(
+        provideExtensionHookContext(hookCtx),
+      )
       expect(result.promptSections).toEqual([
         { id: "shared", content: "project", priority: 50 },
         { id: "project-only", content: "project-only", priority: 60 },
@@ -113,9 +111,9 @@ describe("turn projection hooks", () => {
         ),
       ])
 
-      const result = yield* compiled
-        .resolveTurnProjection()
-        .pipe(provideExtensionHookContext(hookCtx))
+      const result = yield* compiled.resolveTurnProjection.pipe(
+        provideExtensionHookContext(hookCtx),
+      )
       expect(result.promptSections).toEqual([{ id: "good", content: "still-runs", priority: 50 }])
       expect(result.policyFragments).toEqual([{ include: ["still-runs"] }])
     }))
@@ -123,11 +121,7 @@ describe("turn projection hooks", () => {
   test("defecting hook is logged + skipped", () =>
     Effect.gen(function* () {
       const compiled = compile([
-        hookExt("defect-hook", "builtin", () =>
-          Effect.sync(() => {
-            throw new Error("defect")
-          }),
-        ),
+        hookExt("defect-hook", "builtin", () => Effect.die(new Error("defect"))),
         hookExt("good-hook", "project", () =>
           Effect.succeed({
             promptSections: [{ id: "good", content: "after-defect", priority: 50 }],
@@ -135,9 +129,9 @@ describe("turn projection hooks", () => {
         ),
       ])
 
-      const result = yield* compiled
-        .resolveTurnProjection()
-        .pipe(provideExtensionHookContext(hookCtx))
+      const result = yield* compiled.resolveTurnProjection.pipe(
+        provideExtensionHookContext(hookCtx),
+      )
       expect(result.promptSections).toEqual([{ id: "good", content: "after-defect", priority: 50 }])
       expect(result.policyFragments).toEqual([])
     }))
@@ -146,9 +140,9 @@ describe("turn projection hooks", () => {
     Effect.gen(function* () {
       const compiled = compile([hookExt("empty-hook", "builtin", () => Effect.succeed({}))])
 
-      const result = yield* compiled
-        .resolveTurnProjection()
-        .pipe(provideExtensionHookContext(hookCtx))
+      const result = yield* compiled.resolveTurnProjection.pipe(
+        provideExtensionHookContext(hookCtx),
+      )
       expect(result.promptSections).toEqual([])
       expect(result.policyFragments).toEqual([])
     }))

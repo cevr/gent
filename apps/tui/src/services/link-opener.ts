@@ -3,9 +3,9 @@ import type { ChildProcessSpawner } from "effect/unstable/process"
 import { runProcess } from "@gent/core-internal/utils/run-process"
 import { OsService } from "./os-service"
 
-export class LinkOpenerError extends Schema.TaggedErrorClass<LinkOpenerError>()("LinkOpenerError", {
+export class LinkOpenerError extends Schema.TaggedError<LinkOpenerError>()("LinkOpenerError", {
   message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
+  cause: Schema.optional(Schema.Defect()),
 }) {}
 
 export interface LinkOpenerService {
@@ -17,15 +17,14 @@ export interface LinkOpenerService {
 const makeOpener = (command: string, argsForUrl: (url: string) => string[]): LinkOpenerService => ({
   open: Effect.fn("LinkOpener.open")((url: string) =>
     runProcess(command, argsForUrl(url), { stdout: "ignore", stderr: "pipe" }).pipe(
-      Effect.flatMap((result) =>
-        result.exitCode === 0
-          ? Effect.void
-          : Effect.fail(
-              new LinkOpenerError({
-                message: `Failed to open URL: ${url}: ${result.stderr || `Exit code ${result.exitCode}`}`,
-              }),
-            ),
-      ),
+      Effect.flatMap((result) => {
+        if (result.exitCode === 0) return Effect.void
+        return Effect.fail(
+          new LinkOpenerError({
+            message: `Failed to open URL: ${url}: ${result.stderr || `Exit code ${result.exitCode}`}`,
+          }),
+        )
+      }),
       Effect.catchTag("ProcessError", (e) =>
         Effect.fail(
           new LinkOpenerError({
@@ -56,14 +55,17 @@ export class LinkOpener extends Context.Service<LinkOpener, LinkOpenerService>()
     makeOpener("xdg-open", (url) => [url]),
   )
 
-  static LiveOther: Layer.Layer<LinkOpener> = Layer.succeed(LinkOpener, {
-    open: (url) =>
-      Effect.fail(
-        new LinkOpenerError({
-          message: `Unsupported OS for opening URL: ${url}`,
-        }),
-      ),
-  })
+  static LiveOther: Layer.Layer<LinkOpener> = Layer.succeed(
+    LinkOpener,
+    LinkOpener.of({
+      open: (url) =>
+        Effect.fail(
+          new LinkOpenerError({
+            message: `Unsupported OS for opening URL: ${url}`,
+          }),
+        ),
+    }),
+  )
 
   static Live: Layer.Layer<LinkOpener, never, OsService> = Layer.unwrap(
     Effect.gen(function* () {
@@ -76,5 +78,5 @@ export class LinkOpener extends Context.Service<LinkOpener, LinkOpenerService>()
   )
 
   static Test = (impl?: LinkOpenerService): Layer.Layer<LinkOpener, never> =>
-    Layer.succeed(LinkOpener, impl ?? { open: () => Effect.void })
+    Layer.succeed(LinkOpener, LinkOpener.of(impl ?? { open: () => Effect.void }))
 }

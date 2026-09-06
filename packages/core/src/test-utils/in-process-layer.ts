@@ -72,13 +72,12 @@ const buildLayer = (
 export const baseLocalLayer = (
   config: InProcessLayerConfig,
   providerMode: HarnessProviderMode = "debug-scripted",
-) =>
-  buildLayer(
-    providerMode === "debug-slow"
-      ? LanguageModelLayers.debug({ delayMs: DebugSlowLanguageModelDelayMs })
-      : LanguageModelLayers.debug(),
-    config,
-  )
+) => {
+  if (providerMode === "debug-slow") {
+    return buildLayer(LanguageModelLayers.debug({ delayMs: DebugSlowLanguageModelDelayMs }), config)
+  }
+  return buildLayer(LanguageModelLayers.debug(), config)
+}
 
 /** Build a complete in-process test layer with a custom language model layer. */
 export const baseLocalLayerWithProvider = (

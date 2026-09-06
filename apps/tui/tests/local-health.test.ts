@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
-import { Effect, FileSystem, Layer, Path } from "effect"
+import { Effect, FileSystem, Layer, Option, Path } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
 import {
@@ -17,6 +17,8 @@ import {
   resetStorage,
   storagePaths,
 } from "../src/ops/local-health"
+
+const absentServerEntry = Option.getOrUndefined(Option.none())
 
 const createDb = (dbPath: string, statement: string) =>
   Effect.gen(function* () {
@@ -42,7 +44,7 @@ describe("local health", () => {
       expect(storage.existingStorageTables).toEqual(["sessions"])
       expect(storage.migrationCount).toBe(0)
 
-      const report = formatDoctorReport(yield* makeDoctorReport(home, undefined))
+      const report = formatDoctorReport(yield* makeDoctorReport(home, absentServerEntry))
       expect(report).toContain("Gent doctor")
       expect(report).toContain("incompatible")
       expect(report).toContain("Migration table: missing")
@@ -74,7 +76,9 @@ describe("local health", () => {
         }),
       )
 
-      const report = formatDoctorReport(yield* makeDoctorReport(home, undefined, extensionHealth))
+      const report = formatDoctorReport(
+        yield* makeDoctorReport(home, absentServerEntry, extensionHealth),
+      )
       expect(report).toContain("Extensions:")
       expect(report).toContain("degraded (1 degraded, 0 healthy)")
       expect(report).toContain("@test/broken-resource:")

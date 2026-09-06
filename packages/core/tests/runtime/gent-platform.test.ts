@@ -7,7 +7,7 @@
  * downstream tests can rely on it without re-checking each method.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Deferred, Effect, Layer } from "effect"
+import { Predicate, Deferred, Effect, Layer } from "effect"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { GentPlatform, SignalError } from "../../src/runtime/gent-platform"
 
@@ -30,13 +30,13 @@ describe("GentPlatform", () => {
         const info = yield* platform.osInfo
         // Spot-check shape — values are runtime-dependent. Each field must be
         // a non-empty string. `platform` is one of the documented Node values.
-        expect(typeof info.platform).toBe("string")
+        expect(Predicate.isString(info.platform)).toBe(true)
         expect(info.platform.length).toBeGreaterThan(0)
-        expect(typeof info.arch).toBe("string")
+        expect(Predicate.isString(info.arch)).toBe(true)
         expect(info.arch.length).toBeGreaterThan(0)
-        expect(typeof info.release).toBe("string")
-        expect(typeof info.hostname).toBe("string")
-        expect(typeof info.type).toBe("string")
+        expect(Predicate.isString(info.release)).toBe(true)
+        expect(Predicate.isString(info.hostname)).toBe(true)
+        expect(Predicate.isString(info.type)).toBe(true)
       }).pipe(Effect.provide(BunGentPlatformLive)),
     )
 
@@ -46,7 +46,7 @@ describe("GentPlatform", () => {
         const pid = yield* platform.pid
         const execPath = yield* platform.execPath
         expect(pid).toBe(process.pid)
-        expect(typeof pid).toBe("number")
+        expect(Predicate.isNumber(pid)).toBe(true)
         expect(pid).toBeGreaterThan(0)
         expect(execPath).toBe(process.execPath)
         expect(execPath.length).toBeGreaterThan(0)
@@ -76,7 +76,7 @@ describe("GentPlatform", () => {
         expect(failure.pid).toBe(2 ** 31 - 1)
         expect(failure.signal).toBe(0)
         expect(failure.code).toBe("ESRCH")
-        expect(typeof failure.reason).toBe("string")
+        expect(Predicate.isString(failure.reason)).toBe(true)
         expect(failure.reason.length).toBeGreaterThan(0)
       }).pipe(Effect.provide(BunGentPlatformLive)),
     )
@@ -86,8 +86,8 @@ describe("GentPlatform", () => {
         const platform = yield* GentPlatform
         const a = yield* platform.now
         const b = yield* platform.now
-        expect(typeof a).toBe("number")
-        expect(typeof b).toBe("number")
+        expect(Predicate.isNumber(a)).toBe(true)
+        expect(Predicate.isNumber(b)).toBe(true)
         expect(b).toBeGreaterThanOrEqual(a)
       }).pipe(Effect.provide(BunGentPlatformLive)),
     )
@@ -164,11 +164,13 @@ describe("GentPlatform", () => {
               ...base,
               exit: (code) => Deferred.succeed(captured, code).pipe(Effect.andThen(Effect.never)),
             })
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(GentPlatform.Test())),
         )
         yield* Effect.gen(function* () {
           const platform = yield* GentPlatform
           yield* Effect.race(platform.exit(7), Deferred.await(captured))
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(recorder))
         expect(yield* Deferred.await(captured)).toBe(7)
       }),

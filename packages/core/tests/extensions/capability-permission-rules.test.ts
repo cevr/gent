@@ -10,14 +10,19 @@
  *   5. Assert `ToolCallFailed` event is published for `bash`
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, type Layer, Ref, Stream, Schema } from "effect"
+import { Effect, Ref, Stream, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { toolCallStep, textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
 import { ensureStorageParents } from "@gent/core-internal/test-utils"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
-import { EventStore, type EventEnvelope } from "@gent/core-internal/domain/event"
+import {
+  EventStore,
+  ToolCallFailed,
+  ToolCallSucceeded,
+  type EventEnvelope,
+} from "@gent/core-internal/domain/event"
 import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import { AgentName } from "@gent/core-internal/domain/agent"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
@@ -45,7 +50,14 @@ const makeMessage = (text: string) =>
 const runAgentMessage = (message: Message) =>
   Effect.gen(function* () {
     const sessionRuntime = yield* SessionRuntime
-    const text = message.parts.map((part) => (part.type === "text" ? part.text : "")).join("")
+    const text = message.parts
+      .map((part) => {
+        if (part.type === "text") {
+          return part.text
+        }
+        return ""
+      })
+      .join("")
     yield* sessionRuntime.runPrompt({
       sessionId: message.sessionId,
       branchId: message.branchId,
@@ -119,7 +131,7 @@ describe("capability permissionRules E2E", () => {
           // Pass extensions directly — bypass setupBuiltinExtensions overhead
           extensions: [bashExtension, permissionRulesExtension],
           providerLayer,
-          extraLayers: [permissionLive as Layer.Layer<never>],
+          extraLayers: [permissionLive],
         })
 
         yield* Effect.gen(function* () {
@@ -131,7 +143,7 @@ describe("capability permissionRules E2E", () => {
           yield* Effect.forkChild(
             eventStore.subscribe({ sessionId, branchId }).pipe(
               Stream.runForEach((env) => Ref.update(envelopesRef, (current) => [...current, env])),
-              Effect.catchCause(() => Effect.void),
+              Effect.ignoreCause,
             ),
           )
 
@@ -139,21 +151,21 @@ describe("capability permissionRules E2E", () => {
 
           const envelopes = yield* Ref.get(envelopesRef)
 
-          const failed = envelopes.filter((e) => e.event._tag === "ToolCallFailed")
+          const failed = envelopes
+            .map((envelope) => envelope.event)
+            .filter(Schema.is(ToolCallFailed))
           expect(failed.length).toBeGreaterThanOrEqual(1)
 
-          const bashFailed = failed.find(
-            (e) => (e.event as { toolName: string }).toolName === "bash",
-          )
+          const bashFailed = failed.find((event) => event.toolName === "bash")
           expect(bashFailed).toBeDefined()
 
           // Sanity: no ToolCallSucceeded for bash
-          const succeeded = envelopes.filter(
-            (e) =>
-              e.event._tag === "ToolCallSucceeded" &&
-              (e.event as { toolName: string }).toolName === "bash",
-          )
+          const succeeded = envelopes
+            .map((envelope) => envelope.event)
+            .filter(Schema.is(ToolCallSucceeded))
+            .filter((event) => event.toolName === "bash")
           expect(succeeded.length).toBe(0)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(e2eLayer))
       }).pipe(Effect.timeout("28 seconds")),
     30_000,
@@ -184,7 +196,7 @@ describe("capability permissionRules E2E", () => {
           yield* Effect.forkChild(
             eventStore.subscribe({ sessionId, branchId }).pipe(
               Stream.runForEach((env) => Ref.update(envelopesRef, (current) => [...current, env])),
-              Effect.catchCause(() => Effect.void),
+              Effect.ignoreCause,
             ),
           )
 
@@ -193,19 +205,18 @@ describe("capability permissionRules E2E", () => {
           const envelopes = yield* Ref.get(envelopesRef)
 
           // With Permission.Test() (always allow), bash call must succeed
-          const succeeded = envelopes.filter(
-            (e) =>
-              e.event._tag === "ToolCallSucceeded" &&
-              (e.event as { toolName: string }).toolName === "bash",
-          )
+          const succeeded = envelopes
+            .map((envelope) => envelope.event)
+            .filter(Schema.is(ToolCallSucceeded))
+            .filter((event) => event.toolName === "bash")
           expect(succeeded.length).toBe(1)
 
-          const failed = envelopes.filter(
-            (e) =>
-              e.event._tag === "ToolCallFailed" &&
-              (e.event as { toolName: string }).toolName === "bash",
-          )
+          const failed = envelopes
+            .map((envelope) => envelope.event)
+            .filter(Schema.is(ToolCallFailed))
+            .filter((event) => event.toolName === "bash")
           expect(failed.length).toBe(0)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(e2eLayer))
       }).pipe(Effect.timeout("28 seconds")),
     30_000,

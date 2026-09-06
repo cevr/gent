@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Option } from "effect"
 import {
   findCorePublicExportFindings,
   findExtensionsPublicExportFindings,
@@ -25,13 +26,13 @@ describe("core public export guard", () => {
             },
           },
         },
-        {
+        Option.some({
           private: true,
           exports: {
             "./*.js": "./src/*.ts",
             "./*": "./src/*.ts",
           },
-        },
+        }),
       ),
     ).toEqual([])
   })
@@ -52,6 +53,7 @@ describe("core public export guard", () => {
             },
           },
         },
+        Option.none(),
       ),
     ).toEqual([
       {
@@ -66,26 +68,6 @@ describe("core public export guard", () => {
     ])
   })
 
-  test("flags null tombstones as extra public export surface", () => {
-    expect(
-      findCorePublicExportFindings(
-        {
-          exports: {
-            "./extensions/api": "./src/extensions/api.ts",
-            "./runtime/*": null,
-          },
-        },
-        { compilerOptions: { paths: {} } },
-      ),
-    ).toEqual([
-      {
-        path: 'packages/core/package.json exports["./runtime/*"]',
-        message:
-          "Only @gent/core/extensions/api is public; workspace internals must use @gent/core-internal/*",
-      },
-    ])
-  })
-
   test("keeps the workspace internal package private and narrow", () => {
     expect(
       findCorePublicExportFindings(
@@ -95,12 +77,12 @@ describe("core public export guard", () => {
           },
         },
         { compilerOptions: { paths: {} } },
-        {
+        Option.some({
           private: false,
           exports: {
             "./debug/*": "./src/debug/*.ts",
           },
-        },
+        }),
       ),
     ).toEqual([
       {

@@ -5,13 +5,14 @@
  * Expanded: full file list with head/tail truncation
  */
 
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { For, Show, createMemo } from "solid-js"
 import { headTail } from "@gent/core-internal/domain/output-buffer.js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
-import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutputOption, getString } from "../../utils/parse-tool-output"
+import type { ToolInput } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface GlobOutput {
@@ -24,33 +25,39 @@ const GlobOutputSchema = Schema.Struct({
   truncated: Schema.optional(Schema.Boolean),
 })
 
-function parseGlobOutput(output: string | undefined): GlobOutput | undefined {
-  const d = decodeToolOutput(GlobOutputSchema, output)
-  if (d === undefined) return undefined
-  return { files: d["files"], truncated: d["truncated"] ?? false }
+function parseGlobOutput(output: ToolInput): Option.Option<GlobOutput> {
+  return decodeToolOutputOption(GlobOutputSchema, output).pipe(
+    Option.map((decoded) => ({
+      files: decoded.files,
+      truncated: Option.getOrElse(Option.fromNullishOr(decoded.truncated), () => false),
+    })),
+  )
 }
 
-function getPattern(input: unknown): string {
+function getPattern(input: ToolInput): string {
   return getString(input, "pattern")
 }
 
 export function GlobToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
-  const data = createMemo(() => parseGlobOutput(props.toolCall.output))
+  const dataOption = createMemo(() => parseGlobOutput(props.toolCall.output))
+  const data = () => Option.getOrUndefined(dataOption())
   const pattern = createMemo(() => getPattern(props.toolCall.input))
 
-  const collapsedFiles = createMemo(() => {
-    const d = data()
-    if (d === undefined) return { head: [] as string[], tail: [] as string[], truncatedCount: 0 }
-    return headTail(d.files, 6)
-  })
+  const collapsedFiles = createMemo(() =>
+    Option.match(dataOption(), {
+      onNone: () => ({ head: [], tail: [], truncatedCount: 0 }),
+      onSome: (value) => headTail(value.files, 6),
+    }),
+  )
 
-  const expandedFiles = createMemo(() => {
-    const d = data()
-    if (d === undefined) return { head: [] as string[], tail: [] as string[], truncatedCount: 0 }
-    return headTail(d.files, 50)
-  })
+  const expandedFiles = createMemo(() =>
+    Option.match(dataOption(), {
+      onNone: () => ({ head: [], tail: [], truncatedCount: 0 }),
+      onSome: (value) => headTail(value.files, 50),
+    }),
+  )
 
   return (
     <ToolFrame

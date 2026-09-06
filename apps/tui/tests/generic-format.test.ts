@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { formatGenericToolText } from "../src/components/tool-renderers/generic-format"
+import { Schema } from "effect"
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
 describe("formatGenericToolText", () => {
   test("returns plain text unchanged", () => {
@@ -9,7 +12,7 @@ describe("formatGenericToolText", () => {
   test("extracts error message from json object", () => {
     expect(
       formatGenericToolText(
-        JSON.stringify({
+        encodeJson({
           error: "Tool input failed:\n - agent:\nExpected string | undefined, got null",
         }),
       ),
@@ -19,7 +22,7 @@ describe("formatGenericToolText", () => {
   test("combines message with details when present", () => {
     expect(
       formatGenericToolText(
-        JSON.stringify({
+        encodeJson({
           message: "Validation failed",
           details: "path is required",
         }),
@@ -28,7 +31,7 @@ describe("formatGenericToolText", () => {
   })
 
   test("pretty prints json when no common message fields exist", () => {
-    expect(formatGenericToolText(JSON.stringify({ files: ["a.ts", "b.ts"] }))).toBe(
+    expect(formatGenericToolText(encodeJson({ files: ["a.ts", "b.ts"] }))).toBe(
       '{\n  "files": [\n    "a.ts",\n    "b.ts"\n  ]\n}',
     )
   })

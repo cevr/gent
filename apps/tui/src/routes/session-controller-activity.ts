@@ -1,3 +1,6 @@
+import { DateTime, Option } from "effect"
+import type { Array as Arr } from "effect"
+
 export interface ActivityDecor {
   readonly spinner: {
     readonly frames: readonly string[]
@@ -23,7 +26,7 @@ const SPINNERS = [
     frames: ["⠀⠀⠀", "⠂⠂⠂", "⠌⠌⠌", "⡑⡑⡑", "⢕⢕⢕", "⣫⣫⣫", "⣿⣿⣿", "⣫⣫⣫", "⢕⢕⢕", "⡑⡑⡑", "⠌⠌⠌", "⠂⠂⠂"],
     multiplier: 2,
   },
-] as const
+] satisfies Arr.NonEmptyReadonlyArray<ActivityDecor["spinner"]>
 
 const THINKING_WORDS = [
   "thinking",
@@ -43,18 +46,17 @@ const THINKING_WORDS = [
   "synthesizing",
   "assessing",
   "ruminating",
-] as const
+] satisfies Arr.NonEmptyReadonlyArray<string>
 
-export const currentMillis = () => performance.timeOrigin + performance.now()
+export const currentMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
 
-const pickRandom = <T>(arr: readonly T[], random: number): T => {
+const pickRandom = <T>(arr: Arr.NonEmptyReadonlyArray<T>, random: number): T => {
   const item = arr[Math.floor(random * arr.length)]
-  if (item === undefined) throw new Error("pickRandom: empty array")
-  return item
+  return Option.getOrElse(Option.fromNullishOr(item), () => arr[0])
 }
 
 export const defaultActivityDecor = (): ActivityDecor => ({
-  spinner: SPINNERS[0] ?? { frames: ["·"], multiplier: 1 },
+  spinner: SPINNERS[0],
   word: "thinking",
 })
 

@@ -10,6 +10,7 @@ describe("LanguageModelLayers.signal", () => {
     Effect.gen(function* () {
       const { layer, controls } = yield* LanguageModelLayers.signal("hi.")
       // Drain in the background — gate stays closed but the model stream is called.
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       yield* Effect.forkScoped(Effect.provide(callProvider, layer))
       yield* controls.waitForStreamStart
     }),
@@ -18,9 +19,10 @@ describe("LanguageModelLayers.signal", () => {
   it.scoped("emitAll releases every gated chunk in order", () =>
     Effect.gen(function* () {
       const { layer, controls } = yield* LanguageModelLayers.signal("hi.")
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const collectFiber = yield* Effect.forkScoped(Effect.provide(callProvider, layer))
       yield* controls.waitForStreamStart
-      yield* controls.emitAll()
+      yield* controls.emitAll
       const collected = yield* Fiber.join(collectFiber)
 
       // One text-delta + one finish part for "hi.".

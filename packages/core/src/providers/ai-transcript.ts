@@ -1,3 +1,4 @@
+import { Option, Predicate } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type { Message } from "../domain/message.js"
 import {
@@ -24,16 +25,17 @@ export interface PromptTranscriptOptions {
 
 export const isAiVisibleMessage = (message: Message): boolean => message.metadata?.hidden !== true
 
-const toSystemMessage = (message: Message): Prompt.SystemMessage | undefined => {
+const toSystemMessage = (message: Message): Option.Option<Prompt.SystemMessage> => {
   const text = message.parts
     .filter((part): part is Prompt.TextPart => part.type === "text")
     .map((part) => part.text)
     .join("\n")
 
-  return text.length > 0 ? Prompt.systemMessage({ content: text }) : undefined
+  if (text.length === 0) return Option.none()
+  return Option.some(Prompt.systemMessage({ content: text }))
 }
 
-const toUserMessage = (message: Message): Prompt.UserMessage | undefined => {
+const toUserMessage = (message: Message): Option.Option<Prompt.UserMessage> => {
   const content: Prompt.UserMessagePart[] = []
 
   for (const part of message.parts) {
@@ -47,10 +49,11 @@ const toUserMessage = (message: Message): Prompt.UserMessage | undefined => {
     }
   }
 
-  return content.length > 0 ? Prompt.userMessage({ content }) : undefined
+  if (content.length === 0) return Option.none()
+  return Option.some(Prompt.userMessage({ content }))
 }
 
-const toAssistantMessage = (message: Message): Prompt.AssistantMessage | undefined => {
+const toAssistantMessage = (message: Message): Option.Option<Prompt.AssistantMessage> => {
   const content: Prompt.AssistantMessagePart[] = []
 
   for (const part of message.parts) {
@@ -67,21 +70,21 @@ const toAssistantMessage = (message: Message): Prompt.AssistantMessage | undefin
     }
   }
 
-  return content.length > 0 ? Prompt.assistantMessage({ content }) : undefined
+  if (content.length === 0) return Option.none()
+  return Option.some(Prompt.assistantMessage({ content }))
 }
 
-const toToolMessage = (message: Message): Prompt.ToolMessage | undefined => {
-  const content = message.parts.flatMap(
-    (part): ReadonlyArray<Prompt.ToolMessagePart> =>
-      part.type === "tool-result" || part.type === "tool-approval-response"
-        ? [toolMessagePartToPromptPart(part)]
-        : [],
-  )
+const toToolMessage = (message: Message): Option.Option<Prompt.ToolMessage> => {
+  const content = message.parts.flatMap((part): ReadonlyArray<Prompt.ToolMessagePart> => {
+    if (part.type !== "tool-result" && part.type !== "tool-approval-response") return []
+    return [toolMessagePartToPromptPart(part)]
+  })
 
-  return content.length > 0 ? Prompt.toolMessage({ content }) : undefined
+  if (content.length === 0) return Option.none()
+  return Option.some(Prompt.toolMessage({ content }))
 }
 
-const toPromptMessage = (message: Message): Prompt.Message | undefined => {
+const toPromptMessage = (message: Message): Option.Option<Prompt.Message> => {
   switch (message.role) {
     case "system":
       return toSystemMessage(message)
@@ -103,7 +106,7 @@ export const toPromptMessages = (
   for (const message of messages) {
     if (options?.includeHidden !== true && !isAiVisibleMessage(message)) continue
     const promptMessage = toPromptMessage(message)
-    if (promptMessage !== undefined) result.push(promptMessage)
+    if (Option.isSome(promptMessage)) result.push(promptMessage.value)
   }
 
   return result
@@ -113,13 +116,11 @@ export const toPrompt = (
   messages: ReadonlyArray<Message>,
   options?: PromptTranscriptOptions,
 ): Prompt.Prompt => {
-  const promptMessages: Prompt.Message[] =
-    options?.systemPrompt !== undefined && options.systemPrompt !== ""
-      ? [
-          Prompt.systemMessage({ content: options.systemPrompt }),
-          ...toPromptMessages(messages, options),
-        ]
-      : [...toPromptMessages(messages, options)]
+  const promptMessages = [...toPromptMessages(messages, options)]
+  const systemPrompt = options?.systemPrompt
+  if (!Predicate.isUndefined(systemPrompt) && systemPrompt !== "") {
+    promptMessages.unshift(Prompt.systemMessage({ content: systemPrompt }))
+  }
 
   return Prompt.fromMessages(promptMessages)
 }

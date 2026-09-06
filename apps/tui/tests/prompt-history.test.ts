@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test"
+import { Option } from "effect"
 
 // Extract the pure logic from use-prompt-history for testing
 // We test canNavigateAtCursor and the navigate state machine
@@ -54,47 +55,57 @@ describe("canNavigateAtCursor", () => {
 
 // Test the navigate state machine without Solid reactivity
 describe("prompt history navigation", () => {
+  type NavigationResult =
+    | { readonly handled: false }
+    | { readonly handled: true; readonly text: string; readonly cursor: "start" | "end" }
+
   function createHistory(initialEntries: string[] = []) {
     const entries = [...initialEntries]
     let historyIndex = -1
-    let savedEntry: string | null = null
+    let savedEntry: Option.Option<string> = Option.none()
 
     const navigate = (
       direction: "up" | "down",
       currentText: string,
       cursorPos: number,
       textLength: number,
-    ) => {
+    ): NavigationResult => {
       const inHistory = historyIndex >= 0
       if (!canNavigateAtCursor(direction, cursorPos, textLength, inHistory)) {
-        return { handled: false } as const
+        return { handled: false }
       }
-      if (entries.length === 0 && direction === "up") return { handled: false } as const
+      if (entries.length === 0 && direction === "up") return { handled: false }
 
       if (direction === "up") {
         if (historyIndex === -1) {
-          savedEntry = currentText
+          const firstEntry = Option.fromNullishOr(entries[0])
+          if (Option.isNone(firstEntry)) return { handled: false }
+          savedEntry = Option.some(currentText)
           historyIndex = 0
-          return { handled: true, text: entries[0], cursor: "start" } as const
+          return { handled: true, text: firstEntry.value, cursor: "start" }
         }
         if (historyIndex < entries.length - 1) {
           historyIndex += 1
-          return { handled: true, text: entries[historyIndex], cursor: "start" } as const
+          const entry = Option.fromNullishOr(entries[historyIndex])
+          if (Option.isNone(entry)) return { handled: false }
+          return { handled: true, text: entry.value, cursor: "start" }
         }
-        return { handled: false } as const
+        return { handled: false }
       }
 
       if (historyIndex > 0) {
         historyIndex -= 1
-        return { handled: true, text: entries[historyIndex], cursor: "end" } as const
+        const entry = Option.fromNullishOr(entries[historyIndex])
+        if (Option.isNone(entry)) return { handled: false }
+        return { handled: true, text: entry.value, cursor: "end" }
       }
       if (historyIndex === 0) {
         historyIndex = -1
-        const restored = savedEntry ?? ""
-        savedEntry = null
-        return { handled: true, text: restored, cursor: "end" } as const
+        const restored = Option.getOrElse(savedEntry, () => "")
+        savedEntry = Option.none()
+        return { handled: true, text: restored, cursor: "end" }
       }
-      return { handled: false } as const
+      return { handled: false }
     }
 
     const add = (text: string) => {
@@ -103,7 +114,7 @@ describe("prompt history navigation", () => {
       entries.unshift(text.trim())
       if (entries.length > 100) entries.length = 100
       historyIndex = -1
-      savedEntry = null
+      savedEntry = Option.none()
     }
 
     return { navigate, add, getIndex: () => historyIndex }

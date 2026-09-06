@@ -1,13 +1,17 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Fiber, Ref, Schema } from "effect"
+import { Context, Effect, Fiber, Layer, Option, Predicate, Ref, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
+import {
+  DynamicExtensionRegistry,
+  type DynamicExtensionRegistryService,
+} from "@gent/core-internal/domain/dynamic-extension-registry"
 import { tool } from "@gent/core/extensions/api"
-import type { AgentEvent } from "@gent/core-internal/domain/event"
+import { TurnCompleted, type AgentEvent } from "@gent/core-internal/domain/event"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
+import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import {
   assistantMessageIdForTurn,
   toolResultMessageIdForTurn,
@@ -16,6 +20,7 @@ import {
   makeAgentLoopService,
   makeLayer,
   makeLayerWithEvents,
+  makeLiveToolLayer,
   runAgentLoop,
   steerAgentLoop,
   waitForPhase,
@@ -51,7 +56,8 @@ describe("continuation", () => {
         const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(agentLoop, makeContMessage("test auto-continue"))
         expect(yield* controls.callCount).toBe(2)
-        yield* controls.assertDone()
+        yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }),
   )
@@ -64,7 +70,8 @@ describe("continuation", () => {
         const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(agentLoop, makeContMessage("text only"))
         expect(yield* controls.callCount).toBe(1)
-        yield* controls.assertDone()
+        yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }),
   )
@@ -80,7 +87,8 @@ describe("continuation", () => {
         const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(agentLoop, makeContMessage("multi-hop"))
         expect(yield* controls.callCount).toBe(4)
-        yield* controls.assertDone()
+        yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }),
   )
@@ -99,6 +107,7 @@ describe("continuation", () => {
         const events = yield* Ref.get(eventsRef)
         const turnCompleted = events.filter((e) => e._tag === "TurnCompleted")
         expect(turnCompleted.length).toBe(1)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
@@ -125,12 +134,13 @@ describe("continuation", () => {
         yield* Fiber.join(fiber)
         expect(yield* controls.callCount).toBe(2)
         const events = yield* Ref.get(eventsRef)
-        const turnCompleted = events.filter((e) => e._tag === "TurnCompleted")
+        const turnCompleted = events.filter(Schema.is(TurnCompleted))
         expect(turnCompleted.length).toBe(1)
-        const tc = turnCompleted[0] as {
-          interrupted?: boolean
-        }
+        const tc = turnCompleted[0]
+        expect(tc).toBeDefined()
+        if (Predicate.isUndefined(tc)) return
         expect(tc.interrupted).toBe(true)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
@@ -145,9 +155,10 @@ describe("continuation", () => {
         const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(agentLoop, makeContMessage("structural guard"))
         expect(yield* controls.callCount).toBe(2)
-        yield* controls.assertDone()
+        yield* controls.assertDone
         const events = yield* Ref.get(eventsRef)
         expect(events.filter((e) => e._tag === "TurnCompleted").length).toBe(1)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
@@ -182,6 +193,7 @@ describe("continuation", () => {
         expect(t3).toBeUndefined()
         expect(new Set([a1!.id, a2!.id, a3!.id]).size).toBe(3)
         expect(new Set([t1!.id, t2!.id]).size).toBe(2)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }),
   )
@@ -223,22 +235,107 @@ describe("continuation", () => {
           200,
         )
         const events = yield* Ref.get(eventsRef)
-        const turnCompleted = events.filter((e) => e._tag === "TurnCompleted")
+        const turnCompleted = events.filter(Schema.is(TurnCompleted))
         // Both turns should have completed
         expect(turnCompleted.length).toBe(2)
-        const interruptedTurns = turnCompleted.filter(
-          (e) =>
-            (
-              e as {
-                interrupted?: boolean
-              }
-            ).interrupted === true,
-        )
+        const interruptedTurns = turnCompleted.filter((e) => e.interrupted === true)
         // First turn was interrupted, second (follow-up) was not
         expect(interruptedTurns.length).toBe(1)
         // Follow-up used the third provider step
         expect(yield* controls.callCount).toBe(3)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }),
+  )
+
+  it.live("executes the advertised dynamic tool after replacement", () =>
+    Effect.gen(function* () {
+      const first = tool({
+        id: "replaceable",
+        description: "First implementation",
+        params: Schema.Struct({}),
+        output: Schema.Struct({ value: Schema.String }),
+        execute: () => Effect.succeed({ value: "A" }),
+      })
+      const replacement = tool({
+        id: "replaceable",
+        description: "Replacement implementation",
+        params: Schema.Struct({}),
+        output: Schema.Struct({ value: Schema.String }),
+        execute: () => Effect.succeed({ value: "B" }),
+      })
+      const sessionId = SessionId.make("replacement-turn-session")
+      const branchId = BranchId.make("replacement-turn-branch")
+      const makeMessage = (id: string, text: string) =>
+        Message.cases.regular.make({
+          id: MessageId.make(id),
+          sessionId,
+          branchId,
+          role: "user",
+          parts: [Prompt.textPart({ text })],
+          createdAt: dateFromMillis(1_767_225_600_000),
+        })
+      let dynamicRegistry = Option.none<DynamicExtensionRegistryService>()
+      let unregisterFirst = Option.none<Effect.Effect<void>>()
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        {
+          ...toolCallStep("replaceable", {}),
+          assertOptions: (options) => {
+            if (Option.isNone(dynamicRegistry) || Option.isNone(unregisterFirst)) return
+            expect(options.tools.map((entry) => entry.name)).toContain("replaceable")
+            Effect.runSyncWith(Context.empty())(unregisterFirst.value)
+            unregisterFirst = Option.some(
+              Effect.runSyncWith(Context.empty())(
+                dynamicRegistry.value.registerTool({
+                  extensionId: ExtensionId.make("dynamic-b"),
+                  scope: { _tag: "session", sessionId },
+                  capability: replacement,
+                }),
+              ),
+            )
+          },
+        },
+        textStep("Old turn done."),
+        toolCallStep("replaceable", {}),
+        textStep("New turn done."),
+      ])
+
+      yield* Effect.gen(function* () {
+        const dynamic = yield* DynamicExtensionRegistry
+        dynamicRegistry = Option.some(dynamic)
+        unregisterFirst = Option.some(
+          yield* dynamic.registerTool({
+            extensionId: ExtensionId.make("dynamic-a"),
+            scope: { _tag: "session", sessionId },
+            capability: first,
+          }),
+        )
+        const agentLoop = yield* makeAgentLoopService
+        const oldMessage = makeMessage("replacement-old-message", "old turn")
+        const currentMessage = makeMessage("replacement-current-message", "current turn")
+        yield* runAgentLoop(agentLoop, oldMessage)
+        yield* runAgentLoop(agentLoop, currentMessage)
+
+        const messageStorage = yield* MessageStorage
+        const oldResult = yield* messageStorage.getMessage(
+          toolResultMessageIdForTurn(oldMessage.id, 1),
+        )
+        const currentResult = yield* messageStorage.getMessage(
+          toolResultMessageIdForTurn(currentMessage.id, 1),
+        )
+        expect(oldResult?.parts[0]).toEqual(expect.objectContaining({ result: { value: "A" } }))
+        expect(currentResult?.parts[0]).toEqual(expect.objectContaining({ result: { value: "B" } }))
+        expect(yield* controls.callCount).toBe(4)
+        yield* controls.assertDone
+      }).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(
+          Layer.mergeAll(
+            makeLiveToolLayer(providerLayer, [], [], DynamicExtensionRegistry.Live),
+            DynamicExtensionRegistry.Live,
+          ),
+        ),
+      )
     }),
   )
 })

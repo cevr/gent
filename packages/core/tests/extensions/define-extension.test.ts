@@ -7,7 +7,7 @@
  * order, and the result wires into `ExtensionRegistry`.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Effect, Layer, Schema } from "effect"
+import { Cause, Effect, Layer, Option, Predicate, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import { BunServices } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
@@ -23,8 +23,9 @@ import {
   tool,
   type GentExtension,
 } from "@gent/core/extensions/api"
+import type { LoadedExtension } from "../../src/domain/extension"
 import { publicSetupContext } from "../../src/domain/extension-setup-context"
-import { validateExtensionPackageShape } from "../../src/domain/extension-package-shape"
+import { validateExtensionPackage } from "../../src/domain/extension-package-shape"
 import { GentToolMetadataTag, getToolMetadata } from "@gent/core-internal/domain/capability/tool"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
 import { PermissionRule } from "@gent/core-internal/domain/permission"
@@ -84,14 +85,16 @@ describe("defineExtension", () => {
         prompt: { id: "rules", content: "rule one", priority: 50 },
         execute: () => Effect.succeed("ok"),
       })
-      const myLayer = Layer.empty as Layer.Layer<unknown>
+      const myLayer = Layer.empty
       const ext = defineExtension({
         id: "all-kinds",
         tools: [myTool],
         agents: [getBuiltinAgent("cowork")!],
         hooks: [hook.systemPrompt((input) => Effect.succeed(`${input.basePrompt} [suffix]`))],
         resources: [
+          // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
           defineResource({
+            id: "test/define-extension/all-kinds/resource",
             scope: "process",
             layer: myLayer,
           }) as never,
@@ -100,15 +103,17 @@ describe("defineExtension", () => {
           {
             id: "test-job",
             cron: "0 0 * * *",
-            target: { agent: "cowork" as never, prompt: "hi" },
+            target: { agent: AgentName.make("cowork"), prompt: "hi" },
           },
         ],
       })
       const contributions = yield* setupOf(ext)
       const modelCaps = contributions.tools ?? []
-      const modelCapMetadata =
-        modelCaps[0] !== undefined ? getToolMetadata(modelCaps[0]) : undefined
-      expect(String(modelCaps[0] === undefined ? undefined : getToolId(modelCaps[0]))).toBe("echo")
+      const firstModelCap = modelCaps[0]
+      expect(firstModelCap).toBeDefined()
+      if (Predicate.isUndefined(firstModelCap)) return
+      const modelCapMetadata = getToolMetadata(firstModelCap)
+      expect(String(getToolId(firstModelCap))).toBe("echo")
       expect(modelCapMetadata?.permissionRules?.[0]?.tool).toBe("echo")
       expect(modelCapMetadata?.prompt?.id).toBe("rules")
       expect((contributions.agents ?? [])[0]?.name).toBe(AgentName.make("cowork"))
@@ -125,15 +130,19 @@ describe("defineExtension", () => {
       const ext = defineExtension({
         id: "lifecycle",
         resources: [
+          // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
           defineResource({
+            id: "test/define-extension/lifecycle/resource-1",
             scope: "process",
-            layer: Layer.empty as Layer.Layer<unknown>,
+            layer: Layer.empty,
             start: append("startup-1"),
             stop: append("shutdown-1"),
           }) as never,
+          // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
           defineResource({
+            id: "test/define-extension/lifecycle/resource-2",
             scope: "process",
-            layer: Layer.empty as Layer.Layer<unknown>,
+            layer: Layer.empty,
             start: append("startup-2"),
             stop: append("shutdown-2"),
           }) as never,
@@ -142,10 +151,10 @@ describe("defineExtension", () => {
       const contributions = yield* setupOf(ext)
       const loaded = {
         manifest: { id: ext.manifest.id },
-        scope: "builtin" as const,
+        scope: "builtin",
         sourcePath: "builtin",
         contributions,
-      }
+      } satisfies LoadedExtension
       yield* Effect.scoped(Layer.build(buildResourceLayer([loaded], "process")).pipe(Effect.asVoid))
       // Strict ordering — no sorting. Codex  review flagged that the
       // prior `slice(...).sort()` masked a real ordering bug. Lifecycle
@@ -172,35 +181,34 @@ describe("defineExtension", () => {
           }),
       })
       const contributions = yield* setupOf(ext)
-      expect(
-        String(
-          (contributions.tools ?? [])[0] === undefined
-            ? undefined
-            : getToolId((contributions.tools ?? [])[0]!),
-        ),
-      ).toBe("from-effect")
+      const firstTool = (contributions.tools ?? [])[0]
+      expect(firstTool).toBeDefined()
+      if (Predicate.isUndefined(firstTool)) return
+      expect(String(getToolId(firstTool))).toBe("from-effect")
     }))
 
   test("setup context is provided to per-bucket factory", () =>
     Effect.gen(function* () {
-      let captured: PublicExtensionSetupContext | undefined
+      let captured: Option.Option<PublicExtensionSetupContext> = Option.none()
       const ext = defineExtension({
         id: "captures-ctx",
         tools: () =>
           Effect.gen(function* () {
-            captured = yield* ExtensionSetupContext
+            captured = Option.some(yield* ExtensionSetupContext)
             return []
           }),
       })
       yield* setupOf(ext)
-      expect(captured?.cwd).toBeDefined()
-      expect(captured?.home).toBeDefined()
-      expect("spawner" in (captured ?? {})).toBe(false)
-      expect("parentEnv" in (captured?.host ?? {})).toBe(false)
-      expect("signalPid" in (captured?.host ?? {})).toBe(false)
-      expect("runProcess" in (captured?.host ?? {})).toBe(false)
-      expect(captured?.Process.parentEnv).toBeDefined()
-      expect(captured?.Process.runProcess).toBeDefined()
+      expect(Option.isSome(captured)).toBe(true)
+      if (Option.isNone(captured)) return
+      expect(captured.value.cwd).toBeDefined()
+      expect(captured.value.home).toBeDefined()
+      expect("spawner" in captured.value).toBe(false)
+      expect("parentEnv" in captured.value.host).toBe(false)
+      expect("signalPid" in captured.value.host).toBe(false)
+      expect("runProcess" in captured.value.host).toBe(false)
+      expect(captured.value.Process.parentEnv).toBeDefined()
+      expect(captured.value.Process.runProcess).toBeDefined()
     }))
 
   test("requests derive their ref extension id from defineExtension", () =>
@@ -241,18 +249,15 @@ describe("defineExtension", () => {
       const contributions = yield* setupOf(ext)
       const loaded = {
         manifest: { id: ExtensionId.make("wired") },
-        scope: "builtin" as const,
+        scope: "builtin",
         sourcePath: "/test/wired",
         contributions,
-      }
+      } satisfies LoadedExtension
       const resolved = resolveExtensions([loaded])
-      expect(
-        String(
-          resolved.modelCapabilities.get("from-define") === undefined
-            ? undefined
-            : getToolId(resolved.modelCapabilities.get("from-define")!),
-        ),
-      ).toBe("from-define")
+      const resolvedTool = resolved.modelCapabilities.get("from-define")
+      expect(resolvedTool).toBeDefined()
+      if (Predicate.isUndefined(resolvedTool)) return
+      expect(String(getToolId(resolvedTool))).toBe("from-define")
 
       const compiled = compileExtensionHooks([loaded])
       const result = yield* compiled
@@ -265,7 +270,9 @@ describe("defineExtension", () => {
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "boom",
-        tools: () => Effect.fail("nope" as never),
+        tools: () =>
+          // oxlint-disable-next-line effect/noAs -- This invalid factory failure is a membrane-sealing fixture.
+          Effect.fail("nope" as never),
       })
       const exit = yield* Effect.exit(setupOf(ext))
       expect(exit._tag).toBe("Failure")
@@ -281,6 +288,7 @@ describe("defineExtension", () => {
       const ext = defineExtension({
         id: "raw-native",
         tools: [
+          // oxlint-disable-next-line effect/noAs -- This invalid native tool is deliberately injected to test rejection.
           AiTool.dynamic("raw_tool", {
             description: "native but missing Gent metadata",
             parameters: Schema.Unknown,
@@ -310,6 +318,7 @@ describe("defineExtension", () => {
       const ext = defineExtension({
         id: "metadata-spoof",
         tools: [
+          // oxlint-disable-next-line effect/noAs -- This metadata-spoofed native tool is deliberately injected to test rejection.
           AiTool.dynamic("spoofed_tool", {
             description: "native with copied Gent metadata but no private brand",
             parameters: Schema.Unknown,
@@ -330,9 +339,13 @@ describe("defineExtension", () => {
   test("unknown runtime-loaded contribution buckets fail activation", () =>
     Effect.gen(function* () {
       const exit = yield* Effect.exit(
-        validateExtensionPackageShape({ id: ExtensionId.make("unknown-bucket") }, {
-          actors: [],
-        } as never),
+        validateExtensionPackage(
+          { id: ExtensionId.make("unknown-bucket") },
+          // oxlint-disable-next-line effect/noAs -- This invalid bucket is a runtime package-shape rejection fixture.
+          {
+            actors: [],
+          } as never,
+        ),
       )
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -345,6 +358,7 @@ describe("defineExtension", () => {
 
   test("unknown defineExtension buckets fail activation before normalization", () =>
     Effect.gen(function* () {
+      // oxlint-disable-next-line effect/noAs -- This invalid bucket is a compile-contract rejection fixture.
       const ext = defineExtension({ id: "unknown-bucket", actors: [] } as never)
       const exit = yield* Effect.exit(setupOf(ext))
       expect(exit._tag).toBe("Failure")
@@ -353,6 +367,30 @@ describe("defineExtension", () => {
         expect(rendered).toContain("ExtensionLoadError")
         expect(rendered).toContain("unknown contribution bucket")
         expect(rendered).toContain("actors")
+      }
+    }))
+
+  test("runtime-loaded resources require valid identity metadata", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        validateExtensionPackage(
+          { id: ExtensionId.make("invalid-resource-metadata") },
+          // oxlint-disable-next-line effect/noAs -- This malformed resource is a runtime package-shape rejection fixture.
+          {
+            resources: [
+              {
+                scope: "process",
+                layer: Layer.empty,
+              },
+            ],
+          } as never,
+        ),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const rendered = Cause.pretty(exit.cause)
+        expect(rendered).toContain("ExtensionLoadError")
+        expect(rendered).toContain("resources[0]: resource requires non-empty id and revision")
       }
     }))
 
@@ -367,7 +405,7 @@ describe("defineExtension", () => {
           execute: () => Effect.succeed("ok"),
         })
 
-      const exit = yield* validateExtensionPackageShape(
+      const exit = yield* validateExtensionPackage(
         { id: ExtensionId.make("duplicate-requests") },
         {
           requests: [duplicate("same"), duplicate("same")],
@@ -388,7 +426,7 @@ describe("defineExtension", () => {
         id: "read-snapshot",
         extensionId: ExtensionId.make("helper-state"),
         input: Schema.Struct({}),
-        output: Schema.Number,
+        output: Schema.Finite,
         execute: () => Effect.succeed(1),
       })
       const toolExt = defineExtension({

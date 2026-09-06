@@ -13,8 +13,8 @@
  */
 import { Schema } from "effect"
 
-export class ProviderError extends Schema.TaggedErrorClass<ProviderError>()("ProviderError", {
+export class ProviderError extends Schema.TaggedError<ProviderError>()("ProviderError", {
   message: Schema.String,
   model: Schema.String,
-  cause: Schema.optional(Schema.Defect),
+  cause: Schema.optional(Schema.Defect()),
 }) {}

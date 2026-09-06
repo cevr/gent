@@ -1,9 +1,9 @@
-import { Clock, Effect, Schema } from "effect"
+import { Clock, Effect, Option, Schema } from "effect"
 import { dateFromMillis, ExtensionContext, tool } from "@gent/core/extensions/api"
 
 // Search Sessions Error
 
-export class SearchSessionsError extends Schema.TaggedErrorClass<SearchSessionsError>()(
+export class SearchSessionsError extends Schema.TaggedError<SearchSessionsError>()(
   "SearchSessionsError",
   {
     message: Schema.String,
@@ -29,14 +29,14 @@ export const SearchSessionsParams = Schema.Struct({
       description: "Date filter: ISO date or relative (7d, 2w, 1m)",
     }),
   ),
-  limit: Schema.optionalKey(Schema.Number),
+  limit: Schema.optionalKey(Schema.Finite),
 })
 
 // Search Sessions Result
 
 export const SearchSessionsResult = Schema.Struct({
   query: Schema.String,
-  totalMatches: Schema.Number,
+  totalMatches: Schema.Finite,
   sessions: Schema.Array(
     Schema.Struct({
       sessionId: Schema.String,
@@ -49,28 +49,31 @@ export const SearchSessionsResult = Schema.Struct({
 
 // Date parsing
 
-export function parseRelativeDate(s: string, now: number): number | undefined {
-  const match = s.match(/^(\d+)([dwm])$/)
-  if (match === null) {
+export function parseRelativeDate(s: string, now: number): Option.Option<number> {
+  const match = Option.fromNullishOr(s.match(/^(\d+)([dwm])$/))
+  if (Option.isNone(match)) {
     // Try ISO date
     const ts = Date.parse(s)
-    if (Number.isNaN(ts)) return undefined
-    return ts
+    if (Number.isNaN(ts)) return Option.none()
+    return Option.some(ts)
   }
 
-  const amount = parseInt(match[1] ?? "0", 10)
-  const unit = match[2] ?? ""
+  const amount = parseInt(
+    Option.getOrElse(Option.fromNullishOr(match.value[1]), () => "0"),
+    10,
+  )
+  const unit = Option.getOrElse(Option.fromNullishOr(match.value[2]), () => "")
   const MS_DAY = 86400000
 
   switch (unit) {
     case "d":
-      return now - amount * MS_DAY
+      return Option.some(now - amount * MS_DAY)
     case "w":
-      return now - amount * 7 * MS_DAY
+      return Option.some(now - amount * 7 * MS_DAY)
     case "m":
-      return now - amount * 30 * MS_DAY
+      return Option.some(now - amount * 30 * MS_DAY)
     default:
-      return undefined
+      return Option.none()
   }
 }
 
@@ -85,50 +88,58 @@ export const SearchSessionsTool = tool({
   execute: Effect.fn("SearchSessionsTool.execute")(function* (
     params: typeof SearchSessionsParams.Type,
   ) {
-    if (params.query === undefined && params.file === undefined) {
+    const query = Option.fromNullishOr(params.query)
+    const file = Option.fromNullishOr(params.file)
+    if (Option.isNone(query) && Option.isNone(file)) {
       return yield* new SearchSessionsError({
         message: "Provide at least one of: query, file",
       })
     }
 
     // Build search query
-    const searchQuery = [params.query, params.file].filter(Boolean).join(" ")
+    const searchQuery = [query, file].flatMap(Option.toArray).join(" ")
 
     // Parse date range
-    let dateAfter: number | undefined
-    if (params.dateRange !== undefined) {
+    let dateAfter = Option.none<number>()
+    const dateRange = Option.fromNullishOr(params.dateRange)
+    if (Option.isSome(dateRange)) {
       const now = yield* Clock.currentTimeMillis
-      dateAfter = parseRelativeDate(params.dateRange, now)
-      if (dateAfter === undefined) {
+      dateAfter = parseRelativeDate(dateRange.value, now)
+      if (Option.isNone(dateAfter)) {
         return yield* new SearchSessionsError({
-          message: `Invalid date range: ${params.dateRange}. Use ISO date or relative (7d, 2w, 1m)`,
+          message: `Invalid date range: ${dateRange.value}. Use ISO date or relative (7d, 2w, 1m)`,
         })
       }
     }
 
     const ctx = yield* ExtensionContext
     const results = yield* ctx.Session.search(searchQuery, {
-      dateAfter,
-      limit: params.limit ?? 20,
+      dateAfter: Option.getOrUndefined(dateAfter),
+      limit: Option.getOrElse(Option.fromNullishOr(params.limit), () => 20),
     })
 
     // Deduplicate by session, keep best match per session
     const bySession = new Map<
       string,
-      { sessionId: string; sessionName: string | null; snippets: string[]; lastActivity: number }
+      {
+        sessionId: string
+        sessionName: Option.Option<string>
+        snippets: string[]
+        lastActivity: number
+      }
     >()
 
     for (const result of results) {
-      const existing = bySession.get(result.sessionId)
-      if (existing !== undefined) {
-        if (existing.snippets.length < 3) {
-          existing.snippets.push(result.snippet)
+      const existing = Option.fromNullishOr(bySession.get(result.sessionId))
+      if (Option.isSome(existing)) {
+        if (existing.value.snippets.length < 3) {
+          existing.value.snippets.push(result.snippet)
         }
-        existing.lastActivity = Math.max(existing.lastActivity, result.createdAt)
+        existing.value.lastActivity = Math.max(existing.value.lastActivity, result.createdAt)
       } else {
         bySession.set(result.sessionId, {
           sessionId: result.sessionId,
-          sessionName: result.sessionName,
+          sessionName: Option.fromNullishOr(result.sessionName),
           snippets: [result.snippet],
           lastActivity: result.createdAt,
         })
@@ -139,7 +150,7 @@ export const SearchSessionsTool = tool({
       .sort((a, b) => b.lastActivity - a.lastActivity)
       .map((s) => ({
         sessionId: s.sessionId,
-        name: s.sessionName ?? "(unnamed)",
+        name: Option.getOrElse(s.sessionName, () => "(unnamed)"),
         lastActivity: dateFromMillis(s.lastActivity).toISOString(),
         excerpts: s.snippets,
       }))

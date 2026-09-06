@@ -1,4 +1,5 @@
 import { describe, test, expect } from "effect-bun-test"
+import { Option } from "effect"
 import { splitCdCommand, injectGitTrailers, stripBackground } from "../../src/exec-tools/bash.js"
 
 import { SessionId } from "@gent/core-internal/domain/ids"
@@ -6,21 +7,21 @@ import { SessionId } from "@gent/core-internal/domain/ids"
 describe("splitCdCommand", () => {
   test("cd /foo && ls → { cwd: '/foo', command: 'ls' }", () => {
     const result = splitCdCommand("cd /foo && ls")
-    expect(result).toEqual({ cwd: "/foo", command: "ls" })
+    expect(result).toEqual(Option.some({ cwd: "/foo", command: "ls" }))
   })
 
   test("cd with quoted path && cmd → quoted path", () => {
     const result = splitCdCommand('cd "/path with spaces" && ls -la')
-    expect(result).toEqual({ cwd: "/path with spaces", command: "ls -la" })
+    expect(result).toEqual(Option.some({ cwd: "/path with spaces", command: "ls -la" }))
   })
 
   test("cd /foo; ls → semicolon separator", () => {
     const result = splitCdCommand("cd /foo; ls")
-    expect(result).toEqual({ cwd: "/foo", command: "ls" })
+    expect(result).toEqual(Option.some({ cwd: "/foo", command: "ls" }))
   })
 
-  test("plain command → null", () => {
-    expect(splitCdCommand("ls -la")).toBeNull()
+  test("plain command → None", () => {
+    expect(Option.isNone(splitCdCommand("ls -la"))).toBe(true)
   })
 })
 

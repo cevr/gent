@@ -1,16 +1,18 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Predicate, Context, Effect, Layer, Result, Schema } from "effect"
 
 // Valid Regex Pattern - validates regex at decode time
 const ValidRegexPattern = Schema.String.pipe(
   Schema.check(
     Schema.makeFilter<string>(
       (s) => {
-        try {
-          new RegExp(s) // eslint-disable-line no-new -- constructor validates user-provided pattern
-          return undefined
-        } catch (e) {
-          return `Invalid regex pattern: ${e instanceof Error ? e.message : String(e)}`
-        }
+        const validation = Result.try({
+          try: () => new RegExp(s),
+          catch: (error) => error,
+        })
+        if (Result.isSuccess(validation)) return
+        const error = validation.failure
+        if (error instanceof Error) return `Invalid regex pattern: ${error.message}`
+        return `Invalid regex pattern: ${String(error)}`
       },
       { expected: "a valid regex pattern" },
     ),
@@ -32,10 +34,11 @@ export type PermissionResult = typeof PermissionResult.Type
 
 type StoredRule = { rule: PermissionRule; regex?: RegExp }
 
-const toStoredRule = (rule: PermissionRule): StoredRule => ({
-  rule,
-  regex: rule.pattern !== undefined ? new RegExp(rule.pattern) : undefined,
-})
+const toStoredRule = (rule: PermissionRule): StoredRule => {
+  const stored: StoredRule = { rule }
+  if (!Predicate.isUndefined(rule.pattern)) stored.regex = new RegExp(rule.pattern)
+  return stored
+}
 
 export const compilePermissionRules = (
   rules: ReadonlyArray<PermissionRule>,
@@ -44,24 +47,28 @@ export const compilePermissionRules = (
 export const evaluatePermissionRules = (
   rules: ReadonlyArray<StoredRule>,
   tool: string,
-  args: unknown,
+  args: Schema.Schema.Type<typeof Schema.Unknown>,
   defaultAction: PermissionRule["action"] = "allow",
 ): PermissionResult => {
-  const argsStr = JSON.stringify(args)
+  const argsStr = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(args)
   for (const entry of rules) {
     const rule = entry.rule
     if (rule.tool !== tool && rule.tool !== "*") continue
-    if (entry.regex !== undefined && !entry.regex.test(argsStr)) continue
+    if (!Predicate.isUndefined(entry.regex) && !entry.regex.test(argsStr)) continue
     if (rule.action === "allow") return "allowed"
     if (rule.action === "deny") return "denied"
   }
-  return defaultAction === "deny" ? "denied" : "allowed"
+  if (defaultAction === "deny") return "denied"
+  return "allowed"
 }
 
 // Permission Service
 
 export interface PermissionService {
-  readonly check: (tool: string, args: unknown) => Effect.Effect<PermissionResult>
+  readonly check: (
+    tool: string,
+    args: Schema.Schema.Type<typeof Schema.Unknown>,
+  ) => Effect.Effect<PermissionResult>
 }
 
 export class Permission extends Context.Service<Permission, PermissionService>()(
@@ -80,7 +87,10 @@ export class Permission extends Context.Service<Permission, PermissionService>()
     })
 
   static Test = (): Layer.Layer<Permission> =>
-    Layer.succeed(Permission, {
-      check: () => Effect.succeed("allowed" as const),
-    })
+    Layer.succeed(
+      Permission,
+      Permission.of({
+        check: () => Effect.succeed("allowed"),
+      }),
+    )
 }

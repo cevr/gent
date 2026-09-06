@@ -4,9 +4,10 @@
 
 import { createEffect, createSignal, For } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useTerminalDimensions, useRenderer } from "@opentui/solid"
-import { Effect } from "effect"
+import { useRenderer } from "@opentui/solid"
+import { Effect, Match, Option } from "effect"
 import { useTheme } from "../theme/index"
+import { useTerminalDimensions } from "../terminal-dimensions"
 import { useClient } from "../client/index"
 import { useRouter } from "../router"
 import { useEnv } from "../env/context"
@@ -27,12 +28,23 @@ export interface BranchPickerProps {
 }
 
 type BranchPickerState =
-  | { _tag: "loading"; error?: string }
-  | { _tag: "ready"; selectedIndex: number; messageCounts: Map<string, number>; error?: string }
+  | { _tag: "loading"; error: Option.Option<string> }
+  | {
+      _tag: "ready"
+      selectedIndex: number
+      messageCounts: Map<string, number>
+      error: Option.Option<string>
+    }
 
-const formatBranchLabel = (branch: Branch, messageCount?: number): string => {
-  const name = branch.name ?? branch.id.slice(0, 8)
-  const count = messageCount !== undefined ? ` (${messageCount})` : ""
+const formatBranchLabel = (
+  branch: Branch,
+  messageCount: Option.Option<number> = Option.none(),
+): string => {
+  const name = Option.getOrElse(Option.fromNullishOr(branch.name), () => branch.id.slice(0, 8))
+  const count = Option.match(messageCount, {
+    onNone: () => "",
+    onSome: (value) => ` (${value})`,
+  })
   return `${name}${count}`
 }
 
@@ -59,15 +71,18 @@ export function BranchPicker(props: BranchPickerProps) {
 
   const [state, setState] = createSignal<BranchPickerState>({
     _tag: "loading",
+    error: Option.none(),
   })
-  let scrollRef: ScrollBoxRenderable | undefined = undefined
+  let scrollRef = Option.none<ScrollBoxRenderable>()
 
   useScrollSync(
     () => {
       const current = state()
-      return `branch-picker-${current._tag === "ready" ? current.selectedIndex : 0}`
+      let selectedIndex = 0
+      if (current._tag === "ready") selectedIndex = current.selectedIndex
+      return `branch-picker-${selectedIndex}`
     },
-    { getRef: () => scrollRef },
+    { getRef: () => Option.getOrUndefined(scrollRef) },
   )
 
   createEffect(() => {
@@ -75,29 +90,36 @@ export function BranchPicker(props: BranchPickerProps) {
       client.client.branch.getTree({ sessionId: props.sessionId }).pipe(
         Effect.tap((tree) =>
           Effect.sync(() => {
-            setState((current) => ({
-              _tag: "ready",
-              selectedIndex: current._tag === "ready" ? current.selectedIndex : 0,
-              messageCounts: collectCounts(tree),
-              error: undefined,
-            }))
+            setState((current): BranchPickerState => {
+              let selectedIndex = 0
+              if (current._tag === "ready") selectedIndex = current.selectedIndex
+              return {
+                _tag: "ready",
+                selectedIndex,
+                messageCounts: collectCounts(tree),
+                error: Option.none(),
+              }
+            })
           }),
         ),
         Effect.catchEager((err) =>
           Effect.sync(() => {
-            setState((current) => {
+            setState((current): BranchPickerState => {
               const error = formatError(err)
-              switch (current._tag) {
-                case "loading":
-                  return { _tag: "loading", error }
-                case "ready":
-                  return {
+              return Match.value(current).pipe(
+                Match.tagsExhaustive({
+                  loading: (): BranchPickerState => ({
+                    _tag: "loading",
+                    error: Option.some(error),
+                  }),
+                  ready: (current): BranchPickerState => ({
                     _tag: "ready",
                     selectedIndex: current.selectedIndex,
                     messageCounts: current.messageCounts,
-                    error,
-                  }
-              }
+                    error: Option.some(error),
+                  }),
+                }),
+              )
             })
           }),
         ),
@@ -134,10 +156,10 @@ export function BranchPicker(props: BranchPickerProps) {
     if (current._tag !== "ready" || props.branches.length === 0) return false
 
     if (e.name === "return") {
-      const branch = props.branches[current.selectedIndex]
-      if (branch !== undefined) {
-        client.switchSession(props.sessionId, branch.id, props.sessionName)
-        router.navigateToSession(props.sessionId, branch.id, props.prompt)
+      const branch = Option.fromNullishOr(props.branches[current.selectedIndex])
+      if (Option.isSome(branch)) {
+        client.switchSession(props.sessionId, branch.value.id, props.sessionName)
+        router.navigateToSession(props.sessionId, branch.value.id, props.prompt)
       }
       return true
     }
@@ -145,7 +167,8 @@ export function BranchPicker(props: BranchPickerProps) {
     if (e.name === "up") {
       setState((prev) => {
         if (prev._tag !== "ready") return prev
-        const next = prev.selectedIndex > 0 ? prev.selectedIndex - 1 : props.branches.length - 1
+        let next = props.branches.length - 1
+        if (prev.selectedIndex > 0) next = prev.selectedIndex - 1
         return {
           _tag: "ready",
           selectedIndex: next,
@@ -159,7 +182,8 @@ export function BranchPicker(props: BranchPickerProps) {
     if (e.name === "down") {
       setState((prev) => {
         if (prev._tag !== "ready") return prev
-        const next = prev.selectedIndex < props.branches.length - 1 ? prev.selectedIndex + 1 : 0
+        let next = 0
+        if (prev.selectedIndex < props.branches.length - 1) next = prev.selectedIndex + 1
         return {
           _tag: "ready",
           selectedIndex: next,
@@ -176,9 +200,10 @@ export function BranchPicker(props: BranchPickerProps) {
   const panelHeight = () => Math.min(16, dimensions().height - 6)
   const left = () => Math.floor((dimensions().width - panelWidth()) / 2)
   const top = () => Math.floor((dimensions().height - panelHeight()) / 2)
-  const readyState = () => {
+  const readyState = (): Option.Option<Extract<BranchPickerState, { _tag: "ready" }>> => {
     const current = state()
-    return current._tag === "ready" ? current : null
+    if (current._tag !== "ready") return Option.none()
+    return Option.some(current)
   }
 
   return (
@@ -190,33 +215,40 @@ export function BranchPicker(props: BranchPickerProps) {
         left={left()}
         top={top()}
       >
-        <ChromePanel.Error error={state().error} />
+        <ChromePanel.Error error={Option.getOrUndefined(state().error)} />
 
-        <ChromePanel.Body ref={scrollRef}>
+        <ChromePanel.Body ref={(value) => (scrollRef = Option.some(value))}>
           <For each={props.branches}>
             {(branch, index) => {
-              const isSelected = () => {
-                const current = readyState()
-                return current !== null && current.selectedIndex === index()
+              const isSelected = () =>
+                Option.exists(readyState(), (current) => current.selectedIndex === index())
+              const count = () =>
+                Option.flatMap(readyState(), (current) =>
+                  Option.fromNullishOr(current.messageCounts.get(branch.id)),
+                )
+              const summary = () => {
+                const value = Option.fromNullishOr(branch.summary)
+                if (Option.isNone(value) || value.value.length === 0) return ""
+                return ` - ${value.value.replace(/\s+/g, " ")}`
               }
-              const count = () => {
-                const current = readyState()
-                return current !== null ? current.messageCounts.get(branch.id) : undefined
+              const backgroundColor = () => {
+                if (isSelected()) return theme.primary
+                return "transparent"
               }
-              const summary = () =>
-                branch.summary !== undefined && branch.summary.length > 0
-                  ? ` - ${branch.summary.replace(/\s+/g, " ")}`
-                  : ""
+              const foregroundColor = () => {
+                if (isSelected()) return theme.selectedListItemText
+                return theme.text
+              }
               const line = () => `${formatBranchLabel(branch, count())}${summary()}`
               return (
                 <box
                   id={`branch-picker-${index()}`}
-                  backgroundColor={isSelected() ? theme.primary : "transparent"}
+                  backgroundColor={backgroundColor()}
                   paddingLeft={1}
                 >
                   <text
                     style={{
-                      fg: isSelected() ? theme.selectedListItemText : theme.text,
+                      fg: foregroundColor(),
                     }}
                   >
                     {truncate(line(), panelWidth() - 4)}

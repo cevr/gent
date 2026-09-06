@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option } from "effect"
 import { AutoExtension, AutoState, viewForState } from "../../src/auto/index.js"
 import { AutoControllerLive, AutoRead, AutoWrite } from "../../src/auto/controller.js"
 import { provideTestSetupContext } from "@gent/core-internal/test-utils"
@@ -9,7 +9,7 @@ const makeLayer = () => AutoControllerLive
 const getSnapshot = () =>
   Effect.gen(function* () {
     const auto = yield* AutoRead
-    return yield* auto.snapshot()
+    return yield* auto.snapshot
   })
 
 const startAuto = (goal = "test", maxIterations?: number) =>
@@ -31,12 +31,12 @@ const checkpoint = (input: {
 
 const review = Effect.gen(function* () {
   const auto = yield* AutoWrite
-  yield* auto.reviewSignal()
+  yield* auto.reviewSignal
 })
 
 const turnCompleted = Effect.gen(function* () {
   const auto = yield* AutoWrite
-  yield* auto.turnCompleted()
+  yield* auto.turnCompleted
 })
 
 describe("Auto runtime", () => {
@@ -84,18 +84,18 @@ describe("Auto runtime", () => {
       const auto = yield* AutoWrite
       yield* auto.start({ goal: "fix all bugs", maxIterations: 2 })
 
-      const working = yield* auto.drainFollowUp()
-      expect(working?.sourceId).toBe("auto:working:1")
-      expect(working?.content).toContain("Begin: fix all bugs")
+      const working = Option.getOrThrow(yield* auto.drainFollowUp)
+      expect(working.sourceId).toBe("auto:working:1")
+      expect(working.content).toContain("Begin: fix all bugs")
 
       yield* auto.autoSignal({ status: "continue", summary: "ready for review" })
-      const reviewFollowUp = yield* auto.drainFollowUp()
-      expect(reviewFollowUp?.sourceId).toBe("auto:review:1")
-      expect(reviewFollowUp?.content).toContain("review")
+      const reviewFollowUp = Option.getOrThrow(yield* auto.drainFollowUp)
+      expect(reviewFollowUp.sourceId).toBe("auto:review:1")
+      expect(reviewFollowUp.content).toContain("review")
 
       yield* auto.requestHandoff("handoff now")
-      const handoff = yield* auto.drainFollowUp()
-      expect(handoff).toEqual({ sourceId: "auto:handoff:1:1", content: "handoff now" })
+      const handoff = yield* auto.drainFollowUp
+      expect(handoff).toEqual(Option.some({ sourceId: "auto:handoff:1:1", content: "handoff now" }))
     }).pipe(Effect.provide(makeLayer())),
   )
 
@@ -109,8 +109,8 @@ describe("Auto runtime", () => {
 
         yield* first.start({ goal: "first loop" })
 
-        expect((yield* first.snapshot()).active).toBe(true)
-        expect((yield* second.snapshot()).active).toBe(false)
+        expect((yield* first.snapshot).active).toBe(true)
+        expect((yield* second.snapshot).active).toBe(false)
       }),
     ),
   )
@@ -129,10 +129,10 @@ describe("Auto runtime", () => {
     Effect.gen(function* () {
       const auto = yield* AutoWrite
       yield* auto.start({ goal: "test" })
-      expect(yield* auto.isActive()).toBe(true)
+      expect(yield* auto.isActive).toBe(true)
 
-      yield* auto.cancel()
-      expect(yield* auto.isActive()).toBe(false)
+      yield* auto.cancel
+      expect(yield* auto.isActive).toBe(false)
     }).pipe(Effect.provide(makeLayer())),
   )
 
@@ -141,10 +141,10 @@ describe("Auto runtime", () => {
       const auto = yield* AutoWrite
       yield* auto.start({ goal: "test" })
       yield* auto.autoSignal({ status: "continue", summary: "x" })
-      expect((yield* auto.snapshot()).phase).toBe("awaiting-review")
+      expect((yield* auto.snapshot).phase).toBe("awaiting-review")
 
-      yield* auto.cancel()
-      expect(yield* auto.isActive()).toBe(false)
+      yield* auto.cancel
+      expect(yield* auto.isActive).toBe(false)
     }).pipe(Effect.provide(makeLayer())),
   )
 
@@ -242,9 +242,9 @@ describe("Auto runtime", () => {
         learnings: "tried memoization",
         nextIdea: "test LRU eviction",
       })
-      yield* auto.reviewSignal()
+      yield* auto.reviewSignal
 
-      const view = yield* auto.turnProjection()
+      const view = yield* auto.turnProjection
       expect(view.promptSections?.length).toBe(1)
       const content = view.promptSections![0]!.content
       expect(content).toContain("tried memoization")

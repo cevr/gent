@@ -5,8 +5,11 @@ export interface ToolCall {
   id: string
   toolName: string
   status: "running" | "completed" | "error"
+  // eslint-disable-next-line effect/noNullish -- Renderer payloads preserve omitted tool fields from the event stream.
   input: unknown | undefined
+  // eslint-disable-next-line effect/noNullish -- Renderer payloads preserve omitted tool fields from the event stream.
   summary: string | undefined
+  // eslint-disable-next-line effect/noNullish -- Renderer payloads preserve omitted tool fields from the event stream.
   output: string | undefined
 }
 

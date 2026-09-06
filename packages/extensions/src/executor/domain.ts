@@ -5,7 +5,7 @@
  * MCP bridge result/inspection types, and tagged errors.
  */
 
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { ExtensionId } from "@gent/core/extensions/api"
 
 // ── Settings ──
@@ -35,11 +35,16 @@ export const resolveSettings = (
 ): ResolvedExecutorSettings => {
   let merged: ResolvedExecutorSettings = { ...ExecutorSettingsDefaults }
   for (const layer of layers) {
-    if (layer.mode !== undefined) merged = { ...merged, mode: layer.mode }
-    if (layer.autoStart !== undefined) merged = { ...merged, autoStart: layer.autoStart }
-    if (layer.remoteUrl !== undefined) merged = { ...merged, remoteUrl: layer.remoteUrl }
-    if (layer.stopLocalOnShutdown !== undefined)
-      merged = { ...merged, stopLocalOnShutdown: layer.stopLocalOnShutdown }
+    const mode = Option.fromNullishOr(layer.mode)
+    const autoStart = Option.fromNullishOr(layer.autoStart)
+    const remoteUrl = Option.fromNullishOr(layer.remoteUrl)
+    const stopLocalOnShutdown = Option.fromNullishOr(layer.stopLocalOnShutdown)
+    if (Option.isSome(mode)) merged = { ...merged, mode: mode.value }
+    if (Option.isSome(autoStart)) merged = { ...merged, autoStart: autoStart.value }
+    if (Option.isSome(remoteUrl)) merged = { ...merged, remoteUrl: remoteUrl.value }
+    if (Option.isSome(stopLocalOnShutdown)) {
+      merged = { ...merged, stopLocalOnShutdown: stopLocalOnShutdown.value }
+    }
   }
   return merged
 }
@@ -63,7 +68,7 @@ export type ExecutorEndpoint = typeof ExecutorEndpoint.Type
 
 // ── Errors ──
 
-export class ExecutorSidecarError extends Schema.TaggedErrorClass<ExecutorSidecarError>()(
+export class ExecutorSidecarError extends Schema.TaggedError<ExecutorSidecarError>()(
   "ExecutorSidecarError",
   {
     code: Schema.Literals([
@@ -79,13 +84,10 @@ export class ExecutorSidecarError extends Schema.TaggedErrorClass<ExecutorSideca
   },
 ) {}
 
-export class ExecutorMcpError extends Schema.TaggedErrorClass<ExecutorMcpError>()(
-  "ExecutorMcpError",
-  {
-    phase: Schema.Literals(["connect", "execute", "resume", "inspect", "close"]),
-    message: Schema.String,
-  },
-) {}
+export class ExecutorMcpError extends Schema.TaggedError<ExecutorMcpError>()("ExecutorMcpError", {
+  phase: Schema.Literals(["connect", "execute", "resume", "inspect", "close"]),
+  message: Schema.String,
+}) {}
 
 // ── MCP result types ──
 

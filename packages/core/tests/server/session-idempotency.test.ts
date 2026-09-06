@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, FileSystem, Layer, Path } from "effect"
+import { Predicate, Effect, FileSystem, Layer, Option, Path } from "effect"
 import { TestClock } from "effect/testing"
 import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { Branch, Message } from "@gent/core-internal/domain/message"
@@ -16,6 +16,7 @@ import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.s
 import { SessionRuntimeError } from "../../src/runtime/session-runtime"
 import { makeRequestDeduper } from "../../src/runtime/request-dedup"
 import { SessionCommands, SessionCommandsDedupControl } from "../../src/server/session-commands"
+import type { SteerCommand } from "../../src/domain/steer"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
@@ -70,9 +71,9 @@ describe("requestId idempotency", () => {
       expect(second.sessionId).toBe(first.sessionId)
       expect(second.branchId).toBe(first.branchId)
       expect(third.sessionId).toBe(first.sessionId)
-      const all = yield* sessions.listSessions()
+      const all = yield* sessions.listSessions
       expect(all).toHaveLength(1)
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("distinct createSession requestIds create distinct sessions", () =>
@@ -82,8 +83,8 @@ describe("requestId idempotency", () => {
       const a = yield* commands.createSession({ cwd: "/tmp/a", requestId: "req-a" })
       const b = yield* commands.createSession({ cwd: "/tmp/b", requestId: "req-b" })
       expect(a.sessionId).not.toBe(b.sessionId)
-      expect((yield* sessions.listSessions()).length).toBe(2)
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+      expect((yield* sessions.listSessions).length).toBe(2)
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("concurrent duplicate createSession requestIds converge on one session", () =>
@@ -104,8 +105,8 @@ describe("requestId idempotency", () => {
       )
       expect(results[0].sessionId).toBe(results[1].sessionId)
       expect(results[0].sessionId).toBe(results[2].sessionId)
-      expect((yield* sessions.listSessions()).length).toBe(1)
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+      expect((yield* sessions.listSessions).length).toBe(1)
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("duplicate sendMessage requestId sends to runtime only once", () =>
@@ -153,6 +154,7 @@ describe("requestId idempotency", () => {
           content: "hi (distinct)",
           requestId: "req-send-2",
         })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       yield* probe
@@ -210,6 +212,7 @@ describe("requestId idempotency", () => {
           ],
           { concurrency: "unbounded" },
         )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       expect(dispatchCount).toBe(1)
@@ -245,7 +248,7 @@ describe("requestId idempotency", () => {
       expect(second.branchId).toBe(first.branchId)
       // 1 from fixture + 1 from the deduped create
       expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("concurrent duplicate createBranch requestIds converge on one branch", () =>
@@ -274,7 +277,7 @@ describe("requestId idempotency", () => {
       expect(results[0].branchId).toBe(results[1].branchId)
       expect(results[0].branchId).toBe(results[2].branchId)
       expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("duplicate switchBranch requestId activates the target only once", () =>
@@ -311,7 +314,7 @@ describe("requestId idempotency", () => {
       })
 
       expect((yield* sessions.getSession(sessionId))?.activeBranchId).toBe(toBranchId)
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("duplicate forkBranch requestId converges on a single new branch", () =>
@@ -360,7 +363,7 @@ describe("requestId idempotency", () => {
       expect(second.branchId).toBe(first.branchId)
       // origin + 1 forked branch
       expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
-    }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("duplicate public branch.create requestId converges through RPC handlers", () =>
@@ -441,7 +444,7 @@ describe("requestId idempotency", () => {
           branchId: created.branchId,
         })
         const userMessage = snapshot.messages.find((message) => message.role === "user")
-        if (userMessage === undefined) {
+        if (Predicate.isUndefined(userMessage)) {
           return yield* Effect.die("expected seeded user message")
         }
 
@@ -476,12 +479,12 @@ describe("requestId idempotency", () => {
         const created = yield* client.session.create({ cwd: "/tmp/rpc-steer-idem" })
 
         const command = {
-          _tag: "Interject" as const,
+          _tag: "Interject",
           sessionId: created.sessionId,
           branchId: created.branchId,
           requestId: "req-rpc-steer-interject",
           message: "steer once",
-        }
+        } satisfies SteerCommand
         yield* client.steer.command({ command })
         yield* client.steer.command({ command })
 
@@ -555,14 +558,16 @@ describe("requestId idempotency", () => {
   // `requestId` still returns the original session/branch ids even after
   // that cache entry is removed.
   it.effect("durable createSession result survives process-cache eviction", () => {
-    let invalidateCreateSession: ((requestId: string) => Effect.Effect<void>) | undefined =
-      undefined
-    const dedupControlLayer = Layer.succeed(SessionCommandsDedupControl, {
-      registerCreateSessionInvalidator: (invalidate) =>
-        Effect.sync(() => {
-          invalidateCreateSession = invalidate
-        }),
-    })
+    let invalidateCreateSession = Option.none<(requestId: string) => Effect.Effect<void>>()
+    const dedupControlLayer = Layer.succeed(
+      SessionCommandsDedupControl,
+      SessionCommandsDedupControl.of({
+        registerCreateSessionInvalidator: (invalidate) =>
+          Effect.sync(() => {
+            invalidateCreateSession = Option.some(invalidate)
+          }),
+      }),
+    )
     const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
     const deps = Layer.mergeAll(
       storageLayer,
@@ -586,17 +591,17 @@ describe("requestId idempotency", () => {
         cwd: "/tmp/ttl",
         requestId: "req-ttl-1",
       })
-      if (invalidateCreateSession === undefined) {
+      if (Option.isNone(invalidateCreateSession)) {
         return yield* Effect.die("createSession dedup invalidator was not registered")
       }
-      yield* invalidateCreateSession("req-ttl-1")
+      yield* invalidateCreateSession.value("req-ttl-1")
       const second = yield* commands.createSession({
         cwd: "/tmp/ttl",
         requestId: "req-ttl-1",
       })
       expect(second.sessionId).toBe(first.sessionId)
       expect(second.branchId).toBe(first.branchId)
-      expect((yield* sessions.listSessions()).length).toBe(1)
+      expect((yield* sessions.listSessions).length).toBe(1)
     }).pipe(Effect.provide(layer))
   })
 
@@ -618,8 +623,8 @@ describe("requestId idempotency", () => {
         requestId: "req-ttl-mid",
       })
       expect(second.sessionId).toBe(first.sessionId)
-      expect((yield* sessions.listSessions()).length).toBe(1)
-    }).pipe(Effect.provide(sessionCommandsLayer())),
+      expect((yield* sessions.listSessions).length).toBe(1)
+    }).pipe(Effect.provide(sessionCommandsLayer)),
   )
 
   it.effect("dedup cache hard cap evicts the oldest requestId", () =>
@@ -631,7 +636,7 @@ describe("requestId idempotency", () => {
             value += 1
             return value
           }),
-        keyOf: (input) => input.requestId,
+        keyOf: (input) => Option.some(input.requestId),
         maxEntries: 2,
         successTtl: "60 seconds",
       })
@@ -663,7 +668,7 @@ describe("requestId idempotency", () => {
             lastSeen = input.marker
             return input.marker
           }),
-        keyOf: (input) => input.requestId,
+        keyOf: (input) => Option.some(input.requestId),
         successTtl: "60 seconds",
       })
 
@@ -739,6 +744,7 @@ describe("requestId idempotency", () => {
             requestId: "req-create-restart",
             initialPrompt: "stored prompt",
           })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayer(true))),
       )
       expect(firstExit._tag).toBe("Failure")
@@ -750,11 +756,13 @@ describe("requestId idempotency", () => {
           requestId: "req-create-restart",
           initialPrompt: "retry prompt should not win",
         })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(false)))
 
       const sessions = yield* Effect.gen(function* () {
         const storage = yield* SessionStorage
-        return yield* storage.listSessions()
+        return yield* storage.listSessions
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(false)))
 
       expect(sessions).toHaveLength(1)
@@ -784,6 +792,7 @@ describe("requestId idempotency", () => {
           branchId,
           now: FIXED_NOW,
         })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       const first = yield* Effect.gen(function* () {
@@ -793,6 +802,7 @@ describe("requestId idempotency", () => {
           name: "durable branch",
           requestId: "req-create-branch-restart",
         })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       const second = yield* Effect.gen(function* () {
@@ -802,11 +812,13 @@ describe("requestId idempotency", () => {
           name: "retry name should not win",
           requestId: "req-create-branch-restart",
         })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
 
       const branches = yield* Effect.gen(function* () {
         const storage = yield* BranchStorage
         return yield* storage.listBranches(sessionId)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
 
       expect(second.branchId).toBe(first.branchId)
@@ -838,6 +850,7 @@ describe("requestId idempotency", () => {
         yield* branches.createBranch(
           new Branch({ id: toBranchId, sessionId, createdAt: FIXED_NOW }),
         )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       yield* Effect.gen(function* () {
@@ -849,11 +862,13 @@ describe("requestId idempotency", () => {
           summarize: false,
           requestId: "req-switch-branch-restart",
         })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       yield* Effect.gen(function* () {
         const branches = yield* BranchStorage
         yield* branches.deleteBranch(fromBranchId)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
 
       yield* Effect.gen(function* () {
@@ -865,11 +880,13 @@ describe("requestId idempotency", () => {
           summarize: false,
           requestId: "req-switch-branch-restart",
         })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
 
       const session = yield* Effect.gen(function* () {
         const sessions = yield* SessionStorage
         return yield* sessions.getSession(sessionId)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
 
       expect(session?.activeBranchId).toBe(toBranchId)
@@ -908,6 +925,7 @@ describe("requestId idempotency", () => {
             createdAt: FIXED_NOW,
           }),
         )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       const first = yield* Effect.gen(function* () {
@@ -919,11 +937,13 @@ describe("requestId idempotency", () => {
           name: "fork",
           requestId: "req-fork-branch-restart",
         })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       yield* Effect.gen(function* () {
         const messages = yield* MessageStorage
         yield* messages.deleteMessages(branchId)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
 
       const second = yield* Effect.gen(function* () {
@@ -935,11 +955,13 @@ describe("requestId idempotency", () => {
           name: "retry fork should not allocate",
           requestId: "req-fork-branch-restart",
         })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
 
       const branches = yield* Effect.gen(function* () {
         const storage = yield* BranchStorage
         return yield* storage.listBranches(sessionId)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
 
       expect(second.branchId).toBe(first.branchId)

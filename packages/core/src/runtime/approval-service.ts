@@ -8,7 +8,7 @@
  * Tools access this indirectly via `ctx.interaction.approve()` on ToolCapabilityContext.
  */
 
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option } from "effect"
 import { isRecord } from "../domain/guards.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { InteractionPresented } from "../domain/event.js"
@@ -21,9 +21,9 @@ import {
 } from "../domain/interaction-request.js"
 import type { GentPlatform } from "./gent-platform.js"
 
-export interface ApprovalServiceShape extends InteractionService {}
+export interface ApprovalServiceApi extends InteractionService {}
 
-export class ApprovalService extends Context.Service<ApprovalService, ApprovalServiceShape>()(
+export class ApprovalService extends Context.Service<ApprovalService, ApprovalServiceApi>()(
   "@gent/core/src/runtime/approval-service/ApprovalService",
 ) {
   static Live: Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform> = Layer.effect(
@@ -39,30 +39,44 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
   /** Auto-resolves all approval requests without human interaction.
    *  - ask-user requests → cancelled (don't fabricate user answers)
    *  - all other requests (approval, confirm, review) → approved */
-  static LiveAutoResolve: Layer.Layer<ApprovalService> = Layer.succeed(ApprovalService, {
-    present: (params) => {
-      const meta = isRecord(params.metadata) ? params.metadata : undefined
-      const isAskUser = meta?.["type"] === "ask-user"
-      return Effect.succeed(isAskUser ? { approved: false } : { approved: true })
-    },
-    pendingRequestId: () => Effect.sync((): InteractionRequestId | undefined => undefined),
-    storeResolution: () => Effect.void,
-    respond: () => Effect.void,
-    rehydrate: () => Effect.void,
-  })
-
-  static Test = (decisions?: ReadonlyArray<ApprovalDecision>): Layer.Layer<ApprovalService> => {
-    const queue = [...(decisions ?? [{ approved: true }])]
-    return Layer.succeed(ApprovalService, {
-      present: () => {
-        const decision = queue.shift() ?? { approved: true }
-        return Effect.succeed(decision)
+  static LiveAutoResolve: Layer.Layer<ApprovalService> = Layer.succeed(
+    ApprovalService,
+    ApprovalService.of({
+      present: (params) => {
+        const meta = Option.fromUndefinedOr(params.metadata).pipe(Option.filter(isRecord))
+        const isAskUser = Option.match(meta, {
+          onNone: () => false,
+          onSome: (value) => value["type"] === "ask-user",
+        })
+        if (isAskUser) return Effect.succeed({ approved: false })
+        return Effect.succeed({ approved: true })
       },
-      pendingRequestId: () => Effect.sync((): InteractionRequestId | undefined => undefined),
+      pendingRequestId: () =>
+        Effect.sync(() => Option.getOrUndefined(Option.none<InteractionRequestId>())),
       storeResolution: () => Effect.void,
       respond: () => Effect.void,
       rehydrate: () => Effect.void,
-    })
+    }),
+  )
+
+  static Test = (decisions?: ReadonlyArray<ApprovalDecision>): Layer.Layer<ApprovalService> => {
+    const queue = [...(decisions ?? [{ approved: true }])]
+    return Layer.succeed(
+      ApprovalService,
+      ApprovalService.of({
+        present: () => {
+          const decision = Option.getOrElse(Option.fromUndefinedOr(queue.shift()), () => ({
+            approved: true,
+          }))
+          return Effect.succeed(decision)
+        },
+        pendingRequestId: () =>
+          Effect.sync(() => Option.getOrUndefined(Option.none<InteractionRequestId>())),
+        storeResolution: () => Effect.void,
+        respond: () => Effect.void,
+        rehydrate: () => Effect.void,
+      }),
+    )
   }
 }
 

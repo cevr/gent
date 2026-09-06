@@ -48,14 +48,17 @@ export class PromptPresenter extends Context.Service<PromptPresenter, PromptPres
   ): Layer.Layer<PromptPresenter> => {
     let confirmIdx = 0
     let reviewIdx = 0
-    return Layer.succeed(PromptPresenter, {
-      present: () => Effect.void,
-      confirm: () => Effect.succeed(confirmDecisions[confirmIdx++] ?? "yes"),
-      review: () =>
-        Effect.succeed({
-          decision: reviewDecisions[reviewIdx++] ?? "yes",
-          path: "/tmp/test-prompt.md",
-        }),
-    })
+    return Layer.succeed(
+      PromptPresenter,
+      PromptPresenter.of({
+        present: () => Effect.void,
+        confirm: () => Effect.succeed(confirmDecisions[confirmIdx++] ?? "yes"),
+        review: () =>
+          Effect.succeed({
+            decision: reviewDecisions[reviewIdx++] ?? "yes",
+            path: "/tmp/test-prompt.md",
+          }),
+      }),
+    )
   }
 }

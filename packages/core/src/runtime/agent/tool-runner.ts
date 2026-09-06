@@ -1,4 +1,16 @@
-import { Context, Effect, Layer, Schema, Sink, Stream } from "effect"
+import {
+  Context,
+  Effect,
+  FileSystem,
+  Layer,
+  Match,
+  Option,
+  Path,
+  Predicate,
+  Schema,
+  Sink,
+  Stream,
+} from "effect"
 import { getToolId, getToolMetadata, type ToolCapability } from "../../domain/capability/tool.js"
 import { provideExtensionServices } from "../../domain/extension-services.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
@@ -8,13 +20,13 @@ import { ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../../domain
 import { EventPublisher } from "../../domain/event-publisher.js"
 import {
   DynamicExtensionRegistry,
+  type DynamicExtensionRegistryService,
   type DynamicToolEntry,
 } from "../../domain/dynamic-extension-registry.js"
-import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
+import { encodeToolOutput, summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { withWideEvent, WideEvent, WideEventBoundary } from "../wide-event-boundary"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
-import { ToolCallId, type ExtensionId } from "../../domain/ids.js"
-import type * as AiTool from "effect/unstable/ai/Tool"
+import { ToolCallId, type ExtensionId, type SessionId } from "../../domain/ids.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -24,6 +36,7 @@ import {
 } from "./current-extension-host-context.js"
 import { provideHookHostContext } from "../extensions/extension-hook-context.js"
 import { provideExtensionCapabilityContext } from "../extensions/extension-capability-context.js"
+import type { ToolBindingIdentity } from "../../domain/tool-binding.js"
 
 export type ToolCapabilityMap = Record<string, ToolCapability>
 
@@ -33,24 +46,47 @@ export function convertTools(
   return AiToolkit.make(...tools)
 }
 
-type ToolCall = { toolCallId: ToolCallId; toolName: string; input: unknown }
+export type ToolCall = { toolCallId: ToolCallId; toolName: string; input: unknown }
 
 type ToolCapabilityContext = ExtensionHostContext & {
   readonly toolCallId: ToolCallId
 }
 
-interface ResolvedToolCapability {
+/** The exact owner and implementation selected for one tool surface. */
+export interface ResolvedToolCapability {
   readonly extensionId: ExtensionId
   readonly capability: ToolCapability
+  readonly origin: "static" | "dynamic"
+  readonly binding?: ToolBindingIdentity
 }
 
 type ToolExecutionError = AiError.AiError | InteractionPendingError | Error
 
+class ToolExecutionFailure extends Schema.TaggedError<ToolExecutionFailure>(
+  "@gent/core/src/runtime/agent/tool-runner/ToolExecutionFailure",
+)("ToolExecutionFailure", {
+  message: Schema.String,
+}) {}
+
 type ToolRunnerToolkit = AiToolkit.WithHandler<ToolCapabilityMap>
 
 export interface ToolRunnerService {
+  /** Capture the currently visible implementation once for a direct invocation. */
+  readonly capture: (params: {
+    readonly sessionId: SessionId
+    readonly toolName: string
+  }) => Effect.Effect<Option.Option<ResolvedToolCapability>, never, ExtensionRegistry>
   readonly run: (
     toolCall: ToolCall,
+  ) => Effect.Effect<
+    Prompt.ToolResultPart,
+    InteractionPendingError,
+    CurrentExtensionHostContext | ExtensionRegistry | EventPublisher
+  >
+  /** Execute the exact entry captured by a resolved turn. */
+  readonly runBound: (
+    toolCall: ToolCall,
+    entry: Option.Option<ResolvedToolCapability>,
   ) => Effect.Effect<
     Prompt.ToolResultPart,
     InteractionPendingError,
@@ -63,6 +99,7 @@ const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, mes
     id: toolCall.toolCallId,
     name: toolCall.toolName,
     isFailure: true,
+    providerExecuted: false,
     result: { error: message },
   })
 
@@ -93,18 +130,21 @@ const publishCompleted = (params: { ctx: ToolCapabilityContext; result: Prompt.T
       toolName: params.result.name,
       summary: outputSummary,
       output: stringifyOutput(params.result.result),
+      resultJson: encodeToolOutput(params.result.result),
     }
-    yield* eventPublisher
-      .publish(
-        params.result.isFailure ? ToolCallFailed.make(fields) : ToolCallSucceeded.make(fields),
-      )
-      .pipe(Effect.orDie)
+    if (params.result.isFailure) {
+      yield* eventPublisher.publish(ToolCallFailed.make(fields)).pipe(Effect.orDie)
+      return
+    }
+    yield* eventPublisher.publish(ToolCallSucceeded.make(fields)).pipe(Effect.orDie)
   })
 
 const makeExecutionToolkit = (params: {
   tool: ToolCapability
   toolCall: ToolCall
   ctx: ToolCapabilityContext
+  fileSystem: FileSystem.FileSystem
+  path: Path.Path
 }): Effect.Effect<ToolRunnerToolkit, never, ExtensionRegistry> =>
   Effect.gen(function* () {
     const registry = yield* ExtensionRegistry
@@ -113,7 +153,7 @@ const makeExecutionToolkit = (params: {
     const toolName = String(getToolId(params.tool))
 
     const handlerMap: AiToolkit.HandlersFrom<ToolCapabilityMap> = {
-      [toolName]: (decodedInput: unknown) =>
+      [toolName]: (decodedInput) =>
         Effect.gen(function* () {
           const executeResult = yield* provideExtensionServices(
             params.ctx,
@@ -124,6 +164,9 @@ const makeExecutionToolkit = (params: {
                 provideExtensionCapabilityContext,
                 Effect.mapError(normalizeToolExecutionError),
               ),
+          ).pipe(
+            Effect.provideService(FileSystem.FileSystem, params.fileSystem),
+            Effect.provideService(Path.Path, params.path),
           )
 
           return yield* registry.extensionHooks
@@ -149,20 +192,19 @@ const makeExecutionToolkit = (params: {
     }
 
     const handlers = yield* toolkit.toHandlers(handlerMap)
-    return yield* toolkit.asEffect().pipe(Effect.provideContext(handlers))
+    return yield* toolkit.pipe(Effect.provideContext(handlers))
   })
 
-const closedHandlerResultStream = (
-  stream: Stream.Stream<AiTool.HandlerResult<AiTool.Any>, ToolExecutionError, unknown>,
-): Stream.Stream<AiTool.HandlerResult<AiTool.Any>, ToolExecutionError> =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect AI handler streams retain the handler environment in the stream R channel after `toolkit.asEffect()` has closed it; the runtime receives a closed toolkit from `makeExecutionToolkit`.
-  stream as unknown as Stream.Stream<AiTool.HandlerResult<AiTool.Any>, ToolExecutionError>
-
-const terminalToolResult = (toolkit: ToolRunnerToolkit, toolCall: ToolCall) =>
+const terminalToolResult = (
+  toolkit: ToolRunnerToolkit,
+  toolCall: ToolCall,
+): Effect.Effect<
+  Prompt.ToolResultPart,
+  ToolExecutionError,
+  Effect.Services<ReturnType<typeof WideEvent.set>>
+> =>
   Effect.gen(function* () {
-    const resultStream = yield* toolkit
-      .handle(toolCall.toolName, toolCall.input)
-      .pipe(Effect.map(closedHandlerResultStream))
+    const resultStream = yield* toolkit.handle(toolCall.toolName, toolCall.input)
     const terminal = yield* resultStream.pipe(
       Stream.filter((result) => result.preliminary === false),
       Stream.run(Sink.last()),
@@ -176,33 +218,48 @@ const terminalToolResult = (toolkit: ToolRunnerToolkit, toolCall: ToolCall) =>
       id: toolCall.toolCallId,
       name: toolCall.toolName,
       isFailure: terminal.value.isFailure,
+      providerExecuted: false,
       result: terminal.value.encodedResult,
     })
   })
 
-const errorMessageFromAiError = (toolName: string, failure: unknown) => {
-  if (AiError.isAiError(failure)) {
-    if (failure.reason._tag === "ToolParameterValidationError") {
-      return `Tool '${toolName}' input failed:\n${failure.reason.description}`
-    }
-    if (failure.reason._tag === "ToolResultEncodingError") {
-      return `Tool '${toolName}' failed: ${failure.reason.description}`
-    }
-  }
-  return `Tool '${toolName}' failed: ${String(failure)}`
+const errorMessageFromAiError = (toolName: string, failure: ToolExecutionError) => {
+  const fallback = `Tool '${toolName}' failed: ${String(failure)}`
+  if (!AiError.isAiError(failure)) return fallback
+  return Match.type<AiError.AiError["reason"]>().pipe(
+    Match.when(
+      { _tag: "ToolParameterValidationError" },
+      (reason) => `Tool '${toolName}' input failed:\n${reason.description}`,
+    ),
+    Match.when(
+      { _tag: "ToolResultEncodingError" },
+      (reason) => `Tool '${toolName}' failed: ${reason.description}`,
+    ),
+    Match.orElse(() => fallback),
+  )(failure.reason)
 }
 
-const normalizeToolExecutionError = (failure: unknown): InteractionPendingError | Error => {
+const isToolParameterValidationError = (failure: ToolExecutionError): boolean => {
+  if (!AiError.isAiError(failure)) return false
+  return Match.type<AiError.AiError["reason"]>().pipe(
+    Match.when({ _tag: "ToolParameterValidationError" }, () => true),
+    Match.orElse(() => false),
+  )(failure.reason)
+}
+
+const normalizeToolExecutionError = (
+  failure: Schema.Schema.Type<typeof Schema.Unknown>,
+): InteractionPendingError | Error => {
   if (Schema.is(InteractionPendingError)(failure)) return failure
   if (failure instanceof Error) return failure
-  return new Error(String(failure))
+  return new ToolExecutionFailure({ message: String(failure) })
 }
 
 const allowAllPermission: PermissionService = {
   check: () => Effect.succeed("allowed"),
 }
 
-const staticToolEntries = (
+export const staticToolEntries = (
   activeRegistry: ExtensionRegistryService,
 ): ReadonlyArray<ResolvedToolCapability> => {
   const resolved = activeRegistry.getResolved()
@@ -211,201 +268,264 @@ const staticToolEntries = (
     const extension = resolved.extensions.find((extension) =>
       (extension.contributions.tools ?? []).includes(capability),
     )
-    if (extension !== undefined) {
+    if (!Predicate.isUndefined(extension)) {
       entries.push({
         extensionId: extension.manifest.id,
         capability,
+        origin: "static",
       })
     }
   }
   return entries
 }
 
-const dynamicToolEntry = (entry: DynamicToolEntry): ResolvedToolCapability => ({
+export const dynamicToolEntry = (entry: DynamicToolEntry): ResolvedToolCapability => ({
   extensionId: entry.extensionId,
   capability: entry.capability,
+  origin: "dynamic",
 })
 
+/** Merge visible tool entries with dynamic entries shadowing static entries. */
+export const mergeResolvedToolEntries = (
+  staticEntries: ReadonlyArray<ResolvedToolCapability>,
+  dynamicEntries: ReadonlyArray<ResolvedToolCapability>,
+): ReadonlyArray<ResolvedToolCapability> => {
+  const winners = new Map<string, ResolvedToolCapability>()
+  for (const entry of staticEntries) winners.set(String(getToolId(entry.capability)), entry)
+  for (const entry of dynamicEntries) winners.set(String(getToolId(entry.capability)), entry)
+  return [...winners.values()]
+}
+
+const captureToolEntry = (params: {
+  readonly sessionId: SessionId
+  readonly toolName: string
+  readonly activeRegistry: ExtensionRegistryService
+  readonly dynamicRegistry: Option.Option<DynamicExtensionRegistryService>
+}): Effect.Effect<Option.Option<ResolvedToolCapability>> =>
+  Effect.gen(function* () {
+    const staticEntries = staticToolEntries(params.activeRegistry)
+    let dynamicEntries: ReadonlyArray<ResolvedToolCapability> = []
+    if (Option.isSome(params.dynamicRegistry)) {
+      dynamicEntries = yield* params.dynamicRegistry.value
+        .listToolEntries(params.sessionId)
+        .pipe(Effect.map((entries) => entries.map(dynamicToolEntry)))
+    }
+    const entry = mergeResolvedToolEntries(staticEntries, dynamicEntries).find(
+      (candidate) => String(getToolId(candidate.capability)) === params.toolName,
+    )
+    return Option.fromUndefinedOr(entry)
+  })
+
+const runTool = Effect.fn("ToolRunner.execute")(function* (
+  toolCall: ToolCall,
+  toolEntry: Option.Option<ResolvedToolCapability>,
+) {
+  const hostCtx = yield* CurrentExtensionHostContext
+  const ctx: ToolCapabilityContext = { ...hostCtx, toolCallId: toolCall.toolCallId }
+  const activeRegistry = yield* ExtensionRegistry
+  const basePermissionOpt = yield* Effect.serviceOption(Permission)
+  const activePermission: PermissionService = Option.getOrElse(
+    basePermissionOpt,
+    () => allowAllPermission,
+  )
+  return yield* Effect.gen(function* () {
+    yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })
+    yield* publishStarted({ ctx, toolCall })
+
+    const finish = (result: Prompt.ToolResultPart) =>
+      Effect.gen(function* () {
+        yield* publishCompleted({
+          ctx,
+          result,
+        })
+        yield* Effect.logInfo("tool.completed").pipe(
+          Effect.annotateLogs({
+            toolName: toolCall.toolName,
+            toolCallId: toolCall.toolCallId,
+            isError: result.isFailure,
+          }),
+        )
+        return result
+      })
+
+    if (Option.isNone(toolEntry)) {
+      yield* WideEvent.failDomain("unknown", {
+        message: `Unknown tool: ${toolCall.toolName}`,
+      })
+      yield* Effect.logInfo("tool.unknown").pipe(
+        Effect.annotateLogs({
+          toolName: toolCall.toolName,
+          toolCallId: toolCall.toolCallId,
+        }),
+      )
+      return yield* finish(errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`))
+    }
+    const toolCtx: ToolCapabilityContext = {
+      ...ctx,
+      extensionId: toolEntry.value.extensionId,
+    }
+    const fileSystem = yield* Effect.serviceOption(FileSystem.FileSystem)
+    const path = yield* Effect.serviceOption(Path.Path)
+    if (Option.isNone(fileSystem) || Option.isNone(path)) {
+      return yield* finish(errorResult(toolCall, "Tool execution services unavailable"))
+    }
+    const executeKnownTool = Effect.gen(function* () {
+      const preflight = yield* activeRegistry.extensionHooks
+        .preflightToolCall({
+          toolCallId: toolCall.toolCallId,
+          toolName: toolCall.toolName,
+          input: toolCall.input,
+          agentName: ctx.agentName,
+          sessionId: ctx.sessionId,
+          branchId: ctx.branchId,
+        })
+        .pipe(provideHookHostContext(ctx))
+      if (preflight?._tag === "deny") {
+        yield* WideEvent.failDomain("preflight_denied", { message: preflight.message })
+        return Prompt.toolResultPart({
+          id: toolCall.toolCallId,
+          name: toolCall.toolName,
+          isFailure: true,
+          providerExecuted: false,
+          result: preflight.result ?? { error: preflight.message },
+        })
+      }
+
+      const permCheckResult = yield* activePermission.check(toolCall.toolName, toolCall.input).pipe(
+        Effect.catchEager((e) =>
+          WideEvent.failDomain("permission_check_failed", {
+            message: String(e),
+          }).pipe(Effect.as("interceptor_failed")),
+        ),
+      )
+
+      if (permCheckResult === "interceptor_failed") {
+        yield* Effect.logWarning("tool.permission.check.failed").pipe(
+          Effect.annotateLogs({
+            toolName: toolCall.toolName,
+            toolCallId: toolCall.toolCallId,
+          }),
+        )
+        return errorResult(toolCall, "Permission check failed")
+      }
+
+      if (permCheckResult === "denied") {
+        yield* WideEvent.failDomain("permission_denied", { message: "Permission denied" })
+        yield* Effect.logInfo("tool.permission.denied").pipe(
+          Effect.annotateLogs({
+            toolName: toolCall.toolName,
+            toolCallId: toolCall.toolCallId,
+          }),
+        )
+        return errorResult(toolCall, "Permission denied")
+      }
+
+      const executionToolkit = yield* makeExecutionToolkit({
+        tool: toolEntry.value.capability,
+        toolCall,
+        ctx: toolCtx,
+        fileSystem: fileSystem.value,
+        path: path.value,
+      })
+      return yield* terminalToolResult(executionToolkit, toolCall)
+    })
+
+    const executeResult = yield* executeKnownTool.pipe(Effect.result)
+
+    if (executeResult._tag === "Failure") {
+      const failure: ToolExecutionError = executeResult.failure
+      if (Schema.is(InteractionPendingError)(failure)) {
+        return yield* failure
+      }
+
+      const message = errorMessageFromAiError(toolCall.toolName, failure)
+      const schemaFailure = isToolParameterValidationError(failure)
+      let failureDomain: "schema_decode" | "execution_failed" = "execution_failed"
+      let failureLog = "tool.execute.failed"
+      if (schemaFailure) {
+        failureDomain = "schema_decode"
+        failureLog = "tool.schema.failed"
+      }
+      yield* WideEvent.failDomain(failureDomain, { message })
+      yield* Effect.logWarning(failureLog).pipe(
+        Effect.annotateLogs({
+          toolName: toolCall.toolName,
+          toolCallId: toolCall.toolCallId,
+        }),
+      )
+      return yield* finish(errorResult(toolCall, message))
+    }
+
+    return yield* finish(executeResult.success)
+  }).pipe(
+    provideCurrentHostCtx(ctx),
+    withWideEvent(
+      WideEventBoundary.tool(toolCall.toolName, {
+        envelope: { toolCallId: toolCall.toolCallId },
+      }),
+    ),
+  )
+})
+
+const runTestTool = (toolCall: ToolCall) =>
+  Effect.gen(function* () {
+    const hostCtx = yield* CurrentExtensionHostContext
+    const ctx: ToolCapabilityContext = { ...hostCtx, toolCallId: toolCall.toolCallId }
+    yield* publishStarted({ ctx, toolCall })
+    const result = Prompt.toolResultPart({
+      id: toolCall.toolCallId,
+      name: toolCall.toolName,
+      isFailure: false,
+      providerExecuted: false,
+      // oxlint-disable-next-line effect/noNullish -- The test runner preserves the provider-neutral empty result shape.
+      result: null,
+    })
+    yield* publishCompleted({ ctx, result })
+    return result
+  })
+
+/** @effect-expect-leaking ExtensionRegistry */
 export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()(
   "@gent/core/src/runtime/agent/tool-runner/ToolRunner",
 ) {
   static Live: Layer.Layer<ToolRunner> = Layer.succeed(
     ToolRunner,
     ToolRunner.of({
-      run: Effect.fn("ToolRunner.run")(function* (toolCall) {
-        const hostCtx = yield* CurrentExtensionHostContext
-        const ctx: ToolCapabilityContext = { ...hostCtx, toolCallId: toolCall.toolCallId }
-        const activeRegistry = yield* ExtensionRegistry
-        const basePermissionOpt = yield* Effect.serviceOption(Permission)
-        const activePermission: PermissionService =
-          basePermissionOpt._tag === "Some" ? basePermissionOpt.value : allowAllPermission
-
-        return yield* Effect.gen(function* () {
-          yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })
-          yield* publishStarted({ ctx, toolCall })
-
-          const capabilities = staticToolEntries(activeRegistry)
-          const dynamicRegistryOption = yield* Effect.serviceOption(DynamicExtensionRegistry)
-          const dynamicCapabilities =
-            dynamicRegistryOption._tag === "Some"
-              ? yield* dynamicRegistryOption.value
-                  .listToolEntries(ctx.sessionId)
-                  .pipe(Effect.map((entries) => entries.map(dynamicToolEntry)))
-              : []
-          const toolEntry: ResolvedToolCapability | undefined =
-            dynamicCapabilities.find(
-              (entry) => String(getToolId(entry.capability)) === toolCall.toolName,
-            ) ??
-            capabilities.find((entry) => String(getToolId(entry.capability)) === toolCall.toolName)
-
-          const finish = (result: Prompt.ToolResultPart) =>
-            Effect.gen(function* () {
-              yield* publishCompleted({
-                ctx,
-                result,
-              })
-              yield* Effect.logInfo("tool.completed").pipe(
-                Effect.annotateLogs({
-                  toolName: toolCall.toolName,
-                  toolCallId: toolCall.toolCallId,
-                  isError: result.isFailure,
-                }),
-              )
-              return result
-            })
-
-          if (toolEntry === undefined) {
-            yield* WideEvent.failDomain("unknown", {
-              message: `Unknown tool: ${toolCall.toolName}`,
-            })
-            yield* Effect.logInfo("tool.unknown").pipe(
-              Effect.annotateLogs({
-                toolName: toolCall.toolName,
-                toolCallId: toolCall.toolCallId,
-              }),
-            )
-            return yield* finish(errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`))
-          }
-          const toolCtx: ToolCapabilityContext = {
-            ...ctx,
-            extensionId: toolEntry.extensionId,
-          }
-          const executeKnownTool = Effect.gen(function* () {
-            const preflight = yield* activeRegistry.extensionHooks
-              .preflightToolCall({
-                toolCallId: toolCall.toolCallId,
-                toolName: toolCall.toolName,
-                input: toolCall.input,
-                agentName: ctx.agentName,
-                sessionId: ctx.sessionId,
-                branchId: ctx.branchId,
-              })
-              .pipe(provideHookHostContext(ctx))
-            if (preflight?._tag === "deny") {
-              yield* WideEvent.failDomain("preflight_denied", { message: preflight.message })
-              return Prompt.toolResultPart({
-                id: toolCall.toolCallId,
-                name: toolCall.toolName,
-                isFailure: true,
-                result: preflight.result ?? { error: preflight.message },
-              })
-            }
-
-            const permCheckResult = yield* activePermission
-              .check(toolCall.toolName, toolCall.input)
-              .pipe(
-                Effect.catchEager((e) =>
-                  WideEvent.failDomain("permission_check_failed", {
-                    message: String(e),
-                  }).pipe(Effect.as("interceptor_failed" as const)),
-                ),
-              )
-
-            if (permCheckResult === "interceptor_failed") {
-              yield* Effect.logWarning("tool.permission.check.failed").pipe(
-                Effect.annotateLogs({
-                  toolName: toolCall.toolName,
-                  toolCallId: toolCall.toolCallId,
-                }),
-              )
-              return errorResult(toolCall, "Permission check failed")
-            }
-
-            if (permCheckResult === "denied") {
-              yield* WideEvent.failDomain("permission_denied", { message: "Permission denied" })
-              yield* Effect.logInfo("tool.permission.denied").pipe(
-                Effect.annotateLogs({
-                  toolName: toolCall.toolName,
-                  toolCallId: toolCall.toolCallId,
-                }),
-              )
-              return errorResult(toolCall, "Permission denied")
-            }
-
-            const executionToolkit = yield* makeExecutionToolkit({
-              tool: toolEntry.capability,
-              toolCall,
-              ctx: toolCtx,
-            })
-            return yield* terminalToolResult(executionToolkit, toolCall)
+      capture: (params) =>
+        Effect.gen(function* () {
+          const activeRegistry = yield* ExtensionRegistry
+          const dynamicRegistry = yield* Effect.serviceOption(DynamicExtensionRegistry)
+          return yield* captureToolEntry({
+            ...params,
+            activeRegistry,
+            dynamicRegistry,
           })
-
-          const executeResult = yield* executeKnownTool.pipe(Effect.result)
-
-          if (executeResult._tag === "Failure") {
-            const failure: unknown = executeResult.failure
-            if (Schema.is(InteractionPendingError)(failure)) {
-              return yield* failure
-            }
-
-            const message = errorMessageFromAiError(toolCall.toolName, failure)
-            yield* WideEvent.failDomain(
-              AiError.isAiError(failure) && failure.reason._tag === "ToolParameterValidationError"
-                ? "schema_decode"
-                : "execution_failed",
-              { message },
-            )
-            yield* Effect.logWarning(
-              AiError.isAiError(failure) && failure.reason._tag === "ToolParameterValidationError"
-                ? "tool.schema.failed"
-                : "tool.execute.failed",
-            ).pipe(
-              Effect.annotateLogs({
-                toolName: toolCall.toolName,
-                toolCallId: toolCall.toolCallId,
-              }),
-            )
-            return yield* finish(errorResult(toolCall, message))
-          }
-
-          return yield* finish(executeResult.success)
-        }).pipe(
-          provideCurrentHostCtx(ctx),
-          withWideEvent(
-            WideEventBoundary.tool(toolCall.toolName, {
-              envelope: { toolCallId: toolCall.toolCallId },
-            }),
-          ),
-        )
+        }),
+      run: Effect.fn("ToolRunner.run")(function* (toolCall) {
+        const activeRegistry = yield* ExtensionRegistry
+        const dynamicRegistry = yield* Effect.serviceOption(DynamicExtensionRegistry)
+        const hostCtx = yield* CurrentExtensionHostContext
+        const entry = yield* captureToolEntry({
+          sessionId: hostCtx.sessionId,
+          toolName: toolCall.toolName,
+          activeRegistry,
+          dynamicRegistry,
+        })
+        return yield* runTool(toolCall, entry)
       }),
+      runBound: (toolCall, entry) => runTool(toolCall, entry),
     }),
   )
 
   static Test = (): Layer.Layer<ToolRunner> =>
-    Layer.succeed(ToolRunner, {
-      run: (toolCall) =>
-        Effect.gen(function* () {
-          const hostCtx = yield* CurrentExtensionHostContext
-          const ctx: ToolCapabilityContext = { ...hostCtx, toolCallId: toolCall.toolCallId }
-          yield* publishStarted({ ctx, toolCall })
-          const result = Prompt.toolResultPart({
-            id: toolCall.toolCallId,
-            name: toolCall.toolName,
-            isFailure: false,
-            result: null,
-          })
-          yield* publishCompleted({ ctx, result })
-          return result
-        }),
-    })
+    Layer.succeed(
+      ToolRunner,
+      ToolRunner.of({
+        capture: () => Effect.succeedNone,
+        run: runTestTool,
+        runBound: (toolCall) => runTestTool(toolCall),
+      }),
+    )
 }
+
+export { attachToolBindingIdentity } from "./tool-binding-replay.js"

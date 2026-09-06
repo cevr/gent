@@ -38,7 +38,7 @@ export const FileIndexLive: Layer.Layer<
   FileSystem.FileSystem | Path.Path | RuntimeEnvironment
 > = Layer.unwrap(
   Effect.gen(function* () {
-    const cacheRef = yield* makeGitignoreCacheRef()
+    const cacheRef = yield* makeGitignoreCacheRef
     const fallback = yield* makeFallbackService(cacheRef)
     const { platform } = yield* RuntimeEnvironment
 

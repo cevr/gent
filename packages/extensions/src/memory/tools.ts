@@ -5,7 +5,7 @@
  * Session-scoped memories are ephemeral (handled via intents, not vault).
  */
 
-import { DateTime, Effect, Schema } from "effect"
+import { DateTime, Effect, Option, Schema } from "effect"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import {
   MemoryVault,
@@ -21,11 +21,15 @@ export const toSlug = (title: string): string =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 60)
 
-export const memoryPath = (scope: MemoryScope, title: string, projectKey?: string): string => {
+export const memoryPath = (
+  scope: MemoryScope,
+  title: string,
+  projectKey: Option.Option<string>,
+): string => {
   const slug = toSlug(title)
   if (scope === "global") return `global/${slug}.md`
-  if (projectKey === undefined) return `global/${slug}.md`
-  return `project/${projectKey}/${slug}.md`
+  if (Option.isNone(projectKey)) return `global/${slug}.md`
+  return `project/${projectKey.value}/${slug}.md`
 }
 
 export const newFrontmatter = (
@@ -91,19 +95,21 @@ export const MemoryRememberTool = tool({
     const scope = params["scope"]
     const title = params["title"]
     const content = params["content"]
-    const tags = params["tags"] ?? []
+    const tags = Option.getOrElse(Option.fromNullishOr(params["tags"]), () => [])
     // Auto-derive project key from session cwd when scope=project and the
     // caller did not supply one. Without this, project memories silently
     // fall back to the global directory (state.memoryPath line 110) and the
     // vault projection's project section never finds them.
-    const projectKey =
-      params["project_key"] ?? (scope === "project" ? yield* projectKeyOf(ctx.cwd) : undefined)
+    let projectKey = Option.fromNullishOr(params["project_key"])
+    if (scope === "project" && Option.isNone(projectKey)) {
+      projectKey = Option.fromNullishOr(yield* projectKeyOf(ctx.cwd))
+    }
 
     if (scope === "session") {
       // Session memories are ephemeral; return a marker for event observation.
       return {
         stored: true,
-        scope: "session" as const,
+        scope: "session",
         title,
         note: "Session memory stored (ephemeral — lost on restart). Use scope 'project' or 'global' to persist.",
       }
@@ -115,7 +121,11 @@ export const MemoryRememberTool = tool({
     const fm = newFrontmatter(scope, tags, "agent", now)
     const body = `# ${title}\n\n${content}`
 
-    yield* vault.ensureDirs(scope === "project" ? projectKey : undefined)
+    if (scope === "project") {
+      yield* vault.ensureDirs(Option.getOrUndefined(projectKey))
+    } else {
+      yield* vault.ensureDirs()
+    }
     yield* vault.write(path, fm, body)
 
     return { stored: true, scope, path, title }
@@ -137,12 +147,12 @@ const RecallParams = Schema.Struct({
     }),
   ),
   limit: Schema.optionalKey(
-    Schema.Number.annotate({ description: "Maximum entries to return (default 20)" }),
+    Schema.Finite.annotate({ description: "Maximum entries to return (default 20)" }),
   ),
 })
 
 const RecallResult = Schema.Struct({
-  count: Schema.Number,
+  count: Schema.Finite,
   memories: Schema.Array(
     Schema.Struct({
       title: Schema.String,
@@ -163,16 +173,20 @@ export const MemoryRecallTool = tool({
   output: RecallResult,
   execute: Effect.fn("MemoryRecallTool.execute")(function* (params) {
     const vault = yield* MemoryVault
-    const query = params["query"]
+    const query = Option.fromNullishOr(params["query"])
     const scope = params["scope"]
-    const limit = params["limit"] ?? 20
+    const limit = Option.getOrElse(Option.fromNullishOr(params["limit"]), () => 20)
 
-    const entries =
-      query !== undefined ? yield* vault.search(query, scope) : yield* vault.list(scope)
+    let entries
+    if (Option.isSome(query)) {
+      entries = yield* vault.search(query.value, scope)
+    } else {
+      entries = yield* vault.list(scope)
+    }
 
     const limited = entries.slice(0, limit)
 
-    if (query !== undefined && limited.length > 0) {
+    if (Option.isSome(query) && limited.length > 0) {
       // Return full content for search results
       const results = []
       for (const entry of limited) {
@@ -233,13 +247,15 @@ export const MemoryForgetTool = tool({
     const ctx = yield* ExtensionContext
     const scope = params["scope"]
     const title = params["title"]
-    const projectKey =
-      params["project_key"] ?? (scope === "project" ? yield* projectKeyOf(ctx.cwd) : undefined)
+    let projectKey = Option.fromNullishOr(params["project_key"])
+    if (scope === "project" && Option.isNone(projectKey)) {
+      projectKey = Option.fromNullishOr(yield* projectKeyOf(ctx.cwd))
+    }
 
     if (scope === "session") {
       return {
         removed: true,
-        scope: "session" as const,
+        scope: "session",
         title,
         note: "Session memory removal handled by extension state.",
       }
@@ -253,4 +269,4 @@ export const MemoryForgetTool = tool({
   }),
 })
 
-export const MemoryTools = [MemoryRememberTool, MemoryRecallTool, MemoryForgetTool] as const
+export const MemoryTools = [MemoryRememberTool, MemoryRecallTool, MemoryForgetTool]

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Context, Deferred, Effect, Layer, Scope } from "effect"
+import { Context, Deferred, Effect, Layer, Option, Scope } from "effect"
 import { LinkOpener, LinkOpenerError } from "../src/services/link-opener"
 import { Auth } from "../src/routes/auth"
 import { useClient } from "../src/client"
@@ -12,6 +12,23 @@ import { createMockClient, createMockRuntime, renderWithProviders } from "./rend
 import { waitForRenderedFrame } from "./helpers-boundary"
 import { runEffectBoundary } from "./run-effect-boundary"
 import { onMount } from "solid-js"
+
+const absent = Option.getOrUndefined(Option.none())
+const nullValue = Option.getOrNull(Option.none())
+const apiMethod = { label: "API key", type: "api" } satisfies { label: string; type: "api" }
+const oauthMethod = { label: "Browser OAuth", type: "oauth" } satisfies {
+  label: string
+  type: "oauth"
+}
+
+const requireClient = (
+  context: Option.Option<ClientContextValue>,
+): Effect.Effect<ClientContextValue, never> =>
+  Option.match(context, {
+    onNone: () => Effect.die("client context not ready"),
+    onSome: Effect.succeed,
+  })
+
 function ClientProbe(props: { readonly onReady: (ctx: ClientContextValue) => void }) {
   const client = useClient()
   onMount(() => props.onReady(client))
@@ -33,8 +50,7 @@ const servicesWithLinkOpener = (
     Effect.gen(function* () {
       const scope = yield* Scope.make()
       const built = yield* Layer.buildWithScope(layer, scope)
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test harness: foreign-runtime context shape is validated at use sites
-      return Context.add(built, Scope.Scope, scope) as unknown as Context.Context<unknown>
+      return Context.makeUnsafe<unknown>(Context.add(built, Scope.Scope, scope).mapUnsafe)
     }),
   )
 }
@@ -69,7 +85,7 @@ describe("Auth route", () => {
   )
   it.live("ignores stale auth loads after the selected agent changes", () =>
     Effect.gen(function* () {
-      let ctx: ClientContextValue | undefined
+      let ctx = Option.none<ClientContextValue>()
       const pending: Array<{
         agentName?: string
         deferred: Deferred.Deferred<
@@ -99,7 +115,7 @@ describe("Auth route", () => {
         renderWithProviders(
           () => (
             <>
-              <ClientProbe onReady={(c) => (ctx = c)} />
+              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
               <Auth sessionId={activeSessionId} />
             </>
           ),
@@ -111,11 +127,13 @@ describe("Auth route", () => {
         ),
       )
       expect(pending.map((entry) => entry.agentName)).toEqual(["cowork"])
-      ctx?.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
+      const clientContext = yield* requireClient(ctx)
+      clientContext.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
       yield* Effect.promise(() => setup.renderOnce())
       expect(pending.map((entry) => entry.agentName)).toEqual(["cowork", "deepwork"])
-      if (pending[1] !== undefined) {
-        yield* Deferred.succeed(pending[1].deferred, [
+      const secondPending = Option.fromNullishOr(pending[1])
+      if (Option.isSome(secondPending)) {
+        yield* Deferred.succeed(secondPending.value.deferred, [
           { provider: "openai", hasKey: false, required: false },
         ])
       }
@@ -125,8 +143,9 @@ describe("Auth route", () => {
           (frame) => frame.includes("openai") && !frame.includes("anthropic"),
         ),
       )
-      if (pending[0] !== undefined) {
-        yield* Deferred.succeed(pending[0].deferred, [
+      const firstPending = Option.fromNullishOr(pending[0])
+      if (Option.isSome(firstPending)) {
+        yield* Deferred.succeed(firstPending.value.deferred, [
           { provider: "anthropic", hasKey: false, required: false },
         ])
       }
@@ -143,36 +162,36 @@ describe("Auth route", () => {
   )
   it.live("ignores stale auth mutations after the selected agent changes", () =>
     Effect.gen(function* () {
-      let ctx: ClientContextValue | undefined
+      let ctx = Option.none<ClientContextValue>()
       const oldKeySave = yield* Deferred.make<void>()
       const client = createMockClient({
         auth: {
-          listProviders: (input: { agentName?: string }) =>
-            Effect.succeed(
-              input.agentName === "deepwork"
-                ? [
-                    {
-                      provider: "openai",
-                      hasKey: false,
-                      required: false,
-                      source: "none",
-                      authType: undefined,
-                    },
-                  ]
-                : [
-                    {
-                      provider: "anthropic",
-                      hasKey: false,
-                      required: false,
-                      source: "none",
-                      authType: undefined,
-                    },
-                  ],
-            ),
+          listProviders: (input: { agentName?: string }) => {
+            if (input.agentName === "deepwork") {
+              return Effect.succeed([
+                {
+                  provider: "openai",
+                  hasKey: false,
+                  required: false,
+                  source: "none",
+                  authType: absent,
+                },
+              ])
+            }
+            return Effect.succeed([
+              {
+                provider: "anthropic",
+                hasKey: false,
+                required: false,
+                source: "none",
+                authType: absent,
+              },
+            ])
+          },
           listMethods: () =>
             Effect.succeed({
-              anthropic: [{ label: "API key", type: "api" as const }],
-              openai: [{ label: "API key", type: "api" as const }],
+              anthropic: [apiMethod],
+              openai: [apiMethod],
             }),
           setKey: ({ provider }: { provider: string; key: string }) => {
             if (provider === "anthropic") {
@@ -187,7 +206,7 @@ describe("Auth route", () => {
         renderWithProviders(
           () => (
             <>
-              <ClientProbe onReady={(c) => (ctx = c)} />
+              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
               <Auth sessionId={activeSessionId} />
             </>
           ),
@@ -212,7 +231,8 @@ describe("Auth route", () => {
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      ctx?.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
+      const clientContext = yield* requireClient(ctx)
+      clientContext.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
       const reloaded = yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => frame.includes("openai")),
       )
@@ -224,7 +244,7 @@ describe("Auth route", () => {
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => frame.includes("Enter API key for openai")),
       )
-      yield* Deferred.succeed(oldKeySave, undefined)
+      yield* Deferred.succeed(oldKeySave, void 0)
       const frame = yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
@@ -240,13 +260,16 @@ describe("Auth route", () => {
   )
   it.live("ignores stale oauth callbacks after the selected agent changes", () =>
     Effect.gen(function* () {
-      let ctx: ClientContextValue | undefined
-      const authorizeDeferred = yield* Deferred.make<{
-        authorizationId: string
-        url: string
-        method: "auto"
-        instructions?: string
-      } | null>()
+      let ctx = Option.none<ClientContextValue>()
+      const authorizeDeferred = yield* Deferred.make<
+        | {
+            authorizationId: string
+            url: string
+            method: "auto"
+            instructions?: string
+          }
+        | typeof nullValue
+      >()
       const authorizeCalls: Array<{
         provider: string
         method: number
@@ -260,37 +283,37 @@ describe("Auth route", () => {
       }> = []
       const client = createMockClient({
         auth: {
-          listProviders: (input: { agentName?: string }) =>
-            Effect.succeed(
-              input.agentName === "deepwork"
-                ? [
-                    {
-                      provider: "openai",
-                      hasKey: false,
-                      required: false,
-                      source: "none",
-                      authType: undefined,
-                    },
-                  ]
-                : [
-                    {
-                      provider: "anthropic",
-                      hasKey: false,
-                      required: false,
-                      source: "none",
-                      authType: undefined,
-                    },
-                  ],
-            ),
+          listProviders: (input: { agentName?: string }) => {
+            if (input.agentName === "deepwork") {
+              return Effect.succeed([
+                {
+                  provider: "openai",
+                  hasKey: false,
+                  required: false,
+                  source: "none",
+                  authType: absent,
+                },
+              ])
+            }
+            return Effect.succeed([
+              {
+                provider: "anthropic",
+                hasKey: false,
+                required: false,
+                source: "none",
+                authType: absent,
+              },
+            ])
+          },
           listMethods: () =>
             Effect.succeed({
-              anthropic: [{ label: "Browser OAuth", type: "oauth" as const }],
-              openai: [{ label: "API key", type: "api" as const }],
+              anthropic: [oauthMethod],
+              openai: [apiMethod],
             }),
           authorize: (input: { provider: string; method: number; sessionId: string }) => {
             authorizeCalls.push(input)
             const { provider } = input
-            if (provider !== "anthropic") return Effect.succeed(null)
+            if (provider !== "anthropic") return Effect.succeed(nullValue)
             return Deferred.await(authorizeDeferred)
           },
           callback: (input: {
@@ -309,7 +332,7 @@ describe("Auth route", () => {
         renderWithProviders(
           () => (
             <>
-              <ClientProbe onReady={(c) => (ctx = c)} />
+              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
               <Auth sessionId={activeSessionId} />
             </>
           ),
@@ -327,7 +350,8 @@ describe("Auth route", () => {
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      ctx?.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
+      const clientContext = yield* requireClient(ctx)
+      clientContext.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
       yield* Effect.promise(() => waitForRenderedFrame(setup, (frame) => frame.includes("openai")))
       yield* Deferred.succeed(authorizeDeferred, {
         authorizationId: "auth-old",
@@ -365,12 +389,12 @@ describe("Auth route", () => {
                 hasKey: false,
                 required: false,
                 source: "none",
-                authType: undefined,
+                authType: absent,
               },
             ]),
           listMethods: () =>
             Effect.succeed({
-              anthropic: [{ label: "Browser OAuth", type: "oauth" as const }],
+              anthropic: [oauthMethod],
             }),
           authorize: (input: { provider: string; method: number; sessionId: string }) =>
             Effect.sync(() => {
@@ -378,7 +402,7 @@ describe("Auth route", () => {
               return {
                 authorizationId: "auth-active",
                 url: "https://example.com/oauth",
-                method: "auto" as const,
+                method: "auto",
               }
             }),
           callback: (input: {
@@ -427,8 +451,8 @@ describe("Auth route", () => {
   )
   it.live("ignores stale oauth opener failures after the selected agent changes", () =>
     Effect.gen(function* () {
-      let ctx: ClientContextValue | undefined
-      let rejectOpen: ((error: LinkOpenerError) => void) | undefined
+      let ctx = Option.none<ClientContextValue>()
+      let rejectOpen = Option.none<(error: LinkOpenerError) => void>()
       const calls: Array<{
         agentName?: string
         sessionId?: string
@@ -443,39 +467,40 @@ describe("Auth route", () => {
           listProviders: (input: { agentName?: string; sessionId?: string }) =>
             Effect.sync(() => {
               calls.push(input)
-              return input.agentName === "deepwork"
-                ? [
-                    {
-                      provider: "openai",
-                      hasKey: false,
-                      required: false,
-                      source: "none",
-                      authType: undefined,
-                    },
-                  ]
-                : [
-                    {
-                      provider: "anthropic",
-                      hasKey: false,
-                      required: false,
-                      source: "none",
-                      authType: undefined,
-                    },
-                  ]
+              if (input.agentName === "deepwork") {
+                return [
+                  {
+                    provider: "openai",
+                    hasKey: false,
+                    required: false,
+                    source: "none",
+                    authType: absent,
+                  },
+                ]
+              }
+              return [
+                {
+                  provider: "anthropic",
+                  hasKey: false,
+                  required: false,
+                  source: "none",
+                  authType: absent,
+                },
+              ]
             }),
           listMethods: () =>
             Effect.succeed({
-              anthropic: [{ label: "Browser OAuth", type: "oauth" as const }],
-              openai: [{ label: "API key", type: "api" as const }],
+              anthropic: [oauthMethod],
+              openai: [apiMethod],
             }),
           authorize: (input: { provider: string; method: number; sessionId: string }) => {
             authorizeCalls.push(input)
             const { provider } = input
-            if (provider !== "anthropic") return Effect.succeed(null)
+            if (provider !== "anthropic") return Effect.succeed(nullValue)
             return Effect.succeed({
               authorizationId: "auth-old",
               url: "https://example.com/oauth",
-              method: "code" as const,
+              method: "code",
             })
           },
         },
@@ -483,7 +508,7 @@ describe("Auth route", () => {
       const services = yield* Effect.promise(() =>
         servicesWithLinkOpener(() =>
           Effect.callback<void, LinkOpenerError>((resume) => {
-            rejectOpen = (error) => resume(Effect.fail(error))
+            rejectOpen = Option.some((error) => resume(Effect.fail(error)))
           }),
         ),
       )
@@ -492,7 +517,7 @@ describe("Auth route", () => {
         renderWithProviders(
           () => (
             <>
-              <ClientProbe onReady={(c) => (ctx = c)} />
+              <ClientProbe onReady={(c) => (ctx = Option.some(c))} />
               <Auth sessionId={activeSessionId} />
             </>
           ),
@@ -514,11 +539,13 @@ describe("Auth route", () => {
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => frame.includes("Open the URL below")),
       )
-      ctx?.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
+      const clientContext = yield* requireClient(ctx)
+      clientContext.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       expect(calls.at(-1)).toEqual({ agentName: "deepwork", sessionId: activeSessionId })
-      rejectOpen?.(new LinkOpenerError({ message: "open failed" }))
+      if (Option.isSome(rejectOpen))
+        rejectOpen.value(new LinkOpenerError({ message: "open failed" }))
       const frame = yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
@@ -535,7 +562,7 @@ describe("Auth route", () => {
   )
   it.live("ignores stale oauth opener failures after cancelling the same auth flow", () =>
     Effect.gen(function* () {
-      let rejectOpen: ((error: LinkOpenerError) => void) | undefined
+      let rejectOpen = Option.none<(error: LinkOpenerError) => void>()
       const authorizeCalls: Array<{
         provider: string
         method: number
@@ -550,21 +577,21 @@ describe("Auth route", () => {
                 hasKey: false,
                 required: false,
                 source: "none",
-                authType: undefined,
+                authType: absent,
               },
             ]),
           listMethods: () =>
             Effect.succeed({
-              anthropic: [{ label: "Browser OAuth", type: "oauth" as const }],
+              anthropic: [oauthMethod],
             }),
           authorize: (input: { provider: string; method: number; sessionId: string }) => {
             authorizeCalls.push(input)
             const { provider } = input
-            if (provider !== "anthropic") return Effect.succeed(null)
+            if (provider !== "anthropic") return Effect.succeed(nullValue)
             return Effect.succeed({
               authorizationId: "auth-cancelled",
               url: "https://example.com/oauth",
-              method: "code" as const,
+              method: "code",
             })
           },
         },
@@ -572,7 +599,7 @@ describe("Auth route", () => {
       const services = yield* Effect.promise(() =>
         servicesWithLinkOpener(() =>
           Effect.callback<void, LinkOpenerError>((resume) => {
-            rejectOpen = (error) => resume(Effect.fail(error))
+            rejectOpen = Option.some((error) => resume(Effect.fail(error)))
           }),
         ),
       )
@@ -606,7 +633,8 @@ describe("Auth route", () => {
             !frame.includes("open failed"),
         ),
       )
-      rejectOpen?.(new LinkOpenerError({ message: "open failed" }))
+      if (Option.isSome(rejectOpen))
+        rejectOpen.value(new LinkOpenerError({ message: "open failed" }))
       const frame = yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,

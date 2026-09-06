@@ -18,7 +18,7 @@
  * @module
  */
 import { BunServices } from "@effect/platform-bun"
-import { Clock, Context, Effect, Layer } from "effect"
+import { Clock, Context, Effect, Layer, Option } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 
 import {
@@ -31,6 +31,7 @@ import {
   hook,
   ProviderAuthError,
   sectionPatternFor,
+  type ExternalDriverContribution,
   type ExtensionContributions,
   type GentExtension,
   type ToolCapability,
@@ -42,8 +43,8 @@ import {
   createClaudeCodeSessionManager,
   makeClaudeCodeTurnExecutor,
 } from "./claude-code-executor.js"
-import { live as claudeSdkLive, type AcpAgentsPlatformShape } from "./claude-sdk.js"
-import { AnthropicPlatform, type AnthropicPlatformShape } from "../anthropic/platform-adapter.js"
+import { live as claudeSdkLive, type AcpAgentsPlatformApi } from "./claude-sdk.js"
+import { AnthropicPlatform, type AnthropicPlatformApi } from "../anthropic/platform-adapter.js"
 import {
   freshEnoughForUse,
   PRIMARY_CLAUDE_SERVICE,
@@ -64,7 +65,7 @@ import { generateToolDescription } from "./mcp-codemode.js"
  * mid-flight — matches AnthropicCredentialService's policy.
  */
 const readClaudeCodeOAuthToken = (
-  platform: AnthropicPlatformShape,
+  platform: AnthropicPlatformApi,
 ): Effect.Effect<string, ProviderAuthError> =>
   Effect.gen(function* () {
     // The ACP/SDK path always uses the primary account. Multi-account
@@ -144,7 +145,7 @@ const codemodeInstructions = (toolList: string): string =>
 // Section ids produced by `buildTurnPromptSections` that describe the
 // native tool surface — replaced (not appended-to) when the resolved
 // driver is codemode-routed.
-const NATIVE_TOOL_SECTION_IDS = ["tool-list", "tool-guidelines"] as const
+const NATIVE_TOOL_SECTION_IDS = ["tool-list", "tool-guidelines"]
 
 /**
  * Strip native tool sections from an already-compiled prompt string by
@@ -164,7 +165,7 @@ const NATIVE_TOOL_SECTION_IDS = ["tool-list", "tool-guidelines"] as const
  * authored a tool-list section without going through the marker
  * helper).
  */
-const stripNativeToolSections = (compiled: string): { stripped: string; anyStripped: boolean } => {
+const stripNativeToolSections = (compiled: string) => {
   let out = compiled
   let anyStripped = false
   for (const id of NATIVE_TOOL_SECTION_IDS) {
@@ -214,7 +215,8 @@ const rewriteCodemodeSystemPrompt = (input: {
           "section entirely.",
       )
     }
-    return stripped.length === 0 ? codemode : `${stripped}\n\n${codemode}`
+    if (stripped.length === 0) return codemode
+    return `${stripped}\n\n${codemode}`
   })
 
 interface AcpAgentsManagerDeps {
@@ -233,12 +235,12 @@ export const makeAcpAgentsExtension = (
   const cachedBySetupContext = new WeakMap<object, AcpSetupArtifacts>()
   const setupArtifacts = Effect.gen(function* () {
     const ctx = yield* ExtensionSetupContext
-    const cached = cachedBySetupContext.get(ctx)
-    if (cached !== undefined) return cached
+    const cached = Option.fromNullishOr(cachedBySetupContext.get(ctx))
+    if (Option.isSome(cached)) return cached.value
     const anthropicPlatform = AnthropicPlatform.fromSetup(ctx, {})
     const acpPlatform = {
       parentEnv: anthropicPlatform.parentEnv,
-    } satisfies AcpAgentsPlatformShape
+    } satisfies AcpAgentsPlatformApi
 
     const acpManager = yield* deps.makeAcpSessionManager ?? createAcpSessionManager
     const claudeCodeManager = (
@@ -252,23 +254,24 @@ export const makeAcpAgentsExtension = (
     const claudeCode = {
       id: claudeCodeId,
       executor: makeClaudeCodeTurnExecutor(claudeCodeManager),
-      toolSurface: "codemode" as const,
-      invalidate: () => claudeCodeManager.invalidateDriver(claudeCodeId),
-    }
+      toolSurface: "codemode",
+      invalidate: claudeCodeManager.invalidateDriver(claudeCodeId),
+    } satisfies ExternalDriverContribution
     const protocolDrivers = Object.entries(ACP_PROTOCOL_AGENTS).map(([name, config]) => {
       const id = `acp-${name}`
       return {
         id,
         executor: makeAcpTurnExecutor(id, config, acpManager),
-        toolSurface: "codemode" as const,
-        invalidate: () => acpManager.invalidateDriver(id),
-      }
+        toolSurface: "codemode",
+        invalidate: acpManager.invalidateDriver(id),
+      } satisfies ExternalDriverContribution
     })
 
     const artifacts: AcpSetupArtifacts = {
       externalDrivers: [claudeCode, ...protocolDrivers],
       resources: [
         defineResource({
+          id: "@gent/acp-agents/disposer",
           scope: "process",
           layer: Layer.effect(
             AcpAgentsDisposer,
@@ -276,7 +279,7 @@ export const makeAcpAgentsExtension = (
               Effect.succeed(AcpAgentsDisposer.of({ _tag: "AcpAgentsDisposer" })),
               () =>
                 Effect.gen(function* () {
-                  yield* acpManager.disposeAll()
+                  yield* acpManager.disposeAll
                   yield* claudeCodeManager.disposeAll
                 }),
             ),

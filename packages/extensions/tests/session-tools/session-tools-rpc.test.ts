@@ -6,16 +6,11 @@ import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-mod
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { AgentsExtension, SessionToolsExtension } from "../../src/index.js"
 import { e2ePreset } from "../helpers/test-preset"
+import { isToolEventFor } from "../helpers/tool-event.js"
 
 const toolEventsFor = <E>(stream: Stream.Stream<EventEnvelope, E>, toolName: string) =>
   stream.pipe(
-    Stream.filter(
-      (envelope) =>
-        (envelope.event._tag === "ToolCallStarted" ||
-          envelope.event._tag === "ToolCallSucceeded" ||
-          envelope.event._tag === "ToolCallFailed") &&
-        (envelope.event as { readonly toolName?: string }).toolName === toolName,
-    ),
+    Stream.filter(isToolEventFor(toolName)),
     Stream.take(2),
     Stream.runCollect,
     Effect.forkScoped,

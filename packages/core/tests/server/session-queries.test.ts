@@ -30,6 +30,7 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
     yield* stream.pipe(
       Stream.runForEach((value) =>
         Ref.update(values, (current) => [...current, value]).pipe(
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           Effect.andThen(Deferred.succeed(ready, undefined).pipe(Effect.ignore)),
         ),
       ),

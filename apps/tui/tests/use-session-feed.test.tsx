@@ -1,7 +1,8 @@
 import { describe, it, expect } from "effect-bun-test"
 import { createRoot, createSignal } from "solid-js"
-import { Deferred, Effect, Schema, Stream } from "effect"
+import { Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
 import { AgentName } from "@gent/core-internal/domain/agent"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   AgentEvent,
   EventEnvelope,
@@ -24,15 +25,16 @@ import type { Session } from "../src/client"
 import { createMockClient, createMockRuntime } from "./render-harness-boundary"
 
 type FeedClient = Parameters<typeof useSessionFeed>[2]
+const absent = Option.getOrUndefined(Option.none())
 
-class FeedTestTimeoutError extends Schema.TaggedErrorClass<FeedTestTimeoutError>()(
+class FeedTestTimeoutError extends Schema.TaggedError<FeedTestTimeoutError>()(
   "FeedTestTimeoutError",
   { message: Schema.String },
 ) {}
 
 const waitFor = (predicate: () => boolean): Effect.Effect<void, FeedTestTimeoutError> => {
   let attempts = 20
-  const check = Effect.gen(function* () {
+  const check: Effect.Effect<void, FeedTestTimeoutError> = Effect.gen(function* () {
     if (predicate()) return
     attempts -= 1
     if (attempts <= 0) {
@@ -41,20 +43,20 @@ const waitFor = (predicate: () => boolean): Effect.Effect<void, FeedTestTimeoutE
     // gent/no-sleep: allow yield-then-retry primitive — Solid signal microtasks must drain between checks
     yield* Effect.sleep("0 millis")
     return yield* check
-  }) as Effect.Effect<void, FeedTestTimeoutError>
+  })
   return check
 }
 
 const snapshotFor = (
   sessionId: SessionId,
   branchId: BranchId,
-  lastEventId: number | null = null,
+  lastEventId?: number,
 ): SessionSnapshot => ({
   sessionId,
   branchId,
   messages: [],
-  lastEventId,
-  reasoningLevel: undefined,
+  lastEventId: Option.getOrNull(Option.fromNullishOr(lastEventId)),
+  reasoningLevel: Option.getOrUndefined(Option.none()),
   runtime: {
     _tag: "Idle",
     agent: AgentName.make("cowork"),
@@ -94,12 +96,35 @@ const makeUserMessage = (sessionId: SessionId, branchId: BranchId): Message =>
     createdAt: dateFromMillis(0),
   })
 
+const makeCompactionMessage = (sessionId: SessionId, branchId: BranchId): Message =>
+  Message.cases.regular.make({
+    id: MessageId.make("model-compaction:branch-feed-compaction:revision"),
+    sessionId,
+    branchId,
+    role: "assistant",
+    parts: [Prompt.textPart({ text: "Historical context summary: stored summary" })],
+    metadata: {
+      customType: "model-compaction",
+      details: {
+        _tag: "model-compaction",
+        sourceMessageIds: [],
+        sourceRevision: "revision",
+      },
+    },
+    createdAt: dateFromMillis(0),
+  })
+
 const makeSession = (sessionId: SessionId, branchId: BranchId): Session => ({
   sessionId,
   branchId,
   name: "Test Session",
-  reasoningLevel: undefined,
+  reasoningLevel: Option.getOrUndefined(Option.none()),
 })
+
+const isSessionEvent = Predicate.or(
+  Predicate.isTagged("turn-ended"),
+  Predicate.or(Predicate.isTagged("retrying"), Predicate.isTagged("error")),
+)
 
 describe("useSessionFeed", () => {
   it.live("displays repeated event envelopes at most once across visible feed items", () =>
@@ -183,7 +208,7 @@ describe("useSessionFeed", () => {
       ]
       const errorSeen = yield* Deferred.make<void>()
       let appliedEvents = 0
-      let feed: ReturnType<typeof useSessionFeed> | undefined
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
 
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
@@ -207,11 +232,11 @@ describe("useSessionFeed", () => {
             warn: () => {},
             error: (message: string) => {
               if (message === "sessionFeed.error")
-                client.runtime.cast(Deferred.succeed(errorSeen, undefined))
+                client.runtime.cast(Deferred.succeed(errorSeen, void 0))
             },
           },
           setConnectionIssue: () => {},
-          waitForTransportReady: () => Effect.void,
+          waitForTransportReady: Effect.void,
           applySessionSnapshot: () => {},
           applySessionEvent: () => {
             appliedEvents += 1
@@ -219,17 +244,19 @@ describe("useSessionFeed", () => {
           applyBufferedSessionEvent: () => {},
         } satisfies FeedClient
 
-        feed = useSessionFeed(
-          () => sessionId,
-          () => branchId,
-          client,
-          client.runtime.cast,
-          {
-            onInteraction: () => {},
-            onInteractionDismissed: () => {},
-            onBranchSwitch: () => {},
-            onQueueSnapshot: () => {},
-          },
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            client.runtime.cast,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
         )
         return disposeRoot
       })
@@ -237,25 +264,24 @@ describe("useSessionFeed", () => {
       yield* Deferred.await(errorSeen)
       yield* waitFor(
         () =>
-          feed?.messages().some((message) => message.role === "assistant") === true &&
-          feed?.items().some((item) => item._tag === "error") === true,
+          Option.isSome(feed) &&
+          feed.value.messages().some((message) => message.role === "assistant") &&
+          feed.value.items().some((item) => item._tag === "error"),
       )
       yield* Effect.sync(() => {
-        const messages = feed?.messages()
-        const userMessages = messages?.filter((message) => message.role === "user")
-        const assistantMessage = messages?.find((message) => message.role === "assistant")
-        const events = feed
-          ?.items()
-          .filter(
-            (item) =>
-              item._tag === "turn-ended" || item._tag === "retrying" || item._tag === "error",
-          )
+        if (Option.isNone(feed)) return
+        const messages = feed.value.messages()
+        const userMessages = messages.filter((message) => message.role === "user")
+        const assistantMessage = messages.find((message) => message.role === "assistant")
+        const events = feed.value.items().filter(isSessionEvent)
         expect(appliedEvents).toBe(uniqueEnvelopes.length)
         expect(userMessages).toHaveLength(1)
         expect(assistantMessage?.content).toBe("assistant text")
         expect(assistantMessage?.toolCalls).toHaveLength(1)
         expect(assistantMessage?.toolCalls?.[0]?.status).toBe("completed")
         expect(events?.map((event) => event._tag)).toEqual(["turn-ended", "retrying", "error"])
+        const retry = events?.find((event) => event._tag === "retrying")
+        expect(retry?._tag === "retrying" && retry.resolved).toBe(true)
         dispose()
       })
     }),
@@ -277,7 +303,7 @@ describe("useSessionFeed", () => {
           branchId,
           requestId: InteractionRequestId.make("interaction-buffered"),
           text: "approve this",
-          metadata: undefined,
+          metadata: absent,
         }),
       )
       const bufferedBranchSwitch = makeEnvelope(
@@ -294,7 +320,7 @@ describe("useSessionFeed", () => {
       )
       const interactionSeen = yield* Deferred.make<ActiveInteraction>()
       const liveSeen = yield* Deferred.make<void>()
-      let requestedAfter: number | undefined
+      let requestedAfter: Option.Option<number> = Option.none()
       const bufferedTags: string[] = []
       const branchSwitches: Array<{ sessionId: SessionId; branchId: BranchId }> = []
 
@@ -306,7 +332,7 @@ describe("useSessionFeed", () => {
             session: {
               getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId, 3)),
               events: ({ after }: { readonly after?: number }) => {
-                requestedAfter = after
+                requestedAfter = Option.fromNullishOr(after)
                 return Stream.concat(
                   Stream.make(bufferedPulse, bufferedInteraction, bufferedBranchSwitch, liveEvent),
                   Stream.never,
@@ -318,11 +344,11 @@ describe("useSessionFeed", () => {
           runtime: createMockRuntime(),
           log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
           setConnectionIssue: () => {},
-          waitForTransportReady: () => Effect.void,
+          waitForTransportReady: Effect.void,
           applySessionSnapshot: () => {},
           applySessionEvent: (envelope) => {
             if (envelope.id === liveEvent.id)
-              client.runtime.cast(Deferred.succeed(liveSeen, undefined))
+              client.runtime.cast(Deferred.succeed(liveSeen, void 0))
           },
           applyBufferedSessionEvent: (envelope) => {
             bufferedTags.push(envelope.event._tag)
@@ -351,7 +377,7 @@ describe("useSessionFeed", () => {
       const interaction = yield* Deferred.await(interactionSeen)
       yield* Deferred.await(liveSeen)
       yield* Effect.sync(() => {
-        expect(requestedAfter).toBe(0)
+        expect(Option.getOrElse(requestedAfter, () => -1)).toBe(0)
         expect(bufferedTags).toEqual([
           "ExtensionStateChanged",
           "InteractionPresented",
@@ -361,6 +387,178 @@ describe("useSessionFeed", () => {
         expect(branchSwitches).toEqual([])
         dispose()
       })
+    }),
+  )
+
+  it.live("shows a live compaction message as soon as its event arrives", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-compaction-live")
+      const branchId = BranchId.make("branch-feed-compaction-live")
+      const messageEnvelope = makeEnvelope(
+        1,
+        AgentEvent.cases.MessageReceived.make({
+          message: makeCompactionMessage(sessionId, branchId),
+        }),
+      )
+      const streamStartedEnvelope = makeEnvelope(
+        2,
+        AgentEvent.cases.StreamStarted.make({ sessionId, branchId }),
+      )
+      const streamChunkEnvelope = makeEnvelope(
+        3,
+        AgentEvent.cases.StreamChunk.make({
+          sessionId,
+          branchId,
+          chunk: "native response",
+        }),
+      )
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = {
+          session: active,
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () =>
+                Stream.concat(
+                  Stream.make(messageEnvelope, streamStartedEnvelope, streamChunkEnvelope),
+                  Stream.never,
+                ),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+          setConnectionIssue: () => {},
+          waitForTransportReady: Effect.void,
+          applySessionSnapshot: () => {},
+          applySessionEvent: () => {},
+          applyBufferedSessionEvent: () => {},
+        } satisfies FeedClient
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            client.runtime.cast,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+
+      yield* waitFor(
+        () =>
+          Option.isSome(feed) &&
+          feed.value.messages().some((message) => message.content.includes("native response")),
+      )
+      if (Option.isNone(feed)) return yield* Effect.die("feed did not initialize")
+      expect(feed.value.messages()).toHaveLength(2)
+      const summary = feed.value
+        .messages()
+        .find((message) => message.metadata?.customType === "model-compaction")
+      const response = feed.value
+        .messages()
+        .find((message) => message.content.includes("native response"))
+      expect(summary?.content).toBe("Historical context summary: stored summary")
+      expect(response?.id).toBeDefined()
+      expect(response?.id).not.toBe(summary?.id)
+      expect(response?.content).toBe("native response")
+      dispose()
+    }),
+  )
+
+  it.live("reconstructs retry history and completion state during reload", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-compaction-reload")
+      const branchId = BranchId.make("branch-feed-compaction-reload")
+      const retryEnvelope = makeEnvelope(
+        1,
+        AgentEvent.cases.ProviderRetrying.make({
+          sessionId,
+          branchId,
+          attempt: 1,
+          maxAttempts: 3,
+          delayMs: 100,
+          error: "temporary provider failure",
+        }),
+      )
+      const interruptedEnvelope = makeEnvelope(
+        2,
+        AgentEvent.cases.TurnCompleted.make({
+          sessionId,
+          branchId,
+          durationMs: 1_000,
+          interrupted: true,
+        }),
+      )
+      const compactionEnvelope = makeEnvelope(
+        3,
+        AgentEvent.cases.MessageReceived.make({
+          message: makeCompactionMessage(sessionId, branchId),
+        }),
+      )
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = {
+          session: active,
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId, 3)),
+              events: () =>
+                Stream.concat(
+                  Stream.make(retryEnvelope, interruptedEnvelope, compactionEnvelope),
+                  Stream.never,
+                ),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+          setConnectionIssue: () => {},
+          waitForTransportReady: Effect.void,
+          applySessionSnapshot: () => {},
+          applySessionEvent: () => {},
+          applyBufferedSessionEvent: () => {},
+        } satisfies FeedClient
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            client.runtime.cast,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+
+      yield* waitFor(
+        () =>
+          Option.isSome(feed) &&
+          feed.value.items().some((item) => item._tag === "interruption") &&
+          feed.value
+            .messages()
+            .some((message) => message.metadata?.customType === "model-compaction"),
+      )
+      if (Option.isNone(feed)) return yield* Effect.die("feed did not initialize")
+      const retry = feed.value.items().find((item) => item._tag === "retrying")
+      expect(retry?._tag === "retrying" && retry.resolved).toBe(true)
+      expect(feed.value.items().some((item) => item._tag === "interruption")).toBe(true)
+      expect(feed.value.messages()[0]?.content).toContain("stored summary")
+      dispose()
     }),
   )
 })

@@ -30,7 +30,7 @@ describe("ref(capability)", () => {
       id: "test.read",
       extensionId: ExtensionId.make("ext-test"),
       input: Schema.Struct({ q: Schema.String }),
-      output: Schema.Struct({ n: Schema.Number }),
+      output: Schema.Struct({ n: Schema.Finite }),
       execute: () => Effect.succeed({ n: 1 }),
     })
 
@@ -88,7 +88,7 @@ describe("ref(capability)", () => {
 
   test("returns the typed ref for a request capability, preserving id + schema identity", () => {
     const inputSchema = Schema.Struct({ q: Schema.String })
-    const outputSchema = Schema.Struct({ n: Schema.Number })
+    const outputSchema = Schema.Struct({ n: Schema.Finite })
     const capability = request({
       id: "test.read",
       extensionId: ExtensionId.make("ext-test"),
@@ -100,7 +100,7 @@ describe("ref(capability)", () => {
     const r = ref(capability)
     const capabilityId: RpcId = r.capabilityId
     expect(String(capabilityId)).toBe("test.read")
-    expect(r.extensionId as string).toBe("ext-test")
+    expect(String(r.extensionId)).toBe("ext-test")
     // Schema identity: refValue forwards author schemas by reference. A
     // future refactor that clones/wraps would silently change decode
     // behavior at the dispatcher boundary.

@@ -1,4 +1,4 @@
-import { Cause, Clock, Effect, Ref, TxQueue, type Semaphore } from "effect"
+import { Cause, Clock, Effect, Option, Ref, TxQueue, type Semaphore } from "effect"
 import { DEFAULT_AGENT_NAME, type AgentName as AgentNameType } from "../../domain/agent.js"
 import { ErrorOccurred, type AgentEvent } from "../../domain/event.js"
 import type { BranchId, InteractionRequestId, SessionId } from "../../domain/ids.js"
@@ -20,11 +20,11 @@ export type AgentLoopWorkerContext<E = never, R = never> = {
   readonly branchId: BranchId
   readonly sideMutationSemaphore: Semaphore.Semaphore
   readonly turnWorkerQueue: TxQueue.TxQueue<RunningState>
-  readonly activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
+  readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly interruptedRef: Ref.Ref<boolean>
   readonly currentLoopState: Effect.Effect<LoopState>
   readonly saveCheckpoint: (next: LoopState) => Effect.Effect<void, AgentLoopError>
-  readonly takeNextQueuedTurn: Effect.Effect<QueuedTurnItem | undefined, AgentLoopError>
+  readonly takeNextQueuedTurn: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   readonly recordTurnFailure: (cause: Cause.Cause<unknown>) => Effect.Effect<void>
   readonly publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
   readonly runTurn: (state: RunningState) => Effect.Effect<TurnOutcome, AgentLoopError | E, R>
@@ -32,11 +32,11 @@ export type AgentLoopWorkerContext<E = never, R = never> = {
 }
 
 export const interruptActiveStream = Effect.fn("AgentLoop.interruptActiveStream")(function* (
-  activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>,
+  activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>,
 ) {
   const activeStream = yield* Ref.get(activeStreamRef)
-  if (activeStream === undefined) return
-  yield* signalActiveStreamInterrupt(activeStream)
+  if (Option.isNone(activeStream)) return
+  yield* signalActiveStreamInterrupt(activeStream.value)
 })
 
 export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) => {
@@ -79,11 +79,15 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
 
       const nextItem = yield* scope.takeNextQueuedTurn
       yield* Ref.set(scope.interruptedRef, false)
-      if (nextItem !== undefined) {
+      if (Option.isSome(nextItem)) {
         const startedAtMs = yield* Clock.currentTimeMillis
-        const nextRunning = buildRunningState({ currentAgent: startState.currentAgent }, nextItem, {
-          startedAtMs,
-        })
+        const nextRunning = buildRunningState(
+          { currentAgent: startState.currentAgent },
+          nextItem.value,
+          {
+            startedAtMs,
+          },
+        )
         yield* scope.saveCheckpoint(nextRunning)
         yield* enqueueTurnWorker(nextRunning)
         return
@@ -101,11 +105,11 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       const nextItem = yield* scope.takeNextQueuedTurn
       const current = yield* scope.currentLoopState
       yield* Ref.set(scope.interruptedRef, false)
-      if (nextItem !== undefined) {
+      if (Option.isSome(nextItem)) {
         const startedAtMs = yield* Clock.currentTimeMillis
         const nextRunning = buildRunningState(
           { currentAgent: current.currentAgent ?? startState.currentAgent },
-          nextItem,
+          nextItem.value,
           { startedAtMs },
         )
         yield* scope.saveCheckpoint(nextRunning)
@@ -149,32 +153,34 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     Effect.ignore,
   )
 
-  const interrupt: Effect.Effect<void, AgentLoopError> = Effect.gen(function* () {
-    const snap = yield* scope.currentLoopState
-    if (snap._tag === "Idle") return
-    if (snap._tag === "Running") {
-      yield* Ref.set(scope.interruptedRef, true)
-      yield* interruptActiveStream(scope.activeStreamRef)
-      return
-    }
-    yield* Effect.gen(function* () {
-      const state = yield* scope.currentLoopState
-      if (state._tag !== "WaitingForInteraction") return
-      yield* Ref.set(scope.interruptedRef, true)
-      const resumed = buildRunningState(
-        { currentAgent: state.currentAgent },
-        {
-          message: state.message,
-          ...(state.agentOverride !== undefined ? { agentOverride: state.agentOverride } : {}),
-          ...(state.runSpec !== undefined ? { runSpec: state.runSpec } : {}),
-          ...(state.interactive !== undefined ? { interactive: state.interactive } : {}),
-        },
-        { startedAtMs: state.startedAtMs },
-      )
-      yield* scope.saveCheckpoint(resumed)
-      yield* enqueueTurnWorker(resumed)
-    }).pipe(scope.sideMutationSemaphore.withPermits(1))
-  }).pipe(Effect.withSpan("AgentLoop.interrupt"))
+  const interrupt: Effect.Effect<void, AgentLoopError> = Effect.suspend(
+    Effect.fn("AgentLoop.interrupt")(function* () {
+      const snap = yield* scope.currentLoopState
+      if (snap._tag === "Idle") return
+      if (snap._tag === "Running") {
+        yield* Ref.set(scope.interruptedRef, true)
+        yield* interruptActiveStream(scope.activeStreamRef)
+        return
+      }
+      yield* Effect.gen(function* () {
+        const state = yield* scope.currentLoopState
+        if (state._tag !== "WaitingForInteraction") return
+        yield* Ref.set(scope.interruptedRef, true)
+        const resumed = buildRunningState(
+          { currentAgent: state.currentAgent },
+          {
+            message: state.message,
+            agentOverride: state.agentOverride,
+            runSpec: state.runSpec,
+            interactive: state.interactive,
+          },
+          { startedAtMs: state.startedAtMs },
+        )
+        yield* scope.saveCheckpoint(resumed)
+        yield* enqueueTurnWorker(resumed)
+      }).pipe(scope.sideMutationSemaphore.withPermits(1))
+    }),
+  )
 
   const startTurn = Effect.fn("AgentLoop.startTurn")((item: QueuedTurnItem) =>
     Effect.gen(function* () {
@@ -220,9 +226,9 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
           { currentAgent: state.currentAgent },
           {
             message: state.message,
-            ...(state.agentOverride !== undefined ? { agentOverride: state.agentOverride } : {}),
-            ...(state.runSpec !== undefined ? { runSpec: state.runSpec } : {}),
-            ...(state.interactive !== undefined ? { interactive: state.interactive } : {}),
+            agentOverride: state.agentOverride,
+            runSpec: state.runSpec,
+            interactive: state.interactive,
           },
           { startedAtMs: state.startedAtMs },
         )

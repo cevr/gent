@@ -14,14 +14,14 @@
 import {
   createEffect,
   createContext,
-  useContext,
   createSignal,
   onCleanup,
   onMount,
   type Accessor,
   type JSX,
 } from "solid-js"
-import { Effect, Layer, ManagedRuntime } from "effect"
+import { Effect, Layer, ManagedRuntime, Option } from "effect"
+import { useRequiredContext } from "../utils/solid-context"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
 import { builtinClientModules } from "./builtins/index"
@@ -59,7 +59,9 @@ export interface ExtensionUIContextValue {
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
   readonly commands: Accessor<ReadonlyArray<Command>>
   readonly overlays: Accessor<Map<string, OverlayComponent>>
+  // eslint-disable-next-line effect/noNullish -- the undefined key selects the default renderer.
   readonly interactionRenderers: Accessor<Map<string | undefined, InteractionRendererComponent>>
+  // eslint-disable-next-line effect/noNullish -- no composer contribution is a valid result.
   readonly composerSurface: Accessor<ComposerSurfaceComponent | undefined>
   readonly borderLabels: Accessor<ReadonlyArray<ResolvedBorderLabel>>
   readonly autocompleteItems: Accessor<ReadonlyArray<AutocompleteContribution>>
@@ -77,9 +79,11 @@ export interface ExtensionUIContextValue {
       autocompleteOpen: boolean
     },
   ) => void
-  /** Current session ID (undefined before session is active) */
+  /** Current session ID (absent before session is active). */
+  // eslint-disable-next-line effect/noNullish -- extension consumers use absence before session activation.
   readonly sessionId: Accessor<string | undefined>
-  /** Current branch ID (undefined before session is active) */
+  /** Current branch ID (absent before session is active). */
+  // eslint-disable-next-line effect/noNullish -- extension consumers use absence before session activation.
   readonly branchId: Accessor<string | undefined>
   /** ManagedRuntime providing FileSystem, Path, ClientTransport — used by
    *  Effect-typed contribution surfaces (autocomplete `items`, etc.). */
@@ -93,13 +97,17 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   commands: [],
   overlays: new Map(),
   interactionRenderers: new Map(),
+  // eslint-disable-next-line effect/noNullish -- no composer contribution is a valid resolved result.
   composerSurface: undefined,
   borderLabels: [],
   autocompleteItems: [],
 }
 
-const toError = (cause: unknown): Error =>
-  cause instanceof Error ? cause : new Error(String(cause))
+const toError = (cause: unknown): Error => {
+  if (cause instanceof Error) return cause
+  // eslint-disable-next-line effect/noNewError -- the client service boundary requires an Error value.
+  return new Error(String(cause))
+}
 
 const ExtensionUIContext = createContext<ExtensionUIContextValue>()
 
@@ -135,11 +143,11 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
     autocompleteOpen: boolean
   }
   const [composerStateProvider, setComposerStateProviderSignal] = createSignal<
-    (() => ComposerStateSnapshot) | undefined
-  >(undefined)
+    Option.Option<() => ComposerStateSnapshot>
+  >(Option.none())
 
   const setComposerStateProvider = (provider: () => ComposerStateSnapshot) => {
-    setComposerStateProviderSignal(() => provider)
+    setComposerStateProviderSignal(Option.some(provider))
   }
 
   // Provider-scoped cleanup registry. Widget setups that detach Solid
@@ -167,9 +175,9 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         client: transport.client,
         runtime: transport.runtime,
         currentSession: () => {
-          const current = session.session()
-          if (current === null) return undefined
-          return { sessionId: current.sessionId, branchId: current.branchId }
+          const current = Option.fromNullishOr(session.session())
+          if (Option.isNone(current)) return Option.getOrUndefined(Option.none())
+          return { sessionId: current.value.sessionId, branchId: current.value.branchId }
         },
         onExtensionStateChanged: (cb) => transportState.onExtensionStateChanged(cb),
         onSessionEvent: (cb) => transportState.onSessionEvent(cb),
@@ -186,22 +194,22 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         cast: transport.runtime.cast,
       }),
       makeClientDriverLayer({
-        list: () => transport.client.driver.list().pipe(Effect.mapError(toError)),
+        list: transport.client.driver.list().pipe(Effect.mapError(toError)),
         set: (input) => transport.client.driver.set(input).pipe(Effect.mapError(toError)),
         clear: (input) => transport.client.driver.clear(input).pipe(Effect.mapError(toError)),
       }),
       makeClientComposerLayer({
         state: () => {
           const provider = composerStateProvider()
-          if (provider === undefined) {
+          if (Option.isNone(provider)) {
             return {
               draft: "",
-              mode: "editing" as const,
+              mode: "editing" satisfies ComposerStateSnapshot["mode"],
               inputFocused: false,
               autocompleteOpen: false,
             }
           }
-          return provider()
+          return provider.value()
         },
       }),
       makeClientLifecycleLayer({ addCleanup }),
@@ -215,11 +223,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   // from under widget cleanups that still need it.
   onCleanup(() => {
     for (const fn of cleanups) {
-      try {
-        fn()
-      } catch {
-        // Swallow — one broken disposer must not block the rest.
-      }
+      Effect.runSync(Effect.ignore(Effect.try(fn)))
     }
     cleanups.length = 0
     void clientRuntime.dispose()
@@ -232,13 +236,13 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
       cwd: workspace.cwd,
     })
       .then(setResolved)
-      .catch(() => undefined)
+      .catch(() => {})
       .finally(() => setLoading(false))
   })
 
   createEffect(() => {
-    const current = session.session()
-    if (current === null) {
+    const current = Option.fromNullishOr(session.session())
+    if (Option.isNone(current)) {
       setServerCommands([])
       return
     }
@@ -250,16 +254,17 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
     })
 
     transport.runtime.cast(
-      transport.client.extension.listSlashCommands({ sessionId: current.sessionId }).pipe(
+      transport.client.extension.listSlashCommands({ sessionId: current.value.sessionId }).pipe(
         Effect.tap((cmds) =>
           Effect.sync(() => {
             if (!active) return
             setServerCommands(
               cmds.map((c) => {
                 const run = (args: string) => {
-                  const sid = session.session()?.sessionId
-                  const bid = session.session()?.branchId
-                  if (sid === undefined || bid === undefined) return
+                  const activeSession = Option.fromNullishOr(session.session())
+                  if (Option.isNone(activeSession)) return
+                  const sid = activeSession.value.sessionId
+                  const bid = activeSession.value.branchId
                   transport.runtime.cast(
                     transport.client.extension
                       .request({
@@ -283,15 +288,20 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
                   )
                 }
 
-                return {
+                const base = {
                   id: `server:${c.name}`,
-                  title: c.displayName ?? c.description ?? c.name,
+                  title: Option.getOrElse(Option.fromNullishOr(c.displayName), () =>
+                    Option.getOrElse(Option.fromNullishOr(c.description), () => c.name),
+                  ),
                   slash: c.name,
-                  category: c.category ?? "Extension",
-                  ...(c.keybind !== undefined ? { keybind: c.keybind } : {}),
+                  category: Option.getOrElse(Option.fromNullishOr(c.category), () => "Extension"),
                   onSelect: () => run(""),
                   onSlash: run,
                 }
+                return Option.match(Option.fromNullishOr(c.keybind), {
+                  onNone: () => base,
+                  onSome: (keybind) => ({ ...base, keybind }),
+                })
               }),
             )
           }),
@@ -321,8 +331,14 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         setDynamicAutocomplete,
         setOverlayDispatch,
         setComposerStateProvider,
-        sessionId: () => session.session()?.sessionId,
-        branchId: () => session.session()?.branchId,
+        sessionId: () =>
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(session.session()), (value) => value.sessionId),
+          ),
+        branchId: () =>
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(session.session()), (value) => value.branchId),
+          ),
         clientRuntime,
       }}
     >
@@ -332,7 +348,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
 }
 
 export function useExtensionUI(): ExtensionUIContextValue {
-  const ctx = useContext(ExtensionUIContext)
-  if (ctx === undefined) throw new Error("useExtensionUI must be used within ExtensionUIProvider")
-  return ctx
+  return useRequiredContext(
+    ExtensionUIContext,
+    "useExtensionUI must be used within ExtensionUIProvider",
+  )
 }

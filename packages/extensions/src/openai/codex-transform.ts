@@ -31,11 +31,13 @@
  * `keychain-transform.ts:22-32`.)
  */
 
-import { Effect, Option, Schema } from "effect"
-import { HttpClient, HttpClientRequest, Headers } from "effect/unstable/http"
-import type { HttpBody, HttpClientResponse } from "effect/unstable/http"
+// Preserve vendor JSON fields that this transport adapter does not interpret.
+/* oxlint-disable effect/noUnknownParameters, effect/noUnsafeDictionaryType */
+import { Predicate, Effect, Option, Schema } from "effect"
+import { HttpClient, HttpClientRequest, HttpClientResponse, Headers } from "effect/unstable/http"
+import type { HttpBody } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import type { OpenAICredentialServiceShape } from "./credential-service.js"
+import type { OpenAICredentialServiceApi } from "./credential-service.js"
 
 // ── Codex routing ──
 
@@ -83,14 +85,11 @@ const CODEX_USER_AGENT = "gent"
  * duplicates. Order: existing tokens first, required token appended
  * last if missing. Whitespace around commas is normalized.
  */
-const ensureBetaToken = (existing: string | undefined, requiredToken: string): string => {
-  const tokens =
-    existing === undefined
-      ? []
-      : existing
-          .split(",")
-          .map((t) => t.trim())
-          .filter((t) => t.length > 0)
+const ensureBetaToken = (existing: Option.Option<string>, requiredToken: string): string => {
+  const tokens = Option.getOrElse(existing, () => "")
+    .split(",")
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0)
   if (tokens.includes(requiredToken)) return tokens.join(", ")
   return [...tokens, requiredToken].join(", ")
 }
@@ -108,8 +107,7 @@ const ensureBetaToken = (existing: string | undefined, requiredToken: string): s
  * drift fail closed at this boundary instead of hitting Codex with the wrong
  * shape.
  */
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === "object" && !Array.isArray(value)
+const isRecord = (value: unknown): value is Record<string, unknown> => Predicate.isObject(value)
 
 const isInstructionItem = (
   item: unknown,
@@ -119,51 +117,53 @@ const isInstructionItem = (
   return role === "system" || role === "developer"
 }
 
-const textFromContent = (content: unknown): string | undefined => {
-  if (typeof content === "string") return content
-  if (!Array.isArray(content)) return undefined
+const textFromContent = (content: unknown): Option.Option<string> => {
+  if (Predicate.isString(content)) return Option.some(content)
+  if (!Array.isArray(content)) return Option.none()
   const text = content
     .flatMap((part) => {
       if (!isRecord(part)) return []
       const type = part["type"]
       const value = part["text"]
-      return (type === "input_text" || type === "text") && typeof value === "string" ? [value] : []
+      if ((type === "input_text" || type === "text") && Predicate.isString(value)) return [value]
+      return []
     })
     .join("\n")
-  return text.length > 0 ? text : undefined
+  if (text.length > 0) return Option.some(text)
+  return Option.none()
 }
 
 const splitInstructions = (
   input: unknown,
-): { instructions: string[]; filteredInput: unknown[] } | undefined => {
-  if (!Array.isArray(input)) return undefined
+): Option.Option<{ instructions: string[]; input: unknown[] }> => {
+  if (!Array.isArray(input)) return Option.none()
   const instructions: string[] = []
   const filteredInput: unknown[] = []
   for (const item of input) {
     if (isInstructionItem(item)) {
       const text = textFromContent(item.content)
-      if (text !== undefined) {
-        instructions.push(text)
+      if (Option.isSome(text)) {
+        instructions.push(text.value)
         continue
       }
     }
     filteredInput.push(item)
   }
-  return { instructions, filteredInput }
+  return Option.some({ instructions, input: filteredInput })
 }
 
-const convertChatContent = (content: unknown): unknown => {
-  if (typeof content === "string") return [{ type: "input_text", text: content }]
+const convertChatContent = (content: unknown) => {
+  if (Predicate.isString(content)) return [{ type: "input_text", text: content }]
   if (!Array.isArray(content)) return content
   return content.map((part) => {
     if (!isRecord(part)) return part
-    if (part["type"] === "text" && typeof part["text"] === "string") {
+    if (part["type"] === "text" && Predicate.isString(part["text"])) {
       return { ...part, type: "input_text" }
     }
     if (part["type"] === "image_url") {
       const image = part["image_url"]
-      if (typeof image === "string") return { type: "input_image", image_url: image }
-      if (isRecord(image) && typeof image["url"] === "string") {
+      if (Predicate.isString(image)) return { type: "input_image", image_url: image }
+      if (isRecord(image) && Predicate.isString(image["url"])) {
         return { type: "input_image", image_url: image["url"] }
       }
     }
@@ -173,8 +173,8 @@ const convertChatContent = (content: unknown): unknown => {
 
 const chatMessagesToResponsesInput = (
   messages: unknown,
-): { instructions: string[]; input: unknown[] } | undefined => {
-  if (!Array.isArray(messages)) return undefined
+): Option.Option<{ instructions: string[]; input: unknown[] }> => {
+  if (!Array.isArray(messages)) return Option.none()
   const instructions: string[] = []
   const input: unknown[] = []
 
@@ -183,7 +183,7 @@ const chatMessagesToResponsesInput = (
     const role = message["role"]
     if (role === "system" || role === "developer") {
       const text = textFromContent(message["content"])
-      if (text !== undefined) instructions.push(text)
+      if (Option.isSome(text)) instructions.push(text.value)
       continue
     }
     if (role === "user") {
@@ -192,11 +192,11 @@ const chatMessagesToResponsesInput = (
     }
     if (role === "assistant") {
       const text = textFromContent(message["content"])
-      if (text !== undefined) {
+      if (Option.isSome(text)) {
         input.push({
           type: "message",
           role: "assistant",
-          content: [{ type: "output_text", text, annotations: [] }],
+          content: [{ type: "output_text", text: text.value, annotations: [] }],
           status: "completed",
         })
         continue
@@ -205,44 +205,42 @@ const chatMessagesToResponsesInput = (
     input.push(message)
   }
 
-  return { instructions, input }
+  return Option.some({ instructions, input })
 }
 
 /**
- * Try to read the request body as a JSON object. Returns `undefined`
+ * Try to read the request body as a JSON object. Returns `None`
  * when the body isn't a `Uint8Array` HttpBody (the only shape the SDK
  * emits via `bodyJsonUnsafe`) or when JSON parsing fails. Both cases
  * cause the URL/header rewrite to still apply but the body to pass
  * through unchanged — Codex tolerates the chat-completions shape today.
  */
-const tryReadJsonBody = (body: HttpBody.HttpBody): Record<string, unknown> | undefined => {
-  if (body._tag !== "Uint8Array") return undefined
-  try {
-    const text = new TextDecoder().decode(body.body)
-    const parsed: unknown = JSON.parse(text)
-    return isRecord(parsed) ? parsed : undefined
-  } catch {
-    return undefined
-  }
+const CodexBodyJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
+const decodeCodexBody = Schema.decodeUnknownOption(CodexBodyJson)
+const encodeCodexBody = Schema.encodeSync(CodexBodyJson)
+
+const tryReadJsonBody = (body: HttpBody.HttpBody): Option.Option<Record<string, unknown>> => {
+  if (body._tag !== "Uint8Array") return Option.none()
+  return decodeCodexBody(new TextDecoder().decode(body.body))
 }
 
 const rewriteCodexBody = (
   req: HttpClientRequest.HttpClientRequest,
 ): HttpClientRequest.HttpClientRequest => {
   const parsed = tryReadJsonBody(req.body)
-  if (parsed === undefined) return req
-  const split = splitInstructions(parsed["input"])
-  const chat = split === undefined ? chatMessagesToResponsesInput(parsed["messages"]) : undefined
-  const instructions = split?.instructions ?? chat?.instructions
-  const input = split?.filteredInput ?? chat?.input
-  if (instructions === undefined || input === undefined) return req
-  const next: Record<string, unknown> = { ...parsed }
+  if (Option.isNone(parsed)) return req
+  const split = splitInstructions(parsed.value["input"]).pipe(
+    Option.orElse(() => chatMessagesToResponsesInput(parsed.value["messages"])),
+  )
+  if (Option.isNone(split)) return req
+  const { instructions, input } = split.value
+  const next = { ...parsed.value }
   delete next["messages"]
-  next["instructions"] =
-    instructions.length > 0 ? instructions.join("\n\n") : CODEX_DEFAULT_INSTRUCTIONS
+  next["instructions"] = CODEX_DEFAULT_INSTRUCTIONS
+  if (instructions.length > 0) next["instructions"] = instructions.join("\n\n")
   next["input"] = input
   next["store"] = false
-  const encoded = new TextEncoder().encode(JSON.stringify(next))
+  const encoded = new TextEncoder().encode(encodeCodexBody(next))
   return HttpClientRequest.bodyUint8Array(req, encoded, "application/json")
 }
 
@@ -262,17 +260,17 @@ const rewriteCodexBody = (
 const buildOauthHeaders = (
   req: HttpClientRequest.HttpClientRequest,
   accessToken: string,
-  accountId: string | undefined,
+  accountId: Option.Option<string>,
 ): Headers.Headers => {
   let headers = Headers.remove(req.headers, "authorization")
   headers = Headers.set(headers, "authorization", `Bearer ${accessToken}`)
-  if (accountId !== undefined && accountId.length > 0) {
-    headers = Headers.set(headers, "chatgpt-account-id", accountId)
+  if (Option.isSome(accountId) && accountId.value.length > 0) {
+    headers = Headers.set(headers, "chatgpt-account-id", accountId.value)
   }
-  if (headers["originator"] === undefined) {
+  if (!Headers.has(headers, "originator")) {
     headers = Headers.set(headers, "originator", "gent")
   }
-  if (headers["user-agent"] === undefined) {
+  if (!Headers.has(headers, "user-agent")) {
     headers = Headers.set(headers, "user-agent", CODEX_USER_AGENT)
   }
   return headers
@@ -313,16 +311,14 @@ const withHeaders = (
  * 132-140) — typed so the recovery fires only on this signal, not on
  * other 4xx that callers should see verbatim.
  */
-class Unauthorized401Error extends Schema.TaggedErrorClass<Unauthorized401Error>(
-  "@gent/extensions/openai/Unauthorized401Error",
+class Unauthorized401Error extends Schema.TaggedError<Unauthorized401Error>(
+  "@gent/extensions/src/openai/codex-transform/Unauthorized401Error",
 )("Unauthorized401Error", {
-  response: Schema.Any,
-}) {
-  getResponse(): HttpClientResponse.HttpClientResponse {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-    return this.response as HttpClientResponse.HttpClientResponse
-  }
-}
+  response: Schema.declare<HttpClientResponse.HttpClientResponse>(
+    (input): input is HttpClientResponse.HttpClientResponse =>
+      Predicate.hasProperty(input, HttpClientResponse.TypeId),
+  ),
+}) {}
 
 // ── transformClient factory ──
 
@@ -357,9 +353,7 @@ class Unauthorized401Error extends Schema.TaggedErrorClass<Unauthorized401Error>
  *     authorization from the auth picker) can kick in.
  */
 export const buildCodexTransformClient =
-  (
-    creds: OpenAICredentialServiceShape,
-  ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
+  (creds: OpenAICredentialServiceApi): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
   (client) =>
     client.pipe(
       HttpClient.mapRequestEffect((req) =>
@@ -386,7 +380,7 @@ export const buildCodexTransformClient =
             headers = Headers.set(
               headers,
               "openai-beta",
-              ensureBetaToken(headers["openai-beta"], CODEX_BETA_TOKEN),
+              ensureBetaToken(Headers.get(headers, "openai-beta"), CODEX_BETA_TOKEN),
             )
             const withBody = rewriteCodexBody(withHeaders(req, headers))
             if (req.url.startsWith("/")) return withBody
@@ -413,19 +407,24 @@ export const buildCodexTransformClient =
           Effect.flatMap(
             (
               response,
-            ): Effect.Effect<HttpClientResponse.HttpClientResponse, Unauthorized401Error> =>
-              response.status === 401
-                ? Effect.fail(new Unauthorized401Error({ response }))
-                : Effect.succeed(response),
+            ): Effect.Effect<HttpClientResponse.HttpClientResponse, Unauthorized401Error> => {
+              switch (response.status) {
+                case 401:
+                  return Effect.fail(new Unauthorized401Error({ response }))
+                default:
+                  return Effect.succeed(response)
+              }
+            },
           ),
-          Effect.tapError((e) =>
-            e._tag === "Unauthorized401Error" ? creds.invalidate : Effect.void,
-          ),
+          Effect.tapError((e) => {
+            if (e._tag === "Unauthorized401Error") return creds.invalidate
+            return Effect.void
+          }),
           Effect.retry({
             while: (e) => e._tag === "Unauthorized401Error",
             times: 1,
           }),
-          Effect.catchTag("Unauthorized401Error", (e) => Effect.succeed(e.getResponse())),
+          Effect.catchTag("Unauthorized401Error", (e) => Effect.succeed(e.response)),
         ),
       ),
     )

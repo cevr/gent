@@ -66,7 +66,7 @@ describe("AnthropicPlatform.fromSetup", () => {
     const ctx = makeCtxWithSplitHome("/tmp/gent-home", "/Users/test-os-home")
     const platform = AnthropicPlatform.fromSetup(ctx, {})
     expect(platform.parentEnv).toEqual({})
-    expect(typeof platform.runProcess).toBe("function")
+    expect(platform.runProcess).toBe(ctx.Process.runProcess)
   })
 
   test("carries per-instance env snapshot", () => {

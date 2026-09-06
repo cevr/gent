@@ -2,16 +2,20 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { PromptSearchPalette } from "../src/components/prompt-search-palette"
-import { PromptSearchState, transitionPromptSearch } from "../src/components/prompt-search-state"
+import {
+  PromptSearchState,
+  transitionPromptSearch,
+  type PromptSearchEvent,
+} from "../src/components/prompt-search-state"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 const buildOpenState = (draftBeforeOpen: string, entries: readonly string[]) => {
   let state = PromptSearchState.open(draftBeforeOpen)
   for (const event of [
-    { _tag: "TypeChar", char: "f" } as const,
-    { _tag: "TypeChar", char: "i" } as const,
-    { _tag: "TypeChar", char: "x" } as const,
-    { _tag: "MoveDown" } as const,
-  ]) {
+    { _tag: "TypeChar", char: "f" },
+    { _tag: "TypeChar", char: "i" },
+    { _tag: "TypeChar", char: "x" },
+    { _tag: "MoveDown" },
+  ] satisfies ReadonlyArray<PromptSearchEvent>) {
     state = transitionPromptSearch(state, event, entries).state
   }
   return state
@@ -23,7 +27,7 @@ describe("PromptSearchPalette renderer", () => {
         "fix the session queue bug",
         "fix prompt search enter behavior",
         "add tests for renderer",
-      ] as const
+      ]
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
           () => (
@@ -45,7 +49,7 @@ describe("PromptSearchPalette renderer", () => {
   )
   it.live("renders empty-state fallback when no items match", () =>
     Effect.gen(function* () {
-      const entries = ["first prompt", "second prompt"] as const
+      const entries = ["first prompt", "second prompt"]
       const openState = transitionPromptSearch(
         PromptSearchState.open("draft"),
         { _tag: "TypeChar", char: "z" },

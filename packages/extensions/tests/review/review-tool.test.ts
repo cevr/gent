@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Predicate, Schema } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
 import { ReviewTool } from "../../src/review/review-tool.js"
 import {
@@ -7,6 +7,7 @@ import {
   AgentRunResult,
   SessionId,
   type ExtensionContextService,
+  type RunSpec,
 } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
@@ -27,7 +28,7 @@ const makeCtx = (overrides: {
   testToolContext({
     Agent: {
       run: overrides.agentRun,
-      listAgents: () => Effect.succeed(AllBuiltinAgents),
+      listAgents: Effect.succeed(AllBuiltinAgents),
     },
     Interaction: {
       approve: dieStub("interaction.approve"),
@@ -44,15 +45,18 @@ const runtimeEnvironmentLayer = RuntimeEnvironment.Test({
   platform: "test",
 })
 
+type RunOverrides = NonNullable<RunSpec["overrides"]>
+
 describe("ReviewTool", () => {
   it.live("passes description to runner", () => {
     let capturedPrompt = ""
-    const capturedOverrides: Array<Record<string, unknown> | undefined> = []
+    const capturedOverrides: Array<RunOverrides> = []
     const capturedParentToolCallIds: Array<unknown> = []
     const ctx = makeCtx({
       agentRun: (params) => {
         capturedPrompt = params.prompt
-        capturedOverrides.push(params.runSpec?.overrides as Record<string, unknown> | undefined)
+        const overrides = Option.fromNullishOr(params.runSpec?.overrides)
+        if (Option.isSome(overrides)) capturedOverrides.push(overrides.value)
         capturedParentToolCallIds.push(params.runSpec?.parentToolCallId)
         return Effect.succeed(
           AgentRunResult.cases.success.make({
@@ -73,8 +77,8 @@ describe("ReviewTool", () => {
       ).pipe(
         Effect.map(() => {
           expect(capturedPrompt).toContain("refactored auth module")
-          const reviewOverrides = capturedOverrides.find(
-            (overrides) => overrides?.["deniedTools"] !== undefined,
+          const reviewOverrides = capturedOverrides.find((overrides) =>
+            Predicate.isNotUndefined(overrides["deniedTools"]),
           )
           expect(capturedParentToolCallIds.every((id) => id === "test-call")).toBe(true)
           expect(reviewOverrides?.["allowedTools"]).toEqual([
@@ -91,7 +95,7 @@ describe("ReviewTool", () => {
   })
 
   it.live("parses structured JSON review output", () => {
-    const jsonOutput = JSON.stringify([
+    const jsonOutput = encodeJson([
       {
         file: "src/auth.ts",
         line: 10,
@@ -211,9 +215,7 @@ describe("ReviewTool", () => {
   })
 
   it.live("omits session ref for ephemeral review-worker output", () => {
-    const jsonOutput = JSON.stringify([
-      { file: "a.ts", severity: "low", type: "style", text: "minor" },
-    ])
+    const jsonOutput = encodeJson([{ file: "a.ts", severity: "low", type: "style", text: "minor" }])
     const ctx = makeCtx({
       agentRun: () =>
         Effect.succeed(

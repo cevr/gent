@@ -1,3 +1,4 @@
+import { Option, Schema } from "effect"
 import { For } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolCallTree } from "./tool-call-tree"
@@ -21,14 +22,11 @@ export function LiveChildTree(props: { childSessions: ChildSessionEntry[] }) {
   return (
     <For each={props.childSessions}>
       {(entry) => {
+        const decodeInput = Schema.decodeUnknownOption(Schema.JsonObject)
         const items = () =>
           entry.toolCalls.map((tc) => ({
             toolName: tc.toolName,
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
-            args: (tc.input !== undefined && tc.input !== null ? tc.input : {}) as Record<
-              string,
-              unknown
-            >,
+            args: Option.getOrElse(decodeInput(tc.input), () => ({})),
             isError: tc.status === "error",
             status: tc.status,
           }))

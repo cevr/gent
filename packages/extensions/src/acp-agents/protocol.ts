@@ -8,6 +8,7 @@
  * @module
  */
 import {
+  Predicate,
   Deferred,
   Effect,
   Fiber,
@@ -20,6 +21,7 @@ import {
   type Sink,
   Stream,
 } from "effect"
+import { isRecord } from "@gent/core/extensions/api"
 import type { PlatformError } from "effect/PlatformError"
 import type {
   InitializeRequest,
@@ -34,7 +36,7 @@ import * as S from "./schema.js"
 
 // ── Error ──
 
-export class AcpError extends Schema.TaggedErrorClass<AcpError>()("AcpError", {
+export class AcpError extends Schema.TaggedError<AcpError>()("AcpError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
@@ -47,7 +49,7 @@ export class AcpError extends Schema.TaggedErrorClass<AcpError>()("AcpError", {
  * RPC's pending Deferred would never be signalled. Callers identify a
  * driver-invalidation hang vs. a transport error via this tag.
  */
-export class AcpClosedError extends Schema.TaggedErrorClass<AcpClosedError>()("AcpClosedError", {
+export class AcpClosedError extends Schema.TaggedError<AcpClosedError>()("AcpClosedError", {
   reason: Schema.String,
 }) {}
 
@@ -74,9 +76,13 @@ type RequestId = number
 type PendingRequest = {
   readonly resolve: Deferred.Deferred<unknown, AcpError | AcpClosedError>
 }
+type PendingRequestMap = HashMap.HashMap<RequestId, PendingRequest>
+const JsonRpcId = Schema.Union([Schema.Finite, Schema.String, Schema.Null])
+type JsonRpcId = typeof JsonRpcId.Type
+const JSON_NULL = Option.getOrNull(Option.none())
 
-const PendingRequests = Schema.declare<HashMap.HashMap<RequestId, PendingRequest>>(
-  (u): u is HashMap.HashMap<RequestId, PendingRequest> => HashMap.isHashMap(u),
+const PendingRequests = Schema.declare<PendingRequestMap>(
+  (u): u is PendingRequestMap => HashMap.isHashMap(u),
   { identifier: "AcpPendingRequests" },
 )
 
@@ -97,42 +103,56 @@ const ConnState = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("_tag"))
 type ConnState = typeof ConnState.Type
 
-type IncomingRequestHandler = (method: string, params: unknown) => Effect.Effect<unknown, AcpError>
+const IncomingJsonRpcEnvelope = Schema.Record(Schema.String, Schema.Unknown)
+type IncomingJsonRpcRecord = Schema.Schema.Type<typeof IncomingJsonRpcEnvelope>
+
+type IncomingRequestHandler = (
+  method: string,
+  params: Schema.Schema.Type<typeof Schema.Unknown>,
+) => Effect.Effect<Schema.Schema.Type<typeof Schema.Unknown>, AcpError>
 
 // ── JSON-RPC wire helpers ──
 
-const encodeRequest = (id: RequestId, method: string, params: unknown): string =>
-  JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"
+const stringifyJsonRpc = (value: IncomingJsonRpcRecord): string =>
+  // oxlint-disable-next-line effect/noGlobals -- JSON-RPC request encoding is the protocol wire boundary.
+  JSON.stringify(value) || ""
 
-const encodeNotification = (method: string, params: unknown): string =>
-  JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n"
+const encodeRequest = (
+  id: RequestId,
+  method: string,
+  params: Schema.Schema.Type<typeof Schema.Unknown>,
+): string => `${stringifyJsonRpc({ jsonrpc: "2.0", id, method, params })}\n`
 
-const encodeResponse = (id: number | string | null, result: unknown): string =>
-  JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n"
+const encodeNotification = (
+  method: string,
+  params: Schema.Schema.Type<typeof Schema.Unknown>,
+): string => `${stringifyJsonRpc({ jsonrpc: "2.0", method, params })}\n`
 
-const encodeErrorResponse = (id: number | string | null, code: number, message: string): string =>
-  JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }) + "\n"
+const encodeResponse = (id: JsonRpcId, result: Schema.Schema.Type<typeof Schema.Unknown>): string =>
+  `${stringifyJsonRpc({ jsonrpc: "2.0", id, result })}\n`
+
+const encodeErrorResponse = (id: JsonRpcId, code: number, message: string): string =>
+  `${stringifyJsonRpc({ jsonrpc: "2.0", id, error: { code, message } })}\n`
 
 // Incoming JSON-RPC envelopes: the wire format is a flat object with
 // `id`, `method`, `params`, `result`, or `error` keys. We decode to an
 // open record and let `handleLine` dispatch on field presence — the
 // per-method payload schemas live in `./schema.ts` and are applied
 // after routing.
-const IncomingJsonRpcEnvelope = Schema.Record(Schema.String, Schema.Unknown)
 const decodeIncomingEnvelope = Schema.decodeUnknownOption(
   Schema.fromJsonString(IncomingJsonRpcEnvelope),
 )
-const decodeInitializeResponse = (raw: unknown) =>
+const decodeInitializeResponse = (raw: Schema.Schema.Type<typeof Schema.Unknown>) =>
   Schema.decodeUnknownEffect(S.InitializeResponse)(raw).pipe(
     Effect.mapError((cause) => new AcpError({ message: "invalid ACP initialize response", cause })),
   )
-const decodeNewSessionResponse = (raw: unknown) =>
+const decodeNewSessionResponse = (raw: Schema.Schema.Type<typeof Schema.Unknown>) =>
   Schema.decodeUnknownEffect(S.NewSessionResponse)(raw).pipe(
     Effect.mapError(
       (cause) => new AcpError({ message: "invalid ACP session/new response", cause }),
     ),
   )
-const decodePromptResponse = (raw: unknown) =>
+const decodePromptResponse = (raw: Schema.Schema.Type<typeof Schema.Unknown>) =>
   Schema.decodeUnknownEffect(S.PromptResponse)(raw).pipe(
     Effect.mapError(
       (cause) => new AcpError({ message: "invalid ACP session/prompt response", cause }),
@@ -149,7 +169,7 @@ export const makeAcpConnection = (
   incomingRequestHandler?: IncomingRequestHandler,
 ) =>
   Effect.gen(function* () {
-    const nextIdRef = yield* Ref.make(1 as RequestId)
+    const nextIdRef = yield* Ref.make<RequestId>(1)
     const stateRef = yield* Ref.make<ConnState>(
       ConnState.cases.open.make({ pending: HashMap.empty<RequestId, PendingRequest>() }),
     )
@@ -170,17 +190,17 @@ export const makeAcpConnection = (
      */
     const sealAndClaimPending = Ref.modify(
       stateRef,
-      (s): [HashMap.HashMap<RequestId, PendingRequest> | undefined, ConnState] => {
-        if (s._tag === "closed") return [undefined, s]
-        return [s.pending, ConnState.cases.closed.make({})]
+      (s): [Option.Option<PendingRequestMap>, ConnState] => {
+        if (s._tag === "closed") return [Option.none(), s]
+        return [Option.some(s.pending), ConnState.cases.closed.make({})]
       },
     )
 
     const failPendingWith = (reason: string) =>
       Effect.gen(function* () {
         const claimed = yield* sealAndClaimPending
-        if (claimed === undefined) return false
-        for (const [, entry] of claimed) {
+        if (Option.isNone(claimed)) return false
+        for (const [, entry] of claimed.value) {
           yield* Deferred.fail(entry.resolve, new AcpClosedError({ reason }))
         }
         yield* PubSub.shutdown(updatesPubSub).pipe(Effect.ignore)
@@ -213,54 +233,57 @@ export const makeAcpConnection = (
     // claim-and-remove via Ref.modify so a concurrent `close` either
     // sees the entry (and fails it) or this handler sees it — never
     // both, never neither.
-    const handleResponse = (parsed: Record<string, unknown>) =>
+    const handleResponse = (parsed: IncomingJsonRpcRecord) =>
       Effect.gen(function* () {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-        const id = parsed["id"] as RequestId
+        const rawId = parsed["id"]
+        if (!Predicate.isNumber(rawId)) return
+        const id = rawId
         const claimed = yield* Ref.modify(
           stateRef,
-          (s): [PendingRequest | undefined, ConnState] => {
-            if (s._tag === "closed") return [undefined, s]
+          (s): [Option.Option<PendingRequest>, ConnState] => {
+            if (s._tag === "closed") return [Option.none(), s]
             const found = HashMap.get(s.pending, id)
-            if (found._tag === "None") return [undefined, s]
+            if (found._tag === "None") return [Option.none(), s]
             return [
-              found.value,
+              Option.some(found.value),
               ConnState.cases.open.make({ pending: HashMap.remove(s.pending, id) }),
             ]
           },
         )
-        if (claimed === undefined) return
+        if (Option.isNone(claimed)) return
 
         if ("error" in parsed) {
           const err = parsed["error"]
-          const message =
-            typeof err === "object" && err !== null && "message" in err
-              ? String((err as Record<string, unknown>)["message"])
-              : "Unknown ACP error"
-          yield* Deferred.fail(claimed.resolve, new AcpError({ message }))
+          let message = "Unknown ACP error"
+          if (isRecord(err) && "message" in err) message = String(err["message"])
+          yield* Deferred.fail(claimed.value.resolve, new AcpError({ message }))
         } else {
-          yield* Deferred.succeed(claimed.resolve, parsed["result"])
+          yield* Deferred.succeed(claimed.value.resolve, parsed["result"])
         }
       })
 
     // Handle an incoming request from the agent (e.g. permission)
     const handleIncomingRequest = (
       method: string,
-      reqId: number | string | null,
-      params: unknown,
+      reqId: JsonRpcId,
+      params: Schema.Schema.Type<typeof Schema.Unknown>,
     ) =>
       Effect.gen(function* () {
-        if (incomingRequestHandler !== undefined) {
+        if (Predicate.isNotUndefined(incomingRequestHandler)) {
           const result = yield* incomingRequestHandler(method, params).pipe(
+            Effect.map((value) => {
+              if (Predicate.isUndefined(value)) return Option.none()
+              return Option.some(value)
+            }),
             Effect.catchEager((err: AcpError) =>
               Effect.gen(function* () {
                 yield* write(encodeErrorResponse(reqId, -32603, err.message))
-                return undefined
+                return Option.none()
               }),
             ),
           )
-          if (result !== undefined) {
-            yield* write(encodeResponse(reqId, result))
+          if (Option.isSome(result)) {
+            yield* write(encodeResponse(reqId, result.value))
           }
           return
         }
@@ -268,15 +291,22 @@ export const makeAcpConnection = (
         // Auto-approve permissions (bare mode agents shouldn't ask, but just in case)
         if (method === "session/request_permission") {
           const req = yield* Schema.decodeUnknownEffect(S.RequestPermissionRequest)(params).pipe(
-            Effect.catchEager(() => Effect.sync(() => undefined)),
+            Effect.asSome,
+            Effect.catchEager(() => Effect.succeedNone),
           )
-          if (req !== undefined) {
-            const allowOption = req.options.find((o) => o.kind === "allow_once")
+          if (Option.isSome(req)) {
+            const allowOption = Option.fromNullishOr(
+              req.value.options.find((o) => o.kind === "allow_once"),
+            )
+            let outcome: Schema.Schema.Type<typeof Schema.Unknown>
+            if (Option.isSome(allowOption)) {
+              outcome = { outcome: "selected", optionId: allowOption.value.optionId }
+            } else {
+              outcome = { outcome: "cancelled" }
+            }
             yield* write(
               encodeResponse(reqId, {
-                outcome: allowOption
-                  ? { outcome: "selected", optionId: allowOption.optionId }
-                  : { outcome: "cancelled" },
+                outcome,
               }),
             )
           } else {
@@ -302,7 +332,7 @@ export const makeAcpConnection = (
         const parsed = decoded.value
 
         // Response to one of our requests
-        if ("id" in parsed && parsed["id"] !== null && !("method" in parsed)) {
+        if ("id" in parsed && !Predicate.isNull(parsed["id"]) && !("method" in parsed)) {
           yield* handleResponse(parsed)
           return
         }
@@ -313,15 +343,16 @@ export const makeAcpConnection = (
             const notification = yield* Schema.decodeUnknownEffect(S.SessionNotification)(
               parsed["params"],
             ).pipe(
+              Effect.asSome,
               Effect.catchEager((decodeErr) =>
                 Effect.logWarning("acp: failed to decode session/update").pipe(
                   Effect.annotateLogs({ error: String(decodeErr) }),
-                  Effect.as(undefined),
+                  Effect.as(Option.none()),
                 ),
               ),
             )
-            if (notification !== undefined) {
-              yield* PubSub.publish(updatesPubSub, notification)
+            if (Option.isSome(notification)) {
+              yield* PubSub.publish(updatesPubSub, notification.value)
             }
           }
           return
@@ -330,7 +361,8 @@ export const makeAcpConnection = (
         // Incoming request from agent (has id + method)
         if ("method" in parsed && "id" in parsed) {
           const rawId = parsed["id"]
-          const reqId = typeof rawId === "number" || typeof rawId === "string" ? rawId : null
+          let reqId: JsonRpcId = JSON_NULL
+          if (Predicate.isNumber(rawId) || Predicate.isString(rawId)) reqId = rawId
           yield* handleIncomingRequest(String(parsed["method"]), reqId, parsed["params"])
         }
       })
@@ -369,16 +401,16 @@ export const makeAcpConnection = (
     // the pending map *between* "is open?" and "register pending".
     // Without this fold, a late RPC could write its Deferred into the
     // post-drain map and park forever.
-    const rpcRaw = (method: string, params: unknown) =>
+    const rpcRaw = (method: string, params: Schema.Schema.Type<typeof Schema.Unknown>) =>
       Effect.gen(function* () {
-        const id = yield* Ref.getAndUpdate(nextIdRef, (n) => (n + 1) as RequestId)
+        const id = yield* Ref.getAndUpdate(nextIdRef, (n) => n + 1)
         const deferred = yield* Deferred.make<unknown, AcpError | AcpClosedError>()
         const registered = yield* Ref.modify(stateRef, (s): [boolean, ConnState] => {
           if (s._tag === "closed") return [false, s]
           return [
             true,
             ConnState.cases.open.make({
-              pending: HashMap.set(s.pending, id, { resolve: deferred } as PendingRequest),
+              pending: HashMap.set(s.pending, id, { resolve: deferred }),
             }),
           ]
         })

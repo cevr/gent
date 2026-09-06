@@ -9,6 +9,7 @@
  * `griffinmartin/opencode-claude-auth`'s reference implementation.
  */
 import { describe, it, expect } from "bun:test"
+import { Option, Schema } from "effect"
 import {
   freshEnoughForUse,
   parseOAuthResponse,
@@ -17,53 +18,79 @@ import {
   shouldFallBackToCredentialsFile,
   updateCredentialBlob,
 } from "../../src/anthropic/oauth.js"
+import { encodeExternalJson, externalWireNull } from "../helpers/external-wire.js"
+
+const WrappedCredentialBlob = Schema.Struct({
+  claudeAiOauth: Schema.Struct({
+    accessToken: Schema.String,
+    refreshToken: Schema.String,
+    expiresAt: Schema.Finite,
+    subscriptionType: Schema.String,
+  }),
+  mcpOAuth: Schema.Struct({ something: Schema.String }),
+})
+const FlatCredentialBlob = Schema.Struct({
+  accessToken: Schema.String,
+  refreshToken: Schema.String,
+  expiresAt: Schema.Finite,
+})
+const decodeWrappedCredentialBlob = Schema.decodeUnknownSync(
+  Schema.fromJsonString(WrappedCredentialBlob),
+)
+const decodeFlatCredentialBlob = Schema.decodeUnknownSync(Schema.fromJsonString(FlatCredentialBlob))
 
 describe("parseOAuthResponse", () => {
   it("parses a well-formed Anthropic refresh response", () => {
-    const raw = JSON.stringify({
+    const raw = encodeExternalJson({
       access_token: "new-access",
       refresh_token: "new-refresh",
       expires_in: 3600,
     })
     const now = 1_700_000_000_000
     const creds = parseOAuthResponse(raw, "old-refresh", now)
-    expect(creds).toBeDefined()
-    expect(creds?.accessToken).toBe("new-access")
-    expect(creds?.refreshToken).toBe("new-refresh")
-    expect(creds?.expiresAt).toBe(now + 3600 * 1000)
+    expect(Option.isSome(creds)).toBe(true)
+    if (Option.isSome(creds)) {
+      expect(creds.value.accessToken).toBe("new-access")
+      expect(creds.value.refreshToken).toBe("new-refresh")
+      expect(creds.value.expiresAt).toBe(now + 3600 * 1000)
+    }
   })
 
   it("falls back to the caller's refresh token when the response omits one", () => {
-    const raw = JSON.stringify({ access_token: "new-access", expires_in: 3600 })
+    const raw = encodeExternalJson({ access_token: "new-access", expires_in: 3600 })
     const creds = parseOAuthResponse(raw, "old-refresh", 0)
-    expect(creds?.refreshToken).toBe("old-refresh")
+    expect(Option.isSome(creds)).toBe(true)
+    if (Option.isSome(creds)) expect(creds.value.refreshToken).toBe("old-refresh")
   })
 
   it("defaults expires_in to 36 000s (10h) when missing", () => {
-    const raw = JSON.stringify({ access_token: "new-access" })
+    const raw = encodeExternalJson({ access_token: "new-access" })
     const now = 1_700_000_000_000
     const creds = parseOAuthResponse(raw, "old-refresh", now)
-    expect(creds?.expiresAt).toBe(now + 36_000 * 1000)
+    expect(Option.isSome(creds)).toBe(true)
+    if (Option.isSome(creds)) expect(creds.value.expiresAt).toBe(now + 36_000 * 1000)
   })
 
-  it("returns undefined for non-JSON input", () => {
-    expect(parseOAuthResponse("not json", "x", 0)).toBeUndefined()
+  it("returns None for non-JSON input", () => {
+    expect(Option.isNone(parseOAuthResponse("not json", "x", 0))).toBe(true)
   })
 
-  it("returns undefined when access_token is missing", () => {
-    const raw = JSON.stringify({ refresh_token: "x", expires_in: 3600 })
-    expect(parseOAuthResponse(raw, "old-refresh", 0)).toBeUndefined()
+  it("returns None when access_token is missing", () => {
+    const raw = encodeExternalJson({ refresh_token: "x", expires_in: 3600 })
+    expect(Option.isNone(parseOAuthResponse(raw, "old-refresh", 0))).toBe(true)
   })
 
-  it("returns undefined when the body is not an object", () => {
-    expect(parseOAuthResponse(JSON.stringify("oops"), "x", 0)).toBeUndefined()
-    expect(parseOAuthResponse(JSON.stringify(null), "x", 0)).toBeUndefined()
+  it("returns None when the body is not an object", () => {
+    expect(Option.isNone(parseOAuthResponse(encodeExternalJson("oops"), "x", 0))).toBe(true)
+    expect(Option.isNone(parseOAuthResponse(encodeExternalJson(externalWireNull), "x", 0))).toBe(
+      true,
+    )
   })
 })
 
 describe("updateCredentialBlob", () => {
   it("rewrites the wrapped `claudeAiOauth` payload preserving sibling fields", () => {
-    const existing = JSON.stringify({
+    const existing = encodeExternalJson({
       claudeAiOauth: {
         accessToken: "old-access",
         refreshToken: "old-refresh",
@@ -77,25 +104,19 @@ describe("updateCredentialBlob", () => {
       refreshToken: "new-refresh",
       expiresAt: 9_999,
     })
-    expect(next).toBeDefined()
-    const parsed = JSON.parse(next ?? "{}") as {
-      claudeAiOauth: {
-        accessToken: string
-        refreshToken: string
-        expiresAt: number
-        subscriptionType: string
-      }
-      mcpOAuth: { something: string }
+    expect(Option.isSome(next)).toBe(true)
+    if (Option.isSome(next)) {
+      const parsed = decodeWrappedCredentialBlob(next.value)
+      expect(parsed.claudeAiOauth.accessToken).toBe("new-access")
+      expect(parsed.claudeAiOauth.refreshToken).toBe("new-refresh")
+      expect(parsed.claudeAiOauth.expiresAt).toBe(9_999)
+      expect(parsed.claudeAiOauth.subscriptionType).toBe("max")
+      expect(parsed.mcpOAuth.something).toBe("preserve-me")
     }
-    expect(parsed.claudeAiOauth.accessToken).toBe("new-access")
-    expect(parsed.claudeAiOauth.refreshToken).toBe("new-refresh")
-    expect(parsed.claudeAiOauth.expiresAt).toBe(9_999)
-    expect(parsed.claudeAiOauth.subscriptionType).toBe("max")
-    expect(parsed.mcpOAuth.something).toBe("preserve-me")
   })
 
   it("rewrites a flat payload (no `claudeAiOauth` wrapper)", () => {
-    const existing = JSON.stringify({
+    const existing = encodeExternalJson({
       accessToken: "old-access",
       refreshToken: "old-refresh",
       expiresAt: 0,
@@ -105,24 +126,22 @@ describe("updateCredentialBlob", () => {
       refreshToken: "new-refresh",
       expiresAt: 1_234,
     })
-    expect(next).toBeDefined()
-    const parsed = JSON.parse(next ?? "{}") as {
-      accessToken: string
-      refreshToken: string
-      expiresAt: number
+    expect(Option.isSome(next)).toBe(true)
+    if (Option.isSome(next)) {
+      const parsed = decodeFlatCredentialBlob(next.value)
+      expect(parsed.accessToken).toBe("new-access")
+      expect(parsed.refreshToken).toBe("new-refresh")
+      expect(parsed.expiresAt).toBe(1_234)
     }
-    expect(parsed.accessToken).toBe("new-access")
-    expect(parsed.refreshToken).toBe("new-refresh")
-    expect(parsed.expiresAt).toBe(1_234)
   })
 
-  it("returns undefined for non-JSON input", () => {
+  it("returns None for non-JSON input", () => {
     const next = updateCredentialBlob("not json", {
       accessToken: "x",
       refreshToken: "y",
       expiresAt: 0,
     })
-    expect(next).toBeUndefined()
+    expect(Option.isNone(next)).toBe(true)
   })
 })
 

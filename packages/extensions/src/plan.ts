@@ -19,15 +19,17 @@ export { PlanTool, PlanParams } from "./plan-tool.js"
 
 export const PLAN_EXTENSION_ID = ExtensionId.make("@gent/plan")
 
-const planPrompt = (input: string) =>
-  input.trim().length > 0
-    ? `Use the plan tool to create an implementation plan for: ${input.trim()}`
-    : "Use the artifact_read tool with sourceTool 'plan' to show the current plan. If no plan exists, say so."
+const planPrompt = (input: string): string => {
+  if (input.trim().length > 0) {
+    return `Use the plan tool to create an implementation plan for: ${input.trim()}`
+  }
+  return "Use the artifact_read tool with sourceTool 'plan' to show the current plan. If no plan exists, say so."
+}
 
-const auditPrompt = (input: string) =>
-  input.trim().length > 0
-    ? `Use the audit tool to audit: ${input.trim()}`
-    : "Use the audit tool to audit the current changes. Detects concerns, audits in parallel, synthesizes findings, and applies fixes."
+const auditPrompt = (input: string): string => {
+  if (input.trim().length > 0) return `Use the audit tool to audit: ${input.trim()}`
+  return "Use the audit tool to audit the current changes. Detects concerns, audits in parallel, synthesizes findings, and applies fixes."
+}
 
 const PlanCommand = request({
   id: "plan-command",

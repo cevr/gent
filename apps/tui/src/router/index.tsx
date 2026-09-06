@@ -1,5 +1,7 @@
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
-import { createContext, createSignal, onCleanup, useContext, type ParentProps } from "solid-js"
+import { createContext, createSignal, onCleanup, type ParentProps } from "solid-js"
+import { Option } from "effect"
+import { useRequiredContext } from "../utils/solid-context"
 import type { Branch } from "../client"
 
 export type AppRoute =
@@ -23,24 +25,25 @@ export interface AppRouterState {
 }
 
 export const Route = {
-  session: (sessionId: SessionId, branchId: BranchId, prompt?: string): AppRoute => ({
-    _tag: "session",
-    sessionId,
-    branchId,
-    ...(prompt !== undefined ? { prompt } : {}),
-  }),
+  session: (sessionId: SessionId, branchId: BranchId, prompt?: string): AppRoute => {
+    const route: AppRoute = { _tag: "session", sessionId, branchId }
+    return Option.match(Option.fromNullishOr(prompt), {
+      onNone: () => route,
+      onSome: (prompt) => ({ ...route, prompt }),
+    })
+  },
   branchPicker: (
     sessionId: SessionId,
     sessionName: string,
     branches: readonly Branch[],
     prompt?: string,
-  ): AppRoute => ({
-    _tag: "branchPicker",
-    sessionId,
-    sessionName,
-    branches,
-    ...(prompt !== undefined ? { prompt } : {}),
-  }),
+  ): AppRoute => {
+    const route: AppRoute = { _tag: "branchPicker", sessionId, sessionName, branches }
+    return Option.match(Option.fromNullishOr(prompt), {
+      onNone: () => route,
+      onSome: (prompt) => ({ ...route, prompt }),
+    })
+  },
 }
 
 export const isRoute = {
@@ -67,9 +70,9 @@ export function routerReducer(state: AppRouterState, action: RouterAction): AppR
     case "back": {
       if (state.history.length === 0) return state
       const newHistory = [...state.history]
-      const previous = newHistory.pop()
-      if (previous === undefined) return state
-      return { current: previous, history: newHistory }
+      const previous = Option.fromNullishOr(newHistory.pop())
+      if (Option.isNone(previous)) return state
+      return { current: previous.value, history: newHistory }
     }
   }
 }
@@ -169,11 +172,7 @@ export function RouterProvider(props: ParentProps<RouterProviderProps>) {
 }
 
 export function useRouter(): RouterContextValue {
-  const ctx = useContext(RouterContext)
-  if (ctx === undefined) {
-    throw new Error("useRouter must be used within RouterProvider")
-  }
-  return ctx
+  return useRequiredContext(RouterContext, "useRouter must be used within RouterProvider")
 }
 
 export function useRoute(): () => AppRoute {

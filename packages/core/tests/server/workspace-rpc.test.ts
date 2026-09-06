@@ -44,6 +44,7 @@ describe("workspace RPC middleware", () => {
         const context = yield* Layer.build(
           Layer.provide(RpcHandlersLive, createE2ELayer({ ...e2ePreset, providerLayer })),
         )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         const client = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
         const exit = yield* Effect.exit(client["session.list"]())
         expect(exit._tag).toBe("Failure")
@@ -61,6 +62,7 @@ describe("workspace RPC middleware", () => {
         const context = yield* Layer.build(
           Layer.provide(RpcHandlersLive, createE2ELayer({ ...e2ePreset, providerLayer })),
         )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         const client = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
         const inWorkspace = <A, E, R>(workspaceId: string, effect: Effect.Effect<A, E, R>) =>
           RpcClient.withHeaders(effect, { [WORKSPACE_ID_HEADER]: workspaceId })

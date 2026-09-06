@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Deferred, Effect, Stream } from "effect"
+import { Predicate, Cause, Deferred, Effect, Stream } from "effect"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { EventStore, SessionStarted } from "@gent/core-internal/domain/event"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
@@ -286,7 +286,7 @@ describe("session.delete", () => {
             readonly cause?: Cause.Cause<unknown>
           }) => {
             expect(exit._tag).toBe("Failure")
-            if (exit._tag === "Failure" && exit.cause !== undefined) {
+            if (exit._tag === "Failure" && !Predicate.isUndefined(exit.cause)) {
               const message = String(Cause.squash(exit.cause))
               expect(message.toLowerCase()).toMatch(/session.*(not found|terminated)/)
             }

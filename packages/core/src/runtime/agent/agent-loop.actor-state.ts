@@ -1,4 +1,4 @@
-import { Effect, Option, Schema, Stream } from "effect"
+import { Effect, Option, Predicate, Schema, Stream } from "effect"
 import type { AgentName, RunSpec } from "../../domain/agent.js"
 import type { AgentLoopBehavior } from "./agent-loop.behavior.js"
 import { AgentLoopError, type AgentLoopState, type QueuedTurnItem } from "./agent-loop.state.js"
@@ -11,9 +11,9 @@ export const buildQueuedTurnItem = (operation: {
   readonly interactive?: boolean
 }): QueuedTurnItem => ({
   message: operation.message,
-  ...(operation.agentOverride !== undefined ? { agentOverride: operation.agentOverride } : {}),
-  ...(operation.runSpec !== undefined ? { runSpec: operation.runSpec } : {}),
-  ...(operation.interactive !== undefined ? { interactive: operation.interactive } : {}),
+  agentOverride: operation.agentOverride,
+  runSpec: operation.runSpec,
+  interactive: operation.interactive,
 })
 
 export const waitForIdleAfterEpoch = (
@@ -29,15 +29,12 @@ export const waitForIdleAfterEpoch = (
     )
   })
 
-const failTurnFailureState = (failure: { readonly error: unknown }) =>
-  Effect.fail(
-    Schema.is(AgentLoopError)(failure.error)
-      ? failure.error
-      : new AgentLoopError({
-          message: "Agent loop turn failed",
-          cause: failure.error,
-        }),
+const failTurnFailureState = (failure: NonNullable<AgentLoopState["turnFailure"]>) => {
+  if (Schema.is(AgentLoopError)(failure.error)) return Effect.fail(failure.error)
+  return Effect.fail(
+    new AgentLoopError({ message: "Agent loop turn failed", cause: failure.error }),
   )
+}
 
 export const waitForTurnFailureAfterEpoch = (
   behavior: AgentLoopBehavior,
@@ -45,14 +42,14 @@ export const waitForTurnFailureAfterEpoch = (
 ): Effect.Effect<void, AgentLoopError> =>
   Effect.gen(function* () {
     const current = yield* behavior.readState
-    if (current.turnFailure !== undefined && current.turnFailure.epoch > baseline) {
+    if (Predicate.isNotUndefined(current.turnFailure) && current.turnFailure.epoch > baseline) {
       return yield* failTurnFailureState(current.turnFailure)
     }
     const hasNewTurnFailure = (
       state: AgentLoopState,
     ): state is AgentLoopState & {
       readonly turnFailure: NonNullable<AgentLoopState["turnFailure"]>
-    } => state.turnFailure !== undefined && state.turnFailure.epoch > baseline
+    } => Predicate.isNotUndefined(state.turnFailure) && state.turnFailure.epoch > baseline
     const next = yield* behavior.stateChanges.pipe(Stream.filter(hasNewTurnFailure), Stream.runHead)
     if (Option.isSome(next)) return yield* failTurnFailureState(next.value.turnFailure)
     return yield* new AgentLoopError({
@@ -66,7 +63,7 @@ export const failIfTurnFailedAfterEpoch = (
 ): Effect.Effect<void, AgentLoopError> =>
   Effect.gen(function* () {
     const current = yield* behavior.readState
-    if (current.turnFailure !== undefined && current.turnFailure.epoch > baseline) {
+    if (Predicate.isNotUndefined(current.turnFailure) && current.turnFailure.epoch > baseline) {
       return yield* failTurnFailureState(current.turnFailure)
     }
   })

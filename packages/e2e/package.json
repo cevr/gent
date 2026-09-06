@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsc --noEmit",
     "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --max-concurrency=1 --timeout=30000 tests/core-boundary.test.ts tests/event-stream.test.ts tests/live-event.test.ts tests/queue-contract.test.ts tests/watch-state.test.ts tests/e2e.test.ts tests/transport-contract.test.ts tests/server-lifecycle.test.ts"
   },
   "dependencies": {
@@ -15,7 +15,7 @@
     "@gent/server-http": "workspace:*"
   },
   "devDependencies": {
-    "zigpty": "^0.1.6"
+    "zigpty": "^0.2.1"
   },
   "peerDependencies": {
     "@effect/platform-bun": "catalog:",

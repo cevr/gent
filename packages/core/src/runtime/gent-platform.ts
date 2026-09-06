@@ -46,7 +46,7 @@
  * `GentPlatform.Live`'s implementation file (`gent-platform-bun.ts`).
  */
 
-import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { Predicate, Context, Effect, Layer, Ref, Schema } from "effect"
 
 export interface GentPlatformOsInfo {
   readonly platform: string
@@ -69,8 +69,8 @@ export type GentPlatformSignal = string | 0
  * `EINVAL`) without parsing free-form `reason` text. `code` is `null` when
  * the underlying error did not carry a `code` property.
  */
-export class SignalError extends Schema.TaggedErrorClass<SignalError>()("SignalError", {
-  pid: Schema.Number,
+export class SignalError extends Schema.TaggedError<SignalError>()("SignalError", {
+  pid: Schema.Finite,
   signal: Schema.Union([Schema.String, Schema.Literal(0)]),
   code: Schema.NullOr(Schema.String),
   reason: Schema.String,
@@ -78,12 +78,13 @@ export class SignalError extends Schema.TaggedErrorClass<SignalError>()("SignalE
 
 export type GentPlatformHashAlgorithm = "sha256" | "md5"
 
-export interface GentPlatformShape {
+export interface GentPlatformApi {
   readonly randomId: Effect.Effect<string>
   readonly osInfo: Effect.Effect<GentPlatformOsInfo>
   readonly pid: Effect.Effect<number>
   readonly execPath: Effect.Effect<string>
   readonly homeDirectory: Effect.Effect<string>
+  // oxlint-disable-next-line effect/noNullish -- Platform environment snapshots preserve undefined for absent process variables.
   readonly env: Effect.Effect<Record<string, string | undefined>>
   readonly pathListSeparator: Effect.Effect<string>
   readonly commandCandidates: (command: string) => ReadonlyArray<string>
@@ -96,7 +97,7 @@ export interface GentPlatformShape {
   readonly fileURLToPath: (url: string) => string
 }
 
-export class GentPlatform extends Context.Service<GentPlatform, GentPlatformShape>()(
+export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>()(
   "@gent/core/src/runtime/gent-platform/GentPlatform",
 ) {
   /**
@@ -145,11 +146,14 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformShap
           // Length matches the real `sha256`/`md5` hex output (64/32) so
           // consumers that slice off a prefix observe the right shape.
           hash: (algorithm, input) => {
-            const text = typeof input === "string" ? input : new TextDecoder().decode(input)
+            let text = ""
+            if (Predicate.isString(input)) text = input
+            else text = new TextDecoder().decode(input)
             let h = 5381
             for (let i = 0; i < text.length; i += 1) h = (h * 33) ^ text.charCodeAt(i)
             const seed = (h >>> 0).toString(16).padStart(8, "0")
-            const width = algorithm === "sha256" ? 64 : 32
+            let width = 32
+            if (algorithm === "sha256") width = 64
             return seed.repeat(Math.ceil(width / 8)).slice(0, width)
           },
           randomBytes: (length) =>
@@ -160,7 +164,10 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformShap
                 return bytes
               }),
             ),
-          fileURLToPath: (url) => (url.startsWith("file://") ? url.slice("file://".length) : url),
+          fileURLToPath: (url) => {
+            if (url.startsWith("file://")) return url.slice("file://".length)
+            return url
+          },
         })
       }),
     )

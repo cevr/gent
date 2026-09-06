@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, FileSystem } from "effect"
+import { Effect, FileSystem, Option } from "effect"
 import { describe as effectDescribe, it } from "effect-bun-test"
 import { BunFileSystem } from "@effect/platform-bun"
 import { resolveEditor, parseEditorCommand } from "../src/utils/external-editor"
@@ -8,19 +8,19 @@ import { resolveEditor, parseEditorCommand } from "../src/utils/external-editor"
 
 describe("resolveEditor", () => {
   test("prefers $VISUAL", () => {
-    expect(resolveEditor("code", "vim")).toBe("code")
+    expect(resolveEditor(Option.some("code"), Option.some("vim"))).toBe("code")
   })
 
   test("falls back to $EDITOR", () => {
-    expect(resolveEditor(undefined, "nano")).toBe("nano")
+    expect(resolveEditor(Option.none(), Option.some("nano"))).toBe("nano")
   })
 
   test("falls back to vi", () => {
-    expect(resolveEditor(undefined, undefined)).toBe("vi")
+    expect(resolveEditor(Option.none(), Option.none())).toBe("vi")
   })
 
   test("$VISUAL empty string falls through", () => {
-    expect(resolveEditor("", "vim")).toBe("vim")
+    expect(resolveEditor(Option.some(""), Option.some("vim"))).toBe("vim")
   })
 })
 
@@ -67,8 +67,9 @@ effectDescribe("content roundtrip", () => {
     Effect.gen(function* () {
       const content = "line 1\nline 2\nline 3\n"
       const tmpPath = yield* makeFile
-      yield* Effect.promise(() => Bun.write(tmpPath, content))
-      const readBack = yield* Effect.promise(() => Bun.file(tmpPath).text())
+      const fs = yield* FileSystem.FileSystem
+      yield* fs.writeFileString(tmpPath, content)
+      const readBack = yield* fs.readFileString(tmpPath)
       expect(readBack).toBe(content)
     }),
   )
@@ -76,8 +77,9 @@ effectDescribe("content roundtrip", () => {
   roundtripTest("empty content roundtrips", () =>
     Effect.gen(function* () {
       const tmpPath = yield* makeFile
-      yield* Effect.promise(() => Bun.write(tmpPath, ""))
-      const readBack = yield* Effect.promise(() => Bun.file(tmpPath).text())
+      const fs = yield* FileSystem.FileSystem
+      yield* fs.writeFileString(tmpPath, "")
+      const readBack = yield* fs.readFileString(tmpPath)
       expect(readBack).toBe("")
     }),
   )
@@ -86,8 +88,9 @@ effectDescribe("content roundtrip", () => {
     Effect.gen(function* () {
       const content = "function foo() {\n  return `hello ${'world'}`\n}\n"
       const tmpPath = yield* makeFile
-      yield* Effect.promise(() => Bun.write(tmpPath, content))
-      const readBack = yield* Effect.promise(() => Bun.file(tmpPath).text())
+      const fs = yield* FileSystem.FileSystem
+      yield* fs.writeFileString(tmpPath, content)
+      const readBack = yield* fs.readFileString(tmpPath)
       expect(readBack).toBe(content)
     }),
   )

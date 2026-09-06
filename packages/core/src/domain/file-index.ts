@@ -17,7 +17,7 @@ export interface IndexedFile {
 // Error
 // ---------------------------------------------------------------------------
 
-export class FileIndexError extends Schema.TaggedErrorClass<FileIndexError>()("FileIndexError", {
+export class FileIndexError extends Schema.TaggedError<FileIndexError>()("FileIndexError", {
   message: Schema.String,
   cwd: Schema.String,
   cause: Schema.optional(Schema.Unknown),

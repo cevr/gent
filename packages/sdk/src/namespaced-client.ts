@@ -1,4 +1,4 @@
-import { Stream, type Effect, type Fiber } from "effect"
+import { Option, Stream, type Effect, type Fiber } from "effect"
 import { RpcClient } from "effect/unstable/rpc"
 import { Headers } from "effect/unstable/http"
 import { GentRpcs, type GentRpcClient } from "@gent/core-internal/server/rpcs.js"
@@ -59,44 +59,54 @@ const rpcKeys = (): ReadonlyArray<string> => [...GentRpcs.requests.keys()]
 
 const splitRpcKey = (key: string) => {
   const separator = key.indexOf(".")
-  return separator === -1
-    ? { namespace: key, method: undefined }
-    : { namespace: key.slice(0, separator), method: key.slice(separator + 1) }
+  if (separator === -1) return { namespace: key, method: Option.none<string>() }
+  return {
+    namespace: key.slice(0, separator),
+    method: Option.some(key.slice(separator + 1)),
+  }
 }
 
 const namespaceMethods = (namespace: string): ReadonlyArray<string> =>
   rpcKeys().flatMap((key) => {
     const parsed = splitRpcKey(key)
-    return parsed.namespace === namespace && parsed.method !== undefined ? [parsed.method] : []
+    if (parsed.namespace === namespace && Option.isSome(parsed.method)) {
+      return [parsed.method.value]
+    }
+    return []
   })
 
 const makeNamespace = (flat: GentRpcClient, namespace: string, headers?: Headers.Input) => {
   const methods = namespaceMethods(namespace)
+  const headersOption = Option.fromNullishOr(headers)
+  const absent = Option.getOrUndefined(Option.none())
   return new Proxy(Object.create(null), {
     get: (_target, property) => {
-      if (typeof property !== "string") return undefined
+      if (typeof property !== "string") return absent
       const method = Reflect.get(flat, `${namespace}.${property}`)
-      if (headers === undefined || typeof method !== "function") return method
+      if (Option.isNone(headersOption) || typeof method !== "function") return method
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- Runtime key comes from GentRpcs.requests; wrapping preserves the underlying RPC method shape.
       const call = method as RpcMethod
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- The proxy returns the same callable contract with CurrentHeaders attached around the returned Effect or Stream.
       return ((...args: ReadonlyArray<never>) => {
         const result = call(...args)
-        return Stream.isStream(result)
-          ? Stream.updateService(
-              result,
-              RpcClient.CurrentHeaders,
-              Headers.merge(Headers.fromInput(headers)),
-            )
-          : RpcClient.withHeaders(result, headers)
+        if (Stream.isStream(result)) {
+          return Stream.updateService(
+            result,
+            RpcClient.CurrentHeaders,
+            Headers.merge(Headers.fromInput(headersOption.value)),
+          )
+        }
+        return RpcClient.withHeaders(result, headersOption.value)
       }) as typeof method
     },
     has: (_target, property) => typeof property === "string" && methods.includes(property),
     ownKeys: () => methods,
-    getOwnPropertyDescriptor: (_target, property) =>
-      typeof property === "string" && methods.includes(property)
-        ? { enumerable: true, configurable: true }
-        : undefined,
+    getOwnPropertyDescriptor: (_target, property) => {
+      if (typeof property === "string" && methods.includes(property)) {
+        return { enumerable: true, configurable: true }
+      }
+      return absent
+    },
   })
 }
 
@@ -109,24 +119,28 @@ export const makeNamespacedClient = (
     ...new Set(
       rpcKeys().flatMap((key) => {
         const { namespace } = splitRpcKey(key)
-        return namespace === "" ? [] : [namespace]
+        if (namespace === "") return []
+        return [namespace]
       }),
     ),
   ]
+  const absent = Option.getOrUndefined(Option.none())
   return new Proxy(Object.create(null), {
     get: (_target, property) => {
-      if (typeof property !== "string" || !namespaces.includes(property)) return undefined
-      const existing = namespaceCache.get(property)
-      if (existing !== undefined) return existing
+      if (typeof property !== "string" || !namespaces.includes(property)) return absent
+      const existing = Option.fromNullishOr(namespaceCache.get(property))
+      if (Option.isSome(existing)) return existing.value
       const created = makeNamespace(flat, property, headers)
       namespaceCache.set(property, created)
       return created
     },
     has: (_target, property) => typeof property === "string" && namespaces.includes(property),
     ownKeys: () => namespaces,
-    getOwnPropertyDescriptor: (_target, property) =>
-      typeof property === "string" && namespaces.includes(property)
-        ? { enumerable: true, configurable: true }
-        : undefined,
+    getOwnPropertyDescriptor: (_target, property) => {
+      if (typeof property === "string" && namespaces.includes(property)) {
+        return { enumerable: true, configurable: true }
+      }
+      return absent
+    },
   })
 }

@@ -7,19 +7,19 @@
  * unrelated process.
  */
 
-import { Effect, FileSystem, Path, Schema } from "effect"
+import { Predicate, Effect, FileSystem, Path, Schema } from "effect"
 import { GentPlatform } from "../runtime/gent-platform.js"
 
 export { BuildFingerprint } from "./build-fingerprint.js"
 
 export class ServerLockEntry extends Schema.Class<ServerLockEntry>("ServerLockEntry")({
   serverId: Schema.String,
-  pid: Schema.Number,
+  pid: Schema.Finite,
   hostname: Schema.String,
   rpcUrl: Schema.String,
   dbPath: Schema.String,
   buildFingerprint: Schema.String,
-  startedAt: Schema.Number,
+  startedAt: Schema.Finite,
 }) {}
 
 const ServerLockEntryJson = Schema.fromJsonString(ServerLockEntry)
@@ -47,6 +47,7 @@ const serverLockPath = (
 export const readServerLock = (
   home: string,
 ): Effect.Effect<
+  // oxlint-disable-next-line effect/noNullish -- The lock file is an optional process boundary record consumed by the TUI.
   ServerLockEntry | undefined,
   never,
   FileSystem.FileSystem | GentPlatform | Path.Path
@@ -57,9 +58,12 @@ export const readServerLock = (
     const platform = yield* GentPlatform
     const osInfo = yield* platform.osInfo
     const content = yield* fs.readFileString(path).pipe(Effect.option)
+    // oxlint-disable-next-line effect/noNullish -- A missing lock file is the documented absent-server result.
     if (content._tag === "None") return undefined
-    const decoded = Schema.decodeUnknownOption(ServerLockEntryJson)(content.value)
+    const decoded = Schema.decodeOption(ServerLockEntryJson)(content.value)
+    // oxlint-disable-next-line effect/noNullish -- Invalid lock content is treated as no active server.
     if (decoded._tag === "None") return undefined
+    // oxlint-disable-next-line effect/noNullish -- A lock owned by another host is invisible to this client.
     if (decoded.value.hostname !== osInfo.hostname) return undefined
     return decoded.value
   })
@@ -82,7 +86,7 @@ export const removeServerLock = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const current = yield* readServerLock(home)
-    if (current === undefined || current.serverId !== serverId) return false
+    if (Predicate.isUndefined(current) || current.serverId !== serverId) return false
     const path = yield* serverLockPath(home)
     return yield* fs.remove(path).pipe(
       Effect.as(true),
@@ -152,13 +156,14 @@ export const signalIfIdentityOwned = <E, R>(
   probe: (entry: ServerLockEntry) => Effect.Effect<boolean, E, R>,
 ): Effect.Effect<"signaled" | "skipped", never, R | GentPlatform> =>
   Effect.gen(function* () {
-    if (!(yield* canSignalServerLockEntry(entry))) return "skipped" as const
+    if (!(yield* canSignalServerLockEntry(entry))) return "skipped"
     const owns = yield* probe(entry).pipe(Effect.catchEager(() => Effect.succeed(false)))
-    if (!owns) return "skipped" as const
+    if (!owns) return "skipped"
     const platform = yield* GentPlatform
     const sent = yield* platform.signal(entry.pid, "SIGTERM").pipe(
       Effect.as(true),
       Effect.catchEager(() => Effect.succeed(false)),
     )
-    return sent ? ("signaled" as const) : ("skipped" as const)
+    if (sent) return "signaled"
+    return "skipped"
   })

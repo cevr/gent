@@ -1,25 +1,26 @@
-import { useTerminalDimensions } from "@opentui/solid"
+import type { Accessor } from "solid-js"
 import { useTheme } from "../theme/index"
 import { truncate } from "../utils/format-tool"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { getSessionEventLabel, type SessionEvent } from "./session-event-label"
+import { DateTime, Predicate } from "effect"
 
 export interface SessionEventIndicatorProps {
   event: SessionEvent
+  dimensions: Accessor<{ readonly width: number; readonly height: number }>
 }
 
 const LINE_CHAR = "\u2500"
 
-const currentMillis = () => performance.timeOrigin + performance.now()
+const currentMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
 
 export function SessionEventIndicator(props: SessionEventIndicatorProps) {
   const { theme } = useTheme()
-  const dimensions = useTerminalDimensions()
   const tick = useSpinnerClock()
 
   const line = () => {
     tick()
-    const width = Math.max(0, dimensions().width)
+    const width = Math.max(0, props.dimensions().width)
     const label = getSessionEventLabel(props.event, currentMillis())
     const prefix = `- ${label} `
     if (width <= 0) return ""
@@ -31,14 +32,14 @@ export function SessionEventIndicator(props: SessionEventIndicatorProps) {
 
   const plain = () => {
     tick()
-    const width = Math.max(0, dimensions().width)
+    const width = Math.max(0, props.dimensions().width)
     return truncate(getSessionEventLabel(props.event, currentMillis()), width)
   }
 
-  const isLineEvent = () =>
-    props.event._tag === "turn-ended" ||
-    props.event._tag === "error" ||
-    props.event._tag === "retrying"
+  const isLineEvent = Predicate.or(
+    Predicate.isTagged("turn-ended"),
+    Predicate.or(Predicate.isTagged("error"), Predicate.isTagged("retrying")),
+  )
 
   const color = () => {
     switch (props.event._tag) {
@@ -53,9 +54,14 @@ export function SessionEventIndicator(props: SessionEventIndicatorProps) {
     }
   }
 
+  const content = () => {
+    if (isLineEvent(props.event)) return line()
+    return plain()
+  }
+
   return (
     <box marginTop={1}>
-      <text style={{ fg: color() }}>{isLineEvent() ? line() : plain()}</text>
+      <text style={{ fg: color() }}>{content()}</text>
     </box>
   )
 }

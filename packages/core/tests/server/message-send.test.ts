@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { ToolCallId } from "@gent/core-internal/domain/ids"
 import { ModelId } from "@gent/core-internal/domain/model"
@@ -9,6 +9,8 @@ import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import { makeClient, parentToolCallProbeExtension } from "./session-commands/helpers"
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 describe("message.send", () => {
   it.live(
@@ -112,7 +114,7 @@ describe("message.send", () => {
               message.parts.some((part) => part.type === "text" && part.text === assistantText),
           ),
         ).toBe(true)
-        yield* controls.assertDone()
+        yield* controls.assertDone
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -126,9 +128,7 @@ describe("message.send", () => {
           {
             ...textStep(assistantText),
             assertOptions: (options) => {
-              expect(JSON.stringify(options.prompt)).toContain(
-                `parentToolCallId:${parentToolCallId}`,
-              )
+              expect(encodeJson(options.prompt)).toContain(`parentToolCallId:${parentToolCallId}`)
             },
           },
         ])
@@ -164,7 +164,7 @@ describe("message.send", () => {
           "assistant reply from parentToolCallId turn",
         )
 
-        yield* controls.assertDone()
+        yield* controls.assertDone
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )

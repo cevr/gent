@@ -8,7 +8,7 @@
 
 import { createSignal, createMemo, createResource, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
@@ -17,7 +17,8 @@ import { useExtensionUI } from "../extensions/context"
 import { useClient } from "../client/index"
 import type { AutocompleteContribution, AutocompleteItem } from "../extensions/client-facets.js"
 import type { AutocompleteState } from "./composer-interaction-state"
-import { runAutocompleteItems } from "./autocomplete-popup-boundary"
+import { runAutocompleteContributions } from "./autocomplete-popup-boundary"
+import { Option } from "effect"
 
 export type { AutocompleteState }
 
@@ -34,7 +35,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   const [rawSelectedIndex, setSelectedIndex] = createSignal(0)
 
-  let scrollRef: ScrollBoxRenderable | undefined = undefined
+  let scrollRef = Option.none<ScrollBoxRenderable>()
 
   // Find contributions matching the active prefix
   const contributions = createMemo((): AutocompleteContribution[] =>
@@ -48,48 +49,35 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   // Fetch items from all contributions for this prefix, keyed on [prefix, filter]
   const [items] = createResource(
-    () => [props.state.type, props.state.filter] as const,
+    (): readonly [string, string] => [props.state.type, props.state.filter],
     ([_prefix, filter]): Promise<AutocompleteItem[]> => {
       setSelectedIndex(0)
-      return Promise.all(
-        contributions().map((c) =>
-          runAutocompleteItems(c, filter, extensionUI.clientRuntime).catch((err) => {
-            log.error("autocomplete.contribution.failed", {
-              prefix: c.prefix,
-              error: err instanceof Error ? err.message : String(err),
-            })
-            return [] as AutocompleteItem[]
-          }),
-        ),
-      ).then((results) => {
-        // Dedupe by id, first-win (scope-ordered from resolve)
-        const seen = new Set<string>()
-        const deduped: AutocompleteItem[] = []
-        for (const batch of results) {
-          for (const item of batch) {
-            if (!seen.has(item.id)) {
-              seen.add(item.id)
-              deduped.push(item)
-            }
-          }
-        }
-        return deduped
-      })
+      return runAutocompleteContributions(
+        contributions(),
+        filter,
+        extensionUI.clientRuntime,
+        (prefix, reason) => {
+          log.error("autocomplete.contribution.failed", { prefix, error: reason })
+        },
+      )
     },
   )
 
   // Use .latest for stale-while-revalidate: keeps showing previous results
   // during refetch instead of flashing "Loading..."
-  const visibleItems = () => items.latest ?? []
+  const visibleItems = () => Option.getOrElse(Option.fromNullishOr(items.latest), () => [])
 
   // Clamp index reactively
   const selectedIndex = createMemo(() => {
     const list = visibleItems()
     const idx = rawSelectedIndex()
-    return idx >= list.length ? Math.max(0, list.length - 1) : idx
+    if (idx >= list.length) return Math.max(0, list.length - 1)
+    return idx
   })
 
-  useScrollSync(() => `ac-item-${selectedIndex()}`, { getRef: () => scrollRef })
+  useScrollSync(() => `ac-item-${selectedIndex()}`, {
+    getRef: () => Option.getOrUndefined(scrollRef),
+  })
 
   // Handle keyboard navigation
   useScopedKeyboard((e) => {
@@ -102,20 +90,24 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
     }
 
     if (e.name === "return" || e.name === "tab") {
-      const item = list[selectedIndex()]
-      if (item !== undefined) {
-        props.onSelect(item.id)
-      }
+      const item = Option.fromNullishOr(list[selectedIndex()])
+      if (Option.isSome(item)) props.onSelect(item.value.id)
       return true
     }
 
     if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
-      setSelectedIndex((i) => (i > 0 ? i - 1 : list.length - 1))
+      setSelectedIndex((i) => {
+        if (i > 0) return i - 1
+        return list.length - 1
+      })
       return true
     }
 
     if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
-      setSelectedIndex((i) => (i < list.length - 1 ? i + 1 : 0))
+      setSelectedIndex((i) => {
+        if (i < list.length - 1) return i + 1
+        return 0
+      })
       return true
     }
     return false
@@ -129,7 +121,9 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   const popupLeft = () => Math.floor((dimensions().width - popupWidth()) / 2)
 
   // Title from the first matching contribution
-  const title = () => contributions()[0]?.title ?? props.state.type
+  const title = () =>
+    Option.getOrElse(Option.fromNullishOr(contributions()[0]), () => ({ title: props.state.type }))
+      .title
 
   const loading = () => items.loading && visibleItems().length === 0
   const empty = () => !items.loading && visibleItems().length === 0
@@ -152,7 +146,11 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
       </Show>
 
       {/* Items / Loading / Empty */}
-      <ChromePanel.Body ref={scrollRef} paddingLeft={0} paddingRight={0}>
+      <ChromePanel.Body
+        ref={(value) => (scrollRef = Option.some(value))}
+        paddingLeft={0}
+        paddingRight={0}
+      >
         <Show when={loading()}>
           <box paddingLeft={1}>
             <text style={{ fg: theme.textMuted }}>Loading…</text>
@@ -166,22 +164,31 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         <For each={visibleItems()}>
           {(item, index) => {
             const isSelected = () => selectedIndex() === index()
+            const backgroundColor = () => {
+              if (isSelected()) return theme.primary
+              return "transparent"
+            }
+            const textColor = () => {
+              if (isSelected()) return theme.selectedListItemText
+              return theme.text
+            }
+            const descriptionColor = () => {
+              if (isSelected()) return theme.selectedListItemText
+              return theme.textMuted
+            }
             return (
-              <box
-                id={`ac-item-${index()}`}
-                backgroundColor={isSelected() ? theme.primary : "transparent"}
-                paddingLeft={1}
-              >
+              <box id={`ac-item-${index()}`} backgroundColor={backgroundColor()} paddingLeft={1}>
                 <text
                   style={{
-                    fg: isSelected() ? theme.selectedListItemText : theme.text,
+                    fg: textColor(),
                   }}
                 >
                   {item.label}
-                  <Show when={item.description !== undefined}>
+                  {/* Optional description is supplied by the external extension contribution. */}
+                  <Show when={Option.getOrUndefined(Option.fromNullishOr(item.description))}>
                     <span
                       style={{
-                        fg: isSelected() ? theme.selectedListItemText : theme.textMuted,
+                        fg: descriptionColor(),
                         dim: !isSelected(),
                       }}
                     >

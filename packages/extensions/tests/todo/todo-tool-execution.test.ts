@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Fiber, Stream } from "effect"
+import { Effect, Fiber, Option, Schema, Stream } from "effect"
 import { TodoCreateTool, TodoGetTool, TodoListTool, TodoUpdateTool } from "../../src/todo/tools.js"
 import { EventStore } from "@gent/core-internal/domain/event"
 import { SessionId } from "@gent/core-internal/domain/ids"
@@ -52,8 +52,8 @@ describe("TodoListTool", () => {
         yield* runToolWithCtx(TodoCreateTool, { subject: "Todo B" }, ctx)
         const result = yield* runToolWithCtx(TodoListTool, {}, ctx)
         expect(result.todos.length).toBe(2)
-        if (typeof result.summary === "string") {
-          throw new Error("expected todo summary counts")
+        if (Schema.is(Schema.String)(result.summary)) {
+          return yield* Effect.die(new Error("expected todo summary counts"))
         }
         expect(result.summary.total).toBe(2)
         expect(result.summary.pending).toBe(2)
@@ -89,8 +89,9 @@ describe("TodoGetTool", () => {
           ctx,
         )
         const result = yield* runToolWithCtx(TodoGetTool, { todoId: created.todoId }, ctx)
-        if ("error" in result && result.error !== undefined) {
-          throw new Error(result.error)
+        if ("error" in result) {
+          const error = Option.fromUndefinedOr(result.error)
+          if (Option.isSome(error)) return yield* Effect.die(new Error(error.value))
         }
         expect(result.subject).toBe("Review code")
         expect(result.description).toBe("Full review of auth module")

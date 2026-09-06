@@ -5,7 +5,7 @@
  * Expanded: line-numbered content with GutterText
  */
 
-import { Schema } from "effect"
+import { Match, Option, Schema } from "effect"
 import { Show, For, createMemo } from "solid-js"
 import { windowItems, headTailExcerpts } from "@gent/core-internal/domain/windowing.js"
 import { useTheme } from "../../theme/index"
@@ -13,7 +13,8 @@ import { ToolFrame } from "../tool-frame"
 import { GutterText } from "../gutter-text"
 import { truncatePath } from "../message-list-utils"
 import { fileUrl, isAbsPath } from "../../utils/file-refs"
-import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutputOption, getString } from "../../utils/parse-tool-output"
+import type { ToolInput } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 type WindowedLine =
@@ -30,22 +31,22 @@ interface ReadOutput {
 const ReadOutputSchema = Schema.Struct({
   content: Schema.String,
   path: Schema.optional(Schema.String),
-  lineCount: Schema.optional(Schema.Number),
+  lineCount: Schema.optional(Schema.Finite),
   truncated: Schema.optional(Schema.Boolean),
 })
 
-function parseReadOutput(output: string | undefined): ReadOutput | undefined {
-  const d = decodeToolOutput(ReadOutputSchema, output)
-  if (d === undefined) return undefined
-  return {
+function parseReadOutput(
+  output: ToolRendererProps["toolCall"]["output"],
+): Option.Option<ReadOutput> {
+  return Option.map(decodeToolOutputOption(ReadOutputSchema, output), (d) => ({
     content: d["content"],
     path: d["path"] ?? "",
     lineCount: d["lineCount"] ?? 0,
     truncated: d["truncated"] ?? false,
-  }
+  }))
 }
 
-function getPath(input: unknown): string {
+function getPath(input: ToolInput): string {
   return getString(input, "path")
 }
 
@@ -54,7 +55,8 @@ function parseContentLines(content: string): string[] {
   return content.split("\n").map((line) => {
     // strip "  N\t" prefix if present
     const tabIdx = line.indexOf("\t")
-    return tabIdx >= 0 ? line.slice(tabIdx + 1) : line
+    if (tabIdx >= 0) return line.slice(tabIdx + 1)
+    return line
   })
 }
 
@@ -64,7 +66,8 @@ function getStartLine(content: string): number {
   const tabIdx = firstLine.indexOf("\t")
   if (tabIdx < 0) return 1
   const num = parseInt(firstLine.slice(0, tabIdx).trim(), 10)
-  return isNaN(num) ? 1 : num
+  if (isNaN(num)) return 1
+  return num
 }
 
 export function ReadToolRenderer(props: ToolRendererProps) {
@@ -75,14 +78,14 @@ export function ReadToolRenderer(props: ToolRendererProps) {
 
   const contentLines = createMemo(() => {
     const d = data()
-    if (d === undefined) return []
-    return parseContentLines(d.content)
+    if (Option.isNone(d)) return []
+    return parseContentLines(d.value.content)
   })
 
   const startLine = createMemo(() => {
     const d = data()
-    if (d === undefined) return 1
-    return getStartLine(d.content)
+    if (Option.isNone(d)) return 1
+    return getStartLine(d.value.content)
   })
 
   const collapsedLines = createMemo((): WindowedLine[] => {
@@ -90,7 +93,7 @@ export function ReadToolRenderer(props: ToolRendererProps) {
     if (lines.length === 0) return []
     const start = startLine()
     const indexed: WindowedLine[] = lines.map((text, i) => ({
-      _tag: "line" as const,
+      _tag: "line",
       text,
       lineNum: start + i,
     }))
@@ -106,11 +109,13 @@ export function ReadToolRenderer(props: ToolRendererProps) {
     <ToolFrame
       title="read"
       subtitle={truncatePath(path())}
-      subtitleHref={isAbsPath(path()) ? fileUrl(path()) : undefined}
+      subtitleHref={Option.getOrUndefined(
+        Option.some(path()).pipe(Option.filter(isAbsPath), Option.map(fileUrl)),
+      )}
       status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={
-        <Show when={data()}>
+        <Show when={Option.getOrUndefined(data())}>
           {(d) => (
             <box flexDirection="column">
               <text>
@@ -123,18 +128,23 @@ export function ReadToolRenderer(props: ToolRendererProps) {
               <Show when={collapsedLines().length > 0}>
                 <For each={collapsedLines()}>
                   {(item) =>
-                    item._tag === "elision" ? (
-                      <text>
-                        <span style={{ fg: theme.border }}>{"· ··· "}</span>
-                        <span style={{ fg: theme.textMuted }}>{item.count} more lines</span>
-                      </text>
-                    ) : (
-                      <text>
-                        <span style={{ fg: theme.border }}>
-                          {String(item.lineNum).padStart(4)} │{" "}
-                        </span>
-                        <span style={{ fg: theme.textMuted }}>{item.text}</span>
-                      </text>
+                    Match.value(item).pipe(
+                      Match.tagsExhaustive({
+                        elision: (item) => (
+                          <text>
+                            <span style={{ fg: theme.border }}>{"· ··· "}</span>
+                            <span style={{ fg: theme.textMuted }}>{item.count} more lines</span>
+                          </text>
+                        ),
+                        line: (item) => (
+                          <text>
+                            <span style={{ fg: theme.border }}>
+                              {String(item.lineNum).padStart(4)} │{" "}
+                            </span>
+                            <span style={{ fg: theme.textMuted }}>{item.text}</span>
+                          </text>
+                        ),
+                      }),
                     )
                   }
                 </For>

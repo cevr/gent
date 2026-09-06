@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, test, expect } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Context, Effect, Option, Schema } from "effect"
 import { SyntaxStyle } from "@opentui/core"
 import { ConnectionState } from "@gent/sdk"
 import type { ExtensionHealthSnapshot, QueueEntryInfo, Session } from "@gent/sdk"
@@ -13,15 +13,19 @@ import { runEffectBoundary } from "./run-effect-boundary"
 import { useClient, type GentRuntime } from "../src/client"
 import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { dateFromMillis } from "@gent/core-internal/domain/message"
+
+const absent = Option.getOrUndefined(Option.none())
+const nullValue = Option.getOrNull(Option.none())
+
 const syntaxStyle = () => SyntaxStyle.create()
 const testSession: Session = {
   id: SessionId.make("session-test"),
   name: "Test Session",
   cwd: "/tmp/gent-test",
-  reasoningLevel: undefined,
+  reasoningLevel: absent,
   activeBranchId: BranchId.make("branch-test"),
-  parentSessionId: undefined,
-  parentBranchId: undefined,
+  parentSessionId: absent,
+  parentBranchId: absent,
   createdAt: dateFromMillis(0),
   updatedAt: dateFromMillis(0),
 }
@@ -29,13 +33,33 @@ const nextSession: Session = {
   id: SessionId.make("session-next"),
   name: "Next Session",
   cwd: "/tmp/gent-next",
-  reasoningLevel: undefined,
+  reasoningLevel: absent,
   activeBranchId: BranchId.make("branch-next"),
-  parentSessionId: undefined,
-  parentBranchId: undefined,
+  parentSessionId: absent,
+  parentBranchId: absent,
   createdAt: dateFromMillis(0),
   updatedAt: dateFromMillis(0),
 }
+
+const scheduledFailureHealth = (id: string, error: string): ExtensionHealthSnapshot => ({
+  _tag: "degraded",
+  healthyExtensions: [],
+  degradedExtensions: [
+    {
+      manifest: { id },
+      scope: "builtin",
+      sourcePath: "builtin",
+      _tag: "degraded",
+      issues: [{ _tag: "scheduled-job-failed", jobId: "reflect", error }],
+    },
+  ],
+})
+
+const healthyHealth: ExtensionHealthSnapshot = { _tag: "healthy", extensions: [] }
+
+const runWithEmptyContext = <A, E, R>(effect: Effect.Effect<A, E, R>): Promise<A> =>
+  runEffectBoundary(Effect.provideContext(effect, Context.makeUnsafe<R>(new Map<string, never>())))
+
 const HealthControlsProbe = (props: {
   expose: (controls: {
     switchSession: () => void
@@ -44,30 +68,25 @@ const HealthControlsProbe = (props: {
   }) => void
 }) => {
   const client = useClient()
+  const nextBranchId = Option.getOrElse(Option.fromNullishOr(nextSession.activeBranchId), () =>
+    BranchId.make("branch-next"),
+  )
+  const nextName = Option.getOrElse(Option.fromNullishOr(nextSession.name), () => "Next Session")
+  const testName = Option.getOrElse(Option.fromNullishOr(testSession.name), () => "Test Session")
   props.expose({
-    switchSession: () =>
-      client.switchSession(
-        nextSession.id,
-        nextSession.activeBranchId ?? BranchId.make("branch-next"),
-        nextSession.name ?? "Next Session",
-      ),
+    switchSession: () => client.switchSession(nextSession.id, nextBranchId, nextName),
     switchBranchSameSession: () =>
-      client.switchSession(
-        testSession.id,
-        BranchId.make("branch-alt"),
-        testSession.name ?? "Test Session",
-      ),
+      client.switchSession(testSession.id, BranchId.make("branch-alt"), testName),
     clearSession: () => client.clearSession(),
   })
   const failedScheduled = () => {
     const health = client.extensionHealth()
-    return health._tag === "degraded"
-      ? health.degradedExtensions
-          .filter((extension) =>
-            extension.issues.some((issue) => issue._tag === "scheduled-job-failed"),
-          )
-          .map((extension) => extension.manifest.id)
-      : []
+    if (health._tag !== "degraded") return []
+    return health.degradedExtensions
+      .filter((extension) =>
+        extension.issues.some((issue) => issue._tag === "scheduled-job-failed"),
+      )
+      .map((extension) => extension.manifest.id)
   }
   return <text>{failedScheduled().join(",")}</text>
 }
@@ -75,13 +94,12 @@ const createMutableRuntime = (initialState: ConnectionState) => {
   let state = initialState
   const listeners = new Set<(state: ConnectionState) => void>()
   const runtime: GentRuntime = {
-    cast: (effect) => {
-      Effect.runFork(
-        effect as Effect.Effect<unknown, never, never> as Effect.Effect<void, never, never>,
-      )
+    cast: <A, E, R>(effect: Effect.Effect<A, E, R>) => {
+      Effect.runForkWith(Context.makeUnsafe<R>(new Map<string, never>()))(effect)
     },
-    fork: Effect.runFork as never,
-    run: runEffectBoundary as never,
+    fork: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      Effect.runForkWith(Context.makeUnsafe<R>(new Map<string, never>()))(effect),
+    run: runWithEmptyContext,
     lifecycle: {
       getState: () => state,
       subscribe: (listener) => {
@@ -116,7 +134,7 @@ describe("TUI renderer surfaces", () => {
           reasoning: "",
           images: [],
           createdAt: 0,
-          toolCalls: undefined,
+          toolCalls: absent,
         } satisfies Message,
         {
           _tag: "regular-message",
@@ -126,7 +144,7 @@ describe("TUI renderer surfaces", () => {
           reasoning: "Considering current todo state",
           images: [],
           createdAt: 0,
-          toolCalls: undefined,
+          toolCalls: absent,
         } satisfies Message,
       ]
       const setup = yield* Effect.promise(() =>
@@ -222,18 +240,18 @@ describe("TUI renderer surfaces", () => {
             extension: {
               listStatus: () =>
                 Effect.succeed({
-                  _tag: "degraded" as const,
+                  _tag: "degraded",
                   healthyExtensions: [],
                   degradedExtensions: [
                     {
                       manifest: { id: "@gent/memory" },
-                      scope: "builtin" as const,
+                      scope: "builtin",
                       sourcePath: "builtin",
-                      _tag: "degraded" as const,
+                      _tag: "degraded",
                       issues: [
                         {
-                          _tag: "activation-failed" as const,
-                          phase: "startup" as const,
+                          _tag: "activation-failed",
+                          phase: "startup",
                           error: "startup boom",
                         },
                       ],
@@ -260,17 +278,17 @@ describe("TUI renderer surfaces", () => {
               listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
                 expect(sessionId).toBe(testSession.id)
                 return Effect.succeed({
-                  _tag: "degraded" as const,
+                  _tag: "degraded",
                   healthyExtensions: [],
                   degradedExtensions: [
                     {
                       manifest: { id: "@gent/plan" },
-                      scope: "builtin" as const,
+                      scope: "builtin",
                       sourcePath: "builtin",
-                      _tag: "degraded" as const,
+                      _tag: "degraded",
                       issues: [
                         {
-                          _tag: "scheduled-job-failed" as const,
+                          _tag: "scheduled-job-failed",
                           jobId: "reflect",
                           error: "launchd boom",
                         },
@@ -297,17 +315,17 @@ describe("TUI renderer surfaces", () => {
             extension: {
               listStatus: () =>
                 Effect.succeed({
-                  _tag: "degraded" as const,
+                  _tag: "degraded",
                   healthyExtensions: [],
                   degradedExtensions: [
                     {
                       manifest: { id: "@gent/memory" },
-                      scope: "builtin" as const,
+                      scope: "builtin",
                       sourcePath: "builtin",
-                      _tag: "degraded" as const,
+                      _tag: "degraded",
                       issues: [
                         {
-                          _tag: "scheduled-job-failed" as const,
+                          _tag: "scheduled-job-failed",
                           jobId: "reflect",
                           error: "launchd registration failed",
                         },
@@ -337,12 +355,12 @@ describe("TUI renderer surfaces", () => {
         degradedExtensions: [
           {
             manifest: { id: "@gent/plan" },
-            scope: "builtin" as const,
+            scope: "builtin",
             sourcePath: "builtin",
-            _tag: "degraded" as const,
+            _tag: "degraded",
             issues: [
               {
-                _tag: "scheduled-job-failed" as const,
+                _tag: "scheduled-job-failed",
                 jobId: "reflect",
                 error: "launchd boom",
               },
@@ -387,56 +405,36 @@ describe("TUI renderer surfaces", () => {
   )
   it.live("ConnectionWidget clears stale extension status when switching sessions", () =>
     Effect.gen(function* () {
-      let controls!: {
+      let controls = Option.none<{
         switchSession: () => void
         clearSession: () => void
-      }
+      }>()
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
           () => (
             <>
               <ConnectionWidget />
-              <HealthControlsProbe expose={(next) => (controls = next)} />
+              <HealthControlsProbe expose={(next) => (controls = Option.some(next))} />
             </>
           ),
           {
             initialSession: testSession,
             client: createMockClient({
               extension: {
-                listStatus: ({ sessionId }: { sessionId?: SessionId }) =>
-                  Effect.succeed(
-                    sessionId === testSession.id
-                      ? {
-                          _tag: "degraded" as const,
-                          healthyExtensions: [],
-                          degradedExtensions: [
-                            {
-                              manifest: { id: "@gent/plan" },
-                              scope: "builtin" as const,
-                              sourcePath: "builtin",
-                              _tag: "degraded" as const,
-                              issues: [
-                                {
-                                  _tag: "scheduled-job-failed" as const,
-                                  jobId: "reflect",
-                                  error: "launchd boom",
-                                },
-                              ],
-                            },
-                          ],
-                        }
-                      : {
-                          _tag: "healthy" as const,
-                          extensions: [],
-                        },
-                  ),
+                listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
+                  if (sessionId === testSession.id) {
+                    return Effect.succeed(scheduledFailureHealth("@gent/plan", "launchd boom"))
+                  }
+                  return Effect.succeed(healthyHealth)
+                },
               },
             }),
           },
         ),
       )
       expect(renderFrame(setup)).toContain("@gent/plan")
-      controls.switchSession()
+      if (Option.isNone(controls)) return yield* Effect.die("health controls not ready")
+      controls.value.switchSession()
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.yieldNow
@@ -448,18 +446,16 @@ describe("TUI renderer surfaces", () => {
   )
   it.live("same-session branch switches preserve session-scoped extension health", () =>
     Effect.gen(function* () {
-      let controls:
-        | {
-            switchSession: () => void
-            switchBranchSameSession: () => void
-            clearSession: () => void
-          }
-        | undefined
+      let controls = Option.none<{
+        switchSession: () => void
+        switchBranchSameSession: () => void
+        clearSession: () => void
+      }>()
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
           () => (
             <>
-              <HealthControlsProbe expose={(value) => (controls = value)} />
+              <HealthControlsProbe expose={(value) => (controls = Option.some(value))} />
               <ConnectionWidget />
             </>
           ),
@@ -467,40 +463,20 @@ describe("TUI renderer surfaces", () => {
             initialSession: testSession,
             client: createMockClient({
               extension: {
-                listStatus: ({ sessionId }: { sessionId?: SessionId }) =>
-                  Effect.succeed(
-                    sessionId === testSession.id
-                      ? {
-                          _tag: "degraded" as const,
-                          healthyExtensions: [],
-                          degradedExtensions: [
-                            {
-                              manifest: { id: "@gent/plan" },
-                              scope: "builtin" as const,
-                              sourcePath: "builtin",
-                              _tag: "degraded" as const,
-                              issues: [
-                                {
-                                  _tag: "scheduled-job-failed" as const,
-                                  jobId: "reflect",
-                                  error: "launchd boom",
-                                },
-                              ],
-                            },
-                          ],
-                        }
-                      : {
-                          _tag: "healthy" as const,
-                          extensions: [],
-                        },
-                  ),
+                listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
+                  if (sessionId === testSession.id) {
+                    return Effect.succeed(scheduledFailureHealth("@gent/plan", "launchd boom"))
+                  }
+                  return Effect.succeed(healthyHealth)
+                },
               },
             }),
           },
         ),
       )
       expect(renderFrame(setup)).toContain("@gent/plan")
-      controls?.switchBranchSameSession()
+      if (Option.isNone(controls)) return yield* Effect.die("health controls not ready")
+      controls.value.switchBranchSameSession()
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.yieldNow
@@ -546,7 +522,7 @@ describe("uiModel schema validation", () => {
     expect(result._tag).toBe("None")
   })
   test("null snapshot decodes to None", () => {
-    const result = decode(null)
+    const result = decode(nullValue)
     expect(result._tag).toBe("None")
   })
 })

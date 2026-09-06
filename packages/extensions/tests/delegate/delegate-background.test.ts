@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { DelegateTool } from "../../src/delegate/delegate-tool.js"
 import { AgentName } from "@gent/core-internal/domain/agent"
 import { runToolWithCtx } from "@gent/core-internal/test-utils"
@@ -20,10 +20,14 @@ describe("DelegateTool background mode", () => {
           },
           ctx,
         )
-        if (!("todoId" in result) || result.todoId === undefined) {
-          throw new Error("expected background delegate todo")
+        if (!("todoId" in result)) {
+          return yield* Effect.die(new Error("expected background delegate todo"))
         }
-        expect(result.todoId).toBeDefined()
+        const todoId = Option.fromUndefinedOr(result.todoId)
+        if (Option.isNone(todoId)) {
+          return yield* Effect.die(new Error("expected background delegate todo"))
+        }
+        expect(todoId.value).toBeDefined()
         expect(result.status).toBe("running")
       }).pipe(withTodoWrite, Effect.provide(layer)),
     ),

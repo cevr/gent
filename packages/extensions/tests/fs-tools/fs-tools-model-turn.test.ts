@@ -11,6 +11,7 @@ import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-mod
 import { AgentsExtension } from "../../src/agents.js"
 import { FsToolsExtension } from "../../src/index.js"
 import { e2ePreset } from "../helpers/test-preset"
+import { isToolEventFor } from "../helpers/tool-event.js"
 
 describe("FsToolsExtension via model turn", () => {
   const modelTurnTest = it.scopedLive.layer(BunServices.layer)
@@ -35,18 +36,14 @@ describe("FsToolsExtension via model turn", () => {
             extensionInputs: [AgentsExtension, FsToolsExtension],
             cwd,
           })
-          const toolEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
-            Stream.filter(
-              (envelope) =>
-                (envelope.event._tag === "ToolCallSucceeded" ||
-                  envelope.event._tag === "ToolCallFailed" ||
-                  envelope.event._tag === "ToolCallStarted") &&
-                (envelope.event as { readonly toolName?: string }).toolName === "read",
-            ),
-            Stream.take(2),
-            Stream.runCollect,
-            Effect.forkScoped,
-          )
+          const toolEventFiber = yield* client.session
+            .events({ sessionId, branchId })
+            .pipe(
+              Stream.filter(isToolEventFor("read")),
+              Stream.take(2),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
 
           yield* client.message.send({
             sessionId,
@@ -87,18 +84,14 @@ describe("FsToolsExtension via model turn", () => {
             extensionInputs: [AgentsExtension, FsToolsExtension],
             cwd,
           })
-          const toolEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
-            Stream.filter(
-              (envelope) =>
-                (envelope.event._tag === "ToolCallSucceeded" ||
-                  envelope.event._tag === "ToolCallFailed" ||
-                  envelope.event._tag === "ToolCallStarted") &&
-                (envelope.event as { readonly toolName?: string }).toolName === "write",
-            ),
-            Stream.take(2),
-            Stream.runCollect,
-            Effect.forkScoped,
-          )
+          const toolEventFiber = yield* client.session
+            .events({ sessionId, branchId })
+            .pipe(
+              Stream.filter(isToolEventFor("write")),
+              Stream.take(2),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
 
           yield* client.message.send({
             sessionId,

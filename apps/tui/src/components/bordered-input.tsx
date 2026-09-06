@@ -11,8 +11,9 @@
  */
 
 import { Show, For, type JSX } from "solid-js"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "../terminal-dimensions"
 import type { RGBA } from "@opentui/core"
+import { Option } from "effect"
 import { useTheme } from "../theme/index"
 import { buildBorderSegments, type BorderLabelItem, type Segment } from "../utils/border-segments"
 
@@ -49,14 +50,14 @@ export interface BorderedInputProps {
   bottomLeft?: BorderLabelItem[]
   bottomRight?: BorderLabelItem[]
   borderColor?: RGBA
-  error?: string | null
+  error?: string
   children: JSX.Element
 }
 
 export function BorderedInput(props: BorderedInputProps) {
   const { theme } = useTheme()
 
-  const bc = () => props.borderColor ?? theme.border
+  const bc = () => Option.getOrElse(Option.fromNullishOr(props.borderColor), () => theme.border)
 
   return (
     <box flexDirection="column" flexShrink={0}>
@@ -74,25 +75,32 @@ export function BorderedInput(props: BorderedInputProps) {
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-export function formatCwdGit(cwd: string, gitRoot: string | null, branch?: string): string {
+export function formatCwdGit(
+  cwd: string,
+  gitRoot: Option.Option<string>,
+  branch: Option.Option<string>,
+): string {
   let label: string
-  if (gitRoot !== null) {
-    const repoParts = gitRoot.split("/")
-    const repoName = repoParts[repoParts.length - 1] ?? ""
-    if (cwd === gitRoot) {
+  if (Option.isSome(gitRoot)) {
+    const repoParts = gitRoot.value.split("/")
+    const repoName = Option.getOrElse(
+      Option.fromNullishOr(repoParts[repoParts.length - 1]),
+      () => "",
+    )
+    if (cwd === gitRoot.value) {
       label = repoName
-    } else if (cwd.startsWith(gitRoot + "/")) {
-      label = repoName + "/" + cwd.slice(gitRoot.length + 1)
+    } else if (cwd.startsWith(gitRoot.value + "/")) {
+      label = repoName + "/" + cwd.slice(gitRoot.value.length + 1)
     } else {
-      label = repoParts[repoParts.length - 1] ?? cwd
+      label = Option.getOrElse(Option.fromNullishOr(repoParts[repoParts.length - 1]), () => cwd)
     }
   } else {
     const parts = cwd.split("/")
-    label = parts[parts.length - 1] ?? cwd
+    label = Option.getOrElse(Option.fromNullishOr(parts[parts.length - 1]), () => cwd)
   }
 
-  if (branch !== undefined && branch.length > 0) {
-    return `${label} (${branch})`
+  if (Option.isSome(branch) && branch.value.length > 0) {
+    return `${label} (${branch.value})`
   }
   return label
 }

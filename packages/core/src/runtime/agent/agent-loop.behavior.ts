@@ -14,6 +14,8 @@ import {
   Deferred,
   Effect,
   Exit,
+  Option,
+  Predicate,
   Ref,
   Schema,
   Semaphore,
@@ -41,6 +43,7 @@ import type { SessionStorage } from "../../storage/session-storage.js"
 import type { MessageStorage } from "../../storage/message-storage.js"
 import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
+import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import type { SessionProfileCacheService } from "../session-profile.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
@@ -72,6 +75,7 @@ import type { QueueSnapshot } from "../../domain/queue.js"
 import { emptyTurnMetrics, type ActiveStreamHandle } from "./turn-response.js"
 import { makeAgentLoopQueue } from "./agent-loop.queue.js"
 import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
+import type { ProcessLocalToolReplay } from "./process-local-tool-replay.js"
 import { makeAgentLoopWorker } from "./agent-loop.worker.js"
 import {
   captureAgentLoopRuntimeContext,
@@ -90,14 +94,13 @@ export const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(func
       branchId: params.branchId,
       tags: ["AgentSwitched"],
     })
-    .pipe(Effect.catchEager(() => Effect.void))
+    .pipe(Effect.option, Effect.map(Option.flatMap(Option.fromUndefinedOr)))
 
-  const raw =
-    latestAgentEvent !== undefined && latestAgentEvent._tag === "AgentSwitched"
-      ? latestAgentEvent.toAgent
-      : undefined
-
-  return Schema.is(AgentName)(raw) ? raw : DEFAULT_AGENT_NAME
+  if (Option.isSome(latestAgentEvent) && latestAgentEvent.value._tag === "AgentSwitched") {
+    const name = latestAgentEvent.value.toAgent
+    if (Schema.is(AgentName)(name)) return name
+  }
+  return DEFAULT_AGENT_NAME
 })
 
 export type AgentLoopBehavior = {
@@ -110,17 +113,16 @@ export type AgentLoopBehavior = {
   reserveStartOrQueueFollowUp: (
     item: QueuedTurnItem,
     options: { readonly coldQueueOnly: boolean },
-  ) => Effect.Effect<RunningState | undefined, AgentLoopError>
+  ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError>
   reserveRunStartOrQueueFollowUp: (item: QueuedTurnItem) => Effect.Effect<
-    | {
-        readonly stateEpochBaseline: number
-        readonly turnFailureBaseline: number
-      }
-    | undefined,
+    Option.Option<{
+      readonly stateEpochBaseline: number
+      readonly turnFailureBaseline: number
+    }>,
     AgentLoopError
   >
-  takeNextQueuedTurnIfIdle: Effect.Effect<QueuedTurnItem | undefined, AgentLoopError>
-  takeNextQueuedTurn: Effect.Effect<QueuedTurnItem | undefined, AgentLoopError>
+  takeNextQueuedTurnIfIdle: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
+  takeNextQueuedTurn: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   appendSteering: (item: QueuedTurnItem) => Effect.Effect<LoopState, AgentLoopError>
   drainQueue: Effect.Effect<QueueSnapshot, AgentLoopError>
   resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile>
@@ -143,12 +145,13 @@ export type AgentLoopBehavior = {
 
 export const causeToAgentLoopError = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause)
-  return Schema.is(AgentLoopError)(error)
-    ? error
-    : new AgentLoopError({
-        message: "Agent loop turn failed",
-        cause: error,
-      })
+  if (Schema.is(AgentLoopError)(error)) {
+    return error
+  }
+  return new AgentLoopError({
+    message: "Agent loop turn failed",
+    cause: error,
+  })
 }
 
 /**
@@ -194,12 +197,14 @@ export const makeAgentLoopBehavior = (
   | MessageStorage
   | AgentLoopQueueStorage
   | EventStorage
+  | ToolCallBindingStorage
   | SqlClient.SqlClient
   | ModelResolver
   | ExtensionRegistry
   | DriverRegistry
   | EventPublisher
   | ToolRunner
+  | ProcessLocalToolReplay
   | AgentLoopFollowUp
   | ConfigService
   | ModelRegistry
@@ -211,6 +216,7 @@ export const makeAgentLoopBehavior = (
     const extensionRegistry = yield* ExtensionRegistry
     const driverRegistry = yield* DriverRegistry
     const eventPublisher = yield* EventPublisher
+    yield* ToolCallBindingStorage
     yield* ToolRunner
     const followUp = yield* AgentLoopFollowUp
     const host = yield* makeExtensionHostPlatform
@@ -239,8 +245,7 @@ export const makeAgentLoopBehavior = (
       },
     })
 
-    const defaultPermission =
-      permissionService._tag === "Some" ? permissionService.value : AllowAllPermission
+    const defaultPermission = Option.getOrElse(permissionService, () => AllowAllPermission)
 
     const resolveTurnProfile = provideAgentLoopRuntimeContext(runtimeContext)(
       resolveSessionEnvironment({
@@ -254,21 +259,23 @@ export const makeAgentLoopBehavior = (
         },
       }).pipe(Effect.provideService(SessionEnvironmentHostProvider, hostProvider)),
     ).pipe(
-      Effect.map(({ environment }) => ({
-        turnExtensionRegistry: environment.extensionRegistry,
-        turnDriverRegistry: environment.driverRegistry,
-        turnPermission: environment.permission,
-        turnBaseSections: environment.baseSections,
-        turnHostCtx: environment.hostCtx,
-        ...(environment.capabilityContext !== undefined
-          ? { turnCapabilityContext: environment.capabilityContext }
-          : {}),
-      })),
+      Effect.map(({ environment }) => {
+        const profile = {
+          turnExtensionRegistry: environment.extensionRegistry,
+          turnDriverRegistry: environment.driverRegistry,
+          turnPermission: environment.permission,
+          turnBaseSections: environment.baseSections,
+          turnHostCtx: environment.hostCtx,
+          turnCapabilityContext: environment.capabilityContext,
+        }
+        if (Predicate.isUndefined(environment.publication)) return profile
+        return { ...profile, turnPublication: environment.publication }
+      }),
     )
 
     const loopScope = yield* Scope.make()
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
-    const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
+    const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
     const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
     const interruptedRef = yield* Ref.make(false)
     const currentAgent = yield* resolveStoredAgent({
@@ -297,7 +304,11 @@ export const makeAgentLoopBehavior = (
       TxSubscriptionRef.update(loopRef, (s) => ({
         ...s,
         turnFailure: {
-          epoch: (s.turnFailure?.epoch ?? 0) + 1,
+          epoch:
+            Option.getOrElse(
+              Option.fromUndefinedOr(s.turnFailure).pipe(Option.map(({ epoch }) => epoch)),
+              () => 0,
+            ) + 1,
           error: causeToAgentLoopError(cause),
         },
       }))
@@ -328,7 +339,7 @@ export const makeAgentLoopBehavior = (
         const { turnExtensionRegistry: switchRegistry } = yield* resolveTurnProfile
         const agents = [...switchRegistry.getResolved().agents.values()]
         const resolved = agents.find((agent) => agent.name === next)
-        if (resolved === undefined) return state
+        if (Predicate.isUndefined(resolved)) return state
 
         yield* publishEvent(
           AgentSwitched.make({
@@ -382,16 +393,20 @@ export const makeAgentLoopBehavior = (
       },
     ).pipe(Effect.asVoid)
 
-    const start = Effect.gen(function* () {
-      if (yield* Ref.getAndSet(startedRef, true)) return
-      yield* startTurnWorker
-    }).pipe(Effect.withSpan("AgentLoop.start"))
+    const start = Effect.suspend(
+      Effect.fn("AgentLoop.start")(function* () {
+        if (yield* Ref.getAndSet(startedRef, true)) return
+        yield* startTurnWorker
+      }),
+    )
 
-    const close = Effect.gen(function* () {
-      yield* worker.interruptActiveStream
-      yield* Deferred.succeed(closed, undefined).pipe(Effect.ignore)
-      yield* Scope.close(loopScope, Exit.void)
-    }).pipe(Effect.ignore, Effect.withSpan("AgentLoop.close"))
+    const close = Effect.suspend(
+      Effect.fn("AgentLoop.close")(function* () {
+        yield* worker.interruptActiveStream
+        yield* Deferred.succeed(closed, void 0).pipe(Effect.ignore)
+        yield* Scope.close(loopScope, Exit.void)
+      }),
+    ).pipe(Effect.ignore)
 
     return {
       persistenceFailure: Deferred.await(persistenceFailure),

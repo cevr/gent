@@ -9,8 +9,8 @@
  */
 
 import { createSignal, createEffect, Show, For } from "solid-js"
-import { Effect } from "effect"
-import { useTerminalDimensions } from "@opentui/solid"
+import { Effect, Option } from "effect"
+import { useTerminalDimensions } from "../terminal-dimensions"
 import { ref } from "@gent/core/extensions/api"
 import { type TodoEntry, type TodoIdType, TodoUpdateRequest } from "@gent/extensions/client.js"
 import { ChromePanel } from "./chrome-panel"
@@ -20,15 +20,15 @@ import { useRuntime } from "../hooks/use-runtime"
 import { useTheme } from "../theme/index"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 
-const STATUS_ICONS: Record<string, string> = {
+const STATUS_ICONS = {
   pending: "◻",
   in_progress: "◰",
   completed: "✔",
   failed: "✗",
   stopped: "◼",
-}
+} satisfies Record<string, string>
 
-const IN_PROGRESS_SPINNER = ["◰", "◳", "◲", "◱"] as const
+const IN_PROGRESS_SPINNER = ["◰", "◳", "◲", "◱"] satisfies ReadonlyArray<string>
 
 const PANEL_WIDTH = 70
 const PANEL_HEIGHT = 20
@@ -45,7 +45,7 @@ export function TodoDialog(props: {
   const tick = useSpinnerClock()
 
   const [selectedIdx, setSelectedIdx] = createSignal(0)
-  const [detailTodoId, setDetailTodoId] = createSignal<TodoIdType | undefined>(undefined)
+  const [detailTodoId, setDetailTodoId] = createSignal<Option.Option<TodoIdType>>(Option.none())
 
   // Reset selection when todos change
   createEffect(() => {
@@ -56,14 +56,14 @@ export function TodoDialog(props: {
   })
 
   const stopTodo = (todoId: TodoIdType) => {
-    const session = clientCtx.session()
-    if (session === undefined || session === null) return
+    const session = Option.fromNullishOr(clientCtx.session())
+    if (Option.isNone(session)) return
     const updateRef = ref(TodoUpdateRequest)
     cast(
       clientCtx.client.extension
         .request({
-          sessionId: session.sessionId,
-          branchId: session.branchId,
+          sessionId: session.value.sessionId,
+          branchId: session.value.branchId,
           extensionId: updateRef.extensionId,
           capabilityId: updateRef.capabilityId,
           input: { todoId, status: "stopped" },
@@ -77,15 +77,15 @@ export function TodoDialog(props: {
       if (!props.open) return false
 
       if (event.name === "escape") {
-        if (detailTodoId() !== undefined) {
-          setDetailTodoId(undefined)
+        if (Option.isSome(detailTodoId())) {
+          setDetailTodoId(Option.none())
         } else {
           props.onClose()
         }
         return true
       }
 
-      if (detailTodoId() !== undefined) return false
+      if (Option.isSome(detailTodoId())) return false
 
       const todos = props.todos
       if (todos.length === 0) return false
@@ -99,16 +99,19 @@ export function TodoDialog(props: {
         return true
       }
       if (event.name === "return") {
-        const todo = todos[selectedIdx()]
-        if (todo !== undefined) {
-          setDetailTodoId(todo.id)
+        const todo = Option.fromNullishOr(todos[selectedIdx()])
+        if (Option.isSome(todo)) {
+          setDetailTodoId(Option.some(todo.value.id))
         }
         return true
       }
       if (event.name === "x") {
-        const todo = todos[selectedIdx()]
-        if (todo !== undefined && (todo.status === "in_progress" || todo.status === "pending")) {
-          stopTodo(todo.id)
+        const todo = Option.fromNullishOr(todos[selectedIdx()])
+        if (
+          Option.isSome(todo) &&
+          (todo.value.status === "in_progress" || todo.value.status === "pending")
+        ) {
+          stopTodo(todo.value.id)
         }
         return true
       }
@@ -119,8 +122,13 @@ export function TodoDialog(props: {
   )
 
   const statusIcon = (status: TodoEntry["status"]) => {
-    if (status !== "in_progress") return STATUS_ICONS[status] ?? "?"
-    return IN_PROGRESS_SPINNER[tick() % IN_PROGRESS_SPINNER.length] ?? "◰"
+    if (status !== "in_progress") {
+      return Option.getOrElse(Option.fromNullishOr(STATUS_ICONS[status]), () => "?")
+    }
+    return Option.getOrElse(
+      Option.fromNullishOr(IN_PROGRESS_SPINNER[tick() % IN_PROGRESS_SPINNER.length]),
+      () => "◰",
+    )
   }
 
   const statusColor = (status: TodoEntry["status"]) => {
@@ -139,10 +147,17 @@ export function TodoDialog(props: {
     }
   }
 
-  const detailTodo = () => {
+  const detailTodo = (): Option.Option<TodoEntry> => {
     const id = detailTodoId()
-    return id !== undefined ? props.todos.find((t) => t.id === id) : undefined
+    if (Option.isNone(id)) return Option.none()
+    return Option.fromNullishOr(props.todos.find((todo) => todo.id === id.value))
   }
+
+  const detailTitle = () =>
+    Option.match(detailTodo(), {
+      onNone: () => "Todos",
+      onSome: (todo) => `Todo: ${todo.subject}`,
+    })
 
   const left = () => Math.max(0, Math.floor((dimensions().width - PANEL_WIDTH) / 2))
   const top = () => Math.max(0, Math.floor((dimensions().height - PANEL_HEIGHT) / 2))
@@ -150,7 +165,7 @@ export function TodoDialog(props: {
   return (
     <Show when={props.open}>
       <ChromePanel.Root
-        title={detailTodo() !== undefined ? `Todo: ${detailTodo()?.subject}` : "Todos"}
+        title={detailTitle()}
         width={PANEL_WIDTH}
         height={PANEL_HEIGHT}
         left={left()}
@@ -158,19 +173,24 @@ export function TodoDialog(props: {
       >
         <ChromePanel.Body>
           <Show
-            when={detailTodo() === undefined}
+            when={Option.getOrUndefined(detailTodo())}
             fallback={
               <box flexDirection="column" paddingLeft={1}>
-                <text>
-                  <span style={{ fg: theme.textMuted }}>Subject: </span>
-                  <span style={{ fg: theme.text }}>{detailTodo()?.subject}</span>
-                </text>
-                <text>
-                  <span style={{ fg: theme.textMuted }}>Status: </span>
-                  <span style={{ fg: statusColor(detailTodo()?.status ?? "pending") }}>
-                    {detailTodo()?.status}
-                  </span>
-                </text>
+                {Option.match(detailTodo(), {
+                  onNone: () => <></>,
+                  onSome: (todo) => (
+                    <>
+                      <text>
+                        <span style={{ fg: theme.textMuted }}>Subject: </span>
+                        <span style={{ fg: theme.text }}>{todo.subject}</span>
+                      </text>
+                      <text>
+                        <span style={{ fg: theme.textMuted }}>Status: </span>
+                        <span style={{ fg: statusColor(todo.status) }}>{todo.status}</span>
+                      </text>
+                    </>
+                  ),
+                })}
               </box>
             }
           >
@@ -187,18 +207,25 @@ export function TodoDialog(props: {
               <For each={[...props.todos]}>
                 {(todo, idx) => {
                   const selected = () => idx() === selectedIdx()
+                  const selectionColor = () => {
+                    if (selected()) return theme.primary
+                    return theme.textMuted
+                  }
+                  const selectionMarker = () => {
+                    if (selected()) return " ❯ "
+                    return "   "
+                  }
+                  const subjectColor = () => {
+                    if (selected()) return theme.text
+                    return theme.textMuted
+                  }
                   return (
                     <text>
-                      <span style={{ fg: selected() ? theme.primary : theme.textMuted }}>
-                        {selected() ? " ❯ " : "   "}
-                      </span>
+                      <span style={{ fg: selectionColor() }}>{selectionMarker()}</span>
                       <span style={{ fg: statusColor(todo.status) }}>
                         {statusIcon(todo.status)}
                       </span>
-                      <span style={{ fg: selected() ? theme.text : theme.textMuted }}>
-                        {" "}
-                        {todo.subject}
-                      </span>
+                      <span style={{ fg: subjectColor() }}> {todo.subject}</span>
                     </text>
                   )
                 }}
@@ -207,7 +234,7 @@ export function TodoDialog(props: {
           </Show>
         </ChromePanel.Body>
         <ChromePanel.Footer>
-          <Show when={detailTodo() === undefined} fallback="esc back">
+          <Show when={Option.isNone(detailTodo())} fallback="esc back">
             {"↑↓ navigate · enter detail · x stop · esc close"}
           </Show>
         </ChromePanel.Footer>

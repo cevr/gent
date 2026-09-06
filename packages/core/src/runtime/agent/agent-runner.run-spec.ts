@@ -1,6 +1,7 @@
-import { Cause, Effect } from "effect"
+import { Cause, Effect, Option, Predicate } from "effect"
 import {
   AgentRunResult,
+  type AgentRunOverrides,
   type AgentName,
   type AgentPersistence,
   type RunSpec,
@@ -48,36 +49,42 @@ export const handleAgentRunFailure =
       }),
     )
 
-const overrideArray = <A>(values: ReadonlyArray<A> | undefined) =>
-  values === undefined ? undefined : [...values]
+const overrideArray = <A>(values?: ReadonlyArray<A>): Option.Option<ReadonlyArray<A>> =>
+  Option.map(Option.fromUndefinedOr(values), (items) => [...items])
 
+// oxlint-disable-next-line effect/noNullish -- This normalization helper preserves the established optional run-spec API.
 export const normalizeRunSpec = (runSpec: RunSpec | undefined): RunSpec | undefined => {
-  if (runSpec === undefined) return undefined
+  // oxlint-disable-next-line effect/noNullish -- This normalization helper preserves the established optional run-spec API.
+  if (Predicate.isUndefined(runSpec)) return undefined
   const overrides = runSpec.overrides
-  const normalizedOverrides =
-    overrides === undefined
-      ? undefined
-      : {
-          ...(overrides.modelId !== undefined ? { modelId: overrides.modelId } : {}),
-          ...(overrides.allowedTools !== undefined
-            ? { allowedTools: overrideArray(overrides.allowedTools) }
-            : {}),
-          ...(overrides.deniedTools !== undefined
-            ? { deniedTools: overrideArray(overrides.deniedTools) }
-            : {}),
-          ...(overrides.reasoningEffort !== undefined
-            ? { reasoningEffort: overrides.reasoningEffort }
-            : {}),
-          ...(overrides.systemPromptAddendum !== undefined
-            ? { systemPromptAddendum: overrides.systemPromptAddendum }
-            : {}),
-        }
-  return {
-    ...(runSpec.persistence !== undefined ? { persistence: runSpec.persistence } : {}),
-    ...(normalizedOverrides !== undefined ? { overrides: normalizedOverrides } : {}),
-    ...(runSpec.tags !== undefined ? { tags: overrideArray(runSpec.tags) } : {}),
-    ...(runSpec.parentToolCallId !== undefined
-      ? { parentToolCallId: runSpec.parentToolCallId }
-      : {}),
+  // oxlint-disable-next-line effect/noNullish -- Run-spec normalization preserves omission of absent override groups.
+  let normalizedOverrides: AgentRunOverrides | undefined
+  if (Predicate.isUndefined(overrides)) {
+    // oxlint-disable-next-line effect/noNullish -- Run-spec normalization preserves omission of absent override groups.
+    normalizedOverrides = undefined
+  } else {
+    const normalized: { -readonly [K in keyof AgentRunOverrides]?: AgentRunOverrides[K] } = {}
+    if (Predicate.isNotUndefined(overrides.modelId)) normalized.modelId = overrides.modelId
+    const allowedTools = overrideArray(overrides.allowedTools)
+    if (Option.isSome(allowedTools)) normalized.allowedTools = allowedTools.value
+    const deniedTools = overrideArray(overrides.deniedTools)
+    if (Option.isSome(deniedTools)) normalized.deniedTools = deniedTools.value
+    if (Predicate.isNotUndefined(overrides.reasoningEffort)) {
+      normalized.reasoningEffort = overrides.reasoningEffort
+    }
+    if (Predicate.isNotUndefined(overrides.systemPromptAddendum)) {
+      normalized.systemPromptAddendum = overrides.systemPromptAddendum
+    }
+    normalizedOverrides = normalized
   }
+
+  const normalized: { -readonly [K in keyof RunSpec]?: RunSpec[K] } = {}
+  if (Predicate.isNotUndefined(runSpec.persistence)) normalized.persistence = runSpec.persistence
+  if (Predicate.isNotUndefined(normalizedOverrides)) normalized.overrides = normalizedOverrides
+  const tags = overrideArray(runSpec.tags)
+  if (Option.isSome(tags)) normalized.tags = tags.value
+  if (Predicate.isNotUndefined(runSpec.parentToolCallId)) {
+    normalized.parentToolCallId = runSpec.parentToolCallId
+  }
+  return normalized
 }

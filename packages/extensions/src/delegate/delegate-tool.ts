@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Data, Effect, Option, Predicate, Schema } from "effect"
 import {
   tool,
   AgentName,
@@ -24,11 +24,18 @@ interface BackgroundDelegateTarget {
 
 type BackgroundDelegateAgent = Parameters<ExtensionContextService["Agent"]["run"]>[0]["agent"]
 
+type AgentResolution = Data.TaggedEnum<{
+  Found: { readonly agent: BackgroundDelegateAgent }
+  Missing: { readonly error: string }
+}>
+
+const AgentResolution = Data.taggedEnum<AgentResolution>()
+
 const isTodoStillActive = (todoId: TodoId) =>
   Effect.gen(function* () {
     const todoService = yield* TodoService
     const todo = yield* todoService.get(todoId)
-    return todo !== undefined && todo.status !== "stopped" && todo.status !== "failed"
+    return Option.isSome(todo) && todo.value.status !== "stopped" && todo.value.status !== "failed"
   }).pipe(Effect.catchEager(() => Effect.succeed(false)))
 
 const runBackgroundDelegateTodo = Effect.fn("DelegateTool.runBackgroundDelegateTodo")(function* (
@@ -52,13 +59,16 @@ const runBackgroundDelegateTodo = Effect.fn("DelegateTool.runBackgroundDelegateT
   const active = yield* isTodoStillActive(todo.id)
   if (!active) return
 
+  let metadata = {}
+  if (Predicate.isObjectOrArray(todo.metadata)) metadata = todo.metadata
+
   if (result._tag === "success") {
     yield* todoService
       .update(todo.id, {
         status: "completed",
         owner: result.sessionId,
         metadata: {
-          ...(typeof todo.metadata === "object" && todo.metadata !== null ? todo.metadata : {}),
+          ...metadata,
           childSessionId: result.sessionId,
         },
       })
@@ -70,7 +80,7 @@ const runBackgroundDelegateTodo = Effect.fn("DelegateTool.runBackgroundDelegateT
     .update(todo.id, {
       status: "failed",
       metadata: {
-        ...(typeof todo.metadata === "object" && todo.metadata !== null ? todo.metadata : {}),
+        ...metadata,
         error: result.error,
       },
     })
@@ -102,7 +112,7 @@ export const DelegateResult = Schema.Struct({
   todoId: Schema.optional(Schema.String),
   todoIds: Schema.optional(Schema.Array(Schema.String)),
   status: Schema.optional(Schema.Literals(["running"])),
-  count: Schema.optional(Schema.Number),
+  count: Schema.optional(Schema.Finite),
   output: Schema.optional(Schema.String),
   metadata: Schema.optional(
     Schema.Struct({
@@ -112,9 +122,9 @@ export const DelegateResult = Schema.Struct({
       agentName: Schema.optional(AgentName),
       usage: Schema.optional(
         Schema.Struct({
-          input: Schema.Number,
-          output: Schema.Number,
-          cost: Schema.optional(Schema.Number),
+          input: Schema.Finite,
+          output: Schema.Finite,
+          cost: Schema.optional(Schema.Finite),
         }),
       ),
       toolCalls: Schema.optional(Schema.Array(AgentRunToolCallSchema)),
@@ -138,9 +148,10 @@ export const DelegateTool = tool({
   output: DelegateResult,
   execute: Effect.fn("DelegateTool.execute")(function* (params: typeof DelegateParams.Type) {
     const ctx = yield* ExtensionContext
-    const hasChain = (params.chain?.length ?? 0) > 0
-    const hasTodos = (params.todos?.length ?? 0) > 0
-    const hasSingle = params.agent !== undefined && params.todo !== undefined
+    const hasChain = Predicate.isNotUndefined(params.chain) && params.chain.length > 0
+    const hasTodos = Predicate.isNotUndefined(params.todos) && params.todos.length > 0
+    const hasSingle =
+      Predicate.isNotUndefined(params.agent) && Predicate.isNotUndefined(params.todo)
 
     const modes = [hasChain, hasTodos, hasSingle].filter(Boolean).length
     if (modes !== 1) {
@@ -148,18 +159,17 @@ export const DelegateTool = tool({
     }
 
     const resolveAgent = (agentName: string) =>
-      ctx.Agent.listAgents().pipe(
-        Effect.map((agents) => {
-          const agent = agents.find((a) => a.name === agentName)
-          if (agent === undefined) {
-            return { ok: false as const, error: `Unknown agent: ${agentName}` }
-          }
-          return { ok: true as const, agent }
-        }),
+      ctx.Agent.listAgents.pipe(
+        Effect.map((agents) =>
+          Option.match(Option.fromNullishOr(agents.find((a) => a.name === agentName)), {
+            onNone: () => AgentResolution.Missing({ error: `Unknown agent: ${agentName}` }),
+            onSome: (agent) => AgentResolution.Found({ agent }),
+          }),
+        ),
       )
 
     const appendSessionRef = (error: string, sessionId?: string) => {
-      if (sessionId === undefined) return error
+      if (Predicate.isUndefined(sessionId)) return error
       return `${error}\n\nFull session: session://${sessionId}`
     }
 
@@ -182,7 +192,7 @@ export const DelegateTool = tool({
 
     const backgroundSingle = Effect.fn("DelegateTool.backgroundSingle")(function* () {
       const resolved = yield* resolveAgent(params.agent ?? "")
-      if (!resolved.ok) return { error: resolved.error }
+      if (resolved._tag === "Missing") return { error: resolved.error }
 
       const todoService = yield* TodoService
       const todo = yield* todoService
@@ -195,14 +205,15 @@ export const DelegateTool = tool({
           cwd: ctx.cwd,
         })
         .pipe(
-          Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
-          Effect.catchDefect(() => Effect.void.pipe(Effect.as(undefined))),
+          Effect.asSome,
+          Effect.catchEager(() => Effect.succeed(Option.none<Todo>())),
+          Effect.catchDefect(() => Effect.succeed(Option.none<Todo>())),
         )
-      if (todo === undefined)
+      if (Option.isNone(todo))
         return { error: "Background todos unavailable — todo extension is disabled" }
 
-      yield* startBackgroundTodo(todo, resolved.agent)
-      return { todoId: todo.id, status: "running" as const }
+      yield* startBackgroundTodo(todo.value, resolved.agent)
+      return { todoId: todo.value.id, status: "running" } satisfies typeof DelegateResult.Type
     })
 
     const backgroundParallel = Effect.fn("DelegateTool.backgroundParallel")(function* () {
@@ -214,7 +225,7 @@ export const DelegateTool = tool({
       const todoIds: string[] = []
       for (const item of todos) {
         const resolved = yield* resolveAgent(item.agent)
-        if (!resolved.ok) return { error: resolved.error }
+        if (resolved._tag === "Missing") return { error: resolved.error }
         const todoService = yield* TodoService
         const todo = yield* todoService
           .create({
@@ -226,16 +237,21 @@ export const DelegateTool = tool({
             cwd: ctx.cwd,
           })
           .pipe(
-            Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
-            Effect.catchDefect(() => Effect.void.pipe(Effect.as(undefined))),
+            Effect.asSome,
+            Effect.catchEager(() => Effect.succeed(Option.none<Todo>())),
+            Effect.catchDefect(() => Effect.succeed(Option.none<Todo>())),
           )
-        if (todo === undefined) {
+        if (Option.isNone(todo)) {
           return { error: "Background todos unavailable — todo extension is disabled" }
         }
-        yield* startBackgroundTodo(todo, resolved.agent)
-        todoIds.push(todo.id)
+        yield* startBackgroundTodo(todo.value, resolved.agent)
+        todoIds.push(todo.value.id)
       }
-      return { todoIds, status: "running" as const, count: todoIds.length }
+      return {
+        todoIds,
+        status: "running",
+        count: todoIds.length,
+      } satisfies typeof DelegateResult.Type
     })
 
     const foregroundChain = Effect.fn("DelegateTool.foregroundChain")(function* () {
@@ -244,7 +260,7 @@ export const DelegateTool = tool({
 
       for (const step of params.chain ?? []) {
         const resolved = yield* resolveAgent(step.agent)
-        if (!resolved.ok) return { error: resolved.error }
+        if (resolved._tag === "Missing") return { error: resolved.error }
 
         const todoWithContext = step.todo.replace(/\{previous\}/g, previousOutput)
         const result = yield* ctx.Agent.run({
@@ -257,8 +273,8 @@ export const DelegateTool = tool({
         if (result._tag === "error") {
           return {
             error: appendSessionRef(result.error, getDurableAgentRunSessionId(result)),
-            metadata: { mode: "chain" as const, results },
-          }
+            metadata: { mode: "chain", results },
+          } satisfies typeof DelegateResult.Type
         }
         previousOutput = result.text
       }
@@ -266,17 +282,17 @@ export const DelegateTool = tool({
       const chainSessionRefs = results
         .filter((r): r is Extract<AgentRunResult, { _tag: "success" }> => r._tag === "success")
         .map((r) => getDurableAgentRunSessionId(r))
-        .filter((sessionId): sessionId is SessionId => sessionId !== undefined)
+        .filter((sessionId): sessionId is SessionId => Predicate.isNotUndefined(sessionId))
         .map((sessionId) => `session://${sessionId}`)
         .join(", ")
-      const output =
-        chainSessionRefs.length > 0
-          ? `${previousOutput}\n\nFull sessions: ${chainSessionRefs}`
-          : previousOutput
+      let output = previousOutput
+      if (chainSessionRefs.length > 0) {
+        output = `${previousOutput}\n\nFull sessions: ${chainSessionRefs}`
+      }
       return {
         output,
-        metadata: { mode: "chain" as const, results },
-      }
+        metadata: { mode: "chain", results },
+      } satisfies typeof DelegateResult.Type
     })
 
     const foregroundParallel = Effect.fn("DelegateTool.foregroundParallel")(function* () {
@@ -288,7 +304,7 @@ export const DelegateTool = tool({
       const runTodo = (todo: DelegateItemType) =>
         resolveAgent(todo.agent).pipe(
           Effect.flatMap((resolved) => {
-            if (!resolved.ok) {
+            if (resolved._tag === "Missing") {
               return Effect.succeed(AgentRunResult.cases.error.make({ error: resolved.error }))
             }
             return ctx.Agent.run({
@@ -305,22 +321,22 @@ export const DelegateTool = tool({
       )
       const parallelSessionRefs = successes
         .map((r) => getDurableAgentRunSessionId(r))
-        .filter((sessionId): sessionId is SessionId => sessionId !== undefined)
+        .filter((sessionId): sessionId is SessionId => Predicate.isNotUndefined(sessionId))
         .map((sessionId) => `session://${sessionId}`)
         .join(", ")
-      const output =
-        parallelSessionRefs.length > 0
-          ? `Parallel: ${successes.length}/${results.length} succeeded\n\nFull sessions: ${parallelSessionRefs}`
-          : `Parallel: ${successes.length}/${results.length} succeeded`
+      let output = `Parallel: ${successes.length}/${results.length} succeeded`
+      if (parallelSessionRefs.length > 0) {
+        output = `${output}\n\nFull sessions: ${parallelSessionRefs}`
+      }
       return {
         output,
-        metadata: { mode: "parallel" as const, results },
-      }
+        metadata: { mode: "parallel", results },
+      } satisfies typeof DelegateResult.Type
     })
 
     const foregroundSingle = Effect.fn("DelegateTool.foregroundSingle")(function* () {
       const resolved = yield* resolveAgent(params.agent ?? "")
-      if (!resolved.ok) return { error: resolved.error }
+      if (resolved._tag === "Missing") return { error: resolved.error }
 
       const result = yield* ctx.Agent.run({
         agent: resolved.agent,
@@ -334,18 +350,22 @@ export const DelegateTool = tool({
 
       const sessionId = getDurableAgentRunSessionId(result)
       const parts = [result.text]
-      if (result.savedPath !== undefined) parts.push(`\n\nFull output: ${result.savedPath}`)
-      if (sessionId !== undefined) parts.push(`\n\nFull session: session://${sessionId}`)
+      if (Predicate.isNotUndefined(result.savedPath)) {
+        parts.push(`\n\nFull output: ${result.savedPath}`)
+      }
+      if (Predicate.isNotUndefined(sessionId)) {
+        parts.push(`\n\nFull session: session://${sessionId}`)
+      }
       return {
         output: parts.join(""),
         metadata: {
-          mode: "single" as const,
+          mode: "single",
           sessionId,
           agentName: result.agentName,
           usage: result.usage,
           toolCalls: result.toolCalls,
         },
-      }
+      } satisfies typeof DelegateResult.Type
     })
 
     // Background mode: create durable todo and fire-and-forget

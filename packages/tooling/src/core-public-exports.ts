@@ -1,11 +1,13 @@
+import { Option } from "effect"
+
 interface PackageJson {
   readonly private?: boolean
-  readonly exports?: Record<string, unknown>
+  readonly exports?: Readonly<Record<string, string>>
 }
 
 interface TsConfigJson {
   readonly compilerOptions?: {
-    readonly paths?: Record<string, unknown>
+    readonly paths?: Readonly<Record<string, ReadonlyArray<string>>>
   }
 }
 
@@ -34,7 +36,7 @@ const forbiddenCorePathPrefixes = [
   "@gent/core/storage",
   "@gent/core/test-utils",
   "@gent/core/utils",
-] as const
+]
 
 const isForbiddenCorePath = (key: string): boolean =>
   forbiddenCorePathPrefixes.some((prefix) => key === prefix || key.startsWith(`${prefix}/`))
@@ -42,10 +44,10 @@ const isForbiddenCorePath = (key: string): boolean =>
 export const findCorePublicExportFindings = (
   packageJson: PackageJson,
   tsconfigJson: TsConfigJson,
-  coreInternalPackageJson?: PackageJson,
+  coreInternalPackageJson: Option.Option<PackageJson>,
 ): ReadonlyArray<CorePublicSurfaceFinding> => {
   const findings: CorePublicSurfaceFinding[] = []
-  const exportsMap = packageJson.exports ?? {}
+  const exportsMap = Option.getOrElse(Option.fromNullishOr(packageJson.exports), () => ({}))
   for (const key of Object.keys(exportsMap)) {
     if (publicCoreExports.has(key)) continue
     findings.push({
@@ -55,7 +57,12 @@ export const findCorePublicExportFindings = (
     })
   }
 
-  const paths = tsconfigJson.compilerOptions?.paths ?? {}
+  const paths = Option.getOrElse(
+    Option.flatMap(Option.fromNullishOr(tsconfigJson.compilerOptions), (options) =>
+      Option.fromNullishOr(options.paths),
+    ),
+    () => ({}),
+  )
   for (const key of Object.keys(paths)) {
     if (key === "@gent/core/extensions/api" || key === "@gent/core/extensions/api.js") continue
     if (key.startsWith("@gent/core-internal/")) continue
@@ -66,15 +73,19 @@ export const findCorePublicExportFindings = (
     })
   }
 
-  if (coreInternalPackageJson !== undefined) {
-    if (coreInternalPackageJson.private !== true) {
+  if (Option.isSome(coreInternalPackageJson)) {
+    const internalPackage = coreInternalPackageJson.value
+    if (internalPackage.private !== true) {
       findings.push({
         path: "packages/core-internal/package.json private",
         message: "@gent/core-internal must stay private; it is not an extension author API",
       })
     }
 
-    const internalExports = coreInternalPackageJson.exports ?? {}
+    const internalExports = Option.getOrElse(
+      Option.fromNullishOr(internalPackage.exports),
+      () => ({}),
+    )
     if (internalExports["./*.js"] !== "./src/*.ts" || internalExports["./*"] !== "./src/*.ts") {
       findings.push({
         path: "packages/core-internal/package.json exports",

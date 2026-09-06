@@ -1,6 +1,7 @@
+import { AgentName } from "@gent/core-internal/domain/agent"
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { Effect, FileSystem, Layer, Path, Predicate, Schema } from "effect"
 import { narrowR } from "../helpers/effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import type {
@@ -57,19 +58,14 @@ describe("extension activation isolation", () => {
             tool({
               id: "good_tool",
               description: "good",
-              params: {} as never,
+              params: Schema.Struct({}),
               output: Schema.Void,
               execute: () => Effect.void,
             }),
           ],
         }),
       )
-      const bad = makeBuiltin(
-        "bad-ext",
-        Effect.sync(() => {
-          throw new Error("setup boom")
-        }),
-      )
+      const bad = makeBuiltin("bad-ext", Effect.die(new Error("setup boom")))
 
       const result = yield* setupBuiltinExtensions({
         extensions: [good, bad],
@@ -86,6 +82,19 @@ describe("extension activation isolation", () => {
     }).pipe(Effect.provide(fsLayer)),
   )
 
+  it.live("does not infer builtin identity without a compiled build token", () =>
+    Effect.gen(function* () {
+      const extension = makeBuiltin("compiled-artifact", Effect.succeed({}))
+      const result = yield* setupBuiltinExtensions({
+        extensions: [extension],
+        cwd: "/tmp",
+        home: "/tmp",
+        disabled: new Set(),
+      })
+      expect(result.active[0]?.artifactIdentity).toBeUndefined()
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
   it.live("discovered setup failure is isolated instead of crashing activation", () =>
     Effect.gen(function* () {
       const result = yield* setupDiscoveredExtensions({
@@ -96,12 +105,7 @@ describe("extension activation isolation", () => {
             sourcePath: "/tmp/good.ts",
           },
           {
-            extension: makeBuiltin(
-              "bad-ext",
-              Effect.sync(() => {
-                throw new Error("setup boom")
-              }),
-            ),
+            extension: makeBuiltin("bad-ext", Effect.die(new Error("setup boom"))),
             scope: "project",
             sourcePath: "/tmp/bad.ts",
           },
@@ -133,7 +137,7 @@ describe("extension activation isolation", () => {
               tool({
                 id: "healthy_tool",
                 description: "healthy",
-                params: {} as never,
+                params: Schema.Struct({}),
                 output: Schema.Void,
                 execute: () => Effect.void,
               }),
@@ -144,7 +148,7 @@ describe("extension activation isolation", () => {
               tool({
                 id: "shared_tool",
                 description: "a",
-                params: {} as never,
+                params: Schema.Struct({}),
                 output: Schema.Void,
                 execute: () => Effect.void,
               }),
@@ -155,7 +159,7 @@ describe("extension activation isolation", () => {
               tool({
                 id: "shared_tool",
                 description: "b",
-                params: {} as never,
+                params: Schema.Struct({}),
                 output: Schema.Void,
                 execute: () => Effect.void,
               }),
@@ -183,16 +187,20 @@ describe("extension activation isolation", () => {
   // Validation still owns semantic tool checks after authoring has produced a
   // native Effect tool. Description checks live here because runtime-loaded
   // extensions can pass schema-valid but model-hostile tool metadata.
-  const rawToolLeaf = (id: string, description: string | undefined): never =>
-    tool({
+  const rawToolLeaf = (id: string, description?: string) => {
+    let normalizedDescription = ""
+    if (!Predicate.isUndefined(description)) normalizedDescription = description
+    return tool({
       id,
-      description: description ?? "",
+      description: normalizedDescription,
       params: Schema.Unknown,
       output: Schema.Void,
       execute: () => Effect.void,
-    }) as never
+    })
+  }
 
   const rawNativeToolLeaf = (id: string): never =>
+    // oxlint-disable-next-line effect/noAs -- This invalid native tool is a runtime validation fixture.
     AiTool.dynamic(id, {
       description: "native but missing Gent metadata",
       parameters: Schema.Unknown,
@@ -213,6 +221,7 @@ describe("extension activation isolation", () => {
       prompt: metadata.prompt,
       execute: () => Effect.void,
     })
+    // oxlint-disable-next-line effect/noAs -- This metadata-spoofed native tool is a runtime validation fixture.
     return AiTool.dynamic(id, {
       description: "native with copied Gent metadata but no private brand",
       parameters: Schema.Unknown,
@@ -220,6 +229,7 @@ describe("extension activation isolation", () => {
   }
 
   const rawRpcLeaf = (id: string): never =>
+    // oxlint-disable-next-line effect/noAs -- This invalid RPC leaf is a runtime validation fixture.
     ({
       id,
       public: true,
@@ -256,7 +266,7 @@ describe("extension activation isolation", () => {
             tool({
               id: "shared_name",
               description: "model",
-              params: {} as never,
+              params: Schema.Struct({}),
               output: Schema.Void,
               execute: () => Effect.void,
             }),
@@ -276,7 +286,7 @@ describe("extension activation isolation", () => {
   it.live("validation rejects model tool with empty description", () =>
     Effect.gen(function* () {
       const result = yield* validateLoadedExtensions([
-        makeLoaded("missing-desc", { tools: [rawToolLeaf("describeless", undefined)] }),
+        makeLoaded("missing-desc", { tools: [rawToolLeaf("describeless")] }),
       ])
 
       expect(result.active).toEqual([])
@@ -414,15 +424,17 @@ describe("extension activation isolation", () => {
                 tool({
                   id: "healthy_tool",
                   description: "healthy",
-                  params: {} as never,
+                  params: Schema.Struct({}),
                   output: Schema.Void,
                   execute: () => Effect.void,
                 }),
               ],
               resources: [
+                // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
                 defineResource({
+                  id: "test/activation/healthy/resource",
                   scope: "process",
-                  layer: Layer.empty as Layer.Layer<unknown>,
+                  layer: Layer.empty,
                 }) as never,
               ],
               scheduledJobs: [
@@ -430,7 +442,7 @@ describe("extension activation isolation", () => {
                   id: "reflect",
                   cron: "0 21 * * 1-5",
                   target: {
-                    agent: "memory:reflect" as never,
+                    agent: AgentName.make("memory:reflect"),
                     prompt: "Reflect.",
                   },
                 },
@@ -450,10 +462,12 @@ describe("extension activation isolation", () => {
           command: ["/usr/local/bin/gent"],
           env: { HOME: home },
           schedulerRuntime: {
-            install: (_entryPath, _schedule, name) =>
-              name.includes("reflect")
-                ? Effect.fail(new Error("cron install boom") as never)
-                : Effect.void,
+            install: (_entryPath, _schedule, name) => {
+              if (name.includes("reflect")) {
+                return Effect.die(new Error("cron install boom"))
+              }
+              return Effect.void
+            },
             remove: () => Effect.void,
           },
         })
@@ -506,15 +520,17 @@ describe("extension activation isolation", () => {
             tool({
               id: "healthy_tool",
               description: "healthy",
-              params: {} as never,
+              params: Schema.Struct({}),
               output: Schema.Void,
               execute: () => Effect.void,
             }),
           ],
           resources: [
+            // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
             defineResource({
+              id: "test/activation/healthy/start",
               scope: "process",
-              layer: Layer.empty as Layer.Layer<unknown>,
+              layer: Layer.empty,
               start: Effect.void,
             }) as never,
           ],
@@ -524,16 +540,18 @@ describe("extension activation isolation", () => {
             tool({
               id: "broken_tool",
               description: "broken",
-              params: {} as never,
+              params: Schema.Struct({}),
               output: Schema.Void,
               execute: () => Effect.void,
             }),
           ],
           resources: [
+            // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
             defineResource({
+              id: "test/activation/broken/start",
               scope: "process",
-              layer: Layer.empty as Layer.Layer<unknown>,
-              start: Effect.fail(new Error("resource start boom") as never),
+              layer: Layer.empty,
+              start: Effect.die(new Error("resource start boom")),
             }) as never,
           ],
         })
@@ -541,6 +559,7 @@ describe("extension activation isolation", () => {
         const result = yield* reconcileLoadedExtensions({
           extensions: [healthy, broken],
           home: "/tmp",
+          // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
           command: undefined,
         })
 

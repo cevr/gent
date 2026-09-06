@@ -7,6 +7,7 @@ import {
   Exit,
   FileSystem,
   Layer,
+  Option,
   Path,
   Ref,
   Schema,
@@ -103,10 +104,10 @@ function classifyBashCommand(command: string): BashRisk {
 
 // Bash Tool Error
 
-export class BashError extends Schema.TaggedErrorClass<BashError>()("BashError", {
+export class BashError extends Schema.TaggedError<BashError>()("BashError", {
   message: Schema.String,
   command: Schema.String,
-  exitCode: Schema.optional(Schema.Number),
+  exitCode: Schema.optional(Schema.Finite),
   stderr: Schema.optional(Schema.String),
 }) {}
 
@@ -117,7 +118,7 @@ export const BashParams = Schema.Struct({
     description: "Shell command to execute",
   }),
   timeout: Schema.optionalKey(
-    Schema.Number.annotate({
+    Schema.Finite.annotate({
       description: "Timeout in milliseconds (default: 120000, max: 600000)",
     }),
   ),
@@ -139,7 +140,7 @@ export const BashParams = Schema.Struct({
 export const BashResult = Schema.Struct({
   stdout: Schema.String,
   stderr: Schema.String,
-  exitCode: Schema.Number,
+  exitCode: Schema.Finite,
 })
 
 const HEAD_LINES = 50
@@ -155,7 +156,7 @@ interface BackgroundBashState {
 
 interface BackgroundBashJob {
   readonly command: string
-  readonly cwd: string | undefined
+  readonly cwd: Option.Option<string>
 }
 
 interface BackgroundBashTarget {
@@ -172,12 +173,19 @@ interface BackgroundBashTarget {
  * Detect `cd dir && cmd` or `cd dir; cmd` and split into cwd + command.
  * Models often emit this despite instructions to use the cwd param.
  */
-export function splitCdCommand(cmd: string): { cwd: string; command: string } | null {
-  const match = cmd.match(/^\s*cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*(?:&&|;)\s*(.+)$/s)
-  if (match === null) return null
-  const cwd = match[1] ?? match[2] ?? match[3] ?? ""
-  const command = match[4] ?? ""
-  return cwd.length > 0 && command.length > 0 ? { cwd, command } : null
+export function splitCdCommand(cmd: string): Option.Option<{ cwd: string; command: string }> {
+  const match = Option.fromNullishOr(
+    cmd.match(/^\s*cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*(?:&&|;)\s*(.+)$/s),
+  )
+  if (Option.isNone(match)) return Option.none()
+  const cwd = Option.fromNullishOr(match.value[1]).pipe(
+    Option.orElse(() => Option.fromNullishOr(match.value[2])),
+    Option.orElse(() => Option.fromNullishOr(match.value[3])),
+    Option.getOrElse(() => ""),
+  )
+  const command = Option.getOrElse(Option.fromNullishOr(match.value[4]), () => "")
+  if (cwd.length > 0 && command.length > 0) return Option.some({ cwd, command })
+  return Option.none()
 }
 
 /**
@@ -208,10 +216,10 @@ const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
  * Scope owns the spawn finalizer — closing the scope kills the process
  * group via SIGTERM with SIGKILL fallback after SIGKILL_DELAY_MS.
  */
-const runBashCommand = (command: string, cwd: string | undefined) =>
+const runBashCommand = (command: string, cwd: Option.Option<string>) =>
   Effect.gen(function* () {
     const handle = yield* ChildProcess.make("bash", ["-c", command], {
-      ...(cwd !== undefined ? { cwd } : {}),
+      cwd: Option.getOrUndefined(cwd),
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
@@ -228,8 +236,8 @@ const runBashCommand = (command: string, cwd: string | undefined) =>
     }
   })
 
-const backgroundJobKey = (target: BackgroundBashTarget) =>
-  `${target.sessionId}:${target.branchId}:${target.toolCallId}` as BackgroundBashJobKey
+const backgroundJobKey = (target: BackgroundBashTarget): BackgroundBashJobKey =>
+  `${target.sessionId}:${target.branchId}:${target.toolCallId}`
 
 const backgroundJobKeyFields = (target: BackgroundBashTarget): BackgroundBashJobKeyFields => ({
   sessionId: target.sessionId,
@@ -247,9 +255,9 @@ const markJobCompleted = (state: BackgroundBashState, key: BackgroundBashJobKey)
 
 const targetStillExists = (target: BackgroundBashTarget) =>
   Effect.gen(function* () {
-    const session = yield* target.Session.getSession().pipe(Effect.orElseSucceed(() => undefined))
-    if (session === undefined) return false
-    const branches = yield* target.Session.listBranches().pipe(Effect.orElseSucceed(() => []))
+    const session = yield* Effect.option(target.Session.getSession())
+    if (Option.isNone(session)) return false
+    const branches = yield* target.Session.listBranches.pipe(Effect.orElseSucceed(() => []))
     return branches.some((branch) => branch.id === target.branchId)
   })
 
@@ -334,18 +342,18 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
       )
 
       const buf = new OutputBuffer(HEAD_LINES, TAIL_LINES)
-      const fullOutput =
-        bgResult.stderr.length > 0 ? `${bgResult.stdout}\n${bgResult.stderr}` : bgResult.stdout
+      let fullOutput = bgResult.stdout
+      if (bgResult.stderr.length > 0) fullOutput = `${bgResult.stdout}\n${bgResult.stderr}`
       buf.add(fullOutput)
       const formatted = buf.format()
 
       let outputText = formatted.text
       if (formatted.truncatedLines > 0) {
-        const path = yield* saveFullOutput(fullOutput, `bash_bg_${job.command.slice(0, 40)}`).pipe(
-          Effect.orElseSucceed(() => undefined),
+        const path = yield* Effect.option(
+          saveFullOutput(fullOutput, `bash_bg_${job.command.slice(0, 40)}`),
         )
-        if (path !== undefined) {
-          outputText = `${formatted.text}\n\nFull output saved to: ${path}`
+        if (Option.isSome(path)) {
+          outputText = `${formatted.text}\n\nFull output saved to: ${path.value}`
         }
       }
 
@@ -415,11 +423,10 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         const fiber = yield* Deferred.await(started).pipe(
           Effect.andThen(runBackgroundJob(job, target)),
           Effect.catchTag("BashError", (e) => queueFailure(job, target, e.message)),
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.void
-              : queueFailure(job, target, `Internal error: ${Cause.pretty(cause)}`),
-          ),
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) return Effect.void
+            return queueFailure(job, target, `Internal error: ${Cause.pretty(cause)}`)
+          }),
           Effect.ensuring(Ref.update(state, (s) => markJobCompleted(s, key))),
           Effect.updateContext(
             (
@@ -436,10 +443,10 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
           active.set(key, fiber)
           return { ...s, active }
         })
-        yield* Deferred.succeed(started, undefined)
+        yield* Deferred.succeed(started, void 0)
       }).pipe(gate.withPermits(1))
 
-    return { start }
+    return BackgroundBashSupervisor.of({ start })
   }),
 )
 
@@ -467,7 +474,10 @@ export const BashTool = tool({
   output: BashResult,
   execute: Effect.fn("BashTool.execute")(function* (params: typeof BashParams.Type) {
     const ctx = yield* ExtensionContext
-    const timeout = Math.min(params.timeout ?? 120000, 600000)
+    const timeout = Math.min(
+      Option.getOrElse(Option.fromNullishOr(params.timeout), () => 120000),
+      600000,
+    )
 
     // Strip background operator
     let command = stripBackground(params.command)
@@ -476,11 +486,11 @@ export const BashTool = tool({
     command = injectGitTrailers(command, ctx.sessionId)
 
     // Split cd + command patterns into cwd + command
-    let cwd = params.cwd
+    let cwd = Option.fromNullishOr(params.cwd)
     const split = splitCdCommand(command)
-    if (split !== null) {
-      cwd = split.cwd
-      command = split.command
+    if (Option.isSome(split)) {
+      cwd = Option.some(split.value.cwd)
+      command = split.value.command
     }
 
     // Guardrail check — ephemeral, not persisted through Permission service
@@ -541,22 +551,22 @@ export const BashTool = tool({
 
     // Use OutputBuffer for head+tail truncation
     const buf = new OutputBuffer(HEAD_LINES, TAIL_LINES)
-    const fullOutput =
-      result.stderr.length > 0 ? `${result.stdout}\n${result.stderr}` : result.stdout
+    let fullOutput = result.stdout
+    if (result.stderr.length > 0) fullOutput = `${result.stdout}\n${result.stderr}`
     buf.add(fullOutput)
     const formatted = buf.format()
 
     // Save full output when truncated
-    let fullOutputPath: string | undefined
+    let fullOutputPath = Option.none<string>()
     if (formatted.truncatedLines > 0) {
-      fullOutputPath = yield* saveFullOutput(fullOutput, `bash_${command.slice(0, 40)}`).pipe(
-        Effect.orElseSucceed(() => undefined),
+      fullOutputPath = yield* Effect.option(
+        saveFullOutput(fullOutput, `bash_${command.slice(0, 40)}`),
       )
     }
 
     let stdout = formatted.text
-    if (formatted.truncatedLines > 0 && fullOutputPath !== undefined) {
-      stdout = `${formatted.text}\n\nFull output saved to: ${fullOutputPath}`
+    if (formatted.truncatedLines > 0 && Option.isSome(fullOutputPath)) {
+      stdout = `${formatted.text}\n\nFull output saved to: ${fullOutputPath.value}`
     }
 
     return {

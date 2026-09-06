@@ -23,7 +23,7 @@
 //   - border labels: collected (no winner), sorted by priority
 //   - autocomplete: collected (no winner), scope-ordered
 
-import { type Effect, type ManagedRuntime } from "effect"
+import { Option, type Effect, type ManagedRuntime } from "effect"
 import type { ActiveInteraction, ApprovalResult } from "@gent/core-internal/domain/event.js"
 import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
 import type { ToolRenderer } from "../components/tool-renderers/types"
@@ -119,6 +119,7 @@ export interface PaletteLevelEntry {
 export interface PaletteLevel {
   readonly id: string
   readonly title: string
+  // eslint-disable-next-line effect/noNullish -- palette sources use absence while loading.
   readonly source: () => ReadonlyArray<PaletteLevelEntry> | undefined
   readonly onEnter?: () => void
 }
@@ -211,28 +212,29 @@ export interface ClientContributions {
   readonly autocomplete?: ReadonlyArray<AutocompleteContribution>
 }
 
+type MutableClientContributions = {
+  -readonly [Key in keyof ClientContributions]: ClientContributions[Key]
+}
+
+// eslint-disable-next-line effect/noNullish -- contribution buckets preserve omitted optional arrays.
 const append = <A>(
+  // eslint-disable-next-line effect/noNullish -- contribution buckets preserve omitted optional arrays.
   left: ReadonlyArray<A> | undefined,
+  // eslint-disable-next-line effect/noNullish -- contribution buckets preserve omitted optional arrays.
   right: ReadonlyArray<A> | undefined,
+  // eslint-disable-next-line effect/noNullish -- contribution buckets preserve omitted optional arrays.
 ): ReadonlyArray<A> | undefined => {
-  if (right === undefined) return left
-  if (left === undefined) return right
-  return [...left, ...right]
+  const rightOption = Option.fromNullishOr(right)
+  const leftOption = Option.fromNullishOr(left)
+  if (Option.isNone(rightOption)) return Option.getOrUndefined(leftOption)
+  if (Option.isNone(leftOption)) return rightOption.value
+  return [...leftOption.value, ...rightOption.value]
 }
 
 export const clientContributions = (
   ...parts: ReadonlyArray<ClientContributions>
 ): ClientContributions => {
-  const out: {
-    renderers?: ReadonlyArray<RendererContribution>
-    widgets?: ReadonlyArray<WidgetContribution>
-    commands?: ReadonlyArray<ClientCommandContribution>
-    overlays?: ReadonlyArray<OverlayContribution>
-    interactionRenderers?: ReadonlyArray<InteractionRendererContribution>
-    composerSurface?: ComposerSurfaceContribution
-    borderLabels?: ReadonlyArray<BorderLabelContribution>
-    autocomplete?: ReadonlyArray<AutocompleteContribution>
-  } = {}
+  const out: MutableClientContributions = {}
 
   for (const part of parts) {
     out.renderers = append(out.renderers, part.renderers)
@@ -240,7 +242,11 @@ export const clientContributions = (
     out.commands = append(out.commands, part.commands)
     out.overlays = append(out.overlays, part.overlays)
     out.interactionRenderers = append(out.interactionRenderers, part.interactionRenderers)
-    out.composerSurface = part.composerSurface ?? out.composerSurface
+    out.composerSurface = Option.getOrUndefined(
+      Option.orElse(Option.fromNullishOr(part.composerSurface), () =>
+        Option.fromNullishOr(out.composerSurface),
+      ),
+    )
     out.borderLabels = append(out.borderLabels, part.borderLabels)
     out.autocomplete = append(out.autocomplete, part.autocomplete)
   }
@@ -280,9 +286,13 @@ export const overlayContribution = (opts: {
 export const interactionRendererContribution = (
   component: InteractionRendererComponent,
   metadataType?: string,
-): ClientContributions => ({
-  interactionRenderers: [{ ...(metadataType === undefined ? {} : { metadataType }), component }],
-})
+): ClientContributions => {
+  const renderer = Option.match(Option.fromNullishOr(metadataType), {
+    onNone: () => ({ component }),
+    onSome: (value) => ({ metadataType: value, component }),
+  })
+  return { interactionRenderers: [renderer] }
+}
 
 /**
  * Build a composer-surface contribution. The component must be a function

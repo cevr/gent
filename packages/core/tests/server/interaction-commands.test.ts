@@ -1,19 +1,15 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Fiber, Layer, Schema, Stream } from "effect"
-// @effect-diagnostics nodeBuiltinImport:off -- mirrors SDK workspace hashing in a restart fixture.
 import { createHash } from "node:crypto"
-// @effect-diagnostics nodeBuiltinImport:off -- file-backed restart fixture uses a temp SQLite path.
-import * as path from "node:path"
-import type { LoadedExtension } from "../../src/domain/extension.js"
+import { LoadedArtifactIdentity, type LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId, InteractionRequestId } from "@gent/core-internal/domain/ids"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
-import { createTempDirFixture, waitFor } from "@gent/core-internal/test-utils/fixtures"
+import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
-import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { Gent } from "@gent/sdk"
@@ -21,10 +17,13 @@ import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc.js"
 import { encodeInteractionDecision } from "../../src/domain/interaction-request.js"
 
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
 const InteractionProbeExtension: LoadedExtension = {
   manifest: { id: ExtensionId.make("@test/interaction-probe") },
   scope: "builtin",
   sourcePath: "test",
+  artifactIdentity: LoadedArtifactIdentity.make("@test/interaction-probe@artifact-1"),
   contributions: {
     tools: [
       tool({
@@ -48,17 +47,16 @@ const InteractionProbeExtension: LoadedExtension = {
   },
 }
 
-const tempDir = createTempDirFixture("gent-interaction-")
 const currentTestWorkspaceId = () =>
-  WorkspaceId.make(createHash("sha256").update(path.resolve(process.cwd())).digest("hex"))
+  WorkspaceId.make(createHash("sha256").update(process.cwd()).digest("hex"))
 
 describe("interaction.respondInteraction", () => {
-  it.live(
+  it.scopedLive(
     "rehydrates one pending interaction after restart and accepts response before explicit actor wake",
     () =>
       Effect.gen(function* () {
-        const dbPath = path.join(tempDir(), "gent.db")
-        const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(Layer.provide(BunPlatformLive))
+        const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
+        const dbPath = `${tempDir}/gent.db`
         const finalReply = "approval resumed after restart"
         const firstProvider = yield* LanguageModelLayers.sequence([
           toolCallStep("approval_probe", { text: "approve deploy?" }),
@@ -125,23 +123,24 @@ describe("interaction.respondInteraction", () => {
                 extraLayers: [Layer.succeed(CurrentWorkspaceId, currentTestWorkspaceId())],
               }),
             )
-            const eventStorage = yield* EventStorage
-            const rehydrated = yield* eventStorage
-              .listEvents({
-                sessionId: first.sessionId,
-                branchId: first.branchId,
-                afterId: first.lastEventId,
-              })
-              .pipe(Effect.provideService(CurrentWorkspaceId, currentTestWorkspaceId()))
-            const presentedAgain = rehydrated.filter(
-              (envelope) => envelope.event._tag === "InteractionPresented",
+            const rehydrated = Array.from(
+              yield* client.session
+                .events({
+                  sessionId: first.sessionId,
+                  branchId: first.branchId,
+                  after: first.lastEventId,
+                })
+                .pipe(
+                  Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+                  Stream.take(1),
+                  Stream.runCollect,
+                ),
             )
-            expect(presentedAgain.length).toBe(1)
-            expect(presentedAgain[0]?.event._tag).toBe("InteractionPresented")
-            if (presentedAgain[0]?.event._tag === "InteractionPresented") {
-              expect(presentedAgain[0].event.requestId).toBe(first.requestId)
+            expect(rehydrated.length).toBe(1)
+            expect(rehydrated[0]?.event._tag).toBe("InteractionPresented")
+            if (rehydrated[0]?.event._tag === "InteractionPresented") {
+              expect(rehydrated[0].event.requestId).toBe(first.requestId)
             }
-
             yield* client.interaction.respondInteraction({
               sessionId: first.sessionId,
               branchId: first.branchId,
@@ -172,21 +171,22 @@ describe("interaction.respondInteraction", () => {
                   message.parts.some(
                     (part) =>
                       part.type === "tool-result" &&
-                      JSON.stringify(part.result).includes("after restart"),
+                      encodeJson(part.result).includes("after restart"),
                   ),
               ),
             ).toBe(true)
           }).pipe(Effect.timeout("8 seconds")),
-        ).pipe(Effect.provide(storageLayer))
+        )
       }),
     12_000,
   )
 
-  it.live(
+  it.scopedLive(
     "recovers a stored decision after restart before actor wake",
     () =>
       Effect.gen(function* () {
-        const dbPath = path.join(tempDir(), "gent-decision.db")
+        const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
+        const dbPath = `${tempDir}/gent-decision.db`
         const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(Layer.provide(BunPlatformLive))
         const finalReply = "approval resumed from stored decision"
         const firstProvider = yield* LanguageModelLayers.sequence([
@@ -246,6 +246,7 @@ describe("interaction.respondInteraction", () => {
           })
           yield* storage.decide(first.requestId, decisionJson)
         }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(storageLayer),
           Effect.provideService(CurrentWorkspaceId, currentTestWorkspaceId()),
         )
@@ -286,12 +287,12 @@ describe("interaction.respondInteraction", () => {
                   message.parts.some(
                     (part) =>
                       part.type === "tool-result" &&
-                      JSON.stringify(part.result).includes("stored before wake"),
+                      encodeJson(part.result).includes("stored before wake"),
                   ),
               ),
             ).toBe(true)
           }).pipe(Effect.timeout("8 seconds")),
-        ).pipe(Effect.provide(storageLayer))
+        )
       }),
     12_000,
   )
@@ -384,7 +385,7 @@ describe("interaction.respondInteraction", () => {
                 message.parts.some(
                   (part) =>
                     part.type === "tool-result" &&
-                    JSON.stringify(part.result).includes("real approval"),
+                    encodeJson(part.result).includes("real approval"),
                 ),
             ),
           ).toBe(true)

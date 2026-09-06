@@ -1,7 +1,7 @@
 import { createSignal, createEffect, on, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { usePaste, useTerminalDimensions } from "@opentui/solid"
-import { Effect, Fiber } from "effect"
+import { usePaste } from "@opentui/solid"
+import { Effect, Fiber, Option } from "effect"
 import type { SessionId } from "@gent/core-internal/domain/ids.js"
 import { LinkOpener } from "../services/link-opener"
 import { useTheme } from "../theme/index"
@@ -17,16 +17,23 @@ import {
   type AuthState as AuthRouteState,
 } from "./auth-state"
 import { useScopedKeyboard } from "../keyboard/context"
+import { useTerminalDimensions } from "../terminal-dimensions"
 
 export interface AuthProps {
+  // eslint-disable-next-line effect/noNullish -- route props omit a session outside an active session.
   sessionId?: SessionId
+  // eslint-disable-next-line effect/noNullish -- route props omit this policy when it is not enforced.
   enforceAuth?: boolean
+  // eslint-disable-next-line effect/noNullish -- route callbacks are optional at the UI boundary.
   onResolved?: () => void
+  // eslint-disable-next-line effect/noNullish -- route callbacks are optional at the UI boundary.
   onClose?: () => void
 }
 
+// eslint-disable-next-line effect/noNullish -- OpenTUI omits a sequence for control keys.
 function isPrintableAuthSequence(sequence: string | undefined): sequence is string {
-  return sequence !== undefined && sequence.length === 1
+  const value = Option.fromNullishOr(sequence)
+  return Option.isSome(value) && value.value.length === 1
 }
 
 export function Auth(props: AuthProps) {
@@ -40,32 +47,35 @@ export function Auth(props: AuthProps) {
     setState((current) => transitionAuth(current, event))
   }
   const [autoPrompted, setAutoPrompted] = createSignal(false)
-  const [successMessage, setSuccessMessage] = createSignal<string | null>(null)
+  const [successMessage, setSuccessMessage] = createSignal<Option.Option<string>>(Option.none())
   let routeVersion = 0
   let loadVersion = 0
-  let successTimer: Fiber.Fiber<void, never> | undefined
+  let successTimer = Option.none<Fiber.Fiber<void, never>>()
+  const sessionId = Option.fromNullishOr(props.sessionId)
 
   const flashSuccess = (msg: string) => {
-    if (successTimer !== undefined) clientCtx.runtime.cast(Fiber.interrupt(successTimer))
-    setSuccessMessage(msg)
-    successTimer = clientCtx.runtime.fork(
-      Effect.sleep("2 seconds").pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            setSuccessMessage(null)
-            successTimer = undefined
-          }),
+    if (Option.isSome(successTimer)) clientCtx.runtime.cast(Fiber.interrupt(successTimer.value))
+    setSuccessMessage(Option.some(msg))
+    successTimer = Option.some(
+      clientCtx.runtime.fork(
+        Effect.sleep("2 seconds").pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              setSuccessMessage(Option.none())
+              successTimer = Option.none()
+            }),
+          ),
         ),
       ),
     )
   }
   const invalidateRouteVersion = () => {
     routeVersion += 1
-    if (successTimer !== undefined) {
-      clientCtx.runtime.cast(Fiber.interrupt(successTimer))
-      successTimer = undefined
+    if (Option.isSome(successTimer)) {
+      clientCtx.runtime.cast(Fiber.interrupt(successTimer.value))
+      successTimer = Option.none()
     }
-    setSuccessMessage(null)
+    setSuccessMessage(Option.none())
     return routeVersion
   }
   const nextRouteVersion = () => {
@@ -73,9 +83,11 @@ export function Auth(props: AuthProps) {
     return invalidateRouteVersion()
   }
   const isCurrentRouteVersion = (version: number) => version === routeVersion
-  let scrollRef: ScrollBoxRenderable | undefined = undefined
+  let scrollRef = Option.none<ScrollBoxRenderable>()
 
-  useScrollSync(() => `auth-provider-${state().providerIndex}`, { getRef: () => scrollRef })
+  useScrollSync(() => `auth-provider-${state().providerIndex}`, {
+    getRef: () => Option.getOrUndefined(scrollRef),
+  })
 
   createEffect(
     on(
@@ -92,15 +104,24 @@ export function Auth(props: AuthProps) {
 
   const loadAuth = (currentRouteVersion = routeVersion) => {
     const requestVersion = ++loadVersion
-    const agentName = clientCtx.agent()
+    const agentName = Option.fromNullishOr(clientCtx.agent())
     clientCtx.log.info("auth:load-start")
     send(AuthEvent.cases.LoadStarted.make({}))
+    const providerRequest = Option.match(agentName, {
+      onNone: () =>
+        Option.match(sessionId, {
+          onNone: () => ({}),
+          onSome: (value) => ({ sessionId: value }),
+        }),
+      onSome: (value) =>
+        Option.match(sessionId, {
+          onNone: () => ({ agentName: value }),
+          onSome: (id) => ({ agentName: value, sessionId: id }),
+        }),
+    })
     cast(
       Effect.all([
-        clientCtx.client.auth.listProviders({
-          ...(agentName !== undefined ? { agentName } : {}),
-          ...(props.sessionId !== undefined ? { sessionId: props.sessionId } : {}),
-        }),
+        clientCtx.client.auth.listProviders(providerRequest),
         clientCtx.client.auth.listMethods(),
       ]).pipe(
         Effect.tap(([loadedProviders, loadedMethods]) =>
@@ -147,11 +168,14 @@ export function Auth(props: AuthProps) {
     const current = state()
     if (current._tag !== "List") return
 
-    if (props.enforceAuth === true && current.error === undefined) {
+    const currentError = Option.fromNullishOr(current.error)
+    if (props.enforceAuth === true && Option.isNone(currentError)) {
       const missing = current.providers.filter((p) => p.required && !p.hasKey)
       if (missing.length === 0) {
-        props.onResolved?.()
-        props.onClose?.()
+        const onResolved = Option.fromNullishOr(props.onResolved)
+        if (Option.isSome(onResolved)) onResolved.value()
+        const onClose = Option.fromNullishOr(props.onClose)
+        if (Option.isSome(onClose)) onClose.value()
         return
       }
     }
@@ -173,13 +197,13 @@ export function Auth(props: AuthProps) {
   const deleteSelected = () => {
     const current = state()
     if (current._tag !== "List") return
-    const provider = current.providers[current.providerIndex]
-    if (provider === undefined || provider.source !== "stored") return
+    const provider = Option.fromNullishOr(current.providers[current.providerIndex])
+    if (Option.isNone(provider) || provider.value.source !== "stored") return
     const currentRouteVersion = invalidateRouteVersion()
     send(AuthEvent.cases.DeleteStarted.make({}))
 
     cast(
-      clientCtx.client.auth.deleteKey({ provider: provider.provider }).pipe(
+      clientCtx.client.auth.deleteKey({ provider: provider.value.provider }).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             if (!isCurrentRouteVersion(currentRouteVersion)) return
@@ -200,19 +224,19 @@ export function Auth(props: AuthProps) {
   const submitKey = () => {
     const current = state()
     if (current._tag !== "Key") return
-    const provider = current.providers[current.providerIndex]
+    const provider = Option.fromNullishOr(current.providers[current.providerIndex])
     const key = current.value.trim()
-    if (provider === undefined || key.length === 0) return
+    if (Option.isNone(provider) || key.length === 0) return
     const currentRouteVersion = invalidateRouteVersion()
-    clientCtx.log.info("auth:submit-key", { provider: provider.provider })
+    clientCtx.log.info("auth:submit-key", { provider: provider.value.provider })
     send(AuthEvent.cases.SubmitKeyStarted.make({}))
 
     cast(
-      clientCtx.client.auth.setKey({ provider: provider.provider, key }).pipe(
+      clientCtx.client.auth.setKey({ provider: provider.value.provider, key }).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             if (!isCurrentRouteVersion(currentRouteVersion)) return
-            flashSuccess(`API key saved for ${provider.provider}`)
+            flashSuccess(`API key saved for ${provider.value.provider}`)
             send(AuthEvent.cases.ActionSucceeded.make({}))
             loadAuth(currentRouteVersion)
           }),
@@ -230,19 +254,26 @@ export function Auth(props: AuthProps) {
   const startMethod = () => {
     const current = state()
     if (current._tag !== "Method") return
-    const provider = current.providers[current.providerIndex]
-    const methods = provider !== undefined ? (current.methods[provider.provider] ?? []) : []
-    const method = methods[current.methodIndex]
-    if (provider === undefined || method === undefined) return
+    const provider = Option.fromNullishOr(current.providers[current.providerIndex])
+    if (Option.isNone(provider)) return
+    const methods = Option.getOrElse(
+      Option.fromNullishOr(current.methods[provider.value.provider]),
+      () => [],
+    )
+    const method = Option.fromNullishOr(methods[current.methodIndex])
+    if (Option.isNone(method)) return
     const currentRouteVersion = invalidateRouteVersion()
-    clientCtx.log.info("auth:start-method", { provider: provider.provider, method: method.type })
+    clientCtx.log.info("auth:start-method", {
+      provider: provider.value.provider,
+      method: method.value.type,
+    })
 
-    if (method.type === "api") {
+    if (method.value.type === "api") {
       send(AuthEvent.cases.StartKey.make({}))
       return
     }
 
-    if (props.sessionId === undefined) {
+    if (Option.isNone(sessionId)) {
       send(AuthEvent.cases.ActionFailed.make({ error: "No active session for authorization" }))
       return
     }
@@ -251,15 +282,16 @@ export function Auth(props: AuthProps) {
     cast(
       clientCtx.client.auth
         .authorize({
-          sessionId: props.sessionId,
-          provider: provider.provider,
+          sessionId: sessionId.value,
+          provider: provider.value.provider,
           method: current.methodIndex,
         })
         .pipe(
           Effect.tap((authorization) =>
             Effect.sync(() => {
               if (!isCurrentRouteVersion(currentRouteVersion)) return
-              if (authorization === null) {
+              const authorizationOption = Option.fromNullishOr(authorization)
+              if (Option.isNone(authorizationOption)) {
                 send(
                   AuthEvent.cases.ActionFailed.make({
                     error: "No authorization available for this method",
@@ -267,16 +299,16 @@ export function Auth(props: AuthProps) {
                 )
                 return
               }
-              if (authorization.method === "done") {
-                flashSuccess(`Authenticated ${provider.provider}`)
+              if (authorizationOption.value.method === "done") {
+                flashSuccess(`Authenticated ${provider.value.provider}`)
                 send(AuthEvent.cases.ActionSucceeded.make({}))
                 loadAuth(currentRouteVersion)
                 return
               }
               send(
                 AuthEvent.cases.StartOAuth.make({
-                  authorization,
-                  method,
+                  authorization: authorizationOption.value,
+                  method: method.value,
                   providerIndex: current.providerIndex,
                   methodIndex: current.methodIndex,
                 }),
@@ -285,18 +317,24 @@ export function Auth(props: AuthProps) {
           ),
           Effect.tap((authorization) => {
             if (!isCurrentRouteVersion(currentRouteVersion)) return Effect.void
-            if (authorization === null || authorization.method === "done") return Effect.void
-            return openAuthorization(currentRouteVersion, authorization.url)
+            const authorizationOption = Option.fromNullishOr(authorization)
+            if (Option.isNone(authorizationOption) || authorizationOption.value.method === "done") {
+              return Effect.void
+            }
+            return openAuthorization(currentRouteVersion, authorizationOption.value.url)
           }),
           Effect.tap((authorization) => {
             if (!isCurrentRouteVersion(currentRouteVersion)) return Effect.void
-            if (authorization === null || authorization.method === "done") return Effect.void
-            if (authorization.method === "auto") {
+            const authorizationOption = Option.fromNullishOr(authorization)
+            if (Option.isNone(authorizationOption) || authorizationOption.value.method === "done") {
+              return Effect.void
+            }
+            if (authorizationOption.value.method === "auto") {
               return Effect.sync(() =>
                 startAutoCallback(
                   currentRouteVersion,
-                  authorization.authorizationId,
-                  provider.provider,
+                  authorizationOption.value.authorizationId,
+                  provider.value.provider,
                   current.providerIndex,
                   current.methodIndex,
                 ),
@@ -321,7 +359,7 @@ export function Auth(props: AuthProps) {
     _providerIndex: number,
     methodIndex: number,
   ) => {
-    if (props.sessionId === undefined) {
+    if (Option.isNone(sessionId)) {
       send(AuthEvent.cases.OAuthAutoFailed.make({ error: "No active session for authorization" }))
       return
     }
@@ -329,7 +367,7 @@ export function Auth(props: AuthProps) {
     cast(
       clientCtx.client.auth
         .callback({
-          sessionId: props.sessionId,
+          sessionId: sessionId.value,
           provider: providerName,
           method: methodIndex,
           authorizationId,
@@ -357,17 +395,18 @@ export function Auth(props: AuthProps) {
     const current = state()
     if (current._tag !== "OAuth") return
     if (current.phase === "waiting") return
-    const provider = current.providers[current.providerIndex]
-    if (provider === undefined) return
+    const provider = Option.fromNullishOr(current.providers[current.providerIndex])
+    if (Option.isNone(provider)) return
     clientCtx.log.info("auth:submit-oauth", {
-      provider: provider.provider,
+      provider: provider.value.provider,
       method: current.authorization.method,
     })
     const needsCode = current.authorization.method === "code"
     const trimmed = current.code.trim()
-    const code = trimmed.length > 0 ? trimmed : undefined
-    if (needsCode && code === undefined) return
-    if (props.sessionId === undefined) {
+    let code = Option.none<string>()
+    if (trimmed.length > 0) code = Option.some(trimmed)
+    if (needsCode && Option.isNone(code)) return
+    if (Option.isNone(sessionId)) {
       send(AuthEvent.cases.ActionFailed.make({ error: "No active session for authorization" }))
       return
     }
@@ -376,18 +415,28 @@ export function Auth(props: AuthProps) {
 
     cast(
       clientCtx.client.auth
-        .callback({
-          sessionId: props.sessionId,
-          provider: provider.provider,
-          method: current.methodIndex,
-          authorizationId: current.authorization.authorizationId,
-          code,
-        })
+        .callback(
+          Option.match(code, {
+            onNone: () => ({
+              sessionId: sessionId.value,
+              provider: provider.value.provider,
+              method: current.methodIndex,
+              authorizationId: current.authorization.authorizationId,
+            }),
+            onSome: (value) => ({
+              sessionId: sessionId.value,
+              provider: provider.value.provider,
+              method: current.methodIndex,
+              authorizationId: current.authorization.authorizationId,
+              code: value,
+            }),
+          }),
+        )
         .pipe(
           Effect.tap(() =>
             Effect.sync(() => {
               if (!isCurrentRouteVersion(currentRouteVersion)) return
-              flashSuccess(`Authenticated ${provider.provider} via OAuth`)
+              flashSuccess(`Authenticated ${provider.value.provider} via OAuth`)
               send(AuthEvent.cases.ActionSucceeded.make({}))
               loadAuth(currentRouteVersion)
             }),
@@ -410,96 +459,103 @@ export function Auth(props: AuthProps) {
     isPrintableAuthSequence(e.sequence) && e.ctrl !== true && e.meta !== true
 
   const handleKeyStateKeyboard = (
-    current: ReturnType<typeof keyState>,
+    current: ReturnType<typeof keyStateOption>,
     e: {
       readonly name?: string
       readonly sequence?: string
       readonly ctrl?: boolean
       readonly meta?: boolean
     },
-  ): boolean | undefined => {
-    if (current === undefined) return undefined
+  ): Option.Option<boolean> => {
+    if (Option.isNone(current)) return Option.none()
     if (e.name === "escape") {
       invalidateRouteVersion()
       send(AuthEvent.cases.Cancel.make({}))
-      return true
+      return Option.some(true)
     }
     if (e.name === "return") {
       submitKey()
-      return true
+      return Option.some(true)
     }
     if (e.name === "backspace") {
       send(AuthEvent.cases.BackspaceKey.make({}))
-      return true
+      return Option.some(true)
     }
     if (isPrintableAuthChar(e)) {
       send(AuthEvent.cases.TypeKey.make({ char: e.sequence }))
-      return true
+      return Option.some(true)
     }
-    return false
+    return Option.some(false)
   }
 
   const handleOauthStateKeyboard = (
-    current: ReturnType<typeof oauthState>,
+    current: ReturnType<typeof oauthStateOption>,
     e: {
       readonly name?: string
       readonly sequence?: string
       readonly ctrl?: boolean
       readonly meta?: boolean
     },
-  ): boolean | undefined => {
-    if (current === undefined) return undefined
+  ): Option.Option<boolean> => {
+    if (Option.isNone(current)) return Option.none()
     if (e.name === "escape") {
       invalidateRouteVersion()
       send(AuthEvent.cases.Cancel.make({}))
-      return true
+      return Option.some(true)
     }
     if (e.name === "return") {
       submitOauth()
-      return true
+      return Option.some(true)
     }
     if (e.name === "backspace") {
       send(AuthEvent.cases.BackspaceCode.make({}))
-      return true
+      return Option.some(true)
     }
     if (isPrintableAuthChar(e)) {
       send(AuthEvent.cases.TypeCode.make({ char: e.sequence }))
-      return true
+      return Option.some(true)
     }
-    return false
+    return Option.some(false)
   }
 
   const handleMethodStateKeyboard = (
-    current: ReturnType<typeof methodState>,
+    current: ReturnType<typeof methodStateOption>,
     e: {
       readonly name?: string
       readonly ctrl?: boolean
     },
-  ): boolean | undefined => {
-    if (current === undefined) return undefined
+  ): Option.Option<boolean> => {
+    if (Option.isNone(current)) return Option.none()
+    const currentState = current.value
     if (e.name === "escape") {
       invalidateRouteVersion()
       send(AuthEvent.cases.Cancel.make({}))
-      return true
+      return Option.some(true)
     }
-    const provider = current.providers[current.providerIndex]
-    const methods = provider !== undefined ? (current.methods[provider.provider] ?? []) : []
-    if (methods.length === 0) return false
+    const provider = Option.fromNullishOr(currentState.providers[currentState.providerIndex])
+    if (Option.isNone(provider)) return Option.some(false)
+    const methods = Option.getOrElse(
+      Option.fromNullishOr(currentState.methods[provider.value.provider]),
+      () => [],
+    )
+    if (methods.length === 0) return Option.some(false)
     if (e.name === "up") {
-      const next = current.methodIndex > 0 ? current.methodIndex - 1 : methods.length - 1
+      let next = methods.length - 1
+      if (currentState.methodIndex > 0) next = currentState.methodIndex - 1
       send(AuthEvent.cases.SelectMethod.make({ index: next }))
-      return true
+      return Option.some(true)
     }
     if (e.name === "down") {
-      const next = current.methodIndex < methods.length - 1 ? current.methodIndex + 1 : 0
+      let next = 0
+      if (currentState.methodIndex < methods.length - 1) next = currentState.methodIndex + 1
       send(AuthEvent.cases.SelectMethod.make({ index: next }))
-      return true
+      return Option.some(true)
     }
     if (e.name === "return") {
       startMethod()
-      return true
+      return Option.some(true)
     }
-    return false
+    return Option.some(false)
   }
 
   const handleListStateKeyboard = (
@@ -509,23 +565,24 @@ export function Auth(props: AuthProps) {
     },
   ): boolean => {
     if (e.name === "escape") {
-      props.onClose?.()
+      const onClose = Option.fromNullishOr(props.onClose)
+      if (Option.isSome(onClose)) onClose.value()
       return true
     }
-    if (e.name === "r" && current.error !== undefined) {
+    if (e.name === "r" && Option.isSome(Option.fromNullishOr(current.error))) {
       loadAuth(nextRouteVersion())
       return true
     }
     if (current.providers.length === 0) return false
     if (e.name === "up") {
-      const next =
-        current.providerIndex > 0 ? current.providerIndex - 1 : current.providers.length - 1
+      let next = current.providers.length - 1
+      if (current.providerIndex > 0) next = current.providerIndex - 1
       send(AuthEvent.cases.SelectProvider.make({ index: next }))
       return true
     }
     if (e.name === "down") {
-      const next =
-        current.providerIndex < current.providers.length - 1 ? current.providerIndex + 1 : 0
+      let next = 0
+      if (current.providerIndex < current.providers.length - 1) next = current.providerIndex + 1
       send(AuthEvent.cases.SelectProvider.make({ index: next }))
       return true
     }
@@ -544,12 +601,12 @@ export function Auth(props: AuthProps) {
 
   useScopedKeyboard((e) => {
     const current = state()
-    const keyResult = handleKeyStateKeyboard(keyState(), e)
-    if (keyResult !== undefined) return keyResult
-    const oauthResult = handleOauthStateKeyboard(oauthState(), e)
-    if (oauthResult !== undefined) return oauthResult
-    const methodResult = handleMethodStateKeyboard(methodState(), e)
-    if (methodResult !== undefined) return methodResult
+    const keyResult = handleKeyStateKeyboard(keyStateOption(), e)
+    if (Option.isSome(keyResult)) return keyResult.value
+    const oauthResult = handleOauthStateKeyboard(oauthStateOption(), e)
+    if (Option.isSome(oauthResult)) return oauthResult.value
+    const methodResult = handleMethodStateKeyboard(methodStateOption(), e)
+    if (Option.isSome(methodResult)) return methodResult.value
     if (current._tag !== "List") return false
     return handleListStateKeyboard(current, e)
   })
@@ -584,39 +641,94 @@ export function Auth(props: AuthProps) {
 
   // ── Derived accessors ──
 
-  const activeProvider = () => {
+  const activeProviderOption = () => {
     const current = state()
-    return current.providers[current.providerIndex]
+    return Option.fromNullishOr(current.providers[current.providerIndex])
   }
-
   const activeMethods = () => {
     const current = state()
-    const provider = current.providers[current.providerIndex]
-    if (provider === undefined) return []
-    return current.methods[provider.provider] ?? []
+    const provider = Option.fromNullishOr(current.providers[current.providerIndex])
+    if (Option.isNone(provider)) return []
+    return Option.getOrElse(
+      Option.fromNullishOr(current.methods[provider.value.provider]),
+      () => [],
+    )
   }
 
-  const keyState = () => {
+  const keyStateOption = () => {
     const current = state()
-    return current._tag === "Key" ? current : undefined
+    if (current._tag === "Key") return Option.some(current)
+    return Option.none()
   }
+  const keyState = () => Option.getOrUndefined(keyStateOption())
 
-  const oauthState = () => {
+  const oauthStateOption = () => {
     const current = state()
-    return current._tag === "OAuth" ? current : undefined
+    if (current._tag === "OAuth") return Option.some(current)
+    return Option.none()
   }
+  const oauthState = () => Option.getOrUndefined(oauthStateOption())
 
-  const methodState = () => {
+  const methodStateOption = () => {
     const current = state()
-    return current._tag === "Method" ? current : undefined
+    if (current._tag === "Method") return Option.some(current)
+    return Option.none()
   }
-
   const oauthPromptLabel = () => {
-    const current = oauthState()
-    if (current === undefined) return "(type code)"
-    if (current.code.length > 0) return current.code
-    if (current.phase === "waiting") return "(waiting for browser...)"
+    const current = oauthStateOption()
+    if (Option.isNone(current)) return "(type code)"
+    if (current.value.code.length > 0) return current.value.code
+    if (current.value.phase === "waiting") return "(waiting for browser...)"
     return "(type code)"
+  }
+
+  const activeProviderName = () =>
+    Option.getOrElse(
+      Option.map(activeProviderOption(), (provider) => provider.provider),
+      () => "",
+    )
+  const selectedBackground = (selected: boolean) => {
+    if (selected) return theme.primary
+    return "transparent"
+  }
+  const selectedColor = (selected: boolean, fallback: typeof theme.text) => {
+    if (selected) return theme.selectedListItemText
+    return fallback
+  }
+  const keyPromptLabel = (value: string) => {
+    if (value.length > 0) return "*".repeat(value.length)
+    return "(type key)"
+  }
+  const oauthMethodPrompt = (method: string) => {
+    if (method === "code") return "Paste code:"
+    return "Paste code (optional):"
+  }
+  const providerAuthLabel = (hasKey: boolean, authType: Option.Option<string>) => {
+    if (!hasKey) return "[none]"
+    return `[${Option.getOrElse(authType, () => "stored")}]`
+  }
+  const providerRequiredLabel = (required: boolean) => {
+    if (required) return " [required]"
+    return ""
+  }
+  const isMethodSelected = (index: number) => {
+    const current = methodStateOption()
+    return Option.isSome(current) && current.value.methodIndex === index
+  }
+  const isProviderSelected = (index: number) => {
+    const current = state()
+    return current._tag === "List" && current.providerIndex === index
+  }
+  const hasStateError = () => Option.isSome(Option.fromNullishOr(state().error))
+  const listFooter = () => {
+    const current = state()
+    if (current._tag !== "List") return ""
+    if (Option.isSome(Option.fromNullishOr(current.error))) return "r=retry | Esc"
+    return "Up/Down | Enter=select | d=delete | Esc"
+  }
+  const providerLoadingLabel = () => {
+    if (hasStateError()) return "Press r to retry."
+    return "Loading providers..."
   }
 
   // ── Render ──
@@ -631,18 +743,14 @@ export function Auth(props: AuthProps) {
         top={top()}
       >
         <ChromePanel.Error error={state().error} />
-        <ChromePanel.Success message={successMessage()} />
+        <ChromePanel.Success message={Option.getOrUndefined(successMessage())} />
 
         <Show when={keyState()}>
           {(current) => (
             <box paddingLeft={1} paddingRight={1} flexShrink={0} flexDirection="column">
-              <text style={{ fg: theme.text }}>
-                Enter API key for {activeProvider()?.provider}:
-              </text>
+              <text style={{ fg: theme.text }}>Enter API key for {activeProviderName()}:</text>
               <box>
-                <text style={{ fg: theme.text }}>
-                  {current().value.length > 0 ? "*".repeat(current().value.length) : "(type key)"}
-                </text>
+                <text style={{ fg: theme.text }}>{keyPromptLabel(current().value)}</text>
               </box>
             </box>
           )}
@@ -652,17 +760,18 @@ export function Auth(props: AuthProps) {
           {(current) => (
             <box paddingLeft={1} paddingRight={1} flexShrink={0} flexDirection="column">
               <text style={{ fg: theme.text }}>
-                Authorize {activeProvider()?.provider} ({current().method.label})
+                Authorize {activeProviderName()} ({current().method.label})
               </text>
               <text style={{ fg: theme.textMuted }}>
-                {current().authorization.instructions ?? "Open the URL below:"}
+                {Option.getOrElse(
+                  Option.fromNullishOr(current().authorization.instructions),
+                  () => "Open the URL below:",
+                )}
               </text>
               <text style={{ fg: theme.text }}>{current().authorization.url}</text>
               <box flexDirection="column">
                 <text style={{ fg: theme.text }}>
-                  {current().authorization.method === "code"
-                    ? "Paste code:"
-                    : "Paste code (optional):"}
+                  {oauthMethodPrompt(current().authorization.method)}
                 </text>
                 <text style={{ fg: theme.text }}>{oauthPromptLabel()}</text>
               </box>
@@ -683,33 +792,36 @@ export function Auth(props: AuthProps) {
                 when={state()._tag === "Method"}
                 fallback={
                   <box paddingLeft={1} paddingRight={1} flexGrow={1}>
-                    <text style={{ fg: theme.textMuted }}>
-                      {state().error !== undefined ? "Press r to retry." : "Loading providers..."}
-                    </text>
+                    <text style={{ fg: theme.textMuted }}>{providerLoadingLabel()}</text>
                   </box>
                 }
               >
-                <scrollbox ref={scrollRef} flexGrow={1} paddingLeft={1} paddingRight={1}>
+                <scrollbox
+                  ref={(value) => (scrollRef = Option.some(value))}
+                  flexGrow={1}
+                  paddingLeft={1}
+                  paddingRight={1}
+                >
                   <For each={activeMethods()}>
                     {(method, index) => {
-                      const isSelected = () => methodState()?.methodIndex === index()
+                      const isSelected = () => isMethodSelected(index())
                       return (
                         <box
                           id={`auth-method-${index()}`}
-                          backgroundColor={isSelected() ? theme.primary : "transparent"}
+                          backgroundColor={selectedBackground(isSelected())}
                           paddingLeft={1}
                           flexDirection="row"
                         >
                           <text
                             style={{
-                              fg: isSelected() ? theme.selectedListItemText : theme.text,
+                              fg: selectedColor(isSelected(), theme.text),
                             }}
                           >
                             {method.label}
                           </text>
                           <text
                             style={{
-                              fg: isSelected() ? theme.selectedListItemText : theme.textMuted,
+                              fg: selectedColor(isSelected(), theme.textMuted),
                             }}
                           >
                             {" "}
@@ -723,32 +835,40 @@ export function Auth(props: AuthProps) {
               </Show>
             }
           >
-            <scrollbox ref={scrollRef} flexGrow={1} paddingLeft={1} paddingRight={1}>
+            <scrollbox
+              ref={(value) => (scrollRef = Option.some(value))}
+              flexGrow={1}
+              paddingLeft={1}
+              paddingRight={1}
+            >
               <For each={state().providers}>
                 {(provider, index) => {
-                  const isSelected = () => state().providerIndex === index()
+                  const isSelected = () => isProviderSelected(index())
                   return (
                     <box
                       id={`auth-provider-${index()}`}
-                      backgroundColor={isSelected() ? theme.primary : "transparent"}
+                      backgroundColor={selectedBackground(isSelected())}
                       paddingLeft={1}
                       flexDirection="row"
                     >
                       <text
                         style={{
-                          fg: isSelected() ? theme.selectedListItemText : theme.text,
+                          fg: selectedColor(isSelected(), theme.text),
                         }}
                       >
                         {provider.provider}
                       </text>
                       <text
                         style={{
-                          fg: isSelected() ? theme.selectedListItemText : getStatusColor(provider),
+                          fg: selectedColor(isSelected(), getStatusColor(provider)),
                         }}
                       >
                         {" "}
-                        {provider.hasKey ? `[${provider.authType ?? "stored"}]` : "[none]"}
-                        {provider.required ? " [required]" : ""}
+                        {providerAuthLabel(
+                          provider.hasKey,
+                          Option.fromNullishOr(provider.authType),
+                        )}
+                        {providerRequiredLabel(provider.required)}
                       </text>
                     </box>
                   )
@@ -759,11 +879,7 @@ export function Auth(props: AuthProps) {
         </Show>
 
         <ChromePanel.Footer>
-          <Show when={state()._tag === "List"}>
-            {state().error !== undefined
-              ? "r=retry | Esc"
-              : "Up/Down | Enter=select | d=delete | Esc"}
-          </Show>
+          <Show when={state()._tag === "List"}>{listFooter()}</Show>
           <Show when={state()._tag === "Method"}>Up/Down | Enter=choose | Esc</Show>
           <Show when={state()._tag === "Key"}>Enter=save | Esc=cancel</Show>
           <Show when={state()._tag === "OAuth"}>Enter=continue | Esc=cancel</Show>

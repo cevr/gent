@@ -2,9 +2,9 @@
  * PTY-based E2E tests for TUI.
  * Uses zigpty for pseudo-terminal emulation with waitFor pattern.
  */
-import { afterEach } from "bun:test"
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
+import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import {
   ptyWaitFor,
   readClientLog,
@@ -16,7 +16,6 @@ import {
   stripAnsi,
   type TestContext,
 } from "../src/pty-fixture"
-import { runTestCleanupBoundary } from "../src/test-cleanup-boundary"
 
 const TEST_TIMEOUT = 30_000
 
@@ -27,54 +26,44 @@ const UP = "\x1b[A"
 const DOWN = "\x1b[B"
 const ESC_KEY_DECODE_MS = 650
 
-const raceWithNullTimeout = <A>(
+const raceWithTimeout = <A>(
   promise: PromiseLike<A>,
   timeoutMs: number,
-): Effect.Effect<A | null> =>
+): Effect.Effect<Option.Option<A>> =>
   Effect.race(
-    Effect.promise(() => promise),
+    Effect.promise(() => promise).pipe(Effect.asSome),
     // gent/no-sleep: allow real-clock timeout race for foreign Promise resolution
-    Effect.sleep(`${timeoutMs} millis`).pipe(Effect.as(null)),
+    Effect.sleep(`${timeoutMs} millis`).pipe(Effect.as(Option.none<A>())),
   )
 
-let testContext: TestContext | null = null
+const acquireTestContext = <R>(acquire: Effect.Effect<TestContext, never, R>) =>
+  Effect.acquireRelease(acquire, (ctx) => ctx.cleanup.pipe(Effect.andThen(shortPause(100))))
 
-const currentContext = (): TestContext => {
-  if (testContext === null) throw new Error("test context was not initialized")
-  return testContext
-}
-
-afterEach(() =>
-  runTestCleanupBoundary(
-    Effect.gen(function* () {
-      if (testContext !== null) {
-        yield* testContext.cleanup
-        testContext = null
-        yield* shortPause(100)
-      }
-    }),
-  ),
-)
+const waitForOutput = (ctx: TestContext, text: string, timeoutMs: number) =>
+  waitFor(
+    Effect.sync(() => stripAnsi(ctx.output)),
+    (output) => output.includes(text),
+    timeoutMs,
+    `output "${text}"`,
+  )
 
 describe("E2E: Basics", () => {
-  it.live(
+  it.scopedLive(
     "starts and shows home view with prompt",
     () =>
       Effect.gen(function* () {
-        testContext = yield* seedAndSpawn()
-        const ctx = currentContext()
+        const ctx = yield* acquireTestContext(seedAndSpawn())
         yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
         expect(stripAnsi(ctx.output)).toContain("❯")
       }),
     TEST_TIMEOUT,
   )
 
-  it.live(
+  it.scopedLive(
     "typing text appears in output",
     () =>
       Effect.gen(function* () {
-        testContext = yield* seedAndSpawn()
-        const ctx = currentContext()
+        const ctx = yield* acquireTestContext(seedAndSpawn())
         yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
         const before = ctx.output.length
         ctx.pty.write("hello world")
@@ -85,44 +74,41 @@ describe("E2E: Basics", () => {
     TEST_TIMEOUT,
   )
 
-  it.live(
+  it.scopedLive(
     "double ESC exits with code 0",
     () =>
       Effect.gen(function* () {
-        testContext = yield* seedAndSpawn()
-        const ctx = currentContext()
+        const ctx = yield* acquireTestContext(seedAndSpawn())
         yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
         ctx.pty.write(ESC)
         yield* shortPause(ESC_KEY_DECODE_MS)
         ctx.pty.write(ESC)
-        const code = yield* raceWithNullTimeout(ctx.pty.exited, 10_000)
-        expect(code).toBe(0)
+        const code = yield* raceWithTimeout(ctx.pty.exited, 10_000)
+        expect(code).toEqual(Option.some(0))
       }),
     TEST_TIMEOUT,
   )
 })
 
 describe("E2E: Auth", () => {
-  it.live(
+  it.scopedLive(
     "missing auth opens auth panel and method picker",
     () =>
       Effect.gen(function* () {
-        testContext = yield* spawnNoAuth()
-        const ctx = currentContext()
+        const ctx = yield* acquireTestContext(spawnNoAuth)
         yield* ptyWaitFor(ctx.pty, "API Keys", { timeout: 10_000 })
         yield* ptyWaitFor(ctx.pty, "Claude Code", { timeout: 10_000 })
-        yield* ptyWaitFor(ctx.pty, "Manually enter API key", { timeout: 10_000 })
+        yield* waitForOutput(ctx, "Manually enter API key", 10_000)
         expect(ctx.output).toContain("API Keys")
       }),
     TEST_TIMEOUT,
   )
 
-  it.live(
+  it.scopedLive(
     "auth panel: arrows select manual key entry",
     () =>
       Effect.gen(function* () {
-        testContext = yield* spawnNoAuth()
-        const ctx = currentContext()
+        const ctx = yield* acquireTestContext(spawnNoAuth)
         yield* ptyWaitFor(ctx.pty, "API Keys", { timeout: 10_000 })
         yield* shortPause(750)
         ctx.pty.write(DOWN)
@@ -135,16 +121,15 @@ describe("E2E: Auth", () => {
 })
 
 describe("E2E: Slash Commands", () => {
-  it.live(
+  it.scopedLive(
     "/ prefix shows autocomplete popup with commands",
     () =>
       Effect.gen(function* () {
-        testContext = yield* seedAndSpawn()
-        const ctx = currentContext()
+        const ctx = yield* acquireTestContext(seedAndSpawn())
         yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
         ctx.pty.write("/")
         yield* ptyWaitFor(ctx.pty, "Commands", { timeout: 5_000 })
-        yield* ptyWaitFor(ctx.pty, "/new", { timeout: 5_000 })
+        yield* waitForOutput(ctx, "/new", 5_000)
         ctx.pty.write(ESC)
       }),
     TEST_TIMEOUT,
@@ -152,12 +137,11 @@ describe("E2E: Slash Commands", () => {
 })
 
 describe("E2E: Shell Mode", () => {
-  it.live(
+  it.scopedLive(
     "! enters shell, runs echo, ESC exits",
     () =>
       Effect.gen(function* () {
-        testContext = yield* seedAndSpawn()
-        const ctx = currentContext()
+        const ctx = yield* acquireTestContext(seedAndSpawn())
         yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
         ctx.pty.write("!")
         yield* ptyWaitFor(ctx.pty, "$", { timeout: 5_000 })
@@ -169,12 +153,11 @@ describe("E2E: Shell Mode", () => {
     TEST_TIMEOUT,
   )
 
-  it.live(
+  it.scopedLive(
     "shell mode: sequential commands",
     () =>
       Effect.gen(function* () {
-        testContext = yield* seedAndSpawn()
-        const ctx = currentContext()
+        const ctx = yield* acquireTestContext(seedAndSpawn())
         yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
         ctx.pty.write("!")
         yield* ptyWaitFor(ctx.pty, "$", { timeout: 5_000 })
@@ -192,12 +175,11 @@ describe("E2E: Shell Mode", () => {
 })
 
 describe("E2E: Session", () => {
-  it.live(
+  it.scopedLive(
     "submitting message triggers session creation",
     () =>
       Effect.gen(function* () {
-        testContext = yield* seedAndSpawn()
-        const ctx = currentContext()
+        const ctx = yield* acquireTestContext(seedAndSpawn())
         yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
         ctx.pty.write("hi")
         yield* shortPause(300)
@@ -209,13 +191,12 @@ describe("E2E: Session", () => {
     TEST_TIMEOUT,
   )
 
-  it.live(
+  it.scopedLive(
     "double ESC after session activity exits without watchdog fallback",
     () =>
       Effect.gen(function* () {
-        yield* resetClientLog()
-        testContext = yield* seedAndSpawn()
-        const ctx = currentContext()
+        yield* resetClientLog
+        const ctx = yield* acquireTestContext(seedAndSpawn())
         yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
         ctx.pty.write("hi")
         yield* shortPause(300)
@@ -224,9 +205,9 @@ describe("E2E: Session", () => {
         ctx.pty.write(ESC)
         yield* shortPause(ESC_KEY_DECODE_MS)
         ctx.pty.write(ESC)
-        const code = yield* raceWithNullTimeout(ctx.pty.exited, 8_000)
-        const log = yield* readClientLog()
-        expect(code).toBe(0)
+        const code = yield* raceWithTimeout(ctx.pty.exited, 8_000)
+        const log = yield* readClientLog
+        expect(code).toEqual(Option.some(0))
         expect(log).not.toContain("shutdown.watchdog-fired")
       }),
     TEST_TIMEOUT,
@@ -234,13 +215,12 @@ describe("E2E: Session", () => {
 })
 
 describe("E2E: Headless", () => {
-  it.live(
+  it.scopedLive(
     "-H flag produces output",
     () =>
       Effect.gen(function* () {
-        testContext = yield* seedAndSpawn(["-H", "say hello"])
-        const ctx = currentContext()
-        yield* raceWithNullTimeout(ctx.pty.exited, 8_000)
+        const ctx = yield* acquireTestContext(seedAndSpawn(["-H", "say hello"]))
+        yield* raceWithTimeout(ctx.pty.exited, 8_000)
         expect(ctx.output.length).toBeGreaterThan(0)
       }),
     TEST_TIMEOUT,
@@ -248,12 +228,11 @@ describe("E2E: Headless", () => {
 })
 
 describe("E2E: Prompt History", () => {
-  it.live(
+  it.scopedLive(
     "up arrow at empty prompt does not crash",
     () =>
       Effect.gen(function* () {
-        testContext = yield* seedAndSpawn()
-        const ctx = currentContext()
+        const ctx = yield* acquireTestContext(seedAndSpawn())
         yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
         ctx.pty.write(UP)
         yield* shortPause(500)
@@ -262,12 +241,11 @@ describe("E2E: Prompt History", () => {
     TEST_TIMEOUT,
   )
 
-  it.live(
+  it.scopedLive(
     "up arrow at non-empty input does not navigate",
     () =>
       Effect.gen(function* () {
-        testContext = yield* seedAndSpawn()
-        const ctx = currentContext()
+        const ctx = yield* acquireTestContext(seedAndSpawn())
         yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
         ctx.pty.write("some text")
         yield* shortPause(500)
@@ -280,12 +258,11 @@ describe("E2E: Prompt History", () => {
 })
 
 describe("E2E: Skill Popup", () => {
-  it.live(
+  it.scopedLive(
     "$ trigger shows skills popup",
     () =>
       Effect.gen(function* () {
-        testContext = yield* seedSkillAndSpawn()
-        const ctx = currentContext()
+        const ctx = yield* acquireTestContext(seedSkillAndSpawn)
         yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
         yield* shortPause(2_000)
         ctx.pty.write("$t")
@@ -297,12 +274,11 @@ describe("E2E: Skill Popup", () => {
     TEST_TIMEOUT,
   )
 
-  it.live(
+  it.scopedLive(
     "ESC closes skill popup",
     () =>
       Effect.gen(function* () {
-        testContext = yield* seedSkillAndSpawn()
-        const ctx = currentContext()
+        const ctx = yield* acquireTestContext(seedSkillAndSpawn)
         yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
         yield* shortPause(2_000)
         ctx.pty.write("$t")

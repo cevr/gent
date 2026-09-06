@@ -169,8 +169,8 @@ describe("runtime watch contracts", () => {
             ).toBe(true)
 
             // Release chunks for both turns so scope cleanup is fast
-            yield* controls.emitAll()
-            yield* controls.emitAll()
+            yield* controls.emitAll
+            yield* controls.emitAll
           }),
         ),
       ),

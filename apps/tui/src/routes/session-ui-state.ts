@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Match, Schema } from "effect"
 import {
   Session as SessionSchema,
   SessionTreeNode,
@@ -43,7 +43,7 @@ export const SessionUiState = {
     toolsExpanded: false,
     overlay: { _tag: "none" },
   }),
-} as const
+}
 
 export const SessionUiEvent = Schema.TaggedUnion({
   ToggleTools: {},
@@ -71,16 +71,18 @@ export interface SessionUiTransitionResult {
   readonly effects: readonly SessionUiEffect[]
 }
 
-export const getPromptSearchState = (state: SessionUiState): PromptSearchState =>
-  state.overlay._tag === "prompt-search"
-    ? {
-        _tag: "open",
-        draftBeforeOpen: state.overlay.draftBeforeOpen,
-        query: state.overlay.query,
-        selectedIndex: state.overlay.selectedIndex,
-        hasInteracted: state.overlay.hasInteracted,
-      }
-    : PromptSearchStateFactory.closed()
+export const getPromptSearchState = (state: SessionUiState): PromptSearchState => {
+  if (state.overlay._tag === "prompt-search") {
+    return {
+      _tag: "open",
+      draftBeforeOpen: state.overlay.draftBeforeOpen,
+      query: state.overlay.query,
+      selectedIndex: state.overlay.selectedIndex,
+      hasInteracted: state.overlay.hasInteracted,
+    }
+  }
+  return PromptSearchStateFactory.closed()
+}
 
 export const promptSearchOpen = (state: SessionUiState): boolean =>
   getPromptSearchState(state)._tag === "open"
@@ -89,18 +91,16 @@ export function transitionSessionUi(
   state: SessionUiState,
   event: SessionUiEvent,
 ): SessionUiTransitionResult {
-  switch (event._tag) {
-    case "ToggleTools":
-      return {
+  return Match.value(event).pipe(
+    Match.tagsExhaustive({
+      ToggleTools: (): SessionUiTransitionResult => ({
         state: {
           ...state,
           toolsExpanded: !state.toolsExpanded,
         },
         effects: [],
-      }
-
-    case "OpenTree":
-      return {
+      }),
+      OpenTree: (event): SessionUiTransitionResult => ({
         state: {
           ...state,
           overlay: {
@@ -110,82 +110,70 @@ export function transitionSessionUi(
           },
         },
         effects: [],
-      }
-
-    case "OpenFork":
-      return {
+      }),
+      OpenFork: (): SessionUiTransitionResult => ({
         state: {
           ...state,
           overlay: { _tag: "fork" },
         },
         effects: [],
-      }
-
-    case "OpenMermaid":
-      return {
+      }),
+      OpenMermaid: (): SessionUiTransitionResult => ({
         state: {
           ...state,
           overlay: { _tag: "mermaid" },
         },
         effects: [],
-      }
-
-    case "OpenAuth":
-      return {
+      }),
+      OpenAuth: (event): SessionUiTransitionResult => ({
         state: {
           ...state,
           overlay: { _tag: "auth", enforceAuth: event.enforceAuth },
         },
         effects: [],
-      }
-
-    case "OpenPermissions":
-      return {
+      }),
+      OpenPermissions: (): SessionUiTransitionResult => ({
         state: {
           ...state,
           overlay: { _tag: "permissions" },
         },
         effects: [],
-      }
-
-    case "OpenExtensionOverlay":
-      return {
+      }),
+      OpenExtensionOverlay: (event): SessionUiTransitionResult => ({
         state: {
           ...state,
           overlay: { _tag: "extension", overlayId: event.overlayId },
         },
         effects: [],
-      }
-
-    case "CloseOverlay":
-      return {
+      }),
+      CloseOverlay: (): SessionUiTransitionResult => ({
         state: {
           ...state,
           overlay: { _tag: "none" },
         },
         effects: [],
-      }
-
-    case "PromptSearch": {
-      const promptState = getPromptSearchState(state)
-      const result = transitionPromptSearchRoute(promptState, event.event, event.entries)
-      const nextOverlay =
-        result.state._tag === "open"
-          ? {
-              _tag: "prompt-search" as const,
-              draftBeforeOpen: result.state.draftBeforeOpen,
-              query: result.state.query,
-              selectedIndex: result.state.selectedIndex,
-              hasInteracted: result.state.hasInteracted,
-            }
-          : { _tag: "none" as const }
-      return {
-        state: {
-          ...state,
-          overlay: nextOverlay,
-        },
-        effects: result.effects,
-      }
-    }
-  }
+      }),
+      PromptSearch: (event): SessionUiTransitionResult => {
+        const promptState = getPromptSearchState(state)
+        const result = transitionPromptSearchRoute(promptState, event.event, event.entries)
+        let nextOverlay: SessionOverlayState = { _tag: "none" }
+        if (result.state._tag === "open") {
+          nextOverlay = {
+            _tag: "prompt-search",
+            draftBeforeOpen: result.state.draftBeforeOpen,
+            query: result.state.query,
+            selectedIndex: result.state.selectedIndex,
+            hasInteracted: result.state.hasInteracted,
+          }
+        }
+        return {
+          state: {
+            ...state,
+            overlay: nextOverlay,
+          },
+          effects: result.effects,
+        }
+      },
+    }),
+  )
 }

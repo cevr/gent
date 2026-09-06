@@ -1,5 +1,5 @@
-import { Context, Effect, Layer, Ref, Schema } from "effect"
-import { type TurnProjection } from "@gent/core/extensions/api"
+import { Context, Effect, Layer, Option, Predicate, Ref, Schema } from "effect"
+import { type PromptSection, type TurnProjection } from "@gent/core/extensions/api"
 import type { AutoSnapshotReply } from "./protocol.js"
 
 const AUTO_CHECKPOINT_TOOL = "auto_checkpoint"
@@ -7,14 +7,14 @@ const DEFAULT_MAX_ITERATIONS = 10
 const MAX_TURNS_WITHOUT_CHECKPOINT = 5
 
 const AutoLearning = Schema.Struct({
-  iteration: Schema.Number,
+  iteration: Schema.Finite,
   content: Schema.String,
 })
 type AutoLearning = typeof AutoLearning.Type
 
 const AutoMetricEntry = Schema.Struct({
-  iteration: Schema.Number,
-  values: Schema.Record(Schema.String, Schema.Number),
+  iteration: Schema.Finite,
+  values: Schema.Record(Schema.String, Schema.Finite),
 })
 type AutoMetricEntry = typeof AutoMetricEntry.Type
 
@@ -29,29 +29,29 @@ export const AutoState = Schema.TaggedUnion({
     pendingFollowUp: Schema.optional(Schema.String),
   },
   Working: {
-    iteration: Schema.Number,
-    maxIterations: Schema.Number,
+    iteration: Schema.Finite,
+    maxIterations: Schema.Finite,
     goal: Schema.String,
     learnings: Schema.Array(AutoLearning),
     metrics: Schema.Array(AutoMetricEntry),
     promptPending: Schema.Boolean,
-    turnsSinceCheckpoint: Schema.Number,
+    turnsSinceCheckpoint: Schema.Finite,
     lastSummary: Schema.optional(Schema.String),
     nextIdea: Schema.optional(Schema.String),
-    handoffRequestSeq: Schema.Number,
+    handoffRequestSeq: Schema.Finite,
     handoffContent: Schema.optional(Schema.String),
     pendingFollowUp: Schema.optional(Schema.String),
   },
   AwaitingReview: {
-    iteration: Schema.Number,
-    maxIterations: Schema.Number,
+    iteration: Schema.Finite,
+    maxIterations: Schema.Finite,
     goal: Schema.String,
     learnings: Schema.Array(AutoLearning),
     metrics: Schema.Array(AutoMetricEntry),
     promptPending: Schema.Boolean,
     lastSummary: Schema.optional(Schema.String),
     nextIdea: Schema.optional(Schema.String),
-    handoffRequestSeq: Schema.Number,
+    handoffRequestSeq: Schema.Finite,
     handoffContent: Schema.optional(Schema.String),
     pendingFollowUp: Schema.optional(Schema.String),
   },
@@ -84,43 +84,49 @@ export const projectSnapshot = (state: AutoState): AutoSnapshotReply => {
   }
 }
 
-const buildPromptSection = (snapshot: AutoSnapshotReply) => {
-  if (!snapshot.active) return undefined
+const buildPromptSection = (snapshot: AutoSnapshotReply): Option.Option<PromptSection> => {
+  if (!snapshot.active) return Option.none()
+
+  const iteration = Option.getOrElse(Option.fromNullishOr(snapshot.iteration), () => 0)
+  const maxIterations = Option.getOrElse(Option.fromNullishOr(snapshot.maxIterations), () => 0)
 
   if (snapshot.phase === "awaiting-review") {
-    return {
+    return Option.some({
       id: "auto-loop-context",
       content: [
         `## Auto Loop — Peer Review Required`,
         "",
-        `Iteration ${snapshot.iteration ?? 0}/${snapshot.maxIterations ?? 0} is complete.`,
+        `Iteration ${iteration}/${maxIterations} is complete.`,
         "",
         "You MUST call the `review` tool to run an adversarial review of this iteration before continuing.",
         "The loop cannot proceed until the review is done.",
       ].join("\n"),
       priority: 91,
-    }
+    })
   }
 
   const parts: string[] = [
-    `## Auto Loop — Iteration ${snapshot.iteration ?? 0}/${snapshot.maxIterations ?? 0}`,
+    `## Auto Loop — Iteration ${iteration}/${maxIterations}`,
     "",
-    `**Goal**: ${snapshot.goal ?? ""}`,
+    `**Goal**: ${Option.getOrElse(Option.fromNullishOr(snapshot.goal), () => "")}`,
   ]
 
-  if (snapshot.learnings !== undefined && snapshot.learnings.length > 0) {
+  const learnings = Option.fromNullishOr(snapshot.learnings)
+  if (Option.isSome(learnings) && learnings.value.length > 0) {
     parts.push("", "### Accumulated Learnings:")
-    for (const l of snapshot.learnings) {
+    for (const l of learnings.value) {
       parts.push(`- [Iteration ${l.iteration}] ${l.content}`)
     }
   }
 
-  if (snapshot.lastSummary !== undefined) {
-    parts.push("", `### Last iteration summary:`, snapshot.lastSummary)
+  const lastSummary = Option.fromNullishOr(snapshot.lastSummary)
+  if (Option.isSome(lastSummary)) {
+    parts.push("", `### Last iteration summary:`, lastSummary.value)
   }
 
-  if (snapshot.nextIdea !== undefined) {
-    parts.push("", `### Suggested next step:`, snapshot.nextIdea)
+  const nextIdea = Option.fromNullishOr(snapshot.nextIdea)
+  if (Option.isSome(nextIdea)) {
+    parts.push("", `### Suggested next step:`, nextIdea.value)
   }
 
   parts.push(
@@ -128,35 +134,42 @@ const buildPromptSection = (snapshot: AutoSnapshotReply) => {
     "Maintain a findings doc at `.gent/auto/findings.md` — update it with wins, dead ends, and open questions.",
     "",
     "When you have completed this iteration's work, call `auto_checkpoint` with your results.",
-    `This is iteration ${snapshot.iteration ?? 0} of ${snapshot.maxIterations ?? 0}.`,
+    `This is iteration ${iteration} of ${maxIterations}.`,
   )
 
-  return {
+  return Option.some({
     id: "auto-loop-context",
     content: parts.join("\n"),
     priority: 91,
-  }
+  })
 }
 
 export const viewForState = (state: AutoState): TurnProjection => {
   const snapshot = projectSnapshot(state)
   const section = buildPromptSection(snapshot)
-  return {
-    ...(section !== undefined ? { promptSections: [section] } : {}),
-    toolPolicy: snapshot.active ? {} : { exclude: [AUTO_CHECKPOINT_TOOL] },
+  if (snapshot.active) {
+    if (Option.isSome(section)) return { promptSections: [section.value] }
+    return {}
   }
+  if (Option.isSome(section)) {
+    return {
+      promptSections: [section.value],
+      toolPolicy: { exclude: [AUTO_CHECKPOINT_TOOL] },
+    }
+  }
+  return { toolPolicy: { exclude: [AUTO_CHECKPOINT_TOOL] } }
 }
 
 const followUpForWorkingTurn = (state: {
   readonly iteration: number
   readonly maxIterations: number
   readonly goal: string
-  readonly nextIdea?: string | undefined
+  readonly nextIdea?: string
 }): string => {
   if (state.iteration === 1) {
     return `Begin: ${state.goal}. Update \`.gent/auto/findings.md\` as you work. Call \`auto_checkpoint\` when this iteration is done.`
   }
-  const hint = state.nextIdea ?? state.goal
+  const hint = Option.getOrElse(Option.fromNullishOr(state.nextIdea), () => state.goal)
   return `Iteration ${state.iteration}/${state.maxIterations}. ${hint}. Review learnings, update findings doc. Call \`auto_checkpoint\` when done.`
 }
 
@@ -176,50 +189,47 @@ type ToggleInput = {
 type AutoSignalInput = {
   readonly status: "continue" | "complete" | "abandon"
   readonly summary: string
-  readonly learnings?: string | undefined
-  readonly metrics?: Record<string, number> | undefined
-  readonly nextIdea?: string | undefined
+  readonly learnings?: string
+  readonly metrics?: Record<string, number>
+  readonly nextIdea?: string
 }
 
-interface AutoReadShape {
-  readonly snapshot: () => Effect.Effect<AutoSnapshotReply>
-  readonly isActive: () => Effect.Effect<boolean>
-  readonly turnProjection: () => Effect.Effect<ReturnType<typeof viewForState>>
+interface AutoReadService {
+  readonly snapshot: Effect.Effect<AutoSnapshotReply>
+  readonly isActive: Effect.Effect<boolean>
+  readonly turnProjection: Effect.Effect<ReturnType<typeof viewForState>>
 }
 
-interface AutoWriteShape extends AutoReadShape {
+interface AutoWriteService extends AutoReadService {
   readonly start: (input: StartInput) => Effect.Effect<void>
   readonly requestHandoff: (content: string) => Effect.Effect<void>
-  readonly cancel: () => Effect.Effect<void>
+  readonly cancel: Effect.Effect<void>
   readonly toggle: (input: ToggleInput) => Effect.Effect<void>
   readonly autoSignal: (input: AutoSignalInput) => Effect.Effect<void>
-  readonly reviewSignal: () => Effect.Effect<void>
-  readonly turnCompleted: () => Effect.Effect<void>
-  readonly drainFollowUp: () => Effect.Effect<
-    | {
-        readonly content: string
-        readonly sourceId: string
-      }
-    | undefined
-  >
+  readonly reviewSignal: Effect.Effect<void>
+  readonly turnCompleted: Effect.Effect<void>
+  readonly drainFollowUp: Effect.Effect<Option.Option<AutoFollowUp>>
 }
 
-export class AutoRead extends Context.Service<AutoRead, AutoReadShape>()(
+export class AutoRead extends Context.Service<AutoRead, AutoReadService>()(
   "@gent/extensions/src/auto/controller/AutoRead",
 ) {}
 
-export class AutoWrite extends Context.Service<AutoWrite, AutoWriteShape>()(
+export class AutoWrite extends Context.Service<AutoWrite, AutoWriteService>()(
   "@gent/extensions/src/auto/controller/AutoWrite",
 ) {}
 
 const transitionStartAuto = (
   state: AutoState,
-  msg: { readonly goal: string; readonly maxIterations?: number | undefined },
+  msg: { readonly goal: string; readonly maxIterations?: number },
 ): AutoState => {
   if (state._tag !== "Inactive") return state
   return AutoState.cases.Working.make({
     iteration: 1,
-    maxIterations: msg.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+    maxIterations: Option.getOrElse(
+      Option.fromNullishOr(msg.maxIterations),
+      () => DEFAULT_MAX_ITERATIONS,
+    ),
     goal: msg.goal,
     learnings: [],
     metrics: [],
@@ -228,7 +238,10 @@ const transitionStartAuto = (
     handoffRequestSeq: 0,
     pendingFollowUp: followUpForWorkingTurn({
       iteration: 1,
-      maxIterations: msg.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+      maxIterations: Option.getOrElse(
+        Option.fromNullishOr(msg.maxIterations),
+        () => DEFAULT_MAX_ITERATIONS,
+      ),
       goal: msg.goal,
     }),
   })
@@ -237,14 +250,16 @@ const transitionStartAuto = (
 const transitionAutoSignal = (state: AutoState, msg: AutoSignalInput): AutoState => {
   if (state._tag !== "Working") return state
 
-  const newLearnings: ReadonlyArray<AutoLearning> =
-    msg.learnings !== undefined
-      ? [...state.learnings, { iteration: state.iteration, content: msg.learnings }]
-      : state.learnings
-  const newMetrics: ReadonlyArray<AutoMetricEntry> =
-    msg.metrics !== undefined
-      ? [...state.metrics, { iteration: state.iteration, values: msg.metrics }]
-      : state.metrics
+  let newLearnings: ReadonlyArray<AutoLearning> = state.learnings
+  const learning = Option.fromNullishOr(msg.learnings)
+  if (Option.isSome(learning)) {
+    newLearnings = [...state.learnings, { iteration: state.iteration, content: learning.value }]
+  }
+  let newMetrics: ReadonlyArray<AutoMetricEntry> = state.metrics
+  const metrics = Option.fromNullishOr(msg.metrics)
+  if (Option.isSome(metrics)) {
+    newMetrics = [...state.metrics, { iteration: state.iteration, values: metrics.value }]
+  }
 
   if (msg.status === "complete") {
     return AutoState.cases.Inactive.make({
@@ -349,7 +364,11 @@ const transitionTurnCompleted = (state: AutoState): AutoState => {
 }
 
 const transitionCancelAuto = (state: AutoState): AutoState => {
-  if (state._tag === "Working" || state._tag === "AwaitingReview") {
+  const isActiveState = Predicate.or(
+    Predicate.isTagged("Working"),
+    Predicate.isTagged("AwaitingReview"),
+  )
+  if (isActiveState(state)) {
     return AutoState.cases.Inactive.make({ reason: "cancelled" })
   }
   return state
@@ -357,11 +376,11 @@ const transitionCancelAuto = (state: AutoState): AutoState => {
 
 const transitionToggleAuto = (
   state: AutoState,
-  msg: { readonly goal?: string | undefined; readonly maxIterations?: number | undefined },
+  msg: { readonly goal?: string; readonly maxIterations?: number },
 ): AutoState => {
   if (state._tag === "Inactive") {
     return transitionStartAuto(state, {
-      goal: msg.goal ?? "Continue working autonomously",
+      goal: Option.getOrElse(Option.fromNullishOr(msg.goal), () => "Continue working autonomously"),
       maxIterations: msg.maxIterations,
     })
   }
@@ -370,12 +389,21 @@ const transitionToggleAuto = (
 
 const clearFollowUp = (state: AutoState): AutoState => {
   if (state._tag === "Inactive") {
-    return AutoState.cases.Inactive.make({ ...state, pendingFollowUp: undefined })
+    return AutoState.cases.Inactive.make({
+      ...state,
+      pendingFollowUp: Option.getOrUndefined(Option.none()),
+    })
   }
   if (state._tag === "Working") {
-    return AutoState.cases.Working.make({ ...state, pendingFollowUp: undefined })
+    return AutoState.cases.Working.make({
+      ...state,
+      pendingFollowUp: Option.getOrUndefined(Option.none()),
+    })
   }
-  return AutoState.cases.AwaitingReview.make({ ...state, pendingFollowUp: undefined })
+  return AutoState.cases.AwaitingReview.make({
+    ...state,
+    pendingFollowUp: Option.getOrUndefined(Option.none()),
+  })
 }
 
 const followUpSourceId = (state: AutoState): string => {
@@ -387,43 +415,49 @@ const followUpSourceId = (state: AutoState): string => {
   return `auto:working:${state.iteration}`
 }
 
-const drainFollowUp = (state: AutoState) =>
-  [
-    state.pendingFollowUp === undefined
-      ? undefined
-      : {
-          content: state.pendingFollowUp,
-          sourceId: followUpSourceId(state),
-        },
-    clearFollowUp(state),
-  ] as const
+type AutoFollowUp = {
+  readonly content: string
+  readonly sourceId: string
+}
+
+const drainFollowUp = (state: AutoState): readonly [Option.Option<AutoFollowUp>, AutoState] => {
+  let followUp = Option.none<AutoFollowUp>()
+  const pendingFollowUp = Option.fromNullishOr(state.pendingFollowUp)
+  if (Option.isSome(pendingFollowUp)) {
+    followUp = Option.some({
+      content: pendingFollowUp.value,
+      sourceId: followUpSourceId(state),
+    })
+  }
+  return [followUp, clearFollowUp(state)]
+}
 
 export const AutoControllerLive: Layer.Layer<AutoRead | AutoWrite> = Layer.unwrap(
   Effect.gen(function* () {
     const state = yield* Ref.make<AutoState>(AutoState.cases.Inactive.make({}))
     const update = (f: (current: AutoState) => AutoState) => Ref.update(state, f)
-    const snapshot = () => Ref.get(state).pipe(Effect.map(projectSnapshot))
+    const snapshot = Ref.get(state).pipe(Effect.map(projectSnapshot))
 
     const write = {
       snapshot,
-      isActive: () => snapshot().pipe(Effect.map((current) => current.active)),
-      turnProjection: () => Ref.get(state).pipe(Effect.map(viewForState)),
+      isActive: snapshot.pipe(Effect.map((current) => current.active)),
+      turnProjection: Ref.get(state).pipe(Effect.map(viewForState)),
       start: (input) => update((current) => transitionStartAuto(current, input)),
       requestHandoff: (content) =>
         update((current) => transitionRequestHandoff(current, { content })),
-      cancel: () => update(transitionCancelAuto),
+      cancel: update(transitionCancelAuto),
       toggle: (input) => update((current) => transitionToggleAuto(current, input)),
       autoSignal: (input) => update((current) => transitionAutoSignal(current, input)),
-      reviewSignal: () => update(transitionReviewSignal),
-      turnCompleted: () => update(transitionTurnCompleted),
-      drainFollowUp: () => Ref.modify(state, drainFollowUp),
-    } satisfies AutoWriteShape
+      reviewSignal: update(transitionReviewSignal),
+      turnCompleted: update(transitionTurnCompleted),
+      drainFollowUp: Ref.modify(state, drainFollowUp),
+    } satisfies AutoWriteService
 
     const read = {
       snapshot: write.snapshot,
       isActive: write.isActive,
       turnProjection: write.turnProjection,
-    } satisfies AutoReadShape
+    } satisfies AutoReadService
 
     return Layer.merge(Layer.succeed(AutoWrite, write), Layer.succeed(AutoRead, read))
   }),

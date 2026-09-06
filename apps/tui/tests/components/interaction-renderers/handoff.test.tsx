@@ -1,21 +1,20 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { BranchId, InteractionRequestId, SessionId } from "@gent/core-internal/domain/ids"
 import type { ActiveInteraction, ApprovalResult } from "@gent/core-internal/domain/event"
 import { HandoffRenderer } from "../../../src/components/interaction-renderers/handoff"
 import { destroyRenderSetup, renderWithProviders } from "../../render-harness-boundary"
 import { waitForRenderedFrame } from "../../helpers-boundary"
 
-const interaction = (text: string, metadata?: unknown): ActiveInteraction =>
+const interaction = (text: string) =>
   ({
     _tag: "InteractionPresented",
     sessionId: SessionId.make("s"),
     branchId: BranchId.make("b"),
-    requestId: "req-1",
+    requestId: InteractionRequestId.make("req-1"),
     text,
-    metadata,
-  }) as ActiveInteraction
+  }) satisfies ActiveInteraction
 
 describe("HandoffRenderer", () => {
   it.live("renders confirmation with summary", () =>

@@ -1,9 +1,9 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
 
 // Edit Tool Error
 
-export class EditError extends Schema.TaggedErrorClass<EditError>()("EditError", {
+export class EditError extends Schema.TaggedError<EditError>()("EditError", {
   message: Schema.String,
   path: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -32,7 +32,7 @@ export const EditParams = Schema.Struct({
 
 export const EditResult = Schema.Struct({
   path: Schema.String,
-  replacements: Schema.Number,
+  replacements: Schema.Finite,
 })
 
 // Redaction detection
@@ -47,14 +47,20 @@ const REDACTION_PATTERNS = [
   /# \.\.\. existing (code|content|implementation)/i,
 ]
 
-export function detectRedaction(oldString: string, newString: string): string | undefined {
+export function detectRedaction(oldString: string, newString: string): Option.Option<string> {
   for (const pattern of REDACTION_PATTERNS) {
     if (pattern.test(newString) && !pattern.test(oldString)) {
-      const match = newString.match(pattern)
-      return `newString contains redaction placeholder "${match?.[0]}". Provide the full replacement content — do not abbreviate or omit code.`
+      const match = Option.fromNullishOr(newString.match(pattern))
+      const placeholder = Option.match(match, {
+        onNone: () => "redacted content",
+        onSome: (parts) => parts[0],
+      })
+      return Option.some(
+        `newString contains redaction placeholder "${placeholder}". Provide the full replacement content — do not abbreviate or omit code.`,
+      )
     }
   }
-  return undefined
+  return Option.none()
 }
 
 // 3-tier fuzzy matching
@@ -86,11 +92,32 @@ export interface MatchResult {
   index: number
 }
 
-export function findMatch(content: string, oldString: string): MatchResult | undefined {
+const findNormalizedMatch = (content: string, search: string): Option.Option<MatchResult> => {
+  const normalizedContent = normalizeWhitespace(content)
+  const normalizedSearch = normalizeWhitespace(search)
+  if (normalizedSearch === search && normalizedContent === content) return Option.none()
+  if (!normalizedContent.includes(normalizedSearch)) return Option.none()
+
+  const lines = content.split("\n")
+  const searchLines = normalizedSearch.split("\n")
+  for (let index = 0; index < lines.length; index++) {
+    const slice = lines.slice(index, index + searchLines.length)
+    if (slice.length !== searchLines.length) continue
+    const matchString = slice.join("\n")
+    if (normalizeWhitespace(matchString) !== normalizedSearch) continue
+    const realIndex = content.indexOf(matchString)
+    if (realIndex !== -1) {
+      return Option.some({ strategy: "normalized", searchStr: matchString, index: realIndex })
+    }
+  }
+  return Option.none()
+}
+
+export function findMatch(content: string, oldString: string): Option.Option<MatchResult> {
   // Tier 1: exact
   const exactIdx = content.indexOf(oldString)
   if (exactIdx !== -1) {
-    return { strategy: "exact", searchStr: oldString, index: exactIdx }
+    return Option.some({ strategy: "exact", searchStr: oldString, index: exactIdx })
   }
 
   // Tier 2: unescape literal \n, \t, \\ in oldString
@@ -98,39 +125,12 @@ export function findMatch(content: string, oldString: string): MatchResult | und
   if (unescaped !== oldString) {
     const unescIdx = content.indexOf(unescaped)
     if (unescIdx !== -1) {
-      return { strategy: "unescaped", searchStr: unescaped, index: unescIdx }
+      return Option.some({ strategy: "unescaped", searchStr: unescaped, index: unescIdx })
     }
   }
 
   // Tier 3: normalize whitespace + unicode in both
-  const normContent = normalizeWhitespace(content)
-  const normSearch = normalizeWhitespace(unescaped)
-  if (normSearch !== unescaped || normContent !== content) {
-    const normIdx = normContent.indexOf(normSearch)
-    if (normIdx !== -1) {
-      // Map back to original content position — find the corresponding range
-      // by searching for lines that match after normalization
-      const lines = content.split("\n")
-      const searchLines = normSearch.split("\n")
-      if (searchLines.length > 0) {
-        for (let i = 0; i < lines.length; i++) {
-          const slice = lines.slice(i, i + searchLines.length)
-          if (slice.length === searchLines.length) {
-            const normSlice = normalizeWhitespace(slice.join("\n"))
-            if (normSlice === normSearch) {
-              const matchStr = slice.join("\n")
-              const realIdx = content.indexOf(matchStr)
-              if (realIdx !== -1) {
-                return { strategy: "normalized", searchStr: matchStr, index: realIdx }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return undefined
+  return findNormalizedMatch(content, unescaped)
 }
 
 // Edit Tool
@@ -151,8 +151,8 @@ export const EditTool = tool({
 
     // Redaction check
     const redaction = detectRedaction(params.oldString, params.newString)
-    if (redaction !== undefined) {
-      return yield* new EditError({ message: redaction, path: filePath })
+    if (Option.isSome(redaction)) {
+      return yield* new EditError({ message: redaction.value, path: filePath })
     }
 
     return yield* ctx.FileLock.withLock(
@@ -174,7 +174,7 @@ export const EditTool = tool({
         // Try fuzzy match strategy
         const match = findMatch(content, params.oldString)
 
-        if (match === undefined) {
+        if (Option.isNone(match)) {
           return yield* new EditError({
             message: "oldString not found in file",
             path: filePath,
@@ -182,7 +182,7 @@ export const EditTool = tool({
         }
 
         // Use the resolved search string for occurrence counting
-        const searchStr = match.searchStr
+        const searchStr = match.value.searchStr
         const occurrences = content.split(searchStr).length - 1
 
         if (occurrences > 1 && !replaceAll) {
@@ -192,9 +192,12 @@ export const EditTool = tool({
           })
         }
 
-        const newContent = replaceAll
-          ? content.split(searchStr).join(params.newString)
-          : content.replace(searchStr, params.newString)
+        let newContent = content.replace(searchStr, params.newString)
+        let replacements = 1
+        if (replaceAll) {
+          newContent = content.split(searchStr).join(params.newString)
+          replacements = occurrences
+        }
 
         yield* ctx.Files.write(filePath, newContent).pipe(
           Effect.mapError(
@@ -209,7 +212,7 @@ export const EditTool = tool({
 
         return {
           path: filePath,
-          replacements: replaceAll ? occurrences : 1,
+          replacements,
         }
       }),
     )

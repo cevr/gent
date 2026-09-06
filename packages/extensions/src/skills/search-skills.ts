@@ -2,7 +2,7 @@ import { Effect, Schema } from "effect"
 import { Skills } from "./skills.js"
 import { tool } from "@gent/core/extensions/api"
 
-export class SearchSkillsError extends Schema.TaggedErrorClass<SearchSkillsError>()(
+export class SearchSkillsError extends Schema.TaggedError<SearchSkillsError>()(
   "SearchSkillsError",
   {
     message: Schema.String,
@@ -23,7 +23,7 @@ export const SearchSkillsParams = Schema.Struct({
 
 export const SearchSkillsResult = Schema.Struct({
   query: Schema.String,
-  count: Schema.Number,
+  count: Schema.Finite,
   results: Schema.Array(
     Schema.Struct({
       name: Schema.String,
@@ -43,7 +43,7 @@ export const SearchSkillsTool = tool({
   output: SearchSkillsResult,
   execute: Effect.fn("SearchSkillsTool.execute")(function* (params) {
     const skills = yield* Skills
-    const allSkills = yield* skills.list()
+    const allSkills = yield* skills.list
     const query = params.query.trim().toLowerCase()
 
     if (query === "") {
@@ -60,13 +60,18 @@ export const SearchSkillsTool = tool({
     return {
       query: params.query,
       count: matches.length,
-      results: matches.map((skill) => ({
-        name: skill.name,
-        description: skill.description,
-        filePath: skill.filePath,
-        level: skill.level,
-        ...(params.includeContent === true ? { content: skill.content } : {}),
-      })),
+      results: matches.map((skill) => {
+        const result = {
+          name: skill.name,
+          description: skill.description,
+          filePath: skill.filePath,
+          level: skill.level,
+          content: skill.content,
+        }
+        if (params.includeContent === true) return result
+        const { content: _content, ...summary } = result
+        return summary
+      }),
     }
   }),
 })

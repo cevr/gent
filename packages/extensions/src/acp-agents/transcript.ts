@@ -1,3 +1,4 @@
+import { Array as Arr, Option, Predicate, Schema } from "effect"
 /**
  * Transcript composition for external-session rebuilds.
  *
@@ -65,35 +66,38 @@ const escapeXml = (s: string): string =>
     }
   })
 
-const stringifyForAttr = (value: unknown): string => {
-  try {
-    return JSON.stringify(value) ?? "null"
-  } catch {
-    return String(value)
-  }
+const encodeTranscriptJson = Schema.encodeOption(Schema.fromJsonString(Schema.Unknown))
+
+const stringifyForAttr = (value: TranscriptPart["input"]): string =>
+  Option.match(Option.fromNullishOr(value), {
+    onNone: () => "null",
+    onSome: (input) => Option.getOrElse(encodeTranscriptJson(input), () => String(input)),
+  })
+
+const renderText = (part: TranscriptPart): Option.Option<string> => {
+  const text = part.text ?? ""
+  if (text.length === 0) return Option.none()
+  return Option.some(escapeXml(text))
 }
 
-const renderText = (part: TranscriptPart): string | undefined => {
+const renderReasoning = (part: TranscriptPart): Option.Option<string> => {
   const text = part.text ?? ""
-  return text.length === 0 ? undefined : escapeXml(text)
-}
-
-const renderReasoning = (part: TranscriptPart): string | undefined => {
-  const text = part.text ?? ""
-  return text.length === 0 ? undefined : `<thinking>${escapeXml(text)}</thinking>`
+  if (text.length === 0) return Option.none()
+  return Option.some(`<thinking>${escapeXml(text)}</thinking>`)
 }
 
 const renderToolCall = (part: TranscriptPart): string => {
   const name = part.toolName ?? "unknown"
   const id = part.toolCallId ?? ""
-  const input = stringifyForAttr(part.input ?? null)
+  const input = stringifyForAttr(part.input)
   return `<tool name="${escapeXml(name)}" tool_id="${escapeXml(id)}" input="${escapeXml(input)}" />`
 }
 
 const renderToolResult = (part: TranscriptPart): string => {
   const id = part.toolCallId ?? ""
-  const status = part.output?.type === "error-json" ? "error" : "ok"
-  const value = stringifyForAttr(part.output?.value ?? null)
+  let status = "ok"
+  if (part.output?.type === "error-json") status = "error"
+  const value = stringifyForAttr(part.output?.value)
   return `<result tool_id="${escapeXml(id)}" status="${escapeXml(status)}">${escapeXml(value)}</result>`
 }
 
@@ -101,43 +105,44 @@ const renderImage = (
   part: TranscriptPart,
   options: { readonly truncatePayload: boolean },
 ): string => {
-  const mediaAttr =
-    part.mediaType !== undefined && part.mediaType.length > 0
-      ? ` mediaType="${escapeXml(part.mediaType)}"`
-      : ""
-  const src = part.image
-  if (src === undefined || src.length === 0) return `<image${mediaAttr} />`
-  const renderedSrc = options.truncatePayload ? renderImagePayload(src) : src
+  let mediaAttr = ""
+  if (part.mediaType && part.mediaType.length > 0) {
+    mediaAttr = ` mediaType="${escapeXml(part.mediaType)}"`
+  }
+  const src = part.image ?? ""
+  if (src.length === 0) return `<image${mediaAttr} />`
+  let renderedSrc = src
+  if (options.truncatePayload) renderedSrc = renderImagePayload(src)
   return `<image${mediaAttr} src="${escapeXml(renderedSrc)}" />`
 }
 
 const renderPart = (
   part: TranscriptPart,
   options: { readonly truncateImagePayloads: boolean },
-): string | undefined => {
+): Option.Option<string> => {
   switch (part.type) {
     case "text":
       return renderText(part)
     case "reasoning":
       return renderReasoning(part)
     case "tool-call":
-      return renderToolCall(part)
+      return Option.some(renderToolCall(part))
     case "tool-result":
-      return renderToolResult(part)
+      return Option.some(renderToolResult(part))
     case "image":
-      return renderImage(part, { truncatePayload: options.truncateImagePayloads })
+      return Option.some(renderImage(part, { truncatePayload: options.truncateImagePayloads }))
     default:
-      return undefined
+      return Option.none()
   }
 }
 
-const renderMessage = (msg: MessageLike): string | undefined => {
-  const rendered = msg.parts
-    .map((part) => renderPart(part, { truncateImagePayloads: true }))
-    .filter((s): s is string => s !== undefined)
-  if (rendered.length === 0) return undefined
+const renderMessage = (msg: MessageLike): Option.Option<string> => {
+  const rendered = Arr.getSomes(
+    msg.parts.map((part) => renderPart(part, { truncateImagePayloads: true })),
+  )
+  if (rendered.length === 0) return Option.none()
   const role = escapeXml(msg.role)
-  return `<${role}>\n${rendered.join("\n")}\n</${role}>`
+  return Option.some(`<${role}>\n${rendered.join("\n")}\n</${role}>`)
 }
 
 /**
@@ -153,17 +158,21 @@ const renderMessage = (msg: MessageLike): string | undefined => {
  */
 export const composePromptWithTranscript = (
   messages: ReadonlyArray<MessageLike>,
-  liveUser: MessageLike | string | undefined,
+  liveUser: MessageLike | string | Option.Option<MessageLike>,
 ): string => {
   const lastUserIdx = findLastUserMessageIndex(messages)
-  const history = lastUserIdx <= 0 ? [] : messages.slice(0, lastUserIdx)
-  const liveUserText = typeof liveUser === "string" ? liveUser : renderLiveUserPrompt(liveUser)
+  let history: ReadonlyArray<MessageLike> = []
+  if (lastUserIdx > 0) history = messages.slice(0, lastUserIdx)
+  let liveUserText: string
+  if (Predicate.isString(liveUser)) liveUserText = liveUser
+  else if (Option.isOption(liveUser)) liveUserText = renderLiveUserPrompt(liveUser)
+  else liveUserText = renderLiveUserPrompt(Option.some(liveUser))
   if (history.length === 0) return liveUserText
 
   const blocks: string[] = []
   for (const msg of history) {
     const rendered = renderMessage(msg)
-    if (rendered !== undefined) blocks.push(rendered)
+    if (Option.isSome(rendered)) blocks.push(rendered.value)
   }
   if (blocks.length === 0) return liveUserText
 
@@ -181,16 +190,14 @@ export const composePromptWithTranscript = (
 
 export const findLastUserMessage = (
   messages: ReadonlyArray<MessageLike>,
-): MessageLike | undefined => {
-  const idx = findLastUserMessageIndex(messages)
-  return idx >= 0 ? messages[idx] : undefined
-}
+): Option.Option<MessageLike> => Arr.findLast(messages, (message) => message.role === "user")
 
-export const renderLiveUserPrompt = (message: MessageLike | undefined): string => {
-  if (message === undefined) return ""
-  const rendered = message.parts
-    .map((part) => renderPart(part, { truncateImagePayloads: false }))
-    .filter((s): s is string => s !== undefined)
+export const renderLiveUserPrompt = (selected: Option.Option<MessageLike>): string => {
+  if (Option.isNone(selected)) return ""
+  const message = selected.value
+  const rendered = Arr.getSomes(
+    message.parts.map((part) => renderPart(part, { truncateImagePayloads: false })),
+  )
   if (rendered.length === 0) return ""
   const [only] = message.parts
   if (message.parts.length === 1 && only?.type === "text") return only.text ?? ""

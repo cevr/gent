@@ -1,7 +1,19 @@
-import { BunServices } from "@effect/platform-bun"
+import { ModelId } from "@gent/core-internal/domain/model"
+import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
-import { Cause, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Predicate,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
 import { narrowR } from "../helpers/effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
@@ -9,6 +21,7 @@ import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
 import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
 import type { QueueSnapshot } from "@gent/core-internal/domain/queue"
 import { textStep } from "@gent/core-internal/debug/provider"
+import { AgentEvent } from "@gent/core-internal/domain/event"
 import { type CallRecord } from "@gent/core-internal/test-utils"
 import { ExtensionContext, tool, type ToolCapability } from "@gent/core/extensions/api"
 import {
@@ -52,29 +65,35 @@ import { SessionRuntime } from "../../src/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   const cowork = AgentDefinition.make({
-    name: "cowork" as never,
-    model: "test/default" as never,
+    name: AgentName.make("cowork"),
+    model: ModelId.make("test/default"),
   })
   const reflect = AgentDefinition.make({
-    name: "memory:reflect" as never,
-    model: "test/override" as never,
+    name: AgentName.make("memory:reflect"),
+    model: ModelId.make("test/override"),
   })
+  let contributions: ExtensionContributions
+  if (tools.length > 0) {
+    contributions = { agents: [cowork, reflect], tools }
+  } else {
+    contributions = { agents: [cowork, reflect] }
+  }
   return resolveExtensions([
     {
       manifest: { id: ExtensionId.make("agents") },
-      scope: "builtin" as const,
+      scope: "builtin",
       sourcePath: "test",
-      contributions: {
-        agents: [cowork, reflect],
-        ...(tools.length > 0 ? { tools } : {}),
-      } satisfies ExtensionContributions,
+      contributions,
     },
   ])
 }
 const sessionRuntimeLayers = (baseSections: Parameters<typeof SessionRuntime.Live>[0]) =>
   SessionRuntime.Live(baseSections)
 const makeClusterRunnerLayer = (storageLayer: ReturnType<typeof SqliteStorage.TestWithSql>) =>
-  Layer.provide(SingleRunner.layer({ runnerStorage: "memory" }), storageLayer)
+  Layer.provide(
+    SingleRunner.layer({ runnerStorage: "memory" }),
+    Layer.merge(storageLayer, BunCrypto.layer),
+  )
 const makeRuntimeLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   tools: ReadonlyArray<ToolCapability> = [],
@@ -97,6 +116,7 @@ const makeRuntimeLayer = (
     eventStoreLayer,
     recorderLayer,
     ToolRunner.Test(),
+    ApprovalService.Test(),
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     BunServices.layer,
@@ -104,10 +124,10 @@ const makeRuntimeLayer = (
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
   )
-  const baseDeps =
-    profileCacheLayer === undefined
-      ? baseDepsWithoutProfile
-      : Layer.merge(baseDepsWithoutProfile, profileCacheLayer)
+  let baseDeps = baseDepsWithoutProfile
+  if (!Predicate.isUndefined(profileCacheLayer)) {
+    baseDeps = Layer.merge(baseDepsWithoutProfile, profileCacheLayer)
+  }
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   const sessionRuntimeLayer = Layer.provide(
     sessionRuntimeLayers({ baseSections: [] }),
@@ -214,23 +234,20 @@ const createSessionBranchWithIds = (input: {
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
     .filter((call) => call.service === "EventStore" && call.method === "append")
-    .map(
-      (call) =>
-        (
-          call.args as
-            | {
-                _tag?: string
-              }
-            | undefined
-        )?._tag,
-    )
-const latestUserText = (request: { readonly prompt: unknown }) =>
-  [...Prompt.make(request.prompt as Prompt.RawInput).content]
-    .reverse()
-    .find((message) => message.role === "user")
-    ?.content.filter((part): part is Prompt.TextPart => part.type === "text")
-    .map((part) => part.text)
-    .join("\n") ?? ""
+    .map((call) => Schema.decodeUnknownOption(AgentEvent)(call.args))
+    .filter(Option.isSome)
+    .map(({ value }) => value._tag)
+const latestUserText = (request: { readonly prompt: Prompt.RawInput }) =>
+  (() => {
+    const latest = [...Prompt.make(request.prompt).content]
+      .reverse()
+      .find((message) => message.role === "user")
+    if (Predicate.isUndefined(latest)) return ""
+    return latest.content
+      .filter((part): part is Prompt.TextPart => part.type === "text")
+      .map((part) => part.text)
+      .join("\n")
+  })()
 const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.Deferred<void>) =>
   tool({
     id: "interaction-tool",
@@ -355,6 +372,7 @@ describe("SessionRuntime", () => {
               content: "direct follow-up",
             }),
           ])
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -362,9 +380,16 @@ describe("SessionRuntime", () => {
   it.live("control-plane writes check session existence without resolving profiles", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-      const profileCacheLayer = Layer.succeed(SessionProfileCache, {
-        resolve: () => Effect.die("control-plane writes must not resolve session profiles"),
-      })
+      const profileCacheLayer = Layer.succeed(
+        SessionProfileCache,
+        SessionProfileCache.of({
+          resolve: () => Effect.die("control-plane writes must not resolve session profiles"),
+          preview: () => Effect.die("control-plane writes must not preview session profiles"),
+          refresh: () => Effect.die("control-plane writes must not refresh session profiles"),
+          current: () => Effect.succeedNone,
+          requireCurrent: () => Effect.die("control-plane writes must not require profiles"),
+        }),
+      )
       const layer = makeRuntimeLayer(providerLayer, [], profileCacheLayer)
       yield* narrowR(
         Effect.gen(function* () {
@@ -381,6 +406,7 @@ describe("SessionRuntime", () => {
             branchId,
             requestId: InteractionRequestId.make("req-not-waiting"),
           })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -440,9 +466,10 @@ describe("SessionRuntime", () => {
               expect(stateOption.value._tag).toBe("Idle")
               expect(stateOption.value.agent).toBe(AgentName.make("cowork"))
             }
-            const calls = yield* recorder.getCalls()
+            const calls = yield* recorder.getCalls
             expect(eventTags(calls)).not.toContain("AgentSwitched")
-            yield* controls.assertDone()
+            yield* controls.assertDone
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
         )
       }),
@@ -481,6 +508,7 @@ describe("SessionRuntime", () => {
           expect(messages[0]?.id).toBe(MessageId.make("message:req-runtime-send-1"))
           expect(messages[0]?.parts).toEqual([Prompt.textPart({ text: "first attempt" })])
           expect(yield* controls.callCount).toBe(1)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -539,7 +567,8 @@ describe("SessionRuntime", () => {
               .filter((message) => message.role === "assistant")
               .map((message) => message.parts.find((part) => part.type === "text")?.text),
           ).toEqual(["first reply", "steer reply", "queued reply"])
-          yield* controls.assertDone()
+          yield* controls.assertDone
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -584,7 +613,8 @@ describe("SessionRuntime", () => {
           expect(messages.filter((message) => message.role === "user")).toHaveLength(2)
           expect(messages.filter((message) => message.role === "assistant")).toHaveLength(2)
           expect(yield* controls.callCount).toBe(2)
-          yield* controls.assertDone()
+          yield* controls.assertDone
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -633,7 +663,10 @@ describe("SessionRuntime", () => {
             Effect.gen(function* () {
               const stream = yield* sessionRuntime.watchState({ sessionId, branchId })
               const state = yield* Stream.runHead(stream)
-              return state._tag === "Some" ? state.value : undefined
+              if (state._tag === "Some") {
+                return state.value
+              }
+              return Option.getOrUndefined(state)
             }),
             (state) => state?._tag === "Idle",
             5000,
@@ -645,6 +678,7 @@ describe("SessionRuntime", () => {
               (message) => message.role === "user",
             ),
           ).toHaveLength(1)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -668,7 +702,10 @@ describe("SessionRuntime", () => {
             Effect.gen(function* () {
               const stream = yield* sessionRuntime.watchState({ sessionId, branchId })
               const state = yield* Stream.runHead(stream)
-              return state._tag === "Some" ? state.value : undefined
+              if (state._tag === "Some") {
+                return state.value
+              }
+              return Option.getOrUndefined(state)
             }),
             (current) => current?._tag === "WaitingForInteraction",
             5000,
@@ -684,7 +721,10 @@ describe("SessionRuntime", () => {
             Effect.gen(function* () {
               const stream = yield* sessionRuntime.watchState({ sessionId, branchId })
               const state = yield* Stream.runHead(stream)
-              return state._tag === "Some" ? state.value : undefined
+              if (state._tag === "Some") {
+                return state.value
+              }
+              return Option.getOrUndefined(state)
             }),
             (current) => current?._tag === "Idle",
             5000,
@@ -692,6 +732,7 @@ describe("SessionRuntime", () => {
           )
           expect(state?._tag).toBe("Idle")
           expect(Ref.getUnsafe(callCount)).toBe(2)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
       )
     }),

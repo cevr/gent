@@ -21,6 +21,10 @@ export const withTodoWrite = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.E
   effect
 
 export const FIXTURE_DATE = dateFromMillis(0)
+const causeMessage = (cause: unknown) => {
+  if (cause instanceof Error) return cause.message
+  return String(cause)
+}
 
 const mockRunnerSuccess: AgentRunner = {
   run: (params) =>
@@ -51,7 +55,7 @@ export const makeCtx = Effect.gen(function* () {
             persistence: "ephemeral",
           }),
         ),
-      listAgents: () => Effect.succeed(AllBuiltinAgents),
+      listAgents: Effect.succeed(AllBuiltinAgents),
     },
   })
   const State: ExtensionContextService["State"] = {
@@ -68,7 +72,7 @@ export const makeCtx = Effect.gen(function* () {
               new ExtensionServiceError({
                 service: "ExtensionState",
                 operation: "changed",
-                message: cause instanceof Error ? cause.message : String(cause),
+                message: causeMessage(cause),
                 cause,
               }),
           ),
@@ -102,13 +106,13 @@ const ExtensionContextLayer: Layer.Layer<ExtensionContext, never, ExtensionState
                   new ExtensionServiceError({
                     service: "ExtensionState",
                     operation: "changed",
-                    message: cause instanceof Error ? cause.message : String(cause),
+                    message: causeMessage(cause),
                     cause,
                   }),
               ),
             ),
       }
-      return { ...base, State }
+      return ExtensionContext.of({ ...base, State })
     }),
   )
 

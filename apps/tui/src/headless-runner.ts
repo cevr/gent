@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, Exit, Fiber, Random, Schedule, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, Schedule, Stdio, Stream } from "effect"
 import type { AgentName, RunSpec } from "@gent/core-internal/domain/agent.js"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
 import { GentConnectionError, type GentNamespacedClient } from "@gent/sdk"
@@ -8,11 +8,7 @@ import {
   type HeadlessToolRendererRegistry,
   type HeadlessToolCall,
 } from "./headless-tool-renderers"
-
-const isTransientTransportOpenError = (error: unknown): boolean => {
-  const text = String(error)
-  return text.includes("RpcClientError") || text.includes("SocketOpenError")
-}
+import { randomId } from "./utils/random-id"
 
 export const runHeadless = (
   client: GentNamespacedClient,
@@ -25,68 +21,76 @@ export const runHeadless = (
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
+      const stdio = yield* Stdio.Stdio
+      const writeStdout = (text: string) => Stream.make(text).pipe(Stream.run(stdio.stdout()))
+      const writeStderr = (text: string) => Stream.make(text).pipe(Stream.run(stdio.stderr()))
       const done = yield* Deferred.make<void>()
       const activeTools = new Map<string, HeadlessToolCall>()
-      const renderTool = (toolCall: HeadlessToolCall): void => {
-        process.stdout.write(`${renderHeadlessToolCall(toolCall, toolRenderers)}\n`)
-      }
+      const renderTool = (toolCall: HeadlessToolCall) =>
+        writeStdout(`${renderHeadlessToolCall(toolCall, toolRenderers)}\n`)
       const streamFiber = yield* client.session.events({ sessionId, branchId }).pipe(
         Stream.tap((envelope) =>
           Effect.gen(function* () {
             const event = envelope.event
             switch (event._tag) {
               case "StreamChunk":
-                process.stdout.write(event.chunk)
+                yield* writeStdout(event.chunk)
                 break
               case "ToolCallStarted": {
                 const toolCall: HeadlessToolCall = {
                   toolName: event.toolName,
-                  input: event.input,
+                  input: Option.some(event.input),
                   status: "running",
-                  summary: undefined,
-                  output: undefined,
+                  summary: Option.none(),
+                  output: Option.none(),
                 }
                 activeTools.set(String(event.toolCallId), toolCall)
-                process.stdout.write("\n")
-                renderTool(toolCall)
+                yield* writeStdout("\n")
+                yield* renderTool(toolCall)
                 break
               }
               case "ToolCallSucceeded": {
+                const priorInput = Option.fromNullishOr(
+                  activeTools.get(String(event.toolCallId)),
+                ).pipe(Option.flatMap((toolCall) => toolCall.input))
                 const toolCall: HeadlessToolCall = {
                   toolName: event.toolName,
-                  input: activeTools.get(String(event.toolCallId))?.input,
+                  input: priorInput,
                   status: "completed",
-                  summary: event.summary,
-                  output: event.output,
+                  summary: Option.fromNullishOr(event.summary),
+                  output: Option.fromNullishOr(event.output),
                 }
                 activeTools.delete(String(event.toolCallId))
-                renderTool(toolCall)
+                yield* renderTool(toolCall)
                 break
               }
               case "ToolCallFailed": {
+                const priorInput = Option.fromNullishOr(
+                  activeTools.get(String(event.toolCallId)),
+                ).pipe(Option.flatMap((toolCall) => toolCall.input))
                 const toolCall: HeadlessToolCall = {
                   toolName: event.toolName,
-                  input: activeTools.get(String(event.toolCallId))?.input,
+                  input: priorInput,
                   status: "error",
-                  summary: event.summary,
-                  output: event.output,
+                  summary: Option.fromNullishOr(event.summary),
+                  output: Option.fromNullishOr(event.output),
                 }
                 activeTools.delete(String(event.toolCallId))
-                renderTool(toolCall)
+                yield* renderTool(toolCall)
                 break
               }
               case "StreamEnded":
-                process.stdout.write("\n")
+                yield* writeStdout("\n")
                 break
               case "ErrorOccurred":
-                process.stderr.write(`\nError: ${event.error}\n`)
+                yield* writeStderr(`\nError: ${event.error}\n`)
                 yield* Deferred.succeed(done, void 0)
                 break
               case "TurnCompleted":
                 yield* Deferred.succeed(done, void 0)
                 break
               case "InteractionPresented":
-                process.stdout.write(`\n[interaction: auto-approving]\n`)
+                yield* writeStdout(`\n[interaction: auto-approving]\n`)
                 yield* client.interaction
                   .respondInteraction({
                     requestId: event.requestId,
@@ -105,21 +109,24 @@ export const runHeadless = (
         Effect.forkScoped,
       )
 
-      const sendRequestId = yield* Random.nextUUIDv4
+      const sendRequestId = yield* randomId
       yield* Effect.suspend(() =>
         client.message.send({
           sessionId,
           branchId,
           content: promptText,
           requestId: sendRequestId,
-          ...(agentOverride !== undefined ? { agentOverride } : {}),
-          ...(runSpec !== undefined ? { runSpec } : {}),
+          agentOverride,
+          runSpec,
         }),
       ).pipe(
         Effect.retry({
           schedule: Schedule.spaced("250 millis"),
           times: 20,
-          while: isTransientTransportOpenError,
+          while: (error) => {
+            const text = String(error)
+            return text.includes("RpcClientError") || text.includes("SocketOpenError")
+          },
         }),
         Effect.withSpan("Headless.sendMessage"),
       )

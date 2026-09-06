@@ -32,7 +32,7 @@ const VALID_TRANSITIONS: ReadonlyMap<TodoStatus, ReadonlySet<TodoStatus>> = new 
 export const isValidTodoTransition = (from: TodoStatus, to: TodoStatus): boolean =>
   VALID_TRANSITIONS.get(from)?.has(to) === true
 
-export class TodoTransitionError extends Schema.TaggedErrorClass<TodoTransitionError>()(
+export class TodoTransitionError extends Schema.TaggedError<TodoTransitionError>()(
   "TodoTransitionError",
   {
     message: Schema.String,

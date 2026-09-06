@@ -6,7 +6,7 @@
  */
 import { createStore } from "solid-js/store"
 import { createEffect, on, onCleanup } from "solid-js"
-import { Effect, Fiber, Stream } from "effect"
+import { Effect, Fiber, Option, Stream } from "effect"
 import type { SessionId, BranchId } from "@gent/core-internal/domain/ids.js"
 import {
   make as makeChildSessionTracker,
@@ -30,12 +30,12 @@ export function useChildSessions(client: ChildSessionClient): UseChildSessionsRe
     entries: {},
   })
 
-  let fiber: Fiber.Fiber<void> | undefined
+  let fiber: Option.Option<Fiber.Fiber<void>> = Option.none()
 
   const stopAll = () => {
-    if (fiber !== undefined) {
-      Effect.runFork(Fiber.interrupt(fiber))
-      fiber = undefined
+    if (Option.isSome(fiber)) {
+      Effect.runFork(Fiber.interrupt(fiber.value))
+      fiber = Option.none()
     }
     setStore({ entries: {} })
   }
@@ -45,27 +45,29 @@ export function useChildSessions(client: ChildSessionClient): UseChildSessionsRe
 
     // Single long-running scoped fiber: creates tracker, subscribes to changes,
     // and blocks on Effect.never so the scope (and FiberSet) stays alive.
-    fiber = client.runtime.fork(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const tracker = yield* makeChildSessionTracker
+    fiber = Option.some(
+      client.runtime.fork(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const tracker = yield* makeChildSessionTracker
 
-          // Fork: pump tracker snapshots → Solid store
-          yield* Effect.forkScoped(
-            Stream.runForEach(tracker.changes, (entries) =>
-              Effect.sync(() => {
-                setStore({ entries: Object.fromEntries(entries) })
-              }),
-            ).pipe(Effect.catchEager(() => Effect.void)),
-          )
+            // Fork: pump tracker snapshots → Solid store
+            yield* Effect.forkScoped(
+              Stream.runForEach(tracker.changes, (entries) =>
+                Effect.sync(() => {
+                  setStore({ entries: Object.fromEntries(entries) })
+                }),
+              ).pipe(Effect.catchEager(() => Effect.void)),
+            )
 
-          // Start tracking (fires internal subscriptions into FiberSet)
-          yield* tracker.track({ sessionId, branchId })
+            // Start tracking (fires internal subscriptions into FiberSet)
+            yield* tracker.track({ sessionId, branchId })
 
-          // Block forever — keeps the scope alive until fiber is interrupted
-          return yield* Effect.never
-        }),
-      ).pipe(Effect.catchEager(() => Effect.void)),
+            // Block forever — keeps the scope alive until fiber is interrupted
+            return yield* Effect.never
+          }),
+        ).pipe(Effect.catchEager(() => Effect.void)),
+      ),
     )
   }
 
@@ -74,11 +76,12 @@ export function useChildSessions(client: ChildSessionClient): UseChildSessionsRe
     on(
       () => client.session(),
       (session) => {
-        if (session === null) {
+        const current = Option.fromNullishOr(session)
+        if (Option.isNone(current)) {
           stopAll()
           return
         }
-        startTracking(session.sessionId, session.branchId)
+        startTracking(current.value.sessionId, current.value.branchId)
       },
     ),
   )

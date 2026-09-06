@@ -1,8 +1,9 @@
-import { createContext, useContext, onMount, onCleanup, createSignal } from "solid-js"
+import { createContext, onMount, onCleanup, createSignal } from "solid-js"
+import { useRequiredContext } from "../utils/solid-context"
 import type { JSX } from "solid-js"
-import type { ChildProcessSpawner } from "effect/unstable/process"
-import { ChildProcess } from "effect/unstable/process"
-import { Effect, Fiber, FileSystem, Context, Stream } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { Effect, Fiber, FileSystem, Context, Option, Stream } from "effect"
+import type { Cause } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 
 export interface GitStatus {
@@ -15,7 +16,9 @@ export interface GitStatus {
 interface WorkspaceContextValue {
   cwd: string
   home: string
+  // eslint-disable-next-line effect/noNullish -- UI consumers use null while git metadata is unavailable.
   gitRoot: () => string | null
+  // eslint-disable-next-line effect/noNullish -- UI consumers use null while git metadata is unavailable.
   gitStatus: () => GitStatus | null
   isGitRepo: () => boolean
   projectName: () => string
@@ -24,9 +27,7 @@ interface WorkspaceContextValue {
 const WorkspaceContext = createContext<WorkspaceContextValue>()
 
 export function useWorkspace(): WorkspaceContextValue {
-  const ctx = useContext(WorkspaceContext)
-  if (ctx === undefined) throw new Error("useWorkspace must be used within WorkspaceProvider")
-  return ctx
+  return useRequiredContext(WorkspaceContext, "useWorkspace must be used within WorkspaceProvider")
 }
 
 interface WorkspaceProviderProps {
@@ -53,17 +54,17 @@ const gitCommand = (cwd: string, args: ReadonlyArray<string>) =>
 
 const getGitInfo = (
   cwd: string,
-): Effect.Effect<GitInfo | null, never, ChildProcessSpawner.ChildProcessSpawner> =>
+): Effect.Effect<Option.Option<GitInfo>, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const root = yield* gitCommand(cwd, ["rev-parse", "--show-toplevel"]).pipe(
       Effect.catchEager(() => Effect.succeed("")),
     )
-    if (root.length === 0) return null
+    if (root.length === 0) return Option.none()
 
     const branch = yield* gitCommand(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]).pipe(
       Effect.catchEager(() => Effect.succeed("")),
     )
-    if (branch.length === 0) return null
+    if (branch.length === 0) return Option.none()
 
     const diffText = yield* gitCommand(cwd, ["diff", "--stat", "HEAD"]).pipe(
       Effect.catchEager(() => Effect.succeed("")),
@@ -75,51 +76,63 @@ const getGitInfo = (
 
     // Parse last line: " N files changed, X insertions(+), Y deletions(-)"
     const lines = diffText.trim().split("\n")
-    const summaryLine = lines[lines.length - 1] ?? ""
+    const summaryLine = Option.getOrElse(Option.fromNullishOr(lines[lines.length - 1]), () => "")
 
     const filesMatch = summaryLine.match(/(\d+) files? changed/)
     const addMatch = summaryLine.match(/(\d+) insertions?\(\+\)/)
     const delMatch = summaryLine.match(/(\d+) deletions?\(-\)/)
 
-    const filesValue = filesMatch?.[1]
-    const addValue = addMatch?.[1]
-    const delValue = delMatch?.[1]
+    const filesValue = Option.flatMap(Option.fromNullishOr(filesMatch), (match) =>
+      Option.fromNullishOr(match[1]),
+    )
+    const addValue = Option.flatMap(Option.fromNullishOr(addMatch), (match) =>
+      Option.fromNullishOr(match[1]),
+    )
+    const delValue = Option.flatMap(Option.fromNullishOr(delMatch), (match) =>
+      Option.fromNullishOr(match[1]),
+    )
 
-    if (filesValue !== undefined) files = parseInt(filesValue, 10)
-    if (addValue !== undefined) additions = parseInt(addValue, 10)
-    if (delValue !== undefined) deletions = parseInt(delValue, 10)
+    if (Option.isSome(filesValue)) files = parseInt(filesValue.value, 10)
+    if (Option.isSome(addValue)) additions = parseInt(addValue.value, 10)
+    if (Option.isSome(delValue)) deletions = parseInt(delValue.value, 10)
 
-    return { root, status: { branch, files, additions, deletions } }
+    return Option.some({ root, status: { branch, files, additions, deletions } })
   })
 
-function deriveProjectName(cwd: string, gitRoot: string | null): string {
+function deriveProjectName(cwd: string, gitRoot: Option.Option<string>): string {
   // Prefer git repo name
-  if (gitRoot !== null) {
-    const parts = gitRoot.split("/")
-    return parts[parts.length - 1] ?? gitRoot
+  if (Option.isSome(gitRoot)) {
+    const parts = gitRoot.value.split("/")
+    return Option.getOrElse(Option.fromNullishOr(parts[parts.length - 1]), () => gitRoot.value)
   }
   // Fall back to cwd dirname
   const parts = cwd.split("/")
-  return parts[parts.length - 1] ?? cwd
+  return Option.getOrElse(Option.fromNullishOr(parts[parts.length - 1]), () => cwd)
 }
 
 export function WorkspaceProvider(props: WorkspaceProviderProps) {
-  const [gitInfo, setGitInfo] = createSignal<GitInfo | null>(null)
-  const services = props.services ?? Context.empty()
-  let currentFiber: Fiber.Fiber<GitInfo | null, never> | null = null
+  const [gitInfo, setGitInfo] = createSignal<Option.Option<GitInfo>>(Option.none())
+  const services = Option.getOrElse(Option.fromNullishOr(props.services), () => Context.empty())
+  let currentFiber = Option.none<Fiber.Fiber<Option.Option<GitInfo>, never>>()
 
   const refreshGitInfo = () => {
-    if (currentFiber !== null) {
-      Effect.runFork(Fiber.interrupt(currentFiber))
+    if (Option.isSome(currentFiber)) {
+      Effect.runFork(Fiber.interrupt(currentFiber.value))
     }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary validates foreign runtime shape before use
-    const gitServices = services as Context.Context<ChildProcessSpawner.ChildProcessSpawner>
-    currentFiber = Effect.runForkWith(gitServices)(
-      getGitInfo(props.cwd).pipe(
-        Effect.tap((info) =>
-          Effect.sync(() => {
-            setGitInfo(info)
-          }),
+    const gitServices = Context.getOption(services, ChildProcessSpawner.ChildProcessSpawner)
+    if (Option.isNone(gitServices)) {
+      setGitInfo(Option.none())
+      return
+    }
+    const gitContext = Context.make(ChildProcessSpawner.ChildProcessSpawner, gitServices.value)
+    currentFiber = Option.some(
+      Effect.runForkWith(gitContext)(
+        getGitInfo(props.cwd).pipe(
+          Effect.tap((info) =>
+            Effect.sync(() => {
+              setGitInfo(info)
+            }),
+          ),
         ),
       ),
     )
@@ -130,34 +143,40 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
     refreshGitInfo()
 
     // Watch .git/index and .git/HEAD for changes (debounced)
-    let debounceFiber: Fiber.Fiber<void, never> | null = null
+    let debounceFiber = Option.none<Fiber.Fiber<void, never>>()
     const DEBOUNCE_MS = 200
     const debouncedRefresh = () => {
-      if (debounceFiber !== null) Effect.runFork(Fiber.interrupt(debounceFiber))
-      debounceFiber = Effect.runFork(
-        Effect.sleep(`${DEBOUNCE_MS} millis`).pipe(
-          Effect.andThen(
-            Effect.sync(() => {
-              debounceFiber = null
-              refreshGitInfo()
-            }),
+      if (Option.isSome(debounceFiber)) Effect.runFork(Fiber.interrupt(debounceFiber.value))
+      debounceFiber = Option.some(
+        Effect.runFork(
+          Effect.sleep(`${DEBOUNCE_MS} millis`).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                debounceFiber = Option.none()
+                refreshGitInfo()
+              }),
+            ),
           ),
         ),
       )
     }
 
-    let watchFiber: Fiber.Fiber<void, never> | null = null
-    let fallbackFiber: Fiber.Fiber<void, never> | null = null
+    let watchFiber = Option.none<Fiber.Fiber<void, never>>()
+    let fallbackFiber = Option.none<Fiber.Fiber<void, never>>()
 
     const gitDir = `${props.cwd}/.git`
-    const startPollingFallback = (reason: unknown) => {
+    const startPollingFallback = (reason: Cause.Cause<unknown>) => {
       Effect.runFork(
         Effect.logDebug("[workspace] git watch failed, falling back to polling").pipe(
           Effect.annotateLogs({ error: String(reason) }),
         ),
       )
-      fallbackFiber = Effect.runFork(
-        Effect.forever(Effect.sleep("2 seconds").pipe(Effect.andThen(Effect.sync(refreshGitInfo)))),
+      fallbackFiber = Option.some(
+        Effect.runFork(
+          Effect.forever(
+            Effect.sleep("2 seconds").pipe(Effect.andThen(Effect.sync(refreshGitInfo))),
+          ),
+        ),
       )
     }
 
@@ -165,7 +184,7 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
       const fs = yield* FileSystem.FileSystem
       yield* fs.watch(gitDir).pipe(
         Stream.runForEach((event) => {
-          const name = event.path.split("/").pop() ?? ""
+          const name = Option.getOrElse(Option.fromNullishOr(event.path.split("/").pop()), () => "")
           if (name === "index" || name === "HEAD" || name === "MERGE_HEAD") {
             debouncedRefresh()
           }
@@ -182,25 +201,30 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
       ),
     )
 
-    watchFiber = Effect.runFork(watchProgram)
+    watchFiber = Option.some(Effect.runFork(watchProgram))
 
     onCleanup(() => {
-      if (currentFiber !== null) {
-        Effect.runFork(Fiber.interrupt(currentFiber))
+      if (Option.isSome(currentFiber)) {
+        Effect.runFork(Fiber.interrupt(currentFiber.value))
       }
-      if (debounceFiber !== null) Effect.runFork(Fiber.interrupt(debounceFiber))
-      if (watchFiber !== null) Effect.runFork(Fiber.interrupt(watchFiber))
-      if (fallbackFiber !== null) Effect.runFork(Fiber.interrupt(fallbackFiber))
+      if (Option.isSome(debounceFiber)) Effect.runFork(Fiber.interrupt(debounceFiber.value))
+      if (Option.isSome(watchFiber)) Effect.runFork(Fiber.interrupt(watchFiber.value))
+      if (Option.isSome(fallbackFiber)) Effect.runFork(Fiber.interrupt(fallbackFiber.value))
     })
   })
 
   const value: WorkspaceContextValue = {
     cwd: props.cwd,
     home: props.home,
-    gitRoot: () => gitInfo()?.root ?? null,
-    gitStatus: () => gitInfo()?.status ?? null,
-    isGitRepo: () => gitInfo() !== null,
-    projectName: () => deriveProjectName(props.cwd, gitInfo()?.root ?? null),
+    gitRoot: () => Option.getOrNull(Option.flatMap(gitInfo(), (info) => Option.some(info.root))),
+    gitStatus: () =>
+      Option.getOrNull(Option.flatMap(gitInfo(), (info) => Option.some(info.status))),
+    isGitRepo: () => Option.isSome(gitInfo()),
+    projectName: () =>
+      deriveProjectName(
+        props.cwd,
+        Option.map(gitInfo(), (info) => info.root),
+      ),
   }
 
   return <WorkspaceContext.Provider value={value}>{props.children}</WorkspaceContext.Provider>

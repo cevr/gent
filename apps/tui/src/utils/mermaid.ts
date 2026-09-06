@@ -6,6 +6,7 @@
  */
 
 import { renderMermaidASCII, type AsciiRenderOptions } from "beautiful-mermaid"
+import { Effect, Option, Schema } from "effect"
 
 export interface MermaidBlock {
   /** Original mermaid source code */
@@ -23,18 +24,19 @@ export interface MermaidBlock {
 export function extractMermaidBlocks(text: string): MermaidBlock[] {
   const blocks: MermaidBlock[] = []
   const regex = /```mermaid\s*\n([\s\S]*?)```/g
-  let match = regex.exec(text)
+  let match = Option.fromNullishOr(regex.exec(text))
 
-  while (match !== null) {
-    const source = match[1]?.trim()
-    if (source !== undefined && source.length > 0) {
+  while (Option.isSome(match)) {
+    const result = match.value
+    const source = Option.map(Option.fromNullishOr(result[1]), (value) => value.trim())
+    if (Option.isSome(source) && source.value.length > 0) {
       blocks.push({
-        source,
-        startIndex: match.index,
-        endIndex: match.index + match[0].length,
+        source: source.value,
+        startIndex: result.index,
+        endIndex: result.index + result[0].length,
       })
     }
-    match = regex.exec(text)
+    match = Option.fromNullishOr(regex.exec(text))
   }
 
   return blocks
@@ -56,6 +58,7 @@ const PRESETS: readonly Preset[] = [
   { name: "tight", paddingX: 2, paddingY: 1, boxBorderPadding: 1 },
   { name: "tightest", paddingX: 1, paddingY: 1, boxBorderPadding: 0 },
 ]
+const TIGHTEST_PRESET: Preset = { name: "tightest", paddingX: 1, paddingY: 1, boxBorderPadding: 0 }
 
 function getMaxLineWidth(text: string): number {
   let max = 0
@@ -72,16 +75,23 @@ function getMaxLineWidth(text: string): number {
  * Try each preset from roomy → tightest. Pick the first whose
  * rendered output fits within maxWidth. Falls back to tightest.
  */
-export function pickBestPreset(source: string, maxWidth: number): AsciiRenderOptions | undefined {
+export function pickBestPreset(source: string, maxWidth: number): AsciiRenderOptions {
   for (const preset of PRESETS) {
-    try {
-      const ascii = renderMermaidASCII(source, {
-        paddingX: preset.paddingX,
-        paddingY: preset.paddingY,
-        boxBorderPadding: preset.boxBorderPadding,
-      })
-      if (ascii !== undefined && ascii.length > 0) {
-        const width = getMaxLineWidth(ascii)
+    const rendered = Effect.runSync(
+      Effect.option(
+        Effect.try(() =>
+          renderMermaidASCII(source, {
+            paddingX: preset.paddingX,
+            paddingY: preset.paddingY,
+            boxBorderPadding: preset.boxBorderPadding,
+          }),
+        ),
+      ),
+    )
+    if (Option.isSome(rendered)) {
+      const ascii = Option.fromNullishOr(rendered.value)
+      if (Option.isSome(ascii) && ascii.value.length > 0) {
+        const width = getMaxLineWidth(ascii.value)
         if (width <= maxWidth) {
           return {
             paddingX: preset.paddingX,
@@ -90,17 +100,13 @@ export function pickBestPreset(source: string, maxWidth: number): AsciiRenderOpt
           }
         }
       }
-    } catch {
-      // Try next preset
     }
   }
   // Return tightest as fallback
-  const tightest = PRESETS[PRESETS.length - 1]
-  if (tightest === undefined) return undefined
   return {
-    paddingX: tightest.paddingX,
-    paddingY: tightest.paddingY,
-    boxBorderPadding: tightest.boxBorderPadding,
+    paddingX: TIGHTEST_PRESET.paddingX,
+    paddingY: TIGHTEST_PRESET.paddingY,
+    boxBorderPadding: TIGHTEST_PRESET.boxBorderPadding,
   }
 }
 
@@ -111,48 +117,53 @@ export function pickBestPreset(source: string, maxWidth: number): AsciiRenderOpt
 const CACHE_MAX = 20
 const renderCache = new Map<string, string>()
 
-const cacheKey = (source: string, maxWidth?: number): string =>
-  JSON.stringify([source, maxWidth ?? null])
+const encodeCacheKey = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({ source: Schema.String, maxWidth: Schema.optional(Schema.Finite) }),
+  ),
+)
+
+const cacheKey = (source: string, maxWidth: number): string => encodeCacheKey({ source, maxWidth })
 
 /**
  * Render a mermaid diagram to ASCII art.
  * When maxWidth is provided, uses adaptive preset selection.
  * Results are cached (LRU).
  */
-export function renderMermaidToAscii(source: string, maxWidth?: number): string | undefined {
+export function renderMermaidToAscii(source: string, maxWidth: number): Option.Option<string> {
   const key = cacheKey(source, maxWidth)
-  const cached = renderCache.get(key)
-  if (cached !== undefined) {
+  const cached = Option.fromNullishOr(renderCache.get(key))
+  if (Option.isSome(cached)) {
     // Move to end for LRU
     renderCache.delete(key)
-    renderCache.set(key, cached)
+    renderCache.set(key, cached.value)
     return cached
   }
 
-  try {
-    const options = maxWidth !== undefined ? pickBestPreset(source, maxWidth) : undefined
-    const ascii = renderMermaidASCII(source, options)
-    if (ascii === undefined || ascii.length === 0) return undefined
+  const options = pickBestPreset(source, maxWidth)
+  const rendered = Effect.runSync(
+    Effect.option(Effect.try(() => renderMermaidASCII(source, options))),
+  )
+  if (Option.isNone(rendered)) return Option.none()
+  const ascii = Option.fromNullishOr(rendered.value)
+  if (Option.isNone(ascii) || ascii.value.length === 0) return Option.none()
 
-    // Evict oldest if at capacity
-    if (renderCache.size >= CACHE_MAX) {
-      const oldest = renderCache.keys().next()
-      if (!oldest.done) {
-        renderCache.delete(oldest.value)
-      }
+  // Evict oldest if at capacity
+  if (renderCache.size >= CACHE_MAX) {
+    const oldest = renderCache.keys().next()
+    if (!oldest.done) {
+      renderCache.delete(oldest.value)
     }
-    renderCache.set(key, ascii)
-    return ascii
-  } catch {
-    return undefined
   }
+  renderCache.set(key, ascii.value)
+  return ascii
 }
 
 /**
  * Replace mermaid blocks in text with rendered ASCII art.
  * Falls back to the original code block if rendering fails.
  */
-export function replaceMermaidBlocks(text: string, maxWidth?: number): string {
+export function replaceMermaidBlocks(text: string, maxWidth: number): string {
   const blocks = extractMermaidBlocks(text)
   if (blocks.length === 0) return text
 
@@ -163,8 +174,8 @@ export function replaceMermaidBlocks(text: string, maxWidth?: number): string {
     result += text.slice(lastEnd, block.startIndex)
 
     const ascii = renderMermaidToAscii(block.source, maxWidth)
-    if (ascii !== undefined) {
-      result += ascii
+    if (Option.isSome(ascii)) {
+      result += ascii.value
     } else {
       // Fallback: show original code block
       result += text.slice(block.startIndex, block.endIndex)

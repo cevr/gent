@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Predicate, Effect } from "effect"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { Branch, BranchTreeNode } from "../domain/message.js"
 import { BranchStorage } from "../storage/branch-storage.js"
@@ -25,14 +25,14 @@ export const buildBranchTree = (
   const roots: MutableBranchTreeNode[] = []
   for (const branch of branches) {
     const node = nodes.get(branch.id)
-    if (node === undefined) continue
+    if (Predicate.isUndefined(node)) continue
     if (
-      branch.parentBranchId !== undefined &&
+      !Predicate.isUndefined(branch.parentBranchId) &&
       branch.parentBranchId !== "" &&
       nodes.has(branch.parentBranchId)
     ) {
       const parent = nodes.get(branch.parentBranchId)
-      if (parent !== undefined) parent.children.push(node)
+      if (!Predicate.isUndefined(parent)) parent.children.push(node)
       continue
     }
     roots.push(node)

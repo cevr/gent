@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option, Predicate, Ref, Stream } from "effect"
 import {
   AgentEvent,
   type EventEnvelope,
@@ -27,13 +27,17 @@ const TAG_MAP = {
   EventA: "ToolCallStarted",
   EventB: "ToolCallSucceeded",
   FallbackEvent: "ToolCallFailed",
-} as const
+} satisfies Record<string, "ToolCallStarted" | "ToolCallSucceeded" | "ToolCallFailed">
 type SyntheticTag = keyof typeof TAG_MAP
 type RealTag = (typeof TAG_MAP)[SyntheticTag]
-const toBranchId = (branchId: string | BranchId | undefined): BranchId => {
-  if (branchId === undefined) return BranchId.make("default-branch")
-  if (typeof branchId === "string") return BranchId.make(branchId)
-  return branchId
+const toBranchId = (branchId: Option.Option<string | BranchId>): BranchId => {
+  if (Option.isNone(branchId)) return BranchId.make("default-branch")
+  if (Predicate.isString(branchId.value)) return BranchId.make(branchId.value)
+  return branchId.value
+}
+const toSessionId = (sessionId: string | SessionId): SessionId => {
+  if (Predicate.isString(sessionId)) return SessionId.make(sessionId)
+  return sessionId
 }
 const makeEvent = (
   tag: SyntheticTag,
@@ -41,8 +45,8 @@ const makeEvent = (
   branchId?: string | BranchId,
 ): AgentEvent => {
   const realTag = TAG_MAP[tag]
-  const sid = typeof sessionId === "string" ? SessionId.make(sessionId) : sessionId
-  const bid = toBranchId(branchId)
+  const sid = toSessionId(sessionId)
+  const bid = toBranchId(Option.fromUndefinedOr(branchId))
   const base = {
     sessionId: sid,
     branchId: bid,
@@ -75,7 +79,7 @@ const makeEventStoreLayer = (
           const envelope = yield* input.append(event)
           yield* deliver(envelope)
         }),
-        subscribe: () => Effect.die("subscribe not exercised in EventPublisher tests") as never,
+        subscribe: () => Stream.die("subscribe not exercised in EventPublisher tests"),
         removeSession: () => Effect.void,
       }
       return Layer.succeed(EventStore, service)
@@ -94,7 +98,7 @@ describe("EventPublisher", () => {
           Effect.sync(() => {
             persisted.push(event._tag)
             nextId += 1
-            return { id: EventId.make(nextId), event, createdAt: FIXED_NOW_MILLIS } as EventEnvelope
+            return { id: EventId.make(nextId), event, createdAt: FIXED_NOW_MILLIS }
           }),
         broadcast: (envelope: EventEnvelope) =>
           Effect.sync(() => {
@@ -105,6 +109,7 @@ describe("EventPublisher", () => {
       yield* Effect.gen(function* () {
         const publisher = yield* EventPublisher
         yield* publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(persisted).toEqual([TAG.OuterEvent])
       expect(broadcasted).toEqual([TAG.OuterEvent])
@@ -123,7 +128,7 @@ describe("EventPublisher", () => {
             id: EventId.make(1),
             event,
             createdAt: FIXED_NOW_MILLIS,
-          } as EventEnvelope),
+          }),
         broadcast: () =>
           Effect.gen(function* () {
             yield* Deferred.succeed(broadcastStarted, void 0)
@@ -141,6 +146,7 @@ describe("EventPublisher", () => {
         expect(early._tag).toBe("None")
         yield* Deferred.succeed(releaseBroadcast, void 0)
         yield* Fiber.join(fiber)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.scoped, Effect.provide(layer))
     }),
   )
@@ -153,7 +159,7 @@ describe("EventPublisher", () => {
         id: EventId.make(1),
         event: makeEvent("OuterEvent", "session-1", "branch-1"),
         createdAt: FIXED_NOW_MILLIS,
-      } as EventEnvelope
+      }
       const customEventStore = makeEventStoreLayer({
         append: (event) => Effect.succeed({ ...envelope, event }),
         broadcast: () =>
@@ -174,6 +180,7 @@ describe("EventPublisher", () => {
         yield* Fiber.join(first)
         yield* Fiber.join(second)
         expect(yield* Ref.get(broadcastCount)).toBe(1)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.scoped, Effect.provide(layer))
     }),
   )
@@ -184,12 +191,17 @@ describe("EventPublisher", () => {
         id: EventId.make(1),
         event: makeEvent("OuterEvent", "session-1", "branch-1"),
         createdAt: FIXED_NOW_MILLIS,
-      } as EventEnvelope
+      }
       const customEventStore = makeEventStoreLayer({
         append: (event) => Effect.succeed({ ...envelope, event }),
         broadcast: () =>
           Ref.updateAndGet(attempts, (count) => count + 1).pipe(
-            Effect.flatMap((count) => (count === 1 ? Effect.die("broadcast defect") : Effect.void)),
+            Effect.flatMap((count) => {
+              if (count === 1) {
+                return Effect.die("broadcast defect")
+              }
+              return Effect.void
+            }),
           ),
       })
       const layer = Layer.provide(EventPublisherLive, customEventStore)
@@ -198,6 +210,7 @@ describe("EventPublisher", () => {
         const failed = yield* Effect.exit(publisher.deliver(envelope))
         expect(failed._tag).toBe("Failure")
         yield* publisher.deliver(envelope)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(yield* Ref.get(attempts)).toBe(2)
     }),
@@ -214,7 +227,7 @@ describe("EventPublisher server layer", () => {
           Effect.sync(() => {
             persisted.push(event._tag)
             nextId += 1
-            return { id: EventId.make(nextId), event, createdAt: FIXED_NOW_MILLIS } as EventEnvelope
+            return { id: EventId.make(nextId), event, createdAt: FIXED_NOW_MILLIS }
           }),
         broadcast: (envelope: EventEnvelope) =>
           Effect.sync(() => {
@@ -225,6 +238,7 @@ describe("EventPublisher server layer", () => {
       yield* Effect.gen(function* () {
         const publisher = yield* EventPublisher
         yield* publisher.publish(makeEvent("FallbackEvent", "session-secondary", "branch-1"))
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(persisted).toEqual([TAG.FallbackEvent])
       expect(broadcasted).toEqual([TAG.FallbackEvent])

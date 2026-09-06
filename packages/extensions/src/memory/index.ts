@@ -136,13 +136,14 @@ export const MemoryExtension = defineExtension({
   id: MEMORY_EXTENSION_ID,
   tools: [...MemoryTools],
   agents: [MemoryReflectAgent, MemoryMeditateAgent],
-  hooks: [hook.turnProjection(() => projectMemoryVaultTurn())],
+  hooks: [hook.turnProjection(() => projectMemoryVaultTurn)],
   scheduledJobs: MemoryDreamJobs,
   resources: () =>
     Effect.gen(function* () {
       const ctx = yield* ExtensionSetupContext
       return [
         defineResource({
+          id: "@gent/memory/vault",
           scope: "process",
           layer: MemoryVaultLive(ctx.home),
         }),

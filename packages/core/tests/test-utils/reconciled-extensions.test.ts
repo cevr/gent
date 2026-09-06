@@ -18,6 +18,7 @@ const testExtensionRegistryLayer = (
       extensions,
       failedExtensions,
       home,
+      // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
       command: undefined,
     }).pipe(
       Effect.map((result) => result.resolved),
@@ -48,9 +49,9 @@ describe("reconcileTestExtensions", () => {
                   tool({
                     id: "conflict",
                     description: "tool a",
-                    params: {} as never,
+                    params: Schema.Struct({}),
                     output: Schema.Void,
-                    execute: () => undefined as never,
+                    execute: () => Effect.void,
                   }),
                 ],
               },
@@ -64,9 +65,9 @@ describe("reconcileTestExtensions", () => {
                   tool({
                     id: "conflict",
                     description: "tool b",
-                    params: {} as never,
+                    params: Schema.Struct({}),
                     output: Schema.Void,
-                    execute: () => undefined as never,
+                    execute: () => Effect.void,
                   }),
                 ],
               },
@@ -74,6 +75,7 @@ describe("reconcileTestExtensions", () => {
           ]),
         )
 
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         const registry = yield* Effect.service(ExtensionRegistry).pipe(Effect.provide(context))
         const tools = [...registry.getResolved().modelCapabilities.values()]
         const failed = registry.getResolved().failedExtensions

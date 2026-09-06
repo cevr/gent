@@ -13,7 +13,7 @@
  * `layerFromRef` hoist.
  */
 
-import { Cause, Clock, Context, Effect, Layer, Option, Schema, SynchronizedRef } from "effect"
+import { Cause, Clock, Context, Effect, Exit, Layer, Option, Schema, SynchronizedRef } from "effect"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
 import { refreshOpenAIOauth } from "./oauth.js"
 
@@ -28,7 +28,7 @@ export interface OpenAICredentials {
   readonly access: string
   readonly refresh: string
   readonly expires: number
-  readonly accountId?: string
+  readonly accountId: Option.Option<string>
 }
 
 const freshEnoughForUse = (creds: OpenAICredentials, now: number): boolean =>
@@ -39,44 +39,34 @@ const freshEnoughForUse = (creds: OpenAICredentials, now: number): boolean =>
 const OpenAICredentialsSchema: Schema.Schema<OpenAICredentials> = Schema.Struct({
   access: Schema.String,
   refresh: Schema.String,
-  expires: Schema.Number,
-  accountId: Schema.optional(Schema.String),
+  expires: Schema.Finite,
+  accountId: Schema.OptionFromOptional(Schema.String),
 })
 
 export const CredentialCacheCell = Schema.TaggedUnion({
   Empty: {
-    creds: Schema.Null,
     at: Schema.Literal(0),
   },
   Durable: {
     creds: OpenAICredentialsSchema,
-    at: Schema.Number,
+    at: Schema.Finite,
     invalidated: Schema.Boolean,
   },
   PendingPersist: {
     creds: OpenAICredentialsSchema,
-    at: Schema.Number,
+    at: Schema.Finite,
     invalidated: Schema.Boolean,
   },
 })
 export type CredentialCacheCell = Schema.Schema.Type<typeof CredentialCacheCell>
 
 export const EMPTY_CREDENTIAL_CELL: CredentialCacheCell = CredentialCacheCell.cases.Empty.make({
-  creds: null,
   at: 0,
 })
 
 export type CredentialCacheCellRef = SynchronizedRef.SynchronizedRef<CredentialCacheCell>
 
-type CredentialResult =
-  | {
-      readonly creds: OpenAICredentials
-      readonly error?: never
-    }
-  | {
-      readonly error: ProviderAuthError
-      readonly creds?: never
-    }
+type CredentialResult = Exit.Exit<OpenAICredentials, ProviderAuthError>
 
 const durableCell = (
   creds: OpenAICredentials,
@@ -100,13 +90,9 @@ const pendingPersistCell = (
     invalidated,
   })
 
-const successResult = (creds: OpenAICredentials): CredentialResult => ({
-  creds,
-})
+const successResult = (creds: OpenAICredentials): CredentialResult => Exit.succeed(creds)
 
-const failureResult = (error: ProviderAuthError): CredentialResult => ({
-  error,
-})
+const failureResult = (error: ProviderAuthError): CredentialResult => Exit.fail(error)
 
 const providerAuthErrorFromCause = (cause: Cause.Cause<ProviderAuthError>): ProviderAuthError => {
   const error = Cause.findErrorOption(cause)
@@ -115,7 +101,7 @@ const providerAuthErrorFromCause = (cause: Cause.Cause<ProviderAuthError>): Prov
 
 // ── Service interface ──
 
-export interface OpenAICredentialServiceShape {
+export interface OpenAICredentialServiceApi {
   /**
    * Resolve cached/refreshed ChatGPT OAuth credentials. Fails with
    * `ProviderAuthError` when no usable refresh token is available or
@@ -144,6 +130,12 @@ export interface OpenAICredentialIO {
 const realIO: OpenAICredentialIO = {
   refresh: (refreshToken: string) =>
     refreshOpenAIOauth(refreshToken).pipe(
+      Effect.map((credentials) => ({
+        access: credentials.access,
+        refresh: credentials.refresh,
+        expires: credentials.expires,
+        accountId: Option.fromNullishOr(credentials.accountId),
+      })),
       Effect.mapError(
         (cause) =>
           new ProviderAuthError({
@@ -158,7 +150,7 @@ const realIO: OpenAICredentialIO = {
 
 export class OpenAICredentialService extends Context.Service<
   OpenAICredentialService,
-  OpenAICredentialServiceShape
+  OpenAICredentialServiceApi
 >()("@gent/extensions/src/openai/credential-service/OpenAICredentialService") {
   /**
    * Build the credential service for the OAuth path. `authInfo.persist`
@@ -195,7 +187,7 @@ export class OpenAICredentialService extends Context.Service<
         const cellRef = yield* SynchronizedRef.make<CredentialCacheCell>(
           seedCellFromAuthInfo(authInfo),
         )
-        return yield* OpenAICredentialService.buildShape(cellRef, io, authInfo)
+        return yield* OpenAICredentialService.buildService(cellRef, io, authInfo)
       }),
     )
 
@@ -210,40 +202,42 @@ export class OpenAICredentialService extends Context.Service<
         // First-touch seed: only fill the cell if it is still empty.
         // Externally-owned cells may already hold fresher creds from a
         // prior `resolveModel` call within the same extension instance.
-        yield* SynchronizedRef.update(cellRef, (cell) =>
-          cell.creds === null ? seedCellFromAuthInfo(authInfo) : cell,
-        )
-        return yield* OpenAICredentialService.buildShape(cellRef, io, authInfo)
+        yield* SynchronizedRef.update(cellRef, (cell) => {
+          if (cell._tag === "Empty") return seedCellFromAuthInfo(authInfo)
+          return cell
+        })
+        return yield* OpenAICredentialService.buildService(cellRef, io, authInfo)
       }),
     )
 
-  private static buildShape = (
+  private static buildService = (
     cellRef: CredentialCacheCellRef,
     io: OpenAICredentialIO,
     authInfo: ProviderAuthInfo,
-  ): Effect.Effect<OpenAICredentialServiceShape> =>
+  ): Effect.Effect<OpenAICredentialServiceApi> =>
     Effect.sync(() => {
       const persistRefreshed = (
         creds: OpenAICredentials,
       ): Effect.Effect<void, ProviderAuthError> => {
-        const persist = authInfo.persist
-        if (persist === undefined) return Effect.void
-        return persist({
+        const persist = Option.fromNullishOr(authInfo.persist)
+        if (Option.isNone(persist)) return Effect.void
+        const payload = {
           access: creds.access,
           refresh: creds.refresh,
           expires: creds.expires,
-          ...(creds.accountId !== undefined ? { accountId: creds.accountId } : {}),
-        }).pipe(
-          Effect.catchDefect((cause) =>
-            Effect.fail(
+        }
+        const accountId = Option.getOrUndefined(creds.accountId)
+        return persist.value({ ...payload, accountId }).pipe(
+          Effect.catchDefect((cause) => {
+            let message = String(cause)
+            if (cause instanceof Error) message = cause.message
+            return Effect.fail(
               new ProviderAuthError({
-                message: `Failed to persist refreshed OpenAI credentials: ${
-                  cause instanceof Error ? cause.message : String(cause)
-                }`,
+                message: `Failed to persist refreshed OpenAI credentials: ${message}`,
                 cause,
               }),
-            ),
-          ),
+            )
+          }),
         )
       }
 
@@ -293,8 +287,9 @@ export class OpenAICredentialService extends Context.Service<
               // on refresh failure or invalidate would silently roll back
               // to a stale bootstrap that the OAuth server may have
               // already revoked once the new one was issued.
-              const refreshToken = current.creds?.refresh ?? authInfo.refresh
-              if (refreshToken === undefined || refreshToken.length === 0) {
+              let refreshToken = Option.fromNullishOr(authInfo.refresh)
+              if (current._tag !== "Empty") refreshToken = Option.some(current.creds.refresh)
+              if (Option.isNone(refreshToken) || refreshToken.value.length === 0) {
                 return [
                   failureResult(
                     new ProviderAuthError({
@@ -310,16 +305,16 @@ export class OpenAICredentialService extends Context.Service<
               // token survives so a subsequent retry can re-attempt with it
               // (e.g., transient network failure). Only the explicit
               // "no usable refresh token" branch above resets to empty.
-              const refreshed = yield* io.refresh(refreshToken)
+              const refreshed = yield* io.refresh(refreshToken.value)
 
               // Carry the prior accountId forward when the refresh response omits it.
+              let previousAccountId = Option.none<string>()
+              if (current._tag !== "Empty") previousAccountId = current.creds.accountId
               const merged: OpenAICredentials = {
                 access: refreshed.access,
                 refresh: refreshed.refresh,
                 expires: refreshed.expires,
-                ...((refreshed.accountId ?? current.creds?.accountId) !== undefined
-                  ? { accountId: refreshed.accountId ?? current.creds?.accountId }
-                  : {}),
+                accountId: Option.orElse(refreshed.accountId, () => previousAccountId),
               }
 
               const pendingCell = pendingPersistCell(merged, now, false)
@@ -330,9 +325,10 @@ export class OpenAICredentialService extends Context.Service<
               return [successResult(merged), durableCell(merged, now, false)]
             }),
         ).pipe(
-          Effect.flatMap((result) =>
-            result.error === undefined ? Effect.succeed(result.creds) : Effect.fail(result.error),
-          ),
+          Effect.flatMap((result) => {
+            if (Exit.isSuccess(result)) return Effect.succeed(result.value)
+            return Effect.fail(providerAuthErrorFromCause(result.cause))
+          }),
         )
 
       // Invalidate must NOT drop the rotated refresh token. Anthropic's
@@ -350,7 +346,7 @@ export class OpenAICredentialService extends Context.Service<
       // payload so the next `getFresh` can first make the rotation
       // durable, then honor the invalidation by refreshing before use.
       const invalidate: Effect.Effect<void> = SynchronizedRef.update(cellRef, (cell) => {
-        if (cell.creds === null) return cell
+        if (cell._tag === "Empty") return cell
         if (cell._tag === "PendingPersist") {
           return pendingPersistCell(cell.creds, cell.at, true)
         }
@@ -373,7 +369,7 @@ const seedCellFromAuthInfo = (authInfo: ProviderAuthInfo): CredentialCacheCell =
       access,
       refresh,
       expires,
-      ...(authInfo.accountId !== undefined ? { accountId: authInfo.accountId } : {}),
+      accountId: Option.fromNullishOr(authInfo.accountId),
     },
     0,
     false,

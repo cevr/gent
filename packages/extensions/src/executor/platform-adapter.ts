@@ -4,7 +4,12 @@ import type { PublicExtensionSetupContext } from "@gent/core/extensions/api"
 type PublicHost = PublicExtensionSetupContext["host"]
 type PublicProcess = PublicExtensionSetupContext["Process"]
 
-export interface ExecutorPlatformShape {
+const executorBinaryName = (platform: string): string => {
+  if (platform === "win32") return "executor.exe"
+  return "executor"
+}
+
+export interface ExecutorPlatformApi {
   readonly execPath: string
   readonly pathListSeparator: string
   readonly binaryName: string
@@ -15,7 +20,7 @@ export interface ExecutorPlatformShape {
   readonly runProcess: PublicProcess["runProcess"]
 }
 
-export class ExecutorPlatform extends Context.Service<ExecutorPlatform, ExecutorPlatformShape>()(
+export class ExecutorPlatform extends Context.Service<ExecutorPlatform, ExecutorPlatformApi>()(
   "@gent/extensions/src/executor/platform-adapter/ExecutorPlatform",
 ) {
   static Live = (input: { readonly host: PublicHost; readonly Process: PublicProcess }) =>
@@ -24,7 +29,7 @@ export class ExecutorPlatform extends Context.Service<ExecutorPlatform, Executor
       ExecutorPlatform.of({
         execPath: input.host.execPath,
         pathListSeparator: input.host.pathListSeparator,
-        binaryName: input.host.osInfo.platform === "win32" ? "executor.exe" : "executor",
+        binaryName: executorBinaryName(input.host.osInfo.platform),
         commandCandidates: input.Process.commandCandidates,
         isPortFree: input.Process.isPortFree,
         isPidAlive: input.Process.isPidAlive,
@@ -44,7 +49,7 @@ export class ExecutorPlatform extends Context.Service<ExecutorPlatform, Executor
       ExecutorPlatform.of({
         execPath: input.execPath,
         pathListSeparator: input.pathListSeparator,
-        binaryName: input.platform === "win32" ? "executor.exe" : "executor",
+        binaryName: executorBinaryName(input.platform),
         commandCandidates: input.Process.commandCandidates,
         isPortFree: input.Process.isPortFree,
         isPidAlive: input.Process.isPidAlive,

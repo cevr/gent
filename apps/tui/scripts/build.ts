@@ -1,6 +1,7 @@
 import { mkdirSync, lstatSync, unlinkSync, symlinkSync } from "fs"
 import { dirname, join } from "path"
 import { fileURLToPath } from "url"
+import { randomUUID } from "node:crypto"
 import solidTransformPlugin from "@opentui/solid/bun-plugin"
 import * as os from "node:os"
 
@@ -20,6 +21,9 @@ const buildResult = await Bun.build({
   target: "bun",
   plugins: [solidTransformPlugin],
   minify: false,
+  define: {
+    __GENT_BUILTIN_ARTIFACT_ID__: JSON.stringify(`build:${randomUUID()}`),
+  },
   compile: {
     target: "bun-darwin-arm64",
     outfile: join(binDir, "gent"),

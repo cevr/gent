@@ -18,7 +18,7 @@
 
 import { Show, type JSX } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 
 // ── Root ──────────────────────────────────────────────────────────
@@ -125,7 +125,7 @@ function ChromePanelSection(props: ChromePanelSectionProps) {
 // ── Error ─────────────────────────────────────────────────────────
 
 export interface ChromePanelErrorProps {
-  error?: string | null
+  error?: string
 }
 
 function ChromePanelError(props: ChromePanelErrorProps) {
@@ -143,7 +143,7 @@ function ChromePanelError(props: ChromePanelErrorProps) {
 // ── Success ───────────────────────────────────────────────────────
 
 export interface ChromePanelSuccessProps {
-  message?: string | null
+  message?: string
 }
 
 function ChromePanelSuccess(props: ChromePanelSuccessProps) {

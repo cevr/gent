@@ -1,4 +1,6 @@
-import { createContext, useContext, createSignal, type Accessor, type JSX } from "solid-js"
+import { createContext, createSignal, type Accessor, type JSX } from "solid-js"
+import { Option } from "effect"
+import { useRequiredContext } from "../utils/solid-context"
 import type { Command } from "./types"
 import { parseKeybind, matchKeybind } from "./types"
 
@@ -20,9 +22,7 @@ interface CommandContextValue {
 const CommandContext = createContext<CommandContextValue>()
 
 export function useCommand(): CommandContextValue {
-  const ctx = useContext(CommandContext)
-  if (ctx === undefined) throw new Error("useCommand must be used within CommandProvider")
-  return ctx
+  return useRequiredContext(CommandContext, "useCommand must be used within CommandProvider")
 }
 
 interface CommandProviderProps {
@@ -74,9 +74,8 @@ export function CommandProvider(props: CommandProviderProps) {
     if (paletteOpen()) return false
 
     for (const cmd of commands()) {
-      if (cmd.keybind === undefined) continue
-      const kb = parseKeybind(cmd.keybind)
-      if (kb !== null && matchKeybind(kb, event)) {
+      const kb = Option.flatMap(Option.fromNullishOr(cmd.keybind), parseKeybind)
+      if (Option.isSome(kb) && matchKeybind(kb.value, event)) {
         cmd.onSelect()
         return true
       }

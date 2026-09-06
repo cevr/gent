@@ -4,7 +4,7 @@
  * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
-import { Clock, Context, Effect, Layer, Schema } from "effect"
+import { Clock, Context, Effect, Layer, Option, Predicate, Schema } from "effect"
 import { Model } from "effect/unstable/schema"
 import {
   EventEnvelope,
@@ -17,10 +17,10 @@ import {
 import { BranchId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 import { SqlClient, SqlModel } from "effect/unstable/sql"
-import { decodeEvent, decodeEventRow, encodeEvent } from "./sqlite/rows.js"
+import { decodeEvent, decodeEventRow, encodeEvent, toSqlNull } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
-const LatestEventIdRow = Schema.Struct({ id: Schema.Number })
+const LatestEventIdRow = Schema.Struct({ id: Schema.Finite })
 const decodeLatestEventIdRow = Schema.decodeUnknownEffect(LatestEventIdRow)
 
 const EventJsonRow = Schema.Struct({ id: EventId, event_json: Schema.String })
@@ -28,14 +28,11 @@ const decodeEventJsonRow = Schema.decodeUnknownEffect(EventJsonRow)
 
 type EventDecodeOperation = "listEvents" | "getLatestEvent"
 
-export class EventDecodeError extends Schema.TaggedErrorClass<EventDecodeError>()(
-  "EventDecodeError",
-  {
-    eventId: EventId,
-    operation: Schema.Literals(["listEvents", "getLatestEvent"]),
-    error: Schema.String,
-  },
-) {}
+export class EventDecodeError extends Schema.TaggedError<EventDecodeError>()("EventDecodeError", {
+  eventId: EventId,
+  operation: Schema.Literals(["listEvents", "getLatestEvent"]),
+  error: Schema.String,
+}) {}
 
 export type EventStorageError = StorageError | EventDecodeError
 const isEventDecodeError = Schema.is(EventDecodeError)
@@ -67,12 +64,16 @@ const decodePersistedEvent = Effect.fn("EventStorage.decodePersistedEvent")(func
 })
 
 class EventTable extends Model.Class<EventTable>("EventTable")({
-  id: Model.Generated(EventId),
+  id: Model.Field({
+    select: EventId,
+    update: EventId,
+    json: EventId,
+  }),
   session_id: SessionId,
   branch_id: Schema.NullOr(BranchId),
   event_tag: Schema.String,
   event_json: Schema.String,
-  created_at: Schema.Number,
+  created_at: Schema.Finite,
   trace_id: Schema.NullOr(Schema.String),
 }) {}
 
@@ -89,11 +90,13 @@ export interface EventStorageService {
   readonly getLatestEventId: (params: {
     sessionId: SessionId
     branchId?: BranchId
+    // oxlint-disable-next-line effect/noNullish -- Event history lookup uses undefined when no row exists.
   }) => Effect.Effect<number | undefined, StorageError>
   readonly getLatestEvent: (params: {
     sessionId: SessionId
     branchId: BranchId
     tags: ReadonlyArray<AgentEventTag>
+    // oxlint-disable-next-line effect/noNullish -- Event history lookup uses undefined when no matching event exists.
   }) => Effect.Effect<AgentEvent | undefined, EventStorageError>
 }
 
@@ -110,15 +113,19 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
         idColumn: "id",
       })
       const mapError = (message: string) => (cause: unknown) => new StorageError({ message, cause })
-      const mapEventStorageError = (message: string) => (cause: unknown) =>
-        isEventDecodeError(cause) ? cause : mapError(message)(cause)
+      const mapEventStorageError = (message: string) => (cause: unknown) => {
+        if (isEventDecodeError(cause)) {
+          return cause
+        }
+        return mapError(message)(cause)
+      }
 
       return {
         appendEvent: Effect.fn("EventStorage.appendEvent")(
           function* (event, options) {
             const workspaceId = yield* CurrentWorkspaceId
             const sessionId = getEventSessionId(event)
-            if (sessionId === undefined) {
+            if (Predicate.isUndefined(sessionId)) {
               return yield* new StorageError({ message: "Event missing sessionId" })
             }
             const sessionRows = yield* sql<{ id: SessionId }>`
@@ -136,17 +143,17 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
             const eventJson = yield* encodeEvent(event)
             const row = yield* eventRepository.insert({
               session_id: sessionId,
-              branch_id: branchId ?? null,
+              branch_id: toSqlNull(branchId),
               event_tag: event._tag,
               event_json: eventJson,
               created_at: createdAt,
-              trace_id: traceId ?? null,
+              trace_id: toSqlNull(traceId),
             })
             return EventEnvelope.make({
               id: row.id,
               event,
               createdAt,
-              ...(traceId !== undefined ? { traceId } : {}),
+              traceId,
             })
           },
           Effect.mapError(mapError("Failed to append event")),
@@ -155,23 +162,23 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
           function* ({ sessionId, branchId, afterId }) {
             const workspaceId = yield* CurrentWorkspaceId
             const sinceId = afterId ?? 0
-            const rawRows =
-              branchId !== undefined
-                ? yield* sql`SELECT e.id, e.event_json, e.created_at, e.trace_id
+            const rawRows = yield* Option.match(Option.fromUndefinedOr(branchId), {
+              onSome: (branchId) => sql`SELECT e.id, e.event_json, e.created_at, e.trace_id
                     FROM events e
                     JOIN sessions s ON s.id = e.session_id
                     WHERE e.session_id = ${sessionId}
                       AND s.workspace_id = ${workspaceId}
                       AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
                       AND e.id > ${sinceId}
-                    ORDER BY e.id ASC`
-                : yield* sql`SELECT e.id, e.event_json, e.created_at, e.trace_id
+                    ORDER BY e.id ASC`,
+              onNone: () => sql`SELECT e.id, e.event_json, e.created_at, e.trace_id
                     FROM events e
                     JOIN sessions s ON s.id = e.session_id
                     WHERE e.session_id = ${sessionId}
                       AND s.workspace_id = ${workspaceId}
                       AND e.id > ${sinceId}
-                    ORDER BY e.id ASC`
+                    ORDER BY e.id ASC`,
+            })
             const rows = yield* Effect.forEach(rawRows, (row) => decodeEventRow(row))
             return yield* Effect.forEach(rows, (row) =>
               Effect.gen(function* () {
@@ -180,12 +187,15 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
                   eventJson: row.event_json,
                   operation: "listEvents",
                 })
-                return EventEnvelope.make({
+                const fields = {
                   id: row.id,
                   event: decoded,
                   createdAt: row.created_at,
-                  ...(row.trace_id !== null ? { traceId: row.trace_id } : {}),
-                })
+                }
+                if (!Predicate.isNull(row.trace_id)) {
+                  Object.assign(fields, { traceId: row.trace_id })
+                }
+                return EventEnvelope.make(fields)
               }),
             )
           },
@@ -195,22 +205,23 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
         getLatestEventId: Effect.fn("EventStorage.getLatestEventId")(
           function* ({ sessionId, branchId }) {
             const workspaceId = yield* CurrentWorkspaceId
-            const rawRows =
-              branchId !== undefined
-                ? yield* sql`SELECT e.id
+            const rawRows = yield* Option.match(Option.fromUndefinedOr(branchId), {
+              onSome: (branchId) => sql`SELECT e.id
                     FROM events e
                     JOIN sessions s ON s.id = e.session_id
                     WHERE e.session_id = ${sessionId}
                       AND s.workspace_id = ${workspaceId}
                       AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
-                    ORDER BY e.id DESC LIMIT 1`
-                : yield* sql`SELECT e.id
+                    ORDER BY e.id DESC LIMIT 1`,
+              onNone: () => sql`SELECT e.id
                     FROM events e
                     JOIN sessions s ON s.id = e.session_id
                     WHERE e.session_id = ${sessionId}
                       AND s.workspace_id = ${workspaceId}
-                    ORDER BY e.id DESC LIMIT 1`
-            if (rawRows[0] === undefined) return undefined
+                    ORDER BY e.id DESC LIMIT 1`,
+            })
+            // oxlint-disable-next-line effect/noNullish -- Event history lookup uses undefined when no row exists.
+            if (Predicate.isUndefined(rawRows[0])) return undefined
             const row = yield* decodeLatestEventIdRow(rawRows[0])
             return row.id
           },
@@ -219,6 +230,7 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
 
         getLatestEvent: Effect.fn("EventStorage.getLatestEvent")(
           function* ({ sessionId, branchId, tags }) {
+            // oxlint-disable-next-line effect/noNullish -- Event history lookup uses undefined when no matching tag exists.
             if (tags.length === 0) return undefined
             const workspaceId = yield* CurrentWorkspaceId
             const rawRows = yield* sql`SELECT e.id, e.event_json
@@ -229,7 +241,8 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
                 AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
                 AND e.event_tag IN ${sql.in(tags)}
               ORDER BY e.id DESC LIMIT 1`
-            if (rawRows[0] === undefined) return undefined
+            // oxlint-disable-next-line effect/noNullish -- Event history lookup uses undefined when no row exists.
+            if (Predicate.isUndefined(rawRows[0])) return undefined
             const row = yield* decodeEventJsonRow(rawRows[0])
             return yield* decodePersistedEvent({
               eventId: row.id,

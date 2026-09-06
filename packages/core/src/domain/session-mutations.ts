@@ -54,8 +54,15 @@ export interface SessionMutationsService {
   }) => Effect.Effect<void, SessionMutationError>
   readonly updateReasoningLevel: (input: {
     readonly sessionId: SessionId
+    // oxlint-disable-next-line effect/noNullish -- RPC-facing mutation input preserves an omitted reasoning level.
     readonly reasoningLevel: ReasoningEffort | undefined
-  }) => Effect.Effect<{ reasoningLevel: ReasoningEffort | undefined }, SessionMutationError>
+  }) => Effect.Effect<
+    {
+      // oxlint-disable-next-line effect/noNullish -- RPC-facing mutation output preserves an omitted reasoning level.
+      reasoningLevel: ReasoningEffort | undefined
+    },
+    SessionMutationError
+  >
 }
 
 export class SessionMutations extends Context.Service<SessionMutations, SessionMutationsService>()(

@@ -10,11 +10,11 @@ const resolvePlatform = (platform: string): OsPlatform => {
   return "other"
 }
 
-export interface OsServiceShape {
+export interface OsServiceDefinition {
   readonly platform: OsPlatform
 }
 
-export class OsService extends Context.Service<OsService, OsServiceShape>()(
+export class OsService extends Context.Service<OsService, OsServiceDefinition>()(
   "@gent/tui/src/services/os-service/OsService",
 ) {
   static Live: Layer.Layer<OsService, never, GentPlatform> = Layer.effect(
@@ -22,10 +22,10 @@ export class OsService extends Context.Service<OsService, OsServiceShape>()(
     Effect.gen(function* () {
       const platform = yield* GentPlatform
       const info = yield* platform.osInfo
-      return { platform: resolvePlatform(info.platform) }
+      return OsService.of({ platform: resolvePlatform(info.platform) })
     }),
   )
 
   static Test = (platform: OsPlatform): Layer.Layer<OsService> =>
-    Layer.succeed(OsService, { platform })
+    Layer.succeed(OsService, OsService.of({ platform }))
 }

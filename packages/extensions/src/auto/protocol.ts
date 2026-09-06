@@ -4,15 +4,20 @@ import { AutoRead, AutoWrite } from "./controller.js"
 
 export const AUTO_EXTENSION_ID = ExtensionId.make("@gent/auto")
 
-const capabilityError = (capabilityId: string, cause: unknown) =>
-  new CapabilityError({
+const capabilityError = (capabilityId: string, cause: unknown) => {
+  let reason = String(cause)
+  if (cause instanceof Error) {
+    reason = cause.message
+  }
+  return new CapabilityError({
     extensionId: AUTO_EXTENSION_ID,
     capabilityId,
-    reason: cause instanceof Error ? cause.message : String(cause),
+    reason,
   })
+}
 
 const AutoSnapshotLearning = Schema.Struct({
-  iteration: Schema.Number,
+  iteration: Schema.Finite,
   content: Schema.String,
 })
 
@@ -23,8 +28,8 @@ const AutoSnapshotLearning = Schema.Struct({
 export const AutoSnapshotReply = Schema.Struct({
   active: Schema.Boolean,
   phase: Schema.optional(Schema.Literals(["working", "awaiting-review"])),
-  iteration: Schema.optional(Schema.Number),
-  maxIterations: Schema.optional(Schema.Number),
+  iteration: Schema.optional(Schema.Finite),
+  maxIterations: Schema.optional(Schema.Finite),
   goal: Schema.optional(Schema.String),
   learnings: Schema.optional(Schema.Array(AutoSnapshotLearning)),
   lastSummary: Schema.optional(Schema.String),
@@ -37,7 +42,7 @@ export const AutoRpc = defineRequests(AUTO_EXTENSION_ID, {
     id: "auto.start",
     input: Schema.Struct({
       goal: Schema.String,
-      maxIterations: Schema.optional(Schema.Number),
+      maxIterations: Schema.optional(Schema.Finite),
     }),
     output: Schema.Void,
     execute: (input) =>
@@ -63,14 +68,14 @@ export const AutoRpc = defineRequests(AUTO_EXTENSION_ID, {
     execute: () =>
       Effect.gen(function* () {
         const auto = yield* AutoWrite
-        yield* auto.cancel()
+        yield* auto.cancel
       }).pipe(Effect.mapError((cause) => capabilityError("auto.cancel", cause))),
   }),
   ToggleAuto: request({
     id: "auto.toggle",
     input: Schema.Struct({
       goal: Schema.optional(Schema.String),
-      maxIterations: Schema.optional(Schema.Number),
+      maxIterations: Schema.optional(Schema.Finite),
     }),
     output: Schema.Void,
     execute: (input) =>
@@ -86,7 +91,7 @@ export const AutoRpc = defineRequests(AUTO_EXTENSION_ID, {
     execute: () =>
       Effect.gen(function* () {
         const auto = yield* AutoRead
-        return yield* auto.isActive()
+        return yield* auto.isActive
       }).pipe(Effect.mapError((cause) => capabilityError("auto.is-active", cause))),
   }),
   /** Read the current workflow snapshot. Replaces `getUiSnapshot(@gent/auto)`
@@ -99,7 +104,7 @@ export const AutoRpc = defineRequests(AUTO_EXTENSION_ID, {
     execute: () =>
       Effect.gen(function* () {
         const auto = yield* AutoRead
-        return yield* auto.snapshot()
+        return yield* auto.snapshot
       }).pipe(Effect.mapError((cause) => capabilityError("auto.snapshot", cause))),
   }),
 })

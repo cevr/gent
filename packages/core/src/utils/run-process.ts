@@ -1,10 +1,20 @@
-import { Context, Effect, Layer, Schema, Stream, type Duration } from "effect"
+import {
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Schema,
+  Stream,
+  type Duration,
+  type PlatformError,
+} from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
-export class ProcessError extends Schema.TaggedErrorClass<ProcessError>()("ProcessError", {
+export class ProcessError extends Schema.TaggedError<ProcessError>()("ProcessError", {
   command: Schema.String,
   message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
+  cause: Schema.optional(Schema.Defect()),
   timedOut: Schema.optional(Schema.Boolean),
 }) {}
 
@@ -24,6 +34,7 @@ export interface ProcessRunnerService {
 
 export interface RunProcessOptions {
   readonly cwd?: string
+  // oxlint-disable-next-line effect/noNullish -- Child-process environments use undefined to remove inherited variables.
   readonly env?: Record<string, string | undefined>
   readonly timeout?: Duration.Duration
   readonly stdin?: "pipe" | "ignore" | "inherit"
@@ -45,6 +56,11 @@ const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
   return out
 }
 
+const processErrorMessage = (error: PlatformError.PlatformError): string => {
+  if (Predicate.isError(error)) return error.message
+  return String(error)
+}
+
 export const runProcess = (
   command: string,
   args: ReadonlyArray<string>,
@@ -55,25 +71,41 @@ export const runProcess = (
       const stdoutMode = options.stdout ?? "pipe"
       const stderrMode = options.stderr ?? "pipe"
       const spawn = ChildProcess.make(command, [...args], {
-        ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
-        ...(options.env !== undefined ? { env: options.env } : {}),
-        ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
+        cwd: options.cwd,
+        env: options.env,
+        stdin: options.stdin,
         stdout: stdoutMode,
         stderr: stderrMode,
       })
       const handle = yield* spawn
-      const collectStdout =
-        stdoutMode === "pipe" ? Stream.runCollect(handle.stdout) : Effect.succeed(null)
-      const collectStderr =
-        stderrMode === "pipe" ? Stream.runCollect(handle.stderr) : Effect.succeed(null)
+      let collectStdout: Effect.Effect<
+        Option.Option<ReadonlyArray<Uint8Array>>,
+        PlatformError.PlatformError
+      > = Effect.succeedNone
+      if (stdoutMode === "pipe") {
+        collectStdout = Stream.runCollect(handle.stdout).pipe(Effect.asSome)
+      }
+      let collectStderr: Effect.Effect<
+        Option.Option<ReadonlyArray<Uint8Array>>,
+        PlatformError.PlatformError
+      > = Effect.succeedNone
+      if (stderrMode === "pipe") {
+        collectStderr = Stream.runCollect(handle.stderr).pipe(Effect.asSome)
+      }
       const [exitCode, stdoutChunks, stderrChunks] = yield* Effect.all(
         [handle.exitCode, collectStdout, collectStderr],
         { concurrency: "unbounded" },
       )
       return {
         exitCode: Number(exitCode),
-        stdout: stdoutChunks === null ? "" : decodeUtf8(stdoutChunks),
-        stderr: stderrChunks === null ? "" : decodeUtf8(stderrChunks),
+        stdout: Option.match(stdoutChunks, {
+          onNone: () => "",
+          onSome: decodeUtf8,
+        }),
+        stderr: Option.match(stderrChunks, {
+          onNone: () => "",
+          onSome: decodeUtf8,
+        }),
       } satisfies ProcessResult
     }),
   ).pipe(
@@ -81,27 +113,31 @@ export const runProcess = (
       (e) =>
         new ProcessError({
           command,
-          message: `${command} failed: ${e instanceof Error ? e.message : String(e)}`,
+          message: `${command} failed: ${processErrorMessage(e)}`,
           cause: e,
         }),
     ),
   )
 
-  return options.timeout !== undefined
-    ? program.pipe(
-        Effect.timeoutOrElse({
-          duration: options.timeout,
-          orElse: () =>
-            Effect.fail(
-              new ProcessError({
-                command,
-                message: `${command} timed out`,
-                timedOut: true,
-              }),
-            ),
-        }),
-      )
-    : program
+  return Option.fromUndefinedOr(options.timeout).pipe(
+    Option.match({
+      onNone: () => program,
+      onSome: (timeout) =>
+        program.pipe(
+          Effect.timeoutOrElse({
+            duration: timeout,
+            orElse: () =>
+              Effect.fail(
+                new ProcessError({
+                  command,
+                  message: `${command} timed out`,
+                  timedOut: true,
+                }),
+              ),
+          }),
+        ),
+    }),
+  )
 }
 
 export const makeProcessRunner: Effect.Effect<

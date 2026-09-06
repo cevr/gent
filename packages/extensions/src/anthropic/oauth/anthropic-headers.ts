@@ -1,3 +1,4 @@
+import { Option, Schema } from "effect"
 import { getModelBetas as deriveModelBetas, MODEL_CONFIG, getCcVersion } from "../model-config.js"
 import type { AnthropicKeychainEnv } from "../platform-adapter.js"
 
@@ -23,7 +24,7 @@ export const isLongContextError = (responseBody: string): boolean =>
  */
 export const getLongContextBetasForWith = (
   modelId: string,
-  currentBetaFlags: string | undefined,
+  currentBetaFlags: Parameters<typeof deriveModelBetas>[1],
 ): ReadonlyArray<string> => {
   const modelBetas = new Set(deriveModelBetas(modelId, currentBetaFlags))
   return LONG_CONTEXT_BETAS.filter((beta) => modelBetas.has(beta))
@@ -31,8 +32,8 @@ export const getLongContextBetasForWith = (
 
 export const getModelBetas = (
   modelId: string,
-  betaFlags: string | undefined,
-  excluded?: Set<string>,
+  betaFlags: Parameters<typeof deriveModelBetas>[1],
+  excluded: Option.Option<ReadonlySet<string>> = Option.none(),
 ): ReadonlyArray<string> => deriveModelBetas(modelId, betaFlags, excluded)
 
 export const SYSTEM_IDENTITY_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
@@ -51,9 +52,7 @@ export const getUserAgent = (env: AnthropicKeychainEnv): string =>
  * The actual header text is built in `signing.ts` per request because
  * both hashes depend on the live first-user-message text.
  */
-export const getBillingHeaderInputs = (
-  env: AnthropicKeychainEnv,
-): { version: string; entrypoint: string } => ({
+export const getBillingHeaderInputs = (env: AnthropicKeychainEnv) => ({
   version: getCliVersion(env),
   entrypoint: env.entrypoint ?? "cli",
 })
@@ -65,16 +64,13 @@ export const getBillingHeaderInputs = (
  * body / Uint8Array body) and call this helper to derive the model id used for
  * header construction.
  */
-export const parseModelIdFromBody = (bodyText: string | undefined): string => {
-  if (bodyText === undefined || bodyText === "") return "unknown"
-  try {
-    const body: unknown = JSON.parse(bodyText)
-    if (typeof body === "object" && body !== null && "model" in body) {
-      const m = (body as Record<string, unknown>)["model"]
-      if (typeof m === "string") return m
-    }
-  } catch {
-    // ignore — modelId stays "unknown"
-  }
-  return "unknown"
-}
+const ModelRequestBody = Schema.Struct({ model: Schema.String })
+const decodeModelRequestBody = Schema.decodeUnknownOption(Schema.fromJsonString(ModelRequestBody))
+
+export const parseModelIdFromBody = (bodyText: Option.Option<string>): string =>
+  bodyText.pipe(
+    Option.filter((text) => text.length > 0),
+    Option.flatMap(decodeModelRequestBody),
+    Option.map((body) => body.model),
+    Option.getOrElse(() => "unknown"),
+  )

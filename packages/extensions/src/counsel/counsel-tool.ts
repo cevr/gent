@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import {
   AgentDefinition,
   AgentName,
@@ -54,11 +54,16 @@ export const CounselResult = Schema.Struct({
   response: Schema.optional(Schema.String),
 })
 
-const buildCounselPrompt = (prompt: string, context?: string) =>
-  [
-    prompt,
-    ...(context !== undefined && context.trim() !== "" ? ["", "## Context", context] : []),
-  ].join("\n")
+const buildCounselPrompt = (prompt: string, context?: string) => {
+  const parts = [prompt]
+  const contextOption = Option.fromNullishOr(context).pipe(
+    Option.filter((value) => value.trim() !== ""),
+  )
+  if (Option.isSome(contextOption)) {
+    parts.push("", "## Context", contextOption.value)
+  }
+  return parts.join("\n")
+}
 
 export const CounselTool = tool({
   id: "counsel",
@@ -77,11 +82,19 @@ export const CounselTool = tool({
     const ctx = yield* ExtensionContext
     const mode = params.mode ?? "standard"
     const agent = ctx.Agent
-    const agents = yield* agent.listAgents()
+    const agents = yield* agent.listAgents
     const [, modelB] = yield* resolveDualModelPair(agents)
 
     const isDeep = mode === "deep"
     const prompt = buildCounselPrompt(params.prompt, params.context)
+    let reasoningEffort: "high" | "medium" = "medium"
+    let systemPromptAddendum = COUNSEL_STANDARD_PROMPT
+    let allowedTools = ["grep", "glob", "read", "memory_search"]
+    if (isDeep) {
+      reasoningEffort = "high"
+      systemPromptAddendum = COUNSEL_DEEP_PROMPT
+      allowedTools = ["grep", "glob", "read", "memory_search", "websearch", "webfetch"]
+    }
 
     const result = yield* agent.run({
       agent: counselAgent,
@@ -91,20 +104,9 @@ export const CounselTool = tool({
         parentToolCallId: ctx.toolCallId,
         overrides: {
           modelId: modelB,
-          reasoningEffort: isDeep ? "high" : "medium",
-          systemPromptAddendum: isDeep ? COUNSEL_DEEP_PROMPT : COUNSEL_STANDARD_PROMPT,
-          ...(isDeep
-            ? {
-                allowedTools: [
-                  "grep",
-                  "glob",
-                  "read",
-                  "memory_search",
-                  "websearch",
-                  "webfetch",
-                ] as const,
-              }
-            : { allowedTools: ["grep", "glob", "read", "memory_search"] as const }),
+          reasoningEffort,
+          systemPromptAddendum,
+          allowedTools,
         },
       }),
     })
@@ -134,12 +136,14 @@ export const CounselExtension = defineExtension({
       execute: (input: string) =>
         Effect.gen(function* () {
           const ctx = yield* ExtensionContext
+          let content =
+            "Use the counsel tool in standard mode to get a second opinion on the current approach."
+          if (input.trim().length > 0) {
+            content = `Use the counsel tool: ${input.trim()}`
+          }
           yield* ctx.Session.queueFollowUp({
             sourceId: "counsel-command",
-            content:
-              input.trim().length > 0
-                ? `Use the counsel tool: ${input.trim()}`
-                : "Use the counsel tool in standard mode to get a second opinion on the current approach.",
+            content,
           })
         }).pipe(
           Effect.mapError(

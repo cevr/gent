@@ -7,6 +7,7 @@
 
 import { createSignal, Show, For, type JSX } from "solid-js"
 import { SyntaxStyle } from "@opentui/core"
+import { Option } from "effect"
 import type { QuestionOption } from "@gent/core-internal/domain/event.js"
 import { useTheme } from "../../theme/index"
 import { useScopedKeyboard } from "../../keyboard/context"
@@ -31,10 +32,31 @@ export function OptionList(props: OptionListProps): JSX.Element {
   const [freeformText, setFreeformText] = createSignal("")
   const [focusIndex, setFocusIndex] = createSignal(0)
 
-  const options = () => props.options ?? []
+  const options = () => Option.getOrElse(Option.fromNullishOr(props.options), () => [])
   const hasOptions = () => options().length > 0
   const isMultiple = () => props.multiple === true
   const focusableCount = () => options().length + 1
+
+  const toggleFocusedOption = (): boolean => {
+    const option = Option.fromNullishOr(options()[focusIndex()])
+    if (Option.isNone(option)) return true
+    const label = option.value.label
+
+    if (isMultiple()) {
+      setSelected((previous) => {
+        const next = new Set(previous)
+        if (next.has(label)) {
+          next.delete(label)
+        } else {
+          next.add(label)
+        }
+        return next
+      })
+    } else {
+      setSelected(new Set([label]))
+    }
+    return true
+  }
 
   useScopedKeyboard((e) => {
     if (e.name === "escape") {
@@ -42,41 +64,24 @@ export function OptionList(props: OptionListProps): JSX.Element {
       return true
     }
     if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
-      setFocusIndex((i) => (i - 1 + focusableCount()) % focusableCount())
+      setFocusIndex((index) => (index - 1 + focusableCount()) % focusableCount())
       return true
     }
     if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
-      setFocusIndex((i) => (i + 1) % focusableCount())
+      setFocusIndex((index) => (index + 1) % focusableCount())
       return true
     }
 
     if (e.name === "space" && focusIndex() < options().length) {
-      const opt = options()[focusIndex()]
-      if (opt === undefined) return true
-      const label = opt.label
-
-      if (isMultiple()) {
-        setSelected((prev) => {
-          const next = new Set(prev)
-          if (next.has(label)) {
-            next.delete(label)
-          } else {
-            next.add(label)
-          }
-          return next
-        })
-      } else {
-        setSelected(new Set([label]))
-      }
-      return true
+      return toggleFocusedOption()
     }
 
     if (e.name === "return") {
       // Single-select: Enter on a focused option selects + submits it
       if (!isMultiple() && focusIndex() < options().length) {
-        const opt = options()[focusIndex()]
-        if (opt !== undefined && selected().size === 0) {
-          props.onSubmit([opt.label])
+        const option = Option.fromNullishOr(options()[focusIndex()])
+        if (Option.isSome(option) && selected().size === 0) {
+          props.onSubmit([option.value.label])
           return true
         }
       }
@@ -93,9 +98,9 @@ export function OptionList(props: OptionListProps): JSX.Element {
       selections.push(freeform)
     }
     if (selections.length === 0 && focusIndex() < options().length) {
-      const opt = options()[focusIndex()]
-      if (opt !== undefined) {
-        selections.push(opt.label)
+      const option = Option.fromNullishOr(options()[focusIndex()])
+      if (Option.isSome(option)) {
+        selections.push(option.value.label)
       }
     }
     if (selections.length === 0) {
@@ -109,25 +114,50 @@ export function OptionList(props: OptionListProps): JSX.Element {
   const isFreeformFocused = () => focusIndex() === options().length
   const optionMarker = (label: string): string => {
     if (isMultiple()) {
-      return isSelected(label) ? "[x] " : "[ ] "
+      if (isSelected(label)) return "[x] "
+      return "[ ] "
     }
-    return isSelected(label) ? "(+) " : "( ) "
+    if (isSelected(label)) return "(+) "
+    return "( ) "
+  }
+  const optionColor = (index: number) => {
+    if (isFocused(index)) return theme.primary
+    return theme.text
+  }
+  const optionPrefix = (index: number) => {
+    if (isFocused(index)) return "> "
+    return "  "
+  }
+  const freeformColor = () => {
+    if (isFreeformFocused()) return theme.primary
+    return theme.textMuted
+  }
+  const freeformPrefix = () => {
+    if (isFreeformFocused()) return "> "
+    return "  "
+  }
+  const footer = () => {
+    if (isMultiple()) return "up/down navigate - space select - enter submit - esc cancel"
+    return "up/down navigate - space/enter select - esc cancel"
   }
 
   return (
     <box flexDirection="column" paddingLeft={1} paddingTop={1} paddingBottom={1}>
-      <Show when={props.header !== undefined && props.header.length > 0}>
+      <Show when={Option.exists(Option.fromNullishOr(props.header), (header) => header.length > 0)}>
         <text style={{ fg: theme.textMuted }}>
           <b>
             {props.header}
-            {props.progress !== undefined ? ` ${props.progress}` : ""}
+            {Option.match(Option.fromNullishOr(props.progress), {
+              onNone: () => "",
+              onSome: (progress) => ` ${progress}`,
+            })}
           </b>
         </text>
       </Show>
 
       <text style={{ fg: theme.text }}>{props.question}</text>
 
-      <Show when={props.markdown} keyed>
+      <Show when={Option.getOrUndefined(Option.fromNullishOr(props.markdown))} keyed>
         {(markdown) => (
           <box marginTop={1} paddingRight={1}>
             <markdown syntaxStyle={markdownSyntaxStyle} content={markdown} />
@@ -140,12 +170,17 @@ export function OptionList(props: OptionListProps): JSX.Element {
           <For each={options()}>
             {(opt, idx) => (
               <box flexDirection="row">
-                <text style={{ fg: isFocused(idx()) ? theme.primary : theme.text }}>
-                  {isFocused(idx()) ? "> " : "  "}
+                <text style={{ fg: optionColor(idx()) }}>
+                  {optionPrefix(idx())}
                   {optionMarker(opt.label)}
                   {opt.label}
                 </text>
-                <Show when={opt.description !== undefined && opt.description.length > 0}>
+                <Show
+                  when={Option.exists(
+                    Option.fromNullishOr(opt.description),
+                    (description) => description.length > 0,
+                  )}
+                >
                   <text style={{ fg: theme.textMuted }}> - {opt.description}</text>
                 </Show>
               </box>
@@ -155,9 +190,7 @@ export function OptionList(props: OptionListProps): JSX.Element {
       </Show>
 
       <box flexDirection="row" marginTop={1}>
-        <text style={{ fg: isFreeformFocused() ? theme.primary : theme.textMuted }}>
-          {isFreeformFocused() ? "> " : "  "}Other:{" "}
-        </text>
+        <text style={{ fg: freeformColor() }}>{freeformPrefix()}Other: </text>
         <box flexGrow={1}>
           <input
             focused={isFreeformFocused()}
@@ -169,11 +202,7 @@ export function OptionList(props: OptionListProps): JSX.Element {
         </box>
       </box>
 
-      <text style={{ fg: theme.textMuted, marginTop: 1 }}>
-        {isMultiple()
-          ? "up/down navigate - space select - enter submit - esc cancel"
-          : "up/down navigate - space/enter select - esc cancel"}
-      </text>
+      <text style={{ fg: theme.textMuted, marginTop: 1 }}>{footer()}</text>
     </box>
   )
 }

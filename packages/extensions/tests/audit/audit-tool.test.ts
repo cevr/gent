@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
 import { AuditTool } from "../../src/audit/audit-tool.js"
 import {
@@ -7,6 +7,7 @@ import {
   AgentRunResult,
   SessionId,
   type ExtensionContextService,
+  type RunSpec,
 } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
 import {
@@ -42,7 +43,7 @@ const makeCtx = (overrides: {
     agentName: AgentName.make("cowork"),
     Agent: {
       run: overrides.agentRun,
-      listAgents: () => Effect.succeed(AllBuiltinAgents),
+      listAgents: Effect.succeed(AllBuiltinAgents),
     },
     Interaction: {
       approve: dieStub("interaction.approve"),
@@ -58,6 +59,8 @@ const runtimeEnvironmentLayer = RuntimeEnvironment.Test({
   home: "/tmp/test-home",
   platform: "test",
 })
+
+type RunOverrides = NonNullable<RunSpec["overrides"]>
 
 describe("Audit Tool", () => {
   it.live(
@@ -212,13 +215,14 @@ describe("Audit Tool", () => {
   })
 
   it.live("auditor subagents run read-only with bash denied", () => {
-    const auditOverrides: Array<Record<string, unknown> | undefined> = []
+    const auditOverrides: Array<RunOverrides> = []
 
     const ctx = makeCtx({
       agentRun: (params) =>
         Effect.sync(() => {
           if (params.prompt.includes("Audit the code for this concern:")) {
-            auditOverrides.push(params.runSpec?.overrides as Record<string, unknown> | undefined)
+            const overrides = Option.fromNullishOr(params.runSpec?.overrides)
+            if (Option.isSome(overrides)) auditOverrides.push(overrides.value)
           }
           if (params.prompt.includes("Identify audit concerns")) {
             return makeSuccess("1. types: Check types")
@@ -238,8 +242,8 @@ describe("Audit Tool", () => {
         Effect.map(() => {
           expect(auditOverrides.length).toBeGreaterThan(0)
           for (const overrides of auditOverrides) {
-            expect(overrides?.["allowedTools"]).toEqual(["grep", "glob", "read", "memory_search"])
-            expect(overrides?.["deniedTools"]).toEqual(["bash"])
+            expect(overrides["allowedTools"]).toEqual(["grep", "glob", "read", "memory_search"])
+            expect(overrides["deniedTools"]).toEqual(["bash"])
           }
         }),
         Effect.provide(runtimeEnvironmentLayer),

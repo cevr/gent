@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import {
   AgentName,
   DEFAULT_AGENT_NAME,
@@ -43,12 +43,15 @@ const buildPlanPrompt = (
   evaluatorFeedback?: string,
 ) => {
   const parts = [`Design an implementation plan for:\n${prompt}`]
-  if (context !== undefined) parts.push(`## Additional Context\n${context}`)
-  if (files !== undefined && files.length > 0) {
-    parts.push(`## Key Files\n${files.map((file) => `- ${file}`).join("\n")}`)
+  const contextOption = Option.fromNullishOr(context)
+  if (Option.isSome(contextOption)) parts.push(`## Additional Context\n${contextOption.value}`)
+  const filesOption = Option.fromNullishOr(files)
+  if (Option.isSome(filesOption) && filesOption.value.length > 0) {
+    parts.push(`## Key Files\n${filesOption.value.map((file) => `- ${file}`).join("\n")}`)
   }
-  if (evaluatorFeedback !== undefined && evaluatorFeedback !== "") {
-    parts.push(`## Remaining Issues From Prior Iteration\n${evaluatorFeedback}`)
+  const feedbackOption = Option.fromNullishOr(evaluatorFeedback)
+  if (Option.isSome(feedbackOption) && feedbackOption.value !== "") {
+    parts.push(`## Remaining Issues From Prior Iteration\n${feedbackOption.value}`)
   }
   parts.push(
     [
@@ -88,11 +91,23 @@ const buildIncorporatePrompt = (original: string, review: string) =>
     "Output only the revised plan.",
   ].join("\n")
 
-const buildSynthesizePrompt = (planA: string, planB: string, mode: "plan-only" | "fix") =>
-  [
-    mode === "fix"
-      ? "Synthesize these two revised implementation plans into one execution plan organized into batches."
-      : "Synthesize these two revised implementation plans into one implementation plan.",
+const buildSynthesizePrompt = (planA: string, planB: string, mode: "plan-only" | "fix") => {
+  let introduction =
+    "Synthesize these two revised implementation plans into one implementation plan."
+  let instructions = [
+    "Take the strongest parts from each. Resolve conflicts. Keep it execution-ready.",
+  ]
+  if (mode === "fix") {
+    introduction =
+      "Synthesize these two revised implementation plans into one execution plan organized into batches."
+    instructions = [
+      "Organize the output into a small number of ordered batches.",
+      "For each batch, include: title, target files, concrete changes, risks, and verification notes.",
+      "Take the strongest parts from each. Resolve conflicts. Keep it execution-ready.",
+    ]
+  }
+  return [
+    introduction,
     "",
     "## Plan A",
     planA,
@@ -101,14 +116,9 @@ const buildSynthesizePrompt = (planA: string, planB: string, mode: "plan-only" |
     planB,
     "",
     "## Instructions",
-    ...(mode === "fix"
-      ? [
-          "Organize the output into a small number of ordered batches.",
-          "For each batch, include: title, target files, concrete changes, risks, and verification notes.",
-          "Take the strongest parts from each. Resolve conflicts. Keep it execution-ready.",
-        ]
-      : ["Take the strongest parts from each. Resolve conflicts. Keep it execution-ready."]),
+    ...instructions,
   ].join("\n")
+}
 
 const buildExecutePrompt = (plan: string) =>
   [
@@ -134,7 +144,7 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
   evaluatorFeedback?: string
 }) {
   const ctx = yield* ExtensionContext
-  const agents = yield* ctx.Agent.listAgents()
+  const agents = yield* ctx.Agent.listAgents
   const [modelA, modelB] = yield* resolveDualModelPair(agents)
 
   const runAgent = (prompt: string, modelId: typeof modelA) =>
@@ -155,17 +165,14 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
     params.evaluatorFeedback,
   )
   const [planResultA, planResultB] = yield* Effect.all(
-    [runAgent(planPrompt, modelA), runAgent(planPrompt, modelB)] as const,
+    [runAgent(planPrompt, modelA), runAgent(planPrompt, modelB)],
     { concurrency: 2 },
   )
   const planA = yield* requireText(planResultA, "plan-A")
   const planB = yield* requireText(planResultB, "plan-B")
 
   const [reviewResultOfB, reviewResultOfA] = yield* Effect.all(
-    [
-      runAgent(buildReviewPrompt(planB), modelA),
-      runAgent(buildReviewPrompt(planA), modelB),
-    ] as const,
+    [runAgent(buildReviewPrompt(planB), modelA), runAgent(buildReviewPrompt(planA), modelB)],
     { concurrency: 2 },
   )
   const reviewOfB = yield* requireText(reviewResultOfB, "review-A-to-B")
@@ -175,7 +182,7 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
     [
       runAgent(buildIncorporatePrompt(planA, reviewOfA), modelA),
       runAgent(buildIncorporatePrompt(planB, reviewOfB), modelB),
-    ] as const,
+    ],
     { concurrency: 2 },
   )
   const revisedA = yield* requireText(revisedResultA, "incorporate-A")
@@ -221,10 +228,13 @@ export const PlanTool = tool({
         fileNameSeed: ctx.toolCallId ?? "plan",
       })
 
-      const finalPlan =
-        reviewResult.decision === "edit"
-          ? (reviewResult.content ?? synthesizedPlan)
-          : synthesizedPlan
+      let finalPlan = synthesizedPlan
+      if (reviewResult.decision === "edit") {
+        finalPlan = Option.getOrElse(
+          Option.fromNullishOr(reviewResult.content),
+          () => synthesizedPlan,
+        )
+      }
 
       // Only persist approved or edited plans — rejected plans should not pollute artifacts
       if (reviewResult.decision !== "no") {
@@ -252,7 +262,8 @@ export const PlanTool = tool({
       prompt: buildExecutePrompt(synthesizedPlan),
       runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: ctx.toolCallId }),
     })
-    const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
+    let execOutput = "Execution failed."
+    if (execResult._tag === "success") execOutput = execResult.text
 
     // Persist plan artifact even in fix mode
     yield* saveArtifactBestEffort(ctx.sessionId, ctx.branchId, {

@@ -97,19 +97,14 @@ describe("app bootstrap", () => {
             expect(bootstrap.initialSession).toBeDefined()
             expect(bootstrap.initialRoute._tag).toBe("session")
             // Render with pre-resolved state
-            let ctx:
-              | {
-                  client: ClientContextValue
-                  router: RouterContextValue
-                }
-              | undefined
+            let ctx = Option.none<{ client: ClientContextValue; router: RouterContextValue }>()
             const setup = yield* Effect.promise(() =>
               renderWithProviders(
                 () => (
                   <>
                     <StateProbe
                       onReady={(c) => {
-                        ctx = c
+                        ctx = Option.some(c)
                       }}
                     />
                     <App />
@@ -127,10 +122,10 @@ describe("app bootstrap", () => {
               ),
             )
             yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
-            expect(ctx).toBeDefined()
-            if (ctx === undefined) return
+            expect(Option.isSome(ctx)).toBe(true)
+            if (Option.isNone(ctx)) return
             // Route should already be session — no loading transition needed
-            expect(ctx.router.route()._tag).toBe("session")
+            expect(ctx.value.router.route()._tag).toBe("session")
             // waitForFrame polls until the loading marker clears — no
             // pre-sleep needed.
             const frame = yield* waitForFrame(

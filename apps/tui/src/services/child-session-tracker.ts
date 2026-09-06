@@ -57,11 +57,11 @@ export interface ChildSessionTrackerService {
   /** Start tracking children for a parent session/branch. Subscribes to live events. */
   readonly track: (params: { sessionId: SessionId; branchId?: BranchId }) => Effect.Effect<void>
   /** Stop tracking, interrupt all child fibers */
-  readonly stop: () => Effect.Effect<void>
+  readonly stop: Effect.Effect<void>
   /** Get children for a specific tool call */
   readonly getChildren: (toolCallId: ToolCallId) => Effect.Effect<ReadonlyArray<ChildSessionEntry>>
   /** Get all tracked children */
-  readonly getAll: () => Effect.Effect<ReadonlyMap<string, ChildSessionEntry>>
+  readonly getAll: Effect.Effect<ReadonlyMap<string, ChildSessionEntry>>
   /** Current children plus subsequent state snapshots for reactive consumers */
   readonly changes: Stream.Stream<ReadonlyMap<string, ChildSessionEntry>>
 }
@@ -82,11 +82,11 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
         entries,
         (
           current,
-        ): [ChildSessionEntry | undefined, Option.Option<Map<string, ChildSessionEntry>>] => {
-          const entry = current.get(childSessionId)
-          if (entry === undefined) return [undefined, Option.none()]
-          const updated = f(entry)
-          return [updated, Option.some(new Map(current).set(childSessionId, updated))]
+        ): [Option.Option<ChildSessionEntry>, Option.Option<Map<string, ChildSessionEntry>>] => {
+          const entry = Option.fromNullishOr(current.get(childSessionId))
+          if (Option.isNone(entry)) return [Option.none(), Option.none()]
+          const updated = f(entry.value)
+          return [Option.some(updated), Option.some(new Map(current).set(childSessionId, updated))]
         },
       )
 
@@ -106,29 +106,31 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
                 },
               ],
             }))
-            if (updated === undefined) return
+            if (Option.isNone(updated)) return
             break
           }
 
           case "ToolCallSucceeded": {
             const updated = yield* updateEntry(childSessionId, (entry) => ({
               ...entry,
-              toolCalls: entry.toolCalls.map((tc) =>
-                tc.toolCallId === event.toolCallId ? { ...tc, status: "completed" as const } : tc,
-              ),
+              toolCalls: entry.toolCalls.map((tc): ChildToolCall => {
+                if (tc.toolCallId === event.toolCallId) return { ...tc, status: "completed" }
+                return tc
+              }),
             }))
-            if (updated === undefined) return
+            if (Option.isNone(updated)) return
             break
           }
 
           case "ToolCallFailed": {
             const updated = yield* updateEntry(childSessionId, (entry) => ({
               ...entry,
-              toolCalls: entry.toolCalls.map((tc) =>
-                tc.toolCallId === event.toolCallId ? { ...tc, status: "error" as const } : tc,
-              ),
+              toolCalls: entry.toolCalls.map((tc): ChildToolCall => {
+                if (tc.toolCallId === event.toolCallId) return { ...tc, status: "error" }
+                return tc
+              }),
             }))
-            if (updated === undefined) return
+            if (Option.isNone(updated)) return
             break
           }
 
@@ -137,13 +139,15 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
               const combined = entry.streamText + event.chunk
               return {
                 ...entry,
-                streamText:
-                  combined.length > STREAM_TEXT_MAX_LENGTH
-                    ? combined.slice(combined.length - STREAM_TEXT_MAX_LENGTH)
-                    : combined,
+                streamText: (() => {
+                  if (combined.length > STREAM_TEXT_MAX_LENGTH) {
+                    return combined.slice(combined.length - STREAM_TEXT_MAX_LENGTH)
+                  }
+                  return combined
+                })(),
               }
             })
-            if (updated === undefined) return
+            if (Option.isNone(updated)) return
             break
           }
         }
@@ -164,16 +168,16 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
       Effect.gen(function* () {
         const fiber = yield* Ref.modify(
           childFibers,
-          (fibers): [Fiber.Fiber<void> | undefined, Map<string, Fiber.Fiber<void>>] => {
-            const fiber = fibers.get(childSessionId)
-            if (fiber === undefined) return [undefined, fibers]
+          (fibers): [Option.Option<Fiber.Fiber<void>>, Map<string, Fiber.Fiber<void>>] => {
+            const fiber = Option.fromNullishOr(fibers.get(childSessionId))
+            if (Option.isNone(fiber)) return [Option.none(), fibers]
             const next = new Map(fibers)
             next.delete(childSessionId)
             return [fiber, next]
           },
         )
-        if (fiber !== undefined) {
-          yield* Fiber.interrupt(fiber).pipe(Effect.catchEager(() => Effect.void))
+        if (Option.isSome(fiber)) {
+          yield* Fiber.interrupt(fiber.value).pipe(Effect.catchEager(() => Effect.void))
         }
       })
 
@@ -181,14 +185,14 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
       Effect.gen(function* () {
         switch (event._tag) {
           case "AgentRunSpawned": {
-            const childId = event.childSessionId as string
-            const toolCallId = event.toolCallId
-            if (toolCallId === undefined) return
+            const childId = event.childSessionId
+            const toolCallId = Option.fromNullishOr(event.toolCallId)
+            if (Option.isNone(toolCallId)) return
 
             const entry: ChildSessionEntry = {
               childSessionId: childId,
-              childBranchId: event.childBranchId as string | undefined,
-              toolCallId,
+              childBranchId: event.childBranchId,
+              toolCallId: toolCallId.value,
               agentName: event.agentName,
               status: "running",
               toolCalls: [],
@@ -210,26 +214,26 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
           }
 
           case "AgentRunSucceeded": {
-            const childId = event.childSessionId as string
-            const updated = yield* updateEntry(childId, (entry) => ({
+            const childId = event.childSessionId
+            const updated = yield* updateEntry(childId, (entry): ChildSessionEntry => ({
               ...entry,
-              status: "completed" as const,
+              status: "completed",
               usage: event.usage,
               preview: event.preview,
               savedPath: event.savedPath,
             }))
-            if (updated === undefined) return
+            if (Option.isNone(updated)) return
             yield* interruptChild(childId)
             break
           }
 
           case "AgentRunFailed": {
-            const childId = event.childSessionId as string
-            const updated = yield* updateEntry(childId, (entry) => ({
+            const childId = event.childSessionId
+            const updated = yield* updateEntry(childId, (entry): ChildSessionEntry => ({
               ...entry,
-              status: "error" as const,
+              status: "error",
             }))
-            if (updated === undefined) return
+            if (Option.isNone(updated)) return
             yield* interruptChild(childId)
             break
           }
@@ -251,11 +255,10 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
           ).pipe(Effect.catchEager(() => Effect.void)),
         ),
 
-      stop: () =>
-        Effect.gen(function* () {
-          yield* FiberSet.clear(fiberSet)
-          yield* SubscriptionRef.set(entries, new Map())
-        }),
+      stop: Effect.gen(function* () {
+        yield* FiberSet.clear(fiberSet)
+        yield* SubscriptionRef.set(entries, new Map())
+      }),
 
       getChildren: (toolCallId) =>
         Effect.gen(function* () {
@@ -267,7 +270,7 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
           return result
         }),
 
-      getAll: () => SubscriptionRef.get(entries),
+      getAll: SubscriptionRef.get(entries),
 
       changes: SubscriptionRef.changes(entries),
     }

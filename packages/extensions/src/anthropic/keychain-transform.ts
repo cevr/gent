@@ -68,8 +68,8 @@ import { Effect, Option, Schedule, Schema } from "effect"
 import { HttpClient, HttpClientRequest, Headers } from "effect/unstable/http"
 import type { HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import type { AnthropicBetaCacheShape } from "./beta-cache.js"
-import type { AnthropicCredentialServiceShape } from "./credential-service.js"
+import type { AnthropicBetaCacheApi } from "./beta-cache.js"
+import type { AnthropicCredentialServiceApi } from "./credential-service.js"
 import {
   getLongContextBetasForWith,
   getModelBetas,
@@ -92,8 +92,8 @@ import type { AnthropicKeychainEnv } from "./platform-adapter.js"
  * Schema would force this module to depend on undocumented internals.
  * The typed accessor `getResponse` re-narrows for the catch-tag.
  */
-class TransientResponseError extends Schema.TaggedErrorClass<TransientResponseError>(
-  "@gent/extensions/anthropic/TransientResponseError",
+class TransientResponseError extends Schema.TaggedError<TransientResponseError>(
+  "@gent/extensions/src/anthropic/keychain-transform/TransientResponseError",
 )("TransientResponseError", {
   response: Schema.Any,
 }) {
@@ -109,8 +109,8 @@ const isTransientStatus = (status: number): boolean => status === 429 || status 
  * accessor pattern as `TransientResponseError` for the same vendor-class
  * Schema reason.
  */
-class LongContextBetaError extends Schema.TaggedErrorClass<LongContextBetaError>(
-  "@gent/extensions/anthropic/LongContextBetaError",
+class LongContextBetaError extends Schema.TaggedError<LongContextBetaError>(
+  "@gent/extensions/src/anthropic/keychain-transform/LongContextBetaError",
 )("LongContextBetaError", {
   response: Schema.Any,
 }) {
@@ -127,8 +127,8 @@ class LongContextBetaError extends Schema.TaggedErrorClass<LongContextBetaError>
  * or forces a refresh. Counsel-friendly typed error so the recovery
  * fires only on this signal, not other unrelated 4xx.
  */
-class Unauthorized401Error extends Schema.TaggedErrorClass<Unauthorized401Error>(
-  "@gent/extensions/anthropic/Unauthorized401Error",
+class Unauthorized401Error extends Schema.TaggedError<Unauthorized401Error>(
+  "@gent/extensions/src/anthropic/keychain-transform/Unauthorized401Error",
 )("Unauthorized401Error", {
   response: Schema.Any,
 }) {
@@ -139,18 +139,17 @@ class Unauthorized401Error extends Schema.TaggedErrorClass<Unauthorized401Error>
 
 /**
  * Pick the next long-context beta to drop given the candidates the
- * model actually emits and the set already excluded. Returns `null`
- * when every candidate has been tried — caller must surface the 400.
+ * model actually emits and the set already excluded.
  */
 const pickNextBetaToExclude = (
   modelId: string,
-  currentBetaFlags: string | undefined,
+  currentBetaFlags: Option.Option<string>,
   excluded: ReadonlySet<string>,
-): string | null => {
+): Option.Option<string> => {
   for (const beta of getLongContextBetasForWith(modelId, currentBetaFlags)) {
-    if (!excluded.has(beta)) return beta
+    if (!excluded.has(beta)) return Option.some(beta)
   }
-  return null
+  return Option.none()
 }
 
 // ── Helpers ──
@@ -176,16 +175,19 @@ const withHeaders = (
 /**
  * Decode the request body to a string for model-id extraction. The
  * Anthropic SDK serializes JSON bodies as Uint8Array; some caller surfaces use
- * Raw strings. Anything else (FormData / Stream / Empty) returns undefined and
+ * Raw strings. Anything else (FormData / Stream / Empty) returns None and
  * the parser short-circuits to "unknown".
  */
-const requestBodyText = (req: HttpClientRequest.HttpClientRequest): string | undefined => {
-  if (req.body._tag === "Uint8Array") return new TextDecoder().decode(req.body.body)
-  if (req.body._tag === "Raw") {
-    const raw: unknown = req.body.body
-    return typeof raw === "string" ? raw : undefined
+const decodeString = Schema.decodeUnknownOption(Schema.String)
+
+const requestBodyText = (req: HttpClientRequest.HttpClientRequest): Option.Option<string> => {
+  if (req.body._tag === "Uint8Array") {
+    return Option.some(new TextDecoder().decode(req.body.body))
   }
-  return undefined
+  if (req.body._tag === "Raw") {
+    return decodeString(req.body.body)
+  }
+  return Option.none()
 }
 
 /**
@@ -204,7 +206,11 @@ const buildOauthHeaders = (
   // etc.) but drop `x-api-key` since OAuth uses Bearer.
   let headers = Headers.remove(req.headers, "x-api-key")
 
-  const modelBetas = getModelBetas(modelId, env.betaFlags, excluded)
+  const modelBetas = getModelBetas(
+    modelId,
+    Option.fromNullishOr(env.betaFlags),
+    Option.fromNullishOr(excluded),
+  )
   const incomingBeta = headers["anthropic-beta"] ?? ""
   const mergedBetas = Array.from(
     new Set([
@@ -247,8 +253,8 @@ const buildOauthHeaders = (
  */
 export const buildKeychainTransformClient =
   (
-    creds: AnthropicCredentialServiceShape,
-    betaCache: AnthropicBetaCacheShape,
+    creds: AnthropicCredentialServiceApi,
+    betaCache: AnthropicBetaCacheApi,
     env: AnthropicKeychainEnv,
   ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
   (client) =>
@@ -277,7 +283,7 @@ export const buildKeychainTransformClient =
           // betaCache. On retry, mapRequestEffect re-runs and reads the
           // updated set — the beta-retry transformResponse below records
           // the rejected beta into the cache before failing to retry.
-          const excluded = yield* betaCache.getExcluded(modelId, betaFlags)
+          const excluded = yield* betaCache.getExcluded(modelId, Option.fromNullishOr(betaFlags))
           const headers = buildOauthHeaders(req, fresh.accessToken, modelId, env, new Set(excluded))
           return withHeaders(req, headers)
         }),
@@ -300,36 +306,41 @@ export const buildKeychainTransformClient =
               HttpClientResponse.HttpClientResponse,
               LongContextBetaError | HttpClientError
             > => {
-              // Only 400 response bodies carry Anthropic's long-context beta
-              // marker. 429s flow through to the transient retry layer
-              // untouched.
-              if (response.status !== 400) {
-                return Effect.succeed(response)
-              }
-              return response.text.pipe(
-                Effect.flatMap((body) => {
-                  if (!isLongContextError(body)) return Effect.succeed(response)
-                  // Body matches: try to record the next beta + retry.
-                  const modelId = parseModelIdFromBody(requestBodyText(response.request))
-                  const betaFlags = env.betaFlags
-                  return betaCache.getExcluded(modelId, betaFlags).pipe(
-                    Effect.flatMap((excluded) => {
-                      const beta = pickNextBetaToExclude(modelId, betaFlags, excluded)
-                      if (beta === null) return Effect.succeed(response)
-                      return betaCache
-                        .recordExcluded(modelId, beta, betaFlags)
-                        .pipe(
-                          Effect.flatMap(() => Effect.fail(new LongContextBetaError({ response }))),
-                        )
+              switch (response.status) {
+                case 400:
+                  return response.text.pipe(
+                    Effect.flatMap((body) => {
+                      if (!isLongContextError(body)) return Effect.succeed(response)
+                      // Body matches: try to record the next beta + retry.
+                      const modelId = parseModelIdFromBody(requestBodyText(response.request))
+                      const betaFlags = env.betaFlags
+                      return betaCache.getExcluded(modelId, Option.fromNullishOr(betaFlags)).pipe(
+                        Effect.flatMap((excluded) => {
+                          const beta = pickNextBetaToExclude(
+                            modelId,
+                            Option.fromNullishOr(betaFlags),
+                            excluded,
+                          )
+                          if (Option.isNone(beta)) return Effect.succeed(response)
+                          return betaCache
+                            .recordExcluded(modelId, beta.value, Option.fromNullishOr(betaFlags))
+                            .pipe(
+                              Effect.flatMap(() =>
+                                Effect.fail(new LongContextBetaError({ response })),
+                              ),
+                            )
+                        }),
+                      )
                     }),
                   )
-                }),
-              )
+                default:
+                  return Effect.succeed(response)
+              }
             },
           ),
           // Budget: at most LONG_CONTEXT_BETAS.length retries — bounded
           // because every retry adds one beta to the cache's excluded
-          // set, and `pickNextBetaToExclude` returns `null` once
+          // set, and `pickNextBetaToExclude` returns `None` once
           // exhausted (which short-circuits to success above without
           // re-failing). The numeric `times` is a belt-and-suspenders
           // bound; the real terminator is the `null` short-circuit.
@@ -355,10 +366,14 @@ export const buildKeychainTransformClient =
           Effect.flatMap(
             (
               response,
-            ): Effect.Effect<HttpClientResponse.HttpClientResponse, TransientResponseError> =>
-              isTransientStatus(response.status)
-                ? Effect.fail(new TransientResponseError({ response }))
-                : Effect.succeed(response),
+            ): Effect.Effect<HttpClientResponse.HttpClientResponse, TransientResponseError> => {
+              switch (isTransientStatus(response.status)) {
+                case true:
+                  return Effect.fail(new TransientResponseError({ response }))
+                default:
+                  return Effect.succeed(response)
+              }
+            },
           ),
           Effect.retry({
             schedule: Schedule.exponential("1 second"),
@@ -384,14 +399,19 @@ export const buildKeychainTransformClient =
           Effect.flatMap(
             (
               response,
-            ): Effect.Effect<HttpClientResponse.HttpClientResponse, Unauthorized401Error> =>
-              response.status === 401
-                ? Effect.fail(new Unauthorized401Error({ response }))
-                : Effect.succeed(response),
+            ): Effect.Effect<HttpClientResponse.HttpClientResponse, Unauthorized401Error> => {
+              switch (response.status) {
+                case 401:
+                  return Effect.fail(new Unauthorized401Error({ response }))
+                default:
+                  return Effect.succeed(response)
+              }
+            },
           ),
-          Effect.tapError((e) =>
-            e._tag === "Unauthorized401Error" ? creds.invalidate : Effect.void,
-          ),
+          Effect.tapError((e) => {
+            if (e._tag === "Unauthorized401Error") return creds.invalidate
+            return Effect.void
+          }),
           Effect.retry({
             while: (e) => e._tag === "Unauthorized401Error",
             times: 1,

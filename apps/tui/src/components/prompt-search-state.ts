@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { matchSorter } from "match-sorter"
 
 export type PromptSearchState =
@@ -20,7 +20,7 @@ export const PromptSearchState = {
     selectedIndex: 0,
     hasInteracted: false,
   }),
-} as const
+}
 
 export const PromptSearchEvent = Schema.TaggedUnion({
   Open: { draftBeforeOpen: Schema.String },
@@ -62,15 +62,17 @@ const clampSelectedIndex = (selectedIndex: number, itemCount: number): number =>
 export const getPromptSearchPreview = (
   state: PromptSearchState,
   entries: readonly string[],
-): string | undefined => {
-  if (state._tag !== "open") return undefined
-  if (state.hasInteracted === false) return state.draftBeforeOpen
+): Option.Option<string> => {
+  if (state._tag !== "open") return Option.none()
+  if (state.hasInteracted === false) return Option.some(state.draftBeforeOpen)
 
   const items = getPromptSearchItems(state, entries)
-  if (items.length === 0) return state.draftBeforeOpen
+  if (items.length === 0) return Option.some(state.draftBeforeOpen)
 
   const index = clampSelectedIndex(state.selectedIndex, items.length)
-  return items[index] ?? state.draftBeforeOpen
+  return Option.fromNullishOr(items[index]).pipe(
+    Option.orElse(() => Option.some(state.draftBeforeOpen)),
+  )
 }
 
 export function transitionPromptSearch(
@@ -78,34 +80,38 @@ export function transitionPromptSearch(
   event: PromptSearchEvent,
   entries: readonly string[],
 ): PromptSearchTransitionResult {
-  switch (event._tag) {
-    case "Open":
-      return {
-        state: PromptSearchState.open(event.draftBeforeOpen),
-        effects: [],
-      }
+  if (event._tag === "Open") {
+    return {
+      state: PromptSearchState.open(event.draftBeforeOpen),
+      effects: [],
+    }
+  }
 
-    case "Accept":
-      if (state._tag !== "open") return { state, effects: [] }
-      return {
-        state: PromptSearchState.closed(),
-        effects: [
-          PromptSearchEffect.cases.Preview.make({
-            text: getPromptSearchPreview(state, entries) ?? state.draftBeforeOpen,
-          }),
-          PromptSearchEffect.cases.Close.make({}),
-        ],
-      }
+  if (event._tag === "Accept") {
+    if (state._tag !== "open") return { state, effects: [] }
+    return {
+      state: PromptSearchState.closed(),
+      effects: [
+        PromptSearchEffect.cases.Preview.make({
+          text: Option.getOrElse(
+            getPromptSearchPreview(state, entries),
+            () => state.draftBeforeOpen,
+          ),
+        }),
+        PromptSearchEffect.cases.Close.make({}),
+      ],
+    }
+  }
 
-    case "Cancel":
-      if (state._tag !== "open") return { state, effects: [] }
-      return {
-        state: PromptSearchState.closed(),
-        effects: [
-          PromptSearchEffect.cases.Preview.make({ text: state.draftBeforeOpen }),
-          PromptSearchEffect.cases.Close.make({}),
-        ],
-      }
+  if (event._tag === "Cancel") {
+    if (state._tag !== "open") return { state, effects: [] }
+    return {
+      state: PromptSearchState.closed(),
+      effects: [
+        PromptSearchEffect.cases.Preview.make({ text: state.draftBeforeOpen }),
+        PromptSearchEffect.cases.Close.make({}),
+      ],
+    }
   }
 
   if (state._tag !== "open") {
@@ -115,9 +121,11 @@ export function transitionPromptSearch(
   const moveSelection = (selectedIndex: number, itemCount: number, direction: -1 | 1) => {
     if (itemCount <= 0) return 0
     if (direction === -1) {
-      return selectedIndex > 0 ? selectedIndex - 1 : itemCount - 1
+      if (selectedIndex > 0) return selectedIndex - 1
+      return itemCount - 1
     }
-    return selectedIndex < itemCount - 1 ? selectedIndex + 1 : 0
+    if (selectedIndex < itemCount - 1) return selectedIndex + 1
+    return 0
   }
 
   let nextState = state
@@ -171,7 +179,7 @@ export function transitionPromptSearch(
     state: nextState,
     effects: [
       PromptSearchEffect.cases.Preview.make({
-        text: getPromptSearchPreview(nextState, entries) ?? "",
+        text: Option.getOrElse(getPromptSearchPreview(nextState, entries), () => ""),
       }),
     ],
   }

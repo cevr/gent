@@ -1,42 +1,20 @@
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
+const decodeJsonObject = Schema.decodeUnknownOption(Schema.JsonObject)
+const decodeString = Schema.decodeUnknownOption(Schema.String)
+export type ToolInput = Parameters<typeof decodeJsonObject>[0]
 
-/** Parse tool output JSON into an unknown record, returning undefined on failure. */
-export const parseToolOutput = (
-  output: string | undefined,
-): Record<string, unknown> | undefined => {
-  if (output === undefined) return undefined
-  try {
-    const parsed: unknown = JSON.parse(output)
-    return isRecord(parsed) ? parsed : undefined
-  } catch {
-    // not JSON
-  }
-  return undefined
-}
+/** Decode tool output JSON against an Effect Schema. */
+export const decodeToolOutputOption = <T>(schema: Schema.Decoder<T, never>, input: ToolInput) =>
+  Schema.decodeUnknownOption(Schema.fromJsonString(schema))(input)
 
-/**
- * Decode tool output JSON against an Effect Schema.
- * Returns the decoded value on success, undefined on parse/decode failure.
- */
-export const decodeToolOutput = <T>(
-  schema: Schema.Decoder<T, never>,
-  output: string | undefined,
-): T | undefined => {
-  if (output === undefined) return undefined
-  try {
-    const parsed: unknown = JSON.parse(output)
-    return Schema.decodeUnknownSync(schema)(parsed) as T
-  } catch {
-    return undefined
-  }
-}
+/** Decode tool output JSON for framework adapters that use `undefined` for absence. */
+export const decodeToolOutput = <T>(schema: Schema.Decoder<T, never>, input: ToolInput) =>
+  Option.getOrUndefined(decodeToolOutputOption(schema, input))
 
-/** Extract a string property from an unknown value, returning fallback on miss. */
-export const getString = (input: unknown, key: string, fallback = ""): string => {
-  if (!isRecord(input)) return fallback
-  const value = input[key]
-  return typeof value === "string" ? value : fallback
-}
+/** Extract a string property from an untrusted tool input. */
+export const getString = (input: ToolInput, key: string, fallback = ""): string =>
+  Option.getOrElse(
+    decodeJsonObject(input).pipe(Option.flatMap((record) => decodeString(record[key]))),
+    () => fallback,
+  )

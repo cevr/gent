@@ -123,7 +123,7 @@ describe("queue seam contract", () => {
             expect(afterDrain.followUp).toEqual([])
 
             // Release the stream so the run can complete and scope cleanup is fast
-            yield* controls.emitAll()
+            yield* controls.emitAll
           }),
         ),
       ),
@@ -203,9 +203,9 @@ describe("queue seam contract", () => {
             // can drain through the run loop. Each subsequent turn re-uses the
             // same gated stream — emitAll covers the chunk count for one turn,
             // so we keep emitting until the full sequence has been processed.
-            yield* controls.emitAll()
-            yield* controls.emitAll()
-            yield* controls.emitAll()
+            yield* controls.emitAll
+            yield* controls.emitAll
+            yield* controls.emitAll
 
             const messages = yield* waitFor(
               client.message

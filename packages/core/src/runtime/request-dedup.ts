@@ -1,4 +1,4 @@
-import { Cache, Duration, Effect, Exit, Ref } from "effect"
+import { Cache, Duration, Effect, Exit, Option, Ref } from "effect"
 
 // Dedup cache: bound success entries by both time and count so a
 // long-running shared server does not accumulate one entry per user
@@ -31,7 +31,7 @@ export interface RequestDeduper<In, A, E> {
 
 export const makeRequestDeduper = <In, A, E>(opts: {
   readonly body: (input: In) => Effect.Effect<A, E>
-  readonly keyOf: (input: In) => string | undefined
+  readonly keyOf: (input: In) => Option.Option<string>
   readonly maxEntries?: number
   readonly successTtl?: Duration.Input
 }): Effect.Effect<RequestDeduper<In, A, E>> =>
@@ -42,34 +42,48 @@ export const makeRequestDeduper = <In, A, E>(opts: {
     // and removes it on exit via `Effect.ensuring`, which keeps `pending`
     // free of stale-body leaks under interruption and same-key races.
     const pending = yield* Ref.make(new Map<string, Effect.Effect<A, E>>())
-    const successTtl = Duration.fromInputUnsafe(opts.successTtl ?? DEDUP_SUCCESS_TTL)
+    const successTtl = Duration.fromInputUnsafe(
+      Option.getOrElse(Option.fromUndefinedOr(opts.successTtl), () => DEDUP_SUCCESS_TTL),
+    )
     const cache = yield* Cache.makeWith<string, A, E>(
       (key) =>
         Effect.gen(function* () {
-          const body = (yield* Ref.get(pending)).get(key)
-          return yield* body ?? Effect.die("makeRequestDeduper: missing pending body")
+          const body = Option.fromUndefinedOr((yield* Ref.get(pending)).get(key))
+          if (Option.isNone(body))
+            return yield* Effect.die("makeRequestDeduper: missing pending body")
+          return yield* body.value
         }),
       {
-        capacity: opts.maxEntries ?? DEDUP_MAX_ENTRIES,
-        timeToLive: (exit) => (Exit.isSuccess(exit) ? successTtl : Duration.zero),
+        capacity: Option.getOrElse(
+          Option.fromUndefinedOr(opts.maxEntries),
+          () => DEDUP_MAX_ENTRIES,
+        ),
+        timeToLive: (exit) => {
+          if (Exit.isSuccess(exit)) {
+            return successTtl
+          }
+          return Duration.zero
+        },
       },
     )
     const invalidateKey = (key: string) => Cache.invalidate(cache, key)
     const invalidate = (input: In) => {
       const key = opts.keyOf(input)
-      return key === undefined ? Effect.void : invalidateKey(key)
+      if (Option.isNone(key)) return Effect.void
+      return invalidateKey(key.value)
     }
     const run = (input: In) => {
       const key = opts.keyOf(input)
-      if (key === undefined) return opts.body(input)
+      if (Option.isNone(key)) return opts.body(input)
+      const keyValue = key.value
       const body = opts.body(input)
       const remove = Ref.update(pending, (m) => {
         // Only delete if we are still the registered body — a later caller
         // may have already overwritten us, in which case our entry is gone
         // (or about to be removed by that caller's `ensuring`).
-        if (m.get(key) !== body) return m
+        if (m.get(keyValue) !== body) return m
         const next = new Map(m)
-        next.delete(key)
+        next.delete(keyValue)
         return next
       })
       return Effect.gen(function* () {
@@ -79,10 +93,10 @@ export const makeRequestDeduper = <In, A, E>(opts: {
         // assumes idempotency, so any caller's body produces the same result.
         yield* Ref.update(pending, (m) => {
           const next = new Map(m)
-          next.set(key, body)
+          next.set(keyValue, body)
           return next
         })
-        return yield* Cache.get(cache, key)
+        return yield* Cache.get(cache, keyValue)
       }).pipe(Effect.ensuring(remove))
     }
     return Object.assign(run, { invalidate, invalidateKey }) satisfies RequestDeduper<In, A, E>

@@ -1,4 +1,17 @@
-import { Clock, Context, DateTime, Effect, Layer, PubSub, Ref, Stream } from "effect"
+import {
+  Predicate,
+  Clock,
+  Context,
+  DateTime,
+  Effect,
+  Layer,
+  Option,
+  PubSub,
+  Random,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
 import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../domain/extension.js"
 import { ExtensionSetupContext, publicSetupContext } from "../domain/extension-setup-context.js"
 import { BranchId, SessionId, type ToolCallId } from "../domain/ids.js"
@@ -15,6 +28,7 @@ import {
 import {
   EventStore,
   EventEnvelope,
+  EventId,
   getEventSessionId,
   matchesEventFilter,
 } from "../domain/event.js"
@@ -38,8 +52,8 @@ export interface CallRecord {
 
 export interface SequenceRecorderService {
   readonly record: (call: Omit<CallRecord, "timestamp">) => Effect.Effect<void>
-  readonly getCalls: () => Effect.Effect<ReadonlyArray<CallRecord>>
-  readonly clear: () => Effect.Effect<void>
+  readonly getCalls: Effect.Effect<ReadonlyArray<CallRecord>>
+  readonly clear: Effect.Effect<void>
 }
 
 export class SequenceRecorder extends Context.Service<SequenceRecorder, SequenceRecorderService>()(
@@ -49,15 +63,15 @@ export class SequenceRecorder extends Context.Service<SequenceRecorder, Sequence
     SequenceRecorder,
     Effect.gen(function* () {
       const ref = yield* Ref.make<CallRecord[]>([])
-      return {
+      return SequenceRecorder.of({
         record: (call) =>
           Effect.gen(function* () {
             const timestamp = yield* Clock.currentTimeMillis
             yield* Ref.update(ref, (calls) => [...calls, { ...call, timestamp }])
           }),
-        getCalls: () => Ref.get(ref),
-        clear: () => Ref.set(ref, []),
-      }
+        getCalls: Ref.get(ref),
+        clear: Ref.set(ref, []),
+      })
     }),
   )
 }
@@ -73,7 +87,7 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
     const getOrCreateSessionPubSub = (sessionId: SessionId) =>
       Effect.gen(function* () {
         const existing = sessions.get(sessionId)
-        if (existing !== undefined) return existing
+        if (!Predicate.isUndefined(existing)) return existing
         const ps = yield* PubSub.unbounded<EventEnvelope>()
         sessions.set(sessionId, ps)
         return ps
@@ -84,8 +98,7 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
         nextId += 1
         const createdAt = yield* Clock.currentTimeMillis
         const envelope = EventEnvelope.make({
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-          id: nextId as EventEnvelope["id"],
+          id: EventId.make(nextId),
           event,
           createdAt,
         })
@@ -101,7 +114,7 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
       deliver: (envelope) =>
         Effect.gen(function* () {
           const sessionId = getEventSessionId(envelope.event)
-          if (sessionId === undefined) return
+          if (Predicate.isUndefined(sessionId)) return
           const ps = yield* getOrCreateSessionPubSub(sessionId)
           yield* PubSub.publish(ps, envelope)
         }),
@@ -137,7 +150,7 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
       removeSession: (sessionId) =>
         Effect.gen(function* () {
           const ps = sessions.get(sessionId)
-          if (ps !== undefined) {
+          if (!Predicate.isUndefined(ps)) {
             sessions.delete(sessionId)
             yield* PubSub.shutdown(ps)
           }
@@ -150,12 +163,27 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
 
 // Sequence Assertions
 
+const CallMatch = Schema.Record(Schema.String, Schema.Unknown)
+type CallMatch = typeof CallMatch.Type
+const encodeCallMatch = Schema.encodeSync(Schema.fromJsonString(CallMatch))
+
+const callMatches = (
+  call: CallRecord,
+  expected: { service: string; method: string; match?: CallMatch },
+) => {
+  if (call.service !== expected.service || call.method !== expected.method) return false
+  if (Predicate.isUndefined(expected.match)) return true
+  if (!Schema.is(CallMatch)(call.args)) return false
+  const args = call.args
+  return Object.entries(expected.match).every(([key, value]) => args[key] === value)
+}
+
 export const assertSequence = (
   actual: ReadonlyArray<CallRecord>,
   expected: ReadonlyArray<{
     service: string
     method: string
-    match?: Record<string, unknown>
+    match?: CallMatch
   }>,
 ) => {
   let actualIdx = 0
@@ -164,32 +192,22 @@ export const assertSequence = (
     let found = false
     while (actualIdx < actual.length) {
       const call = actual[actualIdx]
-      if (call !== undefined && call.service === exp.service && call.method === exp.method) {
-        if (exp.match !== undefined) {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-          const argsObj = call.args as Record<string, unknown> | undefined
-          if (argsObj !== undefined) {
-            const matches = Object.entries(exp.match).every(([k, v]) => argsObj[k] === v)
-            if (matches) {
-              found = true
-              actualIdx++
-              break
-            }
-          }
-        } else {
-          found = true
-          actualIdx++
-          break
-        }
+      if (!Predicate.isUndefined(call) && callMatches(call, exp)) {
+        found = true
+        actualIdx++
+        break
       }
       actualIdx++
     }
 
     if (!found) {
-      throw new Error(
-        `Expected call not found: ${exp.service}.${exp.method}${
-          exp.match !== undefined ? ` with ${JSON.stringify(exp.match)}` : ""
-        }`,
+      const matchDescription = Option.fromUndefinedOr(exp.match).pipe(
+        Option.match({ onNone: () => "", onSome: (match) => ` with ${encodeCallMatch(match)}` }),
+      )
+      return Effect.runSync(
+        Effect.die(
+          new Error(`Expected call not found: ${exp.service}.${exp.method}${matchDescription}`),
+        ),
       )
     }
   }
@@ -227,6 +245,7 @@ export const testSetupCtx = (
     execPath: "/usr/bin/node",
     homeDirectory: overrides?.home ?? "/tmp",
     parentEnv: {},
+    randomId: Random.nextInt.pipe(Effect.map((value) => `test-${value}`)),
     pathListSeparator: ":",
     commandCandidates: (command) => [command],
     isPortFree: () => Effect.succeed(true),
@@ -267,7 +286,7 @@ export const mockTextResponse = (text: string): LanguageModelStreamPart[] => [
 export const mockToolCallResponse = (
   toolCallId: ToolCallId,
   toolName: string,
-  input: unknown,
+  input: Parameters<typeof toolCallPart>[1],
 ): LanguageModelStreamPart[] => [
   toolCallPart(toolName, input, { toolCallId }),
   finishPart({ finishReason: "tool-calls" }),
@@ -275,7 +294,7 @@ export const mockToolCallResponse = (
 
 export function ensureStorageParents(input: {
   readonly sessionId: SessionId | string
-  readonly branchId?: undefined
+  readonly branchId?: never
 }): Effect.Effect<void, StorageError, SessionStorage>
 export function ensureStorageParents(input: {
   readonly sessionId: SessionId | string
@@ -283,16 +302,18 @@ export function ensureStorageParents(input: {
 }): Effect.Effect<void, StorageError, SessionStorage | BranchStorage>
 export function ensureStorageParents(input: {
   readonly sessionId: SessionId | string
-  readonly branchId?: BranchId | string | undefined
+  readonly branchId?: BranchId | string
 }): Effect.Effect<void, StorageError, SessionStorage | BranchStorage> {
   return Effect.gen(function* () {
     const sessionStorage = yield* SessionStorage
     const sessionId = SessionId.make(input.sessionId)
-    const branchId = input.branchId === undefined ? undefined : BranchId.make(input.branchId)
+    const branchId = Option.fromUndefinedOr(input.branchId).pipe(
+      Option.map((id) => BranchId.make(id)),
+    )
     const now = yield* DateTime.nowAsDate
 
     const session = yield* sessionStorage.getSession(sessionId)
-    if (session === undefined) {
+    if (Predicate.isUndefined(session)) {
       yield* sessionStorage.createSession(
         new Session({
           id: sessionId,
@@ -302,13 +323,13 @@ export function ensureStorageParents(input: {
       )
     }
 
-    if (branchId !== undefined) {
+    if (Option.isSome(branchId)) {
       const branchStorage = yield* BranchStorage
-      const branch = yield* branchStorage.getBranch(branchId)
-      if (branch === undefined) {
+      const branch = yield* branchStorage.getBranch(branchId.value)
+      if (Predicate.isUndefined(branch)) {
         yield* branchStorage.createBranch(
           new Branch({
-            id: branchId,
+            id: branchId.value,
             sessionId,
             createdAt: now,
           }),

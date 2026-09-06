@@ -1,8 +1,10 @@
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import type { Accessor } from "solid-js"
 import * as Effect from "effect/Effect"
-import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"
+import * as Option from "effect/Option"
+import * as Predicate from "effect/Predicate"
+import * as Schema from "effect/Schema"
 import type { Registry } from "./registry"
 import * as Result from "./result"
 import type { Result as AtomResult } from "./result"
@@ -36,10 +38,13 @@ export const writableAtom = <R, W, Services = never>(
 export const state = <A>(initialValue: A): Writable<A> =>
   writableAtom(() => {
     const [value, setValue] = createSignal(initialValue)
-    const set = (next: A | ((value: A) => A)) => {
-      if (typeof next === "function") {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
-        setValue(next as (value: A) => A)
+    const Update = Schema.declare<(value: A) => A>((value): value is (value: A) => A =>
+      Predicate.isFunction(value),
+    )
+    const decodeUpdate = Schema.decodeUnknownSync(Update)
+    const set: WritableInstance<A, A>["set"] = (next) => {
+      if (Predicate.isFunction(next)) {
+        setValue(decodeUpdate(next))
         return
       }
       setValue(() => next)
@@ -69,10 +74,10 @@ export const effect = <A, E, R>(
   options?: { readonly initialValue?: A },
 ): Atom<AtomResult<A, E>, R> =>
   atom((registry) => {
-    const initialResult =
-      options?.initialValue !== undefined
-        ? Result.success<A, E>(options.initialValue)
-        : Result.initial<A, E>(true)
+    const initialResult = Option.match(Option.fromNullishOr(options?.initialValue), {
+      onSome: (value) => Result.success<A, E>(value),
+      onNone: () => Result.initial<A, E>(true),
+    })
     const [result, setResult] = createSignal<AtomResult<A, E>>(initialResult)
     const [version, setVersion] = createSignal(0)
     const get = <T, Services extends R>(atom: Atom<T, Services>) => registry.read(atom)()
@@ -82,7 +87,7 @@ export const effect = <A, E, R>(
       const fiber = registry.fork(eff)
       fiber.addObserver((exit) => {
         if (cancelled) return
-        setResult(Exit.isSuccess(exit) ? Result.success(exit.value) : Result.failure(exit.cause))
+        setResult(Result.fromExit(exit))
       })
       return () => {
         cancelled = true
@@ -90,19 +95,21 @@ export const effect = <A, E, R>(
       }
     }
 
-    let cancel: (() => void) | undefined
+    let cancel = Option.none<() => void>()
     const cleanup = () => {
-      if (cancel === undefined) return
-      cancel()
-      cancel = undefined
+      if (Option.isNone(cancel)) return
+      cancel.value()
+      cancel = Option.none()
     }
 
     createEffect(() => {
       version()
       cleanup()
-      const eff = typeof create === "function" ? create(get) : create
+      let eff: Effect.Effect<A, E, R>
+      if (Predicate.isFunction(create)) eff = create(get)
+      else eff = create
       setResult((prev) => Result.waiting(prev))
-      cancel = runEffect(eff)
+      cancel = Option.some(runEffect(eff))
       onCleanup(cleanup)
     })
 

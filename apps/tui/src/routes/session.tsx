@@ -3,7 +3,8 @@
  */
 
 import { createMemo, For } from "solid-js"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "../terminal-dimensions"
+import { Option, Predicate } from "effect"
 import type { RGBA } from "@opentui/core"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
 import { MessageList } from "../components/message-list"
@@ -59,11 +60,12 @@ export function Session(props: SessionProps) {
   const ext = useExtensionUI()
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
-  const mermaidDiagrams = createMemo(() =>
-    controller.uiState().overlay._tag === "mermaid"
-      ? collectDiagrams(controller.messages(), dimensions().width)
-      : [],
-  )
+  const mermaidDiagrams = createMemo(() => {
+    if (controller.uiState().overlay._tag === "mermaid") {
+      return collectDiagrams(controller.messages(), dimensions().width)
+    }
+    return []
+  })
 
   const borderColor = () => {
     if (client.isError()) return theme.error
@@ -73,8 +75,8 @@ export function Session(props: SessionProps) {
   }
 
   // Map semantic color names from extensions to resolved theme colors
-  const resolveColor = (color: BorderLabelColor | string | undefined): RGBA => {
-    if (typeof color === "string") {
+  const resolveColor = (color: BorderLabelColor | string): RGBA => {
+    if (Predicate.isString(color)) {
       const colorMap = {
         warning: theme.warning,
         info: theme.info,
@@ -85,9 +87,10 @@ export function Session(props: SessionProps) {
       }
       const isKnownColor = (name: string): name is keyof typeof colorMap =>
         Object.hasOwn(colorMap, name)
-      return isKnownColor(color) ? colorMap[color] : theme.text
+      if (isKnownColor(color)) return colorMap[color]
+      return theme.text
     }
-    return color ?? theme.text
+    return color
   }
 
   const topLeftLabels = (): BorderLabelItem[] => {
@@ -131,9 +134,11 @@ export function Session(props: SessionProps) {
     if (a.phase !== "idle") {
       items.push({ text: controller.spinner(), color: theme.textMuted })
     }
+    let activityColor = theme.info
+    if (a.phase === "idle") activityColor = theme.textMuted
     items.push({
       text: controller.phaseLabel(),
-      color: a.phase === "idle" ? theme.textMuted : theme.info,
+      color: activityColor,
     })
     if (a.phase !== "idle" && controller.elapsed() >= 1000) {
       items.push({ text: formatElapsed(controller.elapsed()), color: theme.textMuted })
@@ -153,7 +158,11 @@ export function Session(props: SessionProps) {
 
   const bottomRightLabels = (): BorderLabelItem[] => {
     const items: BorderLabelItem[] = []
-    const label = formatCwdGit(workspace.cwd, workspace.gitRoot(), workspace.gitStatus()?.branch)
+    const label = formatCwdGit(
+      workspace.cwd,
+      Option.fromNullishOr(workspace.gitRoot()),
+      Option.fromNullishOr(workspace.gitStatus()?.branch),
+    )
     items.push({ text: label, color: theme.textMuted })
 
     // Extension-contributed labels
@@ -255,12 +264,13 @@ export function Session(props: SessionProps) {
             case "permissions":
               return <Permissions onClose={controller.closeOverlay} />
             case "extension": {
-              const Overlay = ext.overlays().get(overlay.overlayId)
-              if (Overlay === undefined) return null
-              return <Overlay open={true} onClose={controller.closeOverlay} />
+              const Overlay = Option.fromNullishOr(ext.overlays().get(overlay.overlayId))
+              if (Option.isNone(Overlay)) return <></>
+              const OverlayComponent = Overlay.value
+              return <OverlayComponent open={true} onClose={controller.closeOverlay} />
             }
             default:
-              return null
+              return <></>
           }
         })()}
 

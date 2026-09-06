@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
 import { narrowR } from "../../core/tests/helpers/effect"
 import { homedir } from "node:os"
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
@@ -25,19 +25,25 @@ describe("builtin tool schemas", () => {
           )
 
           for (const tool of loaded.contributions.tools ?? []) {
-            const failure = yield* Effect.sync(() => {
-              try {
-                const { jsonSchema } = toCodecAnthropic(tool.parametersSchema)
-                if (jsonSchema["type"] !== "object") {
-                  return `expected top-level object schema, got type ${String(jsonSchema["type"])}`
-                }
-                return undefined
-              } catch (error) {
-                return String(error)
-              }
-            })
-            if (failure !== undefined)
-              failures.push(`${loaded.manifest.id}/${getToolId(tool)}: ${failure}`)
+            const failure = yield* Effect.try({
+              try: () => toCodecAnthropic(tool.parametersSchema),
+              catch: (cause) => String(cause),
+            }).pipe(
+              Effect.match({
+                onFailure: Option.some,
+                onSuccess: ({ jsonSchema }) => {
+                  if (jsonSchema["type"] !== "object") {
+                    return Option.some(
+                      `expected top-level object schema, got type ${String(jsonSchema["type"])}`,
+                    )
+                  }
+                  return Option.none<string>()
+                },
+              }),
+            )
+            if (Option.isSome(failure)) {
+              failures.push(`${loaded.manifest.id}/${getToolId(tool)}: ${failure.value}`)
+            }
           }
         }
 

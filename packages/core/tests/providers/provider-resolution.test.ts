@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, Layer, Schema, Stream } from "effect"
+import { Cause, Effect, Layer, Option, Predicate, Schema, Stream } from "effect"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution, ProviderResolution } from "@gent/core-internal/domain/driver"
@@ -14,7 +14,6 @@ import {
   LanguageModelLayers,
   toolCallPart,
 } from "@gent/core-internal/test-utils/language-model"
-import type { ProviderError } from "@gent/core-internal/domain/provider-error"
 import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import { convertTools } from "../../src/runtime/agent/tool-runner"
 import { ProviderAuthError } from "@gent/core-internal/domain/driver"
@@ -35,6 +34,7 @@ import {
   ToolCallId,
 } from "@gent/core-internal/domain/ids"
 import { failingLanguageModel, makeLanguageModel } from "../helpers/failing-language-model"
+// oxlint-disable-next-line effect/noNullish -- AuthService uses undefined to represent missing credentials.
 const missingAuthInfo: AuthInfo | undefined = undefined
 const testAuthStorage: AuthService = {
   get: () => Effect.succeed(missingAuthInfo),
@@ -58,7 +58,7 @@ void assertProviderResolutionRejectsBareLayer
 const makeProvider = (id: string, name?: string): ModelDriverContribution => ({
   id,
   name: name ?? id,
-  resolveModel: () => fakeResolution(),
+  resolveModel: () => Effect.succeed(fakeResolution()),
 })
 const EchoParams = Schema.Struct({ text: Schema.String })
 const echoCapability: ToolCapability = tool({
@@ -122,7 +122,7 @@ const streamResolvedModel = <Tools extends Record<string, AiTool.Any> = Record<s
 ) =>
   Effect.gen(function* () {
     const model = yield* resolveModel(request)
-    if (request.toolkit !== undefined) {
+    if (!Predicate.isUndefined(request.toolkit)) {
       return yield* model
         .streamText({
           prompt: request.prompt,
@@ -131,7 +131,7 @@ const streamResolvedModel = <Tools extends Record<string, AiTool.Any> = Record<s
         })
         .pipe(Stream.runCollect)
     }
-    if (request.tools !== undefined) {
+    if (!Predicate.isUndefined(request.tools)) {
       return yield* model
         .streamText({
           prompt: request.prompt,
@@ -149,6 +149,7 @@ describe("Provider model resolution", () => {
       const result = yield* Effect.exit(
         resolveModel({
           model: "custom/gpt-5",
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Success")
@@ -164,10 +165,11 @@ describe("Provider model resolution", () => {
           {
             id: "direct",
             name: "Direct",
-            resolveModel: () => modelFromService("direct", languageModel),
+            resolveModel: () => Effect.succeed(modelFromService("direct", languageModel)),
           },
         ]),
       ])
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const model = yield* resolveModel({ model: "direct/gpt-5" }).pipe(Effect.provide(layer))
       const result = yield* model.streamText({ prompt: [] }).pipe(Stream.runCollect)
       expect(Array.from(result)).toEqual([expect.objectContaining({ type: "finish" })])
@@ -179,6 +181,7 @@ describe("Provider model resolution", () => {
       const result = yield* Effect.exit(
         resolveModel({
           model: "unknown-provider/some-model",
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -197,18 +200,18 @@ describe("Provider model resolution", () => {
   )
   it.scoped("wraps extension resolveModel errors as ProviderError preserving cause", () =>
     Effect.gen(function* () {
+      // oxlint-disable-next-line effect/noNewError -- The defect identity is part of this cause-preservation assertion.
       const original = new Error("kaboom")
       const throwingProvider: ModelDriverContribution = {
         id: "broken",
         name: "Broken",
-        resolveModel: () => {
-          throw original
-        },
+        resolveModel: () => Effect.die(original),
       }
       const layer = buildProviderLayer([makeExt("broken-ext", [throwingProvider])])
       const result = yield* Effect.exit(
         resolveModel({
           model: "broken/model",
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -216,7 +219,7 @@ describe("Provider model resolution", () => {
         const errOpt = Cause.findErrorOption(result.cause)
         expect(errOpt._tag).toBe("Some")
         if (errOpt._tag === "Some") {
-          const err = errOpt.value as ProviderError
+          const err = errOpt.value
           // The original `Error` thrown from the driver must be
           // preserved as `cause` so the upstream chain is debuggable.
           expect(err._tag).toBe("ProviderError")
@@ -227,25 +230,27 @@ describe("Provider model resolution", () => {
   )
   it.scoped("driver ProviderAuthError surfaces typed at the provider boundary", () =>
     Effect.gen(function* () {
-      // Drivers that fail closed at credential resolution throw
-      // ProviderAuthError synchronously from `resolveModel`. The boundary
-      // must re-raise it as-is so `GentRpcError` (which has
+      // Drivers that fail closed at credential resolution return a typed
+      // ProviderAuthError from `resolveModel`. The boundary must keep it
+      // typed so `GentRpcError` (which has
       // `ProviderAuthError` as a first-class union arm) receives the typed
       // tag — not a generic `ProviderError` with the auth error demoted to
       // a defect-encoded cause.
       const failingAuthProvider: ModelDriverContribution = {
         id: "auth-missing",
         name: "AuthMissing",
-        resolveModel: () => {
-          throw new ProviderAuthError({
-            message: "credentials unavailable: no OAuth, API key, or env var",
-          })
-        },
+        resolveModel: () =>
+          Effect.fail(
+            new ProviderAuthError({
+              message: "credentials unavailable: no OAuth, API key, or env var",
+            }),
+          ),
       }
       const layer = buildProviderLayer([makeExt("auth-missing-ext", [failingAuthProvider])])
       const result = yield* Effect.exit(
         resolveModel({
           model: "auth-missing/model",
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -268,10 +273,11 @@ describe("Provider model resolution", () => {
       const provider: ModelDriverContribution = {
         id: "auth-fails",
         name: "AuthFails",
-        resolveModel: () => {
-          resolved = true
-          return fakeResolution()
-        },
+        resolveModel: () =>
+          Effect.sync(() => {
+            resolved = true
+            return fakeResolution()
+          }),
       }
       const authStore: AuthService = {
         ...testAuthStorage,
@@ -281,6 +287,7 @@ describe("Provider model resolution", () => {
       const result = yield* Effect.exit(
         resolveModel({
           model: "auth-fails/model",
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -300,6 +307,7 @@ describe("Provider model resolution", () => {
         makeExt("shadowed", [makeProvider("shadowed", "Shadowed")]),
       ])
       const overrideRegistry = yield* Effect.service(DriverRegistry).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
           DriverRegistry.fromResolved({
             modelDrivers: shadowedResolved.modelDrivers,
@@ -311,6 +319,7 @@ describe("Provider model resolution", () => {
         resolveModel({
           model: "shadowed/some-model",
           driverRegistry: overrideRegistry,
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(capturedLayer)),
       )
       // Resolution should NOT fail with "Unknown provider" — overrideRegistry has "shadowed".
@@ -326,26 +335,28 @@ describe("Provider model resolution", () => {
       // Both drivers registered. Default parse from "primary/foo" → "primary".
       // We force "alt" via driverId override and check `alt` was chosen by giving it
       // a recognizable resolveModel side effect.
-      let chosenDriver: string | undefined
+      let chosenDriver = "unset"
       const layer = buildProviderLayer([
         makeExt("primary-ext", [
           {
             id: "primary",
             name: "Primary",
-            resolveModel: () => {
-              chosenDriver = "primary"
-              return fakeResolution()
-            },
+            resolveModel: () =>
+              Effect.sync(() => {
+                chosenDriver = "primary"
+                return fakeResolution()
+              }),
           },
         ]),
         makeExt("alt-ext", [
           {
             id: "alt",
             name: "Alt",
-            resolveModel: () => {
-              chosenDriver = "alt"
-              return fakeResolution()
-            },
+            resolveModel: () =>
+              Effect.sync(() => {
+                chosenDriver = "alt"
+                return fakeResolution()
+              }),
           },
         ]),
       ])
@@ -353,6 +364,7 @@ describe("Provider model resolution", () => {
         resolveModel({
           model: "primary/foo",
           driverId: "alt",
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(chosenDriver).toBe("alt")
@@ -360,41 +372,44 @@ describe("Provider model resolution", () => {
   )
   it.scoped("runtime tools advertise capabilities through the live stream path", () =>
     Effect.gen(function* () {
-      let captured:
-        | {
-            disableToolCallResolution: boolean | undefined
-            toolkit:
-              | AiToolkit.Toolkit<Record<string, AiTool.Any>>
-              | AiToolkit.WithHandler<Record<string, AiTool.Any>>
-              | undefined
-          }
-        | undefined
+      type CapturedTools = {
+        readonly disableToolCallResolution: Option.Option<boolean>
+        readonly toolkit: Option.Option<
+          | AiToolkit.Toolkit<Record<string, AiTool.Any>>
+          | AiToolkit.WithHandler<Record<string, AiTool.Any>>
+        >
+      }
+      const captured: CapturedTools[] = []
       const streamingProvider: ModelDriverContribution = {
         id: "tools-live",
         name: "ToolsLive",
         resolveModel: () =>
-          modelFromService(
-            "tools-live",
-            makeLanguageModel<{
-              readonly disableToolCallResolution?: boolean
-              readonly toolkit?:
-                | AiToolkit.Toolkit<Record<string, AiTool.Any>>
-                | AiToolkit.WithHandler<Record<string, AiTool.Any>>
-            }>({
-              streamText: (options) => {
-                captured = {
-                  disableToolCallResolution: options.disableToolCallResolution,
-                  toolkit: options.toolkit,
-                }
-                return Stream.fromIterable([
-                  toolCallPart("echo", { text: "hi" }, { toolCallId: ToolCallId.make("tc-1") }),
-                  finishPart({
-                    finishReason: "tool-calls",
-                    usage: { inputTokens: 10, outputTokens: 20 },
-                  }),
-                ])
-              },
-            }),
+          Effect.succeed(
+            modelFromService(
+              "tools-live",
+              makeLanguageModel<{
+                readonly disableToolCallResolution?: boolean
+                readonly toolkit?:
+                  | AiToolkit.Toolkit<Record<string, AiTool.Any>>
+                  | AiToolkit.WithHandler<Record<string, AiTool.Any>>
+              }>({
+                streamText: (options) => {
+                  captured.push({
+                    disableToolCallResolution: Option.fromUndefinedOr(
+                      options.disableToolCallResolution,
+                    ),
+                    toolkit: Option.fromUndefinedOr(options.toolkit),
+                  })
+                  return Stream.fromIterable([
+                    toolCallPart("echo", { text: "hi" }, { toolCallId: ToolCallId.make("tc-1") }),
+                    finishPart({
+                      finishReason: "tool-calls",
+                      usage: { inputTokens: 10, outputTokens: 20 },
+                    }),
+                  ])
+                },
+              }),
+            ),
           ),
       }
       const layer = buildProviderLayer([makeExt("tools-live-ext", [streamingProvider])])
@@ -402,15 +417,23 @@ describe("Provider model resolution", () => {
         model: "tools-live/gpt-5",
         prompt: [],
         tools: [echoCapability],
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
-      expect(captured?.disableToolCallResolution).toBe(true)
-      const toolkit = captured?.toolkit
-      expect(toolkit).toBeDefined()
-      expect(Object.keys(toolkit?.tools ?? {})).toEqual(["echo"])
-      expect(toolkit?.tools["echo"]?.name).toBe("echo")
-      const advertisedTool = toolkit?.tools["echo"]
+      expect(captured).toHaveLength(1)
+      const capturedTools = captured[0]
+      if (Predicate.isUndefined(capturedTools)) return
+      expect(Option.isSome(capturedTools.disableToolCallResolution)).toBe(true)
+      if (Option.isSome(capturedTools.disableToolCallResolution)) {
+        expect(capturedTools.disableToolCallResolution.value).toBe(true)
+      }
+      expect(Option.isSome(capturedTools.toolkit)).toBe(true)
+      if (Option.isNone(capturedTools.toolkit)) return
+      const toolkit = capturedTools.toolkit.value
+      expect(Object.keys(toolkit.tools)).toEqual(["echo"])
+      expect(toolkit.tools["echo"]?.name).toBe("echo")
+      const advertisedTool = toolkit.tools["echo"]
       expect(advertisedTool).toBeDefined()
-      if (advertisedTool !== undefined) {
+      if (!Predicate.isUndefined(advertisedTool)) {
         expect(() => toCodecAnthropic(advertisedTool.parametersSchema)).not.toThrow()
       }
       const collected = Array.from(parts)
@@ -453,31 +476,33 @@ describe("Provider model resolution", () => {
             }),
           ),
       } satisfies AiToolkit.WithHandler<TypedTools>
-      let capturedToolkit: AiToolkit.WithHandler<TypedTools> | undefined
+      let capturedToolkit: Option.Option<AiToolkit.WithHandler<TypedTools>> = Option.none()
       const streamingProvider: ModelDriverContribution = {
         id: "typed-toolkit-live",
         name: "TypedToolkitLive",
         resolveModel: () =>
-          modelFromService(
-            "typed-toolkit-live",
-            makeLanguageModel<{
-              readonly toolkit?: AiToolkit.WithHandler<TypedTools>
-            }>({
-              streamText: (options) => {
-                capturedToolkit = options.toolkit
-                return Stream.fromIterable([
-                  toolCallPart(
-                    "typedEcho",
-                    { text: "hi" },
-                    { toolCallId: ToolCallId.make("typed-tc-1") },
-                  ),
-                  finishPart({
-                    finishReason: "tool-calls",
-                    usage: { inputTokens: 1, outputTokens: 1 },
-                  }),
-                ])
-              },
-            }),
+          Effect.succeed(
+            modelFromService(
+              "typed-toolkit-live",
+              makeLanguageModel<{
+                readonly toolkit?: AiToolkit.WithHandler<TypedTools>
+              }>({
+                streamText: (options) => {
+                  capturedToolkit = Option.fromUndefinedOr(options.toolkit)
+                  return Stream.fromIterable([
+                    toolCallPart(
+                      "typedEcho",
+                      { text: "hi" },
+                      { toolCallId: ToolCallId.make("typed-tc-1") },
+                    ),
+                    finishPart({
+                      finishReason: "tool-calls",
+                      usage: { inputTokens: 1, outputTokens: 1 },
+                    }),
+                  ])
+                },
+              }),
+            ),
           ),
       }
       const layer = buildProviderLayer([makeExt("typed-toolkit-live-ext", [streamingProvider])])
@@ -485,8 +510,10 @@ describe("Provider model resolution", () => {
         model: "typed-toolkit-live/gpt-5",
         prompt: [],
         toolkit: typedToolkit,
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
-      expect(capturedToolkit).toBe(typedToolkit)
+      expect(Option.isSome(capturedToolkit)).toBe(true)
+      if (Option.isSome(capturedToolkit)) expect(capturedToolkit.value).toBe(typedToolkit)
       const collected = Array.from(parts)
       expect(collected[0]).toEqual(
         expect.objectContaining({
@@ -499,26 +526,28 @@ describe("Provider model resolution", () => {
   )
   it.scoped("live stream path builds Effect Prompt with multimodal and reasoning parts", () =>
     Effect.gen(function* () {
-      let capturedPrompt: Prompt.Prompt | undefined
+      let capturedPrompt: Option.Option<Prompt.Prompt> = Option.none()
       const streamingProvider: ModelDriverContribution = {
         id: "prompt-live",
         name: "PromptLive",
         resolveModel: () =>
-          modelFromService(
-            "prompt-live",
-            makeLanguageModel<{
-              readonly prompt?: Prompt.RawInput
-            }>({
-              streamText: (options) => {
-                capturedPrompt = Prompt.make(options.prompt ?? [])
-                return Stream.fromIterable([
-                  finishPart({
-                    finishReason: "stop",
-                    usage: { inputTokens: 3, outputTokens: 1 },
-                  }),
-                ])
-              },
-            }),
+          Effect.succeed(
+            modelFromService(
+              "prompt-live",
+              makeLanguageModel<{
+                readonly prompt?: Prompt.RawInput
+              }>({
+                streamText: (options) => {
+                  capturedPrompt = Option.some(Prompt.make(options.prompt ?? []))
+                  return Stream.fromIterable([
+                    finishPart({
+                      finishReason: "stop",
+                      usage: { inputTokens: 3, outputTokens: 1 },
+                    }),
+                  ])
+                },
+              }),
+            ),
           ),
       }
       const layer = buildProviderLayer([makeExt("prompt-live-ext", [streamingProvider])])
@@ -563,13 +592,16 @@ describe("Provider model resolution", () => {
           ),
         })
         expect(parts.length).toBe(1)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
-      expect(capturedPrompt?.content.map((message) => message.role)).toEqual([
+      expect(Option.isSome(capturedPrompt)).toBe(true)
+      if (Option.isNone(capturedPrompt)) return
+      expect(capturedPrompt.value.content.map((message) => message.role)).toEqual([
         "system",
         "user",
         "assistant",
       ])
-      const userMessage = capturedPrompt?.content[1]
+      const userMessage = capturedPrompt.value.content[1]
       expect(userMessage?.role).toBe("user")
       if (userMessage?.role === "user") {
         expect(userMessage.content[1]).toEqual(
@@ -580,7 +612,7 @@ describe("Provider model resolution", () => {
           }),
         )
       }
-      const assistantMessage = capturedPrompt?.content[2]
+      const assistantMessage = capturedPrompt.value.content[2]
       expect(assistantMessage?.role).toBe("assistant")
       if (assistantMessage?.role === "assistant") {
         expect(assistantMessage.content[0]).toEqual(
@@ -591,13 +623,14 @@ describe("Provider model resolution", () => {
         )
       }
       expect(
-        capturedPrompt?.content.some((message) =>
-          message.role === "user"
-            ? message.content.some(
-                (part) => part.type === "text" && part.text === "should not reach model",
-              )
-            : false,
-        ),
+        capturedPrompt.value.content.some((message) => {
+          if (message.role === "user") {
+            return message.content.some(
+              (part) => part.type === "text" && part.text === "should not reach model",
+            )
+          }
+          return false
+        }),
       ).toBe(false)
     }),
   )

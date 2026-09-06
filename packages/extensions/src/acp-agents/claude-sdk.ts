@@ -34,7 +34,7 @@
  *
  * @module
  */
-import { Context, Effect, Queue, Schema, Stream } from "effect"
+import { Context, Effect, Option, Queue, Schema, Stream } from "effect"
 import type { Cause } from "effect"
 import {
   query as sdkQuery,
@@ -43,11 +43,18 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk"
+import type { PublicExtensionSetupContext } from "@gent/core/extensions/api"
+import {
+  closeClaudeQuery,
+  interruptClaudeQuery,
+  makeClaudeUserMessage,
+  nextClaudeMessage,
+} from "./claude-sdk-boundary.js"
 
 // ── Public service shape ──
 
-export interface AcpAgentsPlatformShape {
-  readonly parentEnv: Record<string, string | undefined>
+export interface AcpAgentsPlatformApi {
+  readonly parentEnv: PublicExtensionSetupContext["Process"]["parentEnv"]
 }
 
 /**
@@ -60,7 +67,10 @@ export interface ClaudeSdkSession {
    * `result` boundary. The optional signal cancels just this prompt via
    * `query.interrupt()`.
    */
-  readonly prompt: (text: string, signal?: AbortSignal) => Stream.Stream<SDKMessage, ClaudeSdkError>
+  readonly prompt: (
+    text: string,
+    signal: Option.Option<AbortSignal>,
+  ) => Stream.Stream<SDKMessage, ClaudeSdkError>
   /**
    * Idempotent: `input.end()` + abort the session-lifetime controller +
    * `q.close()`. Safe to call multiple times.
@@ -75,25 +85,25 @@ export interface ClaudeSdkSession {
  *     death, abort). The manager treats this as session-fatal and
  *     evicts the cached session.
  */
-export class ClaudeSdkError extends Schema.TaggedErrorClass<ClaudeSdkError>()("ClaudeSdkError", {
+export class ClaudeSdkError extends Schema.TaggedError<ClaudeSdkError>()("ClaudeSdkError", {
   kind: Schema.Literals(["init", "stream"]),
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
-export interface ClaudeSdkServiceShape {
+export interface ClaudeSdkServiceApi {
   readonly createSession: (params: {
     readonly cwd: string
     readonly oauthToken: string
     readonly systemPrompt: string
-    readonly mcpServers?: Options["mcpServers"]
+    readonly mcpServers: Option.Option<Options["mcpServers"]>
   }) => Effect.Effect<ClaudeSdkSession, ClaudeSdkError>
 }
 
 // ── Implementations ──
 
 /** Live implementation — talks to the real SDK subprocess. */
-export const live = (platform: AcpAgentsPlatformShape): ClaudeSdkServiceShape =>
+export const live = (platform: AcpAgentsPlatformApi): ClaudeSdkServiceApi =>
   makeLiveService(platform)
 
 /**
@@ -101,7 +111,7 @@ export const live = (platform: AcpAgentsPlatformShape): ClaudeSdkServiceShape =>
  * call to `prompt(text)` yields the next chunk of canned messages. The
  * `close` Effect succeeds.
  */
-export const test = (canned: ReadonlyArray<ReadonlyArray<SDKMessage>>): ClaudeSdkServiceShape => ({
+export const test = (canned: ReadonlyArray<ReadonlyArray<SDKMessage>>): ClaudeSdkServiceApi => ({
   createSession: () =>
     Effect.sync(() => {
       let cursor = 0
@@ -117,17 +127,15 @@ export const test = (canned: ReadonlyArray<ReadonlyArray<SDKMessage>>): ClaudeSd
 })
 
 /** Namespaced exports for the canonical shape. */
-export const ClaudeSdk = { live, test } as const
+export const ClaudeSdk = { live, test }
 
 // ── Live implementation internals ──
 
-const makeUserMessage = (text: string): SDKUserMessage => ({
-  type: "user",
-  message: { role: "user", content: text },
-  parent_tool_use_id: null,
-})
+// The Claude SDK accepts an AbortController so the session owner can abort
+// the subprocess during close. Keep construction at this named host boundary.
+const makeTeardownAbortController = (): AbortController => new AbortController()
 
-function makeLiveService(platform: AcpAgentsPlatformShape): ClaudeSdkServiceShape {
+function makeLiveService(platform: AcpAgentsPlatformApi): ClaudeSdkServiceApi {
   return {
     createSession: ({ cwd, oauthToken, systemPrompt, mcpServers }) =>
       Effect.gen(function* () {
@@ -137,7 +145,7 @@ function makeLiveService(platform: AcpAgentsPlatformShape): ClaudeSdkServiceShap
         // Session-lifetime teardown controller — distinct from any
         // per-prompt cancel signal. Aborting this scopes process death
         // and full close.
-        const teardownController = new AbortController()
+        const teardownController = makeTeardownAbortController()
 
         const options: Options = {
           cwd,
@@ -164,74 +172,96 @@ function makeLiveService(platform: AcpAgentsPlatformShape): ClaudeSdkServiceShap
             ...platform.parentEnv,
             CLAUDE_CODE_OAUTH_TOKEN: oauthToken,
           },
-          ...(mcpServers !== undefined ? { mcpServers } : {}),
         }
+        if (Option.isSome(mcpServers)) options.mcpServers = mcpServers.value
 
         const q = yield* Effect.try({
           try: () => sdkQuery({ prompt: input, options }),
-          catch: (err) =>
-            new ClaudeSdkError({
+          catch: (err) => {
+            const decodedError = Schema.decodeUnknownOption(Schema.instanceOf(Error))(err)
+            const message = Option.match(decodedError, {
+              onNone: () => String(err),
+              onSome: (error) => error.message,
+            })
+            return new ClaudeSdkError({
               kind: "init",
-              message: `Failed to start Claude SDK query: ${err instanceof Error ? err.message : String(err)}`,
+              message: `Failed to start Claude SDK query: ${message}`,
               cause: err,
-            }),
+            })
+          },
         })
 
         // Await initializationResult — surfaces auth / missing executable
         // failures before the first prompt is pushed.
         yield* Effect.tryPromise({
           try: () => q.initializationResult(),
-          catch: (err) =>
-            new ClaudeSdkError({
+          catch: (err) => {
+            const decodedError = Schema.decodeUnknownOption(Schema.instanceOf(Error))(err)
+            const message = Option.match(decodedError, {
+              onNone: () => String(err),
+              onSome: (error) => error.message,
+            })
+            return new ClaudeSdkError({
               kind: "init",
-              message: `Claude SDK initialization failed: ${err instanceof Error ? err.message : String(err)}`,
+              message: `Claude SDK initialization failed: ${message}`,
               cause: err,
-            }),
+            })
+          },
         })
 
         let closed = false
-        const close = Effect.tryPromise({
-          try: (_signal) => {
-            if (closed) return Promise.resolve(undefined)
-            closed = true
-            Queue.endUnsafe(inputQueue)
-            teardownController.abort()
-            return Promise.resolve(q.close()).then(() => undefined)
-          },
-          catch: () => undefined,
+        const close = Effect.suspend(() => {
+          if (closed) return Effect.void
+          closed = true
+          Queue.endUnsafe(inputQueue)
+          teardownController.abort()
+          return closeClaudeQuery(q)
         }).pipe(Effect.ignore)
 
         const prompt = (
           text: string,
-          signal?: AbortSignal,
+          signal: Option.Option<AbortSignal>,
         ): Stream.Stream<SDKMessage, ClaudeSdkError> =>
           Stream.suspend(() => {
-            Queue.offerUnsafe(inputQueue, makeUserMessage(text))
+            Queue.offerUnsafe(inputQueue, makeClaudeUserMessage(text))
             // Per-prompt cancel: hook the signal to `q.interrupt()`. The
             // SDK doc reserves `interrupt` for current-query cancel and
             // `abortController.abort()` for full teardown.
-            let detach: (() => void) | undefined
-            if (signal !== undefined) {
+            let detach = Option.none<() => void>()
+            if (Option.isSome(signal)) {
               const onAbort = (): void => {
-                void q.interrupt().catch(() => undefined)
+                interruptClaudeQuery(q)
               }
-              if (signal.aborted) onAbort()
+              if (signal.value.aborted) onAbort()
               else {
-                signal.addEventListener("abort", onAbort, { once: true })
-                detach = () => signal.removeEventListener("abort", onAbort)
+                signal.value.addEventListener("abort", onAbort, { once: true })
+                detach = Option.some(() => signal.value.removeEventListener("abort", onAbort))
               }
             }
             // Drain the shared Query iterator until we see a `result` —
             // that marks the end of this prompt's response.
-            return Stream.fromAsyncIterable(takeUntilResult(q), (err) =>
-              Schema.is(ClaudeSdkError)(err)
-                ? err
-                : new ClaudeSdkError({
-                    kind: "stream",
-                    message: `Claude SDK stream error: ${err instanceof Error ? err.message : String(err)}`,
-                    cause: err,
+            return Stream.fromAsyncIterable(takeUntilResult(q), (err) => {
+              if (Schema.is(ClaudeSdkError)(err)) return err
+              const decodedError = Schema.decodeUnknownOption(Schema.instanceOf(Error))(err)
+              const message = Option.match(decodedError, {
+                onNone: () => String(err),
+                onSome: (error) => error.message,
+              })
+              return new ClaudeSdkError({
+                kind: "stream",
+                message: `Claude SDK stream error: ${message}`,
+                cause: err,
+              })
+            }).pipe(
+              Stream.ensuring(
+                Effect.sync(() =>
+                  Option.match(detach, {
+                    onNone: () => {},
+                    onSome: (detachSignal) => detachSignal(),
                   }),
-            ).pipe(Stream.ensuring(Effect.sync(() => detach?.())))
+                ),
+              ),
+            )
           })
 
         return {
@@ -253,17 +283,15 @@ function takeUntilResult(q: Query): AsyncIterable<SDKMessage> {
   return {
     [Symbol.asyncIterator](): AsyncIterator<SDKMessage> {
       return {
-        next: () => {
-          if (done) return Promise.resolve({ value: undefined, done: true })
-          return iterator.next().then((result) => {
+        next: () =>
+          nextClaudeMessage(iterator, done).then((result) => {
             if (result.done === true) {
               done = true
               return result
             }
             if (result.value.type === "result") done = true
             return result
-          })
-        },
+          }),
       }
     },
   }

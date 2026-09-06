@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
 import { DelegateTool } from "../../src/delegate/delegate-tool.js"
 import {
@@ -29,7 +29,7 @@ const makeCtx = (overrides: {
               agentName: AgentName.make("test"),
             }),
           )),
-      listAgents: () => Effect.succeed(AllBuiltinAgents),
+      listAgents: Effect.succeed(AllBuiltinAgents),
     },
   })
 
@@ -42,7 +42,7 @@ describe("Delegate Tool", () => {
             text: `${params.agent.name}:${params.prompt}`,
             sessionId: SessionId.make("child-session"),
             agentName: params.agent.name,
-            persistence: "ephemeral" as const,
+            persistence: "ephemeral",
           }),
         ),
     })
@@ -50,12 +50,12 @@ describe("Delegate Tool", () => {
     return narrowR(
       runToolWithCtx(DelegateTool, { agent: AgentName.make("explore"), todo: "hello" }, ctx).pipe(
         Effect.map((result) => {
-          if (!("output" in result) || result.output === undefined) {
-            throw new Error("expected delegate output")
-          }
+          expect("output" in result).toBe(true)
+          if (!("output" in result)) return
           expect(result.output).toBe("explore:hello")
-          if (result.metadata !== undefined && "sessionId" in result.metadata) {
-            expect(result.metadata.sessionId).toBeUndefined()
+          const metadata = Option.fromUndefinedOr(result.metadata)
+          if (Option.isSome(metadata) && "sessionId" in metadata.value) {
+            expect(Option.fromUndefinedOr(metadata.value.sessionId)).toEqual(Option.none())
           }
         }),
       ),
@@ -70,7 +70,7 @@ describe("Delegate Tool", () => {
             text: `${params.agent.name}:${params.prompt}`,
             sessionId: SessionId.make("child-session"),
             agentName: params.agent.name,
-            persistence: "ephemeral" as const,
+            persistence: "ephemeral",
           }),
         ),
     })
@@ -78,9 +78,8 @@ describe("Delegate Tool", () => {
     return narrowR(
       runToolWithCtx(DelegateTool, { agent: AgentName.make("cowork"), todo: "hello" }, ctx).pipe(
         Effect.map((result) => {
-          if (!("output" in result) || result.output === undefined) {
-            throw new Error("expected delegate output")
-          }
+          expect("output" in result).toBe(true)
+          if (!("output" in result)) return
           // Delegate is fire-and-forget ephemeral by design — no durable session ref is shown.
           expect(result.output).toBe("cowork:hello")
         }),
@@ -98,7 +97,7 @@ describe("Delegate Tool", () => {
             text: `step-${idx}`,
             sessionId: SessionId.make(`session-${idx}`),
             agentName: params.agent.name,
-            persistence: "ephemeral" as const,
+            persistence: "ephemeral",
           }),
         )
       },
@@ -116,9 +115,8 @@ describe("Delegate Tool", () => {
         ctx,
       ).pipe(
         Effect.map((result) => {
-          if (!("output" in result) || result.output === undefined) {
-            throw new Error("expected delegate output")
-          }
+          expect("output" in result).toBe(true)
+          if (!("output" in result)) return
           expect(result.output).toBe("step-1")
         }),
       ),
@@ -135,7 +133,7 @@ describe("Delegate Tool", () => {
             text: `result-${idx}`,
             sessionId: SessionId.make(`session-${idx}`),
             agentName: params.agent.name,
-            persistence: "ephemeral" as const,
+            persistence: "ephemeral",
           }),
         )
       },
@@ -153,9 +151,8 @@ describe("Delegate Tool", () => {
         ctx,
       ).pipe(
         Effect.map((result) => {
-          if (!("output" in result) || result.output === undefined) {
-            throw new Error("expected delegate output")
-          }
+          expect("output" in result).toBe(true)
+          if (!("output" in result)) return
           expect(result.output).toContain("2/2 succeeded")
           expect(result.output).not.toContain("Full sessions:")
           expect(result.output).not.toContain("session://session-")
@@ -165,16 +162,16 @@ describe("Delegate Tool", () => {
   })
 
   it.live("foreground single delegates with ephemeral persistence", () => {
-    let capturedRunSpec: { persistence?: string } | undefined
+    let capturedRunSpec = Option.none<{ persistence?: string }>()
     const ctx = makeCtx({
       agentRun: (params) => {
-        capturedRunSpec = params.runSpec
+        capturedRunSpec = Option.fromUndefinedOr(params.runSpec)
         return Effect.succeed(
           AgentRunResult.cases.success.make({
             text: "ok",
             sessionId: SessionId.make("s"),
             agentName: params.agent.name,
-            persistence: "ephemeral" as const,
+            persistence: "ephemeral",
           }),
         )
       },
@@ -183,7 +180,11 @@ describe("Delegate Tool", () => {
     return narrowR(
       runToolWithCtx(DelegateTool, { agent: AgentName.make("explore"), todo: "go" }, ctx).pipe(
         Effect.map(() => {
-          expect(capturedRunSpec?.persistence).toBe("ephemeral")
+          expect(
+            Option.flatMap(capturedRunSpec, (runSpec) =>
+              Option.fromUndefinedOr(runSpec.persistence),
+            ),
+          ).toEqual(Option.some("ephemeral"))
         }),
       ),
     )
@@ -199,7 +200,7 @@ describe("Delegate Tool", () => {
             text: "x",
             sessionId: SessionId.make("s"),
             agentName: params.agent.name,
-            persistence: "ephemeral" as const,
+            persistence: "ephemeral",
           }),
         )
       },
@@ -234,7 +235,7 @@ describe("Delegate Tool", () => {
             text: "x",
             sessionId: SessionId.make("s"),
             agentName: params.agent.name,
-            persistence: "ephemeral" as const,
+            persistence: "ephemeral",
           }),
         )
       },

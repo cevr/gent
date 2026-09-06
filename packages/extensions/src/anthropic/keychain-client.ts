@@ -11,9 +11,10 @@
  * out of the generic provider boundary.
  */
 
-import { Effect, Layer, Stream } from "effect"
+import { Predicate, Effect, Layer, Option, Schema, Stream } from "effect"
 import { isRecord, isRecordArray } from "@gent/core/extensions/api"
 import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { Generated } from "@effect/ai-anthropic"
 import * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 
 export { SYSTEM_IDENTITY_PREFIX } from "./oauth.js"
@@ -28,6 +29,22 @@ export type KeychainTransformRequirements = GentPlatform | AnthropicPlatform
 
 const MCP_PREFIX = "mcp_"
 const BILLING_HEADER_PREFIX = "x-anthropic-billing-header"
+const JsonRecordSchema = Schema.Record(Schema.String, Schema.Unknown)
+type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
+const JsonValueSchema = Schema.Unknown
+type JsonValue = Schema.Schema.Type<typeof JsonValueSchema>
+const MessageStreamEventSchema = Schema.Union([
+  Generated.BetaMessageStartEvent,
+  Generated.BetaMessageDeltaEvent,
+  Generated.BetaMessageStopEvent,
+  Generated.BetaContentBlockStartEvent,
+  Generated.BetaContentBlockDeltaEvent,
+  Generated.BetaContentBlockStopEvent,
+  Generated.BetaErrorResponse,
+])
+const decodeMessageStreamEvent = Schema.decodeUnknownSync(MessageStreamEventSchema)
+const decodeMessagePayload = Schema.decodeUnknownSync(Generated.BetaCreateMessageParams)
+const encodeMessagePayload = Schema.encodeUnknownSync(Generated.BetaCreateMessageParams)
 
 // Counsel  — model-specific quirks (effort-disabled, etc.) live in
 // `model-config.ts`'s `MODEL_OVERRIDES` table; we read them via
@@ -47,29 +64,26 @@ const prefixName = (name: string): string =>
 
 /** Reverse `prefixName`: drop `mcp_` and lowercase the first char. */
 const unprefixName = (name: string): string => {
-  const stripped = name.startsWith(MCP_PREFIX) ? name.slice(MCP_PREFIX.length) : name
+  let stripped = name
+  if (name.startsWith(MCP_PREFIX)) stripped = name.slice(MCP_PREFIX.length)
   return `${stripped.charAt(0).toLowerCase()}${stripped.slice(1)}`
 }
 
 /** Prefix all tool names with mcp_ in the outgoing payload */
-const transformTools = (
-  tools: ReadonlyArray<Record<string, unknown>>,
-): ReadonlyArray<Record<string, unknown>> =>
+const transformTools = (tools: ReadonlyArray<JsonRecord>): ReadonlyArray<JsonRecord> =>
   tools.map((tool) => {
-    if (typeof tool["name"] !== "string") return tool
+    if (!Predicate.isString(tool["name"])) return tool
     return { ...tool, name: prefixName(tool["name"]) }
   })
 
 /** Prefix tool names in historical message content blocks (tool_use) */
-const transformMessages = (
-  messages: ReadonlyArray<Record<string, unknown>>,
-): ReadonlyArray<Record<string, unknown>> =>
+const transformMessages = (messages: ReadonlyArray<JsonRecord>): ReadonlyArray<JsonRecord> =>
   messages.map((msg) => {
     if (!isRecordArray(msg["content"])) return msg
     return {
       ...msg,
-      content: msg["content"].map((block) => {
-        if (block["type"] === "tool_use" && typeof block["name"] === "string") {
+      content: msg["content"].map((block: JsonRecord) => {
+        if (block["type"] === "tool_use" && Predicate.isString(block["name"])) {
           return { ...block, name: prefixName(block["name"]) }
         }
         return block
@@ -78,10 +92,10 @@ const transformMessages = (
   })
 
 /** Prefix tool name in tool_choice if it specifies a particular tool */
-const transformToolChoice = (toolChoice: unknown): unknown => {
+const transformToolChoice = (toolChoice: JsonValue): JsonValue => {
   if (!isRecord(toolChoice)) return toolChoice
-  if (toolChoice["type"] === "tool" && typeof toolChoice["name"] === "string") {
-    return { ...toolChoice, name: prefixName(toolChoice["name"]) }
+  if (toolChoice["type"] === "tool" && Predicate.isString(toolChoice["name"])) {
+    return { ...toolChoice, name: prefixName(toolChoice["name"]) } satisfies JsonRecord
   }
   return toolChoice
 }
@@ -96,9 +110,12 @@ const transformToolChoice = (toolChoice: unknown): unknown => {
  * After filtering, messages whose `content` array empties out are
  * dropped entirely so the API doesn't see `{ role, content: [] }`.
  */
-export const repairToolPairs = (
-  messages: ReadonlyArray<Record<string, unknown>>,
-): ReadonlyArray<Record<string, unknown>> => {
+type ToolPairIds = {
+  readonly toolUseIds: ReadonlySet<string>
+  readonly toolResultIds: ReadonlySet<string>
+}
+
+const collectToolPairIds = (messages: ReadonlyArray<JsonRecord>): ToolPairIds => {
   const toolUseIds = new Set<string>()
   const toolResultIds = new Set<string>()
 
@@ -106,46 +123,63 @@ export const repairToolPairs = (
     if (!isRecordArray(message["content"])) continue
     for (const block of message["content"]) {
       const id = block["id"]
-      if (block["type"] === "tool_use" && typeof id === "string") {
+      if (block["type"] === "tool_use" && Predicate.isString(id)) {
         toolUseIds.add(id)
       }
       const toolUseId = block["tool_use_id"]
-      if (block["type"] === "tool_result" && typeof toolUseId === "string") {
+      if (block["type"] === "tool_result" && Predicate.isString(toolUseId)) {
         toolResultIds.add(toolUseId)
       }
     }
   }
 
-  const orphanedUses = new Set<string>()
-  for (const id of toolUseIds) {
-    if (!toolResultIds.has(id)) orphanedUses.add(id)
+  return { toolUseIds, toolResultIds }
+}
+
+const findOrphanedIds = (
+  ids: ReadonlySet<string>,
+  matchingIds: ReadonlySet<string>,
+): ReadonlySet<string> => {
+  const orphaned = new Set<string>()
+  for (const id of ids) {
+    if (!matchingIds.has(id)) orphaned.add(id)
   }
-  const orphanedResults = new Set<string>()
-  for (const id of toolResultIds) {
-    if (!toolUseIds.has(id)) orphanedResults.add(id)
-  }
+  return orphaned
+}
+
+const filterToolPairMessage = (
+  message: JsonRecord,
+  orphanedUses: ReadonlySet<string>,
+  orphanedResults: ReadonlySet<string>,
+): Option.Option<JsonRecord> => {
+  if (!isRecordArray(message["content"])) return Option.some(message)
+  const next = message["content"].filter((block: JsonRecord) => {
+    const id = block["id"]
+    if (block["type"] === "tool_use" && Predicate.isString(id)) {
+      return !orphanedUses.has(id)
+    }
+    const toolUseId = block["tool_use_id"]
+    if (block["type"] === "tool_result" && Predicate.isString(toolUseId)) {
+      return !orphanedResults.has(toolUseId)
+    }
+    return true
+  })
+  if (next.length === 0) return Option.none()
+  return Option.some({ ...message, content: next })
+}
+
+/** Remove unpaired tool-use and tool-result blocks from message history. */
+export const repairToolPairs = (messages: ReadonlyArray<JsonRecord>): ReadonlyArray<JsonRecord> => {
+  const { toolUseIds, toolResultIds } = collectToolPairIds(messages)
+  const orphanedUses = findOrphanedIds(toolUseIds, toolResultIds)
+  const orphanedResults = findOrphanedIds(toolResultIds, toolUseIds)
 
   if (orphanedUses.size === 0 && orphanedResults.size === 0) return messages
 
-  const filtered: Record<string, unknown>[] = []
+  const filtered: JsonRecord[] = []
   for (const message of messages) {
-    if (!isRecordArray(message["content"])) {
-      filtered.push(message)
-      continue
-    }
-    const next = message["content"].filter((block) => {
-      const id = block["id"]
-      if (block["type"] === "tool_use" && typeof id === "string") {
-        return !orphanedUses.has(id)
-      }
-      const toolUseId = block["tool_use_id"]
-      if (block["type"] === "tool_result" && typeof toolUseId === "string") {
-        return !orphanedResults.has(toolUseId)
-      }
-      return true
-    })
-    if (next.length === 0) continue
-    filtered.push({ ...message, content: next })
+    const next = filterToolPairMessage(message, orphanedUses, orphanedResults)
+    if (Option.isSome(next)) filtered.push(next.value)
   }
   return filtered
 }
@@ -155,12 +189,15 @@ export const repairToolPairs = (
  * array shape used by the rest of the pipeline. The downstream billing
  * + identity injection expects an array — string input is wrapped.
  */
-const normalizeSystemBlocks = (system: unknown): ReadonlyArray<Record<string, unknown>> => {
-  if (system === undefined || system === null) return []
-  if (typeof system === "string") return [{ type: "text", text: system }]
-  if (Array.isArray(system) && isRecordArray(system)) return system
-  return []
-}
+const normalizeSystemBlocks = (system: JsonValue): ReadonlyArray<JsonRecord> =>
+  Option.match(Option.fromNullishOr(system), {
+    onNone: () => [],
+    onSome: (value) => {
+      if (Predicate.isString(value)) return [{ type: "text", text: value }]
+      if (Array.isArray(value) && isRecordArray(value)) return value
+      return []
+    },
+  })
 
 /**
  * Drop any `system[]` entry that already carries a billing-header text
@@ -168,12 +205,10 @@ const normalizeSystemBlocks = (system: unknown): ReadonlyArray<Record<string, un
  * so a stale entry from an earlier turn would otherwise sit alongside
  * the fresh one and confuse the validator.
  */
-const stripExistingBillingBlocks = (
-  blocks: ReadonlyArray<Record<string, unknown>>,
-): ReadonlyArray<Record<string, unknown>> =>
+const stripExistingBillingBlocks = (blocks: ReadonlyArray<JsonRecord>): ReadonlyArray<JsonRecord> =>
   blocks.filter((block) => {
     const text = block["text"]
-    return !(typeof text === "string" && text.startsWith(BILLING_HEADER_PREFIX))
+    return !(Predicate.isString(text) && text.startsWith(BILLING_HEADER_PREFIX))
   })
 
 /**
@@ -190,18 +225,18 @@ const stripExistingBillingBlocks = (
  * the trailing remainder rides along as third-party so the relocator
  * pulls it into the first user message.
  */
-const partitionSystemBlocks = (
-  callerSystem: unknown,
-): {
-  readonly identityBlocks: ReadonlyArray<Record<string, unknown>>
-  readonly thirdPartyBlocks: ReadonlyArray<Record<string, unknown>>
-} => {
+type PartitionedSystemBlocks = {
+  readonly identityBlocks: ReadonlyArray<JsonRecord>
+  readonly thirdPartyBlocks: ReadonlyArray<JsonRecord>
+}
+
+const partitionSystemBlocks = (callerSystem: JsonValue): PartitionedSystemBlocks => {
   const blocks = stripExistingBillingBlocks(normalizeSystemBlocks(callerSystem))
-  const identityBlocks: Record<string, unknown>[] = []
-  const thirdPartyBlocks: Record<string, unknown>[] = []
+  const identityBlocks: JsonRecord[] = []
+  const thirdPartyBlocks: JsonRecord[] = []
   for (const block of blocks) {
     const text = block["text"]
-    if (typeof text === "string" && text.startsWith(SYSTEM_IDENTITY_PREFIX)) {
+    if (Predicate.isString(text) && text.startsWith(SYSTEM_IDENTITY_PREFIX)) {
       const rest = text.slice(SYSTEM_IDENTITY_PREFIX.length).replace(/^\n+/, "")
       const { text: _t, cache_control: _cc, ...rest_props } = block
       // Identity itself rides without cache_control (validator rejects
@@ -241,20 +276,12 @@ const partitionSystemBlocks = (
  * stale digest and 400s.
  */
 const buildSystemArray = (
-  finalMessages: ReadonlyArray<Record<string, unknown>>,
-): Effect.Effect<ReadonlyArray<Record<string, unknown>>, never, KeychainTransformRequirements> =>
+  finalMessages: ReadonlyArray<JsonRecord>,
+): Effect.Effect<ReadonlyArray<JsonRecord>, never, KeychainTransformRequirements> =>
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     const { version, entrypoint } = getBillingHeaderInputs(platform.env)
-    // Cast through unknown — the Message type in signing.ts is a tighter
-    // shape than the wire-level Record we receive from the SDK. The
-    // signature only reads `role` + `content` defensively.
-    const billing = yield* buildBillingHeaderValue(
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-      finalMessages as ReadonlyArray<{ role?: string; content?: string }>,
-      version,
-      entrypoint,
-    )
+    const billing = yield* buildBillingHeaderValue(finalMessages, version, entrypoint)
 
     return [
       { type: "text", text: billing },
@@ -283,28 +310,31 @@ const buildSystemArray = (
  * Returns the new messages array; mutates nothing.
  */
 const relocateThirdPartyIntoFirstUser = (
-  thirdPartyBlocks: ReadonlyArray<Record<string, unknown>>,
-  messages: ReadonlyArray<Record<string, unknown>>,
-): ReadonlyArray<Record<string, unknown>> => {
+  thirdPartyBlocks: ReadonlyArray<JsonRecord>,
+  messages: ReadonlyArray<JsonRecord>,
+): ReadonlyArray<JsonRecord> => {
   const movedTexts: string[] = []
   for (const block of thirdPartyBlocks) {
     const text = block["text"]
-    if (typeof text === "string" && text.length > 0) movedTexts.push(text)
+    if (Predicate.isString(text) && text.length > 0) movedTexts.push(text)
   }
   if (movedTexts.length === 0) return messages
 
   const firstUserIdx = messages.findIndex((m) => m["role"] === "user")
   if (firstUserIdx === -1) return messages
 
-  const firstUser = messages[firstUserIdx]
-  if (firstUser === undefined) return messages
-  const content = firstUser["content"]
+  const firstUser = Option.fromUndefinedOr(messages[firstUserIdx])
+  if (Option.isNone(firstUser)) return messages
+  const firstUserValue = firstUser.value
+  const content = firstUserValue["content"]
   const prefix = movedTexts.join("\n\n")
+  const nextMessages = messages.slice()
 
-  let newContent: unknown
-  if (typeof content === "string") {
-    newContent = `${prefix}\n\n${content}`
-  } else if (isRecordArray(content)) {
+  if (Predicate.isString(content)) {
+    nextMessages[firstUserIdx] = { ...firstUserValue, content: `${prefix}\n\n${content}` }
+    return nextMessages
+  }
+  if (isRecordArray(content)) {
     // Find the index where leading tool_result blocks end. Inserting
     // text before that boundary trips Anthropic's "tool_result must
     // come first" check.
@@ -315,19 +345,18 @@ const relocateThirdPartyIntoFirstUser = (
     ) {
       firstNonToolResult += 1
     }
-    newContent = [
-      ...content.slice(0, firstNonToolResult),
-      { type: "text", text: prefix },
-      ...content.slice(firstNonToolResult),
-    ]
-  } else {
-    // Unknown content shape — bail out rather than mangling it.
-    return messages
+    nextMessages[firstUserIdx] = {
+      ...firstUserValue,
+      content: [
+        ...content.slice(0, firstNonToolResult),
+        { type: "text", text: prefix },
+        ...content.slice(firstNonToolResult),
+      ],
+    }
+    return nextMessages
   }
-
-  const nextMessages = messages.slice()
-  nextMessages[firstUserIdx] = { ...firstUser, content: newContent }
-  return nextMessages
+  // Unknown content shape — bail out rather than mangling it.
+  return messages
 }
 
 /**
@@ -343,36 +372,42 @@ const relocateThirdPartyIntoFirstUser = (
  *  will replace the `claude-haiku` prefix match with the per-model
  * override table from opencode-claude-auth's `model-config.ts`.
  */
-const stripObjectKey = (
-  parent: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> | undefined => {
-  if (!(key in parent)) return parent
+const stripObjectKey = (parent: JsonRecord, key: string): Option.Option<JsonRecord> => {
+  if (!(key in parent)) return Option.some(parent)
   const { [key]: _removed, ...rest } = parent
-  return Object.keys(rest).length === 0 ? undefined : rest
+  if (Object.keys(rest).length === 0) return Option.none()
+  return Option.some(rest)
 }
 
-const stripHaikuEffort = (payload: Record<string, unknown>): Record<string, unknown> => {
+const stripHaikuEffort = (payload: JsonRecord): JsonRecord => {
   const model = payload["model"]
-  if (typeof model !== "string") return payload
+  if (!Predicate.isString(model)) return payload
   // Counsel  — defer to the per-model override table instead of
   // string-prefix matching here. `disableEffort` is currently set for
   // the `haiku` family in `MODEL_CONFIG`.
   const override = getModelOverride(model)
-  if (override?.disableEffort !== true) return payload
+  if (Option.isNone(override) || override.value.disableEffort !== true) return payload
 
   const next = { ...payload }
   const outputConfig = next["output_config"]
   if (isRecord(outputConfig)) {
     const stripped = stripObjectKey(outputConfig, "effort")
-    if (stripped === undefined) delete next["output_config"]
-    else next["output_config"] = stripped
+    Option.match(stripped, {
+      onNone: () => delete next["output_config"],
+      onSome: (value) => {
+        next["output_config"] = value
+      },
+    })
   }
   const thinking = next["thinking"]
   if (isRecord(thinking)) {
     const stripped = stripObjectKey(thinking, "effort")
-    if (stripped === undefined) delete next["thinking"]
-    else next["thinking"] = stripped
+    Option.match(stripped, {
+      onNone: () => delete next["thinking"],
+      onSome: (value) => {
+        next["thinking"] = value
+      },
+    })
   }
   return next
 }
@@ -397,10 +432,10 @@ const stripHaikuEffort = (payload: Record<string, unknown>): Record<string, unkn
  *   7. stripHaikuEffort — final payload correction; independent.
  */
 export const transformPayload = (
-  payload: Record<string, unknown>,
-): Effect.Effect<Record<string, unknown>, never, KeychainTransformRequirements> =>
+  payload: JsonRecord,
+): Effect.Effect<JsonRecord, never, KeychainTransformRequirements> =>
   Effect.gen(function* () {
-    let result: Record<string, unknown> = { ...payload }
+    let result = { ...payload }
 
     if (isRecordArray(result["tools"])) {
       result["tools"] = transformTools(result["tools"])
@@ -419,9 +454,10 @@ export const transformPayload = (
     }
 
     const { thirdPartyBlocks } = partitionSystemBlocks(result["system"])
-    const messagesAfterRelocate = isRecordArray(result["messages"])
-      ? relocateThirdPartyIntoFirstUser(thirdPartyBlocks, result["messages"])
-      : []
+    let messagesAfterRelocate: ReadonlyArray<JsonRecord> = []
+    if (isRecordArray(result["messages"])) {
+      messagesAfterRelocate = relocateThirdPartyIntoFirstUser(thirdPartyBlocks, result["messages"])
+    }
     result["messages"] = messagesAfterRelocate
     result["system"] = yield* buildSystemArray(messagesAfterRelocate)
 
@@ -438,10 +474,10 @@ const stripPrefix = (name: string): string => unprefixName(name)
 
 /** Strip mcp_ prefix from tool_use content blocks in a non-streaming response */
 export const transformResponseContent = (
-  content: ReadonlyArray<Record<string, unknown>>,
-): ReadonlyArray<Record<string, unknown>> =>
+  content: ReadonlyArray<JsonRecord>,
+): ReadonlyArray<JsonRecord> =>
   content.map((block) => {
-    if (block["type"] === "tool_use" && typeof block["name"] === "string") {
+    if (block["type"] === "tool_use" && Predicate.isString(block["name"])) {
       return { ...block, name: stripPrefix(block["name"]) }
     }
     return block
@@ -453,16 +489,16 @@ export const transformStreamEvent = (
   event: AnthropicClient.MessageStreamEvent,
 ): AnthropicClient.MessageStreamEvent => {
   // content_block_start has type: "content_block_start" and content_block with the block data
-  const e = event as Record<string, unknown>
+  const e = Schema.decodeSync(JsonRecordSchema)(event)
   if (e["type"] !== "content_block_start") return event
   const rawBlock = e["content_block"]
-  const block = isRecord(rawBlock) ? rawBlock : undefined
-  if (block?.["type"] === "tool_use" && typeof block["name"] === "string") {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-    return {
+  if (!isRecord(rawBlock)) return event
+  const block = rawBlock
+  if (block["type"] === "tool_use" && Predicate.isString(block["name"])) {
+    return decodeMessageStreamEvent({
       ...event,
       content_block: { ...block, name: stripPrefix(block["name"]) },
-    } as AnthropicClient.MessageStreamEvent
+    })
   }
   return event
 }
@@ -473,70 +509,68 @@ type CreateMessageOptions = Parameters<AnthropicClient.Service["createMessage"]>
 type CreateMessageStreamOptions = Parameters<AnthropicClient.Service["createMessageStream"]>[0]
 
 /** Wraps an AnthropicClient to apply Claude Code keychain conventions. */
-export const makeKeychainClientLayer = (): Layer.Layer<
+export const makeKeychainClientLayer: Layer.Layer<
   AnthropicClient.AnthropicClient,
   never,
   AnthropicClient.AnthropicClient | KeychainTransformRequirements
-> =>
-  Layer.effect(
-    AnthropicClient.AnthropicClient,
-    Effect.gen(function* () {
-      const inner = yield* AnthropicClient.AnthropicClient
-      const transformContext = yield* Effect.context<KeychainTransformRequirements>()
-      const transformPayloadHere = (payload: Record<string, unknown>) =>
-        transformPayload(payload).pipe(Effect.provideContext(transformContext))
+> = Layer.effect(
+  AnthropicClient.AnthropicClient,
+  Effect.gen(function* () {
+    const inner = yield* AnthropicClient.AnthropicClient
+    const transformContext = yield* Effect.context<KeychainTransformRequirements>()
+    const transformPayloadHere = (payload: JsonRecord) =>
+      transformPayload(payload).pipe(Effect.provideContext(transformContext))
 
-      const service: AnthropicClient.Service = {
-        client: inner.client,
-        streamRequest: inner.streamRequest,
+    const service: AnthropicClient.Service = {
+      client: inner.client,
+      streamRequest: inner.streamRequest,
 
-        createMessage: (options: CreateMessageOptions) =>
-          Effect.gen(function* () {
-            const transformed = yield* transformPayloadHere(
-              options.payload as Record<string, unknown>,
-            )
-            return yield* inner.createMessage({
-              ...options,
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-              payload: transformed as typeof options.payload,
-            })
-          }).pipe(
-            Effect.map(([body, response]) => {
-              const b = body as Record<string, unknown>
-              const content = b["content"]
-              if (isRecordArray(content)) {
-                const transformed = {
-                  ...b,
-                  content: transformResponseContent(content),
-                }
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-                return [transformed as typeof body, response] as [typeof body, typeof response]
+      createMessage: (options: CreateMessageOptions) =>
+        Effect.gen(function* () {
+          const payload = yield* Schema.decodeEffect(JsonRecordSchema)(options.payload).pipe(
+            Effect.orDie,
+          )
+          const transformed = yield* transformPayloadHere(payload)
+          return yield* inner.createMessage({
+            ...options,
+            payload: encodeMessagePayload(decodeMessagePayload(transformed)),
+          })
+        }).pipe(
+          Effect.map(([body, response]) => {
+            const b = Schema.decodeSync(JsonRecordSchema)(body)
+            const content = b["content"]
+            if (isRecordArray(content)) {
+              const transformed = {
+                ...b,
+                content: transformResponseContent(content),
               }
-              return [body, response] as [typeof body, typeof response]
-            }),
-          ),
+              return [
+                Schema.decodeUnknownSync(Generated.BetaMessage)(transformed),
+                response,
+              ] satisfies [typeof body, typeof response]
+            }
+            return [body, response] satisfies [typeof body, typeof response]
+          }),
+        ),
 
-        createMessageStream: (options: CreateMessageStreamOptions) =>
-          Effect.gen(function* () {
-            const transformed = yield* transformPayloadHere(
-              options.payload as Record<string, unknown>,
-            )
-            return yield* inner.createMessageStream({
-              ...options,
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-              payload: transformed as typeof options.payload,
-            })
-          }).pipe(
-            Effect.map(
-              ([response, stream]) =>
-                [response, stream.pipe(Stream.map(transformStreamEvent))] as [
-                  typeof response,
-                  typeof stream,
-                ],
-            ),
-          ),
-      }
+      createMessageStream: (options: CreateMessageStreamOptions) =>
+        Effect.gen(function* () {
+          const payload = yield* Schema.decodeEffect(JsonRecordSchema)(options.payload).pipe(
+            Effect.orDie,
+          )
+          const transformed = yield* transformPayloadHere(payload)
+          return yield* inner.createMessageStream({
+            ...options,
+            payload: encodeMessagePayload(decodeMessagePayload(transformed)),
+          })
+        }).pipe(
+          Effect.map(([response, stream]) => [
+            response,
+            stream.pipe(Stream.map(transformStreamEvent)),
+          ]),
+        ),
+    }
 
-      return service
-    }),
-  )
+    return service
+  }),
+)

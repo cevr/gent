@@ -12,7 +12,7 @@
  * provider's `onCleanup` runs them when it unmounts, so this widget
  * leaves no detached root behind.
  */
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { ref } from "@gent/core/extensions/api"
 import { defineClientExtension, borderLabelContribution } from "../client-facets.js"
 import { ArtifactRpc, type ArtifactType } from "@gent/extensions/client.js"
@@ -38,7 +38,8 @@ export default defineClientExtension(EXT_ID, {
           if (p.extensionId === EXT_ID) refetch()
         }),
     })
-    const liveItems = (): readonly ArtifactType[] => itemsResource.read() ?? []
+    const liveItems = (): readonly ArtifactType[] =>
+      Option.getOrElse(Option.fromNullishOr(itemsResource.read()), () => [])
 
     return borderLabelContribution({
       position: "bottom-right",
@@ -46,16 +47,22 @@ export default defineClientExtension(EXT_ID, {
       produce: () => {
         const items = liveItems()
         if (items.length === 0) return []
-        const currentBranch = transport.currentSession()?.branchId
-        const active = items.filter(
-          (a) =>
-            a.status === "active" && (a.branchId === undefined || a.branchId === currentBranch),
-        ).length
+        const currentBranch = Option.fromNullishOr(transport.currentSession()).pipe(
+          Option.map((session) => session.branchId),
+        )
+        const active = items.filter((artifact) => {
+          if (artifact.status !== "active") return false
+          const branchId = Option.fromNullishOr(artifact.branchId)
+          if (Option.isNone(branchId)) return true
+          return Option.contains(currentBranch, branchId.value)
+        }).length
         if (active === 0) return []
+        let suffix = "s"
+        if (active === 1) suffix = ""
         return [
           {
-            text: `${active} artifact${active !== 1 ? "s" : ""}`,
-            color: "info" as const,
+            text: `${active} artifact${suffix}`,
+            color: "info",
           },
         ]
       },

@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
+import type * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension"
 import {
@@ -28,15 +29,48 @@ const testPlatformLayer = Layer.succeed(
   }),
 )
 
+const JsonRecordSchema = Schema.Record(Schema.String, Schema.Unknown)
+type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
+
 // Synchronously run a transformPayload effect with the live Bun platform —
 // `BunGentPlatformLive` is `Layer.succeed`, so the underlying SHA256 hash is
 // computed eagerly without needing an async runtime.
-const transformPayload = (payload: Record<string, unknown>): Record<string, unknown> =>
+const transformPayload = (payload: JsonRecord): JsonRecord =>
   Effect.runSync(
     transformPayloadEffect(payload).pipe(
       Effect.provide(Layer.merge(BunGentPlatformLive, testPlatformLayer)),
     ),
   )
+
+const WireContentBlock = Schema.Struct({
+  type: Schema.String,
+  id: Schema.optional(Schema.String),
+  name: Schema.optional(Schema.String),
+  text: Schema.optional(Schema.String),
+  tool_use_id: Schema.optional(Schema.String),
+})
+const decodeNamedTools = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ name: Schema.String })),
+)
+const decodeMessagesWithBlocks = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ role: Schema.String, content: Schema.Array(WireContentBlock) })),
+)
+const decodeMessagesWithText = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ content: Schema.String })),
+)
+const decodeSystemBlocks = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ text: Schema.String })),
+)
+const decodeToolChoice = Schema.decodeUnknownSync(
+  Schema.Struct({ type: Schema.String, name: Schema.String }),
+)
+const decodeOutputConfig = Schema.decodeUnknownSync(
+  Schema.Struct({ effort: Schema.optional(Schema.String), other: Schema.optional(Schema.Finite) }),
+)
+const decodeThinking = Schema.decodeUnknownSync(
+  Schema.Struct({ type: Schema.optional(Schema.String), effort: Schema.optional(Schema.String) }),
+)
+const decodeContentBlocks = Schema.decodeUnknownSync(Schema.Array(WireContentBlock))
 
 // ── transformPayload ──
 
@@ -56,7 +90,7 @@ describe("transformPayload", () => {
       ],
     }
     const result = transformPayload(payload)
-    const tools = result["tools"] as Array<{ name: string }>
+    const tools = decodeNamedTools(result["tools"])
     expect(tools[0]!.name).toBe("mcp_Echo")
     expect(tools[1]!.name).toBe("mcp_Search")
   })
@@ -80,7 +114,7 @@ describe("transformPayload", () => {
       ],
     }
     const result = transformPayload(payload)
-    const msgs = result["messages"] as Array<{ content: Array<Record<string, unknown>> }>
+    const msgs = decodeMessagesWithBlocks(result["messages"])
     const toolUse = msgs[0]!.content[1]!
     expect(toolUse["name"]).toBe("mcp_Echo")
   })
@@ -97,7 +131,7 @@ describe("transformPayload", () => {
       ],
     }
     const result = transformPayload(payload)
-    const msgs = result["messages"] as Array<{ content: Array<Record<string, unknown>> }>
+    const msgs = decodeMessagesWithBlocks(result["messages"])
     expect(msgs[0]!.content[0]!["type"]).toBe("text")
     expect(msgs[0]!.content[0]!["text"]).toBe("hello")
   })
@@ -110,7 +144,7 @@ describe("transformPayload", () => {
       tool_choice: { type: "tool", name: "echo" },
     }
     const result = transformPayload(payload)
-    const tc = result["tool_choice"] as { type: string; name: string }
+    const tc = decodeToolChoice(result["tool_choice"])
     expect(tc.name).toBe("mcp_Echo")
   })
 
@@ -133,7 +167,7 @@ describe("transformPayload", () => {
       tools: [{ type: "custom", name: "mcp_foo", input_schema: { type: "object" } }],
     }
     const result = transformPayload(payload)
-    const tools = result["tools"] as Array<{ name: string }>
+    const tools = decodeNamedTools(result["tools"])
     expect(tools[0]!.name).toBe("mcp_Mcp_foo")
   })
 
@@ -186,45 +220,44 @@ describe("transformResponseContent", () => {
 describe("transformStreamEvent", () => {
   test("strips mcp_ from content_block_start tool_use events", () => {
     const event = {
-      type: "content_block_start" as const,
+      type: "content_block_start",
       index: 1,
-      content_block: { type: "tool_use" as const, id: "tc-1", name: "mcp_echo", input: {} },
+      content_block: { type: "tool_use", id: "tc-1", name: "mcp_echo", input: {} },
+    } satisfies AnthropicClient.MessageStreamEvent
+    const result = transformStreamEvent(event)
+    expect(result.type).toBe("content_block_start")
+    if (result.type === "content_block_start" && result.content_block.type === "tool_use") {
+      expect(result.content_block.name).toBe("echo")
     }
-    const result = transformStreamEvent(event as never)
-    const r = result as Record<string, unknown>
-    const block = r["content_block"] as Record<string, unknown>
-    expect(block["name"]).toBe("echo")
   })
 
   test("does not modify content_block_start text events", () => {
     const event = {
-      type: "content_block_start" as const,
+      type: "content_block_start",
       index: 0,
-      content_block: { type: "text" as const, text: "" },
-    }
-    const result = transformStreamEvent(event as never)
-    const r = result as Record<string, unknown>
-    const block = r["content_block"] as Record<string, unknown>
-    expect(block["type"]).toBe("text")
+      content_block: { type: "text", text: "" },
+    } satisfies AnthropicClient.MessageStreamEvent
+    const result = transformStreamEvent(event)
+    expect(result.type).toBe("content_block_start")
+    if (result.type === "content_block_start") expect(result.content_block.type).toBe("text")
   })
 
   test("passes through non-content_block_start events", () => {
     const event = {
-      type: "message_start" as const,
-      message: { id: "msg-1", type: "message", role: "assistant", content: [] },
-    }
-    const result = transformStreamEvent(event as never)
-    expect(result).toBe(event as never)
+      type: "message_stop",
+    } satisfies AnthropicClient.MessageStreamEvent
+    const result = transformStreamEvent(event)
+    expect(result).toBe(event)
   })
 
   test("passes through content_block_delta events", () => {
     const event = {
-      type: "content_block_delta" as const,
+      type: "content_block_delta",
       index: 1,
       delta: { type: "input_json_delta", partial_json: '{"text":' },
-    }
-    const result = transformStreamEvent(event as never)
-    expect(result).toBe(event as never)
+    } satisfies AnthropicClient.MessageStreamEvent
+    const result = transformStreamEvent(event)
+    expect(result).toBe(event)
   })
 })
 
@@ -247,7 +280,7 @@ describe("repairToolPairs", () => {
       },
     ]
     const repaired = repairToolPairs(messages)
-    const assistantContent = repaired[0]!["content"] as Array<Record<string, unknown>>
+    const assistantContent = decodeContentBlocks(repaired[0]?.["content"])
     // tool_use tc-2 is dropped; tc-1 + the text block survive.
     expect(assistantContent).toHaveLength(2)
     expect(assistantContent.find((b) => b["id"] === "tc-1")).toBeDefined()
@@ -265,7 +298,7 @@ describe("repairToolPairs", () => {
       },
     ]
     const repaired = repairToolPairs(messages)
-    const userContent = repaired[0]!["content"] as Array<Record<string, unknown>>
+    const userContent = decodeContentBlocks(repaired[0]?.["content"])
     expect(userContent).toHaveLength(1)
     expect(userContent[0]!["type"]).toBe("text")
   })
@@ -330,14 +363,14 @@ describe("transformPayload — system content relocation", () => {
       messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
     }
     const result = transformPayload(payload)
-    const system = result["system"] as Array<{ text?: string }>
+    const system = decodeSystemBlocks(result["system"])
     // After relocation, system[] holds only billing + identity entries.
     expect(system).toHaveLength(2)
     const systemTexts = system.map((b) => b.text ?? "")
     expect(systemTexts.some((t) => t.startsWith("x-anthropic-billing-header"))).toBe(true)
     expect(systemTexts.some((t) => t.startsWith(SYSTEM_IDENTITY_PREFIX))).toBe(true)
     // Relocated content is prepended to the first user message.
-    const messages = result["messages"] as Array<{ content: Array<Record<string, unknown>> }>
+    const messages = decodeMessagesWithBlocks(result["messages"])
     const firstUserContent = messages[0]!.content
     expect(firstUserContent[0]!["type"]).toBe("text")
     expect(firstUserContent[0]!["text"]).toContain("third-party system instructions")
@@ -354,7 +387,7 @@ describe("transformPayload — system content relocation", () => {
       messages: [{ role: "user", content: "hello" }],
     }
     const result = transformPayload(payload)
-    const messages = result["messages"] as Array<{ content: string }>
+    const messages = decodeMessagesWithText(result["messages"])
     expect(messages[0]!.content).toContain("third-party prefix")
     expect(messages[0]!.content.endsWith("hello")).toBe(true)
   })
@@ -367,10 +400,10 @@ describe("transformPayload — system content relocation", () => {
       messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
     }
     const result = transformPayload(payload)
-    const system = result["system"] as Array<{ text?: string }>
+    const system = decodeSystemBlocks(result["system"])
     // billing + identity only — no extras to move.
     expect(system).toHaveLength(2)
-    const messages = result["messages"] as Array<{ content: Array<Record<string, unknown>> }>
+    const messages = decodeMessagesWithBlocks(result["messages"])
     expect(messages[0]!.content).toHaveLength(1)
   })
 
@@ -387,12 +420,12 @@ describe("transformPayload — system content relocation", () => {
       messages: [{ role: "user", content: "hello" }],
     }
     const result = transformPayload(payload)
-    const system = result["system"] as Array<{ text?: string }>
+    const system = decodeSystemBlocks(result["system"])
     // System still holds [billing, identity] — identity is the bare
     // prefix without the trailing rules.
     expect(system[1]!.text).toBe(SYSTEM_IDENTITY_PREFIX)
     // The rules survived: relocated into the first user message.
-    const messages = result["messages"] as Array<{ content: string }>
+    const messages = decodeMessagesWithText(result["messages"])
     expect(messages[0]!.content).toContain("DO-NOT-DROP these rules.")
     expect(messages[0]!.content.endsWith("hello")).toBe(true)
   })
@@ -416,8 +449,8 @@ describe("transformPayload — system content relocation", () => {
       // The control directly carries what the relocator would produce.
       messages: [{ role: "user", content: "third-party prefix\n\nhello" }],
     })
-    const relocatedBilling = (relocatedPayload["system"] as Array<{ text: string }>)[0]!.text
-    const controlBilling = (controlPayload["system"] as Array<{ text: string }>)[0]!.text
+    const relocatedBilling = decodeSystemBlocks(relocatedPayload["system"])[0]?.text
+    const controlBilling = decodeSystemBlocks(controlPayload["system"])[0]?.text
     expect(relocatedBilling).toBe(controlBilling)
   })
 
@@ -460,17 +493,16 @@ describe("transformPayload — system content relocation", () => {
       ],
     }
     const result = transformPayload(payloadWithPair)
-    const messages = result["messages"] as Array<{
-      role: string
-      content: Array<Record<string, unknown>>
-    }>
-    const userMsg = messages.find((m) => m.role === "user")!
-    expect(userMsg.content[0]!["type"]).toBe("tool_result")
-    expect(userMsg.content[1]!["type"]).toBe("tool_result")
-    expect(userMsg.content[2]!["type"]).toBe("text")
-    expect(userMsg.content[2]!["text"]).toBe("third-party prefix")
-    expect(userMsg.content[3]!["type"]).toBe("text")
-    expect(userMsg.content[3]!["text"]).toBe("follow-up")
+    const messages = decodeMessagesWithBlocks(result["messages"])
+    const userMsg = Option.fromNullishOr(messages.find((message) => message.role === "user"))
+    expect(Option.isSome(userMsg)).toBe(true)
+    if (Option.isNone(userMsg)) return
+    expect(userMsg.value.content[0]?.type).toBe("tool_result")
+    expect(userMsg.value.content[1]?.type).toBe("tool_result")
+    expect(userMsg.value.content[2]?.type).toBe("text")
+    expect(userMsg.value.content[2]?.text).toBe("third-party prefix")
+    expect(userMsg.value.content[3]?.type).toBe("text")
+    expect(userMsg.value.content[3]?.text).toBe("follow-up")
   })
 })
 
@@ -482,7 +514,7 @@ describe("transformPayload — haiku effort-strip", () => {
       model: "claude-haiku-4-5",
       max_tokens: 4096,
       messages: [{ role: "user", content: "hi" }],
-      output_config: { effort: "high" as const },
+      output_config: { effort: "high" },
     }
     const result = transformPayload(payload)
     expect(result["output_config"]).toBeUndefined()
@@ -493,10 +525,10 @@ describe("transformPayload — haiku effort-strip", () => {
       model: "claude-haiku-4-5",
       max_tokens: 4096,
       messages: [{ role: "user", content: "hi" }],
-      output_config: { effort: "high" as const, other: 123 },
+      output_config: { effort: "high", other: 123 },
     }
     const result = transformPayload(payload)
-    const oc = result["output_config"] as { effort?: string; other?: number }
+    const oc = decodeOutputConfig(result["output_config"])
     expect(oc.effort).toBeUndefined()
     expect(oc.other).toBe(123)
   })
@@ -506,10 +538,10 @@ describe("transformPayload — haiku effort-strip", () => {
       model: "claude-opus-4-6",
       max_tokens: 4096,
       messages: [{ role: "user", content: "hi" }],
-      output_config: { effort: "high" as const },
+      output_config: { effort: "high" },
     }
     const result = transformPayload(payload)
-    const oc = result["output_config"] as { effort?: string }
+    const oc = decodeOutputConfig(result["output_config"])
     expect(oc.effort).toBe("high")
   })
 
@@ -526,7 +558,7 @@ describe("transformPayload — haiku effort-strip", () => {
       thinking: { type: "enabled", effort: "high" },
     }
     const result = transformPayload(payload)
-    const thinking = result["thinking"] as { type?: string; effort?: string }
+    const thinking = decodeThinking(result["thinking"])
     expect(thinking.effort).toBeUndefined()
     expect(thinking.type).toBe("enabled")
   })

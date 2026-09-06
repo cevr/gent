@@ -4,7 +4,7 @@ import { ProviderAuthError } from "@gent/core/extensions/api"
 const ClaudeCredentials = Schema.Struct({
   accessToken: Schema.String,
   refreshToken: Schema.String,
-  expiresAt: Schema.Number,
+  expiresAt: Schema.Finite,
 })
 
 const ClaudeCredentialsWrapper = Schema.Struct({
@@ -15,9 +15,9 @@ const CredentialBlobSchema = Schema.Record(Schema.String, Schema.Unknown)
 const decodeCredentialBlob = Schema.decodeUnknownOption(Schema.fromJsonString(CredentialBlobSchema))
 
 const OAuthTokenResponseSchema = Schema.Struct({
-  access_token: Schema.optional(Schema.String),
-  refresh_token: Schema.optional(Schema.String),
-  expires_in: Schema.optional(Schema.Number),
+  access_token: Schema.OptionFromOptional(Schema.String),
+  refresh_token: Schema.OptionFromOptional(Schema.String),
+  expires_in: Schema.OptionFromOptional(Schema.Finite),
 })
 const decodeOAuthTokenResponse = Schema.decodeUnknownOption(
   Schema.fromJsonString(OAuthTokenResponseSchema),
@@ -39,10 +39,10 @@ export const freshEnoughForUse = (creds: ClaudeCredentials, now: number): boolea
 export const decodeCredentials = (
   raw: string,
 ): Effect.Effect<ClaudeCredentials, ProviderAuthError> =>
-  Schema.decodeUnknownEffect(Schema.fromJsonString(ClaudeCredentialsWrapper))(raw).pipe(
+  Schema.decodeEffect(Schema.fromJsonString(ClaudeCredentialsWrapper))(raw).pipe(
     Effect.map((w) => w.claudeAiOauth),
     Effect.catchEager(() =>
-      Schema.decodeUnknownEffect(Schema.fromJsonString(ClaudeCredentials))(raw).pipe(
+      Schema.decodeEffect(Schema.fromJsonString(ClaudeCredentials))(raw).pipe(
         Effect.mapError(
           (e) =>
             new ProviderAuthError({
@@ -57,7 +57,7 @@ export const decodeCredentials = (
 /**
  * Splice fresh credentials into an existing keychain blob, preserving
  * any other fields (e.g. `subscriptionType`, `mcpOAuth`) so a write-back
- * doesn't blow away CLI state. Returns `undefined` if the blob isn't
+ * doesn't blow away CLI state. Returns `None` if the blob isn't
  * valid JSON. Exported for testing.
  *
  * @internal
@@ -65,25 +65,27 @@ export const decodeCredentials = (
 export const updateCredentialBlob = (
   existingJson: string,
   newCreds: ClaudeCredentials,
-): string | undefined => {
+): Option.Option<string> => {
   const decoded = decodeCredentialBlob(existingJson)
-  if (Option.isNone(decoded)) return undefined
+  if (Option.isNone(decoded)) return Option.none()
   const parsed = decoded.value
   const wrapperValue = parsed["claudeAiOauth"]
-  const wrapper = isRecord(wrapperValue) ? wrapperValue : undefined
-  const target = wrapper ?? parsed
-  target["accessToken"] = newCreds.accessToken
-  target["refreshToken"] = newCreds.refreshToken
-  target["expiresAt"] = newCreds.expiresAt
-  return JSON.stringify(parsed)
+  const wrapper = Schema.decodeUnknownOption(CredentialBlobSchema)(wrapperValue)
+  const credentialFields = {
+    accessToken: newCreds.accessToken,
+    refreshToken: newCreds.refreshToken,
+    expiresAt: newCreds.expiresAt,
+  }
+  let next: typeof parsed = { ...parsed, ...credentialFields }
+  if (Option.isSome(wrapper)) {
+    next = { ...parsed, claudeAiOauth: { ...wrapper.value, ...credentialFields } }
+  }
+  return Option.some(Schema.encodeSync(Schema.fromJsonString(CredentialBlobSchema))(next))
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
 
 /**
  * Parse a raw OAuth refresh response body into `ClaudeCredentials`.
- * Returns `undefined` if the body is not valid JSON, not an object,
+ * Returns `None` if the body is not valid JSON, not an object,
  * or missing `access_token`. Defaults `expires_in` to 36 000s (10h) per
  * Anthropic's observed token lifetime. Exported for testing.
  *
@@ -93,15 +95,15 @@ export const parseOAuthResponse = (
   raw: string,
   fallbackRefreshToken: string,
   now: number = 0,
-): ClaudeCredentials | undefined => {
+): Option.Option<ClaudeCredentials> => {
   const decoded = decodeOAuthTokenResponse(raw)
-  if (Option.isNone(decoded)) return undefined
+  if (Option.isNone(decoded)) return Option.none()
   const data = decoded.value
-  if (data.access_token === undefined) return undefined
-  const expiresIn = data.expires_in ?? 36_000
-  return {
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token ?? fallbackRefreshToken,
+  if (Option.isNone(data.access_token)) return Option.none()
+  const expiresIn = Option.getOrElse(data.expires_in, () => 36_000)
+  return Option.some({
+    accessToken: data.access_token.value,
+    refreshToken: Option.getOrElse(data.refresh_token, () => fallbackRefreshToken),
     expiresAt: now + expiresIn * 1000,
-  }
+  })
 }

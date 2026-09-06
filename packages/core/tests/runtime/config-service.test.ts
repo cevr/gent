@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from "effect-bun-test"
-import { Deferred, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect"
+import { Predicate, Deferred, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { PermissionRule } from "@gent/core-internal/domain/permission"
 import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core-internal/domain/agent"
@@ -105,11 +105,12 @@ describe("user configuration", () => {
                 Effect.gen(function* () {
                   if (filePath === path.join(home, ConfigService.USER_CONFIG_RELATIVE)) {
                     yield* Ref.update(observedConfigWrites, (count) => count + 1)
-                    const decoded = yield* Schema.decodeUnknownEffect(
-                      Schema.fromJsonString(UserConfig),
-                    )(content).pipe(Effect.catchEager(() => Effect.succeed(new UserConfig({}))))
+                    const decoded = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
+                      content,
+                    ).pipe(Effect.catchEager(() => Effect.succeed(new UserConfig({}))))
                     const count = decoded.permissions?.length ?? 0
                     if (count === tools.length) {
+                      // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
                       yield* Deferred.succeed(allRulesWriteStarted, undefined).pipe(
                         Effect.catchEager(() => Effect.void),
                       )
@@ -133,11 +134,10 @@ describe("user configuration", () => {
         const live = ConfigService.Live.pipe(Layer.provide(platformLayer))
         yield* Effect.gen(function* () {
           const cfg = yield* ConfigService
-          yield* Effect.all(
-            tools.map((tool) =>
-              cfg.addPermissionRule(new PermissionRule({ tool, action: "allow" })),
-            ),
-            { concurrency: "unbounded" },
+          yield* Effect.forEach(
+            tools,
+            (tool) => cfg.addPermissionRule(new PermissionRule({ tool, action: "allow" })),
+            { concurrency: 16 },
           )
           const result = (yield* cfg.get()).permissions ?? []
           expect(result.map((rule) => rule.tool).sort()).toEqual([...tools].sort())
@@ -145,10 +145,11 @@ describe("user configuration", () => {
           const persistedText = yield* fs.readFileString(
             path.join(home, ConfigService.USER_CONFIG_RELATIVE),
           )
-          const persisted = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(UserConfig))(
+          const persisted = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
             persistedText,
           )
           expect(persisted.permissions?.map((rule) => rule.tool).sort()).toEqual([...tools].sort())
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -164,6 +165,7 @@ describe("user configuration", () => {
         const cfg = yield* ConfigService
 
         // Remove Bash rule
+        // oxlint-disable-next-line effect/noNullish -- Exercise the existing absent-value boundary contract.
         yield* cfg.removePermissionRule("Bash", undefined)
 
         const result = (yield* cfg.get()).permissions ?? []
@@ -192,6 +194,7 @@ describe("user configuration", () => {
     })
 
     it.live("removing a missing rule is a no-op", () =>
+      // oxlint-disable-next-line effect/noNullish -- Exercise the existing absent-value boundary contract.
       ConfigService.use((cfg) => cfg.removePermissionRule("NonExistent", undefined)).pipe(
         Effect.provide(ConfigService.Test()),
       ),
@@ -248,9 +251,10 @@ describe("user configuration", () => {
         yield* cfg.setDriverOverride(AgentName.make("cowork"), driver)
         const result = yield* cfg.get()
         const cowork = result.driverOverrides?.[AgentName.make("cowork")]
-        if (cowork === undefined) throw new Error("expected cowork override")
+        if (Predicate.isUndefined(cowork))
+          return yield* Effect.die(new Error("expected cowork override"))
         expect(cowork._tag).toBe("external")
-        expect((cowork as ExternalDriverRef).id).toBe("acp-claude-code")
+        expect(cowork.id).toBe("acp-claude-code")
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
@@ -347,6 +351,7 @@ describe("user configuration", () => {
           ExternalDriverRef.make({ id: "acp-claude-code" }),
         )
         yield* cfg.addPermissionRule(new PermissionRule({ tool: "Bash", action: "deny" }))
+        // oxlint-disable-next-line effect/noNullish -- Exercise the existing absent-value boundary contract.
         yield* cfg.removePermissionRule("Bash", undefined)
         const result = yield* cfg.get()
         expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeDefined()
@@ -386,8 +391,12 @@ describe("user configuration", () => {
 
     const expectExternalOverride = (cfg: UserConfig, agent: string, expectedId: string): void => {
       const override = cfg.driverOverrides?.[AgentName.make(agent)]
-      if (override === undefined) throw new Error(`expected ${agent} override`)
-      if (override._tag !== "external") throw new Error("expected external driver")
+      if (Predicate.isUndefined(override)) {
+        return Effect.runSync(Effect.die(new Error(`expected ${agent} override`)))
+      }
+      if (override._tag !== "external") {
+        return Effect.runSync(Effect.die(new Error("expected external driver")))
+      }
       expect(override.id).toBe(expectedId)
     }
 
@@ -398,6 +407,7 @@ describe("user configuration", () => {
           const cfg = yield* ConfigService
           const result = yield* cfg.get()
           expectExternalOverride(result, "cowork", "acp-launch-driver")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -409,6 +419,7 @@ describe("user configuration", () => {
           const cfg = yield* ConfigService
           const result = yield* cfg.get(projectA)
           expectExternalOverride(result, "cowork", "acp-projectA-driver")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -422,6 +433,7 @@ describe("user configuration", () => {
           const b = yield* cfg.get(projectB)
           expectExternalOverride(a, "cowork", "acp-projectA-driver")
           expectExternalOverride(b, "cowork", "acp-projectB-driver")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -435,6 +447,7 @@ describe("user configuration", () => {
           const cfg = yield* ConfigService
           const result = yield* cfg.get(empty)
           expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeUndefined()
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )

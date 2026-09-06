@@ -6,7 +6,7 @@
  * yield the same services directly instead of routing through an actor mailbox.
  */
 
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import {
   defineExtension,
   defineResource,
@@ -14,7 +14,6 @@ import {
   ExtensionContext,
   ExtensionSetupContext,
   hook,
-  isRecord,
   tool,
   type ToolResultInput,
   type TurnAfterInput,
@@ -30,7 +29,7 @@ const AUTO_CHECKPOINT_TOOL = "auto_checkpoint"
 const REVIEW_TOOL = "review"
 const DEFAULT_MAX_ITERATIONS = 10
 
-class AutoCheckpointDecodeError extends Schema.TaggedErrorClass<AutoCheckpointDecodeError>()(
+class AutoCheckpointDecodeError extends Schema.TaggedError<AutoCheckpointDecodeError>()(
   "AutoCheckpointDecodeError",
   {
     message: Schema.String,
@@ -38,59 +37,53 @@ class AutoCheckpointDecodeError extends Schema.TaggedErrorClass<AutoCheckpointDe
   },
 ) {}
 
-const CheckpointOutput = Schema.Struct({
-  status: Schema.optional(Schema.Literals(["continue", "complete", "abandon"])),
-  summary: Schema.optional(Schema.String),
-  learnings: Schema.optional(Schema.String),
-  metrics: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
-  nextIdea: Schema.optional(Schema.String),
-})
-const decodeCheckpointOutput = Schema.decodeUnknownSync(CheckpointOutput)
+const CheckpointStatus = Schema.Literals(["continue", "complete", "abandon"])
+type CheckpointStatus = typeof CheckpointStatus.Type
+const DEFAULT_CHECKPOINT_STATUS: CheckpointStatus = "continue"
 
-const parseCheckpointParams = (
-  input: Record<string, unknown>,
-): {
-  status: "continue" | "complete" | "abandon"
-  summary: string
-  learnings: string | undefined
-  metrics: Record<string, number> | undefined
-  nextIdea: string | undefined
-} => {
-  const raw = typeof input["status"] === "string" ? input["status"] : "continue"
-  const status: "continue" | "complete" | "abandon" =
-    raw === "continue" || raw === "complete" || raw === "abandon" ? raw : "continue"
+const CheckpointOutput = Schema.Struct({
+  status: Schema.OptionFromOptional(CheckpointStatus),
+  summary: Schema.OptionFromOptional(Schema.String),
+  learnings: Schema.OptionFromOptional(Schema.String),
+  metrics: Schema.OptionFromOptional(Schema.Record(Schema.String, Schema.Finite)),
+  nextIdea: Schema.OptionFromOptional(Schema.String),
+})
+const CheckpointResultInput = Schema.Union([
+  CheckpointOutput,
+  Schema.fromJsonString(CheckpointOutput),
+])
+const decodeCheckpointOutput = Schema.decodeUnknownSync(CheckpointResultInput)
+
+const parseCheckpointParams = (input: ToolResultInput["input"]) => {
+  const decoded = Schema.decodeUnknownSync(CheckpointOutput)(input)
   return {
-    status,
-    summary: typeof input["summary"] === "string" ? input["summary"] : "Checkpoint",
-    learnings: typeof input["learnings"] === "string" ? input["learnings"] : undefined,
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-    metrics: isRecord(input["metrics"]) ? (input["metrics"] as Record<string, number>) : undefined,
-    nextIdea: typeof input["nextIdea"] === "string" ? input["nextIdea"] : undefined,
+    status: Option.getOrElse(decoded.status, () => DEFAULT_CHECKPOINT_STATUS),
+    summary: Option.getOrElse(decoded.summary, () => "Checkpoint"),
+    learnings: decoded.learnings,
+    metrics: decoded.metrics,
+    nextIdea: decoded.nextIdea,
   }
 }
 
-const parseCheckpointResult = (result: unknown) => {
-  const value = typeof result === "string" ? JSON.parse(result) : result
-  return decodeCheckpointOutput(value)
-}
+const parseCheckpointResult = (result: ToolResultInput["result"]) => decodeCheckpointOutput(result)
 
 const readSnapshot = Effect.fn("Auto.readSnapshot")(function* () {
   const auto = yield* Effect.serviceOption(AutoRead)
-  if (auto._tag === "None") return undefined
-  return yield* auto.value.snapshot()
+  if (Option.isNone(auto)) return Option.none()
+  return Option.some(yield* auto.value.snapshot)
 })
 
 const drainAndQueueFollowUp = Effect.fn("Auto.drainAndQueueFollowUp")(function* () {
   const auto = yield* Effect.serviceOption(AutoWrite)
   if (auto._tag === "None") return
 
-  const followUp = yield* auto.value.drainFollowUp()
-  if (followUp === undefined || followUp.content === "") return
+  const followUp = yield* auto.value.drainFollowUp
+  if (Option.isNone(followUp) || followUp.value.content === "") return
 
   const ctx = yield* ExtensionContext
   yield* ctx.Session.queueFollowUp({
-    sourceId: followUp.sourceId,
-    content: followUp.content,
+    sourceId: followUp.value.sourceId,
+    content: followUp.value.content,
     metadata: { extensionId: "auto", hidden: true },
   }).pipe(Effect.catchEager(() => Effect.void))
 })
@@ -100,16 +93,7 @@ const tellAutoFromTool = Effect.fn("Auto.tellFromTool")(function* (input: ToolRe
   if (auto._tag === "None") return
 
   if (input.toolName === AUTO_CHECKPOINT_TOOL) {
-    let parsed:
-      | {
-          status?: "continue" | "complete" | "abandon"
-          summary?: string
-          learnings?: string
-          metrics?: Record<string, number>
-          nextIdea?: string
-        }
-      | undefined
-    parsed = yield* Effect.try({
+    const parsed = yield* Effect.try({
       try: () => parseCheckpointResult(input.result),
       catch: (decodeError) =>
         new AutoCheckpointDecodeError({
@@ -117,28 +101,34 @@ const tellAutoFromTool = Effect.fn("Auto.tellFromTool")(function* (input: ToolRe
           cause: decodeError,
         }),
     }).pipe(
+      Effect.asSome,
       Effect.catchEager((decodeError) =>
         Effect.logWarning("auto.checkpoint.decode-failed").pipe(
-          Effect.annotateLogs({
-            error: decodeError.message,
-            resultType: typeof input.result,
-          }),
-          Effect.as(undefined),
+          Effect.annotateLogs({ error: decodeError.message }),
+          Effect.as(Option.none<typeof CheckpointOutput.Type>()),
         ),
       ),
     )
+    const status = parsed.pipe(
+      Option.flatMap((value) => value.status),
+      Option.getOrElse(() => DEFAULT_CHECKPOINT_STATUS),
+    )
+    const summary = parsed.pipe(
+      Option.flatMap((value) => value.summary),
+      Option.getOrElse(() => "Checkpoint"),
+    )
     yield* auto.value.autoSignal({
-      status: parsed?.status ?? "continue",
-      summary: parsed?.summary ?? "Checkpoint",
-      learnings: parsed?.learnings,
-      metrics: parsed?.metrics,
-      nextIdea: parsed?.nextIdea,
+      status,
+      summary,
+      learnings: Option.getOrUndefined(parsed.pipe(Option.flatMap((value) => value.learnings))),
+      metrics: Option.getOrUndefined(parsed.pipe(Option.flatMap((value) => value.metrics))),
+      nextIdea: Option.getOrUndefined(parsed.pipe(Option.flatMap((value) => value.nextIdea))),
     })
     return
   }
 
   if (input.toolName === REVIEW_TOOL) {
-    yield* auto.value.reviewSignal()
+    yield* auto.value.reviewSignal
   }
 })
 
@@ -151,32 +141,37 @@ const onToolResult = (input: ToolResultInput) =>
       if (journal._tag === "None") return
 
       const snapshot = yield* readSnapshot()
-      if (snapshot === undefined || !snapshot.active) return
+      if (Option.isNone(snapshot) || !snapshot.value.active) return
 
-      if (input.toolName === AUTO_CHECKPOINT_TOOL && isRecord(input.input)) {
+      if (input.toolName === AUTO_CHECKPOINT_TOOL) {
         const cp = parseCheckpointParams(input.input)
 
-        const activePath = yield* journal.value.getActivePath()
-        if (activePath === undefined && snapshot.goal !== undefined) {
+        const activePath = yield* journal.value.getActivePath
+        const goal = Option.fromNullishOr(snapshot.value.goal)
+        if (Option.isNone(activePath) && Option.isSome(goal)) {
           yield* journal.value.start({
-            goal: snapshot.goal,
-            maxIterations: snapshot.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+            goal: goal.value,
+            maxIterations: snapshot.value.maxIterations ?? DEFAULT_MAX_ITERATIONS,
             sessionId: input.sessionId,
           })
         }
 
         yield* journal.value.appendCheckpoint({
-          iteration: snapshot.iteration ?? 1,
-          ...cp,
+          iteration: snapshot.value.iteration ?? 1,
+          status: cp.status,
+          summary: cp.summary,
+          learnings: Option.getOrUndefined(cp.learnings),
+          metrics: Option.getOrUndefined(cp.metrics),
+          nextIdea: Option.getOrUndefined(cp.nextIdea),
         })
 
         if (cp.status === "complete" || cp.status === "abandon") {
-          yield* journal.value.finish()
+          yield* journal.value.finish
         }
       }
 
       if (input.toolName === REVIEW_TOOL) {
-        yield* journal.value.appendReview(snapshot.iteration ?? 1)
+        yield* journal.value.appendReview(snapshot.value.iteration ?? 1)
       }
     }).pipe(Effect.catchEager(() => Effect.void))
 
@@ -190,10 +185,10 @@ const autoHandoffImpl = (input: TurnAfterInput) =>
     const auto = yield* Effect.serviceOption(AutoWrite)
     if (auto._tag === "None") return
 
-    yield* auto.value.turnCompleted()
+    yield* auto.value.turnCompleted
     yield* drainAndQueueFollowUp()
 
-    const snapshot = yield* auto.value.snapshot()
+    const snapshot = yield* auto.value.snapshot
     if (!snapshot.active) return
 
     const contextPercent = yield* estimateContextPercent()
@@ -204,29 +199,31 @@ const autoHandoffImpl = (input: TurnAfterInput) =>
     )
 
     const journal = yield* Effect.serviceOption(AutoJournal)
-    let journalPath: string | undefined
+    let journalPath = Option.none<string>()
     if (journal._tag === "Some") {
-      journalPath = yield* journal.value.getActivePath()
-      if (journalPath === undefined && snapshot.goal !== undefined) {
-        journalPath = yield* journal.value.start({
-          goal: snapshot.goal,
-          maxIterations: snapshot.maxIterations ?? DEFAULT_MAX_ITERATIONS,
-          sessionId: input.sessionId,
-        })
+      journalPath = yield* journal.value.getActivePath
+      const goal = Option.fromNullishOr(snapshot.goal)
+      if (Option.isNone(journalPath) && Option.isSome(goal)) {
+        journalPath = Option.some(
+          yield* journal.value.start({
+            goal: goal.value,
+            maxIterations: snapshot.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+            sessionId: input.sessionId,
+          }),
+        )
       }
     }
 
-    yield* auto.value.requestHandoff(
-      [
-        `Context is at ${contextPercent}%. Call the \`handoff\` tool to transfer to a new session.`,
-        `Include this context:`,
-        `- Auto loop iteration ${snapshot.iteration}/${snapshot.maxIterations}`,
-        `- Goal: ${snapshot.goal}`,
-        journalPath !== undefined ? `- Journal: ${journalPath}` : undefined,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    )
+    const handoffLines = [
+      `Context is at ${contextPercent}%. Call the \`handoff\` tool to transfer to a new session.`,
+      `Include this context:`,
+      `- Auto loop iteration ${snapshot.iteration}/${snapshot.maxIterations}`,
+      `- Goal: ${snapshot.goal}`,
+    ]
+    if (Option.isSome(journalPath)) {
+      handoffLines.push(`- Journal: ${journalPath.value}`)
+    }
+    yield* auto.value.requestHandoff(handoffLines.join("\n"))
 
     yield* drainAndQueueFollowUp()
   }).pipe(Effect.catchEager(() => Effect.void))
@@ -235,7 +232,7 @@ const turnProjection = () =>
   Effect.gen(function* () {
     const auto = yield* Effect.serviceOption(AutoRead)
     if (auto._tag === "None") return viewForState(AutoState.cases.Inactive.make({}))
-    return yield* auto.value.turnProjection()
+    return yield* auto.value.turnProjection
   })
 
 const AutoCheckpointParams = Schema.Struct({
@@ -251,7 +248,7 @@ const AutoCheckpointParams = Schema.Struct({
     }),
   ),
   metrics: Schema.optionalKey(
-    Schema.Record(Schema.String, Schema.Number).annotate({
+    Schema.Record(Schema.String, Schema.Finite).annotate({
       description: "Optional quantitative tracking (e.g. findings count, coverage %)",
     }),
   ),
@@ -293,10 +290,12 @@ export const AutoExtension = defineExtension({
       const ctx = yield* ExtensionSetupContext
       return [
         defineResource({
+          id: "@gent/auto/controller",
           scope: "process",
           layer: AutoControllerLive,
         }),
         defineResource({
+          id: "@gent/auto/journal",
           tag: AutoJournal,
           scope: "process",
           layer: AutoJournal.Live({ cwd: ctx.cwd }),

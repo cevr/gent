@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Match, Schema } from "effect"
 
 export interface MermaidViewerState {
   readonly diagramIndex: number
@@ -12,16 +12,16 @@ export const MermaidViewerState = {
     panX: 0,
     panY: 0,
   }),
-} as const
+}
 
 export const MermaidViewerEvent = Schema.TaggedUnion({
   Open: {},
-  PanLeft: { step: Schema.Number },
-  PanRight: { step: Schema.Number },
-  PanUp: { step: Schema.Number },
-  PanDown: { step: Schema.Number },
+  PanLeft: { step: Schema.Finite },
+  PanRight: { step: Schema.Finite },
+  PanUp: { step: Schema.Finite },
+  PanDown: { step: Schema.Finite },
   PrevDiagram: {},
-  NextDiagram: { diagramCount: Schema.Number },
+  NextDiagram: { diagramCount: Schema.Finite },
   ResetPan: {},
 })
 export type MermaidViewerEvent = Schema.Schema.Type<typeof MermaidViewerEvent>
@@ -36,40 +36,38 @@ export function transitionMermaidViewer(
   state: MermaidViewerState,
   event: MermaidViewerEvent,
 ): MermaidViewerState {
-  switch (event._tag) {
-    case "Open":
-      return MermaidViewerState.initial()
-    case "PanLeft":
-      return {
-        ...state,
-        panX: Math.max(0, state.panX - event.step),
-      }
-    case "PanRight":
-      return {
-        ...state,
-        panX: state.panX + event.step,
-      }
-    case "PanUp":
-      return {
-        ...state,
-        panY: Math.max(0, state.panY - event.step),
-      }
-    case "PanDown":
-      return {
-        ...state,
-        panY: state.panY + event.step,
-      }
-    case "PrevDiagram":
-      return resetPan({
-        ...state,
-        diagramIndex: Math.max(0, state.diagramIndex - 1),
-      })
-    case "NextDiagram":
-      return resetPan({
-        ...state,
-        diagramIndex: Math.min(event.diagramCount - 1, state.diagramIndex + 1),
-      })
-    case "ResetPan":
-      return resetPan(state)
-  }
+  const transitionEvent: (event: MermaidViewerEvent) => MermaidViewerState =
+    Match.type<MermaidViewerEvent>().pipe(
+      Match.tagsExhaustive({
+        Open: () => MermaidViewerState.initial(),
+        PanLeft: (event) => ({
+          ...state,
+          panX: Math.max(0, state.panX - event.step),
+        }),
+        PanRight: (event) => ({
+          ...state,
+          panX: state.panX + event.step,
+        }),
+        PanUp: (event) => ({
+          ...state,
+          panY: Math.max(0, state.panY - event.step),
+        }),
+        PanDown: (event) => ({
+          ...state,
+          panY: state.panY + event.step,
+        }),
+        PrevDiagram: () =>
+          resetPan({
+            ...state,
+            diagramIndex: Math.max(0, state.diagramIndex - 1),
+          }),
+        NextDiagram: (event) =>
+          resetPan({
+            ...state,
+            diagramIndex: Math.min(event.diagramCount - 1, state.diagramIndex + 1),
+          }),
+        ResetPan: () => resetPan(state),
+      }),
+    )
+  return transitionEvent(event)
 }

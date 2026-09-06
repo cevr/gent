@@ -14,25 +14,25 @@ import {
 const GOOGLE_COMPAT_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 const MISTRAL_COMPAT_URL = "https://api.mistral.ai/v1"
 
-export const readOptionalEnv = (name: string): Effect.Effect<string | undefined> =>
-  Effect.gen(function* () {
-    const opt = yield* Config.option(Config.string(name))
-    return Option.getOrUndefined(opt)
-  }).pipe(Effect.orElseSucceed(() => undefined))
+type OpenAiCompatConfig = Required<Parameters<typeof OpenAiLanguageModel.layer>[0]>["config"]
+
+export const readOptionalEnv = (name: string): Effect.Effect<Option.Option<string>> =>
+  Config.option(Config.string(name)).pipe(Effect.orElseSucceed(() => Option.none()))
 
 export const buildOpenAiCompatConfig = (
-  hints?: ProviderHints,
-  options?: { readonly includeReasoning?: boolean },
-): Record<string, unknown> => {
-  const config: Record<string, unknown> = {}
-  if (hints?.maxTokens !== undefined) config["max_tokens"] = hints.maxTokens
-  if (hints?.temperature !== undefined) config["temperature"] = hints.temperature
-  if (
-    options?.includeReasoning === true &&
-    hints?.reasoning !== undefined &&
-    hints.reasoning !== "none"
-  ) {
-    config["reasoning_effort"] = hints.reasoning
+  hints: Option.Option<ProviderHints>,
+  includeReasoning: boolean,
+): OpenAiCompatConfig => {
+  let config: OpenAiCompatConfig = {}
+  if (Option.isSome(hints)) {
+    const maxTokens = Option.fromNullishOr(hints.value.maxTokens)
+    if (Option.isSome(maxTokens)) config = { ...config, max_tokens: maxTokens.value }
+    const temperature = Option.fromNullishOr(hints.value.temperature)
+    if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
+    const reasoning = Option.fromNullishOr(hints.value.reasoning)
+    if (includeReasoning && Option.isSome(reasoning) && reasoning.value !== "none") {
+      config = { ...config, reasoning_effort: reasoning.value }
+    }
   }
   return config
 }
@@ -41,46 +41,50 @@ export const makeOpenAiCompatResolution = (params: {
   readonly provider: string
   readonly modelName: string
   readonly apiKey: string
-  readonly config: Record<string, unknown>
-  readonly apiUrl?: string
+  readonly config: OpenAiCompatConfig
+  readonly apiUrl: Option.Option<string>
 }): ProviderResolution => {
-  const clientLayer = OpenAiClient.layer({
-    apiKey: Redacted.make(params.apiKey),
-    ...(params.apiUrl !== undefined ? { apiUrl: params.apiUrl } : {}),
-  }).pipe(Layer.provide(FetchHttpClient.layer))
+  let clientLayer = OpenAiClient.layer({ apiKey: Redacted.make(params.apiKey) })
+  if (Option.isSome(params.apiUrl)) {
+    clientLayer = OpenAiClient.layer({
+      apiKey: Redacted.make(params.apiKey),
+      apiUrl: params.apiUrl.value,
+    })
+  }
+  const providedClientLayer = clientLayer.pipe(Layer.provide(FetchHttpClient.layer))
   const modelLayer = OpenAiLanguageModel.layer({
     model: params.modelName,
     config: params.config,
-  }).pipe(Layer.provide(clientLayer))
+  }).pipe(Layer.provide(providedClientLayer))
   return AiModel.make(params.provider, params.modelName, modelLayer)
 }
 
 export const makeApiKeyCompatDriver = (params: {
   readonly id: string
   readonly name: string
-  readonly envApiKey: string | undefined
+  readonly envApiKey: Option.Option<string>
   readonly envVarName: string
-  readonly apiUrl?: string
+  readonly apiUrl: Option.Option<string>
 }): ModelDriverContribution => ({
   id: params.id,
   name: params.name,
-  resolveModel: (modelName, authInfo, hints): ProviderResolution => {
-    const storedApiKey =
-      authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
-    const apiKey = storedApiKey ?? params.envApiKey
-    if (apiKey === undefined) {
-      throw new ProviderAuthError({
-        message: `${params.name} credentials unavailable: no stored API key or ${params.envVarName} env var`,
+  resolveModel: (modelName, authInfo, hints) =>
+    Effect.gen(function* () {
+      let apiKey = params.envApiKey
+      if (authInfo?.type === "api") apiKey = Option.fromNullishOr(authInfo.key)
+      if (Option.isNone(apiKey)) {
+        return yield* new ProviderAuthError({
+          message: `${params.name} credentials unavailable: no stored API key or ${params.envVarName} env var`,
+        })
+      }
+      return makeOpenAiCompatResolution({
+        provider: params.id,
+        modelName,
+        apiKey: apiKey.value,
+        apiUrl: params.apiUrl,
+        config: buildOpenAiCompatConfig(Option.fromNullishOr(hints), false),
       })
-    }
-    return makeOpenAiCompatResolution({
-      provider: params.id,
-      modelName,
-      apiKey,
-      apiUrl: params.apiUrl,
-      config: buildOpenAiCompatConfig(hints),
-    })
-  },
+    }),
   auth: {
     methods: [AuthMethod.make({ type: "api", label: "Manually enter API key" })],
   },
@@ -104,7 +108,7 @@ const makeApiKeyCompatExtension = (params: {
             name: params.name,
             envApiKey,
             envVarName: params.envVarName,
-            apiUrl: params.apiUrl,
+            apiUrl: Option.some(params.apiUrl),
           }),
         ]
       }),

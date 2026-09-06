@@ -50,12 +50,12 @@ export const ResearchExtension = defineExtension({
       execute: (input: string) =>
         Effect.gen(function* () {
           const ctx = yield* ExtensionContext
+          let content =
+            "Use the research tool to understand how an external library or framework works. Ask me which repo to research."
+          if (input.trim().length > 0) content = `Use the research tool: ${input.trim()}`
           yield* ctx.Session.queueFollowUp({
             sourceId: "research-command",
-            content:
-              input.trim().length > 0
-                ? `Use the research tool: ${input.trim()}`
-                : "Use the research tool to understand how an external library or framework works. Ask me which repo to research.",
+            content,
           })
         }).pipe(
           Effect.mapError(

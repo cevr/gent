@@ -8,7 +8,7 @@
  * ExecutorMcpBridge. isError results become Effect.fail.
  */
 
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { tool } from "@gent/core/extensions/api"
 import { ExecutorRead } from "./controller.js"
 import { type ExecutorMcpToolResult, ResumeAction, ExecutorMcpError } from "./domain.js"
@@ -19,25 +19,26 @@ import { ExecutorMcpBridge } from "./mcp-bridge.js"
 const requireReadyBaseUrl = (phase: "execute" | "resume") =>
   Effect.gen(function* () {
     const executor = yield* Effect.serviceOption(ExecutorRead)
-    const snapshot =
-      executor._tag === "Some"
-        ? yield* executor.value.snapshot().pipe(Effect.catchEager(() => Effect.void))
-        : undefined
-    if (
-      snapshot === undefined ||
-      snapshot.status !== "ready" ||
-      snapshot.baseUrl === undefined ||
-      snapshot.baseUrl.length === 0
-    ) {
+    if (Option.isNone(executor)) {
       return yield* new ExecutorMcpError({ phase, message: "Executor not ready" })
     }
-    return snapshot.baseUrl
+    const snapshot = yield* executor.value.snapshot.pipe(Effect.option)
+    if (Option.isNone(snapshot) || snapshot.value.status !== "ready") {
+      return yield* new ExecutorMcpError({ phase, message: "Executor not ready" })
+    }
+    const baseUrl = Option.fromNullishOr(snapshot.value.baseUrl)
+    if (Option.isNone(baseUrl) || baseUrl.value.length === 0) {
+      return yield* new ExecutorMcpError({ phase, message: "Executor not ready" })
+    }
+    return baseUrl.value
   })
 
-const failIfError = (result: ExecutorMcpToolResult, phase: "execute" | "resume") =>
-  result.isError
-    ? Effect.fail(new ExecutorMcpError({ phase, message: result.text }))
-    : Effect.succeed(result)
+const failIfError = (result: ExecutorMcpToolResult, phase: "execute" | "resume") => {
+  if (result.isError) {
+    return Effect.fail(new ExecutorMcpError({ phase, message: result.text }))
+  }
+  return Effect.succeed(result)
+}
 
 const ExecuteResult = Schema.Struct({
   text: Schema.String,
@@ -63,6 +64,8 @@ const ResumeParams = Schema.Struct({
     }),
   ),
 })
+
+const ResumeContent = Schema.Record(Schema.String, Schema.Unknown)
 
 // ── Execute Tool ──
 
@@ -107,11 +110,13 @@ export const ResumeTool = tool({
   execute: Effect.fn("ResumeTool.execute")(function* (params: typeof ResumeParams.Type) {
     const baseUrl = yield* requireReadyBaseUrl("resume")
     const bridge = yield* ExecutorMcpBridge
-    const contentStr = params.content
-    const parsed = contentStr
-      ? yield* Schema.decodeUnknownEffect(
-          Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
-        )(contentStr).pipe(
+    const contentStr = Option.fromNullishOr(params.content).pipe(
+      Option.filter((content) => content.length > 0),
+    )
+    let parsed: Option.Option<typeof ResumeContent.Type> = Option.none()
+    if (Option.isSome(contentStr)) {
+      parsed = Option.some(
+        yield* Schema.decodeEffect(Schema.fromJsonString(ResumeContent))(contentStr.value).pipe(
           Effect.mapError(
             () =>
               new ExecutorMcpError({
@@ -119,9 +124,15 @@ export const ResumeTool = tool({
                 message: "Invalid JSON in content parameter",
               }),
           ),
-        )
-      : undefined
-    const result = yield* bridge.resume(baseUrl, params.executionId, params.action, parsed)
+        ),
+      )
+    }
+    const result = yield* bridge.resume(
+      baseUrl,
+      params.executionId,
+      params.action,
+      Option.getOrUndefined(parsed),
+    )
     const checked = yield* failIfError(result, "resume")
     return {
       text: checked.text,

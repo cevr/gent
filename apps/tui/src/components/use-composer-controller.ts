@@ -1,5 +1,5 @@
 import { createEffect, onCleanup, onMount, type Accessor } from "solid-js"
-import { Effect } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { SyntaxStyle, type TextareaRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import { useTheme } from "../theme/index"
@@ -45,10 +45,10 @@ function createPasteManager() {
     },
     expandPlaceholders(text: string): string {
       return text.replace(/\[Pasted ~\d+ lines #(paste-\d+)\]/g, (match, id) => {
-        const content = store.get(id)
-        if (content !== undefined) {
+        const content = Option.fromNullishOr(store.get(id))
+        if (Option.isSome(content)) {
           store.delete(id)
-          return content
+          return content.value
         }
         return match
       })
@@ -60,12 +60,15 @@ function createPasteManager() {
 }
 
 export interface ComposerController {
+  // eslint-disable-next-line effect/noNullish -- Solid autocomplete accessors use null while closed.
   readonly autocomplete: Accessor<AutocompleteState | null>
   readonly mode: Accessor<"editing" | "shell" | "interaction">
   readonly promptSymbol: Accessor<string>
   readonly inputFocused: Accessor<boolean>
+  // eslint-disable-next-line effect/noNullish -- OpenTUI refs pass null before attachment and on cleanup.
   readonly attachTextarea: (renderable: TextareaRenderable | null) => void
   readonly handleTextareaKeyDown: (event: {
+    // eslint-disable-next-line effect/noNullish -- OpenTUI keyboard events omit these modifier fields.
     name?: string
     shift?: boolean
     ctrl?: boolean
@@ -93,32 +96,33 @@ export function useComposerController(): ComposerController {
   const paste = createPasteManager()
   const extensionUI = useExtensionUI()
 
-  let inputRef: TextareaRenderable | null = null
+  let inputRef = Option.none<TextareaRenderable>()
   let submitMode: "queue" | "interject" = "queue"
 
   // Token highlighting — colors autocomplete-resolved tokens with theme.primary
   const tokenStyle = SyntaxStyle.create()
-  let tokenStyleId: number | undefined
+  let tokenStyleId = Option.none<number>()
   const resolvedTokens: Array<string> = []
 
   const ensureStyleId = () => {
-    if (tokenStyleId !== undefined) return tokenStyleId
-    tokenStyleId = tokenStyle.registerStyle("token", { fg: theme.primary })
-    return tokenStyleId
+    if (Option.isSome(tokenStyleId)) return tokenStyleId.value
+    const styleId = tokenStyle.registerStyle("token", { fg: theme.primary })
+    tokenStyleId = Option.some(styleId)
+    return styleId
   }
 
   const applyTokenHighlights = () => {
-    if (inputRef === null) return
-    inputRef.clearAllHighlights()
+    if (Option.isNone(inputRef)) return
+    inputRef.value.clearAllHighlights()
     if (resolvedTokens.length === 0) return
-    const text = inputRef.plainText
+    const text = inputRef.value.plainText
     const styleId = ensureStyleId()
     for (const tokenText of resolvedTokens) {
       let searchFrom = 0
       while (true) {
         const idx = text.indexOf(tokenText, searchFrom)
         if (idx === -1) break
-        inputRef.addHighlightByCharRange({
+        inputRef.value.addHighlightByCharRange({
           start: idx,
           end: idx + tokenText.length,
           styleId,
@@ -128,12 +132,15 @@ export function useComposerController(): ComposerController {
     }
   }
 
-  const autocomplete = () => sc.interactionState().autocomplete
-  const effectiveMode = (): "editing" | "shell" | "interaction" =>
-    sc.composerState()?._tag === "interaction" ? "interaction" : sc.interactionState().mode
+  const autocompleteOption = () => sc.interactionState().autocomplete
+  const autocomplete = () => Option.getOrNull(autocompleteOption())
+  const effectiveMode = (): "editing" | "shell" | "interaction" => {
+    if (sc.composerState()._tag === "interaction") return "interaction"
+    return sc.interactionState().mode
+  }
 
   const clearInput = () => {
-    if (inputRef !== null) inputRef.setText("")
+    if (Option.isSome(inputRef)) inputRef.value.setText("")
     resolvedTokens.length = 0
     sc.onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
   }
@@ -143,20 +150,27 @@ export function useComposerController(): ComposerController {
   }
 
   const focusTextarea = () => {
-    inputRef?.focus()
+    if (Option.isSome(inputRef)) inputRef.value.focus()
   }
 
   const handleAutocompleteSelect = (value: string) => {
-    const state = autocomplete()
-    if (state === null || inputRef === null) return
+    const state = autocompleteOption()
+    if (Option.isNone(state) || Option.isNone(inputRef)) return
 
-    const contribution = extensionUI.autocompleteItems().find((c) => c.prefix === state.type)
+    const contribution = Option.fromNullishOr(
+      extensionUI.autocompleteItems().find((c) => c.prefix === state.value.type),
+    )
     // Notify contribution of selection (frecency tracking, etc.)
-    contribution?.onSelect?.(value, state.filter)
-    const beforeTrigger = inputRef.plainText.slice(0, state.triggerPos)
-    const insertion = contribution?.formatInsertion
-      ? contribution.formatInsertion(value)
-      : `${state.type}${value} `
+    if (Option.isSome(contribution)) {
+      const onSelect = Option.fromNullishOr(contribution.value.onSelect)
+      if (Option.isSome(onSelect)) onSelect.value(value, state.value.filter)
+    }
+    const beforeTrigger = inputRef.value.plainText.slice(0, state.value.triggerPos)
+    let insertion = `${state.value.type}${value} `
+    if (Option.isSome(contribution)) {
+      const formatInsertion = Option.fromNullishOr(contribution.value.formatInsertion)
+      if (Option.isSome(formatInsertion)) insertion = formatInsertion.value(value)
+    }
 
     // Track the inserted token for highlighting (trim trailing space)
     const tokenText = insertion.trimEnd()
@@ -165,8 +179,8 @@ export function useComposerController(): ComposerController {
     }
 
     const nextValue = beforeTrigger + insertion
-    inputRef.replaceText(nextValue)
-    inputRef.cursorOffset = nextValue.length
+    inputRef.value.replaceText(nextValue)
+    inputRef.value.cursorOffset = nextValue.length
     sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text: nextValue }))
     applyTokenHighlights()
     focusTextarea()
@@ -178,19 +192,22 @@ export function useComposerController(): ComposerController {
   }
 
   const handleContentChange = () => {
-    const value = inputRef?.plainText ?? ""
+    const value = Option.getOrElse(
+      Option.map(inputRef, (renderable) => renderable.plainText),
+      () => "",
+    )
     const previousValue = sc.interactionState().draft
     // Skip if text matches current draft — avoids re-deriving autocomplete
     // after RestoreDraft (e.g. autocomplete selection triggers replaceText
     // which fires onContentChange, but we already closed autocomplete)
     if (value === previousValue) return
-    if (value.length > previousValue.length && inputRef !== null) {
+    if (value.length > previousValue.length && Option.isSome(inputRef)) {
       const inserted = value.slice(previousValue.length)
       if (isLargePaste(inserted)) {
         const placeholder = paste.createPlaceholder(inserted)
         const nextValue = previousValue + placeholder
-        inputRef.replaceText(nextValue)
-        inputRef.cursorOffset = nextValue.length
+        inputRef.value.replaceText(nextValue)
+        inputRef.value.cursorOffset = nextValue.length
         sc.onComposerInteraction(
           ComposerInteractionEvent.cases.RestoreDraft.make({ text: nextValue }),
         )
@@ -201,7 +218,8 @@ export function useComposerController(): ComposerController {
 
     // Prune tokens that are no longer in the text, then re-apply highlights
     for (let i = resolvedTokens.length - 1; i >= 0; i--) {
-      if (!value.includes(resolvedTokens[i] ?? "")) resolvedTokens.splice(i, 1)
+      const token = Option.fromNullishOr(resolvedTokens[i])
+      if (Option.isNone(token) || !value.includes(token.value)) resolvedTokens.splice(i, 1)
     }
     applyTokenHighlights()
   }
@@ -223,12 +241,16 @@ export function useComposerController(): ComposerController {
             sc.onSubmit(userMessage)
           }),
         ),
+        // eslint-disable-next-line effect/noUnknownParameters -- shell failures cross the process boundary.
         Effect.catchEager((error: unknown) =>
           Effect.sync(() => {
-            const message =
-              error !== null && typeof error === "object" && "message" in error
-                ? String((error as { message: unknown }).message)
-                : String(error)
+            const decoded = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }))(
+              error,
+            )
+            const message = Option.match(decoded, {
+              onNone: () => String(error),
+              onSome: (value) => value.message,
+            })
             client.setError(message)
           }),
         ),
@@ -237,10 +259,10 @@ export function useComposerController(): ComposerController {
   }
 
   const submitSlashCommand = (text: string) => {
-    const parsed = parseSlashCommand(text)
-    if (parsed === null) return false
+    const parsed = Option.fromNullishOr(parseSlashCommand(text))
+    if (Option.isNone(parsed)) return false
 
-    const [cmd, args] = parsed
+    const [cmd, args] = parsed.value
     client.log.info("slash-command", { cmd })
     clearInput()
 
@@ -272,7 +294,12 @@ export function useComposerController(): ComposerController {
   }
 
   const handleSubmit = () => {
-    const expandedValue = paste.expandPlaceholders(inputRef?.plainText ?? "")
+    const expandedValue = paste.expandPlaceholders(
+      Option.getOrElse(
+        Option.map(inputRef, (renderable) => renderable.plainText),
+        () => "",
+      ),
+    )
     const text = expandedValue.trim()
     if (text.length === 0) return
 
@@ -301,7 +328,10 @@ export function useComposerController(): ComposerController {
   }): boolean => {
     if (!(event.ctrl === true && event.name === "g")) return false
 
-    const currentContent = inputRef?.plainText ?? ""
+    const currentContent = Option.getOrElse(
+      Option.map(inputRef, (renderable) => renderable.plainText),
+      () => "",
+    )
     const editor = resolveEditor(env.visual, env.editor)
     cast(
       openExternalEditor(
@@ -312,9 +342,9 @@ export function useComposerController(): ComposerController {
       ).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
-            if (result._tag === "applied" && inputRef !== null) {
-              inputRef.replaceText(result.content)
-              inputRef.cursorOffset = result.content.length
+            if (result._tag === "applied" && Option.isSome(inputRef)) {
+              inputRef.value.replaceText(result.content)
+              inputRef.value.cursorOffset = result.content.length
               sc.onComposerInteraction(
                 ComposerInteractionEvent.cases.RestoreDraft.make({ text: result.content }),
               )
@@ -334,27 +364,29 @@ export function useComposerController(): ComposerController {
   const handleAutocompleteKey = (event: {
     readonly ctrl?: boolean
     readonly name?: string
-  }): boolean | undefined => {
-    if (autocomplete() === null) return undefined
+  }): Option.Option<boolean> => {
+    if (Option.isNone(autocompleteOption())) return Option.none()
     if (event.name === "escape") {
       clearAutocomplete()
-      return true
+      return Option.some(true)
     }
-    if (["up", "down", "return", "tab"].includes(event.name ?? "")) {
-      return false
+    const keyName = Option.getOrElse(Option.fromNullishOr(event.name), () => "")
+    if (["up", "down", "return", "tab"].includes(keyName)) {
+      return Option.some(false)
     }
     if (event.ctrl === true && (event.name === "p" || event.name === "n")) {
-      return false
+      return Option.some(false)
     }
-    return undefined
+    return Option.none()
   }
 
   const handleShellModeKey = (event: { readonly name?: string }): boolean => {
     if (
       event.name === "!" &&
-      inputRef?.cursorOffset === 0 &&
+      Option.isSome(inputRef) &&
+      inputRef.value.cursorOffset === 0 &&
       effectiveMode() === "editing" &&
-      autocomplete() === null
+      Option.isNone(autocompleteOption())
     ) {
       sc.onComposerInteraction(ComposerInteractionEvent.cases.EnterShell.make({}))
       return true
@@ -369,7 +401,11 @@ export function useComposerController(): ComposerController {
       return true
     }
 
-    if (event.name === "backspace" && (inputRef?.cursorOffset ?? 0) <= 1) {
+    const cursorOffset = Option.getOrElse(
+      Option.map(inputRef, (renderable) => renderable.cursorOffset),
+      () => 0,
+    )
+    if (event.name === "backspace" && cursorOffset <= 1) {
       sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
       clearAutocomplete()
       return true
@@ -388,8 +424,8 @@ export function useComposerController(): ComposerController {
     if (
       (event.name !== "up" && event.name !== "down") ||
       effectiveMode() !== "editing" ||
-      autocomplete() !== null ||
-      inputRef === null ||
+      Option.isSome(autocompleteOption()) ||
+      Option.isNone(inputRef) ||
       event.ctrl === true ||
       event.meta === true ||
       event.option === true ||
@@ -400,17 +436,17 @@ export function useComposerController(): ComposerController {
 
     const result = history.navigate(
       event.name,
-      inputRef.plainText,
-      inputRef.cursorOffset,
-      inputRef.plainText.length,
+      inputRef.value.plainText,
+      inputRef.value.cursorOffset,
+      inputRef.value.plainText.length,
     )
-    if (!result.handled || result.text === undefined) return false
+    const text = Option.fromNullishOr(result.text)
+    if (!result.handled || Option.isNone(text)) return false
 
-    inputRef.replaceText(result.text)
-    inputRef.cursorOffset = result.cursor === "start" ? 0 : result.text.length
-    sc.onComposerInteraction(
-      ComposerInteractionEvent.cases.RestoreDraft.make({ text: result.text }),
-    )
+    inputRef.value.replaceText(text.value)
+    if (result.cursor === "start") inputRef.value.cursorOffset = 0
+    else inputRef.value.cursorOffset = text.value.length
+    sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text: text.value }))
     return true
   }
 
@@ -436,7 +472,7 @@ export function useComposerController(): ComposerController {
     }
 
     const autocompleteResult = handleAutocompleteKey(event)
-    if (autocompleteResult !== undefined) return autocompleteResult
+    if (Option.isSome(autocompleteResult)) return autocompleteResult.value
     if (handleShellModeKey(event)) return true
     if (handlePromptHistoryKey(event)) return true
     return false
@@ -445,7 +481,7 @@ export function useComposerController(): ComposerController {
   /** Called by textarea onSubmit (keybinding: bare return → submit action). */
   const handleSubmitFromTextarea = () => {
     if (sc.promptSearchOpen() === true || effectiveMode() === "interaction") return
-    if (autocomplete() !== null) return
+    if (Option.isSome(autocompleteOption())) return
     submitMode = "queue"
     handleSubmit()
   }
@@ -475,14 +511,14 @@ export function useComposerController(): ComposerController {
     // Meta/Super+Enter = interject (bypasses keybindings)
     if (event.meta === true || event.super === true) {
       event.preventDefault()
-      if (autocomplete() !== null) return
+      if (Option.isSome(autocompleteOption())) return
       submitMode = "interject"
       handleSubmit()
       return
     }
 
     // Autocomplete open: swallow Enter so it doesn't submit
-    if (autocomplete() !== null) {
+    if (Option.isSome(autocompleteOption())) {
       event.preventDefault()
       return
     }
@@ -492,9 +528,9 @@ export function useComposerController(): ComposerController {
 
   createEffect(() => {
     const draft = sc.interactionState().draft
-    if (inputRef === null || inputRef.plainText === draft) return
-    inputRef.replaceText(draft)
-    inputRef.cursorOffset = draft.length
+    if (Option.isNone(inputRef) || inputRef.value.plainText === draft) return
+    inputRef.value.replaceText(draft)
+    inputRef.value.cursorOffset = draft.length
     clearAutocomplete()
     focusTextarea()
   })
@@ -511,14 +547,17 @@ export function useComposerController(): ComposerController {
   return {
     autocomplete,
     mode: effectiveMode,
-    promptSymbol: () => (effectiveMode() === "shell" ? "$ " : "❯ "),
+    promptSymbol: () => {
+      if (effectiveMode() === "shell") return "$ "
+      return "❯ "
+    },
     inputFocused: () =>
       !command.paletteOpen() && sc.promptSearchOpen() !== true && effectiveMode() !== "interaction",
     attachTextarea: (renderable) => {
-      inputRef = renderable
-      if (renderable !== null) {
-        renderable.onContentChange = handleContentChange
-        renderable.syntaxStyle = tokenStyle
+      inputRef = Option.fromNullishOr(renderable)
+      if (Option.isSome(inputRef)) {
+        inputRef.value.onContentChange = handleContentChange
+        inputRef.value.syntaxStyle = tokenStyle
       }
     },
     handleTextareaKeyDown,

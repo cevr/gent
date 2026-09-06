@@ -8,7 +8,18 @@
  * Uses Effect.withLogSpan for timing data.
  */
 
-import { Cause, Config, Effect, FileSystem, Layer, Logger, Option, Context } from "effect"
+import {
+  Predicate,
+  Cause,
+  Config,
+  Context,
+  Effect,
+  FileSystem,
+  Layer,
+  Logger,
+  Option,
+  Schema,
+} from "effect"
 
 import type { LogLevel } from "effect/LogLevel"
 import { CurrentLogAnnotations, CurrentLogSpans, MinimumLogLevel } from "effect/References"
@@ -67,34 +78,36 @@ const RESET = "\x1b[0m"
 const DIM = "\x1b[90m"
 const BOLD = "\x1b[1m"
 
+// oxlint-disable-next-line effect/noUnknownParameters -- Effect logger messages are an external logger boundary.
 const extractMessage = (message: unknown): string => {
-  if (typeof message === "string") return message
+  if (Predicate.isString(message)) return message
   if (Array.isArray(message)) {
-    return message.map((m) => (typeof m === "string" ? m : String(m))).join(" ")
+    return message
+      .map((m) => {
+        if (Predicate.isString(m)) return m
+        return String(m)
+      })
+      .join(" ")
   }
   return String(message)
 }
 
-const collectAnnotations = (
-  annotations: Readonly<Record<string, unknown>>,
-): Record<string, unknown> => {
-  const result: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(annotations)) {
-    result[k] = v
-  }
-  return result
-}
+const decodeJsonValue = Schema.decodeUnknownOption(Schema.Json)
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
-const collectSpans = (
-  spans: ReadonlyArray<[label: string, timestamp: number]>,
-  now: number,
-): Record<string, number> => {
-  const result: Record<string, number> = {}
-  for (const [label, startTime] of spans) {
-    result[label] = now - startTime
-  }
-  return result
-}
+type LogAnnotations =
+  typeof CurrentLogAnnotations extends Context.Service<never, infer Value> ? Value : never
+
+const collectAnnotations = (annotations: LogAnnotations) =>
+  Object.fromEntries(
+    Object.entries(annotations).map(([key, value]) => [
+      key,
+      Option.getOrElse(decodeJsonValue(value), () => String(value)),
+    ]),
+  )
+
+const collectSpans = (spans: ReadonlyArray<[label: string, timestamp: number]>, now: number) =>
+  Object.fromEntries(spans.map(([label, startTime]) => [label, now - startTime]))
 
 // =============================================================================
 // Pretty Logger (stderr)
@@ -110,10 +123,10 @@ const formatPretty: Logger.Logger<unknown, string> = Logger.make(
     const color = levelColor(logLevel)
     const label = levelLabel(logLevel)
 
-    const tracePrefix =
-      fiber.currentSpan !== undefined
-        ? `${DIM}[${fiber.currentSpan.traceId.slice(0, 8)}]${RESET} `
-        : ""
+    let tracePrefix = ""
+    if (!Predicate.isUndefined(fiber.currentSpan)) {
+      tracePrefix = `${DIM}[${fiber.currentSpan.traceId.slice(0, 8)}]${RESET} `
+    }
     let output = `${DIM}[${formatTime(date)}]${RESET} ${tracePrefix}${color}${label}${RESET}  ${BOLD}${msg}${RESET}`
 
     if (cause.reasons.length > 0) {
@@ -123,8 +136,9 @@ const formatPretty: Logger.Logger<unknown, string> = Logger.make(
     if (entries.length > 0) {
       for (const [i, [key, value]] of entries.entries()) {
         const isLast = i === entries.length - 1
-        const prefix = isLast ? "\u2514\u2500" : "\u251C\u2500"
-        const formatted = typeof value === "string" ? value : JSON.stringify(value)
+        let prefix = "\u251C\u2500"
+        if (isLast) prefix = "\u2514\u2500"
+        const formatted = encodeJson(value)
         output += `\n  ${DIM}${prefix}${RESET} ${key}: ${formatted}`
       }
     }
@@ -134,7 +148,8 @@ const formatPretty: Logger.Logger<unknown, string> = Logger.make(
     if (spanEntries.length > 0 && entries.length === 0) {
       for (const [i, [key, ms]] of spanEntries.entries()) {
         const isLast = i === spanEntries.length - 1
-        const prefix = isLast ? "\u2514\u2500" : "\u251C\u2500"
+        let prefix = "\u251C\u2500"
+        if (isLast) prefix = "\u2514\u2500"
         output += `\n  ${DIM}${prefix}${RESET} ${key}: ${ms}ms`
       }
     }
@@ -158,14 +173,16 @@ const formatJsonLogger: Logger.Logger<unknown, string> = Logger.make(
     const now = date.getTime()
     const spanEntries = collectSpans(spans, now)
 
-    const entry: Record<string, unknown> = {
-      ts: date.toISOString(),
-      level: logLevel,
-      msg,
-      ...annots,
-    }
+    const entry = Object.assign(
+      {
+        ts: date.toISOString(),
+        level: logLevel,
+        msg,
+      },
+      annots,
+    )
 
-    if (fiber.currentSpan !== undefined) {
+    if (!Predicate.isUndefined(fiber.currentSpan)) {
       entry["traceId"] = fiber.currentSpan.traceId
       entry["spanId"] = fiber.currentSpan.spanId
       if (fiber.currentSpan._tag === "Span") {
@@ -181,7 +198,7 @@ const formatJsonLogger: Logger.Logger<unknown, string> = Logger.make(
       entry["cause"] = Cause.pretty(cause).split("\n")[0] ?? "unknown error"
     }
 
-    return JSON.stringify(entry)
+    return encodeJson(entry)
   },
 )
 
@@ -301,9 +318,7 @@ export const GentLogLevel: Layer.Layer<never> = Layer.unwrap(
     return Layer.effectContext(Effect.succeed(Context.make(MinimumLogLevel, level)))
   }).pipe(
     Effect.catchEager(() =>
-      Effect.succeed(
-        Layer.effectContext(Effect.succeed(Context.make(MinimumLogLevel, "Info" as LogLevel))),
-      ),
+      Effect.succeed(Layer.effectContext(Effect.succeed(Context.make(MinimumLogLevel, "Info")))),
     ),
   ),
 )

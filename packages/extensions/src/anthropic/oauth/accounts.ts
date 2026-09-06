@@ -1,4 +1,4 @@
-import { Duration, Effect, Schema, type FileSystem, type Path } from "effect"
+import { Duration, Effect, Option, Schema, type FileSystem, type Path } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { updateCredentialBlob, type ClaudeCredentials } from "./credentials.js"
@@ -17,7 +17,7 @@ import { AnthropicPlatform } from "../platform-adapter.js"
 /**
  * Read Claude Code credentials for `source` (the keychain service name).
  * Use `PRIMARY_CLAUDE_SERVICE` for the default account; pass another
- * service from `listClaudeCodeKeychainServices()` for additional ones.
+ * service from `listClaudeCodeKeychainServices` for additional ones.
  *
  * On non-darwin (no keychain), `source` is ignored and the on-disk
  * `.credentials.json` is read instead — that file holds only one
@@ -38,18 +38,19 @@ export const readClaudeCodeCredentials = (
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     if (platform.platform !== "darwin") {
-      return yield* readCredentialsFile()
+      return yield* readCredentialsFile
     }
     return yield* readFromKeychain(source).pipe(
-      Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () =>
-        shouldFallBackToCredentialsFile(platform.platform, source)
-          ? readCredentialsFile()
-          : Effect.fail(
-              new ProviderAuthError({
-                message: `No Claude credentials found in keychain for source: ${source}`,
-              }),
-            ),
-      ),
+      Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () => {
+        if (shouldFallBackToCredentialsFile(platform.platform, source)) {
+          return readCredentialsFile
+        }
+        return Effect.fail(
+          new ProviderAuthError({
+            message: `No Claude credentials found in keychain for source: ${source}`,
+          }),
+        )
+      }),
     )
   })
 
@@ -63,40 +64,39 @@ export const readClaudeCodeCredentials = (
  * returns just the primary so callers fall back to the existing
  * single-credential path.
  */
-export const listClaudeCodeKeychainServices = (): Effect.Effect<
+export const listClaudeCodeKeychainServices: Effect.Effect<
   ReadonlyArray<string>,
   ProviderAuthError,
   AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner
-> =>
-  Effect.gen(function* () {
-    const platform = yield* AnthropicPlatform
-    if (platform.platform !== "darwin") return [PRIMARY_CLAUDE_SERVICE] as ReadonlyArray<string>
-    const result = yield* platform
-      .runProcess("security", ["dump-keychain"], {
-        timeout: Duration.millis(5000),
-      })
-      .pipe(Effect.catchEager(() => Effect.sync(() => undefined)))
-    if (result === undefined || result.exitCode !== 0)
-      return [PRIMARY_CLAUDE_SERVICE] as ReadonlyArray<string>
-    const services: string[] = []
-    const seen = new Set<string>()
-    const re = /"Claude Code-credentials(?:-[0-9a-f]+)?"/g
-    let m = re.exec(result.stdout)
-    while (m !== null) {
-      const svc = m[0].slice(1, -1)
-      if (!seen.has(svc)) {
-        seen.add(svc)
-        services.push(svc)
-      }
-      m = re.exec(result.stdout)
+> = Effect.gen(function* () {
+  const platform = yield* AnthropicPlatform
+  if (platform.platform !== "darwin") return [PRIMARY_CLAUDE_SERVICE]
+  const result = yield* platform
+    .runProcess("security", ["dump-keychain"], {
+      timeout: Duration.millis(5000),
+    })
+    .pipe(Effect.option)
+  if (Option.isNone(result) || result.value.exitCode !== 0) return [PRIMARY_CLAUDE_SERVICE]
+  const services: string[] = []
+  const seen = new Set<string>()
+  const re = /"Claude Code-credentials(?:-[0-9a-f]+)?"/g
+  while (true) {
+    const match = Option.fromNullishOr(re.exec(result.value.stdout))
+    if (Option.isNone(match)) break
+    const svc = match.value[0].slice(1, -1)
+    if (!seen.has(svc)) {
+      seen.add(svc)
+      services.push(svc)
     }
-    const ordered: string[] = []
-    if (seen.has(PRIMARY_CLAUDE_SERVICE)) ordered.push(PRIMARY_CLAUDE_SERVICE)
-    for (const svc of services) {
-      if (svc !== PRIMARY_CLAUDE_SERVICE) ordered.push(svc)
-    }
-    return (ordered.length > 0 ? ordered : [PRIMARY_CLAUDE_SERVICE]) as ReadonlyArray<string>
-  })
+  }
+  const ordered: string[] = []
+  if (seen.has(PRIMARY_CLAUDE_SERVICE)) ordered.push(PRIMARY_CLAUDE_SERVICE)
+  for (const svc of services) {
+    if (svc !== PRIMARY_CLAUDE_SERVICE) ordered.push(svc)
+  }
+  if (ordered.length > 0) return ordered
+  return [PRIMARY_CLAUDE_SERVICE]
+})
 
 /**
  * One Claude account discovered on this machine. `source` is the
@@ -120,26 +120,23 @@ export interface ClaudeAccount {
  *
  * Foundation for the multi-account auth UI.
  */
-export const listClaudeAccounts = (): Effect.Effect<
+export const listClaudeAccounts: Effect.Effect<
   ReadonlyArray<ClaudeAccount>,
   never,
   AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-> =>
-  Effect.gen(function* () {
-    const sources = yield* listClaudeCodeKeychainServices().pipe(
-      Effect.catchEager(() => Effect.succeed([PRIMARY_CLAUDE_SERVICE] as ReadonlyArray<string>)),
-    )
-    const accounts: ClaudeAccount[] = []
-    for (const source of sources) {
-      const credentials = yield* readClaudeCodeCredentials(source).pipe(
-        Effect.catchEager(() => Effect.sync((): ClaudeCredentials | undefined => undefined)),
-      )
-      if (credentials === undefined) continue
-      const label = (yield* getKeychainAccountName(source)) ?? source
-      accounts.push({ source, label, credentials })
-    }
-    return accounts
-  })
+> = Effect.gen(function* () {
+  const sources = yield* listClaudeCodeKeychainServices.pipe(
+    Effect.catchEager(() => Effect.succeed([PRIMARY_CLAUDE_SERVICE])),
+  )
+  const accounts: ClaudeAccount[] = []
+  for (const source of sources) {
+    const credentials = yield* readClaudeCodeCredentials(source).pipe(Effect.option)
+    if (Option.isNone(credentials)) continue
+    const label = (yield* getKeychainAccountName(source)).pipe(Option.getOrElse(() => source))
+    accounts.push({ source, label, credentials: credentials.value })
+  }
+  return accounts
+})
 
 /**
  * Persist refreshed credentials back to the keychain entry named by
@@ -186,7 +183,7 @@ export const writeBackCredentials = (
       ),
     )
     const updated = updateCredentialBlob(raw, creds)
-    if (updated === undefined) return
-    const accountName = (yield* getKeychainAccountName(source)) ?? source
-    yield* writeKeychainEntry(source, accountName, updated)
+    if (Option.isNone(updated)) return
+    const accountName = Option.getOrElse(yield* getKeychainAccountName(source), () => source)
+    yield* writeKeychainEntry(source, accountName, updated.value)
   })

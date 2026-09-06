@@ -7,7 +7,7 @@
  * Owns its own DDL — no dependency on host Storage service.
  */
 
-import { Clock, Context, Effect, Layer, Schema } from "effect"
+import { Clock, Context, Effect, Layer, Option, Predicate, Schema } from "effect"
 import { AgentName, DateFromNumber, SessionId, type BranchId } from "@gent/core/extensions/api"
 import { SqlClient } from "effect/unstable/sql"
 import {
@@ -15,23 +15,29 @@ import {
   TodoStatus,
   TodoTransitionError,
   isValidTodoTransition,
-  type TodoId,
+  TodoId,
+  type TodoId as TodoIdType,
 } from "./todo/domain.js"
 
-export class TodoStorageError extends Schema.TaggedErrorClass<TodoStorageError>()(
-  "TodoStorageError",
-  {
-    message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
-  },
-) {}
+export class TodoStorageError extends Schema.TaggedError<TodoStorageError>()("TodoStorageError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 const MetadataJson = Schema.fromJsonString(Schema.Unknown)
+const JsonValueSchema = Schema.Unknown
+type JsonValue = Schema.Schema.Type<typeof JsonValueSchema>
+const NullableTodoId = Schema.NullOr(TodoId)
+type NullableTodoId = typeof NullableTodoId.Type
+const NullableString = Schema.NullOr(Schema.String)
+type NullableString = typeof NullableString.Type
+const NullableJsonValue = Schema.NullOr(JsonValueSchema)
+type NullableJsonValue = typeof NullableJsonValue.Type
 const decodeMetadataJson = Schema.decodeUnknownEffect(MetadataJson)
 const encodeMetadataJson = Schema.encodeSync(MetadataJson)
 const decodeTodoDate = Schema.decodeUnknownEffect(DateFromNumber)
 
-const mapError = (message: string) => (e: unknown) => new TodoStorageError({ message, cause: e })
+const mapError = (message: string) => (cause: JsonValue) => new TodoStorageError({ message, cause })
 
 const TodoRow = Schema.Struct({
   id: Todo.fields.id,
@@ -46,23 +52,33 @@ const TodoRow = Schema.Struct({
   prompt: Schema.NullOr(Schema.String),
   cwd: Schema.NullOr(Schema.String),
   metadata: Schema.NullOr(Schema.String),
-  created_at: Schema.Number,
-  updated_at: Schema.Number,
+  created_at: Schema.Finite,
+  updated_at: Schema.Finite,
 })
 type TodoRow = typeof TodoRow.Type
 const decodeTodoRow = Schema.decodeUnknownEffect(TodoRow)
 
-const encodeTodoMetadata = (metadata: unknown) =>
+const encodeTodoMetadata = (metadata: JsonValue) =>
   Effect.try({
     try: () => encodeMetadataJson(metadata),
     catch: () => new TodoStorageError({ message: "Todo metadata is not JSON-serializable" }),
   })
 
-const mapUpdateError = (message: string) => (e: unknown) =>
-  Schema.is(TodoTransitionError)(e) ? e : mapError(message)(e)
+const mapUpdateError = (message: string) => (cause: JsonValue) => {
+  if (Schema.is(TodoTransitionError)(cause)) return cause
+  return mapError(message)(cause)
+}
 
-const decodeTodoMetadata = (metadata: string | null) =>
-  metadata === null ? Effect.void : decodeMetadataJson(metadata)
+const decodeTodoMetadata = (metadata: TodoRow["metadata"]) =>
+  Option.match(Option.fromNullishOr(metadata), {
+    onNone: () => Effect.void,
+    onSome: decodeMetadataJson,
+  })
+type TodoUpdates = Record<string, string | number | NullableJsonValue>
+
+// SQLite represents missing nullable values with null at this adapter boundary.
+// oxlint-disable-next-line effect/noNullish -- SQLite nullable column contract requires SQL NULL.
+const sqlNull = () => null
 
 const requiredTodoColumns = [
   "id",
@@ -79,9 +95,9 @@ const requiredTodoColumns = [
   "metadata",
   "created_at",
   "updated_at",
-] as const
+]
 
-const requiredTodoEdgeColumns = ["todo_id", "blocked_by_id"] as const
+const requiredTodoEdgeColumns = ["todo_id", "blocked_by_id"]
 
 const todoFromRow = (input: TodoRow) =>
   Effect.gen(function* () {
@@ -93,14 +109,18 @@ const todoFromRow = (input: TodoRow) =>
       id: row.id,
       sessionId: row.session_id,
       branchId: row.branch_id,
-      parentId: row.parent_id ?? undefined,
+      parentId: Option.getOrUndefined(Option.fromNullishOr(row.parent_id)),
       subject: row.subject,
-      description: row.description ?? undefined,
+      description: Option.getOrUndefined(Option.fromNullishOr(row.description)),
       status: row.status,
-      owner: row.owner !== null ? SessionId.make(row.owner) : undefined,
-      agentType: row.agent_type !== null ? AgentName.make(row.agent_type) : undefined,
-      prompt: row.prompt ?? undefined,
-      cwd: row.cwd ?? undefined,
+      owner: Option.getOrUndefined(
+        Option.fromNullishOr(row.owner).pipe(Option.map((value) => SessionId.make(value))),
+      ),
+      agentType: Option.getOrUndefined(
+        Option.fromNullishOr(row.agent_type).pipe(Option.map((value) => AgentName.make(value))),
+      ),
+      prompt: Option.getOrUndefined(Option.fromNullishOr(row.prompt)),
+      cwd: Option.getOrUndefined(Option.fromNullishOr(row.cwd)),
       metadata,
       createdAt,
       updatedAt,
@@ -129,7 +149,7 @@ const tableHasForeignKey = Effect.fn("TodoStorage.tableHasForeignKey")(function*
   const ids = new Map<number, Set<string>>()
   for (const row of rows) {
     if (row.table !== parentTable) continue
-    const columns = ids.get(row.id) ?? new Set<string>()
+    const columns = Option.getOrElse(Option.fromNullishOr(ids.get(row.id)), () => new Set<string>())
     columns.add(row.from)
     ids.set(row.id, columns)
   }
@@ -185,7 +205,7 @@ const resetIncompatibleTodoTables = Effect.fn("TodoStorage.resetIncompatibleTodo
  * two access surfaces.
  */
 export interface TodoStorageReadOnlyService {
-  readonly getTodo: (id: TodoId) => Effect.Effect<Todo | undefined, TodoStorageError>
+  readonly getTodo: (id: TodoId) => Effect.Effect<Option.Option<Todo>, TodoStorageError>
   readonly listTodos: (
     sessionId: SessionId,
     branchId?: BranchId,
@@ -199,12 +219,12 @@ export interface TodoStorageService extends TodoStorageReadOnlyService {
     id: TodoId,
     fields: Partial<{
       status: TodoStatus
-      parentId: TodoId | null
-      description: string | null
-      owner: string | null
-      metadata: unknown | null
+      parentId: NullableTodoId
+      description: NullableString
+      owner: NullableString
+      metadata: NullableJsonValue
     }>,
-  ) => Effect.Effect<Todo | undefined, TodoStorageError | TodoTransitionError>
+  ) => Effect.Effect<Option.Option<Todo>, TodoStorageError | TodoTransitionError>
   readonly deleteTodo: (id: TodoId) => Effect.Effect<void, TodoStorageError>
   readonly addTodoDep: (
     todoId: TodoId,
@@ -237,12 +257,14 @@ const makeTodoStorageService: Effect.Effect<
 > = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
 
-  const selectTodoById = (id: TodoId) =>
+  const selectTodoById = (id: TodoIdType) =>
     sql<TodoRow>`SELECT id, session_id, branch_id, parent_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM todos WHERE id = ${id}`.pipe(
-      Effect.flatMap((rows) => {
-        const row = rows[0]
-        return row === undefined ? Effect.sync((): Todo | undefined => undefined) : todoFromRow(row)
-      }),
+      Effect.flatMap((rows) =>
+        Option.match(Option.fromNullishOr(rows[0]), {
+          onNone: () => Effect.succeed(Option.none<Todo>()),
+          onSome: (value) => todoFromRow(value).pipe(Effect.asSome),
+        }),
+      ),
     )
 
   yield* resetIncompatibleTodoTables().pipe(
@@ -395,11 +417,14 @@ const makeTodoStorageService: Effect.Effect<
   return {
     createTodo: Effect.fn("TodoStorage.createTodo")(
       function* (todo) {
-        if (todo.parentId !== undefined) {
+        if (Predicate.isNotUndefined(todo.parentId)) {
           yield* ensureParentForNewTodo(todo.parentId, todo.sessionId, todo.branchId)
         }
-        const meta = todo.metadata === undefined ? null : yield* encodeTodoMetadata(todo.metadata)
-        yield* sql`INSERT INTO todos (id, session_id, branch_id, parent_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at) VALUES (${todo.id}, ${todo.sessionId}, ${todo.branchId}, ${todo.parentId ?? null}, ${todo.subject}, ${todo.description ?? null}, ${todo.status}, ${todo.owner ?? null}, ${todo.agentType ?? null}, ${todo.prompt ?? null}, ${todo.cwd ?? null}, ${meta}, ${todo.createdAt.getTime()}, ${todo.updatedAt.getTime()})`
+        const meta = yield* Option.match(Option.fromNullishOr(todo.metadata), {
+          onNone: () => Effect.succeed(sqlNull()),
+          onSome: encodeTodoMetadata,
+        })
+        yield* sql`INSERT INTO todos (id, session_id, branch_id, parent_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at) VALUES (${todo.id}, ${todo.sessionId}, ${todo.branchId}, ${Option.getOrElse(Option.fromNullishOr(todo.parentId), sqlNull)}, ${todo.subject}, ${Option.getOrElse(Option.fromNullishOr(todo.description), sqlNull)}, ${todo.status}, ${Option.getOrElse(Option.fromNullishOr(todo.owner), sqlNull)}, ${Option.getOrElse(Option.fromNullishOr(todo.agentType), sqlNull)}, ${Option.getOrElse(Option.fromNullishOr(todo.prompt), sqlNull)}, ${Option.getOrElse(Option.fromNullishOr(todo.cwd), sqlNull)}, ${meta}, ${todo.createdAt.getTime()}, ${todo.updatedAt.getTime()})`
         return todo
       },
       Effect.mapError(mapError("Failed to create todo")),
@@ -414,10 +439,12 @@ const makeTodoStorageService: Effect.Effect<
 
     listTodos: Effect.fn("TodoStorage.listTodos")(
       function* (sessionId, branchId) {
-        const rows =
-          branchId !== undefined
-            ? yield* sql<TodoRow>`SELECT id, session_id, branch_id, parent_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM todos WHERE session_id = ${sessionId} AND branch_id = ${branchId} ORDER BY created_at ASC`
-            : yield* sql<TodoRow>`SELECT id, session_id, branch_id, parent_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM todos WHERE session_id = ${sessionId} ORDER BY created_at ASC`
+        const rows = yield* Option.match(Option.fromNullishOr(branchId), {
+          onNone: () =>
+            sql<TodoRow>`SELECT id, session_id, branch_id, parent_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM todos WHERE session_id = ${sessionId} ORDER BY created_at ASC`,
+          onSome: (value) =>
+            sql<TodoRow>`SELECT id, session_id, branch_id, parent_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM todos WHERE session_id = ${sessionId} AND branch_id = ${value} ORDER BY created_at ASC`,
+        })
         return yield* Effect.forEach(rows, todoFromRow)
       },
       Effect.mapError(mapError("Failed to list todos")),
@@ -427,42 +454,46 @@ const makeTodoStorageService: Effect.Effect<
       function* (id, fields) {
         const now = yield* Clock.currentTimeMillis
 
-        const updates: Record<string, string | number | null> = {
+        const updates: TodoUpdates = {
           updated_at: now,
         }
 
-        if (fields.status !== undefined) {
+        if (Predicate.isNotUndefined(fields.status)) {
           updates["status"] = fields.status
         }
         if ("parentId" in fields) {
-          updates["parent_id"] = fields.parentId ?? null
+          updates["parent_id"] = Option.getOrElse(Option.fromNullishOr(fields.parentId), sqlNull)
         }
         if ("description" in fields) {
-          updates["description"] = fields.description ?? null
+          updates["description"] = Option.getOrElse(
+            Option.fromNullishOr(fields.description),
+            sqlNull,
+          )
         }
         if ("owner" in fields) {
-          updates["owner"] = fields.owner ?? null
+          updates["owner"] = Option.getOrElse(Option.fromNullishOr(fields.owner), sqlNull)
         }
         if ("metadata" in fields) {
-          updates["metadata"] =
-            fields.metadata === null || fields.metadata === undefined
-              ? null
-              : yield* encodeTodoMetadata(fields.metadata)
+          updates["metadata"] = yield* Option.match(Option.fromNullishOr(fields.metadata), {
+            onNone: () => Effect.succeed(sqlNull()),
+            onSome: encodeTodoMetadata,
+          })
         }
 
         return yield* Effect.gen(function* () {
           const existing = yield* selectTodoById(id)
-          if (existing === undefined) return undefined
-          if (fields.parentId !== undefined && fields.parentId !== null) {
-            yield* ensureNoParentCycle(id, fields.parentId)
-          }
+          if (Option.isNone(existing)) return existing
+          yield* Option.match(Option.fromNullishOr(fields.parentId), {
+            onNone: () => Effect.void,
+            onSome: (parentId) => ensureNoParentCycle(id, parentId),
+          })
           if (
-            fields.status !== undefined &&
-            !isValidTodoTransition(existing.status, fields.status)
+            Predicate.isNotUndefined(fields.status) &&
+            !isValidTodoTransition(existing.value.status, fields.status)
           ) {
             return yield* new TodoTransitionError({
-              message: `Invalid todo transition: ${existing.status} → ${fields.status}`,
-              from: existing.status,
+              message: `Invalid todo transition: ${existing.value.status} → ${fields.status}`,
+              from: existing.value.status,
               to: fields.status,
             })
           }

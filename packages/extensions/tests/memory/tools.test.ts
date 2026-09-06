@@ -43,7 +43,7 @@ const makeCtx = (cwd: string, home: string): ReturnType<typeof testToolContext> 
     home,
     Agent: {
       run: dieStub("run"),
-      listAgents: dieStub("listAgents"),
+      listAgents: Effect.die("listAgents not wired in test"),
     },
     Session: {
       listMessages: dieStub("listMessages"),
@@ -51,7 +51,7 @@ const makeCtx = (cwd: string, home: string): ReturnType<typeof testToolContext> 
       getDetail: dieStub("getDetail"),
       renameCurrent: dieStub("renameCurrent"),
       search: dieStub("search"),
-      listBranches: dieStub("listBranches"),
+      listBranches: Effect.die("listBranches not wired in test"),
       queueFollowUp: dieStub("queueFollowUp"),
     },
     Interaction: {

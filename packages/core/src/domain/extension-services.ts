@@ -1,8 +1,18 @@
-import { Context, Effect, FileSystem, Option, Path, Schema, type PlatformError } from "effect"
+import {
+  Predicate,
+  Context,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+  Schema,
+  type PlatformError,
+} from "effect"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent.js"
 import { DEFAULT_MODEL_ID } from "./agent.js"
 import { estimateContextPercent as pureEstimateContextPercent } from "../runtime/context-estimation.js"
 import type { EventStoreError } from "./event.js"
+import { hasMessage } from "./guards.js"
 import type {
   ExtensionHostRunProcessOptions,
   ExtensionHostProcessResult,
@@ -24,7 +34,7 @@ import {
   type DynamicRegistrationScope,
 } from "./dynamic-extension-registry.js"
 
-export class ExtensionServiceError extends Schema.TaggedErrorClass<ExtensionServiceError>()(
+export class ExtensionServiceError extends Schema.TaggedError<ExtensionServiceError>()(
   "@gent/core/src/domain/extension-services/ExtensionServiceError",
   {
     service: Schema.String,
@@ -36,12 +46,7 @@ export class ExtensionServiceError extends Schema.TaggedErrorClass<ExtensionServ
 
 const errorMessage = (cause: unknown): string => {
   if (cause instanceof Error) return cause.message
-  if (
-    typeof cause === "object" &&
-    cause !== null &&
-    "message" in cause &&
-    typeof cause.message === "string"
-  ) {
+  if (hasMessage(cause)) {
     return cause.message
   }
   return String(cause)
@@ -70,7 +75,8 @@ export interface ExtensionSessionService {
   ) => Effect.Effect<ReadonlyArray<Message>, ExtensionServiceError>
   readonly getSession: (
     sessionId?: SessionId,
-  ) => Effect.Effect<Session | undefined, ExtensionServiceError>
+  ) => // oxlint-disable-next-line effect/noNullish -- The public extension facade preserves undefined for an absent session.
+  Effect.Effect<Session | undefined, ExtensionServiceError>
   readonly getDetail: (sessionId: SessionId) => Effect.Effect<
     {
       readonly session: Session
@@ -99,11 +105,11 @@ export interface ExtensionSessionService {
     readonly metadata?: MessageMetadata
     readonly branchId?: BranchId
   }) => Effect.Effect<void, ExtensionServiceError>
-  readonly listBranches: () => Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
+  readonly listBranches: Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
 }
 
 export interface ExtensionAgentService {
-  readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>, ExtensionServiceError>
+  readonly listAgents: Effect.Effect<ReadonlyArray<AgentDefinition>, ExtensionServiceError>
   readonly run: (params: {
     readonly agent: AgentDefinition
     readonly prompt: string
@@ -135,6 +141,7 @@ export interface ExtensionInteractionService {
 }
 
 export interface ExtensionProcessService {
+  readonly randomId: Effect.Effect<string>
   readonly run: (
     command: string,
     args: ReadonlyArray<string>,
@@ -147,12 +154,14 @@ export interface ExtensionProcessService {
   readonly isPortFree: (port: number) => Effect.Effect<boolean, ExtensionServiceError>
   readonly isPidAlive: (pid: number) => Effect.Effect<boolean, ExtensionServiceError>
   readonly commandCandidates: (command: string) => ReadonlyArray<string>
+  // oxlint-disable-next-line effect/noNullish -- Process environment maps preserve absent variables at the host boundary.
   readonly parentEnv: Record<string, string | undefined>
 }
 
 export const extensionProcessFromHostContext = (
   host: ExtensionHostContext["host"],
 ): ExtensionProcessService => ({
+  randomId: host.randomId,
   run: (command, args, options) =>
     mapError("ExtensionProcess", "run", host.runProcess(command, args, options)),
   signalPid: (pid, signal) =>
@@ -174,6 +183,7 @@ export interface ExtensionFileStat {
     | "Socket"
     | "Unknown"
   readonly size: bigint
+  // oxlint-disable-next-line effect/noNullish -- File stat preserves the platform's absent modification time.
   readonly mtime: Date | undefined
 }
 
@@ -199,21 +209,21 @@ export interface ExtensionFilesService {
   readonly dirname: (path: string) => string
 }
 
-export interface ExtensionFileLockServiceShape {
+export interface ExtensionFileLockServiceApi {
   readonly withLock: <A, E, R>(
     path: string,
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>
 }
 
-export interface ExtensionStateServiceShape {
+export interface ExtensionStateServiceApi {
   readonly changed: (params: {
     readonly sessionId?: SessionId
     readonly branchId?: BranchId
   }) => Effect.Effect<void, ExtensionServiceError>
 }
 
-export interface ExtensionDynamicRegistrationServiceShape {
+export interface ExtensionDynamicRegistrationServiceApi {
   readonly registerTool: (
     capability: ToolCapability,
     options?: { readonly scope?: DynamicRegistrationScope },
@@ -238,9 +248,9 @@ export interface ExtensionContextService {
   readonly Interaction: ExtensionInteractionService
   readonly Process: ExtensionProcessService
   readonly Files: ExtensionFilesService
-  readonly FileLock: ExtensionFileLockServiceShape
-  readonly State: ExtensionStateServiceShape
-  readonly Dynamic: ExtensionDynamicRegistrationServiceShape
+  readonly FileLock: ExtensionFileLockServiceApi
+  readonly State: ExtensionStateServiceApi
+  readonly Dynamic: ExtensionDynamicRegistrationServiceApi
 }
 
 export class ExtensionContext extends Context.Service<ExtensionContext, ExtensionContextService>()(
@@ -267,22 +277,21 @@ export const extensionServicesFromHostContext = (
         mapError("ExtensionSession", "search", ctx.session.search(query, options)),
       queueFollowUp: (params) =>
         mapError("ExtensionSession", "queueFollowUp", ctx.session.queueFollowUp(params)),
-      listBranches: () => mapError("ExtensionSession", "listBranches", ctx.session.listBranches()),
+      listBranches: mapError("ExtensionSession", "listBranches", ctx.session.listBranches()),
     }
     const Agent: ExtensionAgentService = {
-      listAgents: () => mapError("ExtensionAgent", "listAgents", ctx.agent.listAgents()),
+      listAgents: mapError("ExtensionAgent", "listAgents", ctx.agent.listAgents()),
       run: (params) =>
         ctx.agent.run(params).pipe(
-          Effect.mapError((cause) =>
-            Schema.is(ExtensionServiceError)(cause)
-              ? cause
-              : new ExtensionServiceError({
-                  service: "ExtensionAgent",
-                  operation: "run",
-                  message: errorMessage(cause),
-                  cause,
-                }),
-          ),
+          Effect.mapError((cause) => {
+            if (Schema.is(ExtensionServiceError)(cause)) return cause
+            return new ExtensionServiceError({
+              service: "ExtensionAgent",
+              operation: "run",
+              message: errorMessage(cause),
+              cause,
+            })
+          }),
         ),
     }
     const Interaction: ExtensionInteractionService = {
@@ -301,17 +310,18 @@ export const extensionServicesFromHostContext = (
     const fs = yield* FileSystem.FileSystem
     const pathSvc = yield* Path.Path
 
-    const listFiles: ExtensionFilesService["listFiles"] =
-      fileIndexOption._tag === "Some"
-        ? (params) =>
-            mapError("ExtensionFiles", "listFiles", fileIndexOption.value.listFiles(params))
-        : () =>
-            Effect.fail(
-              serviceError(
-                "ExtensionFiles",
-                "listFiles",
-              )(new Error("File index service unavailable")),
-            )
+    const listFiles: ExtensionFilesService["listFiles"] = Option.match(fileIndexOption, {
+      onNone: () => () =>
+        Effect.fail(
+          new ExtensionServiceError({
+            service: "ExtensionFiles",
+            operation: "listFiles",
+            message: "File index service unavailable",
+          }),
+        ),
+      onSome: (fileIndex) => (params) =>
+        mapError("ExtensionFiles", "listFiles", fileIndex.listFiles(params)),
+    })
 
     const Files: ExtensionFilesService = {
       listFiles,
@@ -340,52 +350,100 @@ export const extensionServicesFromHostContext = (
       dirname: (path) => pathSvc.dirname(path),
     }
 
-    const FileLock: ExtensionFileLockServiceShape =
-      fileLockOption._tag === "Some"
-        ? {
-            withLock: (path, effect) => fileLockOption.value.withLock(path, effect),
-          }
-        : {
-            withLock: (_path, effect) => effect,
-          }
+    const FileLock: ExtensionFileLockServiceApi = Option.match(fileLockOption, {
+      onNone: () => ({ withLock: (_path, effect) => effect }),
+      onSome: (fileLock) => ({
+        withLock: (path, effect) => fileLock.withLock(path, effect),
+      }),
+    })
 
-    const State: ExtensionStateServiceShape = (() => {
-      if (statePublisherOption._tag !== "Some") return { changed: () => Effect.void }
-      if (currentExtensionId === undefined) {
-        return {
-          changed: () =>
-            Effect.fail(
-              serviceError(
-                "ExtensionState",
-                "changed",
-              )(new Error("Extension id unavailable for state change notification")),
-            ),
+    const State: ExtensionStateServiceApi = Option.match(statePublisherOption, {
+      onNone: () => ({ changed: () => Effect.void }),
+      onSome: (statePublisher) => {
+        if (Predicate.isUndefined(currentExtensionId)) {
+          return {
+            changed: () =>
+              Effect.fail(
+                new ExtensionServiceError({
+                  service: "ExtensionState",
+                  operation: "changed",
+                  message: "Extension id unavailable for state change notification",
+                }),
+              ),
+          }
         }
-      }
-      return {
-        changed: (params) =>
-          mapError(
-            "ExtensionState",
-            "changed",
-            statePublisherOption.value.changed({
-              extensionId: currentExtensionId,
-              sessionId: params.sessionId ?? ctx.sessionId,
-              branchId: params.branchId ?? ctx.branchId,
-            }),
-          ),
-      }
-    })()
+        return {
+          changed: (params: { readonly sessionId?: SessionId; readonly branchId?: BranchId }) => {
+            const sessionId = Option.getOrElse(
+              Option.fromUndefinedOr(params.sessionId),
+              () => ctx.sessionId,
+            )
+            const branchId = Option.getOrElse(
+              Option.fromUndefinedOr(params.branchId),
+              () => ctx.branchId,
+            )
+            return mapError(
+              "ExtensionState",
+              "changed",
+              statePublisher.changed({
+                extensionId: currentExtensionId,
+                sessionId,
+                branchId,
+              }),
+            )
+          },
+        }
+      },
+    })
 
-    const Dynamic: ExtensionDynamicRegistrationServiceShape =
-      dynamicRegistryOption._tag === "Some" && currentExtensionId !== undefined
-        ? {
+    const currentExtensionIdOption = Option.fromUndefinedOr(currentExtensionId)
+    const defaultDynamicScope: DynamicRegistrationScope = {
+      _tag: "session",
+      sessionId: ctx.sessionId,
+    }
+    const dynamicScope = (options?: {
+      readonly scope?: DynamicRegistrationScope
+    }): DynamicRegistrationScope =>
+      Option.match(Option.fromUndefinedOr(options), {
+        onNone: () => defaultDynamicScope,
+        onSome: (value) =>
+          Option.getOrElse(Option.fromUndefinedOr(value.scope), () => defaultDynamicScope),
+      })
+    let unavailableDynamicMessage = "Dynamic extension registry unavailable"
+    if (Option.isNone(currentExtensionIdOption)) {
+      unavailableDynamicMessage = "Extension id unavailable for dynamic registration"
+    }
+    const unavailableDynamic: ExtensionDynamicRegistrationServiceApi = {
+      registerTool: () =>
+        Effect.fail(
+          new ExtensionServiceError({
+            service: "ExtensionDynamic",
+            operation: "registerTool",
+            message: unavailableDynamicMessage,
+          }),
+        ),
+      registerRequest: () =>
+        Effect.fail(
+          new ExtensionServiceError({
+            service: "ExtensionDynamic",
+            operation: "registerRequest",
+            message: unavailableDynamicMessage,
+          }),
+        ),
+    }
+    const Dynamic: ExtensionDynamicRegistrationServiceApi = Option.match(dynamicRegistryOption, {
+      onNone: () => unavailableDynamic,
+      onSome: (dynamicRegistry) =>
+        Option.match(currentExtensionIdOption, {
+          onNone: () => unavailableDynamic,
+          onSome: (extensionId) => ({
             registerTool: (capability, options) =>
               mapError(
                 "ExtensionDynamic",
                 "registerTool",
-                dynamicRegistryOption.value.registerTool({
-                  extensionId: currentExtensionId,
-                  scope: options?.scope ?? { _tag: "session", sessionId: ctx.sessionId },
+                dynamicRegistry.registerTool({
+                  extensionId,
+                  scope: dynamicScope(options),
                   capability,
                 }),
               ),
@@ -393,50 +451,24 @@ export const extensionServicesFromHostContext = (
               mapError(
                 "ExtensionDynamic",
                 "registerRequest",
-                dynamicRegistryOption.value.registerRequest({
-                  extensionId: currentExtensionId,
-                  scope: options?.scope ?? { _tag: "session", sessionId: ctx.sessionId },
+                dynamicRegistry.registerRequest({
+                  extensionId,
+                  scope: dynamicScope(options),
                   capability,
                 }),
               ),
-          }
-        : {
-            registerTool: () =>
-              Effect.fail(
-                serviceError(
-                  "ExtensionDynamic",
-                  "registerTool",
-                )(
-                  new Error(
-                    currentExtensionId === undefined
-                      ? "Extension id unavailable for dynamic registration"
-                      : "Dynamic extension registry unavailable",
-                  ),
-                ),
-              ),
-            registerRequest: () =>
-              Effect.fail(
-                serviceError(
-                  "ExtensionDynamic",
-                  "registerRequest",
-                )(
-                  new Error(
-                    currentExtensionId === undefined
-                      ? "Extension id unavailable for dynamic registration"
-                      : "Dynamic extension registry unavailable",
-                  ),
-                ),
-              ),
-          }
+          }),
+        }),
+    })
 
     return Context.empty().pipe(
       Context.add(ExtensionContext, {
-        extensionId: currentExtensionId ?? ExtensionId.make("unknown"),
+        extensionId: Option.getOrElse(currentExtensionIdOption, () => ExtensionId.make("unknown")),
         sessionId: ctx.sessionId,
         branchId: ctx.branchId,
-        ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
-        ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
-        ...(ctx.turn !== undefined ? { turn: ctx.turn } : {}),
+        agentName: ctx.agentName,
+        toolCallId: ctx.toolCallId,
+        turn: ctx.turn,
         cwd: ctx.cwd,
         home: ctx.home,
         Session,
@@ -456,11 +488,12 @@ const mapInteraction = <A>(
   effect: Effect.Effect<A, EventStoreError | InteractionPendingError | PlatformError.PlatformError>,
 ): Effect.Effect<A, ExtensionServiceError | InteractionPendingError> =>
   effect.pipe(
-    Effect.mapError((cause) =>
-      Schema.is(InteractionPendingError)(cause)
-        ? cause
-        : serviceError("ExtensionInteraction", operation)(cause),
-    ),
+    Effect.mapError((cause) => {
+      if (Schema.is(InteractionPendingError)(cause)) {
+        return cause
+      }
+      return serviceError("ExtensionInteraction", operation)(cause)
+    }),
   )
 
 export const provideExtensionServices = <A, E, R>(
@@ -479,9 +512,9 @@ export const requireAgent = (
 ): Effect.Effect<AgentDefinition, ExtensionServiceError, ExtensionContext> =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    const agents = yield* ctx.Agent.listAgents()
+    const agents = yield* ctx.Agent.listAgents
     const agent = agents.find((a) => a.name === name)
-    if (agent !== undefined) return agent
+    if (!Predicate.isUndefined(agent)) return agent
     return yield* new ExtensionServiceError({
       service: "ExtensionAgent",
       operation: "require",

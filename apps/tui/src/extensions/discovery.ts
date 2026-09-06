@@ -8,7 +8,7 @@
  * runtime's scoped filesystem services.
  */
 
-import { Effect, FileSystem, Path } from "effect"
+import { Effect, FileSystem, Option, Path } from "effect"
 
 export interface DiscoveredTuiExtension {
   readonly filePath: string
@@ -33,11 +33,9 @@ const discoverDir = (
     const path = yield* Path.Path
 
     const exists = yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))
-    if (!exists) return [] as DiscoveredTuiExtension[]
+    if (!exists) return []
 
-    const entries = yield* fs
-      .readDirectory(dir)
-      .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>))
+    const entries = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))
 
     const results: DiscoveredTuiExtension[] = []
 
@@ -59,9 +57,7 @@ const discoverDir = (
         results.push({ filePath, scope })
       } else if (info.value.type === "Directory") {
         // oxlint-disable-next-line no-await-in-loop -- sequential: directory scan recurses through nested scopes
-        const subEntries = yield* fs
-          .readDirectory(filePath)
-          .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>))
+        const subEntries = yield* fs.readDirectory(filePath).pipe(Effect.orElseSucceed(() => []))
         const clientFiles = subEntries
           .filter((e) => CLIENT_INDEX_PATTERN.test(e))
           .slice()
@@ -75,9 +71,9 @@ const discoverDir = (
             }),
           )
         }
-        const firstClient = clientFiles[0]
-        if (firstClient !== undefined) {
-          results.push({ filePath: path.join(filePath, firstClient), scope })
+        const firstClient = Option.fromNullishOr(clientFiles[0])
+        if (Option.isSome(firstClient)) {
+          results.push({ filePath: path.join(filePath, firstClient.value), scope })
         }
       }
     }

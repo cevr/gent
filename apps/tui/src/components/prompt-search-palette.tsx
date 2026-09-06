@@ -1,11 +1,12 @@
 import { createMemo, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "../terminal-dimensions"
 import { ChromePanel } from "./chrome-panel"
 import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { truncate } from "../utils/format-tool"
 import type { ScopedKeyboardEvent } from "../keyboard/context"
+import { Option } from "effect"
 import {
   getPromptSearchItems,
   PromptSearchEvent,
@@ -18,26 +19,29 @@ export interface PromptSearchPaletteProps {
   onEvent: (event: PromptSearchEvent) => void
 }
 
+// eslint-disable-next-line effect/noNullish -- keyboard events omit a sequence for control keys.
 const isPromptSearchChar = (sequence: string | undefined) => {
-  if (sequence === undefined || sequence.length !== 1) return false
-  const code = sequence.charCodeAt(0)
+  const value = Option.fromNullishOr(sequence)
+  if (Option.isNone(value) || value.value.length !== 1) return false
+  const code = value.value.charCodeAt(0)
   return code >= 32 && code <= 126
 }
 
+// eslint-disable-next-line effect/noNullish -- keyboard events omit a sequence and no event is a valid result.
 export const promptSearchEventFromKey = (
   event: ScopedKeyboardEvent,
   hasItems: boolean,
-): PromptSearchEvent | undefined => {
-  if (event.name === "escape") return PromptSearchEvent.cases.Cancel.make({})
-  if (event.name === "backspace") return PromptSearchEvent.cases.Backspace.make({})
+): Option.Option<PromptSearchEvent> => {
+  if (event.name === "escape") return Option.some(PromptSearchEvent.cases.Cancel.make({}))
+  if (event.name === "backspace") return Option.some(PromptSearchEvent.cases.Backspace.make({}))
   if (event.name === "return" || event.name === "linefeed")
-    return PromptSearchEvent.cases.Accept.make({})
+    return Option.some(PromptSearchEvent.cases.Accept.make({}))
 
   if (hasItems && (event.name === "up" || (event.ctrl === true && event.name === "p"))) {
-    return PromptSearchEvent.cases.MoveUp.make({})
+    return Option.some(PromptSearchEvent.cases.MoveUp.make({}))
   }
   if (hasItems && (event.name === "down" || (event.ctrl === true && event.name === "n"))) {
-    return PromptSearchEvent.cases.MoveDown.make({})
+    return Option.some(PromptSearchEvent.cases.MoveDown.make({}))
   }
 
   if (
@@ -47,22 +51,30 @@ export const promptSearchEventFromKey = (
     event.super !== true &&
     event.option !== true
   ) {
-    return PromptSearchEvent.cases.TypeChar.make({ char: event.sequence })
+    return Option.some(PromptSearchEvent.cases.TypeChar.make({ char: event.sequence }))
   }
 
-  return undefined
+  return Option.none()
 }
 
 export function PromptSearchPalette(props: PromptSearchPaletteProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
-  let scrollRef: ScrollBoxRenderable | undefined = undefined
+  let scrollRef = Option.none<ScrollBoxRenderable>()
 
   const items = createMemo(() => getPromptSearchItems(props.state, props.entries))
-  const selectedIndex = () => (props.state._tag === "open" ? props.state.selectedIndex : 0)
-  const query = () => (props.state._tag === "open" ? props.state.query : "")
+  const selectedIndex = () => {
+    if (props.state._tag === "open") return props.state.selectedIndex
+    return 0
+  }
+  const query = () => {
+    if (props.state._tag === "open") return props.state.query
+    return ""
+  }
 
-  useScrollSync(() => `prompt-search-${selectedIndex()}`, { getRef: () => scrollRef })
+  useScrollSync(() => `prompt-search-${selectedIndex()}`, {
+    getRef: () => Option.getOrUndefined(scrollRef),
+  })
 
   const panelWidth = () => Math.min(80, dimensions().width - 6)
   const panelHeight = () => Math.min(16, dimensions().height - 6)
@@ -86,7 +98,7 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
           </text>
         </ChromePanel.Section>
 
-        <ChromePanel.Body ref={scrollRef}>
+        <ChromePanel.Body ref={(value) => (scrollRef = Option.some(value))}>
           <Show
             when={items().length > 0}
             fallback={
@@ -98,15 +110,23 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
             <For each={items()}>
               {(entry, index) => {
                 const selected = () => selectedIndex() === index()
+                const backgroundColor = () => {
+                  if (selected()) return theme.primary
+                  return "transparent"
+                }
+                const textColor = () => {
+                  if (selected()) return theme.selectedListItemText
+                  return theme.text
+                }
                 return (
                   <box
                     id={`prompt-search-${index()}`}
-                    backgroundColor={selected() ? theme.primary : "transparent"}
+                    backgroundColor={backgroundColor()}
                     paddingLeft={1}
                   >
                     <text
                       style={{
-                        fg: selected() ? theme.selectedListItemText : theme.text,
+                        fg: textColor(),
                       }}
                     >
                       {truncate(entry.replace(/\s+/g, " "), panelWidth() - 4)}

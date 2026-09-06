@@ -10,8 +10,9 @@ import {
   Suspense,
 } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "../terminal-dimensions"
 import { matchSorter } from "match-sorter"
+import { Option } from "effect"
 import { useClient } from "../client/index"
 import type { DomainSession } from "../client"
 import { useCommand } from "../command/context"
@@ -35,6 +36,11 @@ const filterItems = (items: readonly PaletteItem[], query: string): readonly Pal
   })
 }
 
+const selectedTitle = (title: string, selected: boolean): string => {
+  if (selected) return `${title} •`
+  return title
+}
+
 type SessionNode = {
   readonly session: DomainSession
   readonly children: SessionNode[]
@@ -48,12 +54,15 @@ const buildSessionTree = (list: readonly DomainSession[]): SessionNode[] => {
 
   const roots: SessionNode[] = []
   for (const session of list) {
-    const node = nodes.get(session.id)
-    if (node === undefined) continue
-    if (session.parentSessionId !== undefined && nodes.has(session.parentSessionId)) {
-      nodes.get(session.parentSessionId)?.children.push(node)
+    const node = Option.fromNullishOr(nodes.get(session.id))
+    if (Option.isNone(node)) continue
+    const parent = Option.fromNullishOr(session.parentSessionId).pipe(
+      Option.flatMap((id) => Option.fromNullishOr(nodes.get(id))),
+    )
+    if (Option.isSome(parent)) {
+      parent.value.children.push(node.value)
     } else {
-      roots.push(node)
+      roots.push(node.value)
     }
   }
 
@@ -76,9 +85,11 @@ export function CommandPalette() {
   const dimensions = useTerminalDimensions()
   const [state, setState] = createSignal(CommandPaletteState.initial())
 
-  let scrollRef: ScrollBoxRenderable | undefined
+  let scrollRef = Option.none<ScrollBoxRenderable>()
 
-  useScrollSync(() => `item-${state().selectedIndex}`, { getRef: () => scrollRef })
+  useScrollSync(() => `item-${state().selectedIndex}`, {
+    getRef: () => Option.getOrUndefined(scrollRef),
+  })
 
   const dispatch = (event: Parameters<typeof transitionCommandPalette>[1]) => {
     setState((current) => transitionCommandPalette(current, event))
@@ -100,7 +111,7 @@ export function CommandPalette() {
       return [
         {
           id: "theme.system",
-          title: isSystem ? "System •" : "System",
+          title: selectedTitle("System", isSystem),
           description: "Follow terminal theme",
           onSelect: () => {
             set("system")
@@ -109,7 +120,7 @@ export function CommandPalette() {
         },
         {
           id: "theme.dark",
-          title: !isSystem && currentMode === "dark" ? "Dark •" : "Dark",
+          title: selectedTitle("Dark", !isSystem && currentMode === "dark"),
           onSelect: () => {
             set("opencode")
             setMode("dark")
@@ -118,7 +129,7 @@ export function CommandPalette() {
         },
         {
           id: "theme.light",
-          title: !isSystem && currentMode === "light" ? "Light •" : "Light",
+          title: selectedTitle("Light", !isSystem && currentMode === "light"),
           onSelect: () => {
             set("opencode")
             setMode("light")
@@ -130,7 +141,7 @@ export function CommandPalette() {
   })
 
   const sessionsLevel = (): PaletteLevel => {
-    const [sessions] = createResource(() => client.runtime.run(client.listSessions()))
+    const [sessions] = createResource(() => client.runtime.run(client.listSessions))
 
     const newSessionItem: PaletteItem = {
       id: "session.new",
@@ -143,22 +154,22 @@ export function CommandPalette() {
 
     const flattenSessionTree = (nodes: readonly SessionNode[], depth = 0): PaletteItem[] => {
       const items: PaletteItem[] = []
-      const prefix = depth > 0 ? `${"  ".repeat(depth)}- ` : ""
+      let prefix = ""
+      if (depth > 0) prefix = `${"  ".repeat(depth)}- `
       for (const node of nodes) {
         const session = node.session
         const currentSession = client.session()
         const isActive = currentSession?.sessionId === session.id
-        const title = isActive
-          ? `${prefix}${session.name ?? "Unnamed"} •`
-          : `${prefix}${session.name ?? "Unnamed"}`
+        const title = selectedTitle(`${prefix}${session.name ?? "Unnamed"}`, isActive)
 
         items.push({
           id: `session.${session.id}`,
           title,
           onSelect: () => {
-            if (session.activeBranchId === undefined) return
-            client.switchSession(session.id, session.activeBranchId, session.name ?? "Unnamed")
-            router.navigateToSession(session.id, session.activeBranchId)
+            const branchId = Option.fromNullishOr(session.activeBranchId)
+            if (Option.isNone(branchId)) return
+            client.switchSession(session.id, branchId.value, session.name ?? "Unnamed")
+            router.navigateToSession(session.id, branchId.value)
             closePalette()
           },
         })
@@ -173,11 +184,13 @@ export function CommandPalette() {
     return {
       id: "sessions",
       title: "Sessions",
-      source: () => {
-        const data = sessions()
-        if (data === undefined) return undefined
-        return [newSessionItem, ...flattenSessionTree(buildSessionTree(data))]
-      },
+      source: () =>
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(sessions()), (data) => [
+            newSessionItem,
+            ...flattenSessionTree(buildSessionTree(data)),
+          ]),
+        ),
     }
   }
 
@@ -223,8 +236,9 @@ export function CommandPalette() {
         category: cmd.category ?? "ext",
         shortcut: cmd.keybind,
         onSelect: () => {
-          if (cmd.paletteLevel !== undefined) {
-            pushLevel(cmd.paletteLevel())
+          const nextLevel = Option.fromNullishOr(cmd.paletteLevel)
+          if (Option.isSome(nextLevel)) {
+            pushLevel(nextLevel.value())
           } else {
             cmd.onSelect()
             closePalette()
@@ -241,8 +255,8 @@ export function CommandPalette() {
 
   const levelItems = createMemo<readonly PaletteItem[]>(() => {
     const level = currentLevel()
-    if (level === undefined) return []
-    return level.source() ?? []
+    if (Option.isNone(level)) return []
+    return level.value.source() ?? []
   })
 
   const filteredItems = createMemo(() => filterItems(levelItems(), searchQuery()))
@@ -250,7 +264,7 @@ export function CommandPalette() {
   const maxCategoryWidth = createMemo(() => {
     let max = 0
     for (const item of filteredItems()) {
-      if (item.category !== undefined && item.category.length > max) max = item.category.length
+      max = Math.max(max, item.category?.length ?? 0)
     }
     return max
   })
@@ -264,9 +278,9 @@ export function CommandPalette() {
   }
 
   const handleSelect = () => {
-    const item = filteredItems()[state().selectedIndex]
-    if (item === undefined || item.disabled) return
-    item.onSelect()
+    const item = Option.fromNullishOr(filteredItems()[state().selectedIndex])
+    if (Option.isNone(item) || item.value.disabled) return
+    item.value.onSelect()
   }
 
   useScopedKeyboard(
@@ -312,7 +326,7 @@ export function CommandPalette() {
         return true
       }
 
-      if (event.sequence !== undefined && event.sequence.length === 1) {
+      if (event.sequence?.length === 1) {
         const code = event.sequence.charCodeAt(0)
         if (code >= 32 && code <= 126) {
           dispatch(CommandPaletteEvent.cases.SearchTyped.make({ char: event.sequence }))
@@ -347,7 +361,11 @@ export function CommandPalette() {
     )
   }
 
-  const levelTitle = () => currentLevel()?.title ?? "Commands"
+  const levelTitle = () =>
+    Option.match(currentLevel(), {
+      onNone: () => "Commands",
+      onSome: (level) => level.title,
+    })
 
   const LoadingIndicator = () => (
     <box paddingLeft={1}>
@@ -364,19 +382,21 @@ export function CommandPalette() {
           const catWidth = maxCategoryWidth()
           const itemTextColor = () => {
             if (disabled) return theme.textMuted
-            return isSelected() ? theme.selectedListItemText : theme.text
+            if (isSelected()) return theme.selectedListItemText
+            return theme.text
           }
           const metaColor = () => {
             if (disabled) return theme.textMuted
-            return isSelected() ? theme.selectedListItemText : theme.textMuted
+            if (isSelected()) return theme.selectedListItemText
+            return theme.textMuted
+          }
+          const background = () => {
+            if (isSelected() && !disabled) return theme.primary
+            return "transparent"
           }
 
           return (
-            <box
-              id={`item-${index()}`}
-              backgroundColor={isSelected() && !disabled ? theme.primary : "transparent"}
-              paddingLeft={1}
-            >
+            <box id={`item-${index()}`} backgroundColor={background()} paddingLeft={1}>
               <text style={{ fg: itemTextColor() }}>
                 <Show when={catWidth > 0}>
                   <span style={{ fg: metaColor() }}>
@@ -384,10 +404,10 @@ export function CommandPalette() {
                   </span>{" "}
                 </Show>
                 {item.title}
-                <Show when={item.description !== undefined}>
+                <Show when={Option.isSome(Option.fromNullishOr(item.description))}>
                   <span style={{ fg: metaColor() }}> {item.description}</span>
                 </Show>
-                <Show when={item.shortcut !== undefined}>
+                <Show when={Option.isSome(Option.fromNullishOr(item.shortcut))}>
                   <span style={{ fg: metaColor() }}> [{item.shortcut}]</span>
                 </Show>
               </text>
@@ -427,7 +447,7 @@ export function CommandPalette() {
 
         <ChromePanel.Body
           ref={(element) => {
-            scrollRef = element
+            scrollRef = Option.some(element)
           }}
         >
           <Suspense fallback={<LoadingIndicator />}>

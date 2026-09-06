@@ -10,9 +10,9 @@
  * are requests carrying a `slash:` presentation block.
  *
  * Resources are authored through `defineResource({...})` or
- * `defineStateResource({...})` from
- * `./resource.ts`; the leaf is widened by structural assignability at the
- * bucket boundary.
+ * `defineStateResource({...})` from `./resource.ts`. Each leaf carries an
+ * explicit stable resource identity and graph metadata; the leaf is widened
+ * by structural assignability at the bucket boundary.
  *
  * Drivers split into `modelDrivers` and `externalDrivers`; one untagged
  * `drivers: []` bucket would erase the correlated union.
@@ -94,3 +94,4 @@ export const rpcCapabilities = (
 // `{ layer: Layer.empty, stop: ... }`.
 export { defineResource, defineStateResource } from "./resource.js"
 export type { ExtensionState, StateInitializer, StateResourceSpec } from "./resource.js"
+export { ResourceId, ResourceRevision } from "./resource-graph.js"

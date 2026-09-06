@@ -1,8 +1,14 @@
-import { Effect } from "effect"
+import { Clock, Effect, Option, Schema } from "effect"
+// eslint-disable-next-line effect/noNodeBuiltinImport -- integration path resolution is a host boundary.
 import * as path from "node:path"
 import { renderFrame, type renderWithProviders } from "../tests/render-harness-boundary"
 
 export { renderFrame }
+
+class IntegrationWaitError extends Schema.TaggedError<IntegrationWaitError>()(
+  "IntegrationWaitError",
+  { message: Schema.String },
+) {}
 
 export const repoRoot = path.resolve(import.meta.dir, "../../..")
 
@@ -21,12 +27,12 @@ export const waitForFrame = (
   timeoutMs = 5_000,
 ): Effect.Effect<string, Error> =>
   Effect.gen(function* () {
-    const startedAt = Date.now()
+    const startedAt = yield* Clock.currentTimeMillis
     let lastFrame = ""
 
-    while (Date.now() - startedAt < timeoutMs) {
+    while ((yield* Clock.currentTimeMillis) - startedAt < timeoutMs) {
       yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.promise(() => Promise.resolve())
+      yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
 
       const frame = renderFrame(setup)
@@ -38,7 +44,9 @@ export const waitForFrame = (
     }
 
     return yield* Effect.fail(
-      new Error(`timed out waiting for rendered frame: ${label}\n${lastFrame}`),
+      new IntegrationWaitError({
+        message: `timed out waiting for rendered frame: ${label}\n${lastFrame}`,
+      }),
     )
   })
 
@@ -55,11 +63,11 @@ export const waitForCondition = (
   timeoutMs = 5_000,
 ): Effect.Effect<void, Error> =>
   Effect.gen(function* () {
-    const startedAt = Date.now()
+    const startedAt = yield* Clock.currentTimeMillis
 
-    while (Date.now() - startedAt < timeoutMs) {
+    while ((yield* Clock.currentTimeMillis) - startedAt < timeoutMs) {
       yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.promise(() => Promise.resolve())
+      yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
 
       if (predicate()) return
@@ -68,7 +76,9 @@ export const waitForCondition = (
       yield* Effect.sleep("10 millis")
     }
 
-    return yield* Effect.fail(new Error(`timed out waiting for condition: ${label}`))
+    return yield* Effect.fail(
+      new IntegrationWaitError({ message: `timed out waiting for condition: ${label}` }),
+    )
   })
 
 export const makeSessionState = (created: {
@@ -79,5 +89,5 @@ export const makeSessionState = (created: {
   sessionId: created.sessionId,
   branchId: created.branchId,
   name: created.name,
-  reasoningLevel: undefined,
+  reasoningLevel: Option.getOrUndefined(Option.none()),
 })

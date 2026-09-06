@@ -1,5 +1,5 @@
 import { describe, test, expect, it } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Path } from "effect"
+import { Effect, FileSystem, Layer, Option, Path } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import {
   makeMemoryVault,
@@ -144,14 +144,18 @@ source: agent
 
 Body content.`
     const result = parseFrontmatter(content, fallbackIsoDate)
-    expect(result).toBeDefined()
-    expect(result!.frontmatter.scope).toBe("global")
-    expect(result!.frontmatter.tags).toEqual(["test", "memory"])
-    expect(result!.frontmatter.source).toBe("agent")
-    expect(result!.body).toContain("# My Title")
+    expect(Option.isSome(result)).toBe(true)
+    if (Option.isSome(result)) {
+      expect(result.value.frontmatter.scope).toBe("global")
+      expect(result.value.frontmatter.tags).toEqual(["test", "memory"])
+      expect(result.value.frontmatter.source).toBe("agent")
+      expect(result.value.body).toContain("# My Title")
+    }
   })
   test("returns undefined for no frontmatter", () => {
-    expect(parseFrontmatter("# Just a title\n\nNo frontmatter.", fallbackIsoDate)).toBeUndefined()
+    expect(
+      Option.isNone(parseFrontmatter("# Just a title\n\nNo frontmatter.", fallbackIsoDate)),
+    ).toBe(true)
   })
 })
 describe("serializeFrontmatter", () => {
@@ -162,8 +166,8 @@ describe("serializeFrontmatter", () => {
     expect(serialized).toContain("tags: [test]")
     expect(serialized).toContain("source: agent")
     const parsed = parseFrontmatter(serialized + "\n\n# Title\n\nBody", fallbackIsoDate)
-    expect(parsed).toBeDefined()
-    expect(parsed!.frontmatter.scope).toBe("global")
+    expect(Option.isSome(parsed)).toBe(true)
+    if (Option.isSome(parsed)) expect(parsed.value.frontmatter.scope).toBe("global")
   })
 })
 describe("projectKey", () => {

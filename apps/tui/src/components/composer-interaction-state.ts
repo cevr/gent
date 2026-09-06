@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import type { AutocompleteContribution } from "../extensions/client-facets.js"
 
 export interface AutocompleteState {
@@ -10,16 +10,16 @@ export interface AutocompleteState {
 export interface ComposerInteractionState {
   readonly draft: string
   readonly mode: "editing" | "shell"
-  readonly autocomplete: AutocompleteState | null
+  readonly autocomplete: Option.Option<AutocompleteState>
 }
 
 export const ComposerInteractionState = {
   initial: (): ComposerInteractionState => ({
     draft: "",
     mode: "editing",
-    autocomplete: null,
+    autocomplete: Option.none(),
   }),
-} as const
+}
 
 export const ComposerInteractionEvent = Schema.TaggedUnion({
   DraftChanged: { text: Schema.String },
@@ -40,26 +40,32 @@ const deriveAutocomplete = (
   _state: ComposerInteractionState,
   text: string,
   contributions: ReadonlyArray<AutocompleteContribution>,
-): AutocompleteState | null => {
-  if (_state.mode === "shell") return null
+): Option.Option<AutocompleteState> => {
+  if (_state.mode === "shell") return Option.none()
 
   const prefixes = contributions.map((c) => c.prefix)
-  if (prefixes.length === 0) return null
+  if (prefixes.length === 0) return Option.none()
 
   const escaped = prefixes.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
   const regex = new RegExp(`(?:^|[\\s])([${escaped.join("")}])([^\\s]*)$`)
-  const match = text.match(regex)
-  if (match === null) return null
+  return Option.fromNullishOr(regex.exec(text)).pipe(
+    Option.flatMap((match) =>
+      Option.all([
+        Option.fromNullishOr(match[0]),
+        Option.fromNullishOr(match[1]),
+        Option.fromNullishOr(match[2]),
+      ]),
+    ),
+    Option.flatMap(([fullMatch, prefix, filter]) => {
+      if (prefix.length === 0) return Option.none()
+      let leadingWhitespaceLength = 0
+      if (fullMatch.startsWith(" ")) leadingWhitespaceLength = 1
+      const triggerPos = text.length - fullMatch.length + leadingWhitespaceLength
 
-  const [fullMatch, prefix, filter] = match
-  if (prefix === undefined || prefix.length === 0) return null
-
-  const triggerPos = text.length - fullMatch.length + (fullMatch.startsWith(" ") ? 1 : 0)
-
-  // "/" only activates at position 0 — skip mid-text matches like file paths
-  if (prefix === "/" && triggerPos !== 0) return null
-
-  return { type: prefix, filter: filter ?? "", triggerPos }
+      if (prefix === "/" && triggerPos !== 0) return Option.none()
+      return Option.some({ type: prefix, filter, triggerPos })
+    }),
+  )
 }
 
 export function transitionComposerInteraction(
@@ -67,46 +73,29 @@ export function transitionComposerInteraction(
   event: ComposerInteractionEvent,
   contributions: ReadonlyArray<AutocompleteContribution> = [],
 ): ComposerInteractionState {
-  switch (event._tag) {
-    case "DraftChanged":
-      return {
-        ...state,
-        draft: event.text,
-        autocomplete: deriveAutocomplete(state, event.text, contributions),
-      }
-
-    case "RestoreDraft":
-      return {
-        ...state,
-        draft: event.text,
-        autocomplete: null,
-      }
-
-    case "ClearDraft":
-      return {
-        ...state,
-        draft: "",
-        autocomplete: null,
-      }
-
-    case "EnterShell":
-      return {
-        ...state,
-        mode: "shell",
-        autocomplete: null,
-      }
-
-    case "ExitShell":
-      return {
-        ...state,
-        mode: "editing",
-        autocomplete: null,
-      }
-
-    case "CloseAutocomplete":
-      return {
-        ...state,
-        autocomplete: null,
-      }
+  if (event._tag === "DraftChanged") {
+    return {
+      ...state,
+      draft: event.text,
+      autocomplete: deriveAutocomplete(state, event.text, contributions),
+    }
   }
+
+  if (event._tag === "RestoreDraft") {
+    return { ...state, draft: event.text, autocomplete: Option.none() }
+  }
+
+  if (event._tag === "ClearDraft") {
+    return { ...state, draft: "", autocomplete: Option.none() }
+  }
+
+  if (event._tag === "EnterShell") {
+    return { ...state, mode: "shell", autocomplete: Option.none() }
+  }
+
+  if (event._tag === "ExitShell") {
+    return { ...state, mode: "editing", autocomplete: Option.none() }
+  }
+
+  return { ...state, autocomplete: Option.none() }
 }

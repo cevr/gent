@@ -12,7 +12,7 @@
  */
 
 import { Effect, type Context } from "effect"
-import type { InteractionPendingError } from "@gent/core/extensions/api"
+import type { InteractionPendingError, TurnError } from "@gent/core/extensions/api"
 import type { CodemodeConfig } from "./mcp-codemode.js"
 
 /**
@@ -26,8 +26,8 @@ export const makeAcpRunTool =
   (params: {
     readonly runTool: (
       toolName: string,
-      args: unknown,
-    ) => Effect.Effect<unknown, InteractionPendingError>
+      args: Parameters<CodemodeConfig["runTool"]>[1],
+    ) => Effect.Effect<unknown, InteractionPendingError | TurnError>
   }): CodemodeConfig["runTool"] =>
   (toolName, args) =>
     Effect.runPromise(params.runTool(toolName, args))

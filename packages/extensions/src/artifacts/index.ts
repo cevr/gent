@@ -5,7 +5,7 @@
  * remains the public/client transport surface.
  */
 
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import {
   ArtifactId,
   defineExtension,
@@ -14,6 +14,7 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { ARTIFACTS_EXTENSION_ID, ArtifactRpc, ReadQuery } from "../artifacts-protocol.js"
+import type { ContentPatch } from "../artifacts-protocol.js"
 import { ArtifactsRead, ArtifactsStoreLive, ArtifactsWrite } from "./store.js"
 
 export { ARTIFACTS_EXTENSION_ID } from "../artifacts-protocol.js"
@@ -71,8 +72,8 @@ const ArtifactReadResult = Schema.Struct({
   status: Schema.optional(Schema.Literals(["active", "resolved"])),
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   branchId: Schema.optional(Schema.String),
-  createdAt: Schema.optional(Schema.Number),
-  updatedAt: Schema.optional(Schema.Number),
+  createdAt: Schema.optional(Schema.Finite),
+  updatedAt: Schema.optional(Schema.Finite),
 })
 
 const ArtifactReadTool = tool({
@@ -82,17 +83,18 @@ const ArtifactReadTool = tool({
   output: ArtifactReadResult,
   execute: Effect.fn("ArtifactReadTool.execute")(function* (params) {
     const ctx = yield* ExtensionContext
-    const query =
-      params.id !== undefined
-        ? ReadQuery.cases.ById.make({ id: ArtifactId.make(params.id) })
-        : ReadQuery.cases.BySource.make({
-            sourceTool: params.sourceTool ?? "",
-            branchId: ctx.branchId,
-          })
+    const id = Option.fromNullishOr(params.id)
+    let query: ReadQuery = ReadQuery.cases.BySource.make({
+      sourceTool: Option.getOrElse(Option.fromNullishOr(params.sourceTool), () => ""),
+      branchId: ctx.branchId,
+    })
+    if (Option.isSome(id)) {
+      query = ReadQuery.cases.ById.make({ id: ArtifactId.make(id.value) })
+    }
     const artifacts = yield* ArtifactsRead
     const artifact = yield* artifacts.read(ctx.sessionId, ctx.branchId, query)
-    if (artifact === null) return { found: false }
-    return { found: true, ...artifact }
+    if (Option.isNone(artifact)) return { found: false }
+    return { found: true, ...artifact.value }
   }),
 })
 
@@ -125,20 +127,31 @@ const ArtifactUpdateTool = tool({
   output: ArtifactUpdateResult,
   execute: Effect.fn("ArtifactUpdateTool.execute")(function* (params) {
     const ctx = yield* ExtensionContext
-    const patch =
-      params.find !== undefined && params.replace !== undefined
-        ? { find: params.find, replace: params.replace, replaceAll: params.replaceAll }
-        : undefined
+    const find = Option.fromNullishOr(params.find)
+    const replace = Option.fromNullishOr(params.replace)
+    let patch = Option.none<ContentPatch>()
+    if (Option.isSome(find) && Option.isSome(replace)) {
+      patch = Option.some({
+        find: find.value,
+        replace: replace.value,
+        replaceAll: params.replaceAll,
+      })
+    }
     const artifacts = yield* ArtifactsWrite
     const artifact = yield* artifacts.update(ctx.sessionId, ctx.branchId, {
       id: ArtifactId.make(params.id),
-      patch,
+      patch: Option.getOrUndefined(patch),
       status: params.status,
       label: params.label,
       metadata: params.metadata,
     })
-    if (artifact === null) return { found: false }
-    return { found: true, id: artifact.id, label: artifact.label, status: artifact.status }
+    if (Option.isNone(artifact)) return { found: false }
+    return {
+      found: true,
+      id: artifact.value.id,
+      label: artifact.value.label,
+      status: artifact.value.status,
+    }
   }),
 })
 
@@ -167,7 +180,13 @@ const ArtifactClearTool = tool({
 
 export const ArtifactsExtension = defineExtension({
   id: ARTIFACTS_EXTENSION_ID,
-  resources: [defineResource({ scope: "process", layer: ArtifactsStoreLive })],
+  resources: [
+    defineResource({
+      id: "@gent/artifacts/store",
+      scope: "process",
+      layer: ArtifactsStoreLive,
+    }),
+  ],
   requests: [
     ArtifactRpc.Save,
     ArtifactRpc.Read,

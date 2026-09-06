@@ -1,11 +1,12 @@
 import { Effect, Stream } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
+import type * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
 
 export interface TestLanguageModelOptions {
   readonly disableToolCallResolution?: boolean
   readonly toolkit?: unknown
-  readonly prompt?: unknown
+  readonly prompt?: Prompt.RawInput
 }
 
 export interface TestLanguageModelOverrides<Options extends TestLanguageModelOptions> {
@@ -34,6 +35,7 @@ export const makeLanguageModel = <
 >(
   overrides: TestLanguageModelOverrides<Options> = {},
 ): LanguageModel.Service =>
+  // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions -- This helper is the named test boundary for adapting the overloaded model contract.
   ({
     ...baseLanguageModel,
     ...overrides,

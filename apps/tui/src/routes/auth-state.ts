@@ -1,11 +1,11 @@
-import { Schema } from "effect"
+import { Match, Schema } from "effect"
 import {
   AuthAuthorization,
   AuthMethod,
   AuthProviderInfo as AuthProviderInfoSchema,
 } from "@gent/core-internal/domain/auth"
 
-type AuthProviderInfo = typeof AuthProviderInfoSchema.Type
+type AuthProviderInfo = AuthProviderInfoSchema
 
 type AuthCatalog = {
   readonly providers: readonly AuthProviderInfo[]
@@ -52,16 +52,16 @@ export const AuthEvent = Schema.TaggedUnion({
     methods: Schema.Record(Schema.String, Schema.Array(AuthMethod)),
   },
   LoadFailed: { error: Schema.String },
-  SelectProvider: { index: Schema.Number },
-  SelectMethod: { index: Schema.Number },
+  SelectProvider: { index: Schema.Finite },
+  SelectMethod: { index: Schema.Finite },
   OpenMethod: {},
   StartKey: {},
   StartOAuthAuthorization: {},
   StartOAuth: {
     authorization: AuthAuthorization,
     method: AuthMethod,
-    providerIndex: Schema.Number,
-    methodIndex: Schema.Number,
+    providerIndex: Schema.Finite,
+    methodIndex: Schema.Finite,
   },
   TypeKey: { char: Schema.String },
   BackspaceKey: {},
@@ -170,30 +170,44 @@ const onLoadFailed = (
 const onSelectProvider = (
   state: AuthState,
   event: Extract<AuthEvent, { readonly _tag: "SelectProvider" }>,
-): AuthState =>
-  state._tag === "List" ? list({ ...catalogOf(state), providerIndex: event.index }) : state
+): AuthState => {
+  if (state._tag === "List") return list({ ...catalogOf(state), providerIndex: event.index })
+  return state
+}
 
 const onSelectMethod = (
   state: AuthState,
   event: Extract<AuthEvent, { readonly _tag: "SelectMethod" }>,
-): AuthState => (state._tag === "Method" ? method({ ...state, methodIndex: event.index }) : state)
+): AuthState => {
+  if (state._tag === "Method") return method({ ...state, methodIndex: event.index })
+  return state
+}
 
-const onOpenMethod = (state: AuthState): AuthState =>
-  state._tag === "List"
-    ? method({
-        ...catalogOf(state),
-        providerIndex: state.providerIndex,
-        methodIndex: 0,
-      })
-    : state
+const onOpenMethod = (state: AuthState): AuthState => {
+  if (state._tag !== "List") return state
+  return method({
+    ...catalogOf(state),
+    providerIndex: state.providerIndex,
+    methodIndex: 0,
+  })
+}
 
-const onStartKey = (state: AuthState): AuthState =>
-  state._tag === "Method"
-    ? key({ ...catalogOf(state), providerIndex: state.providerIndex, value: "" })
-    : state
+const onStartKey = (state: AuthState): AuthState => {
+  if (state._tag === "Method") {
+    return key({ ...catalogOf(state), providerIndex: state.providerIndex, value: "" })
+  }
+  return state
+}
 
-const onStartOAuthAuthorization = (state: AuthState): AuthState =>
-  state._tag === "Method" ? method({ ...state, authorizing: true }) : state
+const onStartOAuthAuthorization = (state: AuthState): AuthState => {
+  if (state._tag === "Method") return method({ ...state, authorizing: true })
+  return state
+}
+
+const oauthPhase = (authorization: AuthAuthorization): "waiting" | "idle" => {
+  if (authorization.method === "auto") return "waiting"
+  return "idle"
+}
 
 const onStartOAuth = (
   state: AuthState,
@@ -206,65 +220,77 @@ const onStartOAuth = (
     method: event.method,
     authorization: event.authorization,
     code: "",
-    phase: event.authorization.method === "auto" ? "waiting" : "idle",
+    phase: oauthPhase(event.authorization),
   })
 
 const onTypeKey = (
   state: AuthState,
   event: Extract<AuthEvent, { readonly _tag: "TypeKey" }>,
-): AuthState =>
-  state._tag === "Key"
-    ? key({
-        ...catalogOf(state),
-        providerIndex: state.providerIndex,
-        value: state.value + event.char,
-      })
-    : state
+): AuthState => {
+  if (state._tag !== "Key") return state
+  return key({
+    ...catalogOf(state),
+    providerIndex: state.providerIndex,
+    value: state.value + event.char,
+  })
+}
 
-const onBackspaceKey = (state: AuthState): AuthState =>
-  state._tag === "Key"
-    ? key({
-        ...catalogOf(state),
-        providerIndex: state.providerIndex,
-        value: state.value.slice(0, -1),
-      })
-    : state
+const onBackspaceKey = (state: AuthState): AuthState => {
+  if (state._tag !== "Key") return state
+  return key({
+    ...catalogOf(state),
+    providerIndex: state.providerIndex,
+    value: state.value.slice(0, -1),
+  })
+}
 
 const onPasteKey = (
   state: AuthState,
   event: Extract<AuthEvent, { readonly _tag: "PasteKey" }>,
-): AuthState =>
-  state._tag === "Key"
-    ? key({
-        ...catalogOf(state),
-        providerIndex: state.providerIndex,
-        value: state.value + event.text,
-      })
-    : state
+): AuthState => {
+  if (state._tag !== "Key") return state
+  return key({
+    ...catalogOf(state),
+    providerIndex: state.providerIndex,
+    value: state.value + event.text,
+  })
+}
 
-const onSubmitKeyStarted = (state: AuthState): AuthState =>
-  state._tag === "Key" ? key({ ...state, submitting: true }) : state
+const onSubmitKeyStarted = (state: AuthState): AuthState => {
+  if (state._tag === "Key") return key({ ...state, submitting: true })
+  return state
+}
 
 const onTypeCode = (
   state: AuthState,
   event: Extract<AuthEvent, { readonly _tag: "TypeCode" }>,
-): AuthState =>
-  state._tag === "OAuth" ? oauth({ ...state, code: state.code + event.char }) : state
+): AuthState => {
+  if (state._tag === "OAuth") return oauth({ ...state, code: state.code + event.char })
+  return state
+}
 
-const onBackspaceCode = (state: AuthState): AuthState =>
-  state._tag === "OAuth" ? oauth({ ...state, code: state.code.slice(0, -1) }) : state
+const onBackspaceCode = (state: AuthState): AuthState => {
+  if (state._tag === "OAuth") return oauth({ ...state, code: state.code.slice(0, -1) })
+  return state
+}
 
 const onPasteCode = (
   state: AuthState,
   event: Extract<AuthEvent, { readonly _tag: "PasteCode" }>,
-): AuthState =>
-  state._tag === "OAuth" ? oauth({ ...state, code: state.code + event.text }) : state
+): AuthState => {
+  if (state._tag === "OAuth") return oauth({ ...state, code: state.code + event.text })
+  return state
+}
 
-const onSubmitOAuthStarted = (state: AuthState): AuthState =>
-  state._tag === "OAuth" ? oauth({ ...state, submitting: true }) : state
+const onSubmitOAuthStarted = (state: AuthState): AuthState => {
+  if (state._tag === "OAuth") return oauth({ ...state, submitting: true })
+  return state
+}
 
-const onDeleteStarted = (state: AuthState): AuthState =>
-  state._tag === "List" ? list({ ...state, deleting: true }) : state
+const onDeleteStarted = (state: AuthState): AuthState => {
+  if (state._tag === "List") return list({ ...state, deleting: true })
+  return state
+}
 
 const onCancel = (state: AuthState): AuthState => list(catalogOf(state))
 
@@ -274,60 +300,54 @@ const onActionFailed = (
   state: AuthState,
   event: Extract<AuthEvent, { readonly _tag: "ActionFailed" }>,
 ): AuthState => {
-  switch (state._tag) {
-    case "List":
-      return list({ ...catalogOf(state), error: event.error })
-    case "Method":
-      return method({ ...state, authorizing: false, error: event.error })
-    case "Key":
-      return key({ ...state, submitting: false, error: event.error })
-    case "OAuth":
-      return oauth({ ...state, submitting: false, error: event.error })
-    case "Loading":
-      return list({ ...catalogOf(state), error: event.error })
-  }
+  const transitionState: (state: AuthState) => AuthState = Match.type<AuthState>().pipe(
+    Match.tagsExhaustive({
+      List: (state) => list({ ...catalogOf(state), error: event.error }),
+      Method: (state) => method({ ...state, authorizing: false, error: event.error }),
+      Key: (state) => key({ ...state, submitting: false, error: event.error }),
+      OAuth: (state) => oauth({ ...state, submitting: false, error: event.error }),
+      Loading: (state) => list({ ...catalogOf(state), error: event.error }),
+    }),
+  )
+  return transitionState(state)
 }
 
 const onOAuthAutoFailed = (
   state: AuthState,
   event: Extract<AuthEvent, { readonly _tag: "OAuthAutoFailed" }>,
-): AuthState =>
-  state._tag === "OAuth"
-    ? oauth({ ...state, phase: "idle", submitting: false, error: event.error })
-    : state
-
-const transitionByTag = {
-  LoadStarted: onLoadStarted,
-  Loaded: onLoaded,
-  LoadFailed: onLoadFailed,
-  SelectProvider: onSelectProvider,
-  SelectMethod: onSelectMethod,
-  OpenMethod: onOpenMethod,
-  StartKey: onStartKey,
-  StartOAuthAuthorization: onStartOAuthAuthorization,
-  StartOAuth: onStartOAuth,
-  TypeKey: onTypeKey,
-  BackspaceKey: onBackspaceKey,
-  PasteKey: onPasteKey,
-  SubmitKeyStarted: onSubmitKeyStarted,
-  TypeCode: onTypeCode,
-  BackspaceCode: onBackspaceCode,
-  PasteCode: onPasteCode,
-  SubmitOAuthStarted: onSubmitOAuthStarted,
-  DeleteStarted: onDeleteStarted,
-  Cancel: onCancel,
-  ActionSucceeded: onActionSucceeded,
-  ActionFailed: onActionFailed,
-  OAuthAutoFailed: onOAuthAutoFailed,
-} satisfies {
-  [K in AuthEvent["_tag"]]: (
-    state: AuthState,
-    event: Extract<AuthEvent, { readonly _tag: K }>,
-  ) => AuthState
+): AuthState => {
+  if (state._tag === "OAuth") {
+    return oauth({ ...state, phase: "idle", submitting: false, error: event.error })
+  }
+  return state
 }
 
 export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
-  const handler = transitionByTag[event._tag] as (state: AuthState, event: AuthEvent) => AuthState
-  return handler(state, event)
+  const transitionEvent: (event: AuthEvent) => AuthState = Match.type<AuthEvent>().pipe(
+    Match.tagsExhaustive({
+      LoadStarted: () => onLoadStarted(state),
+      Loaded: (event) => onLoaded(state, event),
+      LoadFailed: (event) => onLoadFailed(state, event),
+      SelectProvider: (event) => onSelectProvider(state, event),
+      SelectMethod: (event) => onSelectMethod(state, event),
+      OpenMethod: () => onOpenMethod(state),
+      StartKey: () => onStartKey(state),
+      StartOAuthAuthorization: () => onStartOAuthAuthorization(state),
+      StartOAuth: (event) => onStartOAuth(state, event),
+      TypeKey: (event) => onTypeKey(state, event),
+      BackspaceKey: () => onBackspaceKey(state),
+      PasteKey: (event) => onPasteKey(state, event),
+      SubmitKeyStarted: () => onSubmitKeyStarted(state),
+      TypeCode: (event) => onTypeCode(state, event),
+      BackspaceCode: () => onBackspaceCode(state),
+      PasteCode: (event) => onPasteCode(state, event),
+      SubmitOAuthStarted: () => onSubmitOAuthStarted(state),
+      DeleteStarted: () => onDeleteStarted(state),
+      Cancel: () => onCancel(state),
+      ActionSucceeded: () => onActionSucceeded(state),
+      ActionFailed: (event) => onActionFailed(state, event),
+      OAuthAutoFailed: (event) => onOAuthAutoFailed(state, event),
+    }),
+  )
+  return transitionEvent(event)
 }

@@ -18,7 +18,14 @@ class TurnCounterState extends Context.Service<TurnCounterState, ExtensionState<
 
 export default defineExtension({
   id: "turn-counter",
-  resources: [defineStateResource({ tag: TurnCounterState, scope: "process", initial: 0 })],
+  resources: [
+    defineStateResource({
+      id: "example/turn-counter/state",
+      tag: TurnCounterState,
+      scope: "process",
+      initial: 0,
+    }),
+  ],
   hooks: [
     hook.turnAfter(() =>
       Effect.gen(function* () {

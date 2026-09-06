@@ -16,7 +16,9 @@
  * (no real subprocess) — the agent-loop wiring is covered separately.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Deferred, Effect, Exit, Fiber, Scope, Sink, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Scope, Sink, Stream } from "effect"
+import type { Schema } from "effect"
+import { encodeExternalJson } from "../helpers/external-wire.js"
 import { BadArgument, PlatformError } from "effect/PlatformError"
 import {
   makeAcpConnection,
@@ -34,11 +36,12 @@ import {
 const makeFakeProc = (firstWrite?: Deferred.Deferred<void>) => {
   const writes: string[] = []
   const decoder = new TextDecoder()
+  const firstWriteOption = Option.fromUndefinedOr(firstWrite)
   const stdin = Sink.forEach((chunk: Uint8Array) =>
     Effect.gen(function* () {
       writes.push(decoder.decode(chunk))
-      if (firstWrite !== undefined) {
-        yield* Deferred.succeed(firstWrite, void 0).pipe(Effect.ignore)
+      if (Option.isSome(firstWriteOption)) {
+        yield* Deferred.succeed(firstWriteOption.value, void 0).pipe(Effect.ignore)
       }
     }),
   )
@@ -130,8 +133,9 @@ const makeFakeProcStdoutLine = (firstWrite: Deferred.Deferred<void>, line: strin
   return { writes, proc: { stdin, stdout } }
 }
 
-const invalidResponseLine = (result: unknown) =>
-  JSON.stringify({ jsonrpc: "2.0", id: 1, result }) + "\n"
+type JsonValue = Schema.Schema.Type<typeof Schema.Unknown>
+const invalidResponseLine = (result: JsonValue) =>
+  encodeExternalJson({ jsonrpc: "2.0", id: 1, result }) + "\n"
 
 describe("AcpConnection.close", () => {
   it.live("fails in-flight RPC Deferreds with AcpClosedError", () =>
@@ -226,7 +230,7 @@ describe("AcpConnection.close", () => {
             terminal: false,
           },
           clientInfo: { name: "gent-test", version: "0.0.0" },
-        } as const
+        }
         // Fork 50 RPCs back-to-back into the connection scope. Each
         // either registers and is later failed, or finds the state
         // already closed and fails immediately. Neither path parks.

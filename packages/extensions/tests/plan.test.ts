@@ -8,7 +8,7 @@ import { getToolId } from "@gent/core/extensions/api"
 describe("Plan extension", () => {
   test("has correct extension ID", () => {
     expect(PlanExtension.manifest.id).toBe(PLAN_EXTENSION_ID)
-    expect(PLAN_EXTENSION_ID as string).toBe("@gent/plan")
+    expect(String(PLAN_EXTENSION_ID)).toBe("@gent/plan")
   })
 
   it.live("registers plan tool", () =>

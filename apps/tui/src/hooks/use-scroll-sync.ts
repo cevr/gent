@@ -6,12 +6,13 @@
  */
 
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { Effect, Fiber } from "effect"
+import { Effect, Fiber, Option } from "effect"
 import { createEffect, onCleanup, type Accessor } from "solid-js"
 import { waitFor } from "../utils/wait-for"
 
 interface ScrollSyncOptions {
   /** The scrollbox ref getter */
+  // eslint-disable-next-line effect/noNullish -- OpenTUI refs are absent before attachment and after cleanup.
   getRef: () => ScrollBoxRenderable | undefined
   /** Number of retries when element not found (default: 15) */
   retries?: number
@@ -25,24 +26,24 @@ interface ScrollSyncOptions {
 export function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncOptions) {
   const { getRef, retries = 15, retryDelay = 30 } = options
 
-  const syncScroll = (id: string): true | undefined => {
-    const scrollRef = getRef()
-    if (scrollRef === undefined) return undefined
+  const syncScroll = (id: string): Option.Option<true> => {
+    const scrollRef = Option.fromNullishOr(getRef())
+    if (Option.isNone(scrollRef)) return Option.none()
 
-    const children = scrollRef.getChildren()
-    const target = children.find((child) => child.id === id)
-    if (target === undefined) return undefined
+    const children = scrollRef.value.getChildren()
+    const target = Option.fromNullishOr(children.find((child) => child.id === id))
+    if (Option.isNone(target)) return Option.none()
 
-    const relativeY = target.y - scrollRef.y
-    const viewportHeight = scrollRef.height
+    const relativeY = target.value.y - scrollRef.value.y
+    const viewportHeight = scrollRef.value.height
 
     // Scroll if element is outside viewport
     if (relativeY < 0) {
-      scrollRef.scrollBy(relativeY)
-    } else if (relativeY + target.height > viewportHeight) {
-      scrollRef.scrollBy(relativeY + target.height - viewportHeight)
+      scrollRef.value.scrollBy(relativeY)
+    } else if (relativeY + target.value.height > viewportHeight) {
+      scrollRef.value.scrollBy(relativeY + target.value.height - viewportHeight)
     }
-    return true
+    return Option.some(true)
   }
 
   createEffect(() => {

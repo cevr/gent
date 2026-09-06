@@ -1,4 +1,18 @@
-import { Clock, Deferred, Effect, Exit, Layer, Option, Schema, Scope } from "effect"
+import {
+  Array as Arr,
+  Clock,
+  Crypto,
+  Deferred,
+  Effect,
+  Encoding,
+  Exit,
+  Layer,
+  Option,
+  Predicate,
+  Result,
+  Schema,
+  Scope,
+} from "effect"
 import {
   FetchHttpClient,
   HttpClient,
@@ -7,16 +21,25 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/unstable/http"
-import { BunHttpServer } from "@effect/platform-bun"
+import { BunCrypto, BunHttpServer } from "@effect/platform-bun"
 
-const JwtClaimsSchema = Schema.Record(Schema.String, Schema.Unknown)
+const JwtClaimsSchema = Schema.Struct({
+  chatgpt_account_id: Schema.optional(Schema.Unknown),
+  "https://api.openai.com/auth": Schema.optional(Schema.Unknown),
+  organizations: Schema.optional(Schema.Unknown),
+})
 const decodeJwtClaims = Schema.decodeUnknownOption(Schema.fromJsonString(JwtClaimsSchema))
+const decodeScopedAccount = Schema.decodeUnknownOption(
+  Schema.Struct({ chatgpt_account_id: Schema.String }),
+)
+const decodeOrganizations = Schema.decodeUnknownOption(Schema.Array(Schema.Unknown))
+const decodeOrganization = Schema.decodeUnknownOption(Schema.Struct({ id: Schema.String }))
 
 const TokenResponseSchema = Schema.Struct({
   id_token: Schema.optional(Schema.String),
   access_token: Schema.String,
   refresh_token: Schema.String,
-  expires_in: Schema.optional(Schema.Number),
+  expires_in: Schema.optional(Schema.Finite),
 })
 const decodeTokenResponse = Schema.decodeUnknownEffect(Schema.fromJsonString(TokenResponseSchema))
 type TokenResponse = typeof TokenResponseSchema.Type
@@ -26,7 +49,7 @@ type TokenResponse = typeof TokenResponseSchema.Type
  * failure mode so the surrounding `ProviderAuthError` boundary in
  * `index.ts` preserves structure in `cause`, not just a string.
  */
-export class OAuthError extends Schema.TaggedErrorClass<OAuthError>()("OAuthError", {
+export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
   reason: Schema.Literals([
     "token-exchange-failed",
     "token-refresh-failed",
@@ -76,82 +99,52 @@ export interface OpenAIAuthorizationFlow {
   readonly callback: (manualInput?: string) => Effect.Effect<OpenAIOAuthTokens, OAuthError>
   readonly cancel: Effect.Effect<void>
 }
-
-const generateRandomString = (length: number): string => {
+const generatePKCE: Effect.Effect<PkceCodes, OAuthError, Crypto.Crypto> = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
-  const bytes = crypto.getRandomValues(new Uint8Array(length))
-  return Array.from(bytes)
-    .map((b) => chars[b % chars.length])
-    .join("")
-}
-
-const base64UrlEncode = (buffer: ArrayBuffer): string => {
-  const bytes = new Uint8Array(buffer)
-  const binary = String.fromCharCode(...bytes)
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
-}
-
-const base64UrlDecodeToString = (input: string): string => {
-  const padded = input.replace(/-/g, "+").replace(/_/g, "/")
-  const pad = padded.length % 4 === 0 ? "" : "=".repeat(4 - (padded.length % 4))
-  const binary = atob(padded + pad)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return new TextDecoder().decode(bytes)
-}
-
-const generatePKCE: Effect.Effect<PkceCodes, OAuthError> = Effect.gen(function* () {
-  const verifier = generateRandomString(43)
-  const encoder = new TextEncoder()
-  const data = encoder.encode(verifier)
-  const hash = yield* Effect.tryPromise({
-    try: () => crypto.subtle.digest("SHA-256", data),
-    catch: (e) =>
+  const bytes = yield* crypto.randomBytes(43)
+  const verifier = Array.from(bytes, (byte) => chars[byte % chars.length]).join("")
+  const hash = yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier))
+  return { verifier, challenge: Encoding.encodeBase64Url(hash) }
+}).pipe(
+  Effect.mapError(
+    (error) =>
       new OAuthError({
         reason: "pkce-failed",
-        message: `PKCE digest failed: ${e instanceof Error ? e.message : String(e)}`,
+        message: `PKCE generation failed: ${error.message}`,
       }),
-  })
-  const challenge = base64UrlEncode(hash)
-  return { verifier, challenge }
-})
+  ),
+)
 
-const generateState = (): string =>
-  base64UrlEncode(crypto.getRandomValues(new Uint8Array(32)).buffer)
-
-const parseJwtClaims = (token: string): Record<string, unknown> | undefined => {
+const parseJwtClaims = (token: string): Option.Option<typeof JwtClaimsSchema.Type> => {
   const parts = token.split(".")
-  if (parts.length !== 3) return undefined
-  const json = base64UrlDecodeToString(parts[1] ?? "")
-  return Option.getOrUndefined(decodeJwtClaims(json))
+  if (parts.length !== 3) return Option.none()
+  return Encoding.decodeBase64UrlString(parts[1] ?? "").pipe(
+    Result.getSuccess,
+    Option.flatMap(decodeJwtClaims),
+  )
 }
 
-const extractAccountId = (tokens: TokenResponse): string | undefined => {
-  const fromClaims = (claims: Record<string, unknown> | undefined): string | undefined => {
-    if (claims === undefined) return undefined
-    const direct = claims["chatgpt_account_id"]
-    if (typeof direct === "string") return direct
-    const scoped = claims["https://api.openai.com/auth"]
-    if (scoped !== null && typeof scoped === "object") {
-      const value = (scoped as { chatgpt_account_id?: unknown }).chatgpt_account_id
-      if (typeof value === "string") return value
-    }
-    const orgs = claims["organizations"]
-    if (Array.isArray(orgs) && orgs.length > 0) {
-      const id = orgs[0]?.id
-      if (typeof id === "string") return id
-    }
-    return undefined
-  }
+const accountFromClaims = (claims: typeof JwtClaimsSchema.Type): Option.Option<string> => {
+  const direct = claims.chatgpt_account_id
+  if (Predicate.isString(direct)) return Option.some(direct)
+  const scoped = decodeScopedAccount(claims["https://api.openai.com/auth"])
+  if (Option.isSome(scoped)) return Option.some(scoped.value.chatgpt_account_id)
+  return decodeOrganizations(claims.organizations).pipe(
+    Option.flatMap(Arr.head),
+    Option.flatMap(decodeOrganization),
+    Option.map((organization) => organization.id),
+  )
+}
 
-  if (typeof tokens.id_token === "string") {
-    const accountId = fromClaims(parseJwtClaims(tokens.id_token))
-    if (accountId !== undefined && accountId.length > 0) return accountId
-  }
-  if (typeof tokens.access_token === "string") {
-    return fromClaims(parseJwtClaims(tokens.access_token))
-  }
-  return undefined
+const extractAccountId = (tokens: TokenResponse): Option.Option<string> => {
+  const idTokenAccount = Option.fromNullishOr(tokens.id_token).pipe(
+    Option.flatMap(parseJwtClaims),
+    Option.flatMap(accountFromClaims),
+    Option.filter((accountId) => accountId.length > 0),
+  )
+  if (Option.isSome(idTokenAccount)) return idTokenAccount
+  return parseJwtClaims(tokens.access_token).pipe(Option.flatMap(accountFromClaims))
 }
 
 const buildAuthorizeUrl = (redirectUri: string, pkce: PkceCodes, state: string): string => {
@@ -170,42 +163,39 @@ const buildAuthorizeUrl = (redirectUri: string, pkce: PkceCodes, state: string):
   return `${ISSUER}/oauth/authorize?${params.toString()}`
 }
 
-const tryParseUrl = (value: string): URL | undefined => {
-  // URL parsing is the only sync operation that legitimately needs a try/catch
-  // here — there is no Effect or Option-returning URL parser in the runtime.
-  try {
-    return new URL(value)
-  } catch {
-    return undefined
-  }
+const tryParseUrl = Option.liftThrowable((value: string) => new URL(value))
+
+interface AuthorizationInput {
+  readonly code: Option.Option<string>
+  readonly state: Option.Option<string>
 }
 
-const parseAuthorizationInput = (input: string): { code?: string; state?: string } => {
+const parseAuthorizationInput = (input: string): AuthorizationInput => {
   const value = input.trim()
-  if (value.length === 0) return {}
+  if (value.length === 0) return { code: Option.none(), state: Option.none() }
 
   const parsed = tryParseUrl(value)
-  if (parsed !== undefined) {
+  if (Option.isSome(parsed)) {
     return {
-      code: parsed.searchParams.get("code") ?? undefined,
-      state: parsed.searchParams.get("state") ?? undefined,
+      code: Option.fromNullishOr(parsed.value.searchParams.get("code")),
+      state: Option.fromNullishOr(parsed.value.searchParams.get("state")),
     }
   }
 
   if (value.includes("#")) {
     const [code, state] = value.split("#", 2)
-    return { code, state }
+    return { code: Option.fromNullishOr(code), state: Option.fromNullishOr(state) }
   }
 
   if (value.includes("code=")) {
     const params = new URLSearchParams(value)
     return {
-      code: params.get("code") ?? undefined,
-      state: params.get("state") ?? undefined,
+      code: Option.fromNullishOr(params.get("code")),
+      state: Option.fromNullishOr(params.get("state")),
     }
   }
 
-  return { code: value }
+  return { code: Option.some(value), state: Option.none() }
 }
 
 const exchangeCodeForTokens = (
@@ -341,20 +331,20 @@ const buildCallbackRoutes = (
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest
       const url = new URL(request.url, `http://localhost:${OAUTH_PORT}`)
-      const code = url.searchParams.get("code")
-      const stateParam = url.searchParams.get("state")
-      const error = url.searchParams.get("error")
+      const code = url.searchParams.get("code") ?? ""
+      const stateParam = url.searchParams.get("state") ?? ""
+      const error = Option.fromNullishOr(url.searchParams.get("error"))
       const errorDescription = url.searchParams.get("error_description")
 
-      if (error !== null) {
-        const errorMsg = errorDescription ?? error
+      if (Option.isSome(error)) {
+        const errorMsg = errorDescription ?? error.value
         yield* Deferred.fail(
           deferred,
           new OAuthError({ reason: "callback-error", message: errorMsg }),
         )
         return HttpServerResponse.html(HTML_ERROR(errorMsg))
       }
-      if (code === null || code.length === 0) {
+      if (code.length === 0) {
         const errorMsg = "Missing authorization code"
         yield* Deferred.fail(
           deferred,
@@ -362,7 +352,7 @@ const buildCallbackRoutes = (
         )
         return HttpServerResponse.setStatus(HttpServerResponse.html(HTML_ERROR(errorMsg)), 400)
       }
-      if (stateParam === null || stateParam !== expectedState) {
+      if (stateParam !== expectedState) {
         const errorMsg = "Invalid state"
         yield* Deferred.fail(
           deferred,
@@ -395,25 +385,20 @@ const startRedirectServer = (
   )
 }
 
-const tokensToOAuthResult = (tokens: TokenResponse, now: number): OpenAIOAuthTokens => {
-  const accountId = extractAccountId(tokens)
-  return {
-    type: "oauth",
-    access: tokens.access_token,
-    refresh: tokens.refresh_token,
-    expires: now + (tokens.expires_in ?? 3600) * 1000,
-    ...(accountId !== undefined && accountId.length > 0 ? { accountId } : {}),
-  }
-}
+const tokensToOAuthResult = (tokens: TokenResponse, now: number): OpenAIOAuthTokens => ({
+  type: "oauth",
+  ...tokensToRefreshResult(tokens, now),
+})
 
 const tokensToRefreshResult = (tokens: TokenResponse, now: number): OpenAIRefreshTokens => {
-  const accountId = extractAccountId(tokens)
-  return {
+  const accountId = extractAccountId(tokens).pipe(Option.filter((value) => value.length > 0))
+  const result: OpenAIRefreshTokens = {
     access: tokens.access_token,
     refresh: tokens.refresh_token,
     expires: now + (tokens.expires_in ?? 3600) * 1000,
-    ...(accountId !== undefined && accountId.length > 0 ? { accountId } : {}),
   }
+  if (Option.isSome(accountId)) return { ...result, accountId: accountId.value }
+  return result
 }
 
 /**
@@ -435,7 +420,17 @@ const tokensToRefreshResult = (tokens: TokenResponse, now: number): OpenAIRefres
 export const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError, Scope.Scope> =
   Effect.gen(function* () {
     const pkce = yield* generatePKCE
-    const state = generateState()
+    const crypto = yield* Crypto.Crypto
+    const stateBytes = yield* crypto.randomBytes(32).pipe(
+      Effect.mapError(
+        (error) =>
+          new OAuthError({
+            reason: "pkce-failed",
+            message: `OAuth state generation failed: ${error.message}`,
+          }),
+      ),
+    )
+    const state = Encoding.encodeBase64Url(stateBytes)
     const redirectUri = `http://localhost:${OAUTH_PORT}/auth/callback`
     const authUrl = buildAuthorizeUrl(redirectUri, pkce, state)
     const deferred = yield* Deferred.make<PendingCallbackPayload, OAuthError>()
@@ -445,21 +440,21 @@ export const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError,
     const callback = (manualInput?: string): Effect.Effect<OpenAIOAuthTokens, OAuthError> =>
       Effect.gen(function* () {
         let code: string
-        if (manualInput !== undefined && manualInput.trim().length > 0) {
+        if (manualInput && manualInput.trim().length > 0) {
           const parsed = parseAuthorizationInput(manualInput)
-          if (parsed.state !== undefined && parsed.state !== state) {
+          if (Option.isSome(parsed.state) && parsed.state.value !== state) {
             return yield* new OAuthError({
               reason: "state-mismatch",
               message: "State mismatch",
             })
           }
-          if (parsed.code === undefined || parsed.code.length === 0) {
+          if (Option.isNone(parsed.code) || parsed.code.value.length === 0) {
             return yield* new OAuthError({
               reason: "missing-code",
               message: "Missing authorization code",
             })
           }
-          code = parsed.code
+          code = parsed.code.value
         } else {
           const payload = yield* Deferred.await(deferred)
           code = payload.code
@@ -483,8 +478,9 @@ export const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError,
       },
       callback,
       cancel,
-    }
-  })
+    } satisfies OpenAIAuthorizationFlow
+    // @effect-diagnostics-next-line strictEffectProvide:off OAuth authorization owns its crypto layer at the extension boundary
+  }).pipe(Effect.provide(BunCrypto.layer))
 
 /**
  * Refresh an OpenAI OAuth credential against the token endpoint.

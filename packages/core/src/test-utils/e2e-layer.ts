@@ -8,7 +8,7 @@
  * Import from @gent/core-internal/test-utils/e2e-layer
  */
 
-import { Effect, Layer, Ref } from "effect"
+import { Predicate, Effect, Layer, Option, Ref } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { BunServices } from "@effect/platform-bun"
@@ -24,7 +24,7 @@ import { Auth } from "../domain/auth.js"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
 import type { EventPublisher } from "../domain/event-publisher.js"
-import { SessionId, type ExtensionId, type InteractionRequestId } from "../domain/ids.js"
+import { SessionId, type ExtensionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
@@ -83,22 +83,24 @@ const defaultSubagentRunner: AgentRunner = {
 const applyLayerOverride = (
   contributions: ExtensionContributions,
   extensionId: ExtensionId,
-  override: (() => Layer.Layer<never>) | undefined,
+  override: Option.Option<() => Layer.Layer<never>>,
 ): ExtensionContributions => {
-  if (override === undefined) return contributions
+  if (Option.isNone(override)) return contributions
   const processResources = (contributions.resources ?? []).filter((r) => r.scope === "process")
   if (processResources.length > 1) {
-    throw new Error(
-      `e2e-layer.layerOverrides: extension "${extensionId}" has ${processResources.length} process-scope Resources; the override path replaces all of them with one merged layer. Provide a complete merged layer in the override factory, or extend layerOverrides to address Resources individually.`,
+    return Effect.runSync(
+      Effect.die(
+        new Error(
+          `e2e-layer.layerOverrides: extension "${extensionId}" has ${processResources.length} process-scope Resources; the override path replaces all of them with one merged layer. Provide a complete merged layer in the override factory, or extend layerOverrides to address Resources individually.`,
+        ),
+      ),
     )
   }
-  const rawOverrideLayer = override()
-  type TestOverrideLayer = Layer.Layer<unknown, unknown, never>
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-  const overrideLayer = rawOverrideLayer as unknown as TestOverrideLayer // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
+  // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The test override erases resource output types at this heterogeneous layer boundary.
+  const overrideLayer = override.value() as unknown as Layer.Layer<unknown, never, never>
   const layerOverride = defineResource({
+    id: "test/e2e-layer/process-override",
     scope: "process",
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off
     layer: overrideLayer,
   })
   const otherResources = (contributions.resources ?? []).filter((r) => r.scope !== "process")
@@ -116,6 +118,7 @@ const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
 
 const fromLoadedExtension = (extension: LoadedExtension): GentExtension<never> => ({
   manifest: extension.manifest,
+  artifactIdentity: extension.artifactIdentity,
   setup: Effect.succeed(extension.contributions),
 })
 
@@ -124,12 +127,13 @@ const wrapExtensionInput = (
   layerOverrides: E2ELayerConfig["layerOverrides"],
 ): GentExtension<ChildProcessSpawner | GentPlatform> => ({
   manifest: extension.manifest,
+  artifactIdentity: extension.artifactIdentity,
   setup: extension.setup.pipe(
     Effect.map((contributions) =>
       applyLayerOverride(
         contributions,
         extension.manifest.id,
-        layerOverrides?.[extension.manifest.id],
+        Option.fromUndefinedOr(layerOverrides?.[extension.manifest.id]),
       ),
     ),
   ),
@@ -137,17 +141,19 @@ const wrapExtensionInput = (
 
 const extensionInputsForConfig = (
   config: E2ELayerConfig,
-): ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>> =>
-  config.extensions === undefined
-    ? config.extensionInputs.map((extension) =>
-        wrapExtensionInput(extension, config.layerOverrides),
-      )
-    : [testAgentsExtension(config.agents), ...config.extensions.map(fromLoadedExtension)]
+): ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>> => {
+  if (Predicate.isUndefined(config.extensions)) {
+    return config.extensionInputs.map((extension) =>
+      wrapExtensionInput(extension, config.layerOverrides),
+    )
+  }
+  return [testAgentsExtension(config.agents), ...config.extensions.map(fromLoadedExtension)]
+}
 
 const approvalOverrideForConfig = (config: E2ELayerConfig) => {
-  if (config.approvalLayer !== undefined) return config.approvalLayer
-  if (config.durableApproval === true) return undefined
-  return ApprovalService.Test()
+  if (!Predicate.isUndefined(config.approvalLayer)) return Option.some(config.approvalLayer)
+  if (config.durableApproval === true) return Option.none()
+  return Option.some(ApprovalService.Test())
 }
 
 /**
@@ -168,14 +174,16 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       cwd: "/tmp",
       home: "/tmp",
       platform: "test",
-      persistenceMode: config.storagePath === undefined ? "memory" : "disk",
-      ...(config.storagePath !== undefined ? { dbPath: config.storagePath } : {}),
+      persistenceMode: Option.fromUndefinedOr(config.storagePath).pipe(
+        Option.match({ onNone: () => "memory", onSome: () => "disk" }),
+      ),
+      dbPath: config.storagePath,
       languageModelLayerOverride: config.providerLayer,
       extensions: extensionInputsForConfig(config),
       overrides: {
         eventStoreMode: "storage-backed",
         authLayer: config.authLayer ?? Auth.Test(),
-        approvalLayer: approvalOverrideForConfig(config),
+        approvalLayer: Option.getOrUndefined(approvalOverrideForConfig(config)),
         configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),
         modelRegistryLayer: ModelRegistry.Test(),
         permissionLayer: Permission.Test(),
@@ -220,7 +228,7 @@ export const provideTinyContextWindow = <A, E, R>(
   }).pipe(
     Effect.ensuring(
       Effect.sync(() => {
-        if (originalWindow !== undefined) {
+        if (!Predicate.isUndefined(originalWindow)) {
           MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID] = originalWindow
         } else {
           delete MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID]
@@ -238,20 +246,22 @@ export const provideTinyContextWindow = <A, E, R>(
  *
  * Usage:
  * ```ts
- * const { layer, presentCalled } = yield* trackingApprovalService()
+ * const { layer, presentCalled } = yield* trackingApprovalService
  * // ... provide layer ...
  * expect(yield* Ref.get(presentCalled)).toBe(false)
  * ```
  */
-export const trackingApprovalService = () =>
-  Effect.gen(function* () {
-    const presentCalled = yield* Ref.make(false)
-    const layer = Layer.succeed(ApprovalService, {
+export const trackingApprovalService = Effect.gen(function* () {
+  const presentCalled = yield* Ref.make(false)
+  const layer = Layer.succeed(
+    ApprovalService,
+    ApprovalService.of({
       present: () => Ref.set(presentCalled, true).pipe(Effect.as({ approved: true })),
-      pendingRequestId: () => Effect.sync((): InteractionRequestId | undefined => undefined),
+      pendingRequestId: () => Effect.undefined,
       storeResolution: () => Effect.void,
       respond: () => Effect.void,
       rehydrate: () => Effect.void,
-    })
-    return { layer, presentCalled }
-  })
+    }),
+  )
+  return { layer, presentCalled }
+})

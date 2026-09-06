@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Predicate, Context, Effect, Layer, Option } from "effect"
 import { Auth, AuthApi, AuthOauth, AuthAuthorization } from "../domain/auth.js"
 import type { AuthMethod } from "../domain/auth.js"
 import { ProviderAuthError, type PersistAuth } from "../domain/driver.js"
@@ -9,12 +9,12 @@ import { GentPlatform } from "../runtime/gent-platform.js"
 export { ProviderAuthError } from "../domain/driver.js"
 
 export interface ProviderAuthService {
-  readonly listMethods: () => Effect.Effect<Record<string, ReadonlyArray<typeof AuthMethod.Type>>>
+  readonly listMethods: Effect.Effect<Record<string, ReadonlyArray<AuthMethod>>>
   readonly authorize: (
     sessionId: SessionId,
     provider: string,
     method: number,
-  ) => Effect.Effect<typeof AuthAuthorization.Type | undefined, ProviderAuthError>
+  ) => Effect.Effect<Option.Option<AuthAuthorization>, ProviderAuthError>
   readonly callback: (
     sessionId: SessionId,
     provider: string,
@@ -32,6 +32,11 @@ const makeProviderAuth: Effect.Effect<
   const driverRegistry = yield* DriverRegistry
   const authStore = yield* Auth
   const platform = yield* GentPlatform
+
+  const errorMessage = (cause: unknown): string => {
+    if (Predicate.isError(cause)) return cause.message
+    return String(cause)
+  }
 
   /** Build a PersistAuth callback for a provider — writes credentials to Auth */
   const makePersist =
@@ -56,7 +61,7 @@ const makeProviderAuth: Effect.Effect<
             access: auth.access,
             refresh: auth.refresh,
             expires: auth.expires,
-            ...(auth.accountId !== undefined ? { accountId: auth.accountId } : {}),
+            accountId: auth.accountId,
           }),
         )
         .pipe(
@@ -70,11 +75,11 @@ const makeProviderAuth: Effect.Effect<
         )
     }
 
-  const listMethods = Effect.fn("ProviderAuth.listMethods")(function* () {
-    const result: Record<string, ReadonlyArray<typeof AuthMethod.Type>> = {}
-    const registeredProviders = yield* driverRegistry.listModels()
+  const listMethods = Effect.gen(function* () {
+    const result: Record<string, ReadonlyArray<AuthMethod>> = {}
+    const registeredProviders = yield* driverRegistry.listModels
     for (const provider of registeredProviders) {
-      if (provider.auth !== undefined && provider.auth.methods.length > 0) {
+      if (!Predicate.isUndefined(provider.auth) && provider.auth.methods.length > 0) {
         result[provider.id] = provider.auth.methods
       }
     }
@@ -87,7 +92,7 @@ const makeProviderAuth: Effect.Effect<
     method: number,
   ) {
     const extProvider = yield* driverRegistry.getModel(provider)
-    if (extProvider?.auth?.authorize === undefined) {
+    if (Predicate.isUndefined(extProvider?.auth?.authorize)) {
       return yield* new ProviderAuthError({
         message: `Provider "${provider}" does not support authorize`,
       })
@@ -104,19 +109,21 @@ const makeProviderAuth: Effect.Effect<
         Effect.catchDefect((e) =>
           Effect.fail(
             new ProviderAuthError({
-              message: `Provider auth failed: ${e instanceof Error ? e.message : String(e)}`,
+              message: `Provider auth failed: ${errorMessage(e)}`,
               cause: e,
             }),
           ),
         ),
       )
-    if (extResult === undefined) return undefined
-    return new AuthAuthorization({
-      authorizationId,
-      url: extResult.url,
-      method: extResult.method,
-      ...(extResult.instructions !== undefined ? { instructions: extResult.instructions } : {}),
-    })
+    if (Option.isNone(extResult)) return Option.none()
+    return Option.some(
+      new AuthAuthorization({
+        authorizationId,
+        url: extResult.value.url,
+        method: extResult.value.method,
+        instructions: extResult.value.instructions,
+      }),
+    )
   })
 
   const callback = Effect.fn("ProviderAuth.callback")(function* (
@@ -127,7 +134,7 @@ const makeProviderAuth: Effect.Effect<
     code?: string,
   ) {
     const extProvider = yield* driverRegistry.getModel(provider)
-    if (extProvider?.auth?.callback === undefined) {
+    if (Predicate.isUndefined(extProvider?.auth?.callback)) {
       // No callback handler — auth completed during authorize (e.g. "done" method)
       return
     }
@@ -143,7 +150,7 @@ const makeProviderAuth: Effect.Effect<
         Effect.catchDefect((e) =>
           Effect.fail(
             new ProviderAuthError({
-              message: `Provider auth callback failed: ${e instanceof Error ? e.message : String(e)}`,
+              message: `Provider auth callback failed: ${errorMessage(e)}`,
               cause: e,
             }),
           ),

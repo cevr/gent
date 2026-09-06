@@ -1,17 +1,21 @@
 import { AgentTree } from "./agent-tree"
 import type { ToolRendererProps } from "./types"
+import { Option, Schema } from "effect"
+import type { ToolInput } from "../../utils/parse-tool-output"
 
-function parseInput(input: unknown): { mode?: string } | undefined {
-  if (input === null || input === undefined || typeof input !== "object") return undefined
-  return input as { mode?: string }
-}
+const decodeInput = Schema.decodeUnknownOption(
+  Schema.Struct({ mode: Schema.optional(Schema.String) }),
+)
+
+const parseInput = (input: ToolInput) => Option.getOrUndefined(decodeInput(input))
 
 export function CounselToolRenderer(props: ToolRendererProps) {
   const input = () => parseInput(props.toolCall.input)
 
   const subtitle = () => {
     const mode = input()?.mode ?? "standard"
-    return mode === "deep" ? "deep analysis" : "quick opinion"
+    if (mode === "deep") return "deep analysis"
+    return "quick opinion"
   }
 
   return (

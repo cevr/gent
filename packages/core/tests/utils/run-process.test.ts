@@ -1,15 +1,13 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Duration, Effect, Layer, Path } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
+import type * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner"
 import { runProcess, ProcessError } from "@gent/core-internal/utils/run-process"
-const makePlatformLayer = () =>
-  Layer.mergeAll(
-    BunFileSystem.layer,
-    Path.layer,
-    BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
-  )
-const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) =>
-  Effect.provide(e, makePlatformLayer()) as Effect.Effect<A, E, never>
+const makePlatformLayer = (): Layer.Layer<ChildProcessSpawner.ChildProcessSpawner> =>
+  BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)))
+const provideBun = <A, E>(
+  e: Effect.Effect<A, E, ChildProcessSpawner.ChildProcessSpawner>,
+): Effect.Effect<A, E> => Effect.provide(e, makePlatformLayer())
 
 const processTestTimeout = 15_000
 const withProcessTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>

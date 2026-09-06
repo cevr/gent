@@ -6,7 +6,7 @@
  * worker restart, so it gets its own storage row per branch.
  */
 
-import { Clock, Context, Effect, Layer, Schema } from "effect"
+import { Predicate, Clock, Context, Effect, Layer, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import {
   LoopQueueState,
@@ -24,7 +24,7 @@ const QueueRow = Schema.Struct({
   session_id: SessionId,
   branch_id: BranchId,
   queue_json: Schema.String,
-  updated_at: Schema.Number,
+  updated_at: Schema.Finite,
 })
 const decodeQueueRow = Schema.decodeUnknownEffect(QueueRow)
 
@@ -74,7 +74,7 @@ export class AgentLoopQueueStorage extends Context.Service<
               AND q.branch_id = ${branchId}
               AND q.workspace_id = ${workspaceId}
             LIMIT 1`
-            if (rawRows[0] === undefined) return emptyLoopQueueState()
+            if (Predicate.isUndefined(rawRows[0])) return emptyLoopQueueState()
             const row = yield* decodeQueueRow(rawRows[0])
             return yield* decodeLoopQueueState(row.queue_json)
           },

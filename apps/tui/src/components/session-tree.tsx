@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "../terminal-dimensions"
 import { matchSorter } from "match-sorter"
 import type { SessionId } from "@gent/core-internal/domain/ids.js"
 import type { SessionTreeNode } from "../client"
@@ -10,6 +10,7 @@ import { useScrollSync } from "../hooks/use-scroll-sync"
 import { truncate } from "../utils/format-tool"
 import { useScopedKeyboard } from "../keyboard/context"
 import { SessionTreeEvent, SessionTreeState, transitionSessionTree } from "./session-tree-state"
+import { Option } from "effect"
 
 interface FlatNode {
   id: SessionId
@@ -21,9 +22,14 @@ const labelMatches = (label: string, query: string): boolean =>
   matchSorter([label], query).length > 0
 
 const labelFor = (node: SessionTreeNode): string => {
-  const name = node.session.name ?? node.session.id.slice(0, 8)
-  const cwd = node.session.cwd?.split("/").filter(Boolean).pop()
-  return cwd !== undefined ? `${name} · ${cwd}` : name
+  const name = Option.getOrElse(Option.fromNullishOr(node.session.name), () =>
+    node.session.id.slice(0, 8),
+  )
+  const cwd = Option.fromNullishOr(node.session.cwd).pipe(
+    Option.map((value) => value.split("/").filter(Boolean).pop()),
+  )
+  if (Option.isSome(cwd)) return `${name} · ${cwd.value}`
+  return name
 }
 
 const buildTreeLines = (
@@ -51,19 +57,26 @@ const buildTreeLines = (
 
   if (!visible) return []
 
-  const prefix =
-    guides.length === 0
-      ? ""
-      : guides
-          .slice(0, -1)
-          .map((show) => (show ? "│  " : "   "))
-          .join("") + (isLast ? "└─ " : "├─ ")
+  let prefix = ""
+  if (guides.length > 0) {
+    prefix = guides
+      .slice(0, -1)
+      .map((show) => {
+        if (show) return "│  "
+        return "   "
+      })
+      .join("")
+    if (isLast) prefix += "└─ "
+    else prefix += "├─ "
+  }
   const current = node.session.id === currentSessionId
+  let currentMarker = ""
+  if (current) currentMarker = " •"
 
   return [
     {
       id: node.session.id,
-      line: `${prefix}${label}${current ? " •" : ""}`,
+      line: `${prefix}${label}${currentMarker}`,
       isCurrent: current,
     },
     ...childMatches,
@@ -72,6 +85,7 @@ const buildTreeLines = (
 
 export interface SessionTreeProps {
   open: boolean
+  // eslint-disable-next-line effect/noNullish -- tree is absent while the session query is loading.
   tree: SessionTreeNode | null
   currentSessionId: SessionId
   onSelect: (sessionId: SessionId) => void
@@ -82,24 +96,29 @@ export function SessionTree(props: SessionTreeProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const [state, setState] = createSignal(SessionTreeState.initial())
-  let scrollRef: ScrollBoxRenderable | undefined = undefined
+  let scrollRef = Option.none<ScrollBoxRenderable>()
 
-  const items = createMemo(() => {
+  const items = createMemo<FlatNode[]>(() => {
     const tree = props.tree
-    if (tree === null) return [] as FlatNode[]
+    // eslint-disable-next-line effect/noNullish -- loading state is represented by a null tree at this UI boundary.
+    if (tree === null) return []
     return buildTreeLines(tree, props.currentSessionId, state().query.trim())
   })
 
-  useScrollSync(() => `session-tree-${state().selectedIndex}`, { getRef: () => scrollRef })
+  useScrollSync(() => `session-tree-${state().selectedIndex}`, {
+    getRef: () => Option.getOrUndefined(scrollRef),
+  })
 
   createEffect(() => {
     if (!props.open) return
     const currentIndex = items().findIndex((item) => item.isCurrent)
+    let selectedIndex = 0
+    if (currentIndex >= 0) selectedIndex = currentIndex
     setState(
       transitionSessionTree(
         state(),
         SessionTreeEvent.cases.Open.make({
-          selectedIndex: currentIndex >= 0 ? currentIndex : 0,
+          selectedIndex,
         }),
       ),
     )
@@ -123,8 +142,8 @@ export function SessionTree(props: SessionTreeProps) {
       if (visible.length === 0) return false
 
       if (e.name === "return") {
-        const next = visible[state().selectedIndex]
-        if (next !== undefined) props.onSelect(next.id)
+        const next = Option.fromNullishOr(visible[state().selectedIndex])
+        if (Option.isSome(next)) props.onSelect(next.value.id)
         return true
       }
 
@@ -148,8 +167,9 @@ export function SessionTree(props: SessionTreeProps) {
         return true
       }
 
-      if (e.sequence !== undefined && e.sequence.length === 1) {
-        const char = e.sequence
+      const sequence = Option.fromNullishOr(e.sequence)
+      if (Option.isSome(sequence) && sequence.value.length === 1) {
+        const char = sequence.value
         if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
           setState((current) =>
             transitionSessionTree(current, SessionTreeEvent.cases.TypeChar.make({ char })),
@@ -184,19 +204,27 @@ export function SessionTree(props: SessionTreeProps) {
           </text>
         </ChromePanel.Section>
 
-        <ChromePanel.Body ref={scrollRef}>
+        <ChromePanel.Body ref={(value) => (scrollRef = Option.some(value))}>
           <For each={items()}>
             {(item, index) => {
               const selected = () => state().selectedIndex === index()
+              const backgroundColor = () => {
+                if (selected()) return theme.primary
+                return "transparent"
+              }
+              const textColor = () => {
+                if (selected()) return theme.selectedListItemText
+                return theme.text
+              }
               return (
                 <box
                   id={`session-tree-${index()}`}
-                  backgroundColor={selected() ? theme.primary : "transparent"}
+                  backgroundColor={backgroundColor()}
                   paddingLeft={1}
                 >
                   <text
                     style={{
-                      fg: selected() ? theme.selectedListItemText : theme.text,
+                      fg: textColor(),
                     }}
                   >
                     {truncate(item.line, panelWidth() - 4)}

@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
@@ -8,10 +8,12 @@ import type { BranchTreeNode } from "../client"
 import { BranchId } from "@gent/core-internal/domain/ids.js"
 import { truncate } from "../utils/format-tool"
 import { useScopedKeyboard } from "../keyboard/context"
+import { Option } from "effect"
 
 interface FlatNode {
   id: string
   label: string
+  // eslint-disable-next-line effect/noNullish -- branch summaries are optional transport fields.
   summary: string | undefined
   depth: number
   isActive: boolean
@@ -20,6 +22,7 @@ interface FlatNode {
 export interface BranchTreeProps {
   open: boolean
   tree: readonly BranchTreeNode[]
+  // eslint-disable-next-line effect/noNullish -- picker props preserve an absent active branch.
   activeBranchId?: BranchId
   onSelect: (branchId: BranchId) => void
   onClose: () => void
@@ -27,6 +30,7 @@ export interface BranchTreeProps {
 
 const flattenTree = (
   nodes: readonly BranchTreeNode[],
+  // eslint-disable-next-line effect/noNullish -- tree props preserve an absent active branch.
   activeBranchId: BranchId | undefined,
   depth = 0,
   acc: FlatNode[] = [],
@@ -52,11 +56,13 @@ export function BranchTree(props: BranchTreeProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const [selectedIndex, setSelectedIndex] = createSignal(0)
-  let scrollRef: ScrollBoxRenderable | undefined = undefined
+  let scrollRef = Option.none<ScrollBoxRenderable>()
 
   const items = () => flattenTree(props.tree, props.activeBranchId)
 
-  useScrollSync(() => `branch-tree-${selectedIndex()}`, { getRef: () => scrollRef })
+  useScrollSync(() => `branch-tree-${selectedIndex()}`, {
+    getRef: () => Option.getOrUndefined(scrollRef),
+  })
 
   createEffect(() => {
     if (!props.open) return
@@ -66,7 +72,8 @@ export function BranchTree(props: BranchTreeProps) {
       return
     }
     const activeIndex = list.findIndex((item) => item.isActive)
-    setSelectedIndex(activeIndex >= 0 ? activeIndex : 0)
+    if (activeIndex >= 0) setSelectedIndex(activeIndex)
+    else setSelectedIndex(0)
   })
 
   useScopedKeyboard(
@@ -80,21 +87,27 @@ export function BranchTree(props: BranchTreeProps) {
       if (list.length === 0) return false
 
       if (e.name === "return") {
-        const item = list[selectedIndex()]
-        if (item !== undefined) {
+        const item = Option.fromNullishOr(list[selectedIndex()])
+        if (Option.isSome(item)) {
           // SAFETY: FlatNode.id originates from BranchTreeNode.id which is a BranchId
-          props.onSelect(BranchId.make(item.id))
+          props.onSelect(BranchId.make(item.value.id))
         }
         return true
       }
 
       if (e.name === "up") {
-        setSelectedIndex((i) => (i > 0 ? i - 1 : list.length - 1))
+        setSelectedIndex((i) => {
+          if (i > 0) return i - 1
+          return list.length - 1
+        })
         return true
       }
 
       if (e.name === "down") {
-        setSelectedIndex((i) => (i < list.length - 1 ? i + 1 : 0))
+        setSelectedIndex((i) => {
+          if (i < list.length - 1) return i + 1
+          return 0
+        })
         return true
       }
       return false
@@ -109,11 +122,13 @@ export function BranchTree(props: BranchTreeProps) {
 
   const formatLine = (item: FlatNode, width: number) => {
     const indent = "  ".repeat(item.depth)
-    const active = item.isActive ? " <- active" : ""
-    const summary =
-      item.summary !== undefined && item.summary.length > 0
-        ? ` - ${item.summary.replace(/\s+/g, " ")}`
-        : ""
+    let active = ""
+    if (item.isActive) active = " <- active"
+    let summary = ""
+    const summaryValue = Option.fromNullishOr(item.summary)
+    if (Option.isSome(summaryValue) && summaryValue.value.length > 0) {
+      summary = ` - ${summaryValue.value.replace(/\s+/g, " ")}`
+    }
     return truncate(`${indent}${item.label}${active}${summary}`, width)
   }
 
@@ -126,19 +141,27 @@ export function BranchTree(props: BranchTreeProps) {
         left={left()}
         top={top()}
       >
-        <ChromePanel.Body ref={scrollRef}>
+        <ChromePanel.Body ref={(value) => (scrollRef = Option.some(value))}>
           <For each={items()}>
             {(item, index) => {
               const isSelected = () => selectedIndex() === index()
+              const backgroundColor = () => {
+                if (isSelected()) return theme.primary
+                return "transparent"
+              }
+              const textColor = () => {
+                if (isSelected()) return theme.selectedListItemText
+                return theme.text
+              }
               return (
                 <box
                   id={`branch-tree-${index()}`}
-                  backgroundColor={isSelected() ? theme.primary : "transparent"}
+                  backgroundColor={backgroundColor()}
                   paddingLeft={1}
                 >
                   <text
                     style={{
-                      fg: isSelected() ? theme.selectedListItemText : theme.text,
+                      fg: textColor(),
                     }}
                   >
                     {formatLine(item, panelWidth() - 4)}

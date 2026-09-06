@@ -17,21 +17,23 @@ import * as os from "node:os"
 import { createServer } from "node:net"
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto"
 import { fileURLToPath as nodeFileURLToPath } from "node:url"
-import { Effect, Layer, Schema } from "effect"
+import { Predicate, Effect, Layer, Option, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform, SignalError } from "./gent-platform.js"
 import { CronRuntime, SchedulerRuntimeError } from "./extensions/resource-host/schedule-engine.js"
 
-const bunCronFunction = (): Function | undefined => {
+const bunCronFunction = (): Option.Option<Function> => {
   const bun = Reflect.get(globalThis, "Bun")
-  if (typeof bun !== "object" || bun === null) return undefined
+  if (!Predicate.isObjectOrArray(bun)) return Option.none()
   const cron = Reflect.get(bun, "cron")
-  return typeof cron === "function" ? cron : undefined
+  if (Predicate.isFunction(cron)) return Option.some(cron)
+  return Option.none()
 }
 
-const bunCronRemoveFunction = (cron: Function): Function | undefined => {
+const bunCronRemoveFunction = (cron: Function): Option.Option<Function> => {
   const remove = Reflect.get(cron, "remove")
-  return typeof remove === "function" ? remove : undefined
+  if (Predicate.isFunction(remove)) return Option.some(remove)
+  return Option.none()
 }
 
 const missingCronRuntime = (operation: "install" | "remove", jobName: string) =>
@@ -44,32 +46,39 @@ const missingCronRuntime = (operation: "install" | "remove", jobName: string) =>
 export const BunCronRuntimeLive: Layer.Layer<CronRuntime> = Layer.succeed(
   CronRuntime,
   CronRuntime.of({
-    install: (entryPath, schedule, name) =>
-      Effect.try({
+    install: Effect.fn("CronRuntime.install")(function* (entryPath, schedule, name) {
+      const cron = bunCronFunction()
+      if (Option.isNone(cron)) return yield* missingCronRuntime("install", name)
+      return yield* Effect.try({
         try: () => {
-          const cron = bunCronFunction()
-          if (cron === undefined) throw missingCronRuntime("install", name)
-          Reflect.apply(cron, undefined, [entryPath, schedule, name])
+          const install = cron.value
+          install(entryPath, schedule, name)
         },
-        catch: (cause) =>
-          Schema.is(SchedulerRuntimeError)(cause)
-            ? cause
-            : new SchedulerRuntimeError({ operation: "install", jobName: name, cause }),
-      }),
-    remove: (name) =>
-      Effect.try({
+        catch: (cause) => {
+          if (Schema.is(SchedulerRuntimeError)(cause)) {
+            return cause
+          }
+          return new SchedulerRuntimeError({ operation: "install", jobName: name, cause })
+        },
+      })
+    }),
+    remove: Effect.fn("CronRuntime.remove")(function* (name) {
+      const cron = bunCronFunction()
+      if (Option.isNone(cron)) return yield* missingCronRuntime("remove", name)
+      const remove = bunCronRemoveFunction(cron.value)
+      if (Option.isNone(remove)) return yield* missingCronRuntime("remove", name)
+      return yield* Effect.try({
         try: () => {
-          const cron = bunCronFunction()
-          if (cron === undefined) throw missingCronRuntime("remove", name)
-          const remove = bunCronRemoveFunction(cron)
-          if (remove === undefined) throw missingCronRuntime("remove", name)
-          Reflect.apply(remove, cron, [name])
+          Reflect.apply(remove.value, cron.value, [name])
         },
-        catch: (cause) =>
-          Schema.is(SchedulerRuntimeError)(cause)
-            ? cause
-            : new SchedulerRuntimeError({ operation: "remove", jobName: name, cause }),
-      }),
+        catch: (cause) => {
+          if (Schema.is(SchedulerRuntimeError)(cause)) {
+            return cause
+          }
+          return new SchedulerRuntimeError({ operation: "remove", jobName: name, cause })
+        },
+      })
+    }),
   }),
 )
 
@@ -94,12 +103,19 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
 
     env: Effect.sync(() => Bun.env),
 
-    pathListSeparator: Effect.sync(() => (os.platform() === "win32" ? ";" : ":")),
+    pathListSeparator: Effect.sync(() => {
+      if (os.platform() === "win32") {
+        return ";"
+      }
+      return ":"
+    }),
 
-    commandCandidates: (command) =>
-      os.platform() === "win32"
-        ? [`${command}.exe`, `${command}.cmd`, `${command}.bat`, command]
-        : [command],
+    commandCandidates: (command) => {
+      if (os.platform() === "win32") {
+        return [`${command}.exe`, `${command}.cmd`, `${command}.bat`, command]
+      }
+      return [command]
+    },
 
     isPortFree: (port) =>
       Effect.callback<boolean>((resume) => {
@@ -119,18 +135,19 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
           process.kill(pid, signal)
         },
         catch: (cause) => {
-          const code =
-            cause !== null &&
-            typeof cause === "object" &&
-            "code" in cause &&
-            typeof cause.code === "string"
-              ? cause.code
-              : null
+          const code = Schema.decodeUnknownOption(Schema.Struct({ code: Schema.String }))(
+            cause,
+          ).pipe(
+            Option.map((error) => error.code),
+            Option.getOrNull,
+          )
+          let reason = String(cause)
+          if (cause instanceof Error) reason = cause.message
           return new SignalError({
             pid,
             signal,
             code,
-            reason: cause instanceof Error ? cause.message : String(cause),
+            reason,
           })
         },
       }),
@@ -144,13 +161,7 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
     // let the entrypoint's `BunRuntime.runMain` translate it (see audit
     // note in `apps/tui/src/main.tsx:520-536`).
     exit: (code) =>
-      Effect.yieldNow.pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            process.exit(code)
-          }),
-        ),
-      ) as Effect.Effect<never>,
+      Effect.yieldNow.pipe(Effect.andThen(Effect.sync((): never => process.exit(code)))),
 
     now: Effect.sync(() => performance.now()),
 

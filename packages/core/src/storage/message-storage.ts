@@ -4,7 +4,7 @@
  * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
-import { Context, Effect, Layer, Schema } from "effect"
+import { Predicate, Context, Effect, Layer, Schema } from "effect"
 import { Model } from "effect/unstable/schema"
 import { MessageRole, type Message } from "../domain/message.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
@@ -17,6 +17,7 @@ import {
   encodeStoredMessage,
   groupMessageChunkRows,
   messageSearchText,
+  toSqlNull,
 } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
@@ -27,14 +28,15 @@ class MessageTable extends Model.Class<MessageTable>("MessageTable")({
   branch_id: BranchId,
   kind: Schema.Literals(["regular", "interjection"]),
   role: MessageRole,
-  created_at: Schema.Number,
-  turn_duration_ms: Schema.NullOr(Schema.Number),
+  created_at: Schema.Finite,
+  turn_duration_ms: Schema.NullOr(Schema.Finite),
   metadata: Schema.NullOr(Schema.String),
 }) {}
 
 export interface MessageStorageService {
   readonly createMessage: (message: Message) => Effect.Effect<Message, StorageError>
   readonly createMessageIfAbsent: (message: Message) => Effect.Effect<Message, StorageError>
+  // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
   readonly getMessage: (id: MessageId) => Effect.Effect<Message | undefined, StorageError>
   readonly listMessages: (branchId: BranchId) => Effect.Effect<ReadonlyArray<Message>, StorageError>
   readonly deleteMessages: (
@@ -118,7 +120,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
                   kind: message._tag,
                   role: message.role,
                   created_at: message.createdAt.getTime(),
-                  turn_duration_ms: message.turnDurationMs ?? null,
+                  turn_duration_ms: toSqlNull(message.turnDurationMs),
                   metadata: metadataJson,
                 })
                 yield* insertContent(message.id, partJsons)
@@ -135,7 +137,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
               yield* ensureMessageWorkspace(message)
               const { partJsons, metadataJson } = yield* encodeStoredMessage(message)
               yield* Effect.gen(function* () {
-                yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message._tag}, ${message.role}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
+                yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message._tag}, ${message.role}, ${message.createdAt.getTime()}, ${toSqlNull(message.turnDurationMs)}, ${metadataJson})`
                 const rows = yield* sql<{
                   changed: number
                 }>`SELECT changes() as changed`
@@ -173,7 +175,8 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
               const rows = yield* Effect.forEach(rawRows, (row) => decodeMessageChunkRow(row))
               const grouped = groupMessageChunkRows(rows)
               const entry = grouped[0]
-              if (entry === undefined) return undefined
+              // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
+              if (Predicate.isUndefined(entry)) return undefined
               return yield* decodeStoredMessage(entry.row, entry.partJsons)
             },
             Effect.mapError(mapError("Failed to get message")),
@@ -198,7 +201,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
             LEFT JOIN content_chunks c ON c.id = mc.chunk_id
             JOIN sessions s ON s.id = m.session_id
             WHERE m.branch_id = ${branchId} AND s.workspace_id = ${workspaceId}
-            ORDER BY m.created_at ASC, m.id ASC, mc.ordinal ASC`
+            ORDER BY m.created_at ASC, m.insertion_order ASC, mc.ordinal ASC`
               const rows = yield* Effect.forEach(rawRows, (row) => decodeMessageChunkRow(row))
               return yield* Effect.forEach(groupMessageChunkRows(rows), ({ row, partJsons }) =>
                 decodeStoredMessage(row, partJsons),
@@ -212,16 +215,17 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
               const workspaceId = yield* CurrentWorkspaceId
               yield* Effect.gen(function* () {
                 const messageIds: MessageId[] = []
-                if (afterMessageId !== undefined) {
+                if (!Predicate.isUndefined(afterMessageId)) {
                   const msgs = yield* sql<{
                     id: MessageId
                     created_at: number
-                  }>`SELECT m.id, m.created_at
+                    insertion_order: number
+                  }>`SELECT m.id, m.created_at, m.insertion_order
                     FROM messages m
                     JOIN sessions s ON s.id = m.session_id
                     WHERE m.id = ${afterMessageId} AND s.workspace_id = ${workspaceId}`
                   const msg = msgs[0]
-                  if (msg !== undefined) {
+                  if (!Predicate.isUndefined(msg)) {
                     const rows = yield* sql<{
                       id: MessageId
                     }>`SELECT m.id
@@ -229,7 +233,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
                       JOIN sessions s ON s.id = m.session_id
                       WHERE m.branch_id = ${branchId}
                         AND s.workspace_id = ${workspaceId}
-                        AND (m.created_at > ${msg.created_at} OR (m.created_at = ${msg.created_at} AND m.id > ${msg.id}))`
+                        AND (m.created_at > ${msg.created_at} OR (m.created_at = ${msg.created_at} AND m.insertion_order > ${msg.insertion_order}))`
                     messageIds.push(...rows.map((row) => row.id))
                   }
                 } else {

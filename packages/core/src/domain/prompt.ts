@@ -1,3 +1,4 @@
+import { Predicate } from "effect"
 /**
  * System prompt construction via ordered sections.
  *
@@ -77,7 +78,12 @@ export function buildBasePromptSections(options: {
   customInstructions?: string
 }): ReadonlyArray<PromptSection> {
   const { cwd, platform, isGitRepo, date, shell, osVersion, customInstructions } = options
-  const platformDisplay = osVersion !== undefined ? `${platform} (${osVersion})` : platform
+  let platformDisplay = platform
+  if (!Predicate.isUndefined(osVersion)) platformDisplay = `${platform} (${osVersion})`
+  let shellDisplay = "unknown"
+  if (!Predicate.isUndefined(shell)) shellDisplay = shell
+  let gitRepository = "no"
+  if (isGitRepo) gitRepository = "yes"
 
   const sections: PromptSection[] = [
     {
@@ -92,12 +98,12 @@ export function buildBasePromptSections(options: {
     { id: "boundaries", content: BOUNDARIES, priority: 50 },
     {
       id: "environment",
-      content: `# Environment\n\nWorking directory: ${cwd}\nPlatform: ${platformDisplay}\nShell: ${shell ?? "unknown"}\nGit repository: ${isGitRepo ? "yes" : "no"}\nDate: ${date}`,
+      content: `# Environment\n\nWorking directory: ${cwd}\nPlatform: ${platformDisplay}\nShell: ${shellDisplay}\nGit repository: ${gitRepository}\nDate: ${date}`,
       priority: 60,
     },
   ]
 
-  if (customInstructions !== undefined && customInstructions !== "") {
+  if (!Predicate.isUndefined(customInstructions) && customInstructions !== "") {
     sections.push({
       id: "project-instructions",
       content: `# Project Instructions\n\n${customInstructions}`,

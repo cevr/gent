@@ -6,26 +6,19 @@
  * that flushes remaining lines on scope close.
  */
 
-import { Cause, Effect, FileSystem, Logger } from "effect"
+import { Cause, Effect, FileSystem, Logger, Option, Schema } from "effect"
 import type { PlatformError, Scope } from "effect"
-import type { LogLevel } from "effect/LogLevel"
 import { CurrentLogAnnotations, CurrentLogSpans } from "effect/References"
 import { CLIENT_LOG_PATH } from "./client-logger"
 
-const collectAnnotations = (
-  annotations: Readonly<Record<string, unknown>>,
-): Record<string, unknown> => {
-  const result: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(annotations)) {
-    result[k] = v
-  }
-  return result
-}
+const encodeTraceEntry = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+type SpanDurations = Record<string, number>
 
 const collectSpans = (
   spans: ReadonlyArray<[label: string, timestamp: number]>,
   now: number,
-): Record<string, number> => {
+): SpanDurations => {
   const result: Record<string, number> = {}
   for (const [label, startTime] of spans) {
     result[label] = now - startTime
@@ -33,45 +26,57 @@ const collectSpans = (
   return result
 }
 
-const extractMessage = (message: unknown): string => {
-  if (typeof message === "string") return message
-  if (Array.isArray(message)) return message.map(String).join(" ")
-  return String(message)
-}
+const decodeMessageString = Schema.decodeUnknownOption(Schema.String)
+const decodeMessageParts = Schema.decodeUnknownOption(Schema.Array(Schema.Unknown))
+type LoggerMessage = Parameters<typeof decodeMessageString>[0]
+
+const extractMessage = (message: LoggerMessage): string =>
+  Option.match(decodeMessageString(message), {
+    onNone: () =>
+      Option.match(decodeMessageParts(message), {
+        onNone: () => String(message),
+        onSome: (parts) => parts.map(String).join(" "),
+      }),
+    onSome: (text) => text,
+  })
 
 const formatLogger: Logger.Logger<unknown, string> = Logger.make(
   ({ logLevel, message, fiber, date, cause }) => {
     const msg = extractMessage(message)
     const annotations = fiber.getRef(CurrentLogAnnotations)
     const spans = fiber.getRef(CurrentLogSpans)
-    const annots = collectAnnotations(annotations)
     const now = date.getTime()
     const spanEntries = collectSpans(spans, now)
 
-    const entry: Record<string, unknown> = {
-      ts: date.toISOString(),
-      level: logLevel as LogLevel,
-      msg,
-      ...annots,
-    }
+    const entry = new Map(Object.entries(annotations))
+    entry.set("ts", date.toISOString())
+    entry.set("level", logLevel)
+    entry.set("msg", msg)
 
-    if (fiber.currentSpan !== undefined) {
-      entry["traceId"] = fiber.currentSpan.traceId
-      entry["spanId"] = fiber.currentSpan.spanId
-      if (fiber.currentSpan._tag === "Span") {
-        entry["spanName"] = fiber.currentSpan.name
-      }
-    }
+    Option.fromNullishOr(fiber.currentSpan).pipe(
+      Option.map((currentSpan) => {
+        entry.set("traceId", currentSpan.traceId)
+        entry.set("spanId", currentSpan.spanId)
+        if (currentSpan._tag === "Span") {
+          entry.set("spanName", currentSpan.name)
+        }
+      }),
+    )
 
     if (Object.keys(spanEntries).length > 0) {
-      entry["spans"] = spanEntries
+      entry.set("spans", spanEntries)
     }
 
     if (cause.reasons.length > 0) {
-      entry["cause"] = Cause.pretty(cause).split("\n")[0] ?? "unknown error"
+      entry.set(
+        "cause",
+        Option.fromNullishOr(Cause.pretty(cause).split("\n")[0]).pipe(
+          Option.getOrElse(() => "unknown error"),
+        ),
+      )
     }
 
-    return JSON.stringify(entry)
+    return encodeTraceEntry(Object.fromEntries(entry))
   },
 )
 

@@ -1,8 +1,10 @@
-import { createMemo, For, Show } from "solid-js"
+import { createMemo, For, Show, type Accessor } from "solid-js"
+import { Match, Option, Predicate } from "effect"
 import type { SyntaxStyle } from "@opentui/core"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 import type { ToolCall } from "./tool-renderers/index"
+import { formatToolCallIdentity, ToolCallIdentityProvider } from "./tool-frame"
 import { useExtensionUI } from "../extensions/context"
 import { SessionEventIndicator } from "./session-event-indicator"
 import type { SessionEvent } from "./session-event-label"
@@ -34,6 +36,7 @@ export interface MessageBase {
   reasoning: string
   images: ImageInfo[]
   createdAt: number
+  // eslint-disable-next-line effect/noNullish -- snapshot messages preserve absent tool-call data.
   toolCalls: ToolCall[] | undefined
   /** Ordered parts for interleaved rendering */
   segments?: AssistantSegment[]
@@ -52,8 +55,12 @@ export interface InterjectionMessage extends MessageBase {
 export type Message = RegularMessage | InterjectionMessage
 export type SessionItem = Message | SessionEvent
 
-const isMessageItem = (item: SessionItem): item is Message =>
-  item._tag === "regular-message" || item._tag === "interjection-message"
+type TerminalDimensions = { readonly width: number; readonly height: number }
+
+const isMessageItem = Predicate.or(
+  Predicate.isTagged("regular-message"),
+  Predicate.isTagged("interjection-message"),
+)
 
 function UserMessage(props: {
   content: string
@@ -62,19 +69,30 @@ function UserMessage(props: {
   pendingMode?: "queued" | "steer"
 }) {
   const { theme } = useTheme()
-  const background = () => (props.interjection ? theme.backgroundPanel : theme.backgroundElement)
-  const textColor = () => (props.interjection ? theme.warning : theme.text)
+  const textColor = () => {
+    if (props.interjection) return theme.warning
+    return theme.text
+  }
   const label = () => props.pendingMode
-  const labelColor = () => (props.interjection ? theme.warning : theme.textMuted)
+  const labelColor = () => {
+    if (props.interjection) return theme.warning
+    return theme.textMuted
+  }
+  const railColor = () => {
+    if (props.interjection) return theme.warning
+    return theme.primary
+  }
   const hasContent = () => props.content.length > 0 || props.images.length > 0
 
   return (
     <Show when={hasContent()}>
       <box
         marginTop={1}
-        backgroundColor={background()}
-        paddingLeft={2}
-        paddingRight={2}
+        border={["left"]}
+        borderStyle="heavy"
+        borderColor={railColor()}
+        paddingLeft={1}
+        paddingRight={1}
         flexDirection="column"
       >
         <Show when={props.images.length > 0}>
@@ -87,7 +105,11 @@ function UserMessage(props: {
         <Show when={props.content.length > 0}>
           <box flexDirection="column">
             <Show when={label()}>
-              {(value) => <text style={{ fg: labelColor() }}>[{value()}]</text>}
+              {(value) => (
+                <text>
+                  <span style={{ fg: labelColor(), bold: true }}>[{value()}]</span>
+                </text>
+              )}
             </Show>
             <text style={{ fg: textColor() }}>{props.content}</text>
           </box>
@@ -101,31 +123,41 @@ function AssistantMessage(props: {
   content: string
   reasoning: string
   images: ImageInfo[]
+  // eslint-disable-next-line effect/noNullish -- snapshot messages preserve absent tool-call data.
   toolCalls: ToolCall[] | undefined
   segments?: AssistantSegment[]
   expanded: boolean
   syntaxStyle: () => SyntaxStyle
   streaming: boolean
+  dimensions: Accessor<TerminalDimensions>
   getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
 }) {
   const { theme } = useTheme()
-  const dimensions = useTerminalDimensions()
 
-  const hasContent = () =>
-    props.content.length > 0 ||
-    props.reasoning.length > 0 ||
-    props.images.length > 0 ||
-    (props.toolCalls ?? []).length > 0
+  const hasContent = () => {
+    if (props.content.length > 0) return true
+    if (props.reasoning.length > 0) return true
+    if (props.images.length > 0) return true
+    return (props.toolCalls ?? []).length > 0
+  }
+
+  const processedContent = createMemo(() => {
+    if (props.streaming) return props.content
+    return replaceMermaidBlocks(props.content, props.dimensions().width)
+  })
+
+  const contentMargin = () => {
+    if (hasContent()) return 1
+    return 0
+  }
+
+  const segments = () => Option.getOrElse(Option.fromNullishOr(props.segments), () => [])
 
   // Replace mermaid code blocks with rendered ASCII art (skip while streaming)
-  const processedContent = createMemo(() =>
-    props.streaming ? props.content : replaceMermaidBlocks(props.content, dimensions().width),
-  )
-
   return (
-    <box marginTop={hasContent() ? 1 : 0} paddingLeft={2} flexDirection="column">
+    <box marginTop={contentMargin()} paddingLeft={2} flexDirection="column">
       <Show
-        when={props.segments !== undefined && props.segments.length > 0}
+        when={segments().length > 0}
         fallback={
           <AssistantMessageLegacy
             content={props.content}
@@ -140,11 +172,11 @@ function AssistantMessage(props: {
           />
         }
       >
-        <For each={props.segments}>
-          {(segment) => {
-            switch (segment._tag) {
-              case "reasoning":
-                return (
+        <For each={segments()}>
+          {(segment) =>
+            Match.value(segment).pipe(
+              Match.tagsExhaustive({
+                reasoning: (segment) => (
                   <box flexDirection="column" marginBottom={1}>
                     <text>
                       <span style={{ fg: theme.textMuted, dim: true }}>
@@ -152,36 +184,36 @@ function AssistantMessage(props: {
                       </span>
                     </text>
                   </box>
-                )
-              case "image":
-                return (
+                ),
+                image: (segment) => (
                   <text style={{ fg: theme.info }}>
                     [Image: {segment.image.mediaType.replace("image/", "")}]
                   </text>
-                )
-              case "tool-call":
-                return (
+                ),
+                "tool-call": (segment) => (
                   <SingleToolCall
                     toolCall={segment.toolCall}
                     expanded={props.expanded}
                     getChildSessions={props.getChildSessions}
                   />
-                )
-              case "text":
-                return (
-                  <markdown
-                    syntaxStyle={props.syntaxStyle()}
-                    streaming
-                    content={
-                      props.streaming
-                        ? segment.content
-                        : replaceMermaidBlocks(segment.content, dimensions().width)
-                    }
-                    conceal
-                  />
-                )
-            }
-          }}
+                ),
+                text: (segment) => {
+                  const renderContent = () => {
+                    if (props.streaming) return segment.content
+                    return replaceMermaidBlocks(segment.content, props.dimensions().width)
+                  }
+                  return (
+                    <markdown
+                      syntaxStyle={props.syntaxStyle()}
+                      streaming
+                      content={renderContent()}
+                      conceal
+                    />
+                  )
+                },
+              }),
+            )
+          }
         </For>
       </Show>
     </box>
@@ -193,6 +225,7 @@ function AssistantMessageLegacy(props: {
   content: string
   reasoning: string
   images: ImageInfo[]
+  // eslint-disable-next-line effect/noNullish -- snapshot messages preserve absent tool-call data.
   toolCalls: ToolCall[] | undefined
   expanded: boolean
   syntaxStyle: () => SyntaxStyle
@@ -201,6 +234,10 @@ function AssistantMessageLegacy(props: {
   getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
 }) {
   const { theme } = useTheme()
+  const contentMargin = () => {
+    if (props.content.length > 0) return 1
+    return 0
+  }
 
   return (
     <>
@@ -214,7 +251,7 @@ function AssistantMessageLegacy(props: {
         </box>
       </Show>
       <Show when={props.images.length > 0}>
-        <box flexDirection="column" marginBottom={props.content.length > 0 ? 1 : 0}>
+        <box flexDirection="column" marginBottom={contentMargin()}>
           <For each={props.images}>
             {(img) => (
               <text style={{ fg: theme.info }}>[Image: {img.mediaType.replace("image/", "")}]</text>
@@ -223,7 +260,7 @@ function AssistantMessageLegacy(props: {
         </box>
       </Show>
       <Show when={(props.toolCalls ?? []).length > 0}>
-        <box flexDirection="column" marginBottom={props.content.length > 0 ? 1 : 0}>
+        <box flexDirection="column" marginBottom={contentMargin()}>
           <For each={props.toolCalls ?? []}>
             {(tc) => (
               <SingleToolCall
@@ -268,17 +305,25 @@ function SingleToolCall(props: {
         <Show when={props.toolCall.status === "error"}>
           <text>
             <span style={{ fg: theme.error }}>
-              [x {props.toolCall.toolName}] {props.toolCall.summary ?? "failed"}
+              [x {props.toolCall.toolName}] #{formatToolCallIdentity(props.toolCall.id)}{" "}
+              {props.toolCall.summary ?? "failed"}
             </span>
           </text>
         </Show>
       }
     >
       {(() => {
-        const R = Renderer()
-        if (R === undefined) return null
+        const R = Option.fromNullishOr(Renderer())
+        if (Option.isNone(R)) return <></>
+        const RendererComponent = R.value
         return (
-          <R toolCall={props.toolCall} expanded={props.expanded} childSessions={childSessions()} />
+          <ToolCallIdentityProvider id={props.toolCall.id}>
+            <RendererComponent
+              toolCall={props.toolCall}
+              expanded={props.expanded}
+              childSessions={childSessions()}
+            />
+          </ToolCallIdentityProvider>
         )
       })()}
     </Show>
@@ -294,6 +339,7 @@ interface MessageListProps {
 }
 
 export function MessageList(props: MessageListProps) {
+  const dimensions = useTerminalDimensions()
   const visibleItems = createMemo(() =>
     props.items.filter((item) => !isMessageItem(item) || item.metadata?.hidden !== true),
   )
@@ -302,33 +348,37 @@ export function MessageList(props: MessageListProps) {
     <box flexDirection="column">
       <For each={visibleItems()}>
         {(item, index) =>
-          !isMessageItem(item) ? (
-            <SessionEventIndicator event={item} />
-          ) : (
-            <Show
-              when={item.role === "user"}
-              fallback={
-                <AssistantMessage
+          (() => {
+            if (!isMessageItem(item)) {
+              return <SessionEventIndicator event={item} dimensions={dimensions} />
+            }
+            return (
+              <Show
+                when={item.role === "user"}
+                fallback={
+                  <AssistantMessage
+                    content={item.content}
+                    reasoning={item.reasoning}
+                    images={item.images}
+                    toolCalls={item.toolCalls}
+                    segments={item.segments}
+                    expanded={props.toolsExpanded}
+                    syntaxStyle={props.syntaxStyle}
+                    streaming={props.streaming && index() === props.items.length - 1}
+                    dimensions={dimensions}
+                    getChildSessions={props.getChildSessions}
+                  />
+                }
+              >
+                <UserMessage
                   content={item.content}
-                  reasoning={item.reasoning}
                   images={item.images}
-                  toolCalls={item.toolCalls}
-                  segments={item.segments}
-                  expanded={props.toolsExpanded}
-                  syntaxStyle={props.syntaxStyle}
-                  streaming={props.streaming && index() === props.items.length - 1}
-                  getChildSessions={props.getChildSessions}
+                  interjection={item._tag === "interjection-message"}
+                  pendingMode={item.pendingMode}
                 />
-              }
-            >
-              <UserMessage
-                content={item.content}
-                images={item.images}
-                interjection={item._tag === "interjection-message"}
-                pendingMode={item.pendingMode}
-              />
-            </Show>
-          )
+              </Show>
+            )
+          })()
         }
       </For>
     </box>

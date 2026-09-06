@@ -9,16 +9,29 @@
  *
  * @module
  */
-import { Context, Effect, Layer, Ref, Schema, type Scope } from "effect"
+import { Context, Effect, Layer, Option, Ref, Schema, type Scope } from "effect"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 import * as AiTool from "effect/unstable/ai/Tool"
 import { BunHttpServer } from "@effect/platform-bun"
 import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { getToolId, InteractionPendingError, type ToolCapability } from "@gent/core/extensions/api"
+import {
+  getToolId,
+  type ExternalToolRunner,
+  type InteractionPendingError,
+  type ToolCapability,
+} from "@gent/core/extensions/api"
+import {
+  executeCodemodeFunction,
+  inspectMcpResult,
+  invokeCodemodeTool,
+  makeStatelessMcpTransport,
+  rejectUnknownCodemodeTool,
+} from "./mcp-codemode-boundary.js"
 
-export class McpCodemodeUnknownToolError extends Schema.TaggedErrorClass<McpCodemodeUnknownToolError>()(
+export { inspectMcpResult as inspectForMcp } from "./mcp-codemode-boundary.js"
+
+export class McpCodemodeUnknownToolError extends Schema.TaggedError<McpCodemodeUnknownToolError>()(
   "McpCodemodeUnknownToolError",
   {
     toolName: Schema.String,
@@ -29,7 +42,7 @@ export class McpCodemodeUnknownToolError extends Schema.TaggedErrorClass<McpCode
   }
 }
 
-export class McpCodemodeServerError extends Schema.TaggedErrorClass<McpCodemodeServerError>()(
+export class McpCodemodeServerError extends Schema.TaggedError<McpCodemodeServerError>()(
   "McpCodemodeServerError",
   {
     message: Schema.String,
@@ -49,9 +62,23 @@ export interface CodemodeConfig {
   /** Run a tool by name with args. Routes through ToolRunner.run() in the
    *  parent Effect runtime — full permission checks, interceptors, and
    *  result enrichment apply. Returns the tool result value. */
-  readonly runTool: (toolName: string, args: unknown) => unknown
-  readonly onInteractionPending?: (pending: InteractionPendingError) => unknown
+  readonly runTool: (
+    toolName: string,
+    args: Parameters<(typeof ExternalToolRunner.Service)["runTool"]>[1],
+  ) =>
+    | Effect.Success<ReturnType<(typeof ExternalToolRunner.Service)["runTool"]>>
+    | Promise<Effect.Success<ReturnType<(typeof ExternalToolRunner.Service)["runTool"]>>>
+  readonly onInteractionPending?: (pending: InteractionPendingError) => void | Promise<void>
 }
+
+const ToolDescriptionSchema = Schema.Struct({
+  properties: Schema.optionalKey(
+    Schema.Record(Schema.String, Schema.Struct({ type: Schema.optionalKey(Schema.String) })),
+  ),
+  required: Schema.optionalKey(Schema.Array(Schema.String)),
+})
+
+const ExecuteArguments = Schema.Struct({ code: Schema.String })
 
 // ── Tool description generator ──
 
@@ -76,33 +103,21 @@ export const generateToolDescription = (tools: ReadonlyArray<ToolCapability>): s
   for (const tool of tools) {
     const schema = AiTool.getJsonSchema(tool)
     const id = getToolId(tool)
-    const rawProps = schema["properties"]
-    let props: Record<string, unknown> = {}
-    if (typeof rawProps === "object" && rawProps !== null && !Array.isArray(rawProps)) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-      props = rawProps as Record<string, unknown>
-    }
-    const rawRequired = schema["required"]
-    const required = new Set(
-      Array.isArray(rawRequired)
-        ? rawRequired.filter((r): r is string => typeof r === "string")
-        : [],
-    )
+    const decoded = Schema.decodeOption(ToolDescriptionSchema)(schema)
+    const description = Option.getOrElse(decoded, () => ({ properties: {}, required: [] }))
+    const props = Option.getOrElse(Option.fromNullishOr(description.properties), () => ({}))
+    const required = new Set(Option.getOrElse(Option.fromNullishOr(description.required), () => []))
 
     const params = Object.entries(props)
       .map(([name, prop]) => {
-        const propType =
-          typeof prop === "object" &&
-          prop !== null &&
-          "type" in prop &&
-          typeof prop.type === "string"
-            ? prop.type
-            : "unknown"
-        return required.has(name) ? `${name}: ${propType}` : `${name}?: ${propType}`
+        const propType = Option.getOrElse(Option.fromNullishOr(prop.type), () => "unknown")
+        if (required.has(name)) return `${name}: ${propType}`
+        return `${name}?: ${propType}`
       })
       .join(", ")
 
-    lines.push(`- \`gent.${id}({ ${params} })\` — ${tool.description ?? ""}`)
+    const toolDescription = Option.getOrElse(Option.fromNullishOr(tool.description), () => "")
+    lines.push(`- \`gent.${id}({ ${params} })\` — ${toolDescription}`)
   }
 
   return lines.join("\n")
@@ -122,53 +137,17 @@ const makeGentProxy = (
     {
       get: (_target, toolName: string) => {
         if (!toolNames.has(toolName)) {
-          return () => {
-            throw new McpCodemodeUnknownToolError({ toolName })
-          }
+          return () => rejectUnknownCodemodeTool(new McpCodemodeUnknownToolError({ toolName }))
         }
 
-        return (args: unknown) =>
-          Promise.resolve()
-            .then(() => runTool(toolName, args))
-            .catch((error: unknown) => {
-              if (Schema.is(InteractionPendingError)(error)) {
-                onInteractionPending?.(error)
-              }
-              throw error
-            })
+        return (args: Parameters<CodemodeConfig["runTool"]>[1]) =>
+          invokeCodemodeTool(toolName, args, runTool, onInteractionPending)
       },
     },
   )
 }
 
-// ── inspect helper (vendored — replaces GentPlatform.inspect) ──
-
-/**
- * Stringify an arbitrary `execute`-tool result. Handles circular
- * references by substituting `[Circular]` for repeat sights of the
- * same object and BigInt values by suffixing `n` (so `1n` round-trips
- * as the string `"1n"`, matching dev-tools convention). Falls back to
- * `String(value)` only if `JSON.stringify` still throws.
- */
-export const inspectForMcp = (value: unknown): string => {
-  const seen = new WeakSet<object>()
-  try {
-    return JSON.stringify(
-      value,
-      (_key, v: unknown) => {
-        if (typeof v === "bigint") return `${v.toString()}n`
-        if (typeof v === "object" && v !== null) {
-          if (seen.has(v)) return "[Circular]"
-          seen.add(v)
-        }
-        return v
-      },
-      2,
-    )
-  } catch {
-    return String(value)
-  }
-}
+export type GentToolProxy = ReturnType<typeof makeGentProxy>
 
 // ── MCP server factory (one per request for stateless mode) ──
 
@@ -184,7 +163,7 @@ const createMcpServerForRequest = (
         name: "execute",
         description: toolDescription,
         inputSchema: {
-          type: "object" as const,
+          type: "object",
           properties: {
             code: { type: "string", description: "JavaScript code to execute" },
           },
@@ -196,39 +175,40 @@ const createMcpServerForRequest = (
 
   server.setRequestHandler(CallToolRequestSchema, (request) => {
     const { name, arguments: args } = request.params
+    const executeArguments = Schema.decodeUnknownOption(ExecuteArguments)(args)
 
-    if (name !== "execute" || typeof args?.["code"] !== "string") {
+    if (name !== "execute" || Option.isNone(executeArguments)) {
       return {
-        content: [{ type: "text" as const, text: `Unknown tool: ${name}` }],
+        content: [{ type: "text", text: `Unknown tool: ${name}` }],
         isError: true,
       }
     }
 
-    return Promise.resolve()
-      .then(() => {
-        // eslint-disable-next-line @typescript-eslint/no-implied-eval -- intentional: trusted ACP agent code execution
-        const fn = new Function(
-          "gent",
-          `"use strict"; return (async function() { ${args["code"]} })()`,
-        )
-        return Promise.resolve(Reflect.apply(fn, undefined, [proxy]) as unknown)
-      })
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval -- intentional: trusted ACP agent code execution
+    const fn = new Function(
+      "gent",
+      `"use strict"; return (async function() { ${executeArguments.value.code} })()`,
+    )
+    return executeCodemodeFunction(fn, proxy)
       .then((value) => {
         let text: string
-        if (value === undefined) text = "(no result)"
-        else if (typeof value === "string") text = value
-        else text = inspectForMcp(value)
-        return { content: [{ type: "text" as const, text }] }
+        const presentValue = Option.fromNullishOr(value)
+        if (Option.isNone(presentValue)) text = "(no result)"
+        else {
+          const stringValue = Schema.decodeUnknownOption(Schema.String)(presentValue.value)
+          if (Option.isSome(stringValue)) text = stringValue.value
+          else text = inspectMcpResult(presentValue.value)
+        }
+        return { content: [{ type: "text", text }] }
       })
-      .catch((err: unknown) => ({
-        content: [
-          {
-            type: "text" as const,
-            text: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
-          },
-        ],
-        isError: true,
-      }))
+      .catch((err) => {
+        const decodedError = Schema.decodeUnknownOption(Schema.instanceOf(Error))(err)
+        const text = Option.match(decodedError, {
+          onNone: () => String(err),
+          onSome: (error) => `${error.name}: ${error.message}`,
+        })
+        return { content: [{ type: "text", text }], isError: true }
+      })
   })
 
   return server
@@ -252,8 +232,9 @@ export const startCodemodeServer = (
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const currentConfig = yield* Ref.get(configRef)
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- BunServerRequest.source is the underlying Request
-        const rawRequest = request.source as Request
+        const rawRequest = yield* Schema.decodeUnknownEffect(Schema.instanceOf(Request))(
+          request.source,
+        ).pipe(Effect.orDie)
         const mcpServer = createMcpServerForRequest(
           makeGentProxy(
             currentConfig.tools,
@@ -262,9 +243,7 @@ export const startCodemodeServer = (
           ),
           generateToolDescription(currentConfig.tools),
         )
-        const transport = new WebStandardStreamableHTTPServerTransport({
-          sessionIdGenerator: undefined,
-        })
+        const transport = makeStatelessMcpTransport()
         const response = yield* Effect.promise(() =>
           mcpServer.connect(transport).then(() => transport.handleRequest(rawRequest)),
         )

@@ -5,7 +5,7 @@
 
 import { Context, Layer } from "effect"
 
-export interface ServerIdentityShape {
+export interface ServerIdentityApi {
   readonly serverId: string
   readonly pid: number
   readonly hostname: string
@@ -14,21 +14,24 @@ export interface ServerIdentityShape {
   readonly startedAt: number
 }
 
-export class ServerIdentity extends Context.Service<ServerIdentity, ServerIdentityShape>()(
+export class ServerIdentity extends Context.Service<ServerIdentity, ServerIdentityApi>()(
   "@gent/core/src/server/server-identity/ServerIdentity",
 ) {
-  static Live = (config: ServerIdentityShape): Layer.Layer<ServerIdentity> =>
-    Layer.succeed(ServerIdentity, config)
+  static Live = (config: ServerIdentityApi): Layer.Layer<ServerIdentity> =>
+    Layer.succeed(ServerIdentity, ServerIdentity.of(config))
 
   /** Deterministic identity for tests; values are stable so snapshots don't drift. */
-  static Test = (overrides: Partial<ServerIdentityShape> = {}): Layer.Layer<ServerIdentity> =>
-    Layer.succeed(ServerIdentity, {
-      serverId: "test-server",
-      pid: 0,
-      hostname: "test-host",
-      dbPath: ":memory:",
-      buildFingerprint: "test-fingerprint",
-      startedAt: 0,
-      ...overrides,
-    })
+  static Test = (overrides: Partial<ServerIdentityApi> = {}): Layer.Layer<ServerIdentity> =>
+    Layer.succeed(
+      ServerIdentity,
+      ServerIdentity.of({
+        serverId: "test-server",
+        pid: 0,
+        hostname: "test-host",
+        dbPath: ":memory:",
+        buildFingerprint: "test-fingerprint",
+        startedAt: 0,
+        ...overrides,
+      }),
+    )
 }

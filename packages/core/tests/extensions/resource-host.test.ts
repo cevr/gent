@@ -1,3 +1,4 @@
+import { AgentName } from "@gent/core-internal/domain/agent"
 /**
  * ResourceHost — service/lifecycle Resource tests.
  *
@@ -11,12 +12,13 @@
  */
 
 import { describe, expect, it, test } from "effect-bun-test"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option } from "effect"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
 import type { AnyResourceContribution, ExtensionState } from "@gent/core-internal/domain/resource"
 import { defineResource, defineStateResource } from "@gent/core-internal/domain/contribution"
 import type { ScheduledJobContribution } from "@gent/core-internal/domain/scheduled-job"
 import type { LoadedExtension } from "../../src/domain/extension.js"
+import { ExtensionId } from "@gent/core-internal/domain/ids"
 
 // ── Resource shape + helpers ──
 
@@ -30,14 +32,12 @@ class TestCounterState extends Context.Service<TestCounterState, ExtensionState<
   "@gent/core/tests/extensions/resource-host.test/TestCounterState",
 ) {}
 
-const layerA = Layer.succeed(TestServiceA, { value: "A" })
-const layerB = Layer.succeed(TestServiceB, { value: "B" })
+const layerA = Layer.succeed(TestServiceA, TestServiceA.of({ value: "A" }))
+const layerB = Layer.succeed(TestServiceB, TestServiceB.of({ value: "B" }))
 
 const stubManifest = (id: string) => ({
-  id,
-  version: "0.0.0" as const,
-  description: "test",
-  scope: "builtin" as const,
+  id: ExtensionId.make(id),
+  version: "0.0.0",
 })
 
 const makeStubExtension = (
@@ -46,18 +46,23 @@ const makeStubExtension = (
 ): LoadedExtension =>
   ({
     manifest: stubManifest(id),
-    scope: "builtin" as const,
+    scope: "builtin",
     sourcePath: "builtin",
     contributions: { resources },
-  }) as unknown as LoadedExtension
+  }) satisfies LoadedExtension
 
 describe("defineResource", () => {
   test("emits a contribution with the declared scope", () => {
     const r = defineResource({
+      id: "test/resource-host/declared-scope",
       tag: TestServiceA,
       scope: "process",
       layer: layerA,
     })
+    expect(String(r.id)).toBe("test/resource-host/declared-scope")
+    expect(String(r.revision)).toBe("1")
+    expect(r.requires).toEqual([])
+    expect(r.required).toBe(false)
     expect(r.scope).toBe("process")
     expect(r.tag).toBe(TestServiceA)
   })
@@ -66,14 +71,55 @@ describe("defineResource", () => {
     const job: ScheduledJobContribution = {
       id: "tick",
       cron: "0 * * * *",
-      target: { agent: "memory:dream" as never, prompt: "reflect" },
+      target: { agent: AgentName.make("memory:dream"), prompt: "reflect" },
     }
     expect(job.id).toBe("tick")
     expect(job.cron).toBe("0 * * * *")
   })
 
+  test("normalizes and snapshots resource metadata", () => {
+    const dependency = defineResource({
+      id: "test/resource-host/metadata/dependency",
+      scope: "process",
+      layer: Layer.empty,
+    })
+    const requires = [dependency.id]
+    const r = defineResource({
+      id: "test/resource-host/metadata/consumer",
+      revision: "2",
+      requires,
+      required: true,
+      scope: "process",
+      layer: Layer.empty,
+    })
+    requires.push(dependency.id)
+    expect(String(r.id)).toBe("test/resource-host/metadata/consumer")
+    expect(String(r.revision)).toBe("2")
+    expect(r.requires).toEqual([dependency.id])
+    expect(r.required).toBe(true)
+  })
+
+  test("rejects empty resource metadata", () => {
+    expect(() =>
+      defineResource({
+        id: "",
+        scope: "process",
+        layer: Layer.empty,
+      }),
+    ).toThrow()
+    expect(() =>
+      defineResource({
+        id: "test/resource-host/metadata/invalid-revision",
+        revision: "",
+        scope: "process",
+        layer: Layer.empty,
+      }),
+    ).toThrow()
+  })
+
   test("defineStateResource lowers scoped state to a Resource", () => {
     const r = defineStateResource({
+      id: "test/resource-host/state",
       tag: TestCounterState,
       scope: "process",
       initial: 0,
@@ -91,8 +137,8 @@ describe("buildResourceLayer", () => {
         const layer = buildResourceLayer([ext], "process")
         const ctx = yield* Layer.build(layer)
         // No service tags should be present.
-        expect(Context.getOrUndefined(ctx, TestServiceA)).toBe(undefined)
-        expect(Context.getOrUndefined(ctx, TestServiceB)).toBe(undefined)
+        expect(Option.isNone(Context.getOption(ctx, TestServiceA))).toBe(true)
+        expect(Option.isNone(Context.getOption(ctx, TestServiceB))).toBe(true)
       }),
     ),
   )
@@ -101,8 +147,16 @@ describe("buildResourceLayer", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const ext = makeStubExtension("ext", [
-          defineResource({ scope: "process", layer: layerA }),
-          defineResource({ scope: "process", layer: layerB }),
+          defineResource({
+            id: "test/resource-host/merge/service-a",
+            scope: "process",
+            layer: layerA,
+          }),
+          defineResource({
+            id: "test/resource-host/merge/service-b",
+            scope: "process",
+            layer: layerB,
+          }),
         ])
         const layer = buildResourceLayer([ext], "process")
         const ctx = yield* Layer.build(layer)
@@ -117,6 +171,7 @@ describe("buildResourceLayer", () => {
       Effect.gen(function* () {
         const ext = makeStubExtension("ext", [
           defineStateResource({
+            id: "test/resource-host/state-layer",
             tag: TestCounterState,
             scope: "process",
             initial: Effect.succeed(1),
@@ -125,7 +180,7 @@ describe("buildResourceLayer", () => {
         const ctx = yield* Layer.build(buildResourceLayer([ext], "process"))
         const state = Context.get(ctx, TestCounterState)
         yield* state.update((current) => current + 1)
-        const doubled = yield* state.modify((current) => [current * 2, current * 2] as const)
+        const doubled = yield* state.modify((current) => [current * 2, current * 2])
         expect(doubled).toBe(4)
         expect(yield* state.get).toBe(4)
       }),
@@ -152,12 +207,14 @@ describe("buildResourceLayer lifecycle", () => {
         const append = (s: string) => Effect.sync(() => log.push(s))
         const ext = makeStubExtension("ext", [
           defineResource({
+            id: "test/resource-host/lifecycle/start-stop-1",
             scope: "process",
             layer: layerA,
             start: append("start-1"),
             stop: append("stop-1"),
           }),
           defineResource({
+            id: "test/resource-host/lifecycle/start-stop-2",
             scope: "process",
             layer: layerB,
             start: append("start-2"),
@@ -176,16 +233,18 @@ describe("buildResourceLayer lifecycle", () => {
       const append = (s: string) => Effect.sync(() => log.push(s))
       const ext = makeStubExtension("ext", [
         defineResource({
+          id: "test/resource-host/lifecycle/failure/good",
           scope: "process",
           layer: layerA,
           start: append("start-good-1"),
           stop: append("stop-good-1"),
         }),
         defineResource({
+          id: "test/resource-host/lifecycle/failure/bad",
           scope: "process",
           layer: layerB,
           // Intentional failure — must not bring down the layer build.
-          start: Effect.fail(new Error("boom") as never),
+          start: Effect.die(new Error("boom")),
           // Must NOT run, because start failed.
           stop: append("stop-should-not-run"),
         }),
@@ -206,6 +265,7 @@ describe("buildResourceLayer lifecycle", () => {
       const append = (s: string) => Effect.sync(() => log.push(s))
       const ext = makeStubExtension("ext", [
         defineResource({
+          id: "test/resource-host/lifecycle/stop-only",
           scope: "process",
           layer: layerA,
           stop: append("stop-only"),
@@ -222,11 +282,13 @@ describe("buildResourceLayer lifecycle", () => {
       const append = (s: string) => Effect.sync(() => log.push(s))
       const ext = makeStubExtension("ext", [
         defineResource({
+          id: "test/resource-host/lifecycle/stop-failure/good",
           scope: "process",
           layer: layerA,
           stop: append("stop-1"),
         }),
         defineResource({
+          id: "test/resource-host/lifecycle/stop-failure/bad",
           scope: "process",
           layer: layerB,
           // Failing stop must not prevent stop-1 from running.

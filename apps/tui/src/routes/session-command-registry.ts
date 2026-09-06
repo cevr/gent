@@ -1,5 +1,5 @@
 import { createEffect, onCleanup, type Accessor } from "solid-js"
-import { Effect } from "effect"
+import { Effect, Option, Schema } from "effect"
 import type { ClientContextValue } from "../client/index"
 import type { Command } from "../command/types"
 import type { AutocompleteContribution } from "../extensions/client-facets.js"
@@ -24,19 +24,17 @@ interface SessionCommandRegistryProps {
   readonly openAuth: () => void
 }
 
-const VALID_REASONING_LEVELS = ["off", "low", "medium", "high", "xhigh"] as const
-type ReasoningLevelInput = (typeof VALID_REASONING_LEVELS)[number]
+const ReasoningLevelInput = Schema.Literals(["off", "low", "medium", "high", "xhigh"])
+type ReasoningLevelInput = Schema.Schema.Type<typeof ReasoningLevelInput>
+const VALID_REASONING_LEVELS = [
+  "off",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] satisfies ReadonlyArray<ReasoningLevelInput>
 
-const parseReasoningLevel = (level: string): ReasoningLevelInput | undefined => {
-  switch (level) {
-    case "off":
-    case "low":
-    case "medium":
-    case "high":
-    case "xhigh":
-      return level
-  }
-}
+const parseReasoningLevel = Schema.decodeUnknownOption(ReasoningLevelInput)
 
 const slashAutocompleteItems = (
   commands: readonly Command[],
@@ -46,15 +44,16 @@ const slashAutocompleteItems = (
   const hasFilter = lowerFilter.length > 0
   const items: Array<{ id: string; label: string; description?: string }> = []
   for (const command of commands) {
-    if (command.slash === undefined) continue
+    const slash = Option.fromNullishOr(command.slash)
+    if (Option.isNone(slash)) continue
     if (
       !hasFilter ||
-      command.slash.toLowerCase().includes(lowerFilter) ||
+      slash.value.toLowerCase().includes(lowerFilter) ||
       command.title.toLowerCase().includes(lowerFilter)
     ) {
       items.push({
-        id: command.slash,
-        label: `/${command.slash}`,
+        id: slash.value,
+        label: `/${slash.value}`,
         description: command.description ?? command.title,
       })
     }
@@ -138,20 +137,21 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     onSlash: (args) => {
       const level = args.trim().toLowerCase()
       const reasoningLevel = parseReasoningLevel(level)
-      if (reasoningLevel === undefined) {
+      if (Option.isNone(reasoningLevel)) {
         props.client.setError(`Usage: /think <${VALID_REASONING_LEVELS.join("|")}>`)
         return
       }
+      const sessionReasoningLevel = Option.getOrUndefined(
+        Option.liftPredicate(reasoningLevel.value, (value) => value !== "off"),
+      )
       props.cast(
-        props.client
-          .updateSessionReasoningLevel(reasoningLevel === "off" ? undefined : reasoningLevel)
-          .pipe(
-            Effect.catchEager((error) =>
-              Effect.sync(() => {
-                props.client.setError(formatError(error))
-              }),
-            ),
+        props.client.updateSessionReasoningLevel(sessionReasoningLevel).pipe(
+          Effect.catchEager((error) =>
+            Effect.sync(() => {
+              props.client.setError(formatError(error))
+            }),
           ),
+        ),
       )
     },
   },
@@ -175,13 +175,15 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
 
 export const createSessionCommandRegistry = (props: SessionCommandRegistryProps): void => {
   const unsubBuiltins = props.command.register(createSessionBuiltins(props))
-  let unsubExtCommands: (() => void) | undefined
+  let unsubExtCommands: Option.Option<() => void> = Option.none()
 
   createEffect(() => {
-    unsubExtCommands?.()
+    if (Option.isSome(unsubExtCommands)) unsubExtCommands.value()
     const cmds = props.ext.commands()
     if (cmds.length > 0) {
-      unsubExtCommands = props.command.register([...cmds])
+      unsubExtCommands = Option.some(props.command.register([...cmds]))
+    } else {
+      unsubExtCommands = Option.none()
     }
   })
 
@@ -198,7 +200,7 @@ export const createSessionCommandRegistry = (props: SessionCommandRegistryProps)
 
   onCleanup(() => {
     unsubBuiltins()
-    unsubExtCommands?.()
+    if (Option.isSome(unsubExtCommands)) unsubExtCommands.value()
     props.ext.setDynamicAutocomplete([])
   })
 }

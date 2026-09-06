@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { narrowR } from "../../core/tests/helpers/effect"
 import {
   AgentName,
@@ -49,7 +49,7 @@ const makeCtx = (overrides: {
     ...base,
     Agent: {
       run: agentRun,
-      listAgents: () => Effect.succeed(AllBuiltinAgents),
+      listAgents: Effect.succeed(AllBuiltinAgents),
     },
     Session: {
       ...base.Session,
@@ -184,9 +184,10 @@ describe("Plan Tool", () => {
 
     const ctx = makeCtx({
       agentRun: (params) => {
-        if (params.runSpec?.overrides?.modelId !== undefined) {
-          models.push(params.runSpec.overrides.modelId)
-        }
+        Option.match(Option.fromUndefinedOr(params.runSpec?.overrides?.modelId), {
+          onNone: () => {},
+          onSome: (modelId) => models.push(modelId),
+        })
         return Effect.succeed(
           AgentRunResult.cases.success.make({
             text: "output",

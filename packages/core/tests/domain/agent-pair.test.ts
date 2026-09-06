@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, Option, Schema } from "effect"
+import { Predicate, Cause, Effect, Option, Schema } from "effect"
 import {
   AgentDefinition,
   AgentName,
@@ -9,12 +9,14 @@ import {
 import { ModelId } from "@gent/core-internal/domain/model"
 import { ExternalDriverRef } from "@gent/core-internal/domain/driver"
 
-const agent = (name: string, model?: string): AgentDefinition =>
-  AgentDefinition.make({
+const agent = (name: string, model?: string): AgentDefinition => {
+  const base = {
     name: AgentName.make(name),
     description: name,
-    ...(model !== undefined ? { model: ModelId.make(model) } : {}),
-  })
+  }
+  if (Predicate.isUndefined(model)) return AgentDefinition.make(base)
+  return AgentDefinition.make({ ...base, model: ModelId.make(model) })
+}
 
 const externalAgent = (name: string): AgentDefinition =>
   AgentDefinition.make({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, FileSystem, Layer } from "effect"
+import { Effect, FileSystem, Layer, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import { toolCallStep, textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
@@ -12,6 +12,8 @@ import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset.js"
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 describe("exec-tools background runtime", () => {
   it.live("drops background bash completion after session deletion", () =>
@@ -54,10 +56,11 @@ describe("exec-tools background runtime", () => {
         )
         const remaining = yield* messages.listMessages(branchId)
         const stale = remaining.filter((message) =>
-          JSON.stringify(message.parts).includes("stale-background-completion"),
+          encodeJson(message.parts).includes("stale-background-completion"),
         )
         expect(stale).toEqual([])
         yield* fs.remove(markerPath).pipe(Effect.catchEager(() => Effect.void))
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer), Effect.timeout("5 seconds"))
     }),
   )

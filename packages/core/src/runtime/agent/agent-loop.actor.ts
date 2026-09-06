@@ -4,12 +4,16 @@ import { Actor } from "effect-encore"
 import type { PromptSection } from "../../domain/prompt.js"
 import { buildAgentLoopActorHandlers } from "./agent-loop.handlers.js"
 import { AgentLoop } from "./agent-loop.protocol.js"
+import { ProcessLocalToolReplay } from "./process-local-tool-replay.js"
 
 export { AgentLoop } from "./agent-loop.protocol.js"
 
 export const AgentLoopLiveActor = (config: {
   readonly baseSections: ReadonlyArray<PromptSection>
 }) =>
+  // The replay store is built at the server actor-layer scope. Agent-loop
+  // behaviors can be rebuilt for one entity, but their live tool identities
+  // must remain available until the owning server scope closes.
   Layer.unwrap(
     Actor.provideLayerBuildContext(buildAgentLoopActorHandlers(config)).pipe(
       Effect.map((build) =>
@@ -21,7 +25,7 @@ export const AgentLoopLiveActor = (config: {
         }),
       ),
     ),
-  )
+  ).pipe(Layer.provide(ProcessLocalToolReplay.Live))
 
 export const AgentLoopTestActor = (config: {
   readonly baseSections: ReadonlyArray<PromptSection>
@@ -35,4 +39,4 @@ export const AgentLoopTestActor = (config: {
         }).pipe(Layer.provide(ShardingConfig.layerDefaults)),
       ),
     ),
-  )
+  ).pipe(Layer.provide(ProcessLocalToolReplay.Live))

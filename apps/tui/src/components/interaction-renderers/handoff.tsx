@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import type { InteractionRendererProps } from "../../extensions/client-facets.js"
+import { Option } from "effect"
 import { OptionList } from "./option-list"
 
 export function HandoffRenderer(props: InteractionRendererProps) {
@@ -10,12 +11,18 @@ export function HandoffRenderer(props: InteractionRendererProps) {
       question={props.event.text}
       options={[{ label: "Yes" }, { label: "No" }]}
       onSubmit={(selections) => {
-        const sel = selections[0]?.toLowerCase() ?? "no"
-        const freeform = selections.find((s) => !["yes", "no"].includes(s.toLowerCase()))
-        props.resolve({
-          approved: sel === "yes",
-          ...(freeform !== undefined ? { notes: freeform } : {}),
-        })
+        const sel = Option.fromNullishOr(selections[0]).pipe(
+          Option.map((value) => value.toLowerCase()),
+          Option.getOrElse(() => "no"),
+        )
+        const freeform = Option.fromNullishOr(
+          selections.find((value) => !["yes", "no"].includes(value.toLowerCase())),
+        )
+        if (Option.isSome(freeform)) {
+          props.resolve({ approved: sel === "yes", notes: freeform.value })
+          return
+        }
+        props.resolve({ approved: sel === "yes" })
       }}
       onCancel={() => props.resolve({ approved: false })}
     />

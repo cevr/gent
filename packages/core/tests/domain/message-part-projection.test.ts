@@ -36,7 +36,9 @@ describe("message part projection", () => {
       role,
       parts,
       createdAt: dateFromMillis(0),
+      // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
       metadata: undefined,
+      // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
       turnDurationMs: undefined,
     })
 
@@ -57,6 +59,7 @@ describe("message part projection", () => {
       id: toolCallId,
       name: "read",
       isFailure: false,
+      providerExecuted: false,
       result: { ok: true },
     })
     const parts = [textPart, imagePart, toolCallPart, toolResultPart]
@@ -150,6 +153,7 @@ describe("message part projection", () => {
       id: ToolCallId.make("tc-1"),
       name: "search",
       isFailure: true,
+      providerExecuted: false,
       result: { message: "nope" },
     })
 
@@ -193,12 +197,14 @@ describe("message part projection", () => {
       id: ToolCallId.make("tc-1"),
       name: "read",
       isFailure: false,
+      providerExecuted: false,
       result: "first result",
     })
     const secondResult = Prompt.toolResultPart({
       id: ToolCallId.make("tc-1"),
       name: "read",
       isFailure: false,
+      providerExecuted: false,
       result: "second result",
     })
 
@@ -244,12 +250,14 @@ describe("message part projection", () => {
       id: ToolCallId.make("tc-1"),
       name: "read",
       isFailure: false,
+      providerExecuted: false,
       result: "first result",
     })
     const secondResult = Prompt.toolResultPart({
       id: ToolCallId.make("tc-1"),
       name: "read",
       isFailure: false,
+      providerExecuted: false,
       result: "second result",
     })
 
@@ -315,6 +323,7 @@ describe("message part projection", () => {
         id: ToolCallId.make("tc-2"),
         name: "read",
         isFailure: false,
+        providerExecuted: false,
         result: { value: "encoded" },
       }),
     )

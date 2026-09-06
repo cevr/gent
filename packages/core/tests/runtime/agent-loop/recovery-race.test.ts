@@ -28,7 +28,7 @@
 
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Deferred, Effect, Exit, Fiber, Layer, Ref, Schedule, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schedule, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   finishPart,
@@ -54,6 +54,7 @@ import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
+import { ApprovalService } from "../../../src/runtime/approval-service"
 import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
 import {
@@ -68,8 +69,8 @@ const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })
 
 const gatedQueueStorageLayer = <E>(
-  reopenGate: Ref.Ref<Deferred.Deferred<void> | undefined>,
-  reopenEntered: Ref.Ref<Deferred.Deferred<void> | undefined>,
+  reopenGate: Ref.Ref<Option.Option<Deferred.Deferred<void>>>,
+  reopenEntered: Ref.Ref<Option.Option<Deferred.Deferred<void>>>,
   inner: Layer.Layer<AgentLoopQueueStorage, E>,
 ): Layer.Layer<AgentLoopQueueStorage, E> => {
   const built = Layer.effect(
@@ -85,12 +86,8 @@ const gatedQueueStorageLayer = <E>(
             // unblocked.
             const gate = yield* Ref.get(reopenGate)
             const enteredSignal = yield* Ref.get(reopenEntered)
-            if (enteredSignal !== undefined) {
-              yield* Deferred.succeed(enteredSignal, undefined)
-            }
-            if (gate !== undefined) {
-              yield* Deferred.await(gate)
-            }
+            if (Option.isSome(enteredSignal)) yield* Deferred.succeed(enteredSignal.value, void 0)
+            if (Option.isSome(gate)) yield* Deferred.await(gate.value)
             return yield* real.getQueueState(sessionId, branchId)
           }),
         putQueueState: real.putQueueState,
@@ -147,6 +144,7 @@ describe("agent-loop recovery race", () => {
           ConfigService.Test(),
           EventStore.Memory,
           ToolRunner.Test(),
+          ApprovalService.Test(),
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
@@ -206,6 +204,7 @@ describe("agent-loop recovery race", () => {
             if (completed._tag === "Some") {
               expect(Exit.isFailure(completed.value)).toBe(true)
             }
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
         )
       }),
@@ -223,8 +222,8 @@ describe("agent-loop recovery race", () => {
         // pause Op1 mid-reopen. `reopenEntered` lets us await the moment
         // Op1 has actually entered `getQueueState` (so `closed=false` is
         // already published).
-        const reopenGate = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined)
-        const reopenEntered = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined)
+        const reopenGate = yield* Ref.make<Option.Option<Deferred.Deferred<void>>>(Option.none())
+        const reopenEntered = yield* Ref.make<Option.Option<Deferred.Deferred<void>>>(Option.none())
 
         const providerLayer = LanguageModelLayers.testStream(() =>
           Effect.succeed(
@@ -251,6 +250,7 @@ describe("agent-loop recovery race", () => {
           ConfigService.Test(),
           EventStore.Memory,
           ToolRunner.Test(),
+          ApprovalService.Test(),
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
@@ -308,8 +308,8 @@ describe("agent-loop recovery race", () => {
             // Install the reopen gate before the next ensureStarted.
             const gate = yield* Deferred.make<void>()
             const entered = yield* Deferred.make<void>()
-            yield* Ref.set(reopenGate, gate)
-            yield* Ref.set(reopenEntered, entered)
+            yield* Ref.set(reopenGate, Option.some(gate))
+            yield* Ref.set(reopenEntered, Option.some(entered))
 
             // Op1 enters the actor mailbox, reaches `ensureStarted`,
             // sets `closed=false`, then BLOCKS inside getQueueState.
@@ -336,8 +336,8 @@ describe("agent-loop recovery race", () => {
             // semaphore it would race past the now-unset `closed=false`
             // and try to use the partially-rebuilt handle. Either way,
             // the gate must not capture Op2's storage calls.
-            yield* Ref.set(reopenGate, undefined)
-            yield* Ref.set(reopenEntered, undefined)
+            yield* Ref.set(reopenGate, Option.none())
+            yield* Ref.set(reopenEntered, Option.none())
 
             // Op2 fires concurrently. Track its completion via a Deferred
             // so we can assert it has NOT completed while Op1 is gated.
@@ -351,6 +351,7 @@ describe("agent-loop recovery race", () => {
                   commandId: ActorCommandId.make(yield* platform.randomId),
                 }),
               )
+              // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
               .pipe(Effect.andThen(Deferred.succeed(op2Done, undefined)), Effect.forkChild)
 
             // Sanity: Op2 should not have completed yet. With the wide
@@ -369,10 +370,12 @@ describe("agent-loop recovery race", () => {
             expect(op2DoneEarly).toBe(false)
 
             // Release Op1's gate. Both ops should now drain.
+            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
             yield* Deferred.succeed(gate, undefined)
             yield* Fiber.join(op1)
             yield* Fiber.join(op2)
             yield* Deferred.await(op2Done)
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
         )
       }),

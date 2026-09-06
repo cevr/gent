@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Effect, Fiber, type Layer, Ref, Stream } from "effect"
+import { Effect, Fiber, Ref, Schema, Stream } from "effect"
 import { toolCallStep, textStep } from "@gent/core-internal/debug/provider"
 import {
   LanguageModelLayers,
@@ -16,7 +16,7 @@ import { ensureStorageParents } from "@gent/core-internal/test-utils"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset.js"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
-import { EventStore, type EventEnvelope } from "@gent/core-internal/domain/event"
+import { EventStore, ToolCallSucceeded, type EventEnvelope } from "@gent/core-internal/domain/event"
 import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import { AgentName, AgentRunResult } from "@gent/core-internal/domain/agent"
 import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
@@ -25,6 +25,7 @@ import { AutoRead, AutoWrite } from "../../../extensions/src/auto/controller.js"
 const sessionId = SessionId.make("auto-e2e-session")
 const branchId = BranchId.make("auto-e2e-branch")
 const FIXTURE_DATE = dateFromMillis(0)
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 const makeMessage = (text: string) =>
   Message.cases.regular.make({
@@ -39,7 +40,14 @@ const makeMessage = (text: string) =>
 const runAgentMessage = (message: Message) =>
   Effect.gen(function* () {
     const sessionRuntime = yield* SessionRuntime
-    const text = message.parts.map((part) => (part.type === "text" ? part.text : "")).join("")
+    const text = message.parts
+      .map((part) => {
+        if (part.type === "text") {
+          return part.text
+        }
+        return ""
+      })
+      .join("")
     yield* sessionRuntime.runPrompt({
       sessionId: message.sessionId,
       branchId: message.branchId,
@@ -50,18 +58,21 @@ const runAgentMessage = (message: Message) =>
 
 /** Mock subagent runner that returns valid review JSON for review tool compatibility */
 const reviewCompatibleRunner = {
-  run: (params: { prompt: string }) =>
-    Effect.succeed(
+  run: (params: { prompt: string }) => {
+    let text = "No issues found."
+    if (params.prompt.includes("Synthesize")) {
+      text = encodeJson([
+        { file: "test.ts", line: 1, severity: "low", type: "suggestion", text: "ok" },
+      ])
+    }
+    return Effect.succeed(
       AgentRunResult.cases.success.make({
-        text: params.prompt.includes("Synthesize")
-          ? JSON.stringify([
-              { file: "test.ts", line: 1, severity: "low", type: "suggestion", text: "ok" },
-            ])
-          : "No issues found.",
+        text,
         sessionId: SessionId.make("test-subagent-session"),
         agentName: AgentName.make("cowork"),
       }),
-    ),
+    )
+  },
 }
 
 const runE2ETest = (
@@ -83,6 +94,7 @@ const runE2ETest = (
       yield* ensureStorageParents({ sessionId, branchId })
       yield* auto.start({ goal: "Fix the bug" })
       yield* test(controls)
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
     }).pipe(Effect.provide(e2eLayer))
   })
 
@@ -90,12 +102,8 @@ const waitForAutoActive = (active: boolean, timeoutMs = 3_000) =>
   Effect.gen(function* () {
     const auto = yield* AutoRead
     return yield* waitFor(
-      auto
-        .snapshot()
-        .pipe(
-          Effect.catchEager(() => Effect.succeed(undefined as { active: boolean } | undefined)),
-        ),
-      (snap) => (snap as { active: boolean } | undefined)?.active === active,
+      auto.snapshot,
+      (snap) => snap.active === active,
       timeoutMs,
       `auto active = ${String(active)}`,
     )
@@ -119,10 +127,10 @@ describe("Auto extension E2E", () => {
 
           yield* runAgentMessage(makeMessage("begin"))
 
-          const model = yield* auto.snapshot()
+          const model = yield* auto.snapshot
           expect(model.active).toBe(false)
           expect(yield* controls.callCount).toBe(3)
-          yield* controls.assertDone()
+          yield* controls.assertDone
         }),
     ),
   )
@@ -163,10 +171,10 @@ describe("Auto extension E2E", () => {
 
           yield* runAgentMessage(makeMessage("begin"))
 
-          const model = yield* auto.snapshot()
+          const model = yield* auto.snapshot
           expect(model.active).toBe(false)
           expect(yield* controls.callCount).toBe(7)
-          yield* controls.assertDone()
+          yield* controls.assertDone
         }),
     ),
   )
@@ -199,17 +207,17 @@ describe("Auto extension E2E", () => {
           yield* Effect.forkChild(
             eventStore.subscribe({ sessionId, branchId }).pipe(
               Stream.runForEach((env) => Ref.update(envelopesRef, (current) => [...current, env])),
-              Effect.catchCause(() => Effect.void),
+              Effect.ignoreCause,
             ),
           )
 
           yield* runAgentMessage(makeMessage("begin"))
 
           const envelopes = yield* Ref.get(envelopesRef)
-          const toolSucceeded = envelopes.filter((e) => e.event._tag === "ToolCallSucceeded")
+          const toolSucceeded = envelopes.map((e) => e.event).filter(Schema.is(ToolCallSucceeded))
 
           // Should have auto_checkpoint (x2) and review (x1)
-          const toolNames = toolSucceeded.map((e) => (e.event as { toolName: string }).toolName)
+          const toolNames = toolSucceeded.map((e) => e.toolName)
           expect(toolNames.filter((n) => n === "auto_checkpoint").length).toBe(2)
           expect(toolNames.filter((n) => n === "review").length).toBe(1)
 
@@ -256,7 +264,8 @@ describe("Auto extension E2E", () => {
         }
 
         const model = yield* waitForAutoActive(false)
-        expect(model?.active).toBe(false)
+        expect(model.active).toBe(false)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(e2eLayer))
     }),
   )
@@ -291,7 +300,7 @@ describe("Auto extension E2E", () => {
         yield* controls.waitForCall(1)
 
         // At this point: turn 1 completed, auto is in Working state, turn 2 is blocked
-        const midModel = yield* autoRead.snapshot()
+        const midModel = yield* autoRead.snapshot
         expect(midModel.active).toBe(true)
         expect(midModel.phase).toBe("working")
 
@@ -302,15 +311,16 @@ describe("Auto extension E2E", () => {
         yield* Fiber.join(runFiber)
 
         // Final state: auto is inactive
-        const finalModel = yield* autoRead.snapshot()
+        const finalModel = yield* autoRead.snapshot
         expect(finalModel.active).toBe(false)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(e2eLayer))
     }),
   )
 
   it.live("handoff dedup: handoff extension skips when auto is active", () =>
     Effect.gen(function* () {
-      const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
+      const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService
 
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
         textStep("Starting auto."),
@@ -331,7 +341,7 @@ describe("Auto extension E2E", () => {
       const e2eLayer = createE2ELayer({
         ...e2ePreset,
         providerLayer,
-        extraLayers: [handoffLayer as Layer.Layer<never>],
+        extraLayers: [handoffLayer],
       })
 
       yield* Effect.gen(function* () {
@@ -346,7 +356,7 @@ describe("Auto extension E2E", () => {
         yield* Effect.forkChild(
           eventStore.subscribe({ sessionId, branchId }).pipe(
             Stream.runForEach((env) => Ref.update(envelopesRef, (curr) => [...curr, env])),
-            Effect.catchCause(() => Effect.void),
+            Effect.ignoreCause,
           ),
         )
 
@@ -356,17 +366,16 @@ describe("Auto extension E2E", () => {
 
         // Also verify no HandoffPresented events were published
         const envelopes = yield* Ref.get(envelopesRef)
-        const handoffEvents = envelopes.filter(
-          (e) => (e.event._tag as string) === "HandoffPresented",
-        )
+        const handoffEvents = envelopes.filter((e) => String(e.event._tag) === "HandoffPresented")
         expect(handoffEvents.length).toBe(0)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(e2eLayer))
     }),
   )
 
   it.live("auto handoff emits QueueFollowUp, not HandoffPresented", () =>
     Effect.gen(function* () {
-      const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
+      const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService
 
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         textStep("Working on it."),
@@ -380,7 +389,7 @@ describe("Auto extension E2E", () => {
       const e2eLayer = createE2ELayer({
         ...e2ePreset,
         providerLayer,
-        extraLayers: [handoffLayer as Layer.Layer<never>],
+        extraLayers: [handoffLayer],
       })
 
       yield* Effect.gen(function* () {
@@ -394,14 +403,15 @@ describe("Auto extension E2E", () => {
 
         expect(yield* Ref.get(presentCalled)).toBe(false)
         expect(yield* controls.callCount).toBe(3)
-        yield* controls.assertDone()
+        yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(e2eLayer))
     }),
   )
 
   it.live("threshold: auto active queues follow-up instead of HandoffPresented", () =>
     Effect.gen(function* () {
-      const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
+      const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService
 
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         textStep("x".repeat(2000)), // ~500 tokens — context over 85%
@@ -416,7 +426,7 @@ describe("Auto extension E2E", () => {
       const e2eLayer = createE2ELayer({
         ...e2ePreset,
         providerLayer,
-        extraLayers: [handoffLayer as Layer.Layer<never>],
+        extraLayers: [handoffLayer],
       })
 
       yield* Effect.gen(function* () {
@@ -431,7 +441,8 @@ describe("Auto extension E2E", () => {
         // Auto's interceptor queued a follow-up, NOT a direct HandoffPresented
         expect(yield* Ref.get(presentCalled)).toBe(false)
         expect(yield* controls.callCount).toBe(3)
-        yield* controls.assertDone()
+        yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(e2eLayer))
     }).pipe(provideTinyContextWindow),
   )

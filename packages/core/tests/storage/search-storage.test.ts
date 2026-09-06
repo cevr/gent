@@ -24,7 +24,7 @@ const WORKSPACE_B = "b".repeat(64)
 // Fixture helpers
 
 let counter = 0
-const nextId = () => `test-${++counter}` as string
+const nextId = () => `test-${++counter}`
 
 const createFixture = (opts?: { sessionName?: string }) =>
   Effect.gen(function* () {

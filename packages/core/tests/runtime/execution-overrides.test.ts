@@ -8,7 +8,7 @@
  */
 
 import { describe, test, expect } from "bun:test"
-import { Schema } from "effect"
+import { Predicate, Schema } from "effect"
 import { ToolCallId } from "@gent/core-internal/domain/ids"
 import { ModelId } from "@gent/core-internal/domain/model"
 import { RunSpecSchema } from "@gent/core-internal/domain/agent"
@@ -20,36 +20,36 @@ describe("run spec CLI serialization", () => {
 
   test("round-trips through JSON encode/decode", () => {
     const runSpec = {
-      persistence: "ephemeral" as const,
+      persistence: "ephemeral",
       overrides: {
         modelId: ModelId.make("anthropic/claude-sonnet-4-6"),
         allowedTools: ["grep", "glob", "read"],
         deniedTools: ["bash"],
-        reasoningEffort: "high" as const,
+        reasoningEffort: "high",
         systemPromptAddendum: "Be concise.",
       },
       tags: ["subprocess-test"],
       parentToolCallId: ToolCallId.make("tc-abc-123"),
-    }
+    } satisfies Schema.Schema.Type<typeof RunSpecSchema>
 
     const json = Schema.encodeSync(codec)(runSpec)
-    expect(typeof json).toBe("string")
+    expect(Predicate.isString(json)).toBe(true)
 
-    const decoded = Schema.decodeUnknownSync(codec)(json)
+    const decoded = Schema.decodeSync(codec)(json)
     expect(decoded).toEqual(runSpec)
   })
 
   test("round-trips with minimal runSpec", () => {
     const runSpec = { parentToolCallId: ToolCallId.make("tc-only") }
     const json = Schema.encodeSync(codec)(runSpec)
-    const decoded = Schema.decodeUnknownSync(codec)(json)
-    expect(decoded.parentToolCallId as string | undefined).toBe("tc-only")
+    const decoded = Schema.decodeSync(codec)(json)
+    expect(decoded.parentToolCallId).toBe(ToolCallId.make("tc-only"))
   })
 
   test("round-trips empty runSpec", () => {
     const runSpec = {}
     const json = Schema.encodeSync(codec)(runSpec)
-    const decoded = Schema.decodeUnknownSync(codec)(json)
+    const decoded = Schema.decodeSync(codec)(json)
     expect(decoded).toEqual({})
   })
 })

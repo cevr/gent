@@ -2,13 +2,19 @@ import { Show, createMemo } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import type { ToolRendererProps } from "./types"
+import { Option, Schema } from "effect"
+import type { ToolInput } from "../../utils/parse-tool-output"
 
-function getSkillNames(input: unknown): string[] {
-  if (input === null || typeof input !== "object" || !("names" in input)) return []
-  const names = (input as { names: unknown }).names
+const decodeSkillInput = Schema.decodeUnknownOption(
+  Schema.Struct({ names: Schema.Union([Schema.Literal("all"), Schema.Array(Schema.String)]) }),
+)
+
+function getSkillNames(input: ToolInput): string[] {
+  const decoded = decodeSkillInput(input)
+  if (Option.isNone(decoded)) return []
+  const names = decoded.value.names
   if (names === "all") return ["all"]
-  if (Array.isArray(names)) return names.filter((n): n is string => typeof n === "string")
-  return []
+  return [...names]
 }
 
 export function SkillsToolRenderer(props: ToolRendererProps) {
@@ -30,10 +36,14 @@ export function SkillsToolRenderer(props: ToolRendererProps) {
               const matches = text().match(/^## /gm)
               return matches?.length ?? 0
             })
+            const countLabel = () => {
+              if (skillCount() === 1) return " skill loaded"
+              return " skills loaded"
+            }
             return (
               <text style={{ fg: theme.textMuted }}>
                 <span style={{ fg: theme.success, bold: true }}>{skillCount()}</span>
-                {skillCount() === 1 ? " skill loaded" : " skills loaded"}
+                {countLabel()}
               </text>
             )
           }}

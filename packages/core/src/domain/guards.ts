@@ -1,16 +1,16 @@
+import { Schema } from "effect"
 /** Shared type guards for narrowing unknown/JSON boundary values. */
 
+const JsonRecord = Schema.Record(Schema.String, Schema.Unknown)
+
 /** Narrow an unknown value to a string-keyed record. */
-export const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
+export const isRecord = Schema.is(JsonRecord)
 
 /** Narrow an unknown value to an object with a `.message` string property. */
-export const hasMessage = (value: unknown): value is { message: string } =>
-  isRecord(value) && typeof value["message"] === "string"
+export const hasMessage = Schema.is(Schema.Struct({ message: Schema.String }))
 
-/** Type-safe JSON.parse that returns `unknown` (not `any`). */
-export const parseJsonUnknown = (raw: string): unknown => JSON.parse(raw) as unknown
+/** Type-safe JSON decoding that returns `unknown`. */
+export const parseJsonUnknown = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
 
 /** Narrow an unknown value to a readonly array of records. */
-export const isRecordArray = (value: unknown): value is ReadonlyArray<Record<string, unknown>> =>
-  Array.isArray(value) && value.every(isRecord)
+export const isRecordArray = Schema.is(Schema.Array(JsonRecord))

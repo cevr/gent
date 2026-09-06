@@ -1,9 +1,14 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Predicate, Effect, Layer, Option } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { SessionId, ExtensionId } from "@gent/core-internal/domain/ids"
-import { Auth, AuthError, AuthMethod } from "@gent/core-internal/domain/auth"
-import type { AuthApi, AuthInfo, AuthService } from "@gent/core-internal/domain/auth"
+import {
+  Auth,
+  AuthError,
+  AuthMethod,
+  type AuthInfo,
+  type AuthService,
+} from "@gent/core-internal/domain/auth"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core-internal/domain/driver"
 import { ProviderAuth } from "@gent/core-internal/providers/provider-auth"
@@ -20,23 +25,24 @@ const stubModel = AiModel.make(
 const oauthProvider: ModelDriverContribution = {
   id: "openai",
   name: "OpenAI",
-  resolveModel: () => stubModel,
+  resolveModel: () => Effect.succeed(stubModel),
   auth: {
     methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
     authorize: (ctx) =>
       Effect.sync(() => {
         pendingCallbacks.set(ctx.authorizationId, (code) => code ?? "")
-        return {
+        return Option.some({
           url: "http://example.com/auth",
-          method: "code" as const,
+          method: "code",
           instructions: "Paste code",
-        }
+        })
       }),
     callback: (ctx) =>
       Effect.gen(function* () {
         const cb = pendingCallbacks.get(ctx.authorizationId)
         pendingCallbacks.delete(ctx.authorizationId)
-        const apiKey = cb !== undefined ? cb(ctx.code) : ""
+        let apiKey = ""
+        if (!Predicate.isUndefined(cb)) apiKey = cb(ctx.code)
         yield* ctx.persist({ type: "api", key: apiKey })
       }),
   },
@@ -44,7 +50,7 @@ const oauthProvider: ModelDriverContribution = {
 const noopProvider: ModelDriverContribution = {
   id: "anthropic",
   name: "Anthropic",
-  resolveModel: () => stubModel,
+  resolveModel: () => Effect.succeed(stubModel),
   auth: {
     methods: [AuthMethod.make({ type: "api", label: "API" })],
   },
@@ -52,16 +58,16 @@ const noopProvider: ModelDriverContribution = {
 const persistDuringAuthorizeProvider: ModelDriverContribution = {
   id: "persisting",
   name: "Persisting",
-  resolveModel: () => stubModel,
+  resolveModel: () => Effect.succeed(stubModel),
   auth: {
     methods: [AuthMethod.make({ type: "oauth", label: "Done" })],
     authorize: (ctx) =>
       Effect.gen(function* () {
         yield* ctx.persist({ type: "api", key: "sk-authorize" })
-        return {
+        return Option.some({
           url: "",
-          method: "done" as const,
-        }
+          method: "done",
+        })
       }),
   },
 }
@@ -78,11 +84,10 @@ const testDriverRegistry = DriverRegistry.fromResolved({
   modelDrivers: testResolved.modelDrivers,
   externalDrivers: testResolved.externalDrivers,
 })
-const missingAuthInfo: AuthInfo | undefined = undefined
 const failingAuthStoreLayer = Layer.succeed(
   Auth,
   Auth.of({
-    get: () => Effect.succeed(missingAuthInfo),
+    get: () => Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>())),
     set: () => Effect.fail(new AuthError({ message: "write failed" })),
     remove: () => Effect.void,
   } satisfies AuthService),
@@ -100,20 +105,25 @@ describe("ProviderAuth", () => {
         const auth = yield* ProviderAuth
         const store = yield* Auth
         const authResult = yield* auth.authorize(SessionId.make("s1"), "openai", 0)
-        if (authResult === undefined) return { ok: false as const }
+        if (Option.isNone(authResult)) return { ok: false }
         yield* auth.callback(
           SessionId.make("s1"),
           "openai",
           0,
-          authResult.authorizationId,
+          authResult.value.authorizationId,
           "sk-test-key",
         )
         const stored = yield* store.get("openai")
-        return { ok: true as const, stored }
+        return { ok: true, stored }
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
-      if (!result.ok) throw new Error("auth setup failed")
-      expect(result.stored?.type).toBe("api")
-      expect((result.stored as AuthApi | undefined)?.key).toBe("sk-test-key")
+      if (!result.ok) return yield* Effect.die(new Error("auth setup failed"))
+      const stored = Option.fromUndefinedOr(result.stored)
+      expect(Option.isSome(stored)).toBe(true)
+      if (Option.isNone(stored)) return
+      expect(stored.value.type).toBe("api")
+      if (stored.value.type !== "api") return
+      expect(stored.value.key).toBe("sk-test-key")
     }),
   )
   it.live("listMethods returns methods from extension providers", () =>
@@ -125,7 +135,8 @@ describe("ProviderAuth", () => {
       )
       const methods = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
-        return yield* auth.listMethods()
+        return yield* auth.listMethods
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(Object.keys(methods)).toContain("openai")
       expect(Object.keys(methods)).toContain("anthropic")
@@ -147,6 +158,7 @@ describe("ProviderAuth", () => {
       const exit = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
         return yield* Effect.exit(auth.authorize(SessionId.make("s1"), "persisting", 0))
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -169,16 +181,17 @@ describe("ProviderAuth", () => {
       const exit = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
         const authResult = yield* auth.authorize(SessionId.make("s1"), "openai", 0)
-        if (authResult === undefined) return yield* Effect.die("auth setup failed")
+        if (Option.isNone(authResult)) return yield* Effect.die("auth setup failed")
         return yield* Effect.exit(
           auth.callback(
             SessionId.make("s1"),
             "openai",
             0,
-            authResult.authorizationId,
+            authResult.value.authorizationId,
             "sk-test-key",
           ),
         )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {

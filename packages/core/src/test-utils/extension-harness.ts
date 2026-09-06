@@ -1,6 +1,7 @@
 /** Test helpers for extension tool execution. */
 
 // @effect-diagnostics nodeBuiltinImport:off — test stub needs sync path ops; ExtensionFilesService captures Path.Path at runtime construction
+// oxlint-disable-next-line effect/noNodeBuiltinImport -- The synchronous test host implements the platform path adapter.
 import * as nodePath from "node:path"
 import { Effect, FileSystem, Layer, Option } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -44,6 +45,7 @@ import { ModelResolver } from "../providers/model-resolver.js"
 import { LanguageModelLayers } from "./language-model.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { testExtensionHostContext } from "./extension-host-context.js"
+import { eraseResourceLayer } from "../runtime/extensions/extension-effect-membrane.js"
 
 export interface ToolTestLayerConfig {
   /** Agents to register */
@@ -65,9 +67,11 @@ export interface ToolTestLayerConfig {
  * services (FileSystem, Path) should compose with BunServices.layer.
  */
 export const createToolTestLayer = (config: ToolTestLayerConfig) => {
-  const builtinContributions: ExtensionContributions = {
+  let builtinContributions: ExtensionContributions = {
     agents: config.agents,
-    ...((config.tools ?? []).length > 0 ? { tools: config.tools } : {}),
+  }
+  if ((config.tools ?? []).length > 0) {
+    builtinContributions = { ...builtinContributions, tools: config.tools }
   }
 
   const defaultRunner: AgentRunner = {
@@ -97,7 +101,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
       const allExtensions: LoadedExtension[] = [
         {
           manifest: { id: ExtensionId.make("test-agents") },
-          scope: "builtin" as const,
+          scope: "builtin",
           sourcePath: "test",
           contributions: builtinContributions,
         },
@@ -108,6 +112,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         extensions: allExtensions,
         failedExtensions: setupResult.failed,
         home: "/tmp",
+        // oxlint-disable-next-line effect/noNullish -- The setup context requires this absent command field.
         command: undefined,
       })
 
@@ -155,25 +160,27 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
           (ext.contributions.resources ?? [])
             .filter((r) => r.scope === "process")
             .map((r) => {
-              // Resource layers carry their own R/E; harness boundary.
+              // Resource layers carry their own R/E; the shared membrane closes
+              // those channels at this test harness boundary.
               // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-              const merged = Layer.provideMerge(r.layer as Layer.Layer<any>, baseLayerAny) // eslint-disable-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
+              const merged = Layer.provideMerge(eraseResourceLayer(r.layer), baseLayerAny)
               // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
+              // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The harness closes resource requirements against the test service graph.
               return merged as Layer.Layer<never, never, object>
             }),
       )
 
-      let extensionLayer: Layer.Layer<never, never, object> | undefined
+      let extensionLayer = baseLayerAny
       for (const layer of contributedLayers) {
-        extensionLayer = extensionLayer === undefined ? layer : Layer.merge(extensionLayer, layer)
+        extensionLayer = Layer.merge(extensionLayer, layer)
       }
-
-      return extensionLayer === undefined ? baseLayerAny : Layer.merge(baseLayerAny, extensionLayer)
+      return extensionLayer
     }),
   ).pipe(Layer.provide(BunPlatformLive))
 }
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
+const dieEffect = (label: string) => Effect.die(`${label} not wired in test`)
 
 export type TestToolContext = ExtensionHostContext &
   ExtensionContextService & { readonly toolCallId: ToolCallId }
@@ -194,6 +201,19 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
     queueFollowUp: dieStub("session.queueFollowUp"),
     listBranches: dieStub("session.listBranches"),
   }
+  const Agent: ExtensionContextService["Agent"] = {
+    listAgents: dieEffect("agent.listAgents"),
+    run: dieStub("agent.run"),
+  }
+  const Session: ExtensionContextService["Session"] = {
+    listMessages: dieStub("session.listMessages"),
+    getSession: dieStub("session.getSession"),
+    getDetail: dieStub("session.getDetail"),
+    renameCurrent: dieStub("session.renameCurrent"),
+    search: dieStub("session.search"),
+    queueFollowUp: dieStub("session.queueFollowUp"),
+    listBranches: dieEffect("session.listBranches"),
+  }
   const interaction = {
     approve: dieStub("interaction.approve"),
     present: dieStub("interaction.present"),
@@ -201,6 +221,7 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
     review: dieStub("interaction.review"),
   }
   const process: ExtensionContextService["Process"] = {
+    randomId: host.randomId,
     run: (command, args, options) =>
       host.runProcess(command, args, options).pipe(
         Effect.mapError(
@@ -230,23 +251,27 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
     commandCandidates: host.commandCandidates,
     parentEnv: host.parentEnv,
   }
-  const filesError = (operation: string) => (cause: unknown) =>
-    new ExtensionServiceError({
+  const filesError = (operation: string) => (cause: unknown) => {
+    let message = String(cause)
+    if (cause instanceof Error) message = cause.message
+    return new ExtensionServiceError({
       service: "ExtensionFiles",
       operation,
-      message: cause instanceof Error ? cause.message : String(cause),
+      message,
       cause,
     })
+  }
   const filesFs = <A, E>(
     operation: string,
     op: (fs: FileSystem.FileSystem) => Effect.Effect<A, E>,
   ) =>
     Effect.serviceOption(FileSystem.FileSystem).pipe(
-      Effect.flatMap((opt) =>
-        Option.isSome(opt)
-          ? op(opt.value).pipe(Effect.mapError(filesError(operation)))
-          : Effect.fail(filesError(operation)(new Error("FileSystem service unavailable in test"))),
-      ),
+      Effect.flatMap((opt) => {
+        if (Option.isSome(opt)) {
+          return op(opt.value).pipe(Effect.mapError(filesError(operation)))
+        }
+        return Effect.fail(filesError(operation)("FileSystem service unavailable in test"))
+      }),
     )
   const files: ExtensionContextService["Files"] = {
     listFiles: () =>
@@ -288,8 +313,8 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
     registerTool: () => Effect.succeed(Effect.void),
     registerRequest: () => Effect.succeed(Effect.void),
   }
-  const resolvedAgent = overrides?.Agent ?? agent
-  const resolvedSession = overrides?.Session ?? session
+  const resolvedAgent = overrides?.Agent ?? Agent
+  const resolvedSession = overrides?.Session ?? Session
   const resolvedInteraction = overrides?.Interaction ?? interaction
   const resolvedProcess = overrides?.Process ?? process
   const resolvedFiles = overrides?.Files ?? files

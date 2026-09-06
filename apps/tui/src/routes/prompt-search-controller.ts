@@ -1,4 +1,5 @@
 import type { ScopedKeyboardEvent } from "../keyboard/context"
+import { Option } from "effect"
 import {
   getPromptSearchItems,
   PromptSearchEvent,
@@ -37,8 +38,8 @@ export function createPromptSearchController(params: {
         event,
         getPromptSearchItems(params.state(), params.entries()).length > 0,
       )
-      if (promptEvent === undefined) return false
-      onEvent(promptEvent)
+      if (Option.isNone(promptEvent)) return false
+      onEvent(promptEvent.value)
       return true
     },
   }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "effect-bun-test"
 import type { Scope } from "effect"
-import { Deferred, Effect, Ref, Stream } from "effect"
+import { Deferred, Effect, Option, Ref, Stream } from "effect"
 import {
   directSignalCase,
   toTestFailure,
@@ -57,7 +57,7 @@ describe("live event contracts", () => {
                 client.session.events({
                   sessionId: created.sessionId,
                   branchId: created.branchId,
-                  after: snapshot.lastEventId ?? undefined,
+                  after: Option.getOrUndefined(Option.fromNullishOr(snapshot.lastEventId)),
                 }),
               ).pipe(Effect.mapError(toTestFailure))
 
@@ -116,7 +116,7 @@ describe("live event contracts", () => {
               client.session.events({
                 sessionId: created.sessionId,
                 branchId: created.branchId,
-                after: snapshot.lastEventId ?? undefined,
+                after: Option.getOrUndefined(Option.fromNullishOr(snapshot.lastEventId)),
               }),
             ).pipe(Effect.mapError(toTestFailure))
 
@@ -130,7 +130,7 @@ describe("live event contracts", () => {
 
             // Wait for the stream to start, then release the chunks
             yield* controls.waitForStreamStart
-            yield* controls.emitAll()
+            yield* controls.emitAll
 
             const received = yield* waitFor(
               Ref.get(liveEvents),

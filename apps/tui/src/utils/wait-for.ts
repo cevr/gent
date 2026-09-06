@@ -1,6 +1,6 @@
-import { Clock, Effect, Schema } from "effect"
+import { Clock, Effect, Option, Schema } from "effect"
 
-export class WaitForTimeout extends Schema.TaggedErrorClass<WaitForTimeout>()("WaitForTimeout", {
+export class WaitForTimeout extends Schema.TaggedError<WaitForTimeout>()("WaitForTimeout", {
   label: Schema.String,
 }) {
   override get message(): string {
@@ -15,7 +15,7 @@ export class WaitForTimeout extends Schema.TaggedErrorClass<WaitForTimeout>()("W
  * yet; frame N+1 will) where there is no event signal to subscribe to.
  */
 export const waitFor = <A>(
-  probe: () => A | undefined,
+  probe: () => Option.Option<A>,
   options: { label: string; intervalMs?: number; timeoutMs?: number },
 ): Effect.Effect<A, WaitForTimeout> =>
   Effect.gen(function* () {
@@ -23,7 +23,7 @@ export const waitFor = <A>(
     const deadline = (yield* Clock.currentTimeMillis) + (options.timeoutMs ?? 500)
     const loop: Effect.Effect<A, WaitForTimeout> = Effect.gen(function* () {
       const value = probe()
-      if (value !== undefined) return value
+      if (Option.isSome(value)) return value.value
       if ((yield* Clock.currentTimeMillis) >= deadline) {
         return yield* new WaitForTimeout({ label: options.label })
       }

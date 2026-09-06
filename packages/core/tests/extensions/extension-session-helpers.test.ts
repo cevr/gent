@@ -33,19 +33,23 @@ const textMessage = (id: string, content: string): Message =>
     branchId: BRANCH_ID,
     role: "user",
     parts: [Prompt.textPart({ text: content })],
+    // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
     metadata: undefined,
     createdAt: FIXTURE_DATE,
   })
 
 const contextLayerFromMessages = (messages: ReadonlyArray<Message>) => {
   const base = testToolContext()
-  return Layer.succeed(ExtensionContext, {
-    ...base,
-    Session: {
-      ...base.Session,
-      listMessages: () => Effect.succeed(messages),
-    },
-  })
+  return Layer.succeed(
+    ExtensionContext,
+    ExtensionContext.of({
+      ...base,
+      Session: {
+        ...base.Session,
+        listMessages: () => Effect.succeed(messages),
+      },
+    }),
+  )
 }
 
 describe("estimateContextPercent helper", () => {
@@ -58,6 +62,7 @@ describe("estimateContextPercent helper", () => {
       const expected = pureEstimateContextPercent(messages, DEFAULT_MODEL_ID)
       expect(expected).toBeGreaterThan(0)
       const percent = yield* estimateContextPercent({ modelId: DEFAULT_MODEL_ID }).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(contextLayerFromMessages(messages)),
       )
       expect(percent).toBe(expected)
@@ -68,8 +73,10 @@ describe("estimateContextPercent helper", () => {
     Effect.gen(function* () {
       const messages = [textMessage("m1", "x".repeat(10_000))]
       const layer = contextLayerFromMessages(messages)
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const withDefault = yield* estimateContextPercent().pipe(Effect.provide(layer))
       const explicit = yield* estimateContextPercent({ modelId: DEFAULT_MODEL_ID }).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(layer),
       )
       expect(withDefault).toBe(explicit)
@@ -84,10 +91,14 @@ describe("estimateContextPercent helper", () => {
         operation: "listMessages",
         message: "boom",
       })
-      const ctxLayer = Layer.succeed(ExtensionContext, {
-        ...base,
-        Session: { ...base.Session, listMessages: () => Effect.fail(failure) },
-      })
+      const ctxLayer = Layer.succeed(
+        ExtensionContext,
+        ExtensionContext.of({
+          ...base,
+          Session: { ...base.Session, listMessages: () => Effect.fail(failure) },
+        }),
+      )
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const exit = yield* Effect.exit(estimateContextPercent().pipe(Effect.provide(ctxLayer)))
       expect(exit._tag).toBe("Failure")
       if (exit._tag !== "Failure") return

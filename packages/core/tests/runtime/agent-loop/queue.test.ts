@@ -1,7 +1,7 @@
 import { test } from "bun:test"
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect"
+import { Predicate, Deferred, Effect, Fiber, Layer, Option, Ref, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   finishPart,
@@ -22,6 +22,7 @@ import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
+import { ApprovalService } from "../../../src/runtime/approval-service"
 import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import {
   makeAgentLoopService,
@@ -85,7 +86,7 @@ describe("queue drain regression", () => {
             const idx = yield* Ref.getAndUpdate(streamCallRef, (n) => n + 1)
             yield* Ref.update(streamOrder, (arr) => [...arr, idx])
             const gate = gates[idx]
-            if (gate !== undefined) {
+            if (!Predicate.isUndefined(gate)) {
               yield* Deferred.await(gate)
             }
             return Stream.fromIterable([
@@ -103,6 +104,7 @@ describe("queue drain regression", () => {
           ConfigService.Test(),
           EventStore.Memory,
           ToolRunner.Test(),
+          ApprovalService.Test(),
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
@@ -142,7 +144,10 @@ describe("queue drain regression", () => {
               () =>
                 Effect.gen(function* () {
                   const count = yield* Ref.get(streamCallRef)
-                  return count >= 1 ? count : undefined
+                  if (count >= 1) {
+                    return Option.some(count)
+                  }
+                  return Option.none()
                 }),
               "model stream call #0 to start",
               200,
@@ -177,6 +182,7 @@ describe("queue drain regression", () => {
             expect(queue.inFlight).toBeUndefined()
             expect(queue.followUp).toEqual([])
             expect(queue.steering).toEqual([])
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer)),
         )
       }),
@@ -215,6 +221,7 @@ describe("queue drain regression", () => {
                 }
                 yield* Ref.set(storedQueueRef, queue)
                 if (queuedFollowUps === 2) {
+                  // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
                   yield* Deferred.succeed(secondFollowUpStored, undefined).pipe(
                     Effect.catchEager(() => Effect.void),
                   )
@@ -234,6 +241,7 @@ describe("queue drain regression", () => {
             ConfigService.Test(),
             EventStore.Memory,
             ToolRunner.Test(),
+            ApprovalService.Test(),
             BunServices.layer,
             ModelRegistry.Test(),
             GentPlatform.Test(),
@@ -273,6 +281,7 @@ describe("queue drain regression", () => {
             yield* Fiber.join(firstQueued)
             yield* Fiber.join(secondQueued)
             expect((yield* agentLoop.getQueue({ sessionId, branchId })).followUp).toHaveLength(2)
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.timeout("4 seconds"), Effect.provide(makeLayer())),
         )
         yield* Effect.scoped(
@@ -280,8 +289,10 @@ describe("queue drain regression", () => {
             const agentLoop = yield* makeAgentLoopService
             const recovered = yield* agentLoop.getQueue({ sessionId, branchId })
             expect(recovered.followUp.map((item) => item.content)).toEqual(["second", "third"])
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.timeout("4 seconds"), Effect.provide(makeLayer())),
         )
+        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
         yield* Deferred.succeed(activeTurnReleased, undefined).pipe(
           Effect.catchEager(() => Effect.void),
         )
@@ -300,6 +311,7 @@ describe("queue drain regression", () => {
         const providerLayer = LanguageModelLayers.testStream(() =>
           Effect.gen(function* () {
             yield* Ref.update(providerCalls, (n) => n + 1)
+            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
             yield* Deferred.succeed(providerCalled, undefined).pipe(Effect.ignore)
             return Stream.fromIterable([
               textDeltaPart("recovered"),
@@ -316,6 +328,7 @@ describe("queue drain regression", () => {
           ConfigService.Test(),
           EventStore.Memory,
           ToolRunner.Test(),
+          ApprovalService.Test(),
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
@@ -345,6 +358,7 @@ describe("queue drain regression", () => {
             yield* agentLoop.getState({ sessionId, branchId })
             yield* Deferred.await(providerCalled).pipe(Effect.timeout("4 seconds"))
             expect(yield* Ref.get(providerCalls)).toBe(1)
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer)),
         )
       }),
@@ -372,15 +386,17 @@ describe("queue drain regression", () => {
           AgentLoopQueueStorage,
           AgentLoopQueueStorage.of({
             getQueueState: () => Ref.get(storedQueueRef),
-            putQueueState: (_sessionId, _branchId, queue) =>
-              queue.followUp.length > 0
-                ? Effect.fail(
-                    new StorageError({
-                      message: "queue persistence failed",
-                      cause: "injected test failure",
-                    }),
-                  )
-                : Ref.set(storedQueueRef, queue),
+            putQueueState: (_sessionId, _branchId, queue) => {
+              if (queue.followUp.length > 0) {
+                return Effect.fail(
+                  new StorageError({
+                    message: "queue persistence failed",
+                    cause: "injected test failure",
+                  }),
+                )
+              }
+              return Ref.set(storedQueueRef, queue)
+            },
             clearQueueState: () => Ref.set(storedQueueRef, emptyPersistedQueue()),
           }),
         )
@@ -394,6 +410,7 @@ describe("queue drain regression", () => {
           ConfigService.Test(),
           EventStore.Memory,
           ToolRunner.Test(),
+          ApprovalService.Test(),
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
@@ -430,8 +447,10 @@ describe("queue drain regression", () => {
             expect(queuedExit._tag).toBe("Failure")
             expect((yield* agentLoop.getQueue({ sessionId, branchId })).followUp).toEqual([])
             expect((yield* Ref.get(storedQueueRef)).followUp).toEqual([])
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer)),
         )
+        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
         yield* Deferred.succeed(activeTurnReleased, undefined).pipe(
           Effect.catchEager(() => Effect.void),
         )

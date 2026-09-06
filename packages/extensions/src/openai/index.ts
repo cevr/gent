@@ -1,4 +1,4 @@
-import { Duration, Effect, Fiber, Layer, SynchronizedRef } from "effect"
+import { Duration, Effect, Fiber, Layer, Option, Schema, SynchronizedRef } from "effect"
 import {
   defineExtension,
   AuthMethod,
@@ -8,7 +8,6 @@ import {
   type ProviderAuthInfo,
   type ProviderAuthorizationResult,
   type ProviderHints,
-  type ProviderResolution,
 } from "@gent/core/extensions/api"
 import {
   allocateOpenAIAuthorization,
@@ -39,14 +38,30 @@ type PendingCallbackEntry = {
   readonly timeoutFiber: Fiber.Fiber<void>
 }
 
-const buildOpenAiResponsesConfig = (hints?: ProviderHints) => {
-  const config: Record<string, unknown> = { store: false }
-  if (hints?.maxTokens !== undefined) config["max_output_tokens"] = hints.maxTokens
-  if (hints?.temperature !== undefined) config["temperature"] = hints.temperature
-  if (hints?.reasoning !== undefined && hints.reasoning !== "none") {
-    config["reasoning"] = {
-      effort: hints.reasoning,
-      summary: "auto",
+type OpenAiResponsesConfig = Required<
+  Parameters<typeof OpenAiResponsesLanguageModel.layer>[0]
+>["config"]
+type OpenAiCompatConfig = Parameters<typeof makeOpenAiCompatResolution>[0]["config"]
+const OpenAiReasoningEffort = Schema.Literals([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+])
+
+const buildOpenAiResponsesConfig = (hints: Option.Option<ProviderHints>): OpenAiResponsesConfig => {
+  let config: OpenAiResponsesConfig = { store: false }
+  if (Option.isSome(hints)) {
+    const maxTokens = Option.fromNullishOr(hints.value.maxTokens)
+    if (Option.isSome(maxTokens)) config = { ...config, max_output_tokens: maxTokens.value }
+    const temperature = Option.fromNullishOr(hints.value.temperature)
+    if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
+    const reasoning = Schema.decodeUnknownOption(OpenAiReasoningEffort)(hints.value.reasoning)
+    if (Option.isSome(reasoning) && reasoning.value !== "none") {
+      config = { ...config, reasoning: { effort: reasoning.value, summary: "auto" } }
     }
   }
   return config
@@ -61,9 +76,16 @@ const buildOpenAiResponsesConfig = (hints?: ProviderHints) => {
  */
 const makeApiKeyOpenAIResolution = (
   modelName: string,
-  config: Record<string, unknown>,
+  config: OpenAiCompatConfig,
   apiKey: string,
-) => makeOpenAiCompatResolution({ provider: "openai", modelName, apiKey, config })
+) =>
+  makeOpenAiCompatResolution({
+    provider: "openai",
+    modelName,
+    apiKey,
+    config,
+    apiUrl: Option.none(),
+  })
 
 /**
  * OAuth path: builds `OpenAiClient.layer` with `transformClient` set to
@@ -81,7 +103,7 @@ const makeApiKeyOpenAIResolution = (
  */
 const makeOauthOpenAILayer = (
   modelName: string,
-  config: Record<string, unknown>,
+  config: OpenAiResponsesConfig,
   authInfo: ProviderAuthInfo,
   credentialCellRef: CredentialCacheCellRef,
 ) => {
@@ -117,59 +139,63 @@ const makeOauthOpenAILayer = (
 export const buildOpenAIModelDriver = (
   credentialCellRef: CredentialCacheCellRef,
   pendingCallbacks: Map<string, PendingCallbackEntry>,
-  envApiKey: string | undefined,
+  envApiKey: Option.Option<string>,
 ): ModelDriverContribution => ({
   id: "openai",
   name: "OpenAI",
-  resolveModel: (modelName, authInfo, hints): ProviderResolution => {
-    // Stored OAuth — handle inline with token refresh. The ChatGPT Codex
-    // backend speaks the Responses shape, so the OAuth path uses
-    // @effect/ai-openai instead of the chat-completions compat adapter.
-    if (authInfo?.type === "oauth") {
-      const config = buildOpenAiResponsesConfig(hints)
-      if (!OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)) {
-        throw new ProviderAuthError({
-          message: `Model "${modelName}" not available with ChatGPT OAuth`,
-        })
+  resolveModel: (modelName, authInfo, hints) =>
+    Effect.gen(function* () {
+      const auth = Option.fromNullishOr(authInfo)
+      // Stored OAuth — handle inline with token refresh. The ChatGPT Codex
+      // backend speaks the Responses shape, so the OAuth path uses
+      // @effect/ai-openai instead of the chat-completions compat adapter.
+      if (Option.isSome(auth) && auth.value.type === "oauth") {
+        const config = buildOpenAiResponsesConfig(Option.fromNullishOr(hints))
+        if (!OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)) {
+          return yield* new ProviderAuthError({
+            message: `Model "${modelName}" not available with ChatGPT OAuth`,
+          })
+        }
+        return AiModel.make(
+          "openai",
+          modelName,
+          makeOauthOpenAILayer(modelName, config, auth.value, credentialCellRef),
+        )
       }
-      return AiModel.make(
-        "openai",
-        modelName,
-        makeOauthOpenAILayer(modelName, config, authInfo, credentialCellRef),
-      )
-    }
 
-    // Stored API key takes precedence over env var
-    const storedApiKey =
-      authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
-    const apiKey = storedApiKey ?? envApiKey
+      // Stored API key takes precedence over env var
+      let apiKey = envApiKey
+      if (Option.isSome(auth) && auth.value.type === "api") {
+        apiKey = Option.fromNullishOr(auth.value.key)
+      }
 
-    if (apiKey !== undefined) {
-      return makeApiKeyOpenAIResolution(
-        modelName,
-        buildOpenAiCompatConfig(hints, { includeReasoning: true }),
-        apiKey,
-      )
-    }
+      if (Option.isSome(apiKey)) {
+        return makeApiKeyOpenAIResolution(
+          modelName,
+          buildOpenAiCompatConfig(Option.fromNullishOr(hints), true),
+          apiKey.value,
+        )
+      }
 
-    // Fail closed — no stored OAuth, no stored API key, no env var.
-    // Previous versions fell through to `OpenAiClient.layer({})` and let
-    // the unauthenticated request fail late as a generic HTTP error,
-    // masking the real auth failure for non-TUI callers.
-    throw new ProviderAuthError({
-      message:
-        "OpenAI credentials unavailable: no ChatGPT OAuth, stored API key, or OPENAI_API_KEY env var",
-    })
-  },
+      // Fail closed — no stored OAuth, no stored API key, no env var.
+      // Previous versions fell through to `OpenAiClient.layer({})` and let
+      // the unauthenticated request fail late as a generic HTTP error,
+      // masking the real auth failure for non-TUI callers.
+      return yield* new ProviderAuthError({
+        message:
+          "OpenAI credentials unavailable: no ChatGPT OAuth, stored API key, or OPENAI_API_KEY env var",
+      })
+    }),
   listModels: (baseCatalog, authInfo) => {
     // When OAuth is active, filter to allowed models + zero pricing
-    if (authInfo?.type !== "oauth") return baseCatalog
+    const auth = Option.fromNullishOr(authInfo)
+    if (Option.isNone(auth) || auth.value.type !== "oauth") return baseCatalog
     return baseCatalog
       .filter((model) => {
         if (model.provider !== "openai") return true
         const parts = model.id.split("/", 2)
-        const modelName = parts[1]
-        return modelName !== undefined && OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)
+        const modelName = Option.fromNullishOr(parts[1])
+        return Option.isSome(modelName) && OPENAI_OAUTH_ALLOWED_MODELS.has(modelName.value)
       })
       .map((model) => {
         if (model.provider !== "openai") return model
@@ -181,9 +207,11 @@ export const buildOpenAIModelDriver = (
       AuthMethod.make({ type: "oauth", label: "ChatGPT Pro/Plus" }),
       AuthMethod.make({ type: "api", label: "Manually enter API key" }),
     ],
-    authorize: (ctx): Effect.Effect<ProviderAuthorizationResult | undefined, ProviderAuthError> =>
+    authorize: (
+      ctx,
+    ): Effect.Effect<Option.Option<ProviderAuthorizationResult>, ProviderAuthError> =>
       Effect.gen(function* () {
-        if (ctx.methodIndex !== 0) return undefined
+        if (ctx.methodIndex !== 0) return Option.none()
         const { flow, close } = yield* allocateOpenAIAuthorization.pipe(
           Effect.mapError(
             (e) =>
@@ -207,19 +235,20 @@ export const buildOpenAIModelDriver = (
           Effect.forkChild,
         )
         pendingCallbacks.set(ctx.authorizationId, { flow, close, timeoutFiber })
-        return flow.authorization
+        return Option.some(flow.authorization)
       }),
     callback: (ctx) =>
       Effect.gen(function* () {
         const entry = pendingCallbacks.get(ctx.authorizationId)
         pendingCallbacks.delete(ctx.authorizationId)
-        if (entry === undefined) {
+        const pendingEntry = Option.fromNullishOr(entry)
+        if (Option.isNone(pendingEntry)) {
           return yield* new ProviderAuthError({
             message: "OpenAI OAuth callback state is missing or expired",
           })
         }
-        yield* Fiber.interrupt(entry.timeoutFiber)
-        const result = yield* entry.flow.callback(ctx.code).pipe(
+        yield* Fiber.interrupt(pendingEntry.value.timeoutFiber)
+        const result = yield* pendingEntry.value.flow.callback(ctx.code).pipe(
           Effect.mapError(
             (e) =>
               new ProviderAuthError({
@@ -227,14 +256,23 @@ export const buildOpenAIModelDriver = (
                 cause: e,
               }),
           ),
-          Effect.ensuring(entry.close),
+          Effect.ensuring(pendingEntry.value.close),
         )
+        const accountId = Option.fromNullishOr(result.accountId)
+        if (Option.isNone(accountId)) {
+          return yield* ctx.persist({
+            type: "oauth",
+            access: result.access,
+            refresh: result.refresh,
+            expires: result.expires,
+          })
+        }
         yield* ctx.persist({
           type: "oauth",
           access: result.access,
           refresh: result.refresh,
           expires: result.expires,
-          ...(result.accountId !== undefined ? { accountId: result.accountId } : {}),
+          accountId: accountId.value,
         })
       }),
   },

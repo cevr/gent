@@ -5,7 +5,7 @@
  * codemode proxy dispatch/rejection behavior.
  */
 import { describe, test, expect, it } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { InteractionPendingError, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
@@ -22,10 +22,11 @@ import {
 import { SessionNotification } from "../../src/acp-agents/schema.js"
 import { startCodemodeServer } from "../../src/acp-agents/mcp-codemode.js"
 import { makeAcpRunTool } from "../../src/acp-agents/executor-boundary.js"
+import { externalWireNull } from "../helpers/external-wire.js"
 
 // ── ACP → response part mapping ──
-const makeNotification = (update: unknown) =>
-  Schema.decodeUnknownSync(SessionNotification)({ sessionId: SessionId.make("s1"), update })
+const makeNotification = (update: SessionNotification["update"]) =>
+  Schema.decodeSync(SessionNotification)({ sessionId: SessionId.make("s1"), update })
 describe("mapAcpUpdateToResponsePart", () => {
   test("maps agent_message_chunk with text content to text-delta", () => {
     const part = mapAcpUpdateToResponsePart(
@@ -34,7 +35,11 @@ describe("mapAcpUpdateToResponsePart", () => {
         content: { type: "text", text: "hello world" },
       }),
     )
-    expect(part).toMatchObject({ type: "text-delta", id: "acp-text", delta: "hello world" })
+    expect(Option.getOrThrow(part)).toMatchObject({
+      type: "text-delta",
+      id: "acp-text",
+      delta: "hello world",
+    })
   })
   test("maps agent_thought_chunk with text content to reasoning-delta", () => {
     const part = mapAcpUpdateToResponsePart(
@@ -43,7 +48,7 @@ describe("mapAcpUpdateToResponsePart", () => {
         content: { type: "text", text: "thinking..." },
       }),
     )
-    expect(part).toMatchObject({
+    expect(Option.getOrThrow(part)).toMatchObject({
       type: "reasoning-delta",
       id: "acp-reasoning",
       delta: "thinking...",
@@ -57,7 +62,7 @@ describe("mapAcpUpdateToResponsePart", () => {
         title: "read_file",
       }),
     )
-    expect(part).toMatchObject({
+    expect(Option.getOrThrow(part)).toMatchObject({
       type: "tool-call",
       id: "tc-1",
       name: "read_file",
@@ -73,11 +78,11 @@ describe("mapAcpUpdateToResponsePart", () => {
         status: "completed",
       }),
     )
-    expect(part).toMatchObject({
+    expect(Option.getOrThrow(part)).toMatchObject({
       type: "tool-result",
       id: "tc-1",
       name: "external",
-      result: null,
+      result: externalWireNull,
       isFailure: false,
       providerExecuted: false,
       preliminary: false,
@@ -92,7 +97,7 @@ describe("mapAcpUpdateToResponsePart", () => {
         error: "not found",
       }),
     )
-    expect(part).toMatchObject({
+    expect(Option.getOrThrow(part)).toMatchObject({
       type: "tool-result",
       id: "tc-2",
       name: "external",
@@ -115,7 +120,7 @@ describe("mapAcpUpdateToResponsePart", () => {
         ],
       }),
     )
-    expect(part).toMatchObject({
+    expect(Option.getOrThrow(part)).toMatchObject({
       type: "tool-result",
       id: "tc-out-1",
       name: "external",
@@ -138,7 +143,7 @@ describe("mapAcpUpdateToResponsePart", () => {
         ],
       }),
     )
-    expect(part).toMatchObject({
+    expect(Option.getOrThrow(part)).toMatchObject({
       type: "tool-result",
       id: "tc-out-2",
       name: "external",
@@ -162,7 +167,7 @@ describe("mapAcpUpdateToResponsePart", () => {
         ],
       }),
     )
-    expect(part).toMatchObject({
+    expect(Option.getOrThrow(part)).toMatchObject({
       type: "tool-result",
       id: "tc-out-mixed",
       name: "external",
@@ -185,11 +190,11 @@ describe("mapAcpUpdateToResponsePart", () => {
         status: "completed",
       }),
     )
-    expect(part).toMatchObject({
+    expect(Option.getOrThrow(part)).toMatchObject({
       type: "tool-result",
       id: "tc-out-3",
       name: "external",
-      result: null,
+      result: externalWireNull,
       isFailure: false,
     })
   })
@@ -211,38 +216,42 @@ describe("mapAcpUpdateToResponsePart", () => {
       }),
       mapper,
     )
-    expect(part).toMatchObject({ type: "tool-result", id: "tc-named", name: "read_file" })
+    expect(Option.getOrThrow(part)).toMatchObject({
+      type: "tool-result",
+      id: "tc-named",
+      name: "read_file",
+    })
   })
-  test("returns undefined for non-text content in message chunk", () => {
+  test("returns None for non-text content in message chunk", () => {
     const event = mapAcpUpdateToResponsePart(
       makeNotification({
         sessionUpdate: "agent_message_chunk",
         content: { type: "image", data: "base64...", mimeType: "image/png" },
       }),
     )
-    expect(event).toBeUndefined()
+    expect(Option.isNone(event)).toBe(true)
   })
-  test("returns undefined for unknown session update type", () => {
+  test("returns None for unknown session update type", () => {
     const event = mapAcpUpdateToResponsePart(
       makeNotification({
         sessionUpdate: "usage_update",
         totalInputTokens: 100,
       }),
     )
-    expect(event).toBeUndefined()
+    expect(Option.isNone(event)).toBe(true)
   })
-  test("returns undefined for null update", () => {
-    const event = mapAcpUpdateToResponsePart(makeNotification(null))
-    expect(event).toBeUndefined()
+  test("returns None for null update", () => {
+    const event = mapAcpUpdateToResponsePart(makeNotification(externalWireNull))
+    expect(Option.isNone(event)).toBe(true)
   })
-  test("tool_call without toolCallId returns undefined", () => {
+  test("tool_call without toolCallId returns None", () => {
     const event = mapAcpUpdateToResponsePart(
       makeNotification({
         sessionUpdate: "tool_call",
         title: "bash",
       }),
     )
-    expect(event).toBeUndefined()
+    expect(Option.isNone(event)).toBe(true)
   })
   test("tool_call uses 'unknown' when title is missing", () => {
     const event = mapAcpUpdateToResponsePart(
@@ -251,13 +260,13 @@ describe("mapAcpUpdateToResponsePart", () => {
         toolCallId: ToolCallId.make("tc-3"),
       }),
     )
-    expect(event).toMatchObject({
+    expect(Option.getOrThrow(event)).toMatchObject({
       type: "tool-call",
       id: "tc-3",
       name: "unknown",
     })
   })
-  test("tool_call_update with in-progress status returns undefined", () => {
+  test("tool_call_update with in-progress status returns None", () => {
     const event = mapAcpUpdateToResponsePart(
       makeNotification({
         sessionUpdate: "tool_call_update",
@@ -265,7 +274,7 @@ describe("mapAcpUpdateToResponsePart", () => {
         status: "in_progress",
       }),
     )
-    expect(event).toBeUndefined()
+    expect(Option.isNone(event)).toBe(true)
   })
 })
 // ── Codemode proxy ──
@@ -273,16 +282,28 @@ describe("mapAcpUpdateToResponsePart", () => {
 const JsonUnknown = Schema.fromJsonString(Schema.Unknown)
 const decodeJsonUnknown = Schema.decodeUnknownEffect(JsonUnknown)
 const encodeJsonUnknown = Schema.encodeSync(JsonUnknown)
+const ErrorResult = Schema.Struct({ isError: Schema.Boolean })
+const assertErrorResult = (result: Option.Option<unknown>) => {
+  const decoded = Option.flatMap(result, Schema.decodeUnknownOption(ErrorResult))
+  expect(Option.isSome(decoded)).toBe(true)
+  if (Option.isSome(decoded)) expect(decoded.value.isError).toBe(true)
+}
 const parseSseResult = (response: Response) =>
   Effect.gen(function* () {
     const text = yield* Effect.promise(() => response.text())
     for (const line of text.split("\n")) {
       if (line.startsWith("data: ")) {
         const json = yield* decodeJsonUnknown(line.slice(6)).pipe(Effect.orDie)
-        if (typeof json === "object" && json !== null && "result" in json) return json["result"]
+        if (Schema.is(Schema.Record(Schema.String, Schema.Unknown))(json) && "result" in json) {
+          return Option.some(json["result"])
+        }
       }
     }
-    return undefined
+    return yield* Effect.die(
+      new Error(
+        `MCP response did not include a JSON-RPC result (HTTP ${response.status} ${response.statusText}): ${text}`,
+      ),
+    )
   })
 const mcpHeaders = {
   "Content-Type": "application/json",
@@ -341,7 +362,7 @@ describe("codemode proxy", () => {
       expect(calls.length).toBe(1)
       expect(calls[0]!.toolName).toBe("echo")
       expect(calls[0]!.args).toEqual({ text: "hello" })
-      expect(result).toBeDefined()
+      expect(Option.isSome(result)).toBe(true)
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
   it.scopedLive("refreshes runTool authority without restarting the codemode server", () =>
@@ -390,9 +411,14 @@ describe("codemode proxy", () => {
     Effect.gen(function* () {
       const server = yield* startCodemodeServer({
         tools: [],
-        runTool: () => {
-          throw new Error("should not be called")
-        },
+        runTool: () =>
+          Prompt.toolResultPart({
+            id: ToolCallId.make("unused"),
+            name: "unused",
+            isFailure: true,
+            providerExecuted: false,
+            result: externalWireNull,
+          }),
       })
       const response = yield* Effect.promise(() =>
         callMcp(server.url, {
@@ -405,8 +431,7 @@ describe("codemode proxy", () => {
           },
         }),
       )
-      const result = (yield* parseSseResult(response)) as Record<string, unknown> | undefined
-      expect(result?.["isError"]).toBe(true)
+      assertErrorResult(yield* parseSseResult(response))
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
 })
@@ -433,6 +458,7 @@ describe("codemode proxy via makeAcpRunTool", () => {
               id: ToolCallId.make("tc-acp-boundary"),
               name: toolName,
               isFailure: false,
+              providerExecuted: false,
               result: { boundary: "ok" },
             }),
           )
@@ -461,7 +487,7 @@ describe("codemode proxy via makeAcpRunTool", () => {
       expect(calls.length).toBe(1)
       expect(calls[0]!.name).toBe("echo")
       expect(calls[0]!.input).toEqual({ text: "via-boundary" })
-      expect(result).toBeDefined()
+      expect(Option.isSome(result)).toBe(true)
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
   it.scopedLive("uses the closed tool runner service at the Promise boundary", () =>
@@ -476,6 +502,7 @@ describe("codemode proxy via makeAcpRunTool", () => {
               id: ToolCallId.make("tc-acp-boundary-context"),
               name: toolName,
               isFailure: false,
+              providerExecuted: false,
               result: { boundary: boundaryProbe.value },
             })
           }),
@@ -500,7 +527,7 @@ describe("codemode proxy via makeAcpRunTool", () => {
         }),
       )
       const result = yield* parseSseResult(response)
-      expect(result).toBeDefined()
+      expect(Option.isSome(result)).toBe(true)
       expect(observed).toEqual(["from-boundary-service"])
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
@@ -531,8 +558,7 @@ describe("codemode proxy via makeAcpRunTool", () => {
       // Failure surfaces through the codemode SSE response as an error
       // payload, not a thrown native Error — the boundary must not let
       // the Effect die-cause crash the codemode server.
-      const result = (yield* parseSseResult(response)) as Record<string, unknown> | undefined
-      expect(result?.["isError"]).toBe(true)
+      assertErrorResult(yield* parseSseResult(response))
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
   it.scopedLive("notifies the turn executor when an interaction parks at the boundary", () =>
@@ -556,7 +582,9 @@ describe("codemode proxy via makeAcpRunTool", () => {
       const server = yield* startCodemodeServer({
         tools: [mockTool],
         runTool,
-        onInteractionPending: (error) => observed.push(error),
+        onInteractionPending: (error) => {
+          observed.push(error)
+        },
       })
       const response = yield* Effect.promise(() =>
         callMcp(server.url, {
@@ -569,9 +597,48 @@ describe("codemode proxy via makeAcpRunTool", () => {
           },
         }),
       )
-      const result = (yield* parseSseResult(response)) as Record<string, unknown> | undefined
-      expect(result?.["isError"]).toBe(true)
+      assertErrorResult(yield* parseSseResult(response))
       expect(observed).toEqual([pending])
+    }).pipe(Effect.provide(BunGentPlatformLive)),
+  )
+  it.scopedLive("preserves a synchronously thrown pending error at the boundary", () =>
+    Effect.gen(function* () {
+      const pending = new InteractionPendingError({
+        requestId: InteractionRequestId.make("req-acp-sync-boundary"),
+        sessionId: SessionId.make("s-acp-sync-boundary"),
+        branchId: BranchId.make("b-acp-sync-boundary"),
+      })
+      const observed: InteractionPendingError[] = []
+      const mockTool: ToolCapability = tool({
+        id: "echo",
+        description: "echo",
+        params: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({ echoed: Schema.Boolean }),
+        execute: () => Effect.succeed({ echoed: true }),
+      })
+      const server = yield* startCodemodeServer({
+        tools: [mockTool],
+        runTool: () => {
+          // oxlint-disable-next-line effect/noThrowStatement -- exercise the synchronous host boundary
+          throw pending
+        },
+        onInteractionPending: (error) => {
+          observed.push(error)
+        },
+      })
+      const response = yield* Effect.promise(() =>
+        callMcp(server.url, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "execute",
+            arguments: { code: 'return gent.echo({ text: "sync-park" })' },
+          },
+        }),
+      )
+      assertErrorResult(yield* parseSseResult(response))
+      expect(observed[0]).toBe(pending)
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
 })

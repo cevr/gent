@@ -1,4 +1,4 @@
-import { Effect, Layer, FileSystem, Path } from "effect"
+import { Effect, Layer, FileSystem, Option, Path } from "effect"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { ApprovalService } from "./approval-service.js"
 import { RuntimeEnvironment } from "./runtime-environment.js"
@@ -10,8 +10,11 @@ const slugify = (text: string): string =>
     .replace(/^-|-$/g, "")
     .slice(0, 40)
 
-const defaultPromptPath = (cwd: string, title: string | undefined, fileNameSeed: string) => {
-  const slug = title !== undefined ? slugify(title) : "prompt"
+const defaultPromptPath = (cwd: string, title: Option.Option<string>, fileNameSeed: string) => {
+  const slug = Option.match(title, {
+    onNone: () => "prompt",
+    onSome: slugify,
+  })
   return `${cwd}/.gent/prompts/${slug}-${fileNameSeed}.md`
 }
 
@@ -46,15 +49,22 @@ export const PromptPresenterLive: Layer.Layer<
           },
           { sessionId: params.sessionId, branchId: params.branchId },
         )
-        return decision.approved ? ("yes" as const) : ("no" as const)
+        if (decision.approved) return "yes"
+        return "no"
       }),
 
       review: Effect.fn("PromptPresenter.review")(function* (params) {
         const resolvedPath = path.resolve(
-          defaultPromptPath(platform.cwd, params.title, params.fileNameSeed),
+          defaultPromptPath(
+            platform.cwd,
+            Option.fromUndefinedOr(params.title),
+            params.fileNameSeed,
+          ),
         )
-        const text =
-          params.title !== undefined ? `# ${params.title}\n\n${params.content}` : params.content
+        const text = Option.match(Option.fromUndefinedOr(params.title), {
+          onNone: () => params.content,
+          onSome: (title) => `# ${title}\n\n${params.content}`,
+        })
 
         yield* fs.makeDirectory(path.dirname(resolvedPath), { recursive: true })
         yield* fs.writeFileString(resolvedPath, text)
@@ -72,16 +82,16 @@ export const PromptPresenterLive: Layer.Layer<
             .readFileString(resolvedPath)
             .pipe(Effect.catchEager(() => Effect.succeed(text)))
           return {
-            decision: "edit" as const,
+            decision: "edit",
             path: resolvedPath,
             content: editedContent,
           }
         }
 
-        return {
-          decision: decision.approved ? ("yes" as const) : ("no" as const),
-          path: resolvedPath,
+        if (decision.approved) {
+          return { decision: "yes", path: resolvedPath }
         }
+        return { decision: "no", path: resolvedPath }
       }),
     })
   }),

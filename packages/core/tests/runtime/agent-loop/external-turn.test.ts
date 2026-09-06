@@ -6,9 +6,10 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Clock, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
+import { Predicate, Clock, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
+import { TestClock } from "effect/testing"
 import type { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
 import {
   AgentLoop as AgentLoopActor,
@@ -16,7 +17,10 @@ import {
 } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
-import { assistantMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
+import {
+  assistantMessageIdForTurn,
+  toolResultMessageIdForTurn,
+} from "../../../src/runtime/agent/agent-loop.utils"
 import { resolveExtensions, ExtensionRegistry } from "../../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
@@ -41,16 +45,15 @@ import type { AgentEvent } from "@gent/core-internal/domain/event"
 import { EventEnvelope, EventId, EventStore } from "@gent/core-internal/domain/event"
 import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
 import { Permission } from "@gent/core-internal/domain/permission"
-import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
 import { SqliteStorage, type StorageError } from "@gent/core-internal/storage/sqlite-storage"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
+import { ToolCallBindingStorage } from "@gent/core-internal/storage/tool-call-binding-storage"
 import type { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import type { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import {
   BranchId,
   ActorCommandId,
   ExtensionId,
-  InteractionRequestId,
   MessageId,
   SessionId,
   ToolCallId,
@@ -111,15 +114,18 @@ const makeAgentLoopService = Effect.gen(function* () {
           createdAt: dateFromMillis(1_767_225_600_000),
         })
         const ref = yield* refFor(input.sessionId, input.branchId)
-        yield* ref.execute(
-          AgentLoopActor.Run.make({
-            workspaceId: DefaultWorkspaceId,
-            message,
-            agentOverride: input.agentName,
-            runSpec: input.runSpec,
-            interactive: input.interactive,
-          }),
-        )
+        const payload = {
+          workspaceId: DefaultWorkspaceId,
+          message,
+          // Actor operation payloads require optional fields explicitly.
+          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
+          agentOverride: input.agentName,
+          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
+          runSpec: input.runSpec,
+          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
+          interactive: input.interactive,
+        }
+        yield* ref.execute(AgentLoopActor.Run.make(payload))
       }),
   } satisfies AgentLoopService
 })
@@ -143,8 +149,12 @@ const runAgentLoop = (
           AgentLoopActor.Run.make({
             workspaceId: DefaultWorkspaceId,
             message,
+            // Actor operation payloads require optional fields explicitly.
+            // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
             agentOverride: options?.agentOverride,
+            // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
             runSpec: options?.runSpec,
+            // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
             interactive: options?.interactive,
           }),
         )
@@ -164,7 +174,11 @@ const textDelta = (text: string): TurnStreamPart =>
 const reasoningDelta = (text: string): TurnStreamPart =>
   Response.makePart("reasoning-delta", { id: "external-test-reasoning", delta: text })
 
-const toolCall = (toolCallId: ToolCallId, toolName: string, input: unknown = {}): TurnStreamPart =>
+const toolCall = (
+  toolCallId: ToolCallId,
+  toolName: string,
+  input: Schema.Schema.Type<typeof Schema.Unknown> = {},
+): TurnStreamPart =>
   Response.makePart("tool-call", {
     id: toolCallId,
     name: toolName,
@@ -175,7 +189,8 @@ const toolCall = (toolCallId: ToolCallId, toolName: string, input: unknown = {})
 const toolResult = (
   toolCallId: ToolCallId,
   toolName: string,
-  result: unknown = null,
+  // oxlint-disable-next-line effect/noNullish -- External response fixture preserves a null tool result on the wire.
+  result: Schema.Schema.Type<typeof Schema.Unknown> = null,
 ): TurnStreamPart =>
   Response.makePart("tool-result", {
     id: toolCallId,
@@ -224,7 +239,7 @@ const makeFailingExecutor = (message: string): TurnExecutor => ({
   executeTurn: () => Stream.fail(new TurnError({ message })),
 })
 const externalAgent = AgentDefinition.make({
-  name: "test-external" as never,
+  name: AgentName.make("test-external"),
   allowedTools: ["context_probe"],
   driver: ExternalDriverRef.make({ id: "test-runner" }),
 })
@@ -239,12 +254,12 @@ const makeResolved = (executor: TurnExecutor, tools: ReadonlyArray<ToolCapabilit
   resolveExtensions([
     {
       manifest: { id: ExtensionId.make("test-ext") },
-      scope: "builtin" as const,
+      scope: "builtin",
       sourcePath: "test",
       contributions: {
         agents: [externalAgent],
         tools,
-        externalDrivers: [{ id: "test-runner", executor, invalidate: () => Effect.void }],
+        externalDrivers: [{ id: "test-runner", executor, invalidate: Effect.void }],
       },
     },
   ])
@@ -257,34 +272,40 @@ const makeDriverRegistry = (executor: TurnExecutor, tools?: ReadonlyArray<ToolCa
   })
 /** Counting event store that captures published events. */
 const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
-  Layer.succeed(EventStore, {
-    append: (event: AgentEvent) =>
-      Effect.gen(function* () {
-        yield* Ref.update(eventsRef, (events) => [...events, event])
-        return EventEnvelope.make({
-          id: EventId.make(0),
-          event,
-          createdAt: yield* Clock.currentTimeMillis,
-        })
-      }),
-    broadcast: () => Effect.void,
-    deliver: () => Effect.void,
-    publish: (event: AgentEvent) => Ref.update(eventsRef, (events) => [...events, event]),
-    subscribe: () => Stream.empty,
-    removeSession: () => Effect.void,
-  })
+  Layer.succeed(
+    EventStore,
+    EventStore.of({
+      append: (event: AgentEvent) =>
+        Effect.gen(function* () {
+          yield* Ref.update(eventsRef, (events) => [...events, event])
+          return EventEnvelope.make({
+            id: EventId.make(0),
+            event,
+            createdAt: yield* Clock.currentTimeMillis,
+          })
+        }),
+      broadcast: () => Effect.void,
+      deliver: () => Effect.void,
+      publish: (event: AgentEvent) => Ref.update(eventsRef, (events) => [...events, event]),
+      subscribe: () => Stream.empty,
+      removeSession: () => Effect.void,
+    }),
+  )
 const makeLayerWithEvents = (
   executor: TurnExecutor,
   eventsRef: Ref.Ref<AgentEvent[]>,
   options?: {
     readonly tools?: ReadonlyArray<ToolCapability>
     readonly liveToolRunner?: boolean
+    readonly liveApproval?: boolean
   },
 ) => {
   // Dummy provider — external turns don't use it but AgentLoop requires it
   const providerLayer = LanguageModelLayers.testStream(() =>
     Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
   )
+  let toolRunnerLayer = ToolRunner.Test()
+  if (options?.liveToolRunner === true) toolRunnerLayer = ToolRunner.Live
   const deps = Layer.mergeAll(
     SqliteStorage.TestWithSql(),
     providerLayer,
@@ -292,7 +313,7 @@ const makeLayerWithEvents = (
     makeExtRegistry(executor, options?.tools),
     makeDriverRegistry(executor, options?.tools),
     makeCountingEventStore(eventsRef),
-    options?.liveToolRunner === true ? ToolRunner.Live : ToolRunner.Test(),
+    toolRunnerLayer,
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ApprovalService.Test(),
     Permission.Live([], "allow"),
@@ -302,8 +323,17 @@ const makeLayerWithEvents = (
     GentPlatform.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+  let approvalLayer = ApprovalService.Test()
+  if (options?.liveApproval === true) {
+    approvalLayer = ApprovalService.Live.pipe(
+      Layer.provide(Layer.merge(deps, eventPublisherLayer)),
+      Layer.orDie,
+    )
+  }
   return AgentLoopTestActor({ baseSections: [] }).pipe(
-    Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
+    Layer.provideMerge(
+      Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live, approvalLayer),
+    ),
   )
 }
 // ── Tests ──
@@ -328,47 +358,72 @@ describe("external turn execution", () => {
           expect(tags).toContain("StreamStarted")
           expect(tags).toContain("StreamChunk")
           expect(tags).toContain("TurnCompleted")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
       )
     }),
   )
-  it.live("external tool InteractionPendingError parks the agent loop", () =>
+  it.live("external sequential calls retain results and resume before later callbacks", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      const toolCalls = yield* Ref.make(0)
+      const completedInputs = yield* Ref.make<string[]>([])
+      const actualCallIds = yield* Ref.make<string[]>([])
+      const executorCalls = yield* Ref.make(0)
       const pendingTool: ToolCapability = tool({
         id: "context_probe",
         description: "Probe tool context",
         params: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ ok: Schema.Boolean }),
-        execute: () =>
+        output: Schema.Struct({
+          value: Schema.String,
+          nested: Schema.Struct({ ok: Schema.Boolean }),
+        }),
+        execute: (input: { value: string }) =>
           Effect.gen(function* () {
             const ctx = yield* ExtensionContext
-            return yield* new InteractionPendingError({
-              requestId: InteractionRequestId.make("req-external-pending"),
-              sessionId: ctx.sessionId,
-              branchId: ctx.branchId,
-            })
+            yield* Ref.update(toolCalls, (value) => value + 1)
+            const actualCallId = ctx.toolCallId
+            if (Predicate.isUndefined(actualCallId))
+              return yield* Effect.die("Missing tool call ID")
+            yield* Ref.update(actualCallIds, (ids) => [...ids, actualCallId])
+            if (input.value === "park") {
+              const decision = yield* ctx.Interaction.approve({
+                text: "Approve second external call",
+              })
+              expect(decision.approved).toBe(true)
+            }
+            yield* Ref.update(completedInputs, (inputs) => [...inputs, input.value])
+            return { value: input.value, nested: { ok: true } }
           }),
       })
       const executor: TurnExecutor = {
         executeTurn: () =>
           Stream.fromEffect(
             Effect.gen(function* () {
+              const call = yield* Ref.getAndUpdate(executorCalls, (value) => value + 1)
               const runner = yield* ExternalToolRunner
-              return yield* runner.runTool("context_probe", { value: "park" })
+              if (call === 0) {
+                yield* runner.runTool("context_probe", { value: "first" })
+                return yield* runner.runTool("context_probe", { value: "park" })
+              }
+              return yield* runner.runTool("context_probe", { value: "later" })
             }),
-          ).pipe(Stream.flatMap(() => Stream.fromIterable([finish()]))),
+          ).pipe(
+            Stream.flatMap(() => Stream.fromIterable([textDelta("external resumed"), finish()])),
+          ),
       }
       const layer = makeLayerWithEvents(executor, eventsRef, {
         tools: [pendingTool],
         liveToolRunner: true,
+        liveApproval: true,
       })
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
           yield* ensureStorageParents({ sessionId, branchId })
+          const message = makeMessage("park externally")
           const fiber = yield* Effect.forkChild(
-            runAgentLoop(agentLoop, makeMessage("park externally"), {
+            runAgentLoop(agentLoop, message, {
               agentOverride: AgentName.make("test-external"),
             }),
           )
@@ -388,8 +443,147 @@ describe("external turn execution", () => {
             "external interaction pending state",
           )
           expect(state._tag).toBe("WaitingForInteraction")
-          yield* Fiber.interrupt(fiber)
+          if (state._tag !== "WaitingForInteraction") return
+          const messages = yield* MessageStorage
+          const bindingStorage = yield* ToolCallBindingStorage
+          const firstResult = yield* messages.getMessage(toolResultMessageIdForTurn(message.id, 1))
+          expect(firstResult?.parts).toEqual([
+            Prompt.toolResultPart({
+              id: Ref.getUnsafe(actualCallIds)[0] ?? "missing",
+              name: "context_probe",
+              isFailure: false,
+              providerExecuted: false,
+              result: { value: "first", nested: { ok: true } },
+            }),
+          ])
+          const assistant = yield* messages.getMessage(assistantMessageIdForTurn(message.id, 2))
+          expect(assistant).not.toBeUndefined()
+          if (Predicate.isUndefined(assistant)) return
+          const persistedCall = assistant.parts.find((part) => part.type === "tool-call")
+          expect(persistedCall?.type).toBe("tool-call")
+          if (persistedCall?.type !== "tool-call") return
+          expect(persistedCall.id).toBe(Ref.getUnsafe(actualCallIds)[1] ?? "missing")
+          expect(persistedCall.params).toEqual({ value: "park" })
+          expect(
+            yield* bindingStorage.get({
+              sessionId,
+              branchId,
+              assistantMessageId: assistant.id,
+              toolCallId: ToolCallId.make(persistedCall.id),
+            }),
+          ).toBeUndefined()
+          const approval = yield* ApprovalService
+          const pendingRequestId = yield* approval.pendingRequestId({ sessionId, branchId })
+          expect(pendingRequestId).not.toBeUndefined()
+          if (Predicate.isUndefined(pendingRequestId)) return
+          yield* approval.storeResolution(pendingRequestId, { approved: true })
+          yield* ref.execute(
+            AgentLoopActor.RespondInteraction.make({
+              workspaceId: DefaultWorkspaceId,
+              sessionId,
+              branchId,
+              requestId: pendingRequestId,
+            }),
+          )
+          yield* waitFor(
+            ref.execute(
+              AgentLoopActor.GetState.make({
+                workspaceId: DefaultWorkspaceId,
+                sessionId,
+                branchId,
+                commandId: ActorCommandId.make("external-resumed-state"),
+              }),
+            ),
+            (snapshot) => snapshot._tag === "Idle",
+            4_000,
+            "external interaction resumed state",
+          )
+          expect(Ref.getUnsafe(toolCalls)).toBe(4)
+          expect(Ref.getUnsafe(executorCalls)).toBe(2)
+          expect(Ref.getUnsafe(completedInputs)).toEqual(["first", "park", "later"])
+          const ids = Ref.getUnsafe(actualCallIds)
+          expect(ids[2]).toBe(ids[1])
+          expect(ids[3]).not.toBe(ids[1])
+          const history = yield* messages.listMessages(branchId)
+          const calls = history.flatMap((message) => messagePartsToolCallParts(message.parts))
+          const results = history.flatMap((message) => messagePartsToolResultParts(message.parts))
+          expect(calls.map((part) => part.id)).toEqual(ids.filter((_, index) => index !== 2))
+          expect(results.map((part) => part.id)).toEqual(calls.map((part) => part.id))
+          expect(results.map((part) => part.result)).toEqual([
+            { value: "first", nested: { ok: true } },
+            { value: "park", nested: { ok: true } },
+            { value: "later", nested: { ok: true } },
+          ])
+          expect(history.map((message) => messagePartsText(message.parts))).toContain(
+            "external resumed",
+          )
+          yield* Fiber.join(fiber)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+      )
+    }),
+  )
+  it.live("external callback limit rejects before another side effect or saved intent", () =>
+    Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      const executions = yield* Ref.make(0)
+      const boundedTool = tool({
+        id: "context_probe",
+        description: "Count external side effects",
+        params: Schema.Struct({ value: Schema.String }),
+        output: Schema.Finite,
+        execute: () => Ref.updateAndGet(executions, (count) => count + 1),
+      })
+      const executor: TurnExecutor = {
+        executeTurn: () =>
+          Stream.fromEffect(
+            Effect.gen(function* () {
+              const runner = yield* ExternalToolRunner
+              for (let call = 0; call < 201; call++) {
+                yield* runner.runTool("context_probe", { value: String(call) })
+              }
+              return finish()
+            }),
+          ),
+      }
+      const layer = makeLayerWithEvents(executor, eventsRef, {
+        tools: [boundedTool],
+        liveToolRunner: true,
+      }).pipe(Layer.provideMerge(TestClock.layer()))
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(1_767_225_600_000)
+          const loop = yield* makeAgentLoopService
+          const message = makeMessage("bound external calls")
+          yield* runAgentLoop(loop, message, {
+            agentOverride: externalAgent.name,
+          })
+          const storage = yield* MessageStorage
+          const history = yield* storage.listMessages(branchId)
+          const calls = history.flatMap((message) => messagePartsToolCallParts(message.parts))
+          const results = history.flatMap((message) => messagePartsToolResultParts(message.parts))
+          expect(yield* Ref.get(executions)).toBe(200)
+          expect(calls).toHaveLength(200)
+          expect(history.map((entry) => entry.id)).toEqual([
+            message.id,
+            ...Array.from({ length: 200 }, (_, index) => index + 1).flatMap((step) => [
+              assistantMessageIdForTurn(message.id, step),
+              toolResultMessageIdForTurn(message.id, step),
+            ]),
+          ])
+          expect(results.map((result) => result.id)).toEqual(calls.map((call) => call.id))
+          expect(results.at(-1)?.result).toBe(200)
+          const errors = (yield* Ref.get(eventsRef)).filter(
+            (event) => event._tag === "ErrorOccurred",
+          )
+          expect(errors.map((event) => event.error)).toContain(
+            "External turn executor error: External turn exceeded the 200 tool step limit",
+          )
+        }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test builds the real actor under a fixed clock at its test boundary.
+          Effect.provide(layer),
+          Effect.timeout("4 seconds"),
+        ),
       )
     }),
   )
@@ -422,6 +616,7 @@ describe("external turn execution", () => {
               output: "null",
             }),
           )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -444,6 +639,7 @@ describe("external turn execution", () => {
           const events = yield* Ref.get(eventsRef)
           const tags = events.map((e) => e._tag)
           expect(tags).toContain("ToolCallFailed")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -462,6 +658,7 @@ describe("external turn execution", () => {
           const events = yield* Ref.get(eventsRef)
           const tags = events.map((e) => e._tag)
           expect(tags).toContain("ErrorOccurred")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -471,7 +668,9 @@ describe("external turn execution", () => {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const executor = makeMockExecutor([
         textDelta("partial external answer"),
-        Response.makePart("error", { error: new Error("external response part failed") }),
+        Response.makePart("error", {
+          error: new TurnError({ message: "external response part failed" }),
+        }),
         textDelta("unreachable"),
       ])
       const layer = makeLayerWithEvents(executor, eventsRef)
@@ -498,6 +697,7 @@ describe("external turn execution", () => {
           )
           const assistant = yield* messages.getMessage(assistantMessageIdForTurn(message.id, 1))
           expect(assistant?.parts).toEqual([Prompt.textPart({ text: "partial external answer" })])
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -527,6 +727,7 @@ describe("external turn execution", () => {
           // Only one ToolCallStarted (from external events), not two (no re-execution)
           const toolStartedCount = tags.filter((t) => t === "ToolCallStarted").length
           expect(toolStartedCount).toBe(1)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -541,7 +742,7 @@ describe("external turn execution", () => {
       const agentsResolved = resolveExtensions([
         {
           manifest: { id: ExtensionId.make("agents") },
-          scope: "builtin" as const,
+          scope: "builtin",
           sourcePath: "test",
           contributions: { agents: AllBuiltinAgents },
         },
@@ -557,6 +758,7 @@ describe("external turn execution", () => {
         }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
@@ -577,6 +779,7 @@ describe("external turn execution", () => {
           const tags = events.map((e) => e._tag)
           expect(tags).toContain("StreamStarted")
           expect(tags).toContain("TurnCompleted")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -584,9 +787,9 @@ describe("external turn execution", () => {
   it.live("executor receives correct TurnContext", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
-      let capturedCtx: TurnContext | undefined
+      const capturedContexts: TurnContext[] = []
       const executor = makeCapturingExecutor([finish()], (ctx) => {
-        capturedCtx = ctx
+        capturedContexts.push(ctx)
       })
       const layer = makeLayerWithEvents(executor, eventsRef, { tools: [contextProbeTool] })
       yield* Effect.scoped(
@@ -595,13 +798,16 @@ describe("external turn execution", () => {
           yield* runAgentLoop(agentLoop, makeMessage("context check"), {
             agentOverride: AgentName.make("test-external"),
           })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
-      expect(capturedCtx).toBeDefined()
-      expect(capturedCtx!.agent.name).toBe(AgentName.make("test-external"))
-      expect(capturedCtx!.cwd).toBe("/tmp")
-      expect(capturedCtx!.abortSignal).toBeDefined()
-      expect(capturedCtx!.tools.map((candidate) => String(getToolId(candidate)))).toEqual([
+      expect(capturedContexts).toHaveLength(1)
+      const capturedCtx = capturedContexts[0]
+      if (Predicate.isUndefined(capturedCtx)) return
+      expect(capturedCtx.agent.name).toBe(AgentName.make("test-external"))
+      expect(capturedCtx.cwd).toBe("/tmp")
+      expect(capturedCtx.abortSignal).toBeDefined()
+      expect(capturedCtx.tools.map((candidate) => String(getToolId(candidate)))).toEqual([
         "context_probe",
       ])
     }),
@@ -609,9 +815,9 @@ describe("external turn execution", () => {
   it.live("executor receives all live user message parts", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
-      let capturedCtx: TurnContext | undefined
+      const capturedContexts: TurnContext[] = []
       const executor = makeCapturingExecutor([finish()], (ctx) => {
-        capturedCtx = ctx
+        capturedContexts.push(ctx)
       })
       const layer = makeLayerWithEvents(executor, eventsRef)
       const message = makeMessageWithParts([
@@ -628,13 +834,21 @@ describe("external turn execution", () => {
           yield* runAgentLoop(agentLoop, message, {
             agentOverride: AgentName.make("test-external"),
           })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
-      const lastUser = capturedCtx!.messages.at(-1)
-      expect(lastUser?.parts.map((part) => part.type)).toEqual(["text", "file", "text"])
-      expect(lastUser?.parts[2]?.type === "text" ? lastUser.parts[2].text : undefined).toBe(
-        "second text",
-      )
+      expect(capturedContexts).toHaveLength(1)
+      const capturedCtx = capturedContexts[0]
+      if (Predicate.isUndefined(capturedCtx)) return
+      const lastUser = capturedCtx.messages.at(-1)
+      expect(lastUser).toBeDefined()
+      if (Predicate.isUndefined(lastUser)) return
+      expect(lastUser.parts.map((part) => part.type)).toEqual(["text", "file", "text"])
+      const lastPart = lastUser.parts[2]
+      expect(lastPart).toBeDefined()
+      if (Predicate.isUndefined(lastPart)) return
+      expect(lastPart.type).toBe("text")
+      if (lastPart.type === "text") expect(lastPart.text).toBe("second text")
     }),
   )
   it.live("reasoning-delta events are captured in assistant output", () =>
@@ -657,6 +871,7 @@ describe("external turn execution", () => {
           // Turn should complete successfully with reasoning present
           expect(tags).toContain("TurnCompleted")
           expect(tags).toContain("StreamChunk")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -679,19 +894,19 @@ describe("ExternalDriverContribution end-to-end", () => {
       }
       // Agent referencing the external driver by id.
       const e2eAgent = AgentDefinition.make({
-        name: "my-test-agent" as never,
+        name: AgentName.make("my-test-agent"),
         driver: ExternalDriverRef.make({ id: "my-test-driver" }),
       })
       // Register the contribution through resolveExtensions — the real path.
       const e2eResolved = resolveExtensions([
         {
           manifest: { id: ExtensionId.make("e2e-ext") },
-          scope: "builtin" as const,
+          scope: "builtin",
           sourcePath: "test",
           contributions: {
             agents: [e2eAgent],
             externalDrivers: [
-              { id: "my-test-driver", executor: e2eExecutor, invalidate: () => Effect.void },
+              { id: "my-test-driver", executor: e2eExecutor, invalidate: Effect.void },
             ],
           },
         },
@@ -712,6 +927,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         // Messages go through focused storage directly — EventStore path is orthogonal.
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
@@ -740,6 +956,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           const allText = messagesResult.map((m) => messagePartsText(m.parts))
           const combined = allText.join("")
           expect(combined).toContain(expectedText)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -763,18 +980,18 @@ describe("ExternalDriverContribution end-to-end", () => {
           ]),
       }
       const e2eAgent = AgentDefinition.make({
-        name: "tool-test-agent" as never,
+        name: AgentName.make("tool-test-agent"),
         driver: ExternalDriverRef.make({ id: "tool-test-driver" }),
       })
       const e2eResolved = resolveExtensions([
         {
           manifest: { id: ExtensionId.make("e2e-tool-ext") },
-          scope: "builtin" as const,
+          scope: "builtin",
           sourcePath: "test",
           contributions: {
             agents: [e2eAgent],
             externalDrivers: [
-              { id: "tool-test-driver", executor: e2eExecutor, invalidate: () => Effect.void },
+              { id: "tool-test-driver", executor: e2eExecutor, invalidate: Effect.void },
             ],
           },
         },
@@ -794,6 +1011,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
@@ -831,7 +1049,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           const events = yield* Ref.get(eventsRef)
           const succeeded = events.find((e) => e._tag === "ToolCallSucceeded")
           expect(succeeded).toBeDefined()
-          if (succeeded !== undefined && "toolName" in succeeded) {
+          if (!Predicate.isUndefined(succeeded) && "toolName" in succeeded) {
             expect(succeeded.toolName).toBe("read_file")
           }
           const started = events.find((e) => e._tag === "ToolCallStarted")
@@ -842,6 +1060,7 @@ describe("ExternalDriverContribution end-to-end", () => {
               output: '{\n  "contents": "hello"\n}',
             }),
           )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -860,18 +1079,18 @@ describe("ExternalDriverContribution end-to-end", () => {
           ]),
       }
       const e2eAgent = AgentDefinition.make({
-        name: "tool-fail-agent" as never,
+        name: AgentName.make("tool-fail-agent"),
         driver: ExternalDriverRef.make({ id: "tool-fail-driver" }),
       })
       const e2eResolved = resolveExtensions([
         {
           manifest: { id: ExtensionId.make("e2e-tool-fail-ext") },
-          scope: "builtin" as const,
+          scope: "builtin",
           sourcePath: "test",
           contributions: {
             agents: [e2eAgent],
             externalDrivers: [
-              { id: "tool-fail-driver", executor: e2eExecutor, invalidate: () => Effect.void },
+              { id: "tool-fail-driver", executor: e2eExecutor, invalidate: Effect.void },
             ],
           },
         },
@@ -891,6 +1110,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
@@ -926,7 +1146,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           const events = yield* Ref.get(eventsRef)
           const failed = events.find((e) => e._tag === "ToolCallFailed")
           expect(failed).toBeDefined()
-          if (failed !== undefined && "toolName" in failed) {
+          if (!Predicate.isUndefined(failed) && "toolName" in failed) {
             expect(failed.toolName).toBe("bash")
           }
           expect(failed).toEqual(
@@ -935,6 +1155,7 @@ describe("ExternalDriverContribution end-to-end", () => {
               output: '{\n  "error": "permission denied"\n}',
             }),
           )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -956,18 +1177,18 @@ describe("ExternalDriverContribution end-to-end", () => {
           ]),
       }
       const e2eAgent = AgentDefinition.make({
-        name: "tool-dup-agent" as never,
+        name: AgentName.make("tool-dup-agent"),
         driver: ExternalDriverRef.make({ id: "tool-dup-driver" }),
       })
       const e2eResolved = resolveExtensions([
         {
           manifest: { id: ExtensionId.make("e2e-tool-dup-ext") },
-          scope: "builtin" as const,
+          scope: "builtin",
           sourcePath: "test",
           contributions: {
             agents: [e2eAgent],
             externalDrivers: [
-              { id: "tool-dup-driver", executor: e2eExecutor, invalidate: () => Effect.void },
+              { id: "tool-dup-driver", executor: e2eExecutor, invalidate: Effect.void },
             ],
           },
         },
@@ -987,6 +1208,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
+        ApprovalService.Test(),
         RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         BunServices.layer,
@@ -1018,6 +1240,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           expect(toolCallParts[0]?.name).toBe("write_file")
           expect(toolResultParts.length).toBe(1)
           expect(toolResultParts[0]?.name).toBe("write_file")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),

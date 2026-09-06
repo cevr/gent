@@ -5,12 +5,13 @@
  * Expanded: all matches with line numbers per file
  */
 
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { For, Show, createMemo } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
-import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutputOption, getString } from "../../utils/parse-tool-output"
+import type { ToolInput } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface GrepMatch {
@@ -20,13 +21,13 @@ interface GrepMatch {
 }
 
 interface GrepOutput {
-  readonly matches: GrepMatch[]
+  readonly matches: readonly GrepMatch[]
   readonly truncated: boolean
 }
 
 const GrepMatchSchema = Schema.Struct({
   file: Schema.String,
-  line: Schema.Number,
+  line: Schema.Finite,
   content: Schema.String,
 })
 
@@ -35,24 +36,26 @@ const GrepOutputSchema = Schema.Struct({
   truncated: Schema.optional(Schema.Boolean),
 })
 
-function parseGrepOutput(output: string | undefined): GrepOutput | undefined {
-  const d = decodeToolOutput(GrepOutputSchema, output)
-  if (d === undefined) return undefined
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
-  return { matches: d["matches"] as GrepMatch[], truncated: d["truncated"] ?? false }
+function parseGrepOutput(
+  output: ToolRendererProps["toolCall"]["output"],
+): Option.Option<GrepOutput> {
+  return Option.map(decodeToolOutputOption(GrepOutputSchema, output), (d) => ({
+    matches: d.matches,
+    truncated: d.truncated ?? false,
+  }))
 }
 
-function getPattern(input: unknown): string {
+function getPattern(input: ToolInput): string {
   return getString(input, "pattern")
 }
 
 /** Group matches by file */
-function groupByFile(matches: GrepMatch[]): Map<string, GrepMatch[]> {
+function groupByFile(matches: readonly GrepMatch[]): Map<string, GrepMatch[]> {
   const groups = new Map<string, GrepMatch[]>()
   for (const m of matches) {
-    const existing = groups.get(m.file)
-    if (existing !== undefined) {
-      existing.push(m)
+    const existing = Option.fromNullishOr(groups.get(m.file))
+    if (Option.isSome(existing)) {
+      existing.value.push(m)
     } else {
       groups.set(m.file, [m])
     }
@@ -67,8 +70,8 @@ export function GrepToolRenderer(props: ToolRendererProps) {
   const pattern = createMemo(() => getPattern(props.toolCall.input))
   const grouped = createMemo(() => {
     const d = data()
-    if (d === undefined) return new Map<string, GrepMatch[]>()
-    return groupByFile(d.matches)
+    if (Option.isNone(d)) return new Map<string, GrepMatch[]>()
+    return groupByFile(d.value.matches)
   })
 
   const fileNames = createMemo(() => [...grouped().keys()])
@@ -81,7 +84,7 @@ export function GrepToolRenderer(props: ToolRendererProps) {
       status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={
-        <Show when={data()}>
+        <Show when={Option.getOrUndefined(data())}>
           {(d) => (
             <box flexDirection="column">
               <text>
@@ -105,7 +108,7 @@ export function GrepToolRenderer(props: ToolRendererProps) {
         </Show>
       }
     >
-      <Show when={data()}>
+      <Show when={Option.getOrUndefined(data())}>
         <box flexDirection="column">
           <For each={fileNames()}>
             {(file) => {

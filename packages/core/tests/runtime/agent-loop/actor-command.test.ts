@@ -1,15 +1,23 @@
-import { BunServices } from "@effect/platform-bun"
+import { ModelId } from "@gent/core-internal/domain/model"
+import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
-import { Cause, Clock, Context, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Cause, Clock, Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
+import { ExtensionContext, tool, type ToolCapability } from "@gent/core/extensions/api"
+import { Permission } from "@gent/core-internal/domain/permission"
+import { ApprovalService } from "@gent/core-internal/runtime/approval-service"
+import {
+  processLocalReplayBindingKey,
+  ProcessLocalToolReplay,
+} from "@gent/core-internal/runtime/agent/process-local-tool-replay"
+import {
+  assistantMessageIdForCommand,
+  toolCallIdForCommand,
+} from "@gent/core-internal/runtime/agent/agent-loop.utils"
 import { narrowR } from "../../helpers/effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import {
-  MessageStorage as ClusterMessageStorage,
-  Sharding,
-  SingleRunner,
-} from "effect/unstable/cluster"
-import { ActorAddressResolver, type PeekResult } from "effect-encore"
+import { SingleRunner } from "effect/unstable/cluster"
+import type { PeekResult } from "effect-encore"
 import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
 import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
 import type { QueueSnapshot } from "@gent/core-internal/domain/queue"
@@ -17,7 +25,7 @@ import {
   EventEnvelope,
   EventId,
   EventStoreError,
-  type AgentEvent,
+  AgentEvent,
 } from "@gent/core-internal/domain/event"
 import {
   finishPart,
@@ -62,31 +70,40 @@ import { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
 import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
 
-const makeTestExtensions = () => {
+const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   const cowork = AgentDefinition.make({
-    name: "cowork" as never,
-    model: "test/default" as never,
+    name: AgentName.make("cowork"),
+    model: ModelId.make("test/default"),
   })
   return resolveExtensions([
     {
       manifest: { id: ExtensionId.make("agents") },
-      scope: "builtin" as const,
+      scope: "builtin",
       sourcePath: "test",
       contributions: {
         agents: [cowork],
+        tools,
       } satisfies ExtensionContributions,
     },
   ])
 }
 
 const makeClusterRunnerLayer = (storageLayer: ReturnType<typeof SqliteStorage.TestWithSql>) =>
-  Layer.provide(SingleRunner.layer({ runnerStorage: "memory" }), storageLayer)
+  Layer.provide(
+    SingleRunner.layer({ runnerStorage: "memory" }),
+    Layer.merge(storageLayer, BunCrypto.layer),
+  )
 
-const makeRuntimeLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
-  const resolvedExtensions = makeTestExtensions()
+const makeRuntimeLayer = (
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+  tools: ReadonlyArray<ToolCapability> = [],
+) => {
+  const resolvedExtensions = makeTestExtensions(tools)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
   const storageLayer = SqliteStorage.TestWithSql()
+  let toolRunnerLayer = ToolRunner.Test()
+  if (tools.length > 0) toolRunnerLayer = ToolRunner.Live
   const baseDeps = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
@@ -99,7 +116,8 @@ const makeRuntimeLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel
     }),
     eventStoreLayer,
     recorderLayer,
-    ToolRunner.Test(),
+    toolRunnerLayer,
+    Permission.Live([], "allow"),
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     BunServices.layer,
@@ -108,9 +126,12 @@ const makeRuntimeLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel
     AgentLoopSessionGovernance.Live,
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
+  const approvalLayer = ApprovalService.Live.pipe(
+    Layer.provide(Layer.merge(baseDeps, eventPublisherLayer)),
+  )
   return Layer.provideMerge(
     SessionRuntime.Live({ baseSections: [] }),
-    Layer.merge(baseDeps, eventPublisherLayer),
+    Layer.mergeAll(baseDeps, eventPublisherLayer, approvalLayer, ProcessLocalToolReplay.Live),
   )
 }
 
@@ -135,6 +156,7 @@ const makeRuntimeLayerWithEventPublisher = (
     eventStoreLayer,
     recorderLayer,
     ToolRunner.Test(),
+    ApprovalService.Test(),
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     BunServices.layer,
@@ -237,20 +259,7 @@ const recordToolResultViaActor = (input: {
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
     .filter((call) => call.service === "EventStore" && call.method === "append")
-    .map((call) => (call.args as { _tag?: string } | undefined)?._tag)
-
-const actorProtocolContext = Effect.gen(function* () {
-  const resolver = yield* ActorAddressResolver
-  const actorClientFactory = yield* AgentLoopActor.Context
-  const clusterMessageStorage = yield* ClusterMessageStorage.MessageStorage
-  const sharding = yield* Sharding.Sharding
-  return Context.empty().pipe(
-    Context.add(ActorAddressResolver, resolver),
-    Context.add(AgentLoopActor.Context, actorClientFactory),
-    Context.add(ClusterMessageStorage.MessageStorage, clusterMessageStorage),
-    Context.add(Sharding.Sharding, sharding),
-  )
-})
+    .map((call) => Schema.decodeUnknownSync(AgentEvent)(call.args)._tag)
 
 const materializeActorCommand = <A, E>(result: PeekResult<A, E>): Effect.Effect<A, E> => {
   switch (result._tag) {
@@ -269,6 +278,100 @@ const materializeActorCommand = <A, E>(result: PeekResult<A, E>): Effect.Effect<
 }
 
 describe("agent-loop actor commands", () => {
+  it.live("InvokeTool rejects approval with a paired result and durable command failure", () =>
+    Effect.gen(function* () {
+      const executions = yield* Ref.make(0)
+      const approvalTool = tool({
+        id: "direct-approval",
+        description: "Needs human approval",
+        params: Schema.Struct({}),
+        output: Schema.Boolean,
+        execute: () =>
+          Effect.gen(function* () {
+            yield* Ref.update(executions, (count) => count + 1)
+            const ctx = yield* ExtensionContext
+            return (yield* ctx.Interaction.approve({ text: "approve direct invocation" })).approved
+          }),
+      })
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+      const layer = makeRuntimeLayer(providerLayer, [approvalTool])
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { sessionId, branchId } = yield* createSessionBranch
+          const factory = yield* AgentLoopActor.Context
+          const control = yield* AgentLoopActor.Control
+          const entityId = entityIdOf(DefaultWorkspaceId, sessionId, branchId)
+          const ref = yield* factory(entityId)
+          const commandId = ActorCommandId.make("direct-approval-command")
+          const payload = AgentLoopActor.InvokeTool.make({
+            workspaceId: DefaultWorkspaceId,
+            sessionId,
+            branchId,
+            commandId,
+            toolName: ToolName.make("direct-approval"),
+            input: {},
+          })
+          yield* ref.send(payload)
+          const first = yield* AgentLoopActor.InvokeTool.waitFor(payload)
+          expect(first._tag).toBe("Failure")
+          if (first._tag !== "Failure") return
+          expect(first.error.cause).toMatchObject({
+            message:
+              "InvokeTool cannot wait for approval. Use a session turn for interactive tools.",
+          })
+          expect(first.error.message).toContain("InvokeTool cannot wait for approval")
+          const storage = yield* MessageStorage
+          const history = yield* storage.listMessages(branchId)
+          expect(history.map((message) => message.role)).toEqual(["assistant", "tool"])
+          expect(history[1]?.parts[0]).toEqual(
+            Prompt.toolResultPart({
+              id: toolCallIdForCommand(commandId),
+              name: "direct-approval",
+              isFailure: true,
+              providerExecuted: false,
+              result: {
+                error:
+                  "InvokeTool cannot wait for approval. Use a session turn for interactive tools.",
+                reason: "ToolInvocationInteractionError",
+              },
+            }),
+          )
+          const approval = yield* ApprovalService
+          expect(yield* approval.pendingRequestId({ sessionId, branchId })).toBeUndefined()
+          const replay = yield* ProcessLocalToolReplay
+          expect(
+            Option.isNone(
+              yield* replay.getBinding(
+                processLocalReplayBindingKey({
+                  sessionId,
+                  branchId,
+                  assistantMessageId: assistantMessageIdForCommand(commandId),
+                  toolCallId: toolCallIdForCommand(commandId),
+                }),
+              ),
+            ),
+          ).toBe(true)
+          yield* ref.send(payload)
+          yield* control.redeliver(entityId)
+          const repeated = yield* AgentLoopActor.InvokeTool.waitFor(payload)
+          expect(repeated).toEqual(first)
+          expect(yield* Ref.get(executions)).toBe(1)
+          const recorder = yield* SequenceRecorder
+          expect(eventTags(yield* recorder.getCalls)).toContain("InteractionResolved")
+          const state = yield* ref.execute(
+            AgentLoopActor.GetState.make({
+              workspaceId: DefaultWorkspaceId,
+              sessionId,
+              branchId,
+              commandId: ActorCommandId.make("direct-approval-state"),
+            }),
+          )
+          expect(state._tag).toBe("Idle")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for the actor operation.
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer), narrowR),
+      )
+    }),
+  )
   it.live("InvokeTool actor command dedupes by commandId", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
@@ -283,17 +386,14 @@ describe("agent-loop actor commands", () => {
           const actorControl = yield* AgentLoopActor.Control
           const entityId = entityIdOf(DefaultWorkspaceId, sessionId, branchId)
           const ref = yield* actorClientFactory(entityId)
-          const protocolContext = yield* actorProtocolContext
-          yield* ref
-            .execute(
-              AgentLoopActor.GetState.make({
-                workspaceId: DefaultWorkspaceId,
-                sessionId,
-                branchId,
-                commandId: ActorCommandId.make("invoke-tool-warm-state"),
-              }),
-            )
-            .pipe(Effect.provide(protocolContext))
+          yield* ref.execute(
+            AgentLoopActor.GetState.make({
+              workspaceId: DefaultWorkspaceId,
+              sessionId,
+              branchId,
+              commandId: ActorCommandId.make("invoke-tool-warm-state"),
+            }),
+          )
           const invokePayload = AgentLoopActor.InvokeTool.make({
             workspaceId: DefaultWorkspaceId,
             sessionId,
@@ -305,13 +405,11 @@ describe("agent-loop actor commands", () => {
           yield* ref.send(invokePayload)
           yield* actorControl.redeliver(entityId)
           yield* AgentLoopActor.InvokeTool.waitFor(invokePayload).pipe(
-            Effect.provide(protocolContext),
             Effect.flatMap(materializeActorCommand),
           )
           yield* ref.send(invokePayload)
           yield* actorControl.redeliver(entityId)
           yield* AgentLoopActor.InvokeTool.waitFor(invokePayload).pipe(
-            Effect.provide(protocolContext),
             Effect.flatMap(materializeActorCommand),
           )
           const messages = yield* waitFor(
@@ -321,7 +419,7 @@ describe("agent-loop actor commands", () => {
             "invokeTool messages",
           )
           const queue = yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })
-          const calls = yield* recorder.getCalls()
+          const calls = yield* recorder.getCalls
           expect(messages.map((message) => message.role)).toEqual(["assistant", "tool"])
           expect(messages[0]?.parts[0]?.type).toBe("tool-call")
           expect(messages[1]?.parts[0]?.type).toBe("tool-result")
@@ -330,6 +428,7 @@ describe("agent-loop actor commands", () => {
           expect(eventTags(calls)).toContain("ToolCallSucceeded")
           expect(eventTags(calls).filter((tag) => tag === "ToolCallStarted")).toHaveLength(1)
           expect(eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(1)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -349,17 +448,14 @@ describe("agent-loop actor commands", () => {
           const actorControl = yield* AgentLoopActor.Control
           const entityId = entityIdOf(DefaultWorkspaceId, sessionId, branchId)
           const ref = yield* actorClientFactory(entityId)
-          const protocolContext = yield* actorProtocolContext
-          yield* ref
-            .execute(
-              AgentLoopActor.GetState.make({
-                workspaceId: DefaultWorkspaceId,
-                sessionId,
-                branchId,
-                commandId: ActorCommandId.make("interrupt-warm-state"),
-              }),
-            )
-            .pipe(Effect.provide(protocolContext))
+          yield* ref.execute(
+            AgentLoopActor.GetState.make({
+              workspaceId: DefaultWorkspaceId,
+              sessionId,
+              branchId,
+              commandId: ActorCommandId.make("interrupt-warm-state"),
+            }),
+          )
           const interruptPayload = AgentLoopActor.Interrupt.make({
             workspaceId: DefaultWorkspaceId,
             sessionId,
@@ -369,9 +465,7 @@ describe("agent-loop actor commands", () => {
           const exit = yield* Effect.gen(function* () {
             yield* ref.send(interruptPayload)
             yield* actorControl.redeliver(entityId)
-            const result = yield* AgentLoopActor.Interrupt.waitFor(interruptPayload).pipe(
-              Effect.provide(protocolContext),
-            )
+            const result = yield* AgentLoopActor.Interrupt.waitFor(interruptPayload)
             return yield* materializeActorCommand(result)
           }).pipe(Effect.exit)
 
@@ -379,15 +473,16 @@ describe("agent-loop actor commands", () => {
           if (exit._tag !== "Failure") return
           const errorOption = Cause.findErrorOption(exit.cause)
           if (errorOption._tag !== "Some") {
-            throw new Error(
-              `Expected interrupt failure error, got cause: ${Cause.pretty(exit.cause)}`,
+            return yield* Effect.die(
+              new Error(`Expected interrupt failure error, got cause: ${Cause.pretty(exit.cause)}`),
             )
           }
           const error = errorOption.value
           if (!Schema.is(AgentLoopError)(error)) {
-            throw new Error(`Expected AgentLoopError, got: ${String(error)}`)
+            return yield* Effect.die(new Error(`Expected AgentLoopError, got: ${String(error)}`))
           }
           expect(error.message).toBe("Invalid interrupt command")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -415,7 +510,7 @@ describe("agent-loop actor commands", () => {
           yield* recordToolResultViaActor(command)
           yield* recordToolResultViaActor(command)
           const messages = yield* messageStorage.listMessages(target.branchId)
-          const calls = yield* recorder.getCalls()
+          const calls = yield* recorder.getCalls
           const toolMessages = messages.filter((message) => message.role === "tool")
           const state = yield* getActorState(target)
           expect(toolMessages).toHaveLength(1)
@@ -425,6 +520,7 @@ describe("agent-loop actor commands", () => {
               id: ToolCallId.make("tool-call-idempotent"),
               name: "read",
               isFailure: false,
+              providerExecuted: false,
               result: { ok: true },
             }),
           ])
@@ -434,6 +530,7 @@ describe("agent-loop actor commands", () => {
             queue: { followUp: [], steering: [] },
           })
           expect(eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(1)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -442,20 +539,25 @@ describe("agent-loop actor commands", () => {
   it.live("recordToolResult rolls back the tool message when durable event append fails", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-      const failingPublisherLayer = Layer.succeed(EventPublisher, {
-        append: (event: AgentEvent) =>
-          event._tag === "ToolCallSucceeded"
-            ? Effect.fail(new EventStoreError({ message: "append failed" }))
-            : Effect.gen(function* () {
-                return EventEnvelope.make({
-                  id: EventId.make(0),
-                  event,
-                  createdAt: yield* Clock.currentTimeMillis,
-                })
-              }),
-        deliver: () => Effect.void,
-        publish: () => Effect.void,
-      })
+      const failingPublisherLayer = Layer.succeed(
+        EventPublisher,
+        EventPublisher.of({
+          append: (event: AgentEvent) => {
+            if (event._tag === "ToolCallSucceeded") {
+              return Effect.fail(new EventStoreError({ message: "append failed" }))
+            }
+            return Effect.gen(function* () {
+              return EventEnvelope.make({
+                id: EventId.make(0),
+                event,
+                createdAt: yield* Clock.currentTimeMillis,
+              })
+            })
+          },
+          deliver: () => Effect.void,
+          publish: () => Effect.void,
+        }),
+      )
       const layer = makeRuntimeLayerWithEventPublisher(providerLayer, failingPublisherLayer)
       yield* narrowR(
         Effect.gen(function* () {
@@ -477,6 +579,7 @@ describe("agent-loop actor commands", () => {
           )
           expect(exit._tag).toBe("Failure")
           expect(message).toBeUndefined()
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
@@ -505,6 +608,7 @@ describe("agent-loop actor commands", () => {
               if (envelope.event._tag !== "ToolCallSucceeded") return
               deliveredToolResults++
               if (deliveredToolResults === 1) {
+                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
                 yield* Deferred.succeed(firstDeliveryStarted, undefined)
                 yield* Deferred.await(releaseDelivery)
               }
@@ -546,10 +650,12 @@ describe("agent-loop actor commands", () => {
           const earlySecond = yield* Fiber.join(secondFiber).pipe(Effect.timeoutOption("1 millis"))
           expect(earlySecond._tag).toBe("None")
           expect(deliveredToolResults).toBe(1)
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(releaseDelivery, undefined)
           yield* Fiber.join(firstFiber)
           yield* Fiber.join(secondFiber)
           expect(deliveredToolResults).toBe(2)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
       )
     }),
@@ -561,6 +667,7 @@ describe("agent-loop actor commands", () => {
       const streamReleased = yield* Deferred.make<void>()
       const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.gen(function* () {
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(streamStarted, undefined)
           yield* Deferred.await(streamReleased)
           return Stream.fromIterable([
@@ -597,6 +704,7 @@ describe("agent-loop actor commands", () => {
           const messagesBeforeRelease = yield* messageStorage.listMessages(branchId)
           expect(earlyRecord._tag).toBe("None")
           expect(messagesBeforeRelease.some((message) => message.role === "tool")).toBe(false)
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(streamReleased, undefined)
           yield* Fiber.join(submitFiber)
           yield* Fiber.join(recordFiber)
@@ -611,6 +719,7 @@ describe("agent-loop actor commands", () => {
             "assistant",
             "tool",
           ])
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
       )
     }),
@@ -622,6 +731,7 @@ describe("agent-loop actor commands", () => {
       const streamReleased = yield* Deferred.make<void>()
       const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.gen(function* () {
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(streamStarted, undefined)
           yield* Deferred.await(streamReleased)
           return Stream.fromIterable([
@@ -660,7 +770,9 @@ describe("agent-loop actor commands", () => {
           yield* Fiber.join(recordFiber).pipe(Effect.ignore)
           const afterTerminate = yield* Effect.exit(getActorState({ sessionId, branchId }))
           expect(afterTerminate._tag).toBe("Failure")
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(streamReleased, undefined).pipe(Effect.ignore)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),

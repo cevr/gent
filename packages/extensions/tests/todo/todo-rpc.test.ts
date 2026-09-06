@@ -10,7 +10,7 @@
  *  - missing capability id fails as ExtensionProtocolError (NotFound mapped)
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { TodoExtension } from "../../src/todo/index.js"
@@ -23,6 +23,14 @@ import {
 import { ref } from "@gent/core/extensions/api"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { e2ePreset } from "../helpers/test-preset"
+import { Todo } from "../../src/todo/domain.js"
+
+const TodoSummary = Schema.Struct({
+  id: Todo.fields.id,
+  subject: Todo.fields.subject,
+  status: Todo.fields.status,
+})
+const TodoSummaries = Schema.Array(TodoSummary)
 
 // Hoisted refs — every test reuses the same capability tokens.
 const TodoCreateRef = ref(TodoCreateRequest)
@@ -44,25 +52,29 @@ describe("TodoExtension via RPC", () => {
           })
 
           // request: create
-          const created = (yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId: TodoCreateRef.extensionId,
-            capabilityId: TodoCreateRef.capabilityId,
-            input: { subject: "Inspect repo" },
-          })) as { id: string; subject: string; status: string }
+          const created = yield* client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: TodoCreateRef.extensionId,
+              capabilityId: TodoCreateRef.capabilityId,
+              input: { subject: "Inspect repo" },
+            })
+            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(TodoSummary)))
           expect(created.id).toBeDefined()
           expect(created.subject).toBe("Inspect repo")
           expect(created.status).toBe("pending")
 
           // request: list
-          const listed = (yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId: TodoListRef.extensionId,
-            capabilityId: TodoListRef.capabilityId,
-            input: {},
-          })) as ReadonlyArray<{ id: string; subject: string; status: string }>
+          const listed = yield* client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: TodoListRef.extensionId,
+              capabilityId: TodoListRef.capabilityId,
+              input: {},
+            })
+            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(TodoSummaries)))
           expect(listed).toHaveLength(1)
           expect(listed[0]?.id).toBe(created.id)
 
@@ -75,13 +87,15 @@ describe("TodoExtension via RPC", () => {
             input: { todoId: created.id, status: "in_progress" },
           })
 
-          const afterUpdate = (yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId: TodoListRef.extensionId,
-            capabilityId: TodoListRef.capabilityId,
-            input: {},
-          })) as ReadonlyArray<{ id: string; status: string }>
+          const afterUpdate = yield* client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: TodoListRef.extensionId,
+              capabilityId: TodoListRef.capabilityId,
+              input: {},
+            })
+            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(TodoSummaries)))
           expect(afterUpdate[0]?.status).toBe("in_progress")
 
           // request: delete
@@ -92,13 +106,15 @@ describe("TodoExtension via RPC", () => {
             capabilityId: TodoDeleteRef.capabilityId,
             input: { todoId: created.id },
           })
-          const afterDelete = (yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId: TodoListRef.extensionId,
-            capabilityId: TodoListRef.capabilityId,
-            input: {},
-          })) as ReadonlyArray<unknown>
+          const afterDelete = yield* client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: TodoListRef.extensionId,
+              capabilityId: TodoListRef.capabilityId,
+              input: {},
+            })
+            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(TodoSummaries)))
           expect(afterDelete).toHaveLength(0)
         }).pipe(Effect.timeout("8 seconds")),
       ),
@@ -185,7 +201,9 @@ describe("TodoExtension via RPC", () => {
             input: { subject: "Inspect repo" },
           })
 
-          expect((result as { subject: string }).subject).toBe("Inspect repo")
+          expect((yield* Schema.decodeUnknownEffect(TodoSummary)(result)).subject).toBe(
+            "Inspect repo",
+          )
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

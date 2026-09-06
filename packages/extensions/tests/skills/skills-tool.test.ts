@@ -1,9 +1,9 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
 
 import { SkillsTool } from "../../src/skills/skills-tool.js"
-import { SearchSkillsTool } from "../../src/skills/search-skills.js"
+import { SearchSkillsResult, SearchSkillsTool } from "../../src/skills/search-skills.js"
 import { Skill, Skills } from "../../src/skills/skills.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { runToolWithCtx } from "@gent/core-internal/test-utils"
@@ -115,7 +115,7 @@ describe("SearchSkillsTool", () => {
     narrowR(
       runToolWithCtx(SearchSkillsTool, { query: "effect" }, ctx).pipe(
         Effect.map((result) => {
-          const r = result as { count: number; results: ReadonlyArray<{ name: string }> }
+          const r = Schema.decodeSync(SearchSkillsResult)(result)
           expect(r.count).toBe(2)
           expect(r.results.every((s) => s.name === "effect-v4")).toBe(true)
         }),
@@ -128,7 +128,7 @@ describe("SearchSkillsTool", () => {
     narrowR(
       runToolWithCtx(SearchSkillsTool, { query: "react" }, ctx).pipe(
         Effect.map((result) => {
-          const r = result as { results: ReadonlyArray<{ level: string }> }
+          const r = Schema.decodeSync(SearchSkillsResult)(result)
           expect(r.results[0]?.level).toBe("global")
         }),
         Effect.provide(skillsLayer),

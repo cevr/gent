@@ -6,6 +6,7 @@ import {
   Cause,
   Config,
   Console,
+  Context,
   DateTime,
   Effect,
   Exit,
@@ -19,8 +20,6 @@ import {
   Tracer,
 } from "effect"
 import { makeClientTraceLogger } from "./utils/client-trace-logger"
-import { identity } from "effect/Function"
-import type { Context } from "effect"
 import { RegistryProvider } from "./atom-solid/solid"
 import { LinkOpener } from "./services/link-opener"
 import { OsService } from "./services/os-service"
@@ -36,6 +35,7 @@ import { render } from "@opentui/solid"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { App } from "./app"
+import { TerminalDimensionsProvider } from "./terminal-dimensions"
 import { detectColorScheme } from "./theme/index"
 import { ClientProvider } from "./client/index"
 import { RouterProvider } from "./router"
@@ -96,14 +96,17 @@ const formatMissingProviders = (providers: readonly ProviderId[]): string =>
 
 const ATOM_CACHE_MAX = 256
 
-const toError = (cause: unknown): Error =>
-  cause instanceof Error ? cause : new Error(String(cause))
+const toError = (cause: unknown): Error => {
+  if (cause instanceof Error) return cause
+  // eslint-disable-next-line effect/noNewError -- the client service boundary requires an Error value.
+  return new Error(String(cause))
+}
 
 const waitForRendererDestroy = (renderer: CliRenderer) =>
   Effect.callback<void>((resume) => {
     let settled = false
     // @effect-diagnostics-next-line globalTimersInEffect:off -- process lifetime handle: OpenTUI render resolves after mount and suspended Effect fibers do not keep Bun alive
-    const keepAlive = setInterval(() => {}, 60_000)
+    const keepAlive = setInterval(() => {}, 60_000) // eslint-disable-line effect/noGlobals -- OpenTUI needs a process-lifetime handle until renderer destruction.
     const onDestroy = () => {
       if (settled) return
       settled = true
@@ -122,7 +125,7 @@ const waitForRendererDestroy = (renderer: CliRenderer) =>
     })
   })
 
-class CliStartupError extends Schema.TaggedErrorClass<CliStartupError>()("CliStartupError", {
+class CliStartupError extends Schema.TaggedError<CliStartupError>()("CliStartupError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
@@ -145,13 +148,15 @@ const resolveParentSpan = () =>
     const traceIdOpt = yield* Config.option(Config.string("GENT_TRACE_ID"))
     const parentSpanIdOpt = yield* Config.option(Config.string("GENT_PARENT_SPAN_ID"))
 
-    if (!Option.isSome(traceIdOpt) || !Option.isSome(parentSpanIdOpt)) return undefined
+    if (!Option.isSome(traceIdOpt) || !Option.isSome(parentSpanIdOpt)) return Option.none()
 
-    return Tracer.externalSpan({
-      traceId: traceIdOpt.value,
-      spanId: parentSpanIdOpt.value,
-      sampled: true,
-    })
+    return Option.some(
+      Tracer.externalSpan({
+        traceId: traceIdOpt.value,
+        spanId: parentSpanIdOpt.value,
+        sampled: true,
+      }),
+    )
   })
 
 const runHeadlessTurn = (
@@ -159,55 +164,59 @@ const runHeadlessTurn = (
   state: Extract<InitialState, { readonly _tag: "headless" }>,
   cwd: string,
   home: string,
-  agent: AgentName | undefined,
-  runSpec?: RunSpec,
-) =>
-  Effect.gen(function* () {
-    const branchId = state.session.activeBranchId
-    if (branchId === undefined) {
+  agent: Option.Option<AgentName>,
+  runSpec: Option.Option<RunSpec>,
+) => {
+  const branchId = Option.fromNullishOr(state.session.activeBranchId)
+  if (Option.isNone(branchId)) {
+    return Effect.gen(function* () {
       yield* Console.error("Error: session has no branch")
       return yield* new AppBootstrapError({
         sessionId: state.session.id,
         reason: "missing-branch",
       })
-    }
+    })
+  }
 
+  const resolvedBranchId = branchId.value
+  const clientRuntime: ClientRuntime = ManagedRuntime.make(
+    Layer.mergeAll(
+      BunFileSystem.layer,
+      BunServices.layer,
+      makeClientTransportLayer({
+        client: bundle.client,
+        runtime: bundle.runtime,
+        currentSession: () => ({ sessionId: state.session.id, branchId: resolvedBranchId }),
+        onExtensionStateChanged: () => () => {},
+        onSessionEvent: () => () => {},
+      }),
+      makeClientWorkspaceLayer({ cwd, home }),
+      makeClientShellLayer({
+        sendMessage: () => {},
+        openOverlay: () => {},
+        closeOverlay: () => {},
+        run: bundle.runtime.run,
+        cast: bundle.runtime.cast,
+      }),
+      makeClientDriverLayer({
+        list: bundle.client.driver.list().pipe(Effect.mapError(toError)),
+        set: (input) => bundle.client.driver.set(input).pipe(Effect.mapError(toError)),
+        clear: (input) => bundle.client.driver.clear(input).pipe(Effect.mapError(toError)),
+      }),
+      makeClientComposerLayer({
+        state: () => ({
+          draft: "",
+          mode: "editing",
+          inputFocused: false,
+          autocompleteOpen: false,
+        }),
+      }),
+      makeClientLifecycleLayer({ addCleanup: () => {} }),
+    ),
+  )
+
+  return Effect.gen(function* () {
     const parentSpan = yield* resolveParentSpan()
-    const clientRuntime: ClientRuntime = ManagedRuntime.make(
-      Layer.mergeAll(
-        BunFileSystem.layer,
-        BunServices.layer,
-        makeClientTransportLayer({
-          client: bundle.client,
-          runtime: bundle.runtime,
-          currentSession: () => ({ sessionId: state.session.id, branchId }),
-          onExtensionStateChanged: () => () => {},
-          onSessionEvent: () => () => {},
-        }),
-        makeClientWorkspaceLayer({ cwd, home }),
-        makeClientShellLayer({
-          sendMessage: () => {},
-          openOverlay: () => {},
-          closeOverlay: () => {},
-          run: bundle.runtime.run,
-          cast: bundle.runtime.cast,
-        }),
-        makeClientDriverLayer({
-          list: () => bundle.client.driver.list().pipe(Effect.mapError(toError)),
-          set: (input) => bundle.client.driver.set(input).pipe(Effect.mapError(toError)),
-          clear: (input) => bundle.client.driver.clear(input).pipe(Effect.mapError(toError)),
-        }),
-        makeClientComposerLayer({
-          state: () => ({
-            draft: "",
-            mode: "editing",
-            inputFocused: false,
-            autocompleteOpen: false,
-          }),
-        }),
-        makeClientLifecycleLayer({ addCleanup: () => {} }),
-      ),
-    )
     const toolRenderers = yield* Effect.promise(() =>
       loadExtensionUi(clientRuntime, {
         builtins: builtinClientModules,
@@ -233,19 +242,21 @@ const runHeadlessTurn = (
       ),
     )
 
-    yield* runHeadless(
+    const headlessEffect = runHeadless(
       bundle.client,
       state.session.id,
-      branchId,
+      resolvedBranchId,
       state.prompt,
-      agent,
-      runSpec,
+      Option.getOrUndefined(agent),
+      Option.getOrUndefined(runSpec),
       toolRenderers,
-    ).pipe(
-      Effect.withSpan("Headless.run"),
-      parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
-    )
+    ).pipe(Effect.withSpan("Headless.run"))
+    yield* Option.match(parentSpan, {
+      onNone: () => headlessEffect,
+      onSome: (span) => headlessEffect.pipe(Effect.withParentSpan(span)),
+    })
   })
+}
 
 // Main command - launches TUI or runs headless
 const main = Command.make(
@@ -313,55 +324,59 @@ const main = Command.make(
       const cwd = process.cwd()
       const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
       const scope = yield* Effect.scope
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary validates foreign runtime shape before use
-      const uiServices = (yield* Layer.buildWithScope(
-        makeUiLayer(),
-        scope,
-      )) as Context.Context<unknown>
+      const builtUiServices = yield* Layer.buildWithScope(makeUiLayer(), scope)
+      const uiServices = Context.makeUnsafe<unknown>(builtUiServices.mapUnsafe)
       const visualOpt = yield* Config.option(Config.string("VISUAL"))
       const editorOpt = yield* Config.option(Config.string("EDITOR"))
       const authDirectoryOpt = yield* Config.option(Config.string("GENT_AUTH_DIRECTORY"))
       const env = {
-        visual: Option.getOrUndefined(visualOpt),
-        editor: Option.getOrUndefined(editorOpt),
+        visual: visualOpt,
+        editor: editorOpt,
       }
 
       // Create Effect-backed logger from captured services
       const logServices = yield* Effect.context<never>()
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary validates foreign runtime shape before use
-      const log = createClientLog(logServices as Context.Context<unknown>)
-      let mainFiber: Fiber.Fiber<unknown, unknown> | undefined
+      const log = createClientLog(Context.makeUnsafe<unknown>(logServices.mapUnsafe))
+      let mainFiber: Option.Option<Fiber.Fiber<unknown, unknown>> = Option.none()
       yield* Effect.withFiber((fiber) =>
         Effect.sync(() => {
-          mainFiber = fiber
+          mainFiber = Option.some(fiber)
         }),
       )
       const mainServices = yield* Effect.context<never>()
       const interruptMain = () => {
         shutdownLog("shutdown.interrupt-fiber")
-        if (mainFiber !== undefined) {
-          Effect.runForkWith(mainServices)(Fiber.interrupt(mainFiber))
+        if (Option.isSome(mainFiber)) {
+          Effect.runForkWith(mainServices)(Fiber.interrupt(mainFiber.value))
         }
       }
 
       const resolveBundle = () => {
         if (Option.isSome(connect)) return Gent.client(connect.value)
-        const serverState = debug || isolate ? Gent.state.memory() : Gent.state.sqlite()
-        const serverProvider = debug ? Gent.provider.mock() : Gent.provider.live()
-        return Effect.flatMap(
-          Gent.server({
-            cwd,
-            state: serverState,
-            provider: serverProvider,
-            ...(Option.isSome(authDirectoryOpt) ? { authDirectory: authDirectoryOpt.value } : {}),
-            debug,
-          }),
-          Gent.client,
-        )
+        let serverState = Gent.state.sqlite()
+        if (debug || isolate) serverState = Gent.state.memory()
+        let serverProvider = Gent.provider.live()
+        if (debug) serverProvider = Gent.provider.mock()
+        const serverOptions = {
+          cwd,
+          state: serverState,
+          provider: serverProvider,
+          debug,
+        }
+        const configuredOptions = Option.match(authDirectoryOpt, {
+          onNone: () => serverOptions,
+          onSome: (authDirectory) => ({ ...serverOptions, authDirectory }),
+        })
+        return Effect.flatMap(Gent.server(configuredOptions), Gent.client)
       }
       const bundle = yield* resolveBundle()
-      const requestedAgent: AgentName | undefined =
-        Option.isSome(agent) && Schema.is(AgentNameSchema)(agent.value) ? agent.value : undefined
+      const requestedAgent = Option.match(agent, {
+        onNone: () => Option.none<AgentName>(),
+        onSome: (value) => {
+          if (!Schema.is(AgentNameSchema)(value)) return Option.none<AgentName>()
+          return Option.some(value)
+        },
+      })
 
       if (headless) {
         yield* bundle.runtime.lifecycle.waitForReady
@@ -378,7 +393,7 @@ const main = Command.make(
         const startupAuth = yield* resolveStartupAuthState({
           client: bundle.client,
           state,
-          ...(requestedAgent !== undefined ? { requestedAgent } : {}),
+          requestedAgent: Option.getOrUndefined(requestedAgent),
         })
         const missingProviders = startupAuth.missingProviders
 
@@ -394,16 +409,17 @@ const main = Command.make(
           })
         }
 
-        const decodedRunSpec: RunSpec | undefined = Option.isSome(runSpecJson)
-          ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RunSpecSchema))(
-              runSpecJson.value,
-            ).pipe(
+        const decodedRunSpec = yield* Option.match(runSpecJson, {
+          onNone: () => Effect.succeed(Option.none<RunSpec>()),
+          onSome: (runSpec) =>
+            Schema.decodeEffect(Schema.fromJsonString(RunSpecSchema))(runSpec).pipe(
+              Effect.asSome,
               Effect.mapError(
                 (e) =>
                   new CliStartupError({ message: `Invalid --run-spec: ${String(e)}`, cause: e }),
               ),
-            )
-          : undefined
+            ),
+        })
 
         yield* runHeadlessTurn(bundle, state, cwd, home, requestedAgent, decodedRunSpec)
         return
@@ -460,11 +476,13 @@ const main = Command.make(
                   >
                     <ExtensionUIProvider>
                       <RouterProvider initialRoute={bootstrap.initialRoute}>
-                        <App
-                          debugMode={debug}
-                          missingAuthProviders={missingAuth}
-                          initialThemeMode={initialThemeMode}
-                        />
+                        <TerminalDimensionsProvider>
+                          <App
+                            debugMode={debug}
+                            missingAuthProviders={missingAuth}
+                            initialThemeMode={initialThemeMode}
+                          />
+                        </TerminalDimensionsProvider>
                       </RouterProvider>
                     </ExtensionUIProvider>
                   </ClientProvider>
@@ -506,7 +524,8 @@ const sessions = Command.make(
       const cwd = process.cwd()
       const resolveBundle = () => {
         if (Option.isSome(connect)) return Gent.client(connect.value)
-        const serverState = isolate ? Gent.state.memory() : Gent.state.sqlite()
+        let serverState = Gent.state.sqlite()
+        if (isolate) serverState = Gent.state.memory()
         return Effect.flatMap(Gent.server({ cwd, state: serverState }), Gent.client)
       }
       const bundle = yield* resolveBundle()
@@ -526,7 +545,8 @@ const sessions = Command.make(
             onSome: DateTime.formatIso,
           }),
         )
-        yield* Console.log(`  ${s.id} - ${s.name ?? "Unnamed"} (${date})`)
+        const name = Option.getOrElse(Option.fromNullishOr(s.name), () => "Unnamed")
+        yield* Console.log(`  ${s.id} - ${name} (${date})`)
       }
     }),
 )
@@ -535,9 +555,9 @@ const sessions = Command.make(
 const serverStatus = Command.make("status", {}, () =>
   Effect.gen(function* () {
     const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
-    const entry = yield* readServerLock(home)
+    const entry = Option.fromNullishOr(yield* readServerLock(home))
 
-    if (entry === undefined) {
+    if (Option.isNone(entry)) {
       yield* Console.log("No shared server.")
       return
     }
@@ -548,10 +568,11 @@ const serverStatus = Command.make("status", {}, () =>
     )
     yield* Console.log("─".repeat(120))
 
-    const validation = yield* validateServerLockEntry(entry)
-    const status = validation.valid ? "alive" : `dead (${validation.reason})`
+    const validation = yield* validateServerLockEntry(entry.value)
+    let status = "alive"
+    if (!validation.valid) status = `dead (${validation.reason})`
     yield* Console.log(
-      `${String(entry.pid).padEnd(8)} ${status.padEnd(10)} ${entry.serverId.padEnd(40)} ${entry.dbPath.padEnd(40)} ${entry.rpcUrl}`,
+      `${String(entry.value.pid).padEnd(8)} ${status.padEnd(10)} ${entry.value.serverId.padEnd(40)} ${entry.value.dbPath.padEnd(40)} ${entry.value.rpcUrl}`,
     )
   }),
 )
@@ -569,34 +590,36 @@ const serverStop = Command.make(
     Effect.gen(function* () {
       const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
       const thisHost = yield* getLocalHostname
-      const entry = yield* readServerLock(home)
+      const entry = Option.fromNullishOr(yield* readServerLock(home))
 
-      if (entry === undefined) {
+      if (Option.isNone(entry)) {
         yield* Console.log("No shared server.")
         return
       }
 
-      if (entry.hostname !== thisHost || (!all && !(yield* isPidAlive(entry.pid)))) {
+      if (entry.value.hostname !== thisHost || (!all && !(yield* isPidAlive(entry.value.pid)))) {
         yield* Console.log("No live shared server to stop on this host.")
         return
       }
 
       // Signal target — identity-probe before SIGTERM so PID reuse after a
       // crash never kills an unrelated process (same boundary as SDK attach).
-      const outcome = yield* signalIfIdentityOwned(entry, probeServerLockEntryIdentity)
+      const outcome = yield* signalIfIdentityOwned(entry.value, probeServerLockEntryIdentity)
       if (outcome === "signaled") {
-        yield* Console.log(`Sent SIGTERM to PID ${entry.pid} (${entry.serverId})`)
+        yield* Console.log(`Sent SIGTERM to PID ${entry.value.pid} (${entry.value.serverId})`)
       } else {
-        yield* Console.log(`Skipped PID ${entry.pid} (${entry.serverId}): identity probe failed`)
+        yield* Console.log(
+          `Skipped PID ${entry.value.pid} (${entry.value.serverId}): identity probe failed`,
+        )
       }
 
       // Wait for the process to exit, then cleanup the server lock.
       yield* Effect.sleep("2 seconds")
 
-      if (yield* isPidAlive(entry.pid)) {
+      if (yield* isPidAlive(entry.value.pid)) {
         yield* Console.log("\nShared server is still running after SIGTERM.")
       } else {
-        yield* removeServerLock(home, entry.serverId)
+        yield* removeServerLock(home, entry.value.serverId)
         yield* Console.log("\nShared server stopped and cleaned up.")
       }
     }),
@@ -613,11 +636,9 @@ const readDoctorExtensionHealth = (
   Effect.gen(function* () {
     const validation = yield* validateServerLockEntry(entry)
     if (!validation.valid) {
-      return extensionHealthUnavailable(
-        validation.reason === "dead-pid"
-          ? "Shared server lock is stale."
-          : "Shared server is not local to this host.",
-      )
+      let reason = "Shared server is not local to this host."
+      if (validation.reason === "dead-pid") reason = "Shared server lock is stale."
+      return extensionHealthUnavailable(reason)
     }
 
     return yield* Effect.scoped(
@@ -627,18 +648,18 @@ const readDoctorExtensionHealth = (
         const snapshot = yield* bundle.client.extension.listStatus({})
         return extensionHealthFromSnapshot(snapshot)
       }),
-    ).pipe(Effect.catch((error: unknown) => Effect.succeed(extensionHealthError(String(error)))))
+    ).pipe(Effect.catch((error) => Effect.succeed(extensionHealthError(String(error)))))
   })
 
 const doctor = Command.make("doctor", {}, () =>
   Effect.gen(function* () {
     const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
-    const entry = yield* readServerLock(home)
-    const extensions =
-      entry === undefined
-        ? extensionHealthUnavailable("No shared server.")
-        : yield* readDoctorExtensionHealth(entry)
-    const report = yield* makeDoctorReport(home, entry, extensions)
+    const entry = Option.fromNullishOr(yield* readServerLock(home))
+    const extensions = yield* Option.match(entry, {
+      onNone: () => Effect.succeed(extensionHealthUnavailable("No shared server.")),
+      onSome: readDoctorExtensionHealth,
+    })
+    const report = yield* makeDoctorReport(home, Option.getOrUndefined(entry), extensions)
     yield* Console.log(formatDoctorReport(report))
   }),
 )
@@ -646,8 +667,8 @@ const doctor = Command.make("doctor", {}, () =>
 const storageReset = Command.make("reset", {}, () =>
   Effect.gen(function* () {
     const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
-    const entry = yield* readServerLock(home)
-    if (entry !== undefined && (yield* validateServerLockEntry(entry)).valid) {
+    const entry = Option.fromNullishOr(yield* readServerLock(home))
+    if (Option.isSome(entry) && (yield* validateServerLockEntry(entry.value)).valid) {
       yield* Console.error(
         "Error: shared server is running. Stop it with `gent server stop` first.",
       )
@@ -687,8 +708,12 @@ const TraceLoggerLayer = Layer.unwrap(
   makeClientTraceLogger().pipe(Effect.map((logger) => Logger.layer([logger]))),
 )
 const CliRuntimeLayer = Layer.merge(PlatformLayer, Layer.provide(TraceLoggerLayer, PlatformLayer))
-// @effect-diagnostics-next-line strictEffectProvide:off entrypoint layer provision
-const mainEffect = cli.pipe(Effect.provide(CliRuntimeLayer))
+const mainEffect = Effect.scoped(
+  Effect.gen(function* () {
+    const cliContext = yield* Layer.build(CliRuntimeLayer)
+    return yield* Effect.provideContext(cli, Context.makeUnsafe<unknown>(cliContext.mapUnsafe))
+  }),
+)
 
 const gracefulCliTeardown: Runtime.Teardown = (exit, onExit) => {
   if (Exit.isSuccess(exit)) {
@@ -711,6 +736,7 @@ const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
       process.removeListener("SIGTERM", onSignal)
     }
     teardown(exit, (code) => {
+      // eslint-disable-next-line effect/noGlobals -- CLI teardown must return the process exit code.
       process.exit(code)
     })
   })
@@ -726,5 +752,4 @@ const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
   process.on("SIGTERM", onSignal)
 })
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary validates foreign runtime shape before use
-runCliMain(Effect.scoped(mainEffect) as Effect.Effect<void>, { teardown: gracefulCliTeardown })
+runCliMain(Effect.scoped(mainEffect), { teardown: gracefulCliTeardown })

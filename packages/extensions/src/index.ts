@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import {
   type GentExtension,
   defineExtension,
@@ -7,6 +7,7 @@ import {
   hook,
   tool,
 } from "@gent/core/extensions/api"
+import { BuiltinArtifactIdentity } from "./artifact-identity.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ExecToolsExtension } from "./exec-tools/index.js"
 import { DelegateExtension } from "./delegate/delegate-tool.js"
@@ -84,11 +85,12 @@ export const SessionToolsExtension = defineExtension({
   id: "@gent/session-tools",
   tools: [SearchSessionsTool, ReadSessionTool, RenameSessionTool],
   hooks: [
-    hook.systemPrompt((input) =>
-      Effect.succeed(
-        input.interactive === false ? input.basePrompt : input.basePrompt + NAMING_INSTRUCTION,
-      ),
-    ),
+    hook.systemPrompt((input) => {
+      if (input.interactive === false) {
+        return Effect.succeed(input.basePrompt)
+      }
+      return Effect.succeed(input.basePrompt + NAMING_INSTRUCTION)
+    }),
   ],
 })
 
@@ -147,4 +149,10 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner>
   GoogleExtension,
   MistralExtension,
   ArtifactsExtension,
-]
+].map((extension) => {
+  if (Option.isNone(BuiltinArtifactIdentity)) return extension
+  return {
+    ...extension,
+    artifactIdentity: BuiltinArtifactIdentity.value,
+  }
+})

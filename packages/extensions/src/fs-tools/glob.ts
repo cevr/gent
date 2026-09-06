@@ -1,10 +1,10 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import picomatch from "picomatch"
 
 // Glob Tool Error
 
-export class GlobError extends Schema.TaggedErrorClass<GlobError>()("GlobError", {
+export class GlobError extends Schema.TaggedError<GlobError>()("GlobError", {
   message: Schema.String,
   pattern: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -22,7 +22,7 @@ export const GlobParams = Schema.Struct({
     }),
   ),
   limit: Schema.optionalKey(
-    Schema.Number.annotate({
+    Schema.Finite.annotate({
       description: "Maximum number of results (default: 100)",
     }),
   ),
@@ -48,7 +48,11 @@ export const GlobTool = tool({
   execute: Effect.fn("GlobTool.execute")(function* (params) {
     const ctx = yield* ExtensionContext
 
-    const basePath = params.path !== undefined ? ctx.Files.resolve(params.path) : ctx.cwd
+    let basePath = ctx.cwd
+    const path = Option.fromNullishOr(params.path)
+    if (Option.isSome(path)) {
+      basePath = ctx.Files.resolve(path.value)
+    }
     const limit = params.limit ?? 100
 
     const allFiles = yield* ctx.Files.listFiles({ cwd: basePath })

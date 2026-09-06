@@ -19,7 +19,7 @@ describe("AgentName brand", () => {
 
   test("plain string fails the brand predicate at the schema boundary", () => {
     expect(Schema.is(AgentName)("cowork")).toBe(true) // brand-only filter accepts strings at runtime
-    const decoded = Effect.runSync(Schema.decodeUnknownEffect(AgentName)("research"))
+    const decoded = Effect.runSync(Schema.decodeEffect(AgentName)("research"))
     expect(decoded).toBe(AgentName.make("research"))
   })
 })
@@ -49,7 +49,7 @@ describe("AgentRunResult", () => {
 describe("AgentRunToolCallSchema", () => {
   test("decodes structurally typed tool-call records", () => {
     const decoded = Effect.runSync(
-      Schema.decodeUnknownEffect(AgentRunToolCallSchema)({
+      Schema.decodeEffect(AgentRunToolCallSchema)({
         toolName: "read",
         args: { path: "x.ts" },
         isError: false,
@@ -62,16 +62,12 @@ describe("AgentRunToolCallSchema", () => {
 
 describe("ApprovalRequest / ApprovalDecision schemas", () => {
   test("ApprovalRequest accepts text + optional metadata", () => {
-    const decoded = Effect.runSync(
-      Schema.decodeUnknownEffect(ApprovalRequestSchema)({ text: "approve?" }),
-    )
+    const decoded = Effect.runSync(Schema.decodeEffect(ApprovalRequestSchema)({ text: "approve?" }))
     expect(decoded.text).toBe("approve?")
   })
 
   test("ApprovalDecision requires approved boolean", () => {
-    const decoded = Effect.runSync(
-      Schema.decodeUnknownEffect(ApprovalDecisionSchema)({ approved: true }),
-    )
+    const decoded = Effect.runSync(Schema.decodeEffect(ApprovalDecisionSchema)({ approved: true }))
     expect(decoded.approved).toBe(true)
   })
 })

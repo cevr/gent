@@ -1,6 +1,6 @@
 import { Layer, Context } from "effect"
 
-export interface RuntimeEnvironmentShape {
+export interface RuntimeEnvironmentApi {
   readonly cwd: string
   readonly home: string
   readonly platform: string
@@ -8,11 +8,11 @@ export interface RuntimeEnvironmentShape {
 
 export class RuntimeEnvironment extends Context.Service<
   RuntimeEnvironment,
-  RuntimeEnvironmentShape
+  RuntimeEnvironmentApi
 >()("@gent/core/src/runtime/runtime-environment/RuntimeEnvironment") {
-  static Live = (config: RuntimeEnvironmentShape): Layer.Layer<RuntimeEnvironment> =>
+  static Live = (config: RuntimeEnvironmentApi): Layer.Layer<RuntimeEnvironment> =>
     Layer.succeed(RuntimeEnvironment, config)
 
-  static Test = (config: RuntimeEnvironmentShape): Layer.Layer<RuntimeEnvironment> =>
+  static Test = (config: RuntimeEnvironmentApi): Layer.Layer<RuntimeEnvironment> =>
     Layer.succeed(RuntimeEnvironment, config)
 }

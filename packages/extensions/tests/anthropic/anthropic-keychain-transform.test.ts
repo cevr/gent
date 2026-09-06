@@ -12,7 +12,7 @@
  */
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, Fiber, Layer, Ref } from "effect"
+import { Context, Effect, Fiber, Layer, Option, Predicate, Ref, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { testSetupCtx } from "@gent/core-internal/test-utils"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
@@ -21,12 +21,14 @@ import { buildKeychainTransformClient } from "../../src/anthropic/keychain-trans
 import type { AnthropicKeychainEnv } from "../../src/anthropic/platform-adapter.js"
 
 const TEST_ENV: AnthropicKeychainEnv = {}
+const JsonRecordSchema = Schema.Record(Schema.String, Schema.Unknown)
+type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
 import type {
-  AnthropicCredentialServiceShape,
+  AnthropicCredentialServiceApi,
   AnthropicCredentialIO,
 } from "../../src/anthropic/credential-service.js"
 import { AnthropicCredentialService } from "../../src/anthropic/credential-service.js"
-import { AnthropicBetaCache, type AnthropicBetaCacheShape } from "../../src/anthropic/beta-cache.js"
+import { AnthropicBetaCache, type AnthropicBetaCacheApi } from "../../src/anthropic/beta-cache.js"
 import type { ClaudeCredentials } from "../../src/anthropic/oauth.js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
@@ -44,7 +46,7 @@ interface CapturedRequest {
   url: string
   method: string
   headers: Record<string, string>
-  body: string | undefined
+  body?: string
 }
 // Sentinel object the responder can return to ask the fake client to
 // emit `HttpClientError(TransportError)` instead of a successful
@@ -57,22 +59,29 @@ const transportFailure = (message: string): TransportFailure => ({
   _tag: "TransportFailure",
   message,
 })
+const hasTransportFailureTag = Predicate.isTagged("TransportFailure")
 const isTransportFailure = (v: Response | TransportFailure): v is TransportFailure =>
-  (v as TransportFailure)._tag === "TransportFailure"
+  hasTransportFailureTag(v)
 interface FakeClientState {
   captured: Array<CapturedRequest>
   responder: (call: number) => Response | TransportFailure
 }
+const respondFirstWith =
+  (first: Response | TransportFailure, later: Response | TransportFailure) =>
+  (call: number): Response | TransportFailure => {
+    if (call === 0) return first
+    return later
+  }
 const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
   HttpClient.make((request) => {
     const headersObj: Record<string, string> = {}
     for (const [key, value] of Object.entries(request.headers)) {
-      if (typeof value === "string") headersObj[key] = value
+      if (Schema.is(Schema.String)(value)) headersObj[key] = value
     }
-    let bodyText: string | undefined
+    let bodyText = Option.getOrUndefined(Option.none<string>())
     if (request.body._tag === "Uint8Array") {
       bodyText = new TextDecoder().decode(request.body.body)
-    } else if (request.body._tag === "Raw" && typeof request.body.body === "string") {
+    } else if (request.body._tag === "Raw" && Schema.is(Schema.String)(request.body.body)) {
       bodyText = request.body.body
     }
     state.captured.push({
@@ -98,7 +107,7 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
 // Capture the credential-service "instance" by running its layer once
 // and grabbing the service from context. The transform takes this
 // instance directly (closure-based, not yielded from R).
-const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServiceShape> => {
+const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServiceApi> => {
   const host = testSetupCtx().host
   const platformLayer = Layer.succeed(
     AnthropicPlatform,
@@ -129,7 +138,7 @@ const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServi
 // Same instance-extraction trick for AnthropicBetaCache. Each call
 // returns a FRESH cache (the layer builds a new Ref) so tests are
 // isolated.
-const buildBetaCache = (): Promise<AnthropicBetaCacheShape> =>
+const buildBetaCache = (): Promise<AnthropicBetaCacheApi> =>
   runEffectBoundary(
     Layer.build(AnthropicBetaCache.layer).pipe(
       Effect.scoped,
@@ -144,7 +153,7 @@ const validCredsIO = (label: string): AnthropicCredentialIO => ({
 // outgoing JSON bodies (via `text` → Uint8Array). The transform reads
 // the body via `requestBodyText` which decodes that Uint8Array back to
 // a string, so this matches production representation.
-const jsonBody = (payload: Record<string, unknown>) => HttpBody.jsonUnsafe(payload)
+const jsonBody = (payload: JsonRecord) => HttpBody.jsonUnsafe(payload)
 // `Effect.orDie` collapses typed errors to defects so test bodies can
 // assert success without `as Effect<unknown, never, never>` casts.
 const runOk = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> =>
@@ -160,9 +169,7 @@ const runWithTestClock = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> => 
     yield* TestClock.adjust("3 seconds")
     return yield* Fiber.join(fiber)
   })
-  return runEffectBoundary(
-    Effect.scoped(program).pipe(Effect.provide(TestClock.layer())) as Effect.Effect<A, E, never>,
-  )
+  return runEffectBoundary(Effect.scoped(program).pipe(Effect.provide(TestClock.layer())))
 }
 // ── Tests ──
 describe("keychainTransformClient — auth headers (Commit 2a)", () => {
@@ -297,7 +304,9 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
           yield* TestClock.adjust("3 seconds")
           return yield* Fiber.join(fiber)
         }),
-      ).pipe(Effect.provide(TestClock.layer()))
+      )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        .pipe(Effect.provide(TestClock.layer()))
       // The fake client never saw the request — the transform short-
       // circuited at the credential read.
       expect(fakeState.captured).toHaveLength(0)
@@ -312,10 +321,10 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
-        responder: (call) =>
-          call === 0
-            ? new Response("rate limited", { status: 429 })
-            : new Response("ok", { status: 200 }),
+        responder: respondFirstWith(
+          new Response("rate limited", { status: 429 }),
+          new Response("ok", { status: 200 }),
+        ),
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
@@ -338,10 +347,10 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
-        responder: (call) =>
-          call === 0
-            ? new Response("overloaded", { status: 529 })
-            : new Response("ok", { status: 200 }),
+        responder: respondFirstWith(
+          new Response("overloaded", { status: 529 }),
+          new Response("ok", { status: 200 }),
+        ),
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
@@ -390,8 +399,10 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
-        responder: (call) =>
-          call === 0 ? transportFailure("socket hang up") : new Response("ok", { status: 200 }),
+        responder: respondFirstWith(
+          transportFailure("socket hang up"),
+          new Response("ok", { status: 200 }),
+        ),
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
@@ -429,7 +440,9 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
             yield* TestClock.adjust("3 seconds")
             return yield* Fiber.join(fiber)
           }),
-        ).pipe(Effect.provide(TestClock.layer())),
+        )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          .pipe(Effect.provide(TestClock.layer())),
       )
       // 1 initial + 2 retries = 3 attempts
       expect(fakeState.captured).toHaveLength(3)
@@ -472,10 +485,10 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
-        responder: (call) =>
-          call === 0
-            ? new Response(LONG_CONTEXT_BODY, { status: 400 })
-            : new Response("ok", { status: 200 }),
+        responder: respondFirstWith(
+          new Response(LONG_CONTEXT_BODY, { status: 400 }),
+          new Response("ok", { status: 200 }),
+        ),
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
@@ -501,10 +514,10 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
-        responder: (call) =>
-          call === 0
-            ? new Response(LONG_CONTEXT_BODY, { status: 400 })
-            : new Response("ok", { status: 200 }),
+        responder: respondFirstWith(
+          new Response(LONG_CONTEXT_BODY, { status: 400 }),
+          new Response("ok", { status: 200 }),
+        ),
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
@@ -549,10 +562,10 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
-        responder: (call) =>
-          call === 0
-            ? new Response(LONG_CONTEXT_BODY, { status: 429 })
-            : new Response("ok", { status: 200 }),
+        responder: respondFirstWith(
+          new Response(LONG_CONTEXT_BODY, { status: 429 }),
+          new Response("ok", { status: 200 }),
+        ),
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
@@ -636,9 +649,12 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
     let attempt = 0
     return {
       read: Effect.suspend(() => {
-        const label = attempt === 0 ? staleLabel : freshLabel
+        if (attempt === 0) {
+          attempt++
+          return Effect.succeed(makeCreds(staleLabel))
+        }
         attempt++
-        return Effect.succeed(makeCreds(label))
+        return Effect.succeed(makeCreds(freshLabel))
       }),
       refresh: Effect.fail(new ProviderAuthError({ message: "should not be called" })),
     }
@@ -649,8 +665,10 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
-        responder: (call) =>
-          call === 0 ? new Response("auth", { status: 401 }) : new Response("ok", { status: 200 }),
+        responder: respondFirstWith(
+          new Response("auth", { status: 401 }),
+          new Response("ok", { status: 200 }),
+        ),
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
@@ -703,10 +721,10 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
-        responder: (call) =>
-          call === 0
-            ? new Response("server error", { status: 500 })
-            : new Response("ok", { status: 200 }),
+        responder: respondFirstWith(
+          new Response("server error", { status: 500 }),
+          new Response("ok", { status: 200 }),
+        ),
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))

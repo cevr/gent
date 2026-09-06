@@ -23,10 +23,10 @@ export const Running = Schema.TaggedStruct("Running", { pid: Schema.Number })
 export const WorkerLifecycleStateSchema = Schema.Union(Idle, Running)
 
 // Approved alternative — TaggedErrorClass for error-shape unions.
-export class SpawnFailed extends Schema.TaggedErrorClass<SpawnFailed>("SpawnFailed")(
+export class SpawnFailed extends Schema.TaggedError<SpawnFailed>("SpawnFailed")(
   "SpawnFailed",
   { reason: Schema.String },
 ) {}
-export class TimedOut extends Schema.TaggedErrorClass<TimedOut>("TimedOut")("TimedOut", {
+export class TimedOut extends Schema.TaggedError<TimedOut>("TimedOut")("TimedOut", {
   ms: Schema.Number,
 }) {}

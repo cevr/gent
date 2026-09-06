@@ -1,4 +1,5 @@
 import { Switch, Match, ErrorBoundary } from "solid-js"
+import { Option, Schema } from "effect"
 import { CommandPalette } from "./components/command-palette"
 import { ThemeProvider } from "./theme/index"
 import { CommandProvider } from "./command/context"
@@ -18,15 +19,21 @@ export interface AppProps {
 
 function AppContent(props: AppProps) {
   const router = useRouter()
+  const sessionRoute = (): SessionRoute | false => {
+    const route = router.route()
+    if (isRoute.session(route)) return route
+    return false
+  }
+  const branchPickerRoute = (): BranchPickerRoute | false => {
+    const route = router.route()
+    if (isRoute.branchPicker(route)) return route
+    return false
+  }
 
   return (
     <box flexDirection="column" width="100%" height="100%">
       <Switch>
-        <Match
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
-          when={isRoute.session(router.route()) ? (router.route() as SessionRoute) : false}
-          keyed
-        >
+        <Match when={sessionRoute()} keyed>
           {(route) => (
             <Session
               sessionId={route.sessionId}
@@ -37,12 +44,7 @@ function AppContent(props: AppProps) {
             />
           )}
         </Match>
-        <Match
-          when={
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
-            isRoute.branchPicker(router.route()) ? (router.route() as BranchPickerRoute) : false
-          }
-        >
+        <Match when={branchPickerRoute()}>
           {(r) => {
             const route = r()
             return (
@@ -64,6 +66,13 @@ function AppContent(props: AppProps) {
 }
 
 export function App(props: AppProps) {
+  const decodeError = Schema.decodeUnknownOption(Schema.instanceOf(Error))
+  const errorMessage = (error: Parameters<typeof decodeError>[0]): string =>
+    Option.match(decodeError(error), {
+      onNone: () => String(error),
+      onSome: (cause) => cause.message,
+    })
+
   return (
     <ErrorBoundary
       fallback={(err) => (
@@ -71,7 +80,7 @@ export function App(props: AppProps) {
           <text>
             <span style={{ fg: "red", bold: true }}>Fatal error</span>
           </text>
-          <text>{err instanceof Error ? err.message : String(err)}</text>
+          <text>{errorMessage(err)}</text>
         </box>
       )}
     >

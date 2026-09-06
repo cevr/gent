@@ -7,7 +7,7 @@
  * human approval it returns waiting_for_interaction with an executionId.
  */
 
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option, Predicate, Schema } from "effect"
 import { isRecord, isRecordArray } from "@gent/core/extensions/api"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
@@ -29,19 +29,28 @@ import {
 
 const DEFAULT_TEXT = "(no result)"
 const EMPTY_LOGS: ReadonlyArray<string> = []
+const JSON_NULL_REPLACER = Option.getOrNull(Option.none())
+const JsonRecordSchema = Schema.Record(Schema.String, Schema.Unknown)
+type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
+const JsonValueSchema = Schema.Unknown
+type JsonValue = Schema.Schema.Type<typeof JsonValueSchema>
+const OptionalStringSchema = Schema.optional(Schema.String)
+type OptionalString = typeof OptionalStringSchema.Type
 
-const collectText = (content: ReadonlyArray<Record<string, unknown>>): string => {
+const collectText = (content: ReadonlyArray<JsonRecord>): string => {
   const parts: string[] = []
   for (const item of content) {
-    if (item["type"] === "text" && typeof item["text"] === "string") {
+    if (item["type"] === "text" && Predicate.isString(item["text"])) {
       parts.push(item["text"])
     }
   }
   return parts.join("\n").trim()
 }
 
-const readLogs = (value: unknown): ReadonlyArray<string> =>
-  Array.isArray(value) && value.every((entry) => typeof entry === "string") ? value : EMPTY_LOGS
+const readLogs = (value: JsonValue): ReadonlyArray<string> => {
+  if (Array.isArray(value) && value.every((entry) => Predicate.isString(entry))) return value
+  return EMPTY_LOGS
+}
 
 /**
  * Try each discriminator (`_tag`, then `kind`) independently. Falling
@@ -50,33 +59,32 @@ const readLogs = (value: unknown): ReadonlyArray<string> =>
  * still normalized via the wire-kind path.
  */
 const tryInteraction = (
-  kind: unknown,
-  structured: Record<string, unknown>,
-): ExecutorInteraction | undefined => {
+  kind: JsonValue,
+  structured: JsonRecord,
+): Option.Option<ExecutorInteraction> => {
   const message = structured["message"]
-  if (kind === "form" && typeof message === "string") {
-    return ExecutorInteractionForm.make({
-      message,
-      ...(isRecord(structured["requestedSchema"])
-        ? { requestedSchema: structured["requestedSchema"] }
-        : {}),
-    })
+  if (kind === "form" && Predicate.isString(message)) {
+    const requestedSchema = structured["requestedSchema"]
+    if (isRecord(requestedSchema)) {
+      return Option.some(ExecutorInteractionForm.make({ message, requestedSchema }))
+    }
+    return Option.some(ExecutorInteractionForm.make({ message }))
   }
   const url = structured["url"]
-  if (kind === "url" && typeof message === "string" && typeof url === "string") {
-    return ExecutorInteractionUrl.make({ message, url })
+  if (kind === "url" && Predicate.isString(message) && Predicate.isString(url)) {
+    return Option.some(ExecutorInteractionUrl.make({ message, url }))
   }
-  return undefined
+  return Option.none()
 }
 
-const normalizeInteraction = (structured: unknown): ExecutorInteraction | undefined => {
-  if (!isRecord(structured)) return undefined
-  return (
-    tryInteraction(structured["_tag"], structured) ?? tryInteraction(structured["kind"], structured)
+const normalizeInteraction = (structured: JsonValue): Option.Option<ExecutorInteraction> => {
+  if (!isRecord(structured)) return Option.none()
+  return tryInteraction(structured["_tag"], structured).pipe(
+    Option.orElse(() => tryInteraction(structured["kind"], structured)),
   )
 }
 
-const normalizeStructuredContent = (structured: unknown): unknown => {
+const normalizeStructuredContent = (structured: JsonValue): JsonValue => {
   if (!isRecord(structured)) return structured
 
   if (structured["_tag"] === "completed") {
@@ -86,7 +94,7 @@ const normalizeStructuredContent = (structured: unknown): unknown => {
     }) satisfies ExecutorStructuredContent
   }
 
-  if (structured["_tag"] === "error" && typeof structured["error"] === "string") {
+  if (structured["_tag"] === "error" && Predicate.isString(structured["error"])) {
     return ExecutorFailed.make({
       error: structured["error"],
       logs: [...readLogs(structured["logs"])],
@@ -95,13 +103,13 @@ const normalizeStructuredContent = (structured: unknown): unknown => {
 
   if (
     structured["_tag"] === "waiting_for_interaction" &&
-    typeof structured["executionId"] === "string"
+    Predicate.isString(structured["executionId"])
   ) {
     const interaction = normalizeInteraction(structured["interaction"])
-    if (interaction !== undefined) {
+    if (Option.isSome(interaction)) {
       return ExecutorWaitingForInteraction.make({
         executionId: structured["executionId"],
-        interaction,
+        interaction: interaction.value,
       }) satisfies ExecutorStructuredContent
     }
   }
@@ -115,9 +123,9 @@ const normalizeStructuredContent = (structured: unknown): unknown => {
 
   if (structured["status"] === "error") {
     let error = "Executor failed"
-    if (typeof structured["error"] === "string") {
+    if (Predicate.isString(structured["error"])) {
       error = structured["error"]
-    } else if (typeof structured["errorMessage"] === "string") {
+    } else if (Predicate.isString(structured["errorMessage"])) {
       error = structured["errorMessage"]
     }
     return ExecutorFailed.make({
@@ -128,13 +136,13 @@ const normalizeStructuredContent = (structured: unknown): unknown => {
 
   if (
     structured["status"] === "waiting_for_interaction" &&
-    typeof structured["executionId"] === "string"
+    Predicate.isString(structured["executionId"])
   ) {
     const interaction = normalizeInteraction(structured["interaction"])
-    if (interaction !== undefined) {
+    if (Option.isSome(interaction)) {
       return ExecutorWaitingForInteraction.make({
         executionId: structured["executionId"],
-        interaction,
+        interaction: interaction.value,
       }) satisfies ExecutorStructuredContent
     }
   }
@@ -142,45 +150,66 @@ const normalizeStructuredContent = (structured: unknown): unknown => {
   return structured
 }
 
-export const readExecutionId = (structured: unknown): string | undefined => {
-  if (!isRecord(structured)) return undefined
-  return structured["_tag"] === "waiting_for_interaction" &&
-    typeof structured["executionId"] === "string"
-    ? structured["executionId"]
-    : undefined
+const readExecutionIdOption = (structured: JsonValue): Option.Option<string> => {
+  if (!isRecord(structured)) return Option.none()
+  if (
+    structured["_tag"] === "waiting_for_interaction" &&
+    Predicate.isString(structured["executionId"])
+  ) {
+    return Option.some(structured["executionId"])
+  }
+  return Option.none()
 }
+
+export const readExecutionId = (structured: JsonValue): OptionalString =>
+  Option.getOrUndefined(readExecutionIdOption(structured))
 
 export const normalizeToolResult = (
   raw: Awaited<ReturnType<Client["callTool"]>>,
 ): ExecutorMcpToolResult => {
   // MCP SDK can return { toolResult } without content array
-  if (!("content" in raw) || raw.content === undefined) {
-    const fallback = "toolResult" in raw ? raw.toolResult : undefined
+  if (!("content" in raw) || Predicate.isUndefined(raw.content)) {
+    let fallback = Option.none<JsonValue>()
+    if ("toolResult" in raw) fallback = Option.fromNullishOr(raw.toolResult)
+    let text = DEFAULT_TEXT
+    if (Option.isSome(fallback)) {
+      // oxlint-disable-next-line effect/noGlobals -- MCP result serialization is the host wire boundary.
+      text = JSON.stringify(fallback.value, JSON_NULL_REPLACER, 2)
+    }
     return {
-      text: fallback ? JSON.stringify(fallback, null, 2) : DEFAULT_TEXT,
-      structuredContent: fallback ?? null,
+      text,
+      structuredContent: Option.getOrNull(fallback),
       isError: false,
     }
   }
 
-  const content = isRecordArray(raw.content) ? raw.content : []
-  const structured: unknown = raw.structuredContent
-    ? normalizeStructuredContent(JSON.parse(JSON.stringify(raw.structuredContent)))
-    : undefined
+  let content: ReadonlyArray<JsonRecord> = []
+  if (isRecordArray(raw.content)) content = raw.content
+  const structured = Option.fromNullishOr(raw.structuredContent).pipe(
+    Option.map((value) => {
+      // oxlint-disable-next-line effect/noGlobals -- MCP structured content crosses a JSON host boundary.
+      const serialized = JSON.stringify(value)
+      // oxlint-disable-next-line effect/noGlobals -- MCP structured content crosses a JSON host boundary.
+      return normalizeStructuredContent(JSON.parse(serialized))
+    }),
+  )
   const text = collectText(content)
 
   let resultText = DEFAULT_TEXT
   if (text.length > 0) {
     resultText = text
-  } else if (structured) {
-    resultText = JSON.stringify(structured, null, 2)
+  } else if (Option.isSome(structured)) {
+    // oxlint-disable-next-line effect/noGlobals -- MCP result serialization is the host wire boundary.
+    resultText = JSON.stringify(structured.value, JSON_NULL_REPLACER, 2)
   }
 
   return {
     text: resultText,
-    structuredContent: structured ?? null,
+    structuredContent: Option.getOrNull(structured),
     isError: raw.isError === true,
-    executionId: readExecutionId(structured),
+    executionId: Option.getOrUndefined(
+      Option.flatMap(structured, (value) => readExecutionIdOption(value)),
+    ),
   }
 }
 
@@ -196,7 +225,7 @@ export interface ExecutorMcpBridgeService {
     baseUrl: string,
     executionId: string,
     action: ResumeAction,
-    content?: Record<string, unknown>,
+    content?: JsonRecord,
   ) => Effect.Effect<ExecutorMcpToolResult, ExecutorMcpError>
 }
 
@@ -205,6 +234,11 @@ export interface ExecutorMcpBridgeService {
 interface McpConnection {
   readonly client: Client
   readonly transport: StreamableHTTPClientTransport
+}
+
+const errorMessage = (error: JsonValue): string => {
+  if (error instanceof Error) return error.message
+  return String(error)
 }
 
 const acquireConnection = (baseUrl: string) =>
@@ -217,7 +251,7 @@ const acquireConnection = (baseUrl: string) =>
     catch: (e) =>
       new ExecutorMcpError({
         phase: "connect",
-        message: `MCP connect failed: ${e instanceof Error ? e.message : String(e)}`,
+        message: `MCP connect failed: ${errorMessage(e)}`,
       }),
   })
 
@@ -225,8 +259,8 @@ const releaseConnection = (conn: McpConnection) =>
   Effect.tryPromise(() =>
     conn.transport
       .terminateSession()
-      .catch(() => undefined)
-      .then(() => conn.client.close().catch(() => undefined)),
+      .catch(() => {})
+      .then(() => conn.client.close().catch(() => {})),
   ).pipe(Effect.orElseSucceed(() => {}))
 
 const connection = (baseUrl: string) =>
@@ -245,18 +279,21 @@ export class ExecutorMcpBridge extends Context.Service<
         connection(baseUrl).pipe(
           Effect.flatMap((conn) =>
             Effect.gen(function* () {
-              const listPage = (cursor: string | undefined) =>
+              const listPage = (cursor: OptionalString) =>
                 Effect.tryPromise({
-                  try: () => conn.client.listTools(cursor ? { cursor } : undefined),
+                  try: () => {
+                    if (Predicate.isUndefined(cursor)) return conn.client.listTools()
+                    return conn.client.listTools({ cursor })
+                  },
                   catch: (e) =>
                     new ExecutorMcpError({
                       phase: "inspect",
-                      message: `MCP inspect failed: ${e instanceof Error ? e.message : String(e)}`,
+                      message: `MCP inspect failed: ${errorMessage(e)}`,
                     }),
                 })
               type Tool = { name: string; description?: string }
               const readPage: (
-                cursor: string | undefined,
+                cursor: OptionalString,
                 acc: ReadonlyArray<Tool>,
               ) => Effect.Effect<ReadonlyArray<Tool>, ExecutorMcpError> = (cursor, acc) =>
                 listPage(cursor).pipe(
@@ -268,12 +305,11 @@ export class ExecutorMcpBridge extends Context.Service<
                         description: t.description,
                       })),
                     ]
-                    return response.nextCursor === undefined
-                      ? Effect.succeed(next)
-                      : Effect.suspend(() => readPage(response.nextCursor, next))
+                    if (Predicate.isUndefined(response.nextCursor)) return Effect.succeed(next)
+                    return Effect.suspend(() => readPage(response.nextCursor, next))
                   }),
                 )
-              const tools = yield* readPage(undefined, [])
+              const tools = yield* readPage(Option.getOrUndefined(Option.none()), [])
               return {
                 instructions: conn.client.getInstructions(),
                 tools,
@@ -297,7 +333,7 @@ export class ExecutorMcpBridge extends Context.Service<
               catch: (e) =>
                 new ExecutorMcpError({
                   phase: "execute",
-                  message: `MCP execute failed: ${e instanceof Error ? e.message : String(e)}`,
+                  message: `MCP execute failed: ${errorMessage(e)}`,
                 }),
             }),
           ),
@@ -315,15 +351,19 @@ export class ExecutorMcpBridge extends Context.Service<
                     arguments: {
                       executionId,
                       action,
-                      // @effect-diagnostics-next-line preferSchemaOverJson:off
-                      content: content ? JSON.stringify(content) : "{}",
+                      content: Option.match(Option.fromNullishOr(content), {
+                        onNone: () => "{}",
+                        onSome: (value) =>
+                          // oxlint-disable-next-line effect/noGlobals -- MCP resume content is a host wire payload.
+                          JSON.stringify(value),
+                      }),
                     },
                   })
                   .then(normalizeToolResult),
               catch: (e) =>
                 new ExecutorMcpError({
                   phase: "resume",
-                  message: `MCP resume failed: ${e instanceof Error ? e.message : String(e)}`,
+                  message: `MCP resume failed: ${errorMessage(e)}`,
                 }),
             }),
           ),

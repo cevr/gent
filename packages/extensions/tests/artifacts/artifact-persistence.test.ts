@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
 
 // PlanTool/AuditTool/ReviewTool execution signatures inherit their
@@ -17,6 +17,7 @@ import {
   type ExtensionContextService,
 } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
+import { encodeExternalJson } from "../helpers/external-wire.js"
 import {
   ArtifactId,
   BranchId,
@@ -59,14 +60,14 @@ const fakeArtifact = (sourceTool: string): Artifact => ({
 const createArtifactSpy = () => {
   const calls: RequestCall[] = []
   const service = {
-    read: () => Effect.succeed<Artifact | null>(null),
+    read: () => Effect.succeed(Option.none<Artifact>()),
     list: () => Effect.succeed<ReadonlyArray<Artifact>>([]),
     save: (sessionId: SessionId, branchId: BranchId, input: ArtifactSaveInput) => {
       calls.push({ sessionId, branchId, input })
       return Effect.succeed(fakeArtifact(input.sourceTool))
     },
     update: (_sessionId: SessionId, _branchId: BranchId, _input: ArtifactUpdateInput) =>
-      Effect.succeed<Artifact | null>(null),
+      Effect.succeed(Option.none<Artifact>()),
     clear: () => Effect.void,
   }
   return { calls, layer: Layer.succeed(ArtifactsWrite, service) }
@@ -86,12 +87,18 @@ const stubAgentRun =
     )
 
 const agentLookup = {
-  get: (name: AgentName) => Effect.succeed(AllBuiltinAgents.find((a) => a.name === name)),
+  get: (name: AgentName) =>
+    Effect.succeed(
+      Option.getOrUndefined(
+        Option.fromNullishOr(AllBuiltinAgents.find((agent) => agent.name === name)),
+      ),
+    ),
   require: (name: AgentName) => {
-    const agent = AllBuiltinAgents.find((a) => a.name === name)
-    return agent !== undefined ? Effect.succeed(agent) : Effect.die(`Agent "${name}" not found`)
+    const agent = Option.fromNullishOr(AllBuiltinAgents.find((item) => item.name === name))
+    if (Option.isSome(agent)) return Effect.succeed(agent.value)
+    return Effect.die(`Agent "${name}" not found`)
   },
-  listAgents: () => Effect.succeed(AllBuiltinAgents),
+  listAgents: Effect.succeed(AllBuiltinAgents),
 }
 
 const runtimeEnvironmentLayer = RuntimeEnvironment.Test({
@@ -114,7 +121,7 @@ describe("PlanTool artifact persistence", () => {
         approve: () => Effect.die("approve not wired"),
         present: () => Effect.die("present not wired"),
         confirm: () => Effect.die("confirm not wired"),
-        review: () => Effect.succeed({ decision: "yes" as const, path: "/tmp/plan.md" }),
+        review: () => Effect.succeed({ decision: "yes", path: "/tmp/plan.md" }),
       },
     })
 
@@ -145,7 +152,7 @@ describe("PlanTool artifact persistence", () => {
         confirm: () => Effect.die("confirm not wired"),
         review: () =>
           Effect.succeed({
-            decision: "edit" as const,
+            decision: "edit",
             path: "/tmp/plan.md",
             content: "edited plan content",
           }),
@@ -175,7 +182,7 @@ describe("PlanTool artifact persistence", () => {
         approve: () => Effect.die("approve not wired"),
         present: () => Effect.die("present not wired"),
         confirm: () => Effect.die("confirm not wired"),
-        review: () => Effect.succeed({ decision: "no" as const, path: "/tmp/plan.md" }),
+        review: () => Effect.succeed({ decision: "no", path: "/tmp/plan.md" }),
       },
     })
 
@@ -226,7 +233,7 @@ describe("AuditTool artifact persistence", () => {
       },
       Interaction: {
         approve: () => Effect.die("approve not wired"),
-        present: () => Effect.succeed(undefined as never),
+        present: () => Effect.void,
         confirm: () => Effect.die("confirm not wired"),
         review: () => Effect.die("review not wired"),
       },
@@ -250,7 +257,7 @@ describe("AuditTool artifact persistence", () => {
 describe("ReviewTool artifact persistence", () => {
   it.live("saves review comments as artifact after synthesis", () => {
     const spy = createArtifactSpy()
-    const reviewJson = JSON.stringify([
+    const reviewJson = encodeExternalJson([
       {
         file: "src/auth.ts",
         line: 10,

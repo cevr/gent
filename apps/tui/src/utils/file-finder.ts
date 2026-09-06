@@ -18,37 +18,37 @@
  * is fine — the finder stays valid for the next search).
  */
 
-import { Effect, FileSystem, Schema } from "effect"
+import { Effect, FileSystem, Option, Schema } from "effect"
 import { FileFinder, type SearchResult } from "@ff-labs/fff-bun"
 
 // ── Errors ───────────────────────────────────────────────────────────────
 
-export class FileFinderUnavailableError extends Schema.TaggedErrorClass<FileFinderUnavailableError>()(
+export class FileFinderUnavailableError extends Schema.TaggedError<FileFinderUnavailableError>()(
   "FileFinderUnavailableError",
   {},
 ) {}
 
-export class FileFinderInitError extends Schema.TaggedErrorClass<FileFinderInitError>()(
+export class FileFinderInitError extends Schema.TaggedError<FileFinderInitError>()(
   "FileFinderInitError",
   { reason: Schema.String },
 ) {}
 
-export class FileFinderScanError extends Schema.TaggedErrorClass<FileFinderScanError>()(
+export class FileFinderScanError extends Schema.TaggedError<FileFinderScanError>()(
   "FileFinderScanError",
   { reason: Schema.String },
 ) {}
 
 // ── DB dir ───────────────────────────────────────────────────────────────
 
-let _dbDir: string | undefined
+let dbDir = Option.none<string>()
 
 const ensureDbDir = (home: string): Effect.Effect<string, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
-    if (_dbDir !== undefined) return _dbDir
+    if (Option.isSome(dbDir)) return dbDir.value
     const fs = yield* FileSystem.FileSystem
     const dir = `${home}/.gent/fff`
     yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore)
-    _dbDir = dir
+    dbDir = Option.some(dir)
     return dir
   })
 
@@ -74,8 +74,8 @@ const ensureFinder = (
   FileSystem.FileSystem
 > =>
   Effect.gen(function* () {
-    const existing = finders.get(cwd)
-    if (existing !== undefined) return existing
+    const existing = Option.fromNullishOr(finders.get(cwd))
+    if (Option.isSome(existing)) return existing.value
 
     if (!FileFinder.isAvailable()) {
       return yield* new FileFinderUnavailableError()
@@ -99,17 +99,18 @@ const ensureFinder = (
     // search call before the blocking scan begins.
     const scanReady: Effect.Effect<ScanOutcome> = Effect.yieldNow.pipe(
       Effect.andThen(
-        Effect.sync(() => {
-          try {
-            const scan = finder.waitForScan(15_000)
-            return scan.ok
-              ? ({ ok: true } satisfies ScanOutcome)
-              : ({ ok: false, reason: "waitForScan returned !ok" } satisfies ScanOutcome)
-          } catch (e) {
-            return { ok: false, reason: String(e) } satisfies ScanOutcome
-          }
+        Effect.tryPromise({
+          try: () => finder.waitForScan(15_000),
+          catch: String,
         }),
       ),
+      Effect.match({
+        onFailure: (reason) => ({ ok: false, reason }) satisfies ScanOutcome,
+        onSuccess: (scan) => {
+          if (scan.ok) return { ok: true } satisfies ScanOutcome
+          return { ok: false, reason: "waitForScan returned !ok" } satisfies ScanOutcome
+        },
+      }),
     )
 
     const entry: FinderEntry = { finder, scanReady }
@@ -148,7 +149,7 @@ export const searchFiles = (
 
 /** Track a selection for frecency learning. No-op if no finder for `cwd`. */
 export const trackSelection = (cwd: string, query: string, filePath: string): void => {
-  const entry = finders.get(cwd)
-  if (entry === undefined) return
-  entry.finder.trackQuery(query, filePath)
+  const entry = Option.fromNullishOr(finders.get(cwd))
+  if (Option.isNone(entry)) return
+  entry.value.finder.trackQuery(query, filePath)
 }

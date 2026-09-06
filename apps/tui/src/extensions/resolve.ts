@@ -7,7 +7,7 @@
  * Per-tag conflict rules are NOT uniform — see the per-tag resolvers below.
  */
 
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import type {
   AutocompleteContribution,
   BorderLabelItem,
@@ -18,7 +18,7 @@ import type {
   WidgetComponent,
 } from "./client-facets.js"
 
-const SCOPE_PRECEDENCE = { builtin: 0, user: 1, project: 2 } as const
+const SCOPE_PRECEDENCE = { builtin: 0, user: 1, project: 2 } satisfies Record<string, number>
 type CoreExtensionScope = keyof typeof SCOPE_PRECEDENCE
 
 /**
@@ -26,7 +26,7 @@ type CoreExtensionScope = keyof typeof SCOPE_PRECEDENCE
  * contribution collision (two extensions claim the same key). This is a
  * programmer-misuse-only signal.
  */
-export class TuiExtensionResolveError extends Schema.TaggedErrorClass<TuiExtensionResolveError>()(
+export class TuiExtensionResolveError extends Schema.TaggedError<TuiExtensionResolveError>()(
   "TuiExtensionResolveError",
   {
     reason: Schema.Literals(["same-scope-collision"]),
@@ -69,7 +69,9 @@ export interface ResolvedTuiExtensions {
   readonly widgets: ReadonlyArray<ResolvedWidget>
   readonly commands: ReadonlyArray<Command>
   readonly overlays: Map<string, OverlayComponent>
+  // eslint-disable-next-line effect/noNullish -- the undefined key selects the default renderer.
   readonly interactionRenderers: Map<string | undefined, InteractionRendererComponent>
+  // eslint-disable-next-line effect/noNullish -- no composer contribution is a valid resolved result.
   readonly composerSurface: ComposerSurfaceComponent | undefined
   readonly borderLabels: ReadonlyArray<ResolvedBorderLabel>
   readonly autocompleteItems: ReadonlyArray<AutocompleteContribution>
@@ -80,17 +82,25 @@ interface ScopeEntry {
   readonly source: string
 }
 
+// eslint-disable-next-line effect/noNullish -- extension contribution buckets may be omitted.
+const itemsOrEmpty = <A>(items: ReadonlyArray<A> | undefined): ReadonlyArray<A> =>
+  Option.getOrElse(Option.fromNullishOr(items), () => [])
+
+const scopeEntryFor = <K>(scopes: Map<K, ScopeEntry>, key: K): Option.Option<ScopeEntry> =>
+  Option.fromNullishOr(scopes.get(key))
+
 /** Check for same-scope collision and throw with context */
 const checkCollision = (
-  prev: ScopeEntry | undefined,
+  prev: Option.Option<ScopeEntry>,
   ext: LoadedTuiExtension,
   label: string,
   key: string,
 ): void => {
-  if (prev !== undefined && prev.scope === ext.scope && prev.source !== ext.filePath) {
+  if (Option.isSome(prev) && prev.value.scope === ext.scope && prev.value.source !== ext.filePath) {
+    // eslint-disable-next-line effect/noThrowStatement -- same-scope collisions are programmer misuse in this synchronous resolver.
     throw new TuiExtensionResolveError({
       reason: "same-scope-collision",
-      detail: `Same-scope TUI ${label} collision: "${key}" from "${prev.source}" and "${ext.filePath}" in scope "${ext.scope}"`,
+      detail: `Same-scope TUI ${label} collision: "${key}" from "${prev.value.source}" and "${ext.filePath}" in scope "${ext.scope}"`,
     })
   }
 }
@@ -102,10 +112,10 @@ const resolveRenderers = (sorted: ReadonlyArray<LoadedTuiExtension>): Map<string
   const scopes = new Map<string, ScopeEntry>()
 
   for (const ext of sorted) {
-    for (const contribution of ext.contributions.renderers ?? []) {
+    for (const contribution of itemsOrEmpty(ext.contributions.renderers)) {
       for (const name of contribution.toolNames) {
         const key = name.toLowerCase()
-        checkCollision(scopes.get(key), ext, "renderer", name)
+        checkCollision(scopeEntryFor(scopes, key), ext, "renderer", name)
         renderers.set(key, contribution.component)
         scopes.set(key, { scope: ext.scope, source: ext.filePath })
       }
@@ -122,12 +132,13 @@ const resolveHeadlessRenderers = (
   const scopes = new Map<string, ScopeEntry>()
 
   for (const ext of sorted) {
-    for (const contribution of ext.contributions.renderers ?? []) {
-      if (contribution.headless === undefined) continue
+    for (const contribution of itemsOrEmpty(ext.contributions.renderers)) {
+      const headless = Option.fromNullishOr(contribution.headless)
+      if (Option.isNone(headless)) continue
       for (const name of contribution.toolNames) {
         const key = name.toLowerCase()
-        checkCollision(scopes.get(key), ext, "headless renderer", name)
-        renderers.set(key, contribution.headless)
+        checkCollision(scopeEntryFor(scopes, key), ext, "headless renderer", name)
+        renderers.set(key, headless.value)
         scopes.set(key, { scope: ext.scope, source: ext.filePath })
       }
     }
@@ -143,12 +154,12 @@ const resolveWidgets = (
   const scopes = new Map<string, ScopeEntry>()
 
   for (const ext of sorted) {
-    for (const contribution of ext.contributions.widgets ?? []) {
-      checkCollision(scopes.get(contribution.id), ext, "widget", contribution.id)
+    for (const contribution of itemsOrEmpty(ext.contributions.widgets)) {
+      checkCollision(scopeEntryFor(scopes, contribution.id), ext, "widget", contribution.id)
       widgetMap.set(contribution.id, {
         id: contribution.id,
         slot: contribution.slot,
-        priority: contribution.priority ?? 100,
+        priority: Option.getOrElse(Option.fromNullishOr(contribution.priority), () => 100),
         component: contribution.component,
       })
       scopes.set(contribution.id, { scope: ext.scope, source: ext.filePath })
@@ -158,63 +169,89 @@ const resolveWidgets = (
   return [...widgetMap.values()].sort((a, b) => a.priority - b.priority)
 }
 
+interface CommandResolutionState {
+  readonly commandMap: Map<string, Command>
+  readonly keybindScopes: Map<string, ScopeEntry>
+  readonly slashScopes: Map<string, ScopeEntry>
+  readonly keybindOwner: Map<string, string>
+  readonly slashOwner: Map<string, string>
+}
+
+const resolveCommandKeybind = (
+  entry: Command,
+  ext: LoadedTuiExtension,
+  state: CommandResolutionState,
+): void => {
+  const keybind = Option.fromNullishOr(entry.keybind)
+  if (Option.isNone(keybind)) return
+  const key = keybind.value.toLowerCase()
+  checkCollision(scopeEntryFor(state.keybindScopes, key), ext, "keybind", keybind.value)
+  const previousOwner = Option.fromNullishOr(state.keybindOwner.get(key))
+  if (Option.isSome(previousOwner)) {
+    const previousCommand = Option.fromNullishOr(state.commandMap.get(previousOwner.value))
+    if (Option.isSome(previousCommand)) {
+      state.commandMap.set(previousOwner.value, {
+        ...previousCommand.value,
+        keybind: Option.getOrUndefined(Option.none()),
+      })
+    }
+  }
+  state.keybindScopes.set(key, { scope: ext.scope, source: ext.filePath })
+  state.keybindOwner.set(key, entry.id)
+}
+
+const resolveCommandSlash = (
+  entry: Command,
+  ext: LoadedTuiExtension,
+  state: CommandResolutionState,
+): void => {
+  const slash = Option.fromNullishOr(entry.slash)
+  if (Option.isNone(slash)) return
+  const key = slash.value.toLowerCase()
+  checkCollision(scopeEntryFor(state.slashScopes, key), ext, "slash", slash.value)
+  const previousOwner = Option.fromNullishOr(state.slashOwner.get(key))
+  if (Option.isSome(previousOwner)) {
+    const previousCommand = Option.fromNullishOr(state.commandMap.get(previousOwner.value))
+    if (Option.isSome(previousCommand)) {
+      state.commandMap.set(previousOwner.value, {
+        ...previousCommand.value,
+        slash: Option.getOrUndefined(Option.none()),
+      })
+    }
+  }
+  state.slashScopes.set(key, { scope: ext.scope, source: ext.filePath })
+  state.slashOwner.set(key, entry.id)
+}
+
+const resolveCommandEntry = (
+  entry: Command,
+  ext: LoadedTuiExtension,
+  idScopes: Map<string, ScopeEntry>,
+  state: CommandResolutionState,
+): void => {
+  checkCollision(scopeEntryFor(idScopes, entry.id), ext, "command", entry.id)
+  resolveCommandKeybind(entry, ext, state)
+  resolveCommandSlash(entry, ext, state)
+  state.commandMap.set(entry.id, entry)
+  idScopes.set(entry.id, { scope: ext.scope, source: ext.filePath })
+}
+
 const resolveCommands = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArray<Command> => {
   const commandMap = new Map<string, Command>()
   const idScopes = new Map<string, ScopeEntry>()
   const keybindScopes = new Map<string, ScopeEntry>()
   const slashScopes = new Map<string, ScopeEntry>()
-  // Track which command id owns each keybind/slash — for stripping superseded ones
-  const keybindOwner = new Map<string, string>() // keybind → command id
-  const slashOwner = new Map<string, string>() // slash → command id
+  const state: CommandResolutionState = {
+    commandMap,
+    keybindScopes,
+    slashScopes,
+    keybindOwner: new Map<string, string>(),
+    slashOwner: new Map<string, string>(),
+  }
 
   for (const ext of sorted) {
-    for (const entry of ext.contributions.commands ?? []) {
-      checkCollision(idScopes.get(entry.id), ext, "command", entry.id)
-
-      if (entry.keybind !== undefined) {
-        const kb = entry.keybind.toLowerCase()
-        checkCollision(keybindScopes.get(kb), ext, "keybind", entry.keybind)
-        // Higher scope wins the keybind — strip it from the previous owner
-        const prevOwnerId = keybindOwner.get(kb)
-        if (prevOwnerId !== undefined) {
-          const prevCmd = commandMap.get(prevOwnerId)
-          if (prevCmd !== undefined) {
-            commandMap.set(prevOwnerId, { ...prevCmd, keybind: undefined })
-          }
-        }
-        keybindScopes.set(kb, { scope: ext.scope, source: ext.filePath })
-        keybindOwner.set(kb, entry.id)
-      }
-
-      if (entry.slash !== undefined) {
-        const sl = entry.slash.toLowerCase()
-        checkCollision(slashScopes.get(sl), ext, "slash", entry.slash)
-        // Higher scope wins the slash — strip it from the previous owner
-        const prevOwnerId = slashOwner.get(sl)
-        if (prevOwnerId !== undefined) {
-          const prevCmd = commandMap.get(prevOwnerId)
-          if (prevCmd !== undefined) {
-            commandMap.set(prevOwnerId, { ...prevCmd, slash: undefined })
-          }
-        }
-        slashScopes.set(sl, { scope: ext.scope, source: ext.filePath })
-        slashOwner.set(sl, entry.id)
-      }
-
-      commandMap.set(entry.id, {
-        id: entry.id,
-        title: entry.title,
-        description: entry.description,
-        category: entry.category,
-        keybind: entry.keybind,
-        slash: entry.slash,
-        aliases: entry.aliases,
-        slashPriority: entry.slashPriority,
-        onSelect: entry.onSelect,
-        onSlash: entry.onSlash,
-        paletteLevel: entry.paletteLevel,
-      })
-      idScopes.set(entry.id, { scope: ext.scope, source: ext.filePath })
+    for (const entry of itemsOrEmpty(ext.contributions.commands)) {
+      resolveCommandEntry(entry, ext, idScopes, state)
     }
   }
 
@@ -228,8 +265,8 @@ const resolveOverlays = (
   const scopes = new Map<string, ScopeEntry>()
 
   for (const ext of sorted) {
-    for (const contribution of ext.contributions.overlays ?? []) {
-      checkCollision(scopes.get(contribution.id), ext, "overlay", contribution.id)
+    for (const contribution of itemsOrEmpty(ext.contributions.overlays)) {
+      checkCollision(scopeEntryFor(scopes, contribution.id), ext, "overlay", contribution.id)
       overlays.set(contribution.id, contribution.component)
       scopes.set(contribution.id, { scope: ext.scope, source: ext.filePath })
     }
@@ -240,17 +277,21 @@ const resolveOverlays = (
 
 const resolveInteractionRenderers = (
   sorted: ReadonlyArray<LoadedTuiExtension>,
+  // eslint-disable-next-line effect/noNullish -- the default renderer uses an undefined map key.
 ): Map<string | undefined, InteractionRendererComponent> => {
+  // eslint-disable-next-line effect/noNullish -- the default renderer uses an undefined map key.
   const renderers = new Map<string | undefined, InteractionRendererComponent>()
+  // eslint-disable-next-line effect/noNullish -- the default renderer uses an undefined map key.
   const scopes = new Map<string | undefined, ScopeEntry>()
 
   for (const ext of sorted) {
-    for (const contribution of ext.contributions.interactionRenderers ?? []) {
-      const key = contribution.metadataType
-      const label = key ?? "(default)"
-      checkCollision(scopes.get(key), ext, "interaction renderer", label)
-      renderers.set(key, contribution.component)
-      scopes.set(key, { scope: ext.scope, source: ext.filePath })
+    for (const contribution of itemsOrEmpty(ext.contributions.interactionRenderers)) {
+      const key = Option.fromNullishOr(contribution.metadataType)
+      const label = Option.getOrElse(key, () => "(default)")
+      const mapKey = Option.getOrUndefined(key)
+      checkCollision(scopeEntryFor(scopes, mapKey), ext, "interaction renderer", label)
+      renderers.set(mapKey, contribution.component)
+      scopes.set(mapKey, { scope: ext.scope, source: ext.filePath })
     }
   }
 
@@ -259,21 +300,22 @@ const resolveInteractionRenderers = (
 
 const resolveComposerSurface = (
   sorted: ReadonlyArray<LoadedTuiExtension>,
+  // eslint-disable-next-line effect/noNullish -- no composer contribution is a valid result.
 ): ComposerSurfaceComponent | undefined => {
-  let winner: ComposerSurfaceComponent | undefined
-  let winnerScope: ScopeEntry | undefined
+  let winner = Option.none<ComposerSurfaceComponent>()
+  let winnerScope = Option.none<ScopeEntry>()
 
   for (const ext of sorted) {
-    const contribution = ext.contributions.composerSurface
-    if (contribution === undefined) continue
-    if (winnerScope !== undefined) {
+    const contribution = Option.fromNullishOr(ext.contributions.composerSurface)
+    if (Option.isNone(contribution)) continue
+    if (Option.isSome(winnerScope)) {
       checkCollision(winnerScope, ext, "composer surface", "composerSurface")
     }
-    winner = contribution.component
-    winnerScope = { scope: ext.scope, source: ext.filePath }
+    winner = Option.some(contribution.value.component)
+    winnerScope = Option.some({ scope: ext.scope, source: ext.filePath })
   }
 
-  return winner
+  return Option.getOrUndefined(winner)
 }
 
 const resolveBorderLabels = (
@@ -281,10 +323,10 @@ const resolveBorderLabels = (
 ): ReadonlyArray<ResolvedBorderLabel> => {
   const out: ResolvedBorderLabel[] = []
   for (const ext of sorted) {
-    for (const contribution of ext.contributions.borderLabels ?? []) {
+    for (const contribution of itemsOrEmpty(ext.contributions.borderLabels)) {
       out.push({
         position: contribution.position,
-        priority: contribution.priority ?? 100,
+        priority: Option.getOrElse(Option.fromNullishOr(contribution.priority), () => 100),
         produce: contribution.produce,
       })
     }
@@ -298,7 +340,7 @@ const resolveAutocomplete = (
 ): ReadonlyArray<AutocompleteContribution> => {
   const out: AutocompleteContribution[] = []
   for (const ext of sorted) {
-    out.push(...(ext.contributions.autocomplete ?? []))
+    out.push(...itemsOrEmpty(ext.contributions.autocomplete))
   }
   return out
 }

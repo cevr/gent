@@ -27,14 +27,11 @@ import { type Effect, type FileSystem, type Path, Schema } from "effect"
 // ── Errors ────────────────────────────────────────────────────────────────
 
 /** Failure surfaced from a client extension's `setup` Effect. */
-export class ClientSetupError extends Schema.TaggedErrorClass<ClientSetupError>()(
-  "ClientSetupError",
-  {
-    extensionId: Schema.String,
-    message: Schema.String,
-    cause: Schema.optional(Schema.Unknown),
-  },
-) {}
+export class ClientSetupError extends Schema.TaggedError<ClientSetupError>()("ClientSetupError", {
+  extensionId: Schema.String,
+  message: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
 
 // ── Transport ─────────────────────────────────────────────────────────────
 

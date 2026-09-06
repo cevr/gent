@@ -1,8 +1,8 @@
-import { Schema } from "effect"
+import { Option, Predicate, Result, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 
-export class UrlBackedImageNotSupportedError extends Schema.TaggedErrorClass<UrlBackedImageNotSupportedError>()(
+export class UrlBackedImageNotSupportedError extends Schema.TaggedError<UrlBackedImageNotSupportedError>()(
   "UrlBackedImageNotSupportedError",
   {
     image: Schema.String,
@@ -14,50 +14,54 @@ export class UrlBackedImageNotSupportedError extends Schema.TaggedErrorClass<Url
 }
 
 export const filePartDataToDisplay = (part: Prompt.FilePart): string => {
-  if (typeof part.data === "string") return part.data
+  if (Predicate.isString(part.data)) return part.data
   if (part.data instanceof URL) return part.data.toString()
   return `data:${part.mediaType};base64,${Buffer.from(part.data).toString("base64")}`
 }
 
 export const fileDataFromImage = (part: Prompt.FilePart): string | URL | Uint8Array => {
-  if (typeof part.data !== "string") return part.data
-  if (part.data.startsWith("data:")) return part.data
-  try {
-    return new URL(part.data)
-  } catch {
-    return part.data
-  }
+  const data = part.data
+  if (!Predicate.isString(data)) return data
+  if (data.startsWith("data:")) return data
+  const url = Result.try(() => new URL(data))
+  if (Result.isSuccess(url)) return url.success
+  return data
 }
 
-export const dataUrlToBytes = (value: string): Uint8Array | undefined => {
+export const dataUrlToBytes = (value: string): Option.Option<Uint8Array> => {
   const match = /^data:([^;,]+);base64,(.+)$/u.exec(value)
-  if (match === null) return undefined
+  if (Predicate.isNull(match)) return Option.none()
   const data = match[2]
-  if (data === undefined) return undefined
-  return Uint8Array.from(Buffer.from(data, "base64"))
+  if (Predicate.isUndefined(data)) return Option.none()
+  return Option.some(Uint8Array.from(Buffer.from(data, "base64")))
 }
 
 export const imagePartToResponseFilePart = (part: Prompt.FilePart): Response.FilePart => {
-  let data: Uint8Array | undefined
-  if (typeof part.data === "string") {
+  let data = Option.none<Uint8Array>()
+  if (Predicate.isString(part.data)) {
     data = dataUrlToBytes(part.data)
   } else if (!(part.data instanceof URL)) {
-    data = part.data
+    data = Option.some(part.data)
   }
 
-  if (data === undefined) {
+  if (Option.isNone(data)) {
+    // oxlint-disable-next-line effect/noThrowStatement -- This synchronous Prompt conversion exposes a tagged failure to its caller.
     throw new UrlBackedImageNotSupportedError({ image: filePartDataToDisplay(part) })
   }
   return Response.makePart("file", {
-    data,
+    data: data.value,
     mediaType: part.mediaType,
   })
 }
 
-export const responseFilePartToImagePart = (part: Response.FilePart): Prompt.FilePart | undefined =>
-  part.mediaType.startsWith("image/")
-    ? Prompt.filePart({
-        data: `data:${part.mediaType};base64,${Buffer.from(part.data).toString("base64")}`,
-        mediaType: part.mediaType,
-      })
-    : undefined
+export const responseFilePartToImagePart = (
+  part: Response.FilePart,
+): Option.Option<Prompt.FilePart> => {
+  if (!part.mediaType.startsWith("image/")) return Option.none()
+  return Option.some(
+    Prompt.filePart({
+      data: `data:${part.mediaType};base64,${Buffer.from(part.data).toString("base64")}`,
+      mediaType: part.mediaType,
+    }),
+  )
+}

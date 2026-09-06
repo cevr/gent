@@ -167,10 +167,8 @@ describe("turn prompt composition", () => {
       params: Schema.Struct({}),
       output: Schema.Void,
       execute: () => Effect.void,
-      ...(overrides.promptSnippet !== undefined ? { promptSnippet: overrides.promptSnippet } : {}),
-      ...(overrides.promptGuidelines !== undefined
-        ? { promptGuidelines: overrides.promptGuidelines }
-        : {}),
+      promptSnippet: overrides.promptSnippet,
+      promptGuidelines: overrides.promptGuidelines,
     })
 
   const agent = AgentDefinition.make({
@@ -195,7 +193,7 @@ describe("turn prompt composition", () => {
     const tools = [
       makeTool("read", {
         description: "Read files",
-        promptGuidelines: ["Use instead of bash cat"] as const,
+        promptGuidelines: ["Use instead of bash cat"],
       }),
     ]
     const result = buildTurnPrompt(baseSections, agent, tools)
@@ -205,8 +203,8 @@ describe("turn prompt composition", () => {
 
   test("duplicate guidelines appear only once", () => {
     const tools = [
-      makeTool("read", { description: "Read", promptGuidelines: ["Shared guideline"] as const }),
-      makeTool("grep", { description: "Grep", promptGuidelines: ["Shared guideline"] as const }),
+      makeTool("read", { description: "Read", promptGuidelines: ["Shared guideline"] }),
+      makeTool("grep", { description: "Grep", promptGuidelines: ["Shared guideline"] }),
     ]
     const result = buildTurnPrompt(baseSections, agent, tools)
     const count = result.split("Shared guideline").length - 1
@@ -263,6 +261,7 @@ describe("turn prompt composition", () => {
       AgentDefinition.make({ name: AgentName.make("explore-2"), description: "Code review" }),
       AgentDefinition.make({ name: AgentName.make("no-desc") }), // no description — should be excluded
     ]
+    // oxlint-disable-next-line effect/noNullish -- Exercise the existing absent-value boundary contract.
     const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
     expect(result).toContain("## Delegation Targets")
     expect(result).toContain("**explore**: Fast codebase search")
@@ -277,6 +276,7 @@ describe("turn prompt composition", () => {
       self,
       AgentDefinition.make({ name: AgentName.make("other"), description: "Other agent" }),
     ]
+    // oxlint-disable-next-line effect/noNullish -- Exercise the existing absent-value boundary contract.
     const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
     expect(result).toContain("**other**: Other agent")
     expect(result).not.toContain("**test-agent**")
@@ -287,6 +287,7 @@ describe("turn prompt composition", () => {
     const targets = [
       AgentDefinition.make({ name: AgentName.make("explore"), description: "Search" }),
     ]
+    // oxlint-disable-next-line effect/noNullish -- Exercise the existing absent-value boundary contract.
     const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
     expect(result).not.toContain("## Delegation Targets")
   })

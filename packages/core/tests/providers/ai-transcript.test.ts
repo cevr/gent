@@ -89,6 +89,7 @@ describe("AI transcript projection", () => {
               id: ToolCallId.make("tc-1"),
               name: "describe",
               isFailure: false,
+              providerExecuted: false,
               result: { label: "diagram" },
             }),
             Prompt.toolApprovalResponsePart({
@@ -246,17 +247,23 @@ describe("AI transcript projection", () => {
         reason: "tool-calls",
         usage: new Response.Usage({
           inputTokens: {
+            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
             uncached: undefined,
             total: 12,
+            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
             cacheRead: undefined,
+            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
             cacheWrite: undefined,
           },
           outputTokens: {
             total: 4,
+            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
             text: undefined,
+            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
             reasoning: undefined,
           },
         }),
+        // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
         response: undefined,
       }),
     ])

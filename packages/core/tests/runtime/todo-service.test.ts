@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Effect, Exit, Layer, Schema } from "effect"
+import { Cause, Effect, Exit, Layer, Option, Predicate, Schema } from "effect"
 import { TodoService, TodoServiceUnavailableError } from "../../../extensions/src/todo-service.js"
 import { TodoStorage } from "../../../extensions/src/todo-storage.js"
 import { TodoTransitionError } from "../../../extensions/src/todo/domain.js"
@@ -54,9 +54,9 @@ describe("todo lifecycle", () => {
       expect(Exit.isFailure(exit)).toBe(true)
       if (!Exit.isFailure(exit)) return yield* Effect.die("expected unavailable failure")
       const reason = exit.cause.reasons.find(Cause.isFailReason)
-      expect(reason !== undefined && Schema.is(TodoServiceUnavailableError)(reason.error)).toBe(
-        true,
-      )
+      expect(
+        !Predicate.isUndefined(reason) && Schema.is(TodoServiceUnavailableError)(reason.error),
+      ).toBe(true)
     }).pipe(
       Effect.provide(
         Layer.mergeAll(TodoService.Live, ExtensionStatePublisher.Test(), TestExtensionContextLayer),
@@ -78,7 +78,9 @@ describe("todo lifecycle", () => {
         })
         expect(created.subject).toBe("Sibling layer todo")
         const loaded = yield* todoService.get(created.id)
-        expect(loaded?.id).toBe(created.id)
+        expect(Option.isSome(loaded)).toBe(true)
+        if (Option.isSome(loaded)) expect(loaded.value.id).toBe(created.id)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
     }),
   )
@@ -98,8 +100,9 @@ describe("todo lifecycle", () => {
 
         // pending → stopped is a valid transition
         const updated = yield* todoService.update(todo.id, { status: "stopped" })
-        expect(updated).toBeDefined()
-        expect(updated!.status).toBe("stopped")
+        expect(Option.isSome(updated)).toBe(true)
+        if (Option.isSome(updated)) expect(updated.value.status).toBe("stopped")
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
     }),
   )
@@ -122,7 +125,10 @@ describe("todo lifecycle", () => {
         expect(Exit.isFailure(exit)).toBe(true)
         if (!Exit.isFailure(exit)) return yield* Effect.die("expected transition failure")
         const reason = exit.cause.reasons.find(Cause.isFailReason)
-        expect(reason !== undefined && Schema.is(TodoTransitionError)(reason.error)).toBe(true)
+        expect(!Predicate.isUndefined(reason) && Schema.is(TodoTransitionError)(reason.error)).toBe(
+          true,
+        )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
     }),
   )

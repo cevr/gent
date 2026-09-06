@@ -9,7 +9,7 @@
     "perf": "error"
   },
   "plugins": ["typescript", "import", "node"],
-  "jsPlugins": ["./lint/no-direct-env.ts"],
+  "jsPlugins": ["./lint/no-direct-env.ts", "oxlint-plugin-effect/plugin"],
   "rules": {
     // Custom — no positional error args in Effect.log*
     "gent/no-positional-log-error": "error",
@@ -39,6 +39,50 @@
     "gent/no-sleep": "error",
     // Custom — no `withX(innerCall(...))`; pipe the inner call through the adapter
     "gent/no-with-wrapper-call": "error",
+
+    // Effect — complete recommended preset
+    "effect/maxCognitiveComplexity": ["error", { "max": 21 }],
+    "effect/maxHalsteadDifficulty": ["error", { "max": 79 }],
+    "effect/noAs": "error",
+    "effect/noAsyncFunction": "error",
+    "effect/noChainedTypeAssertions": "error",
+    "effect/noConditionalEmptyObjectSpread": "error",
+    "effect/noDynamicImports": "error",
+    "effect/noEffectBind": "error",
+    "effect/noEffectDo": "error",
+    "effect/noGlobals": "error",
+    "effect/noInlineProvide": "error",
+    "effect/noKnownValueWidening": "error",
+    "effect/noManagedRuntimeInEffect": "error",
+    "effect/noModuleMocks": "error",
+    "effect/noNestedEffectGen": "error",
+    "effect/noNewError": "error",
+    "effect/noNewPromise": "error",
+    "effect/noNodeBuiltinImport": "error",
+    "effect/noNullish": "error",
+    "effect/noObjectParameters": "error",
+    "effect/noPerCallCacheConstruction": "error",
+    "effect/noRunCollectOnUnboundedStream": "error",
+    "effect/noRuntimeTypeof": "error",
+    "effect/noSequentialEffectAll": "error",
+    "effect/noShapeInSymbolNames": "error",
+    "effect/noSilentCatchAll": "error",
+    "effect/noTernary": "error",
+    "effect/noTestLifecycleHooks": "error",
+    "effect/noThrowStatement": "error",
+    "effect/noTryCatch": "error",
+    "effect/noUnboundedConcurrency": "error",
+    "effect/noUnboundedRetry": "error",
+    "effect/noUnknownParameters": "error",
+    "effect/noUnknownTypeAliases": "error",
+    "effect/noUnsafeDictionaryType": "error",
+    "effect/noWidenThenAssert": "error",
+    "effect/preferCatchTag": "error",
+    "effect/preferEffectFn": "error",
+    "effect/preferMatchTagsExhaustive": "error",
+    "effect/preferPredicateIsTagged": "error",
+    "effect/preferServiceOf": "error",
+    "effect/requireNamedEffectFn": "error",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
     // TypeScript - flag unsafe type assertions (as X)
@@ -87,8 +131,86 @@
     "typescript/no-duplicate-type-constituents": "off",
     "typescript/no-unnecessary-template-expression": "off"
   },
-  "ignorePatterns": ["**/dist/**", "**/node_modules/**", "**/*.d.ts", "**/scripts/**"],
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/node_modules/**",
+    "**/*.d.ts",
+    "**/scripts/**",
+    "packages/tooling/fixtures/**"
+  ],
   "overrides": [
+    {
+      // GentPlatform implements Bun/OS capabilities at the runtime boundary.
+      "files": ["packages/core/src/runtime/gent-platform-bun.ts"],
+      "rules": {
+        "effect/noGlobals": "off",
+        "effect/noNodeBuiltinImport": "off"
+      }
+    },
+    {
+      "files": ["lint/**/*.ts"],
+      "rules": {
+        "effect/maxCognitiveComplexity": "off",
+        "effect/noAs": "off",
+        "effect/noChainedTypeAssertions": "off",
+        "effect/noKnownValueWidening": "off",
+        "effect/noNullish": "off",
+        "effect/noRuntimeTypeof": "off",
+        "effect/noTernary": "off",
+        "effect/noUnknownParameters": "off",
+        "effect/noUnsafeDictionaryType": "off"
+      }
+    },
+    {
+      "files": ["packages/e2e/src/*-fixture.ts"],
+      "rules": {
+        "effect/noGlobals": "off"
+      }
+    },
+    {
+      "files": ["packages/sdk/src/namespaced-client.ts"],
+      "rules": {
+        "effect/noAs": "off",
+        "effect/noRuntimeTypeof": "off"
+      }
+    },
+    {
+      "files": ["packages/sdk/src/server.ts", "packages/sdk/src/transport-headers.ts"],
+      "rules": {
+        "effect/noNodeBuiltinImport": "off"
+      }
+    },
+    {
+      "files": ["packages/tooling/src/fixture-runner.ts"],
+      "rules": {
+        "effect/noGlobals": "off",
+        "effect/noNodeBuiltinImport": "off"
+      }
+    },
+    {
+      "files": ["packages/tooling/src/check-guardrails.ts"],
+      "rules": {
+        "effect/noGlobals": "off"
+      }
+    },
+    {
+      "files": ["packages/tooling/src/workspace-test-runner.ts"],
+      "rules": {
+        "effect/noGlobals": "off"
+      }
+    },
+    {
+      "files": ["packages/tooling/src/test-diagnose.ts"],
+      "rules": {
+        "effect/noGlobals": "off"
+      }
+    },
+    {
+      "files": ["packages/tooling/tests/fixtures.test.ts"],
+      "rules": {
+        "effect/noNodeBuiltinImport": "off"
+      }
+    },
     {
       "files": ["**/*.tsx"],
       "rules": {}

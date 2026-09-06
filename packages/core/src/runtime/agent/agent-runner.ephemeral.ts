@@ -1,4 +1,4 @@
-import { Cause, DateTime, Duration, Effect, Fiber, Layer, Ref, Scope, Stream } from "effect"
+import { Cause, DateTime, Duration, Effect, Fiber, Layer, Option, Ref, Scope, Stream } from "effect"
 import {
   AgentRunError,
   AgentRunResult,
@@ -47,8 +47,8 @@ const reparentEphemeralChildEvent = (
       return StreamEnded.make({
         sessionId: parentSessionId,
         branchId: parentBranchId,
-        ...(event.usage !== undefined ? { usage: event.usage } : {}),
-        ...(event.interrupted !== undefined ? { interrupted: event.interrupted } : {}),
+        usage: event.usage,
+        interrupted: event.interrupted,
       })
     case "ToolCallStarted":
       return ToolCallStarted.make({
@@ -56,7 +56,7 @@ const reparentEphemeralChildEvent = (
         branchId: parentBranchId,
         toolCallId: event.toolCallId,
         toolName: event.toolName,
-        ...(event.input !== undefined ? { input: event.input } : {}),
+        input: event.input,
       })
     case "ToolCallSucceeded":
       return ToolCallSucceeded.make({
@@ -64,8 +64,9 @@ const reparentEphemeralChildEvent = (
         branchId: parentBranchId,
         toolCallId: event.toolCallId,
         toolName: event.toolName,
-        ...(event.summary !== undefined ? { summary: event.summary } : {}),
-        ...(event.output !== undefined ? { output: event.output } : {}),
+        summary: event.summary,
+        output: event.output,
+        resultJson: event.resultJson,
       })
     case "ToolCallFailed":
       return ToolCallFailed.make({
@@ -73,8 +74,9 @@ const reparentEphemeralChildEvent = (
         branchId: parentBranchId,
         toolCallId: event.toolCallId,
         toolName: event.toolName,
-        ...(event.summary !== undefined ? { summary: event.summary } : {}),
-        ...(event.output !== undefined ? { output: event.output } : {}),
+        summary: event.summary,
+        output: event.output,
+        resultJson: event.resultJson,
       })
     default:
       return event
@@ -108,20 +110,25 @@ export const runEphemeralAgent = (params: {
     "ToolCallSucceeded",
     "ToolCallFailed",
   ])
+  const timeoutMs = Option.fromUndefinedOr(params.runnerConfig.timeoutMs)
   const runWithTimeout = <R>(effect: Effect.Effect<void, AgentRunError, R>) =>
-    params.runnerConfig.timeoutMs === undefined
-      ? effect
-      : effect.pipe(
-          Effect.timeoutOrElse({
-            duration: Duration.millis(params.runnerConfig.timeoutMs),
-            orElse: () =>
-              Effect.fail(
-                new AgentRunError({
-                  message: `Agent run timed out after ${params.runnerConfig.timeoutMs}ms`,
-                }),
-              ),
-          }),
-        )
+    timeoutMs.pipe(
+      Option.match({
+        onNone: () => effect,
+        onSome: (timeout) =>
+          effect.pipe(
+            Effect.timeoutOrElse({
+              duration: Duration.millis(timeout),
+              orElse: () =>
+                Effect.fail(
+                  new AgentRunError({
+                    message: `Agent run timed out after ${timeout}ms`,
+                  }),
+                ),
+            }),
+          ),
+      }),
+    )
 
   const handleUnexpectedFailure = (cause: Cause.Cause<unknown>) => {
     if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
@@ -163,29 +170,28 @@ export const runEphemeralAgent = (params: {
 
     const mirrorEnvelope = (envelope: EventEnvelope) =>
       Ref.modify(mirroredEnvelopeIds, (current) => {
-        if (current.has(envelope.id)) return [false, current] as const
+        if (current.has(envelope.id)) return [false, current]
         const next = new Set(current)
         next.add(envelope.id)
-        return [true, next] as const
+        return [true, next]
       }).pipe(
-        Effect.flatMap((shouldMirror) =>
-          shouldMirror
-            ? Effect.sync(() =>
-                reparentEphemeralChildEvent(
-                  envelope.event,
-                  params.parentSessionId,
-                  params.parentBranchId,
-                ),
-              ).pipe(
-                Effect.flatMap((event) =>
-                  params.parentBaseEventStore
-                    .publish(event)
-                    .pipe(Effect.tap(() => params.notifyMirroredEventObservers(event))),
-                ),
-                Effect.catchEager(() => Effect.void),
-              )
-            : Effect.void,
-        ),
+        Effect.flatMap((shouldMirror) => {
+          if (!shouldMirror) return Effect.void
+          return Effect.sync(() =>
+            reparentEphemeralChildEvent(
+              envelope.event,
+              params.parentSessionId,
+              params.parentBranchId,
+            ),
+          ).pipe(
+            Effect.flatMap((event) =>
+              params.parentBaseEventStore
+                .publish(event)
+                .pipe(Effect.tap(() => params.notifyMirroredEventObservers(event))),
+            ),
+            Effect.catchEager(() => Effect.void),
+          )
+        }),
       )
 
     const mirrorFiber = yield* Effect.forkChild(
@@ -205,15 +211,20 @@ export const runEphemeralAgent = (params: {
     )
 
     return yield* Effect.gen(function* () {
-      const runSpec: RunSpec | undefined =
-        params.toolCallId !== undefined
-          ? makeRunSpec({
-              persistence: normalizedRunSpec?.persistence,
-              overrides: normalizedRunSpec?.overrides,
-              tags: normalizedRunSpec?.tags,
-              parentToolCallId: params.toolCallId,
-            })
-          : normalizedRunSpec
+      const runSpec = Option.fromUndefinedOr(params.toolCallId).pipe(
+        Option.match({
+          onNone: () => Option.fromUndefinedOr(normalizedRunSpec),
+          onSome: (parentToolCallId) =>
+            Option.some(
+              makeRunSpec({
+                persistence: normalizedRunSpec?.persistence,
+                overrides: normalizedRunSpec?.overrides,
+                tags: normalizedRunSpec?.tags,
+                parentToolCallId,
+              }),
+            ),
+        }),
+      )
       yield* runWithTimeout(
         sessionRuntime.runPrompt({
           sessionId,
@@ -221,7 +232,7 @@ export const runEphemeralAgent = (params: {
           agentName: params.agentName,
           prompt: params.prompt,
           interactive: false,
-          ...(runSpec !== undefined ? { runSpec } : {}),
+          runSpec: Option.getOrUndefined(runSpec),
         }),
       )
 
@@ -285,7 +296,8 @@ export const runEphemeralAgent = (params: {
       sessionId,
     })
 
-    const preview = success.text.length > 200 ? success.text.slice(0, 200) + "…" : success.text
+    let preview = success.text
+    if (success.text.length > 200) preview = success.text.slice(0, 200) + "…"
 
     yield* params.durableRuntime.publishAgentRunSucceeded({
       parentSessionId: params.parentSessionId,
@@ -295,7 +307,7 @@ export const runEphemeralAgent = (params: {
       agentName: params.agentName,
       usage: success.usage,
       preview,
-      savedPath,
+      savedPath: Option.getOrUndefined(savedPath),
     })
 
     yield* WideEvent.set({
@@ -305,7 +317,7 @@ export const runEphemeralAgent = (params: {
 
     return AgentRunResult.cases.success.make({
       ...success,
-      savedPath,
+      savedPath: Option.getOrUndefined(savedPath),
     })
   }).pipe(withWideEvent(agentRunBoundary(params.agentName, params.parentSessionId)))
 

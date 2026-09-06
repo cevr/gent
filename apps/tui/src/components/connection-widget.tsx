@@ -1,4 +1,5 @@
 import { Show } from "solid-js"
+import { Option } from "effect"
 import { useTheme } from "../theme/index"
 import { InlineChrome } from "./inline-chrome"
 import { useClient } from "../client/index"
@@ -7,30 +8,39 @@ export function ConnectionWidget() {
   const client = useClient()
   const { theme } = useTheme()
   const disconnectedReason = () => {
-    const state = client.connectionState()
-    if (state?._tag !== "disconnected" || state.reason === "stopped") return null
-    return state.reason
+    const state = Option.fromNullishOr(client.connectionState())
+    if (Option.isNone(state)) return Option.none<string>()
+    if (state.value._tag !== "disconnected" || state.value.reason === "stopped") {
+      return Option.none<string>()
+    }
+    return Option.some(state.value.reason)
   }
+  const connectionIssue = () => Option.fromNullishOr(client.connectionIssue())
   const degradedExtensions = () => {
     const health = client.extensionHealth()
-    return health._tag === "degraded" ? health.degradedExtensions : []
+    if (health._tag === "degraded") return health.degradedExtensions
+    return []
   }
   const failedExtensions = () =>
     degradedExtensions()
       .filter((extension) => extension.issues.some((issue) => issue._tag === "activation-failed"))
       .map((extension) => extension.manifest.id)
   const failedScheduledJobs = () =>
-    degradedExtensions().flatMap((extension) =>
-      extension.issues.flatMap((issue) =>
-        issue._tag === "scheduled-job-failed" ? [`${extension.manifest.id}:${issue.jobId}`] : [],
-      ),
-    )
+    degradedExtensions().flatMap((extension) => {
+      const jobs: string[] = []
+      for (const issue of extension.issues) {
+        if (issue._tag === "scheduled-job-failed") {
+          jobs.push(`${extension.manifest.id}:${issue.jobId}`)
+        }
+      }
+      return jobs
+    })
   const hasFailedExtensions = () => failedExtensions().length > 0
   const hasFailedScheduledJobs = () => failedScheduledJobs().length > 0
   const visible = () =>
     client.isReconnecting() ||
-    client.connectionIssue() !== null ||
-    disconnectedReason() !== null ||
+    Option.isSome(connectionIssue()) ||
+    Option.isSome(disconnectedReason()) ||
     hasFailedExtensions() ||
     hasFailedScheduledJobs()
   const accent = () => {
@@ -42,8 +52,8 @@ export function ConnectionWidget() {
     if (client.isReconnecting()) return "worker reconnect in progress"
     if (hasFailedExtensions()) return "extension activation degraded"
     if (hasFailedScheduledJobs()) return "scheduled jobs degraded"
-    if (disconnectedReason() !== null) return "runtime unavailable"
-    return client.connectionIssue() ?? ""
+    if (Option.isSome(disconnectedReason())) return "runtime unavailable"
+    return Option.getOrElse(connectionIssue(), () => "")
   }
   const restartCount = () => client.connectionGeneration()
 
@@ -70,16 +80,16 @@ export function ConnectionWidget() {
               <span style={{ fg: theme.textMuted }}>restart count: {restartCount()}</span>
             </text>
           </Show>
-          <Show when={client.connectionIssue() !== null}>
+          <Show when={Option.isSome(connectionIssue())}>
             <text>
               <span style={{ fg: accent() }}>{"│ "}</span>
-              <span style={{ fg: theme.text }}>{client.connectionIssue()}</span>
+              <span style={{ fg: theme.text }}>{Option.getOrUndefined(connectionIssue())}</span>
             </text>
           </Show>
-          <Show when={disconnectedReason() !== null}>
+          <Show when={Option.isSome(disconnectedReason())}>
             <text>
               <span style={{ fg: accent() }}>{"│ "}</span>
-              <span style={{ fg: theme.text }}>{disconnectedReason()}</span>
+              <span style={{ fg: theme.text }}>{Option.getOrUndefined(disconnectedReason())}</span>
             </text>
           </Show>
           <Show when={hasFailedExtensions()}>

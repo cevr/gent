@@ -12,7 +12,7 @@
  * Mirrors `anthropic-keychain-transform.test.ts`.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Predicate, Schema } from "effect"
 import type { Cause } from "effect"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
@@ -20,7 +20,7 @@ import { buildCodexTransformClient } from "../../src/openai/codex-transform.js"
 import {
   OpenAICredentialService,
   type OpenAICredentialIO,
-  type OpenAICredentialServiceShape,
+  type OpenAICredentialServiceApi,
   type OpenAICredentials,
 } from "../../src/openai/credential-service.js"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
@@ -30,28 +30,35 @@ interface CapturedRequest {
   url: string
   method: string
   headers: Record<string, string>
-  body: string | undefined
+  body?: string
 }
 interface TransportFailure {
   readonly _tag: "TransportFailure"
   readonly message: string
 }
+const hasTransportFailureTag = Predicate.isTagged("TransportFailure")
 const isTransportFailure = (v: Response | TransportFailure): v is TransportFailure =>
-  (v as TransportFailure)._tag === "TransportFailure"
+  hasTransportFailureTag(v)
 interface FakeClientState {
   captured: Array<CapturedRequest>
   responder: (call: number) => Response | TransportFailure
 }
+const respondFirstWith =
+  (first: Response | TransportFailure, later: Response | TransportFailure) =>
+  (call: number): Response | TransportFailure => {
+    if (call === 0) return first
+    return later
+  }
 const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
   HttpClient.make((request) => {
     const headersObj: Record<string, string> = {}
     for (const [key, value] of Object.entries(request.headers)) {
-      if (typeof value === "string") headersObj[key] = value
+      if (Schema.is(Schema.String)(value)) headersObj[key] = value
     }
-    let bodyText: string | undefined
+    let bodyText = Option.getOrUndefined(Option.none<string>())
     if (request.body._tag === "Uint8Array") {
       bodyText = new TextDecoder().decode(request.body.body)
-    } else if (request.body._tag === "Raw" && typeof request.body.body === "string") {
+    } else if (request.body._tag === "Raw" && Schema.is(Schema.String)(request.body.body)) {
       bodyText = request.body.body
     }
     state.captured.push({
@@ -74,9 +81,10 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
     }
     return Effect.succeed(HttpClientResponse.fromWeb(request, result))
   })
-const JsonRecord = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
-const decodeJsonRecord = (raw: string): Effect.Effect<Record<string, unknown>> =>
-  Schema.decodeUnknownEffect(JsonRecord)(raw).pipe(Effect.orDie)
+const JsonRecordSchema = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
+type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
+const decodeJsonRecord = (raw: string): Effect.Effect<JsonRecord> =>
+  Schema.decodeEffect(JsonRecordSchema)(raw).pipe(Effect.orDie)
 // ── Service-instance extraction ──
 // Capture the credential-service "instance" by running its layer once
 // and grabbing the service from context. The transform takes this
@@ -84,7 +92,7 @@ const decodeJsonRecord = (raw: string): Effect.Effect<Record<string, unknown>> =
 const buildCreds = (
   io: OpenAICredentialIO,
   authInfo: ProviderAuthInfo,
-): Promise<OpenAICredentialServiceShape> => {
+): Promise<OpenAICredentialServiceApi> => {
   const layer = OpenAICredentialService.layerFromIO(io, authInfo)
   return runEffectBoundary(
     Layer.build(layer).pipe(
@@ -102,19 +110,28 @@ const validAuthInfo = (
     refresh: string
     accountId: string
   }>,
-): ProviderAuthInfo => ({
-  type: "oauth",
-  access: overrides?.access ?? "fresh-access",
-  refresh: overrides?.refresh ?? "fresh-refresh",
-  expires: FAR_FUTURE_MS,
-  ...(overrides?.accountId !== undefined ? { accountId: overrides.accountId } : {}),
-})
+): ProviderAuthInfo => {
+  const access = Option.getOrElse(Option.fromUndefinedOr(overrides?.access), () => "fresh-access")
+  const refresh = Option.getOrElse(
+    Option.fromUndefinedOr(overrides?.refresh),
+    () => "fresh-refresh",
+  )
+  const accountId = Option.fromUndefinedOr(overrides?.accountId)
+  const base = {
+    type: "oauth",
+    access,
+    refresh,
+    expires: FAR_FUTURE_MS,
+  }
+  if (Option.isNone(accountId)) return base
+  return { ...base, accountId: accountId.value }
+}
 const noopRefreshIO = (): OpenAICredentialIO => ({
   refresh: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
 })
 // `HttpBody.jsonUnsafe` mirrors how the OpenAI-compat SDK serializes
 // outgoing JSON bodies (via `bodyJsonUnsafe`/`bodyText` → Uint8Array).
-const jsonBody = (payload: Record<string, unknown>) => HttpBody.jsonUnsafe(payload)
+const jsonBody = (payload: JsonRecord) => HttpBody.jsonUnsafe(payload)
 const runOk = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> =>
   runEffectBoundary(Effect.scoped(eff.pipe(Effect.orDie)))
 // ── Tests ──
@@ -323,17 +340,27 @@ describe("codexTransformClient — auth headers (O2)", () => {
       // client signature stays `With<HttpClientError, never>`. The
       // original ProviderAuthError must be reachable as the cause so
       // upstream error classifiers can still see it.
-      if (result._tag !== "Failure") throw new Error("expected failure")
+      if (result._tag !== "Failure") return yield* Effect.die(new Error("expected failure"))
       const failReason = result.cause.reasons.find(
         (r): r is Cause.Fail<HttpClientError> => r._tag === "Fail",
       )
       expect(failReason).toBeDefined()
-      const err = failReason!.error
+      const failReasonOption = Option.fromUndefinedOr(failReason)
+      if (Option.isNone(failReasonOption)) {
+        return yield* Effect.die(new Error("expected fail reason"))
+      }
+      const err = failReasonOption.value.error
       expect(err).toBeInstanceOf(HttpClientError)
       expect(err.reason).toBeInstanceOf(TransportError)
-      const reason = err.reason as TransportError
-      expect(reason.cause).toBeInstanceOf(ProviderAuthError)
-      expect((reason.cause as ProviderAuthError).message).toBe("no usable refresh token")
+      if (!(err.reason instanceof TransportError)) {
+        return yield* Effect.die(new Error("expected transport error"))
+      }
+      const reason = err.reason
+      expect(Schema.is(ProviderAuthError)(reason.cause)).toBe(true)
+      if (!Schema.is(ProviderAuthError)(reason.cause)) {
+        return yield* Effect.die(new Error("expected provider auth error"))
+      }
+      expect(reason.cause.message).toBe("no usable refresh token")
       expect(reason.description).toBe("no usable refresh token")
     }),
   )
@@ -351,6 +378,7 @@ describe("codexTransformClient — auth headers (O2)", () => {
               access: "rotated-access",
               refresh: "rotated-refresh",
               expires: FAR_FUTURE_MS,
+              accountId: Option.none(),
             })
           }
           return Effect.fail(new ProviderAuthError({ message: "should not be called twice" }))
@@ -678,17 +706,20 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
         refresh: () =>
           Effect.sync(() => {
             refreshCount += 1
-            return refreshCount === 1
-              ? {
-                  access: "stale-access",
-                  refresh: "stale-refresh",
-                  expires: FAR_FUTURE_MS,
-                }
-              : {
-                  access: "rotated-access",
-                  refresh: "rotated-refresh",
-                  expires: FAR_FUTURE_MS,
-                }
+            if (refreshCount === 1) {
+              return {
+                access: "stale-access",
+                refresh: "stale-refresh",
+                expires: FAR_FUTURE_MS,
+                accountId: Option.none(),
+              }
+            }
+            return {
+              access: "rotated-access",
+              refresh: "rotated-refresh",
+              accountId: Option.none(),
+              expires: FAR_FUTURE_MS,
+            }
           }),
       }
       // Empty access on authInfo forces an initial refresh (otherwise the
@@ -703,10 +734,10 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
       const state: FakeClientState = {
         captured: [],
         // First call returns 401, second returns 200.
-        responder: (call) =>
-          call === 0
-            ? new Response("unauthorized", { status: 401 })
-            : new Response("ok", { status: 200 }),
+        responder: respondFirstWith(
+          new Response("unauthorized", { status: 401 }),
+          new Response("ok", { status: 200 }),
+        ),
       }
       const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
       const response = yield* Effect.promise(() =>
@@ -735,6 +766,7 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
             access: "always-stale",
             refresh: "always-stale-refresh",
             expires: FAR_FUTURE_MS,
+            accountId: Option.none(),
           }),
       }
       const stalAuthInfo: ProviderAuthInfo = {
@@ -832,6 +864,7 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
                   access: "first-access",
                   refresh: "first-refresh",
                   expires: FAR_FUTURE_MS,
+                  accountId: Option.none(),
                 })
               }
               return Effect.fail(new ProviderAuthError({ message: "rotation failed mid-recovery" }))
@@ -857,17 +890,27 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
             .pipe(Effect.exit),
         )
         expect(result._tag).toBe("Failure")
-        if (result._tag !== "Failure") throw new Error("expected failure")
+        if (result._tag !== "Failure") return yield* Effect.die(new Error("expected failure"))
         const failReason = result.cause.reasons.find(
           (r): r is Cause.Fail<HttpClientError> => r._tag === "Fail",
         )
         expect(failReason).toBeDefined()
-        const err = failReason!.error
+        const failReasonOption = Option.fromUndefinedOr(failReason)
+        if (Option.isNone(failReasonOption)) {
+          return yield* Effect.die(new Error("expected fail reason"))
+        }
+        const err = failReasonOption.value.error
         expect(err).toBeInstanceOf(HttpClientError)
         expect(err.reason).toBeInstanceOf(TransportError)
-        const reason = err.reason as TransportError
-        expect(reason.cause).toBeInstanceOf(ProviderAuthError)
-        expect((reason.cause as ProviderAuthError).message).toBe("rotation failed mid-recovery")
+        if (!(err.reason instanceof TransportError)) {
+          return yield* Effect.die(new Error("expected transport error"))
+        }
+        const reason = err.reason
+        expect(Schema.is(ProviderAuthError)(reason.cause)).toBe(true)
+        if (!Schema.is(ProviderAuthError)(reason.cause)) {
+          return yield* Effect.die(new Error("expected provider auth error"))
+        }
+        expect(reason.cause.message).toBe("rotation failed mid-recovery")
         // Exactly one wire call: the original 401. The retry never reaches
         // the wire because preprocess (creds.getFresh) fails first.
         expect(state.captured).toHaveLength(1)

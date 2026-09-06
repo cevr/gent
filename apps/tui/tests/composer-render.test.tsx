@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
 import { createSignal, type JSX } from "solid-js"
+import { Effect, Option } from "effect"
 import { Composer } from "../src/components/composer"
 import {
   ComposerInteractionState,
@@ -9,7 +10,8 @@ import {
 import { ComposerState } from "../src/components/composer-state"
 import { SessionControllerContext, type SessionController } from "../src/routes/session-controller"
 import { SessionUiState } from "../src/routes/session-ui-state"
-import { Effect } from "effect"
+import { PromptSearchState } from "../src/components/prompt-search-state"
+import { useClient } from "../src/client"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 function TestComposer(props: {
   readonly suspended?: boolean
@@ -17,19 +19,38 @@ function TestComposer(props: {
   readonly children?: JSX.Element
 }) {
   const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
+  const client = useClient()
   const mockController = {
+    client,
+    items: () => [],
+    messages: () => [],
+    queueState: () => ({ steering: [], followUp: [] }),
     interactionState,
+    uiState: SessionUiState.initial,
     composerState: () => ComposerState.idle(),
+    promptEntries: () => [],
+    promptSearchState: PromptSearchState.closed,
+    promptSearchOpen: () => props.suspended ?? false,
+    toolsExpanded: () => false,
+    treeOverlay: () => Option.getOrNull(Option.none()),
+    activity: () => ({ phase: "idle", turn: 0 }),
+    spinner: () => "",
+    phaseLabel: () => "idle",
+    elapsed: () => 0,
+    getChildren: () => [],
     onComposerInteraction: (event: Parameters<typeof transitionComposerInteraction>[1]) =>
       setInteractionState((current) => transitionComposerInteraction(current, event)),
     onSubmit: props.onSubmit,
     onSlashCommand: (_cmd: string, _args: string) => Effect.void,
     clearMessages: () => {},
-    promptSearchOpen: () => props.suspended ?? false,
     onRestoreQueue: () => {},
     dispatchComposer: () => {},
-    uiState: () => SessionUiState.initial(),
-  } as unknown as SessionController
+    resolveAuthGate: () => {},
+    closeOverlay: () => {},
+    onSessionTreeSelect: () => {},
+    onForkSelect: () => {},
+    onPromptSearchEvent: () => {},
+  } satisfies SessionController
   return (
     <SessionControllerContext.Provider value={mockController}>
       <Composer>{props.children}</Composer>

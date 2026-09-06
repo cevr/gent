@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Predicate, Schema } from "effect"
 import {
   ExtensionHostProcessError,
   type ExtensionHostPlatform,
@@ -6,34 +6,29 @@ import {
 } from "../../domain/extension.js"
 import { ProcessRunner } from "../../utils/run-process.js"
 import { GentPlatform } from "../gent-platform.js"
+import { hasMessage } from "../../domain/guards.js"
 
-const errorMessage = (error: unknown): string => {
-  if (error instanceof Error) return error.message
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message
-  }
+const errorMessage = (error: Parameters<typeof hasMessage>[0]): string => {
+  if (Predicate.isError(error)) return error.message
+  if (hasMessage(error)) return error.message
   return String(error)
 }
 
+const hasTimedOut = Schema.is(Schema.Struct({ timedOut: Schema.Literal(true) }))
+
 const toHostProcessError =
   (command: string) =>
-  (error: unknown): ExtensionHostProcessError =>
-    new ExtensionHostProcessError({
+  (error: Parameters<typeof hasMessage>[0]): ExtensionHostProcessError => {
+    const fields = {
       command,
       message: errorMessage(error),
       cause: error,
-      ...(typeof error === "object" &&
-      error !== null &&
-      "timedOut" in error &&
-      error.timedOut === true
-        ? { timedOut: true }
-        : {}),
-    })
+    }
+    if (hasTimedOut(error)) {
+      return new ExtensionHostProcessError({ ...fields, timedOut: true })
+    }
+    return new ExtensionHostProcessError(fields)
+  }
 
 export const makeExtensionHostPlatform: Effect.Effect<ExtensionHostPlatform, never, GentPlatform> =
   Effect.gen(function* () {
@@ -49,6 +44,7 @@ export const makeExtensionHostPlatform: Effect.Effect<ExtensionHostPlatform, nev
       execPath,
       homeDirectory,
       parentEnv,
+      randomId: platform.randomId,
       pathListSeparator,
       commandCandidates: platform.commandCandidates,
       isPortFree: platform.isPortFree,

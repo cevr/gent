@@ -4,16 +4,17 @@ import { narrowR } from "../../../core/tests/helpers/effect"
 import { PromptTool } from "../../src/interaction-tools/prompt.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { runToolWithCtx } from "@gent/core-internal/test-utils"
+import type { ExtensionContextService } from "@gent/core/extensions/api"
 
 describe("Prompt Tool", () => {
   it.live("review mode: writes content and returns decision", () => {
-    const interaction = {
+    const interaction: ExtensionContextService["Interaction"] = {
       approve: () => Effect.die("interaction.approve not wired"),
       present: () => Effect.die("interaction.present not wired"),
       confirm: () => Effect.die("interaction.confirm not wired"),
       review: () =>
         Effect.succeed({
-          decision: "yes" as const,
+          decision: "yes",
           path: "/tmp/test-prompt.md",
         }),
     }
@@ -33,10 +34,10 @@ describe("Prompt Tool", () => {
   })
 
   it.live("confirm mode: returns yes/no decision", () => {
-    const interaction = {
+    const interaction: ExtensionContextService["Interaction"] = {
       approve: () => Effect.die("interaction.approve not wired"),
       present: () => Effect.die("interaction.present not wired"),
-      confirm: () => Effect.succeed("no" as const),
+      confirm: () => Effect.succeed("no"),
       review: () => Effect.die("interaction.review not wired"),
     }
     const ctx = testToolContext({ Interaction: interaction })

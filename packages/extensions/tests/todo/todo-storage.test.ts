@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option, Predicate } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { Todo, TodoId } from "../../src/todo/domain.js"
@@ -69,11 +69,16 @@ describe("TodoStorage metadata boundary", () => {
           metadata: { keep: false },
         })
 
-        const updated = yield* todoService.update(created.id, { metadata: null })
+        const updated = yield* todoService.update(created.id, {
+          metadata: Option.getOrNull(Option.none()),
+        })
         const reloaded = yield* todoService.get(created.id)
 
-        expect(updated?.metadata).toBeUndefined()
-        expect(reloaded?.metadata).toBeUndefined()
+        expect(Option.isSome(updated)).toBe(true)
+        expect(Option.isSome(reloaded)).toBe(true)
+        if (Option.isSome(updated)) expect(Predicate.isUndefined(updated.value.metadata)).toBe(true)
+        if (Option.isSome(reloaded))
+          expect(Predicate.isUndefined(reloaded.value.metadata)).toBe(true)
       }).pipe(withTodoWrite, Effect.provide(layer)),
     ),
   )
@@ -83,8 +88,8 @@ describe("TodoStorage metadata boundary", () => {
       Effect.gen(function* () {
         yield* setup
         const todoStorage = yield* TodoStorage
-        const badMetadata: Record<string, unknown> = {}
-        badMetadata["self"] = badMetadata
+        const badMetadata = { self: {} } satisfies { self: object }
+        badMetadata.self = badMetadata
         const now = FIXTURE_DATE
         const result = yield* todoStorage
           .createTodo(
@@ -142,7 +147,9 @@ describe("TodoStorage.deleteTodo", () => {
 
         expect(result._tag).toBe("TodoStorageError")
         expect(yield* todoService.getDeps(blocked.id)).toEqual([blocker.id])
-        expect((yield* todoService.get(blocker.id))?.id).toBe(blocker.id)
+        const loaded = yield* todoService.get(blocker.id)
+        expect(Option.isSome(loaded)).toBe(true)
+        if (Option.isSome(loaded)) expect(loaded.value.id).toBe(blocker.id)
       }).pipe(withTodoWrite, Effect.provide(layer)),
     ),
   )
