@@ -472,6 +472,20 @@ const cellExecutionsMigration = Effect.gen(function* () {
   `)
 })
 
+const cellNamespacesMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`
+    CREATE TABLE cell_namespaces (
+      session_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, branch_id),
+      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
+    )
+  `)
+})
+
 const cellToolOperationsMigration = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   yield* sql.unsafe(`
@@ -527,6 +541,7 @@ const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient>
       "011_message_insertion_order": messageInsertionOrderMigration,
       "012_cell_executions": cellExecutionsMigration,
       "013_cell_tool_operations": cellToolOperationsMigration,
+      "014_cell_namespaces": cellNamespacesMigration,
     }),
     table: "gent_storage_migrations",
   }).pipe(

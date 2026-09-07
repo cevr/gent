@@ -131,6 +131,22 @@ export const runCellWorker = Effect.scoped(
         yield* transport.send(CellResponse.cases.Reset.make({ requestId: request.requestId }))
         return
       }
+      if (request._tag === "Snapshot") {
+        const snapshot = yield* kernel.snapshot
+        yield* transport.send(
+          CellResponse.cases.Snapshot.make({ requestId: request.requestId, snapshot }),
+        )
+        return
+      }
+      if (request._tag === "Restore") {
+        const bindings = yield* kernel
+          .restore(request.bindings)
+          .pipe(Effect.mapError((error) => new CellProtocolError({ message: error.message })))
+        yield* transport.send(
+          CellResponse.cases.Restored.make({ requestId: request.requestId, bindings }),
+        )
+        return
+      }
       activeCell = Option.some(request.cellId)
       cellCalls = 0
       yield* kernel.evaluate(request.source).pipe(

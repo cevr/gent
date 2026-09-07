@@ -10,6 +10,7 @@ import type { ModelResolver } from "../../providers/model-resolver.js"
 import type { ModelRegistry } from "../model-registry.js"
 import type { ToolRunner } from "./tool-runner.js"
 import type { CellExecutionStorage } from "../../storage/cell-execution-storage.js"
+import type { CellNamespaceStorage } from "../../storage/cell-namespace-storage.js"
 import type { CellToolOperationStorage } from "../../storage/cell-tool-operation-storage.js"
 import type { InteractionStorage } from "../../storage/interaction-storage.js"
 
@@ -24,6 +25,7 @@ export type AgentLoopRuntimeServices =
   | ToolRunner
   | EventPublisher
   | CellExecutionStorage
+  | CellNamespaceStorage
   | CellToolOperationStorage
   | InteractionStorage
 

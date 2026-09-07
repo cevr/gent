@@ -6,6 +6,7 @@ import {
   Layer,
   Option,
   type Path,
+  Predicate,
   Ref,
   Schema,
   Scope,
@@ -16,6 +17,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../domain/ids.js"
 import { StorageError } from "../../domain/storage-error.js"
 import { CellExecutionStorage } from "../../storage/cell-execution-storage.js"
+import { CellNamespaceStorage } from "../../storage/cell-namespace-storage.js"
 import {
   CellKernelError,
   type CellOperationHost,
@@ -23,7 +25,11 @@ import {
   openMacosCellKernel,
 } from "./cell-kernel.js"
 import { CellProcessError } from "./cell-process.js"
-import { CellEvaluationError } from "./cell-protocol.js"
+import {
+  type CellEvaluation,
+  CellEvaluationError,
+  type CellRestoreReport,
+} from "./cell-protocol.js"
 import { GentPlatform } from "../gent-platform.js"
 
 export class CellExecutionIncomplete extends Schema.TaggedError<CellExecutionIncomplete>()(
@@ -38,6 +44,10 @@ export class CellExecutionIncomplete extends Schema.TaggedError<CellExecutionInc
 ) {}
 
 const CellFailure = Schema.Union([CellEvaluationError, CellKernelError, CellProcessError])
+const isPassThrough = Predicate.or(
+  Predicate.isTagged("CellToolCallSuspended"),
+  Predicate.isTagged("StorageError"),
+)
 type Kernel = Effect.Success<ReturnType<typeof openMacosCellKernel>>
 
 export interface CellExecutionService {
@@ -82,6 +92,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
       CellExecution,
       Effect.gen(function* () {
         const storage = yield* CellExecutionStorage
+        const namespaces = yield* CellNamespaceStorage
         const scope = yield* Effect.scope
         const platform = yield* Effect.context<
           FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
@@ -98,6 +109,33 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           })
         let kernel = Option.none<Kernel>()
         let startupAttempts = 0
+        // Set when the worker reported state loss; the next run replaces it and restores.
+        let recoveryPending = false
+        // Report for the first evaluation after a host-owned restore.
+        let restoreReport = Option.none<CellRestoreReport>()
+        const namespaceAddress = { sessionId: input.sessionId, branchId: input.branchId }
+        /** Put the last good namespace back into a fresh worker. Missing values are named. */
+        const restoreNamespace = Effect.fn("CellExecution.restoreNamespace")(function* (
+          current: Kernel,
+        ) {
+          const saved = yield* namespaces.get(namespaceAddress)
+          if (Option.isNone(saved)) return
+          const restored = yield* current.restore(saved.value.bindings)
+          // An empty namespace has nothing to report.
+          if (restored.length === 0 && saved.value.omitted.length === 0) return
+          restoreReport = Option.some({ restored, omitted: saved.value.omitted })
+        })
+        /** Keep the namespace after each good cell. A failed snapshot only loses recency. */
+        const saveNamespace = Effect.fn("CellExecution.saveNamespace")(function* (current: Kernel) {
+          yield* current.snapshot.pipe(
+            Effect.flatMap((snapshot) => namespaces.set(namespaceAddress, snapshot)),
+            Effect.catch((error) =>
+              Effect.logWarning("Cell namespace snapshot failed").pipe(
+                Effect.annotateLogs({ error: String(error) }),
+              ),
+            ),
+          )
+        })
         const getKernel = Effect.fn("CellExecution.getKernel")(function* () {
           if (Option.isSome(kernel)) return kernel.value
           const remainingReplacements = (input.maximumReplacements ?? 3) - startupAttempts
@@ -121,9 +159,33 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
                   kernel = Option.some(opened)
                 }),
               ),
+              Effect.tap((opened) => restoreNamespace(opened)),
             ),
           )
         })
+        /** Reset on request clears the saved namespace; reset after loss restores it. */
+        const prepare = Effect.fn("CellExecution.prepare")(function* (
+          current: Kernel,
+          reset: boolean,
+        ) {
+          if (reset) {
+            yield* current.reset
+            yield* namespaces.clear(namespaceAddress)
+            recoveryPending = false
+            restoreReport = Option.none()
+            return
+          }
+          if (!recoveryPending) return
+          yield* current.reset
+          recoveryPending = false
+          yield* restoreNamespace(current)
+        })
+        const evaluated = (value: CellEvaluation): CellEvaluation => {
+          if (Option.isNone(restoreReport)) return value
+          const report = restoreReport.value
+          restoreReport = Option.none()
+          return { ...value, restored: report }
+        }
         const run = Effect.fn("CellExecution.run")(function* (
           call: Parameters<CellExecutionService["run"]>[0],
           runEpoch: number,
@@ -155,8 +217,10 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           const result = yield* evaluate.pipe(
             Effect.flatMap((current) =>
               Effect.gen(function* () {
-                if (admission.reset === true) yield* current.reset
-                return yield* current.evaluate(admission.code)
+                yield* prepare(current, admission.reset === true)
+                const value = yield* current.evaluate(admission.code)
+                yield* saveNamespace(current)
+                return evaluated(value)
               }),
             ),
             Effect.raceFirst(Deferred.await(signal)),
@@ -179,7 +243,8 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
               onFailure: (
                 error,
               ): Effect.Effect<Prompt.ToolResultPart, StorageError | CellToolCallSuspended> => {
-                if (error._tag === "CellToolCallSuspended") return Effect.fail(error)
+                if (isPassThrough(error)) return Effect.fail(error)
+                if (error._tag !== "CellEvaluationError") recoveryPending = true
                 return Schema.encodeEffect(CellFailure)(error).pipe(
                   Effect.mapError(
                     (cause) =>
@@ -203,6 +268,9 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
         })
         const reset = Effect.fn("CellExecution.reset")(function* () {
           if (Option.isSome(kernel)) yield* kernel.value.reset
+          yield* namespaces.clear(namespaceAddress).pipe(Effect.orDie)
+          recoveryPending = false
+          restoreReport = Option.none()
         })
         const cancel = Effect.fn("CellExecution.cancel")(function* () {
           cancellationEpoch++

@@ -23,6 +23,7 @@ import {
   maximumCellSourceLength,
   maximumPendingCellCalls,
 } from "./cell-protocol.js"
+import type { CellSnapshot, SnapshotBinding } from "./cell-snapshot.js"
 
 /** Supplied by the caller for each evaluation, never retained in the worker. */
 export class CellOperationHost extends Context.Service<
@@ -178,7 +179,13 @@ export const openMacosCellKernel = Effect.fn("CellKernel.openMacos")(function* (
         const seen = new Set<string>()
         const pending = new Set<string>()
         const receive = Effect.fn("CellKernel.receive")(function* (frame: CellResponse) {
-          if (frame._tag === "Ready" || frame._tag === "Reset" || frame.cellId !== cellId) {
+          if (
+            frame._tag === "Ready" ||
+            frame._tag === "Reset" ||
+            frame._tag === "Snapshot" ||
+            frame._tag === "Restored" ||
+            frame.cellId !== cellId
+          ) {
             return yield* failure("protocol", "Unexpected cell response")
           }
           if (frame._tag === "HostCall") {
@@ -275,13 +282,54 @@ export const openMacosCellKernel = Effect.fn("CellKernel.openMacos")(function* (
     )
   })
 
+  /** One control request with one matching reply, while no cell is active. */
+  const control = Effect.fn("CellKernel.control")(function* <A>(
+    make: (requestId: string) => CellRequest,
+    read: (response: CellResponse, requestId: string) => Option.Option<A>,
+  ) {
+    if (status === "closed") return yield* failure("closed", "Cell kernel is closed")
+    if (status === "lost") {
+      return yield* failure("recovery-required", "Working state was lost; reset before evaluating")
+    }
+    const requestId = String(++sequence)
+    return yield* Effect.gen(function* () {
+      yield* child.send(make(requestId))
+      const response = yield* child.responses.pipe(Stream.runHead)
+      const value = Option.flatMap(response, (frame) => read(frame, requestId))
+      if (Option.isNone(value))
+        return yield* failure("protocol", "Unexpected cell control response")
+      return value.value
+    }).pipe(
+      Effect.catchTag("CellProcessError", (error) => Effect.fail(processError(error))),
+      Effect.timeoutOrElse(deadline),
+      Effect.onError(() => discard().pipe(Effect.orDie)),
+    )
+  })
+  const snapshot = control(
+    (requestId) => CellRequest.cases.Snapshot.make({ requestId }),
+    (frame, requestId): Option.Option<CellSnapshot> => {
+      if (frame._tag === "Snapshot" && frame.requestId === requestId)
+        return Option.some(frame.snapshot)
+      return Option.none()
+    },
+  )
+  const restore = (bindings: ReadonlyArray<SnapshotBinding>) =>
+    control(
+      (requestId) => CellRequest.cases.Restore.make({ requestId, bindings }),
+      (frame, requestId): Option.Option<ReadonlyArray<string>> => {
+        if (frame._tag === "Restored" && frame.requestId === requestId)
+          return Option.some(frame.bindings)
+        return Option.none()
+      },
+    )
+
+  const guarded = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Semaphore.withPermit(permit, effect.pipe(Effect.raceFirst(Deferred.await(shutdown))))
   return {
-    evaluate: (source: string) =>
-      Semaphore.withPermit(
-        permit,
-        evaluate(source).pipe(Effect.raceFirst(Deferred.await(shutdown))),
-      ),
-    reset: Semaphore.withPermit(permit, reset().pipe(Effect.raceFirst(Deferred.await(shutdown)))),
+    evaluate: (source: string) => guarded(evaluate(source)),
+    snapshot: guarded(snapshot),
+    restore: (bindings: ReadonlyArray<SnapshotBinding>) => guarded(restore(bindings)),
+    reset: guarded(reset()),
     close: close().pipe(Effect.uninterruptible),
   }
 })

@@ -214,6 +214,7 @@ describe("Sessions", () => {
           "message_insertion_order",
           "cell_executions",
           "cell_tool_operations",
+          "cell_namespaces",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -241,6 +242,7 @@ describe("Sessions", () => {
           "message_insertion_order",
           "cell_executions",
           "cell_tool_operations",
+          "cell_namespaces",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -280,6 +282,7 @@ describe("Sessions", () => {
         }
         // Restore the version-10 schema in this temporary test database.
         const sql = yield* SqlClient.SqlClient
+        yield* sql.unsafe("DROP TABLE cell_namespaces")
         yield* sql.unsafe("DROP TABLE cell_tool_operations")
         yield* sql.unsafe("DROP TABLE cell_executions")
         yield* sql.unsafe("DROP TRIGGER messages_assign_insertion_order")

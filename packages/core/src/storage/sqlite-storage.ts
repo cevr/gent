@@ -16,6 +16,7 @@ import { RelationshipStorage } from "./relationship-storage.js"
 import { SessionOperationStorage } from "./session-operation-storage.js"
 import { ToolCallBindingStorage } from "./tool-call-binding-storage.js"
 import { CellExecutionStorage } from "./cell-execution-storage.js"
+import { CellNamespaceStorage } from "./cell-namespace-storage.js"
 import { CellToolOperationStorage } from "./cell-tool-operation-storage.js"
 import { ResourceGraphStorage } from "./resource-graph-storage.js"
 import { StorageError } from "../domain/storage-error.js"
@@ -66,6 +67,7 @@ type FocusedStorage =
   | SessionOperationStorage
   | ToolCallBindingStorage
   | CellExecutionStorage
+  | CellNamespaceStorage
   | CellToolOperationStorage
   | ResourceGraphStorage
   | ClusterMessageStorage.MessageStorage
@@ -85,6 +87,7 @@ const provideFocusedRepositories = <E, R>(
     Layer.provide(SessionOperationStorage.Live, base),
     Layer.provide(ToolCallBindingStorage.Live, base),
     Layer.provide(CellExecutionStorage.Live, base),
+    Layer.provide(CellNamespaceStorage.Live, base),
     Layer.provide(CellToolOperationStorage.Live, Layer.merge(base, interactionStorage)),
     Layer.provide(ResourceGraphStorage.Live, base),
     Layer.provide(encoreSqlMessageStorage(), Layer.merge(base, BunCrypto.layer)),

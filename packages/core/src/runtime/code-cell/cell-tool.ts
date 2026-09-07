@@ -11,11 +11,11 @@ export const CellTool = tool({
   params: CellInput,
   output: Schema.Json,
   promptGuidelines: [
-    "Values remain available in later cells on this branch while its worker lives.",
+    "Top-level variables stay bound in later cells on this branch. The host saves them after each cell and restores them after a worker restart; a result then carries restored (names) and omitted (functions, class instances, cycles, oversized values).",
     "Call host tools with await tools.call(name, input). Run independent calls concurrently with Promise.all; chain dependent calls with sequential awaits.",
     "Discover selected tools with await tools.call('tool-catalog', {action: 'search', query: ''}). Search returns 20 names; pass nextOffset as offset for the next page.",
     "Get an input schema with await tools.call('tool-catalog', {action: 'describe', name: 'tool-name'}). Descriptions do not grant permission to execute.",
-    "Set reset: true to discard retained values before running new code. Use this after worker state loss.",
+    "Set reset: true to discard retained values and the saved namespace before running new code.",
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
   ],
   execute: Effect.fn("CellTool.execute")(function* () {

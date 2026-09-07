@@ -50,6 +50,7 @@ import { GentPlatform } from "./gent-platform.js"
 import type { ToolRunner } from "./agent/tool-runner.js"
 import type { ToolCallBindingStorage } from "../storage/tool-call-binding-storage.js"
 import type { CellExecutionStorage } from "../storage/cell-execution-storage.js"
+import type { CellNamespaceStorage } from "../storage/cell-namespace-storage.js"
 import type { CellToolOperationStorage } from "../storage/cell-tool-operation-storage.js"
 import type { InteractionStorage } from "../storage/interaction-storage.js"
 import type { ConfigService } from "./config-service.js"
@@ -197,6 +198,7 @@ type SessionRuntimeLayerRequirements =
   | ToolRunner
   | ToolCallBindingStorage
   | CellExecutionStorage
+  | CellNamespaceStorage
   | CellToolOperationStorage
   | InteractionStorage
   | ConfigService

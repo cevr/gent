@@ -1,9 +1,11 @@
 import { Effect, Schema } from "effect"
+import { CellSnapshot, SnapshotBinding, SnapshotOmission } from "./cell-snapshot.js"
 
 export const maximumCellSourceLength = 256 * 1024
 export const maximumCellDisplayLength = 64 * 1024
 export const maximumCellBindings = 1024
 export const maximumCellFrameBytes = 1024 * 1024
+export const maximumCellDisplayHeadLength = 48 * 1024
 export const maximumPendingCellCalls = 32
 export const maximumCallsPerCell = 4096
 
@@ -16,10 +18,19 @@ export class CellEvaluationError extends Schema.TaggedError<CellEvaluationError>
   },
 ) {}
 
+/** Restored names and named omissions from the last host-owned snapshot. */
+export const CellRestoreReport = Schema.Struct({
+  restored: Schema.Array(Schema.String),
+  omitted: Schema.Array(SnapshotOmission),
+})
+export type CellRestoreReport = typeof CellRestoreReport.Type
+
 export const CellEvaluation = Schema.Struct({
   display: Schema.String,
   bindings: Schema.Array(Schema.String),
   truncated: Schema.Boolean,
+  /** Present on the first evaluation after a worker was restored from a snapshot. */
+  restored: Schema.optional(CellRestoreReport),
 })
 export type CellEvaluation = typeof CellEvaluation.Type
 
@@ -31,6 +42,8 @@ export const CellRequest = Schema.TaggedUnion({
     source: Schema.String.check(Schema.isMaxLength(maximumCellSourceLength)),
   },
   Reset: { requestId: CorrelationId },
+  Snapshot: { requestId: CorrelationId },
+  Restore: { requestId: CorrelationId, bindings: Schema.Array(SnapshotBinding) },
   HostSucceeded: { cellId: CorrelationId, operationId: CorrelationId, value: Schema.Json },
   HostFailed: { cellId: CorrelationId, operationId: CorrelationId, message: Schema.String },
 })
@@ -41,6 +54,8 @@ export const CellResponse = Schema.TaggedUnion({
   Evaluated: { cellId: CorrelationId, result: CellEvaluation },
   Failed: { cellId: CorrelationId, error: CellEvaluationError },
   Reset: { requestId: CorrelationId },
+  Snapshot: { requestId: CorrelationId, snapshot: CellSnapshot },
+  Restored: { requestId: CorrelationId, bindings: Schema.Array(Schema.String) },
   HostCall: {
     cellId: CorrelationId,
     operationId: CorrelationId,

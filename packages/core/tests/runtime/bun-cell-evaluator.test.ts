@@ -76,8 +76,14 @@ describe("Bun cell evaluation", () => {
       const kernel = yield* makeBunCellEvaluator.pipe(
         Effect.provideService(CellHost, { call: () => Effect.succeed(0) }),
       )
-      const result = yield* kernel.evaluate("console.log('x'.repeat(100000)); 'done'")
-      expect(result.display.length).toBe(maximumCellDisplayLength)
+      const result = yield* kernel.evaluate(
+        "console.log('x'.repeat(100000)); console.log('the end'); 'done'",
+      )
+      // Head and tail survive; the middle is replaced with an omission marker.
+      expect(result.display.length).toBeLessThan(maximumCellDisplayLength + 64)
+      expect(result.display.startsWith("x".repeat(1024))).toBe(true)
+      expect(result.display).toContain("characters omitted")
+      expect(result.display).toContain("the end")
       expect(result.truncated).toBe(true)
       const error = yield* kernel
         .evaluate(" ".repeat(maximumCellSourceLength + 1))

@@ -96,7 +96,7 @@ describe.skipIf(process.platform !== "darwin")("recorded cell execution", () => 
   )
 
   it.scopedLive(
-    "cancels active and queued cells without replay and requires explicit reset",
+    "cancels active and queued cells without replay and replaces the lost worker",
     () =>
       Effect.gen(function* () {
         const worker = yield* buildCellWorker
@@ -145,15 +145,71 @@ describe.skipIf(process.platform !== "darwin")("recorded cell execution", () => 
         expect(
           yield* cells.run(first).pipe(Effect.provideService(CellOperationHost, host)),
         ).toEqual(cancelled)
+        // The host replaces the lost worker itself; no namespace was saved yet, so nothing is restored.
         expect(
           yield* cells.run(third).pipe(Effect.provideService(CellOperationHost, host)),
-        ).toMatchObject({ isFailure: true, result: { reason: "recovery-required" } })
+        ).toMatchObject({ isFailure: false, result: { display: "1" } })
         expect(
           yield* cells.run(fourth).pipe(Effect.provideService(CellOperationHost, host)),
         ).toMatchObject({ isFailure: false, result: { display: "42" } })
         expect(yield* Ref.get(calls)).toBe(1)
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
     10000,
+  )
+
+  it.scopedLive(
+    "restores the saved namespace into a replaced worker and into a new branch owner",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [define, hang, useAgain, later, wipe, gone] = yield* setupCalls(
+          [
+            "let n = 41; const seen = new Map([['k', new Date(0)]]); const fn = () => 1; n",
+            "await tools.call('wait', {})",
+            "n + 1",
+            "[n, seen.get('k') instanceof Date, typeof fn].join(',')",
+            "typeof n",
+            "typeof n",
+          ],
+          [4],
+        )
+        if (!define || !hang || !useAgain || !later || !wipe || !gone)
+          return yield* Effect.die("Missing test cells")
+        const started = yield* Deferred.make<boolean>()
+        const host = CellOperationHost.of({
+          call: () => Deferred.succeed(started, true).pipe(Effect.andThen(Effect.never)),
+        })
+        const open = Effect.gen(function* () {
+          const context = yield* Layer.build(CellExecution.Live({ ...worker, sessionId, branchId }))
+          return Context.get(context, CellExecution)
+        })
+        const cells = yield* open
+        const run = (owner: typeof cells, call: Parameters<typeof cells.run>[0]) =>
+          owner.run(call).pipe(Effect.provideService(CellOperationHost, host))
+        expect((yield* run(cells, define)).result).toMatchObject({ display: "41" })
+        // Cancellation loses the worker. The host replaces it and restores the last good namespace.
+        const running = yield* run(cells, hang).pipe(Effect.forkScoped({ startImmediately: true }))
+        yield* Deferred.await(started)
+        yield* cells.cancel
+        expect(yield* Fiber.join(running)).toMatchObject({ isFailure: true })
+        expect((yield* run(cells, useAgain)).result).toMatchObject({
+          display: "42",
+          restored: { restored: ["n", "seen"], omitted: [{ name: "fn", reason: "function" }] },
+        })
+        // A second owner over the same storage stands in for a process restart.
+        const restarted = yield* open
+        const revived = yield* run(restarted, later)
+        expect(revived.result).toMatchObject({ display: "41,true,undefined" })
+        // The report is attached once, to the first cell after a restore.
+        expect((yield* run(restarted, later)).result).toEqual(revived.result)
+        // An explicit reset clears the saved namespace for every later owner.
+        expect((yield* run(restarted, wipe)).result).toMatchObject({ display: "undefined" })
+        const fresh = yield* open
+        const cleared = yield* run(fresh, gone)
+        expect(cleared.result).toMatchObject({ display: "undefined" })
+        expect(cleared.result).not.toHaveProperty("restored")
+      }).pipe(Effect.timeout("12 seconds"), Effect.provide(testLayer)),
+    15000,
   )
 
   it.scopedLive(

@@ -50,6 +50,7 @@ import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-stora
 import { EventStorage } from "../../storage/event-storage.js"
 import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
 import type { CellExecutionStorage } from "../../storage/cell-execution-storage.js"
+import type { CellNamespaceStorage } from "../../storage/cell-namespace-storage.js"
 import type { CellToolOperationStorage } from "../../storage/cell-tool-operation-storage.js"
 import type { InteractionStorage } from "../../storage/interaction-storage.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
@@ -208,6 +209,7 @@ export const makeAgentLoopBehavior = (
   | SessionOperationStorage
   | ToolCallBindingStorage
   | CellExecutionStorage
+  | CellNamespaceStorage
   | CellToolOperationStorage
   | InteractionStorage
   | SqlClient.SqlClient
