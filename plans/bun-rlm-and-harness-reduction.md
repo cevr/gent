@@ -179,8 +179,8 @@ Evidence as of `dee60987` (2026-09-07), recorded in `plans/bun-rlm-progress.md`:
       decreases for the replaced scope. Report tests/data separately. If new
       safety behavior exceeds savings, record the tradeoff and obtain a revised
       scope decision rather than claim completion. **Not met**: runtime is
-      87,813 lines against the 86,965 baseline (+848, down from +1,503 after
-      `a815f6b7`, `33a6de71`, `30f0f9e1`). The additions are the prior-art
+      87,705 lines against the 86,965 baseline (+740, down from +1,503 after
+      `a815f6b7`, `33a6de71`, `30f0f9e1`, `9f8e3d0a`). The additions are the prior-art
       contracts above, not moved code. Tests are 74,688 (+3,186). Loom is
       unchanged. A scope decision is required.
 - [x] Owned library changes are released properly where required; no local

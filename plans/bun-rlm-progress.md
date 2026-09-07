@@ -2,7 +2,7 @@
 
 ## One interpreter and the dead-code sweep
 
-Three commits after `71cf164a`, all local on the Rift (not pushed, not merged):
+Four commits after `71cf164a`, all local on the Rift (not pushed, not merged):
 
 | Commit     | Unit                                                         | Runtime lines | Test lines |
 | ---------- | ------------------------------------------------------------ | ------------: | ---------: |
@@ -38,18 +38,21 @@ and `domain/sdk-boundary.ts` had no importers. A reference sweep over every
 outside their own file (`formatKeybind`, `GentLoggerJson`, `fetchRepo`,
 `TurnSource`, `CapabilityCoreContext`, `saveArtifactBestEffort`, and others);
 they are removed with the imports they orphaned and the empty e2e cleanup
-module. The sweep script lives outside the repository; rerun it with a
-per-export `\bName\b` search across all `.ts/.tsx` files.
+module. A second pass (`9f8e3d0a`) ignored barrel re-export lines and found
+nine more symbols whose only reader was an index file. The sweep script lives
+outside the repository; rerun it with a per-export `\bName\b` search across
+all `.ts/.tsx` files, once with and once without barrel lines.
 
-Measurement (same method; reproduces the `d03bca7f` receipt): runtime 87,813
+Measurement (same method; reproduces the `d03bca7f` receipt): runtime 87,705
 lines across 450 files; tests 74,688 lines across 293 files. Net against the
-86,965 baseline is +848 runtime lines (was +1,503). The remaining additions
+86,965 baseline is +740 runtime lines (was +1,503). The remaining additions
 are the prior-art contracts in the next section, not moved code. The plan's
 LOC completion rule is still not met. Every provable deletion and the
 plan-mandated consolidation are done; the remaining gap can close only by
 dropping product behavior or a listed contract, which is a scope decision.
 
-Gates: `bun run gate` exit 0 after each of the three commits.
+Gates: `bun run gate` exit 0 after each of the four commits; `bun run test:e2e`
+exit 0 (36 tests, 8 files; 26 TUI tests, 6 files) after `30f0f9e1`.
 
 ## Prime-model persistence and the OpenCode v2 contracts
 

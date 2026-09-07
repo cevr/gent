@@ -88,7 +88,7 @@ and TUI both route through it. Helper thread added the config field.
 
 ## Current state at handoff
 
-Updated by Claude on 2026-09-07 (night) at Rift HEAD `30f0f9e1`:
+Updated by Claude on 2026-09-07 (night) at Rift HEAD `9f8e3d0a`:
 
 - Inherited work is committed in the Rift. Stage 4 cutover landed: `@gent/cell`
   is a core builtin composed at the server root, the Executor is deleted, and
@@ -109,11 +109,12 @@ Updated by Claude on 2026-09-07 (night) at Rift HEAD `30f0f9e1`:
   Receipts: top section of `plans/bun-rlm-progress.md`.
 - After the receipts commit `71cf164a`: `a815f6b7` (three unreferenced
   files), `33a6de71` (ACP code mode runs through the branch cell; the
-  `new Function` interpreter is gone), `30f0f9e1` (31 unreferenced exports).
+  `new Function` interpreter is gone), `30f0f9e1` (31 unreferenced exports), `9f8e3d0a` (nine barrel-only
+  exports).
 - Gates: `bun run gate` exit 0 after every commit. `bun run test:e2e` exit 0
   (36 tests, 8 files) after the marker contract was stated in
   `packages/e2e/tests/event-stream.test.ts`.
-- Runtime lines: 87,813 across 450 files (baseline 86,965, +848). Tests:
+- Runtime lines: 87,705 across 450 files (baseline 86,965, +740). Tests:
   74,688 across 293 files. The method reproduces the earlier 87,219 receipt.
 
 ## Remaining work
@@ -130,11 +131,12 @@ Updated by Claude on 2026-09-07 (night) at Rift HEAD `30f0f9e1`:
 
 1. **Runtime size (blocks completion).** The plan's completion rule requires a
    net runtime reduction, or a recorded tradeoff and a revised scope decision.
-   Runtime is +1,503 lines over the baseline. The additions are the prior-art
-   safety and delivery contracts, not moved code. Options: accept the tradeoff
-   and close the plan; name deletion targets (candidates in
-   `docs/research/2026-09-06-gent-trim-candidates.md`); or drop specific
-   contracts.
+   Runtime is +740 lines over the baseline after every provable dead-code
+   deletion and the ACP interpreter consolidation. The additions are the
+   prior-art safety and delivery contracts, not moved code. Options: accept
+   the tradeoff and close the plan; name product features to drop (the
+   trim-candidate ranks 1-5 are done; rank 6, profile defaults, does not
+   delete code); or drop specific contracts.
 2. Herdr live-model runs: authorize the paid runs, or accept the mock-provider
    gate and E2E as the evidence.
 3. `@cvr/bun-cell`: release with the pending Changeset after porting snapshot
