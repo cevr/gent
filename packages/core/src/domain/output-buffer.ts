@@ -86,12 +86,6 @@ export function headTailChars(text: string, maxChars: number = 64_000): HeadTail
   }
 }
 
-export interface OutputBufferResult {
-  text: string
-  truncatedLines: number
-  savedPath?: string
-}
-
 /**
  * Save full output to /tmp/gent/outputs/ and return the path.
  */

@@ -343,38 +343,6 @@ export const getRepoCachePath = (home: string, spec: string): string => {
   }
 }
 
-/** Ensure a repo is cloned/fetched. Returns the cache path. */
-export const fetchRepo = (spec: string, home: string) =>
-  Effect.gen(function* () {
-    const ctx = yield* ExtensionContext
-    const gitReader = yield* GitReader
-    const cachePath = getRepoCachePath(home, spec)
-    const parsed = parseSpec(spec)
-
-    const exists = yield* ctx.Files.exists(cachePath)
-    if (exists) return cachePath
-
-    // Only auto-fetch GitHub repos — npm/pypi/crates need the full repo tool
-    if (parsed.type !== "github") return cachePath
-
-    // Create parent dir — let clone create the final directory
-    yield* ctx.Files.makeDirectory(cachePath.slice(0, cachePath.lastIndexOf("/")), {
-      recursive: true,
-    }).pipe(Effect.ignore)
-
-    const url = `https://github.com/${parsed.name}.git`
-    yield* gitReader
-      .clone(url, cachePath, { depth: 100, ref: parsed.version })
-      .pipe(
-        Effect.mapError(
-          (e) =>
-            new RepoExplorerError({ message: `Failed to fetch: ${e.message}`, spec, cause: e }),
-        ),
-      )
-
-    return cachePath
-  })
-
 const ensureCached = (cachePath: string, spec: string) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext

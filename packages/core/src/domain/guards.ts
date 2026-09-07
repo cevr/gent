@@ -9,8 +9,5 @@ export const isRecord = Schema.is(JsonRecord)
 /** Narrow an unknown value to an object with a `.message` string property. */
 export const hasMessage = Schema.is(Schema.Struct({ message: Schema.String }))
 
-/** Type-safe JSON decoding that returns `unknown`. */
-export const parseJsonUnknown = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
-
 /** Narrow an unknown value to a readonly array of records. */
 export const isRecordArray = Schema.is(Schema.Array(JsonRecord))

@@ -39,7 +39,6 @@ import type { BranchId, SessionId } from "./ids.js"
 import type { InteractionPendingError } from "./interaction-request.js"
 import type { Message } from "./message.js"
 import type { Model } from "./model.js"
-import type { ProviderError } from "./provider-error.js"
 
 export const DriverFailureId = Schema.String.pipe(Schema.brand("DriverFailureId"))
 export type DriverFailureId = typeof DriverFailureId.Type
@@ -246,18 +245,6 @@ export interface TurnExecutor {
 
 export type TurnToolEventMode = "capture-tool-calls" | "observe-external-tools"
 
-export interface TurnSource {
-  readonly driverKind: "model" | "external"
-  readonly driverId?: string
-  readonly stream: Stream.Stream<
-    Response.AnyPart,
-    ProviderError | TurnError | InteractionPendingError
-  >
-  readonly toolEventMode: TurnToolEventMode
-  readonly formatStreamError: (streamError: ProviderError | TurnError) => string
-  readonly collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
-}
-
 // ── ExternalDriverContribution — turn-executor-shaped driver ──
 
 /**
@@ -301,5 +288,3 @@ export interface ExternalDriverContribution {
    */
   readonly invalidate: Effect.Effect<void>
 }
-
-export type AnyDriverContribution = ModelDriverContribution | ExternalDriverContribution

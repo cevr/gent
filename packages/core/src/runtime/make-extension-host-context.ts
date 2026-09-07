@@ -14,11 +14,7 @@ import {
 import { AgentRunnerService, type AgentRunner, type AgentName } from "../domain/agent.js"
 import { BranchId, SessionId } from "../domain/ids.js"
 import { RuntimeEnvironment, type RuntimeEnvironmentApi } from "./runtime-environment.js"
-import {
-  ExtensionHostProcessError,
-  type ExtensionHostFacts,
-  type ExtensionHostPlatform,
-} from "../domain/extension.js"
+import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../domain/extension.js"
 import { ApprovalService, type ApprovalServiceApi } from "./approval-service.js"
 import { PromptPresenter, type PromptPresenterService } from "../domain/prompt-presenter.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
@@ -121,16 +117,6 @@ const toHostError =
       message: errorMessage(error),
       cause: error,
     })
-
-export const extensionHostFacts = (host: ExtensionHostPlatform): ExtensionHostFacts => ({
-  osInfo: host.osInfo,
-  execPath: host.execPath,
-  homeDirectory: host.homeDirectory,
-  pathListSeparator: host.pathListSeparator,
-  commandCandidates: host.commandCandidates,
-  isPortFree: host.isPortFree,
-  isPidAlive: host.isPidAlive,
-})
 
 export const HostPlatformRef = Context.Reference<RuntimeEnvironmentApi>(
   "@gent/core/src/runtime/make-extension-host-context/HostPlatformRef",

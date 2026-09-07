@@ -208,11 +208,6 @@ export interface SkippedExtension {
   readonly error: string
 }
 
-export interface DiscoveryResult {
-  readonly loaded: ReadonlyArray<DiscoveredExtension>
-  readonly skipped: ReadonlyArray<SkippedExtension>
-}
-
 /** Discover and load extensions from all configured directories. Per-file isolation — one broken file does not suppress siblings. */
 export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions")(function* (opts: {
   readonly userDir: string // ~/.gent/extensions

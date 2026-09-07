@@ -14,17 +14,11 @@ import {
 } from "effect"
 import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../domain/extension.js"
 import { ExtensionSetupContext, publicSetupContext } from "../domain/extension-setup-context.js"
-import { BranchId, SessionId, type ToolCallId } from "../domain/ids.js"
+import { BranchId, SessionId } from "../domain/ids.js"
 import { Branch, Session } from "../domain/message.js"
 import type { StorageError } from "../domain/storage-error.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
-import {
-  finishPart,
-  textDeltaPart,
-  toolCallPart,
-  type LanguageModelStreamPart,
-} from "./language-model.js"
 import {
   EventStore,
   EventEnvelope,
@@ -277,20 +271,6 @@ export const provideTestSetupContext =
     )
 
 // Mock Helpers
-
-export const mockTextResponse = (text: string): LanguageModelStreamPart[] => [
-  textDeltaPart(text),
-  finishPart({ finishReason: "stop" }),
-]
-
-export const mockToolCallResponse = (
-  toolCallId: ToolCallId,
-  toolName: string,
-  input: Parameters<typeof toolCallPart>[1],
-): LanguageModelStreamPart[] => [
-  toolCallPart(toolName, input, { toolCallId }),
-  finishPart({ finishReason: "tool-calls" }),
-]
 
 export function ensureStorageParents(input: {
   readonly sessionId: SessionId | string

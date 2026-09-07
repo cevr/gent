@@ -223,15 +223,3 @@ export const ArtifactsStoreLive: Layer.Layer<ArtifactsRead | ArtifactsWrite, nev
       return Layer.merge(Layer.succeed(ArtifactsWrite, write), Layer.succeed(ArtifactsRead, read))
     }),
   )
-
-export const saveArtifactBestEffort = Effect.fn("Artifacts.saveBestEffort")(function* (
-  sessionId: SessionId,
-  branchId: BranchId,
-  input: ArtifactSaveInput,
-) {
-  const artifacts = yield* Effect.serviceOption(ArtifactsWrite)
-  return yield* Option.match(artifacts, {
-    onNone: () => Effect.void,
-    onSome: (store) => store.save(sessionId, branchId, input).pipe(Effect.asVoid),
-  })
-})

@@ -12,14 +12,6 @@ export const joinPath = (...parts: ReadonlyArray<string>): string =>
     }),
   )
 
-export const dirnamePath = (value: string): string =>
-  runPath(
-    Effect.gen(function* () {
-      const path = yield* Path.Path
-      return path.dirname(value)
-    }),
-  )
-
 export const resolvePath = (...parts: ReadonlyArray<string>): string =>
   runPath(
     Effect.gen(function* () {

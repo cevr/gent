@@ -212,18 +212,6 @@ export const bindingResourcesFromPlan = (
   return descriptors.filter((descriptor) => active.has(descriptor.id))
 }
 
-export const makeBindingCaptureError = (params: {
-  readonly assistantMessageId: MessageId
-  readonly toolCallId: ToolCallId
-  readonly toolId: ToolId
-}) =>
-  new ToolBindingCaptureError({
-    assistantMessageId: params.assistantMessageId,
-    toolCallId: params.toolCallId,
-    toolId: params.toolId,
-    message: `No durable identity was captured for tool ${params.toolId}`,
-  })
-
 export const makeBindingReplayError = (params: {
   readonly assistantMessageId: MessageId
   readonly toolCallId: ToolCallId

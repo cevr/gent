@@ -29,8 +29,6 @@ export class ImageContent extends Schema.Class<ImageContent>("AcpImageContent")(
   mimeType: Schema.String,
 }) {}
 
-export type ContentBlock = TextContent | ImageContent
-
 // ── MCP Server Config ──
 
 export class McpEnvVar extends Schema.Class<McpEnvVar>("AcpMcpEnvVar")({
@@ -63,8 +61,6 @@ export class McpServerSse extends Schema.Class<McpServerSse>("AcpMcpServerSse")(
   url: Schema.String,
   headers: Schema.optional(Schema.Array(McpHeaderEntry)),
 }) {}
-
-export type McpServer = McpServerStdio | McpServerHttp | McpServerSse
 
 // ── Initialize ──
 

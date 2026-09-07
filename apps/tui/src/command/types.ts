@@ -72,17 +72,3 @@ export function matchKeybind(
     keybind.meta === (event.meta ?? false)
   )
 }
-
-export function formatKeybind(config: string): string {
-  const parsed = parseKeybind(config)
-  if (Option.isNone(parsed)) return ""
-  const kb = parsed.value
-
-  const parts: string[] = []
-  if (kb.ctrl) parts.push("Ctrl")
-  if (kb.shift) parts.push("Shift")
-  if (kb.meta) parts.push("Cmd")
-  if (kb.key.length > 0) parts.push(kb.key.toUpperCase())
-
-  return parts.join("+")
-}

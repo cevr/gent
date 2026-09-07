@@ -1,11 +1,8 @@
 import { createRoot, createSignal, onCleanup } from "solid-js"
 import type { Accessor } from "solid-js"
-import { Effect, Fiber, Option, Schedule } from "effect"
+import { Effect, Fiber, Schedule } from "effect"
 
-let disposeTicker = Option.none<() => void>()
-
-const ticker = createRoot((dispose) => {
-  disposeTicker = Option.some(dispose)
+const ticker = createRoot(() => {
   const [tick, setTick] = createSignal(0)
   const fiber = Effect.runFork(
     Effect.sync(() => {
@@ -19,8 +16,3 @@ const ticker = createRoot((dispose) => {
 })
 
 export const useSpinnerClock = (): Accessor<number> => ticker
-
-/** Dispose the spinner root — call during shutdown to stop the interval */
-export const disposeSpinnerClock = () => {
-  disposeTicker.pipe(Option.map((dispose) => dispose()))
-}

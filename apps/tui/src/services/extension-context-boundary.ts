@@ -15,16 +15,6 @@ import type { AnyExtensionClientModule, ClientRuntime } from "../extensions/clie
 import { loadTuiExtensions } from "../extensions/loader-boundary"
 import type { ResolvedTuiExtensions } from "../extensions/resolve"
 
-/**
- * Resolve the disabled-extensions set for the current workspace by reading
- * user + project config. The Effect runs through `clientRuntime.runPromise`
- * so the awaited result lands directly in `onMount`'s sync flow.
- */
-export const loadDisabledExtensions = (
-  clientRuntime: ClientRuntime,
-  params: { home: string; cwd: string },
-): Promise<ReadonlySet<string>> => clientRuntime.runPromise(readDisabledExtensions(params))
-
 export const loadExtensionUi = (
   clientRuntime: ClientRuntime,
   params: {

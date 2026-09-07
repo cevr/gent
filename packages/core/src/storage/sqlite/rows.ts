@@ -93,7 +93,6 @@ export const EventRow = Schema.Struct({
 })
 export type EventRow = typeof EventRow.Type
 
-export const decodeMessageRow = Schema.decodeUnknownEffect(MessageRow)
 export const decodeMessageChunkRow = Schema.decodeUnknownEffect(MessageChunkRow)
 export const decodeEventRow = Schema.decodeUnknownEffect(EventRow)
 

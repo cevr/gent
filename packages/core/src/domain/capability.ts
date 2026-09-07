@@ -6,18 +6,9 @@
  */
 
 import { type Effect, Schema } from "effect"
-import type { AgentName } from "./agent.js"
-import type { ExtensionHostFacts } from "./extension.js"
 import type { PermissionRule } from "./permission.js"
 import type { PromptSection } from "./prompt.js"
-import {
-  ExtensionId,
-  type RpcId,
-  type ToolId,
-  type BranchId,
-  type SessionId,
-  type ToolCallId,
-} from "./ids.js"
+import { ExtensionId, type RpcId, type ToolId } from "./ids.js"
 
 /** Failure raised by a Capability handler. Carries audience + id for diagnostics. */
 export class CapabilityError extends Schema.TaggedError<CapabilityError>()(
@@ -37,21 +28,6 @@ export class CapabilityNotFoundError extends Schema.TaggedError<CapabilityNotFou
     capabilityId: Schema.String,
   },
 ) {}
-
-/**
- * Minimal facts passed to capabilities. Host authority is not threaded through
- * this object; extension code imports constrained Effect services instead.
- */
-export interface CapabilityCoreContext {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly agentName?: AgentName
-  /** Present only when this Capability was invoked as a tool by the LLM. */
-  readonly toolCallId?: ToolCallId
-  readonly cwd: string
-  readonly home: string
-  readonly host: ExtensionHostFacts
-}
 
 export type CapabilityEffect<Input = unknown, Output = unknown, R = never, E = CapabilityError> = {
   bivarianceHack(input: Input): Effect.Effect<Output, E, R>

@@ -77,8 +77,6 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   driver: Schema.optional(DriverRef),
 }) {}
 
-export type AgentDefinitionInput = ConstructorParameters<typeof AgentDefinition>[0]
-
 // Built-in agents and their prompts live in their owning extensions:
 // - @gent/agents (extensions/agents.ts): cowork, deepwork, explore, architect, reviewer, summarizer, title
 // - @gent/librarian (extensions/librarian/index.ts): librarian

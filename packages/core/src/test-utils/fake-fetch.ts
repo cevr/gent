@@ -36,15 +36,6 @@ export interface FakeFetchState {
 /** Build a fresh capture state. */
 export const makeFakeFetchState = (): FakeFetchState => ({ captured: [] })
 
-/** Last captured request. Throws if zero requests were captured. */
-export const lastRequest = (state: FakeFetchState): CapturedRequest => {
-  const last = state.captured[state.captured.length - 1]
-  if (Predicate.isUndefined(last)) {
-    return Effect.runSync(Effect.die(new Error("fake-fetch: no requests captured")))
-  }
-  return last
-}
-
 /**
  * Builds a fake `typeof globalThis.fetch` that captures each call into
  * `state.captured` and responds with the provided `responder` body.

@@ -439,11 +439,6 @@ export const updateCurrentAgentOnState = (
 export const queueSnapshotFromQueueState = (queue: LoopQueueState): QueueSnapshot =>
   toQueueSnapshot(queue.steering, queue.followUp)
 
-export const queueContainsContent = (
-  queue: ReadonlyArray<QueuedTurnItem>,
-  content: string,
-): boolean => queue.some((item) => messageText(item.message).includes(content))
-
 // ── Runtime state projection ──
 
 export const runtimeStateFromLoopState = (

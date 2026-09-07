@@ -11,12 +11,6 @@ import { joinPath } from "../platform/path-runtime"
 const MAX_LINES = 2000
 const MAX_BYTES = 50 * 1024 // 50KB
 
-export interface ShellResult {
-  output: string
-  truncated: boolean
-  savedPath?: string
-}
-
 export class ShellCommandError extends Schema.TaggedError<ShellCommandError>(
   "@gent/tui/src/utils/shell/ShellCommandError",
 )("ShellCommandError", {

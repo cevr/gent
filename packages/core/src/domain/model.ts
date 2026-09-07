@@ -41,8 +41,6 @@ export const calculateCost = (
   return inputCost + outputCost
 }
 
-export const BUILTIN_PROVIDER_IDS = new Set<string>(["anthropic", "openai", "google", "mistral"])
-
 export const parseModelProvider = (modelId: string): Option.Option<ProviderId> => {
   const slash = modelId.indexOf("/")
   if (slash <= 0 || slash === modelId.length - 1) return Option.none()

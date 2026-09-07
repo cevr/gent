@@ -51,13 +51,6 @@ export interface MemoryEntry {
   readonly frontmatter: MemoryFrontmatter
 }
 
-export const MemoryEntrySchema = Schema.Struct({
-  path: Schema.String,
-  title: Schema.String,
-  summary: Schema.String,
-  frontmatter: MemoryFrontmatterSchema,
-})
-
 // ── Frontmatter parsing ──
 
 const isMemoryScope = Schema.is(MemoryScope)
@@ -222,7 +215,6 @@ export class MemoryVaultReadOnly extends Context.Service<
   MemoryVaultReadOnly,
   MemoryVaultReadOnlyApi
 >()("@gent/extensions/src/memory/vault/MemoryVaultReadOnly") {}
-export type MemoryVaultReadOnlyTag = typeof MemoryVaultReadOnly
 
 // ── Implementation ──
 

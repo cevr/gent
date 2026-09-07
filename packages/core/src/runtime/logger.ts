@@ -272,27 +272,6 @@ export const GentLogger = (cwd: string): Layer.Layer<never, never, FileSystem.Fi
     ),
   )
 
-/** JSON-only logger layer (for headless/prod). */
-export const GentLoggerJson = (cwd: string): Layer.Layer<never, never, FileSystem.FileSystem> =>
-  Layer.unwrap(
-    Effect.gen(function* () {
-      const defaultLogFile = buildLogPaths(cwd).log
-      const logFileOpt = yield* Config.option(Config.string("GENT_LOG_FILE"))
-      const logFile = Option.getOrElse(logFileOpt, () => defaultLogFile)
-      const isSubprocess = Option.isSome(yield* Config.option(Config.string("GENT_TRACE_ID")))
-      if (!isSubprocess) yield* clearLogFile(logFile)
-      const jsonLogger = yield* makeJsonFileLogger(logFile)
-      return Logger.layer([jsonLogger])
-    }).pipe(
-      Effect.catchEager(() =>
-        makeJsonFileLogger(buildLogPaths(cwd).log).pipe(
-          Effect.map((jsonLogger) => Logger.layer([jsonLogger])),
-          Effect.orElseSucceed(() => Logger.layer([prettyLogger])),
-        ),
-      ),
-    ),
-  )
-
 /** Pretty-only logger layer (for testing/debugging). */
 export const GentLoggerPretty: Layer.Layer<never> = Logger.layer([prettyLogger])
 
