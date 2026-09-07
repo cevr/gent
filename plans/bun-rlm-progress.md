@@ -1,5 +1,61 @@
 # Bun RLM progress
 
+## Stage 4 remainder and Stage 5: transcript, delegate, delivery, health
+
+Commits after the cutover (`267eab59`): `b58496ec`, `000c4003`, `6f89af4e`,
+`c901616d`, `5fb89a76`. Each passed the pre-commit gate (lint, typecheck,
+build, test).
+
+Transcript (`b58496ec`). Tool events carry an optional `parentToolCallId` when a
+cell admitted the call (`tool-runner.ts` reads `CurrentCellToolOperation`).
+`cell-operation-receipt.ts` attaches `{toolCallId, tool, outcome, summary}`
+receipts to a saved cell result when the cell made inner calls, so reload keeps
+effects visible without a second query. The TUI feed nests live inner calls
+under the cell, the compact tree prints `· N ops · M failed`, a `cell` renderer
+shows code, receipts, display, bindings, and failures, and the headless runner
+indents nested calls. Evidence: the shipped-surface RPC test asserts receipts
+and parent ids; feed, message-list render, and headless tests cover nesting.
+
+Delegate (`000c4003`). `delegate` takes one agent and one task. Parallel and
+chained delegation are cell recipes (`Promise.all`, sequential awaits). The
+`todos`/`chain` params, three mode paths, result metadata, renderer branches,
+and four tests are gone. Evidence: a cell test runs two host calls with
+`Promise.all` and records two receipts; the kernel already forks each host call.
+
+Delivery (`6f89af4e`). Session PubSubs are sliding buffers of event ids
+(capacity 64). Publishers never wait. `makeCursorReplayStream` drains the
+durable store from the subscriber's cursor on every notification burst, for
+both event stores. Evidence: `tests/domain/event-stream-delivery.test.ts` runs
+against memory and SQLite stores: a stalled subscriber sees 192 events in order
+after publishers finished without waiting, appends during backlog replay are
+neither lost nor repeated, and branch filters hold. A mutation that delivered
+only notified ids failed the stalled-subscriber case in both stores.
+
+Health (`c901616d`). `gent doctor` reads `resource_graph_state` and lists each
+cwd's state and failure. A graph that is not applied prints the existing repair
+path (`gent storage reset`). No new control API. Evidence: two doctor tests.
+
+Shipped composition (`5fb89a76`). The SDK server defaulted to the native
+builtin list, so the TUI still advertised 37 tools and Anthropic rejected the
+request with its strict-tool cap. `ShippedExtensions` in `@gent/sdk` is now the
+one shipped list. Evidence: `bun run smoke` failed before and completes after
+(one live request each).
+
+Not run: Herdr pane workflows against a live model (paid, not authorised beyond
+the repo smoke), Loom consumer gate (no shared evaluator or protocol file
+changed since `267eab59`; only `cell-dispatch.ts`, `cell-tool.ts`, and the new
+receipt module changed).
+
+Measurement (final source): runtime 88,934 lines across 462 files; tests 75,215
+lines across 300 files. Baseline 86,965. Net runtime is +1,969 over the
+baseline. Per-unit runtime deltas: transcript +434, delegate −188, delivery +30,
+doctor +105, shipped list +15. The fixed workflow tools (plan, review, audit,
+counsel, research, helpers, renderers) are 1,825 lines and remain the only
+large reduction candidate; removing them changes product behavior (slash
+commands, artifacts, interaction review, typed renderers). Per the completion
+rule, this is recorded as a tradeoff for a scope decision, not claimed as
+completion.
+
 ## Stage 4: default cell surface and Executor removal
 
 Core now declares the `@gent/cell` builtin in `runtime/code-cell/cell-extension.ts`
