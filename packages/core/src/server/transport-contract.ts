@@ -65,8 +65,6 @@ export const CreateSessionInput = Schema.Struct({
 })
 export type CreateSessionInput = typeof CreateSessionInput.Type
 
-export type SessionTreeNodeType = Schema.Schema.Type<typeof SessionTreeNode>
-
 export const CreateBranchInput = Schema.Struct({
   sessionId: SessionId,
   name: Schema.optional(Schema.String),

@@ -243,8 +243,6 @@ export interface TurnExecutor {
   ) => Stream.Stream<TurnStreamPart, TurnError | InteractionPendingError, ExternalToolRunner>
 }
 
-export type TurnToolEventMode = "capture-tool-calls" | "observe-external-tools"
-
 // ── ExternalDriverContribution — turn-executor-shaped driver ──
 
 /**

@@ -10,7 +10,6 @@ export {
   SYSTEM_IDENTITY_PREFIX,
 } from "./oauth/anthropic-headers.js"
 export {
-  listClaudeAccounts,
   listClaudeCodeKeychainServices,
   readClaudeCodeCredentials,
   writeBackCredentials,

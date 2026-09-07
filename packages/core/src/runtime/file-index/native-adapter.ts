@@ -1,10 +1,5 @@
-import { Effect, FileSystem, Layer, Option, Path, Result } from "effect"
-import {
-  FileIndex,
-  FileIndexError,
-  type FileIndexService,
-  type IndexedFile,
-} from "../../domain/file-index.js"
+import { Effect, FileSystem, Option, Path, Result } from "effect"
+import { FileIndexError, type FileIndexService, type IndexedFile } from "../../domain/file-index.js"
 import { RuntimeEnvironment } from "../runtime-environment.js"
 import { FileFinder as NativeFileFinder, type FileItem } from "@ff-labs/fff-bun"
 
@@ -161,22 +156,3 @@ export const makeNativeServiceFromModule = (
 // ---------------------------------------------------------------------------
 // Layer (standalone native, no fallback)
 // ---------------------------------------------------------------------------
-
-export const NativeFileIndexLive: Layer.Layer<
-  FileIndex,
-  FileIndexError,
-  FileSystem.FileSystem | Path.Path | RuntimeEnvironment
-> = Layer.unwrap(
-  Effect.gen(function* () {
-    if (!isNativeFileIndexAvailable()) {
-      return yield* new FileIndexError({ message: "native binary not available", cwd: "" })
-    }
-
-    const dbDir = yield* ensureDbDir
-
-    const { service, finalize } = yield* makeNativeServiceFromModule(dbDir)
-    yield* Effect.addFinalizer(() => finalize)
-
-    return Layer.succeed(FileIndex, service)
-  }),
-)

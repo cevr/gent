@@ -4,11 +4,11 @@
 
 Three commits after `71cf164a`, all local on the Rift (not pushed, not merged):
 
-| Commit     | Unit                                                          | Runtime lines | Test lines |
-| ---------- | ------------------------------------------------------------- | ------------: | ---------: |
-| `a815f6b7` | Unreferenced TUI components and the SDK boundary module gone  |          -383 |          0 |
-| `33a6de71` | ACP code mode runs through the branch cell                    |            -2 |       +170 |
-| `30f0f9e1` | 31 unreferenced exports removed with their orphaned imports   |          -270 |          0 |
+| Commit     | Unit                                                         | Runtime lines | Test lines |
+| ---------- | ------------------------------------------------------------ | ------------: | ---------: |
+| `a815f6b7` | Unreferenced TUI components and the SDK boundary module gone |          -383 |          0 |
+| `33a6de71` | ACP code mode runs through the branch cell                   |            -2 |       +170 |
+| `30f0f9e1` | 31 unreferenced exports removed with their orphaned imports  |          -270 |          0 |
 
 One interpreter (`33a6de71`). The ACP `execute` MCP tool no longer evaluates
 JavaScript with `new Function` and a `gent.*` Proxy. It forwards the code to

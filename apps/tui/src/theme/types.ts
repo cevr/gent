@@ -1,5 +1,4 @@
-import { RGBA } from "@opentui/core"
-import { Option } from "effect"
+import type { RGBA } from "@opentui/core"
 
 // Core color palette for the application theme
 export interface ThemeColors {
@@ -80,23 +79,4 @@ export interface ThemeJson {
     backgroundMenu?: ColorValue
     thinkingOpacity?: number
   }
-}
-
-export function selectedForeground(theme: Theme, bg?: RGBA): RGBA {
-  // If theme explicitly defines selectedListItemText, use it
-  if (theme._hasSelectedListItemText) {
-    return theme.selectedListItemText
-  }
-
-  // For transparent backgrounds, calculate contrast based on the actual bg (or fallback to primary)
-  if (theme.background.a === 0) {
-    const targetColor = Option.getOrElse(Option.fromNullishOr(bg), () => theme.primary)
-    const { r, g, b } = targetColor
-    const luminance = 0.299 * r + 0.587 * g + 0.114 * b
-    if (luminance > 0.5) return RGBA.fromInts(0, 0, 0)
-    return RGBA.fromInts(255, 255, 255)
-  }
-
-  // Fall back to background color
-  return theme.background
 }

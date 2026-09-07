@@ -169,7 +169,6 @@ export { SessionRpcs, WorkspaceHeaderError, WorkspaceRpcMiddleware }
 export {
   CreateSessionInput,
   Session,
-  type SessionTreeNodeType,
   Branch,
   CreateBranchInput,
   SwitchBranchInput,

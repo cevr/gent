@@ -1,6 +1,5 @@
 export {
   dataUrlToBytes,
-  fileDataFromImage,
   imagePartToResponseFilePart,
   responseFilePartToImagePart,
   UrlBackedImageNotSupportedError,

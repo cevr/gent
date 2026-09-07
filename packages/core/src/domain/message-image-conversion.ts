@@ -1,4 +1,4 @@
-import { Option, Predicate, Result, Schema } from "effect"
+import { Option, Predicate, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 
@@ -17,15 +17,6 @@ export const filePartDataToDisplay = (part: Prompt.FilePart): string => {
   if (Predicate.isString(part.data)) return part.data
   if (part.data instanceof URL) return part.data.toString()
   return `data:${part.mediaType};base64,${Buffer.from(part.data).toString("base64")}`
-}
-
-export const fileDataFromImage = (part: Prompt.FilePart): string | URL | Uint8Array => {
-  const data = part.data
-  if (!Predicate.isString(data)) return data
-  if (data.startsWith("data:")) return data
-  const url = Result.try(() => new URL(data))
-  if (Result.isSuccess(url)) return url.success
-  return data
 }
 
 export const dataUrlToBytes = (value: string): Option.Option<Uint8Array> => {

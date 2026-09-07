@@ -112,33 +112,6 @@ export interface ClaudeAccount {
 }
 
 /**
- * Discover every Claude Code account on this machine: enumerate the
- * keychain services, read each credential, and pair it with its
- * keychain `acct` label. Accounts whose credentials fail to decode
- * are dropped (the slot may exist but be empty / corrupted) — the
- * list returned is ready to render in a picker.
- *
- * Foundation for the multi-account auth UI.
- */
-export const listClaudeAccounts: Effect.Effect<
-  ReadonlyArray<ClaudeAccount>,
-  never,
-  AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-> = Effect.gen(function* () {
-  const sources = yield* listClaudeCodeKeychainServices.pipe(
-    Effect.catchEager(() => Effect.succeed([PRIMARY_CLAUDE_SERVICE])),
-  )
-  const accounts: ClaudeAccount[] = []
-  for (const source of sources) {
-    const credentials = yield* readClaudeCodeCredentials(source).pipe(Effect.option)
-    if (Option.isNone(credentials)) continue
-    const label = (yield* getKeychainAccountName(source)).pipe(Option.getOrElse(() => source))
-    accounts.push({ source, label, credentials: credentials.value })
-  }
-  return accounts
-})
-
-/**
  * Persist refreshed credentials back to the keychain entry named by
  * `source` (or `~/.claude/.credentials.json` on non-darwin). Without
  * this, every direct OAuth refresh is wasted — the next read pulls

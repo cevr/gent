@@ -15,7 +15,6 @@ export {
   type FileIndexService,
 } from "../../domain/file-index.js"
 export { FallbackFileIndexLive } from "./fallback-adapter.js"
-export { NativeFileIndexLive } from "./native-adapter.js"
 
 /** Wrap a primary service with per-method fallback on FileIndexError. */
 const withFallback = (primary: FileIndexService, fallback: FileIndexService): FileIndexService => ({

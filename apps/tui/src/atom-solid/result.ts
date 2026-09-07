@@ -1,7 +1,6 @@
 import type * as Cause from "effect/Cause"
 import * as Exit from "effect/Exit"
 import * as Match from "effect/Match"
-import * as Option from "effect/Option"
 
 export class InitialResult {
   readonly _tag = "Initial"
@@ -40,9 +39,6 @@ export const failure = <A = never, E = never>(
   waiting = false,
 ): Result<A, E> => new FailureResult(cause, waiting)
 
-export const isInitial = <A, E>(result: Result<A, E>): result is InitialResult =>
-  result._tag === "Initial"
-
 export const isSuccess = <A, E>(result: Result<A, E>): result is SuccessResult<A> =>
   result._tag === "Success"
 
@@ -63,11 +59,6 @@ export const waiting = <A, E>(result: Result<A, E>): Result<A, E> => {
       Failure: (result) => failure<A, E>(result.cause, true),
     }),
   )
-}
-
-export const waitingFrom = <A, E>(previous: Option.Option<Result<A, E>>): Result<A, E> => {
-  if (Option.isSome(previous)) return waiting(previous.value)
-  return initial(true)
 }
 
 export const match = <A, E, R>(

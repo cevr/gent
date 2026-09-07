@@ -35,14 +35,6 @@ export interface MemoryFrontmatter {
   readonly source: MemorySource
 }
 
-export const MemoryFrontmatterSchema = Schema.Struct({
-  scope: MemoryScope,
-  tags: Schema.Array(Schema.String),
-  created: Schema.String,
-  updated: Schema.String,
-  source: MemorySource,
-})
-
 export interface MemoryEntry {
   /** Relative path within vault (e.g. "global/my-topic.md") */
   readonly path: string

@@ -1,5 +1,4 @@
 export type { Theme, ThemeColors, ThemeJson, ThemeMode, ColorValue, HexColor } from "./types"
-export { selectedForeground } from "./types"
 export { resolveTheme, generateSystemTheme, tint } from "./resolve"
 export { DEFAULT_THEMES } from "./default-themes"
 export { ThemeProvider, useTheme } from "./context"
