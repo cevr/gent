@@ -12,10 +12,8 @@ import {
   type AgentDefinition,
   type AgentRunner,
 } from "../domain/agent.js"
-import { EventStore } from "../domain/event.js"
-import type { LoadedExtension, GentExtension } from "../domain/extension.js"
+import type { GentExtension } from "../domain/extension.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
-import { type ExtensionContributions } from "../domain/contribution.js"
 import type { ToolCapability } from "../domain/capability/tool.js"
 import {
   ExtensionContext,
@@ -26,26 +24,17 @@ import { getToolEffect } from "../domain/capability/tool.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
-import { PromptPresenter } from "../domain/prompt-presenter.js"
-import { AgentLoopTestActor } from "../runtime/agent/agent-loop.actor.js"
-import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-governance.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
-import {
-  reconcileLoadedExtensions,
-  setupBuiltinExtensions,
-} from "../runtime/extensions/activation.js"
-import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
-import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { BunGentPlatformLive, BunPlatformLive } from "../runtime/gent-platform-bun.js"
+import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
-import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
-import { EventPublisherLive } from "../domain/event-publisher.js"
-import { ModelResolver } from "../providers/model-resolver.js"
 import { LanguageModelLayers } from "./language-model.js"
-import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { testExtensionHostContext } from "./extension-host-context.js"
-import { eraseResourceLayer } from "../runtime/extensions/extension-effect-membrane.js"
+import { Auth } from "../domain/auth.js"
+import { ApprovalService } from "../runtime/approval-service.js"
+import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
+import { defineExtension } from "../extensions/api.js"
+import { createDependencies } from "../server/dependencies.js"
 
 export interface ToolTestLayerConfig {
   /** Agents to register */
@@ -55,7 +44,7 @@ export interface ToolTestLayerConfig {
   /** Extra tools to register (authored via `tool({...})`). */
   readonly tools?: ReadonlyArray<ToolCapability>
   /** AgentRunner mock — default returns success with empty text */
-  readonly subagentRunner?: AgentRunner
+  readonly subagentRunner?: Pick<AgentRunner, "run">
   /** Extra layers to merge (e.g., GitReader.Test) */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
@@ -66,118 +55,47 @@ export interface ToolTestLayerConfig {
  * Provides core services needed by most tools. Tools that need platform
  * services (FileSystem, Path) should compose with BunServices.layer.
  */
-export const createToolTestLayer = (config: ToolTestLayerConfig) => {
-  let builtinContributions: ExtensionContributions = {
-    agents: config.agents,
-  }
-  if ((config.tools ?? []).length > 0) {
-    builtinContributions = { ...builtinContributions, tools: config.tools }
-  }
-
-  const defaultRunner: AgentRunner = {
-    run: () =>
-      Effect.succeed(
-        AgentRunResult.cases.success.make({
-          text: "",
-          sessionId: SessionId.make("test-subagent-session"),
-          agentName: AgentName.make("cowork"),
+export const createToolTestLayer = (config: ToolTestLayerConfig) =>
+  createDependencies({
+    cwd: "/tmp",
+    home: "/tmp",
+    platform: "test",
+    persistenceMode: "memory",
+    languageModelLayerOverride: LanguageModelLayers.debug(),
+    extensions: [
+      defineExtension({ id: "test-agents", agents: config.agents, tools: config.tools ?? [] }),
+      ...(config.extensions ?? []),
+    ],
+    overrides: {
+      authLayer: Auth.Test(),
+      approvalLayer: ApprovalService.Test(),
+      configServiceLayer: ConfigService.Test(),
+      modelRegistryLayer: ModelRegistry.Test(),
+      permissionLayer: Permission.Test(),
+      toolRunnerLayer: ToolRunner.Test(),
+      agentRunnerLayer: Layer.succeed(
+        AgentRunnerService,
+        AgentRunnerService.of({
+          start: () => Effect.die("AgentRunner.start not configured in test"),
+          inspect: () => Effect.die("AgentRunner.inspect not configured in test"),
+          wait: () => Effect.die("AgentRunner.wait not configured in test"),
+          cancel: () => Effect.die("AgentRunner.cancel not configured in test"),
+          ...(config.subagentRunner ?? {
+            run: () =>
+              Effect.succeed(
+                AgentRunResult.cases.success.make({
+                  text: "",
+                  sessionId: SessionId.make("test-subagent-session"),
+                  agentName: AgentName.make("cowork"),
+                }),
+              ),
+          }),
         }),
       ),
-  }
-  const subagentRunnerLayer = Layer.succeed(
-    AgentRunnerService,
-    config.subagentRunner ?? defaultRunner,
-  )
-
-  return Layer.unwrap(
-    Effect.gen(function* () {
-      const setupResult = yield* setupBuiltinExtensions({
-        extensions: config.extensions ?? [],
-        cwd: "/tmp",
-        home: "/tmp",
-        disabled: new Set(),
-      })
-
-      const allExtensions: LoadedExtension[] = [
-        {
-          manifest: { id: ExtensionId.make("test-agents") },
-          scope: "builtin",
-          sourcePath: "test",
-          contributions: builtinContributions,
-        },
-        ...setupResult.active,
-      ]
-
-      const reconciled = yield* reconcileLoadedExtensions({
-        extensions: allExtensions,
-        failedExtensions: setupResult.failed,
-        home: "/tmp",
-        // oxlint-disable-next-line effect/noNullish -- The setup context requires this absent command field.
-        command: undefined,
-      })
-
-      const activeExtensions = reconciled.resolved.extensions
-      const storageLayer = Layer.orDie(SqliteStorage.TestWithSql())
-      const extensionRegistryLayer = ExtensionRegistry.fromResolved(reconciled.resolved)
-      const driverRegistryLayer = DriverRegistry.fromResolved(reconciled.resolved)
-      const languageModelLayer = LanguageModelLayers.debug()
-      const baseDepsLayer = Layer.mergeAll(
-        storageLayer,
-        EventStore.Memory,
-        extensionRegistryLayer,
-        driverRegistryLayer,
-        subagentRunnerLayer,
-        PromptPresenter.Test(),
-        Permission.Test(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        languageModelLayer,
-        ModelResolver.fromLanguageModel(languageModelLayer),
-        ToolRunner.Test(),
-        ConfigService.Test(),
-        ModelRegistry.Test(),
-        // Required for resource layers below: `Layer.provideMerge(r.layer,
-        // baseLayerAny)` (line 123) feeds extension Resource layers from
-        // `baseLayerAny`, and many of them yield `GentPlatform`. Outer
-        // `Layer.provide(BunPlatformLive)` only reaches outer requirements,
-        // not the requirements satisfied INSIDE `provideMerge`.
-        BunGentPlatformLive,
-        ...(config.extraLayers ?? []),
-      )
-      const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDepsLayer)
-      const baseWithRuntimeLayer = Layer.mergeAll(
-        baseDepsLayer,
-        eventPublisherLayer,
-        AgentLoopSessionGovernance.Live,
-      )
-      const agentLoopLayer = AgentLoopTestActor({ baseSections: [] }).pipe(
-        Layer.provideMerge(baseWithRuntimeLayer),
-      )
-      const baseLayer = Layer.merge(baseWithRuntimeLayer, agentLoopLayer)
-      const baseLayerAny: Layer.Layer<never, never, object> = baseLayer
-
-      const contributedLayers: Array<Layer.Layer<never, never, object>> = activeExtensions.flatMap(
-        (ext) =>
-          (ext.contributions.resources ?? [])
-            .filter((r) => r.scope === "process")
-            .map((r) => {
-              // Resource layers carry their own R/E; the shared membrane closes
-              // those channels at this test harness boundary.
-              // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-              const merged = Layer.provideMerge(eraseResourceLayer(r.layer), baseLayerAny)
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
-              // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The harness closes resource requirements against the test service graph.
-              return merged as Layer.Layer<never, never, object>
-            }),
-      )
-
-      let extensionLayer = baseLayerAny
-      for (const layer of contributedLayers) {
-        extensionLayer = Layer.merge(extensionLayer, layer)
-      }
-      return extensionLayer
-    }),
-  ).pipe(Layer.provide(BunPlatformLive))
-}
+      fileIndexLayer: Layer.provide(FallbackFileIndexLive, BunPlatformLive),
+      extraLayers: config.extraLayers,
+    },
+  }).pipe(Layer.provide(BunPlatformLive), Layer.orDie)
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 const dieEffect = (label: string) => Effect.die(`${label} not wired in test`)
@@ -185,11 +103,20 @@ const dieEffect = (label: string) => Effect.die(`${label} not wired in test`)
 export type TestToolContext = ExtensionHostContext &
   ExtensionContextService & { readonly toolCallId: ToolCallId }
 
+type TestToolContextOverrides = Omit<Partial<TestToolContext>, "agent" | "Agent"> & {
+  readonly agent?: Partial<ExtensionHostContext.Agent>
+  readonly Agent?: Partial<ExtensionContextService["Agent"]>
+}
+
 /** Default ToolCapabilityContext for tests — overridable via spread */
-export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolContext => {
+export const testToolContext = (overrides?: TestToolContextOverrides): TestToolContext => {
   const host = testExtensionHostContext().host
   const agent = {
     listAgents: dieStub("agent.listAgents"),
+    start: dieStub("agent.start"),
+    inspect: dieStub("agent.inspect"),
+    wait: dieStub("agent.wait"),
+    cancel: dieStub("agent.cancel"),
     run: dieStub("agent.run"),
   }
   const session = {
@@ -203,6 +130,10 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
   }
   const Agent: ExtensionContextService["Agent"] = {
     listAgents: dieEffect("agent.listAgents"),
+    start: dieStub("agent.start"),
+    inspect: dieStub("agent.inspect"),
+    wait: dieStub("agent.wait"),
+    cancel: dieStub("agent.cancel"),
     run: dieStub("agent.run"),
   }
   const Session: ExtensionContextService["Session"] = {
@@ -313,7 +244,7 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
     registerTool: () => Effect.succeed(Effect.void),
     registerRequest: () => Effect.succeed(Effect.void),
   }
-  const resolvedAgent = overrides?.Agent ?? Agent
+  const resolvedAgent = { ...Agent, ...overrides?.Agent }
   const resolvedSession = overrides?.Session ?? Session
   const resolvedInteraction = overrides?.Interaction ?? interaction
   const resolvedProcess = overrides?.Process ?? process
@@ -331,10 +262,8 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
     cwd: "/tmp",
     home: "/tmp",
     host,
-    agent,
     session,
     interaction,
-    Agent: resolvedAgent,
     Session: resolvedSession,
     Interaction: resolvedInteraction,
     Process: resolvedProcess,
@@ -343,6 +272,8 @@ export const testToolContext = (overrides?: Partial<TestToolContext>): TestToolC
     State: resolvedState,
     Dynamic: resolvedDynamic,
     ...overrides,
+    agent: { ...agent, ...overrides?.agent },
+    Agent: resolvedAgent,
   }
 }
 

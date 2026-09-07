@@ -1,5 +1,12 @@
 import { Schema, type Effect, type PlatformError } from "effect"
-import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent"
+import type {
+  AgentDefinition,
+  AgentName,
+  AgentRunError,
+  AgentRunResult,
+  AgentRunner,
+  RunSpec,
+} from "./agent"
 import type { ExtensionHostPlatform } from "./extension"
 import type { EventStoreError } from "./event"
 import { BranchId, SessionId, type ExtensionId } from "./ids"
@@ -55,6 +62,21 @@ export interface ExtensionHostContext {
 export declare namespace ExtensionHostContext {
   interface Agent {
     readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
+    readonly start: (
+      params: Omit<
+        Parameters<AgentRunner["start"]>[0],
+        "parentSessionId" | "parentBranchId" | "cwd"
+      > & { cwd?: string },
+    ) => ReturnType<AgentRunner["start"]>
+    readonly inspect: (
+      params: Pick<Parameters<AgentRunner["inspect"]>[0], "requestId">,
+    ) => ReturnType<AgentRunner["inspect"]>
+    readonly wait: (
+      params: Pick<Parameters<AgentRunner["wait"]>[0], "requestId" | "waitMs">,
+    ) => ReturnType<AgentRunner["wait"]>
+    readonly cancel: (
+      params: Pick<Parameters<AgentRunner["cancel"]>[0], "requestId">,
+    ) => ReturnType<AgentRunner["cancel"]>
 
     readonly run: (params: {
       agent: AgentDefinition

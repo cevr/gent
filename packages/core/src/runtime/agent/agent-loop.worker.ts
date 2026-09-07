@@ -1,7 +1,7 @@
-import { Cause, Clock, Effect, Option, Ref, TxQueue, type Semaphore } from "effect"
+import { Cause, Clock, Effect, Option, Predicate, Ref, TxQueue, type Semaphore } from "effect"
 import { DEFAULT_AGENT_NAME, type AgentName as AgentNameType } from "../../domain/agent.js"
 import { ErrorOccurred, type AgentEvent } from "../../domain/event.js"
-import type { BranchId, InteractionRequestId, SessionId } from "../../domain/ids.js"
+import type { BranchId, InteractionRequestId, MessageId, SessionId } from "../../domain/ids.js"
 import {
   buildIdleState,
   buildRunningState,
@@ -19,9 +19,11 @@ export type AgentLoopWorkerContext<E = never, R = never> = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly sideMutationSemaphore: Semaphore.Semaphore
+  readonly interruptSemaphore: Semaphore.Semaphore
   readonly turnWorkerQueue: TxQueue.TxQueue<RunningState>
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly interruptedRef: Ref.Ref<boolean>
+  readonly interruptCell: Effect.Effect<void>
   readonly currentLoopState: Effect.Effect<LoopState>
   readonly saveCheckpoint: (next: LoopState) => Effect.Effect<void, AgentLoopError>
   readonly takeNextQueuedTurn: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
@@ -135,8 +137,10 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
           ),
         ),
         Effect.matchCauseEffect({
-          onFailure: (cause) => failTurnWorker(startState, cause),
-          onSuccess: (outcome) => finishTurnWorker(startState, outcome),
+          onFailure: (cause) =>
+            failTurnWorker(startState, cause).pipe(scope.interruptSemaphore.withPermits(1)),
+          onSuccess: (outcome) =>
+            finishTurnWorker(startState, outcome).pipe(scope.interruptSemaphore.withPermits(1)),
         }),
         Effect.catchCause((cause) =>
           scope
@@ -153,34 +157,37 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     Effect.ignore,
   )
 
-  const interrupt: Effect.Effect<void, AgentLoopError> = Effect.suspend(
-    Effect.fn("AgentLoop.interrupt")(function* () {
+  const interrupt = Effect.fn("AgentLoop.interrupt")(function* (messageId?: MessageId) {
+    const waiting = yield* Effect.gen(function* () {
       const snap = yield* scope.currentLoopState
-      if (snap._tag === "Idle") return
-      if (snap._tag === "Running") {
-        yield* Ref.set(scope.interruptedRef, true)
-        yield* interruptActiveStream(scope.activeStreamRef)
-        return
-      }
-      yield* Effect.gen(function* () {
-        const state = yield* scope.currentLoopState
-        if (state._tag !== "WaitingForInteraction") return
-        yield* Ref.set(scope.interruptedRef, true)
-        const resumed = buildRunningState(
-          { currentAgent: state.currentAgent },
-          {
-            message: state.message,
-            agentOverride: state.agentOverride,
-            runSpec: state.runSpec,
-            interactive: state.interactive,
-          },
-          { startedAtMs: state.startedAtMs },
-        )
-        yield* scope.saveCheckpoint(resumed)
-        yield* enqueueTurnWorker(resumed)
-      }).pipe(scope.sideMutationSemaphore.withPermits(1))
-    }),
-  )
+      if (snap._tag === "Idle") return false
+      if (Predicate.isNotUndefined(messageId) && snap.message.id !== messageId) return false
+      if (snap._tag === "WaitingForInteraction") return true
+      yield* Ref.set(scope.interruptedRef, true)
+      yield* interruptActiveStream(scope.activeStreamRef)
+      yield* scope.interruptCell
+      return false
+    }).pipe(scope.interruptSemaphore.withPermits(1))
+    if (!waiting) return
+    yield* Effect.gen(function* () {
+      const state = yield* scope.currentLoopState
+      if (state._tag !== "WaitingForInteraction") return
+      if (Predicate.isNotUndefined(messageId) && state.message.id !== messageId) return
+      yield* Ref.set(scope.interruptedRef, true)
+      const resumed = buildRunningState(
+        { currentAgent: state.currentAgent },
+        {
+          message: state.message,
+          agentOverride: state.agentOverride,
+          runSpec: state.runSpec,
+          interactive: state.interactive,
+        },
+        { startedAtMs: state.startedAtMs },
+      )
+      yield* scope.saveCheckpoint(resumed)
+      yield* enqueueTurnWorker(resumed)
+    }).pipe(scope.sideMutationSemaphore.withPermits(1))
+  })
 
   const startTurn = Effect.fn("AgentLoop.startTurn")((item: QueuedTurnItem) =>
     Effect.gen(function* () {

@@ -75,6 +75,8 @@ export const AgentEvent = Schema.TaggedUnion({
   StreamStarted: {
     sessionId: SessionId,
     branchId: BranchId,
+    messageId: Schema.optional(MessageId),
+    step: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
   },
   StreamChunk: {
     sessionId: SessionId,
@@ -84,6 +86,8 @@ export const AgentEvent = Schema.TaggedUnion({
   StreamEnded: {
     sessionId: SessionId,
     branchId: BranchId,
+    messageId: Schema.optional(MessageId),
+    step: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
     usage: Schema.optional(UsageSchema),
     // `model` identifies which model produced the stream that just ended.
     model: Schema.optional(ModelId),
@@ -100,6 +104,8 @@ export const AgentEvent = Schema.TaggedUnion({
     messageId: Schema.optional(MessageId),
     durationMs: Schema.Finite,
     interrupted: Schema.optional(Schema.Boolean),
+    // Absent in historical receipts; absence does not prove model success.
+    streamFailed: Schema.optional(Schema.Boolean),
   },
   ToolCallStarted: {
     sessionId: SessionId,
@@ -141,6 +147,7 @@ export const AgentEvent = Schema.TaggedUnion({
     requestId: InteractionRequestId,
     approved: Schema.Boolean,
     notes: Schema.optional(Schema.String),
+    editedContent: Schema.optional(Schema.String),
   },
   ErrorOccurred: {
     sessionId: SessionId,
@@ -333,6 +340,7 @@ export type ActiveInteraction = InteractionPresented
 export type ApprovalResult = {
   readonly approved: boolean
   readonly notes?: string
+  readonly editedContent?: string
 }
 
 // ============================================================================

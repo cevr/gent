@@ -1,24 +1,5 @@
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
-/**
- * RuntimeProfileResolver regression locks.
- *
- * Locks the single-pipeline contract: both discovering composition roots
- * (server startup, per-cwd profile cache) flow
- * through `resolveRuntimeProfile` and `buildExtensionLayers`. The locks prove:
- *
- *   1. Same inputs → same resolved extensions (extension ids, scope precedence).
- *   2. `buildExtensionLayers` actually wires `ExtensionRegistry` from the
- *      resolved data (not just exported as a helper).
- *   3. turn-projection hooks resolve services contributed via
- *      `defineResource`.
- *   4. Server-style and per-cwd-style assemblies produce equivalent observable
- *      output (same registry contents, same merged sections). If the per-cwd
- *      path skips an extension layer, this fails.
- *
- * If this regresses, the activation paths can drift again — e.g., an
- * extension's prompt section appears at server startup but not in a per-cwd
- * profile.
- */
+/** Profile behavior through the production live cache and child adapter. */
 import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, FileSystem, Layer, Path, Schema as S } from "effect"
 import { BunFileSystem, BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
@@ -30,14 +11,13 @@ import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-b
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import {
   buildExtensionLayers,
-  compileBaseSections,
   loadRuntimeProfileDeclarations,
-  resolveProfileRuntime,
-  resolveRuntimeProfile,
+  type RuntimeProfileInputs,
 } from "../../src/runtime/profile"
 import { provideExtensionHookContext } from "../../src/runtime/extensions/extension-hook-context"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { CronRuntime } from "../../src/runtime/extensions/resource-host/schedule-engine"
+import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ProcessRunnerLive } from "../../src/utils/run-process"
 
 const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
@@ -50,6 +30,17 @@ const fsLayer = Layer.provideMerge(
 )
 
 const sharedLayer = Layer.mergeAll(fsLayer, ConfigService.Test(), SqliteStorage.TestWithSql())
+
+// Build a fresh production cache in the test's owning scope.
+const openProfile = Effect.fn("RuntimeProfileTest.openProfile")(function* (
+  inputs: RuntimeProfileInputs,
+) {
+  const context = yield* Layer.build(SessionProfileCache.Live(inputs))
+  const cache = Context.get(context, SessionProfileCache)
+  const profile = yield* cache.resolve(inputs.cwd)
+  if (!profile.publication) return yield* Effect.die("Live profile has no publication")
+  return { ...profile.publication.value, publication: profile.publication }
+})
 
 // Static prompt sections live on capability leaf `prompt`. The tool here is a
 // no-op carrier — its only purpose is to bring the prompt section into scope.
@@ -124,7 +115,7 @@ const dynamicExtension = defineExtension({
   ],
 })
 
-describe("resolveRuntimeProfile", () => {
+describe("live Profile", () => {
   const test = it.live.layer(BunServices.layer)
 
   test("loads declarations without lifecycle or scheduler work before boot activation", () =>
@@ -254,11 +245,11 @@ describe("resolveRuntimeProfile", () => {
 
         const runtimeExit = yield* Effect.exit(
           // oxlint-disable-next-line effect/noInlineProvide -- This test provides a local scheduler spy for the boot boundary.
-          Effect.scoped(resolveRuntimeProfile(inputs).pipe(Effect.provide(schedulerLayer))),
+          Effect.scoped(openProfile(inputs).pipe(Effect.provide(schedulerLayer))),
         )
         expect(runtimeExit._tag).toBe("Success")
         if (runtimeExit._tag === "Success") {
-          expect(runtimeExit.value.resolved.failedExtensions).toContainEqual(
+          expect(runtimeExit.value.profile.resolved.failedExtensions).toContainEqual(
             expect.objectContaining({
               manifest: { id: "@gent/test-runtime-profile/declaration-invalid" },
               phase: "validation",
@@ -275,7 +266,7 @@ describe("resolveRuntimeProfile", () => {
       }),
     ).pipe(Effect.provide(sharedLayer)))
 
-  test("resolveProfileRuntime starts process resources once and skips duplicate lifecycle hooks", () =>
+  test("live Profile starts process resources once and skips duplicate lifecycle hooks", () =>
     Effect.scoped(
       Effect.gen(function* () {
         let starts = 0
@@ -294,7 +285,7 @@ describe("resolveRuntimeProfile", () => {
           ],
         })
 
-        yield* resolveProfileRuntime({
+        yield* openProfile({
           cwd: "/tmp",
           home: "/tmp",
           platform: "darwin",
@@ -305,7 +296,7 @@ describe("resolveRuntimeProfile", () => {
       }),
     ).pipe(Effect.provide(sharedLayer)))
 
-  test("resolveProfileRuntime preserves one scoped resource instance for hooks and shutdown", () =>
+  test("live Profile preserves one scoped resource instance for hooks and shutdown", () =>
     Effect.gen(function* () {
       let nextInstance = 0
       const events: Array<readonly [string, number]> = []
@@ -361,7 +352,7 @@ describe("resolveRuntimeProfile", () => {
       const exit = yield* Effect.exit(
         Effect.scoped(
           Effect.gen(function* () {
-            const runtime = yield* resolveProfileRuntime({
+            const runtime = yield* openProfile({
               cwd: "/tmp",
               home: "/tmp",
               platform: "darwin",
@@ -392,8 +383,7 @@ describe("resolveRuntimeProfile", () => {
 
             const result = yield* runtime.registryService.extensionHooks.resolveTurnProjection.pipe(
               provideExtensionHookContext(hookCtx),
-              // oxlint-disable-next-line effect/noInlineProvide -- This test composes the profile runtime for this operation.
-              Effect.provide(runtime.layerContext),
+              runtime.publication.run,
             )
             expect(result.promptSections).toEqual([
               { id: "pure-probe", priority: 1, content: "pure" },
@@ -451,72 +441,34 @@ describe("resolveRuntimeProfile", () => {
           ],
         })
 
-        for (const extensions of [
-          [activatedExtension, pureExtension],
-          [pureExtension, activatedExtension],
+        for (const { extensions, expected } of [
+          { extensions: [activatedExtension, pureExtension], expected: "pure" },
+          { extensions: [pureExtension, activatedExtension], expected: "pure" },
         ]) {
-          const runtime = yield* resolveProfileRuntime({
+          const runtime = yield* openProfile({
             cwd: "/tmp",
             home: "/tmp",
             platform: "darwin",
             extensions,
           })
-          expect(Context.get(runtime.layerContext, PrecedenceProbe).value).toBe("pure")
+          expect(Context.get(runtime.layerContext, PrecedenceProbe).value).toBe(expected)
 
           const builderContext = yield* Layer.build(
             buildExtensionLayers(runtime.profile.resolved, {
               lifecycle: "skip",
-              resourceContexts: runtime.profile.resourceContexts,
             }),
           ).pipe(Effect.scoped)
-          expect(Context.get(builderContext, PrecedenceProbe).value).toBe("pure")
+          expect(Context.get(builderContext, PrecedenceProbe).value).toBe(expected)
         }
 
         expect(starts).toBe(2)
       }),
     ).pipe(Effect.provide(sharedLayer)))
 
-  test("same inputs across modes produce equivalent profiles", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const inputs = {
-          cwd: "/tmp",
-          home: "/tmp",
-          platform: "darwin",
-          extensions: [sectionExtension],
-        }
-
-        // Two independent invocations simulate: server startup vs per-cwd cache miss
-        const profileA = yield* resolveRuntimeProfile(inputs)
-        const profileB = yield* resolveRuntimeProfile(inputs)
-
-        // Same resolved extension set
-        expect(profileA.resolved.extensions.length).toBe(profileB.resolved.extensions.length)
-        expect(profileA.resolved.extensions.map((e) => e.manifest.id)).toEqual(
-          profileB.resolved.extensions.map((e) => e.manifest.id),
-        )
-
-        // Compile sections (no dynamic deps in this test extension; runs in
-        // current scope without extension layers).
-        const sectionsA = yield* compileBaseSections(profileA)
-        const sectionsB = yield* compileBaseSections(profileB)
-
-        // Same merged base sections (length and content)
-        expect(sectionsA.length).toBe(sectionsB.length)
-        const aIds = sectionsA.map((s) => s.id).sort()
-        const bIds = sectionsB.map((s) => s.id).sort()
-        expect(aIds).toEqual(bIds)
-
-        // Extension-contributed section appears in the merged sections
-        const sec = sectionsA.find((s) => s.id === "rp-test-section")
-        expect(sec?.content).toBe("rp test content")
-      }),
-    ).pipe(Effect.provide(sharedLayer)))
-
   test("buildExtensionLayers wires ExtensionRegistry from resolved data", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const profile = yield* resolveRuntimeProfile({
+        const { profile } = yield* openProfile({
           cwd: "/tmp",
           home: "/tmp",
           platform: "darwin",
@@ -539,7 +491,7 @@ describe("resolveRuntimeProfile", () => {
   test("resource-backed turnProjection resolves through buildExtensionLayers", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const profile = yield* resolveRuntimeProfile({
+        const { profile } = yield* openProfile({
           cwd: "/tmp",
           home: "/tmp",
           platform: "darwin",
@@ -581,36 +533,6 @@ describe("resolveRuntimeProfile", () => {
           priority: 60,
           content: "dynamic-from-service",
         })
-      }),
-    ).pipe(Effect.provide(sharedLayer)))
-
-  test("profile runtime helper gives server and per-cwd paths the same runtime shape", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const inputs = {
-          cwd: "/tmp",
-          home: "/tmp",
-          platform: "darwin",
-          extensions: [sectionExtension, dynamicExtension],
-        }
-
-        // Server startup and SessionProfileCache call this same helper now.
-        const serverRuntime = yield* resolveProfileRuntime(inputs)
-        const cacheRuntime = yield* resolveProfileRuntime(inputs)
-
-        // Same registered extension ids (in same scope-precedence order)
-        const serverIds = serverRuntime.registryService
-          .getResolved()
-          .extensions.map((e) => e.manifest.id)
-        const cacheIds = cacheRuntime.registryService
-          .getResolved()
-          .extensions.map((e) => e.manifest.id)
-        expect(cacheIds).toEqual(serverIds)
-
-        // Same merged sections (ids and content)
-        const toMap = (sections: ReadonlyArray<{ id: string; content: string }>) =>
-          new Map(sections.map((s) => [s.id, s.content]))
-        expect(toMap(cacheRuntime.baseSections)).toEqual(toMap(serverRuntime.baseSections))
       }),
     ).pipe(Effect.provide(sharedLayer)))
 })

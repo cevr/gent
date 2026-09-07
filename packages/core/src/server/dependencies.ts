@@ -22,7 +22,8 @@ import { ModelResolver } from "../providers/model-resolver.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { DebugSlowLanguageModelDelayMs, LanguageModelLayers } from "../test-utils/language-model.js"
 import { ApprovalService } from "../runtime/approval-service.js"
-import { InProcessRunner, SubprocessRunner } from "../runtime/agent/agent-runner.js"
+import { InProcessRunner } from "../runtime/agent/agent-runner.js"
+import { AgentLoopLiveActor } from "../runtime/agent/agent-loop.actor.js"
 import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-governance.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
@@ -32,6 +33,8 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
+import { CellToolOperationStorage } from "../storage/cell-tool-operation-storage.js"
+import { CurrentCellToolOperation } from "../runtime/code-cell/current-cell-tool-operation.js"
 import { ResourceGraphStorage } from "../storage/resource-graph-storage.js"
 import {
   decodeInteractionDecision,
@@ -97,7 +100,6 @@ export interface DependenciesConfig {
   platform: string
   shell?: string
   osVersion?: string
-  subprocessBinaryPath?: string
   dbPath?: string
   /**
    * Directory for the on-disk auth store. One URL-encoded file per
@@ -108,8 +110,6 @@ export interface DependenciesConfig {
   providerMode?: "live" | "debug-scripted" | "debug-failing" | "debug-slow"
   disabledExtensions?: ReadonlyArray<string>
   scheduledJobCommand?: ScheduledJobCommand
-  /** URL of the shared server. Subprocess children pass --connect to reuse it. */
-  sharedServerUrl?: string
   /** Language model layer override. When set, bypasses providerMode string and uses this layer directly.
    *  Must be a fully-provided layer (no requirements, no errors). */
   languageModelLayerOverride?: Layer.Layer<LanguageModel.LanguageModel, never, never>
@@ -142,12 +142,9 @@ const scheduledJobEnv = (config: DependenciesConfig): ScheduledJobEnvironment =>
 
 const makeBaseEventStoreLayer = (
   eventStoreMode: Option.Option<NonNullable<DependencyOverrides["eventStoreMode"]>>,
-  persistenceMode: "disk" | "memory",
 ) => {
   if (Option.isSome(eventStoreMode) && eventStoreMode.value === "memory") return EventStore.Memory
-  if (Option.isSome(eventStoreMode) && eventStoreMode.value === "storage-backed")
-    return EventStoreLive
-  if (persistenceMode === "memory") return EventStore.Memory
+  // Snapshots and event replay must share a cursor, including in-memory SQLite.
   return EventStoreLive
 }
 
@@ -253,9 +250,17 @@ const makeApprovalServiceLayer = <A, E, R>(
     Layer.unwrap(
       Effect.gen(function* () {
         const store = yield* InteractionStorage
+        const operations = yield* CellToolOperationStorage
         return ApprovalService.LiveWithStorage({
           persist: (record) =>
-            store.persist(record).pipe(
+            Effect.gen(function* () {
+              const operation = yield* Effect.serviceOption(CurrentCellToolOperation)
+              if (Option.isSome(operation)) {
+                yield* operations.suspend(operation.value, record)
+              } else {
+                yield* store.persist(record)
+              }
+            }).pipe(
               Effect.asVoid,
               Effect.mapError(
                 (cause) =>
@@ -335,23 +340,6 @@ const makeSessionProfileCacheLayer = <A, E, R>(
   )
 }
 
-const makeSessionRuntimeLayer = <A, E, R>(
-  getBaseSectionsSeed: () => Option.Option<ReadonlyArray<PromptSection>>,
-  runtimeDeps: Layer.Layer<A, E, R>,
-) =>
-  Layer.provide(
-    Layer.unwrap(
-      Effect.gen(function* () {
-        const baseSectionsSeed = getBaseSectionsSeed()
-        if (Option.isNone(baseSectionsSeed)) {
-          return yield* new BootstrapError({ seed: "baseSections" })
-        }
-        return SessionRuntime.Live({ baseSections: baseSectionsSeed.value })
-      }),
-    ),
-    runtimeDeps,
-  )
-
 const makeAgentRuntimeLayer = <A, E, R>(
   config: DependenciesConfig,
   getBaseSectionsSeed: () => Option.Option<ReadonlyArray<PromptSection>>,
@@ -368,24 +356,6 @@ const makeAgentRuntimeLayer = <A, E, R>(
         }
         const runnerConfig: AgentRunnerConfig = {
           baseSections: baseSectionsSeed.value,
-        }
-        if (
-          !Predicate.isUndefined(config.subprocessBinaryPath) &&
-          config.subprocessBinaryPath !== ""
-        ) {
-          Object.assign(runnerConfig, { subprocessBinaryPath: config.subprocessBinaryPath })
-        }
-        if (!Predicate.isUndefined(config.dbPath) && config.dbPath !== "") {
-          Object.assign(runnerConfig, { dbPath: config.dbPath })
-        }
-        if (!Predicate.isUndefined(config.sharedServerUrl)) {
-          Object.assign(runnerConfig, { sharedServerUrl: config.sharedServerUrl })
-        }
-        if (
-          !Predicate.isUndefined(config.subprocessBinaryPath) &&
-          config.subprocessBinaryPath !== ""
-        ) {
-          return SubprocessRunner(runnerConfig)
         }
         return InProcessRunner(runnerConfig)
       }),
@@ -416,7 +386,6 @@ export const createDependencies = (config: DependenciesConfig) => {
   // Base event store: raw storage-backed publish/subscribe storage
   const baseEventStoreLive = makeBaseEventStoreLayer(
     Option.fromUndefinedOr(config.overrides?.eventStoreMode),
-    persistenceMode,
   )
 
   // Auth lives in `~/.gent/auth/` (one URL-encoded file per provider).
@@ -669,7 +638,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     }),
   )
 
-  const sessionRuntimeLive = makeSessionRuntimeLayer(() => baseSectionsSeed, allDeps)
+  const sessionRuntimeLive = Layer.provide(SessionRuntime.Client, allDeps)
 
   const sessionMutationsLive = Layer.provide(
     SessionCommands.SessionMutationsLive,
@@ -679,10 +648,18 @@ export const createDependencies = (config: DependenciesConfig) => {
   const allWithRuntime = Layer.mergeAll(allDeps, sessionMutationsLive, sessionRuntimeLive)
 
   const agentRuntimeLive = makeAgentRuntimeLayer(config, () => baseSectionsSeed, allWithRuntime)
-
-  return Layer.mergeAll(
-    allWithRuntime,
-    agentRuntimeLive,
-    Layer.provide(interactionRecoveryLive, allWithRuntime),
+  const runtimeWithHandlers = Layer.provideMerge(
+    Layer.unwrap(
+      Effect.gen(function* () {
+        if (Option.isNone(baseSectionsSeed))
+          return yield* new BootstrapError({ seed: "baseSections" })
+        return AgentLoopLiveActor({ baseSections: baseSectionsSeed.value })
+      }),
+    ),
+    Layer.merge(allWithRuntime, agentRuntimeLive),
+  )
+  return Layer.merge(
+    runtimeWithHandlers,
+    Layer.provide(interactionRecoveryLive, runtimeWithHandlers),
   )
 }

@@ -158,6 +158,7 @@ export const RespondInteractionInput = Schema.Struct({
   branchId: BranchId,
   approved: Schema.Boolean,
   notes: Schema.optional(Schema.String),
+  editedContent: Schema.optional(Schema.String),
 })
 export type RespondInteractionInput = typeof RespondInteractionInput.Type
 

@@ -17,6 +17,10 @@ const die = (operation: string) =>
 
 const defaultAgent = (): ExtensionHostContext.Agent => ({
   listAgents: () => die("agent.listAgents"),
+  start: () => die("agent.start"),
+  inspect: () => die("agent.inspect"),
+  wait: () => die("agent.wait"),
+  cancel: () => die("agent.cancel"),
   run: () => die("agent.run"),
 })
 

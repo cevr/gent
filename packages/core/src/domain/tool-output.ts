@@ -1,6 +1,12 @@
 import { Option, Predicate, Result, Schema } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 
+/** Structured failure data. The runner, not the tool, owns transcript identity. */
+export class ToolResultFailure extends Schema.TaggedError<ToolResultFailure>()(
+  "ToolResultFailure",
+  { message: Schema.String, result: Schema.Json },
+) {}
+
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
 

@@ -122,12 +122,12 @@ The app surface is split by concern:
 - storage/event store
 - auth/config/model registry
 - provider stack
-- extension loading (delegated to `RuntimeProfileResolver`)
+- extension loading and live Profile ownership
 - actor/runtime services
 
 It is the composition boundary. Not the domain boundary.
 
-### RuntimeProfileResolver
+### Runtime Profile
 
 `packages/core/src/runtime/profile.ts` owns the shared profile pipeline.
 `loadRuntimeProfileDeclarations` discovers extensions, runs trusted setup,
@@ -135,11 +135,13 @@ validates declarations, and loads static prompt inputs. It does not acquire
 Resource layers, invoke their lifecycle hooks, or reconcile scheduled jobs.
 Trusted setup can still perform its own effects; this is not a sandbox boundary.
 
-`resolveRuntimeProfile` consumes those declarations and activates resources and
-scheduled jobs. It retains each successful resource context with its owning scope.
-`buildExtensionLayers` assembles those contexts and remaining declarative layers
-in resolved extension order. It does not acquire the retained services again.
-The authored resource descriptors remain unchanged.
+`runtime/live-profile.ts` sends these declarations to the graph host and
+reconciles scheduled jobs while staging the catalog. `buildProfileCatalog`
+assembles registries and prompt inputs from the acquired resource context.
+`buildExtensionLayers` remains the isolated child adapter. It builds child
+service values without repeating the parent's process lifecycle hooks.
+Profile tests use the live cache. The tool test layer uses the production
+composition root. Neither has a separate activation implementation.
 
 The production server uses one live profile owner:
 
@@ -190,26 +192,157 @@ Shape:
   `(workspaceId, sessionId, branchId)`.
 - Runtime commands resolve an existing `(sessionId, branchId)` target before loop dispatch.
 - `AgentRunner` is the helper-agent boundary. Durable runs create persisted child sessions; ephemeral runs use isolated in-memory storage and only publish parent-side `AgentRun*` receipts.
+- Durable child admission uses one shared ancestry check. Missing or incomplete
+  ancestry is an error, not root depth. A parent at the depth limit cannot spawn.
+  This check is not a concurrency or token budget and does not add child handles.
+- `SessionRuntime.sendUserMessage` accepts an explicit completion mode. `admission`
+  uses the existing persisted `SubmitDurable` actor operation and returns after
+  enqueue. `turn` waits through `SubmitAndWait`. Omission preserves existing
+  correlation-based behavior. Admission callers must reuse their command or
+  request ID for retries. This provides a queue-owned start path without a new
+  detached worker or scheduler; the child-handle API remains unfinished.
+- Durable child creation accepts an optional admission request. The existing
+  `SessionOperationStorage` records `agent.start` input and child IDs in the same
+  transaction as the child session, branch, and spawn event. Repeated identical
+  input returns the same child. Changed input fails. The receipt belongs to the
+  parent branch, so deleting the child does not allow a retry to recreate it.
+  Caller-owned transactions are rejected before admission.
+- New durable start requests reserve at most four unfinished children per parent
+  branch. The existing creation transaction verifies parent-branch ownership,
+  reuses an existing receipt first, then checks capacity and creates the child.
+  Capacity comes from stored start receipts without a matching completed user
+  turn, not live actors. Unstarted and unknown outcomes retain reservations.
+  A fresh runner sees the same count. This limit applies to the private durable
+  start path, not legacy blocking or ephemeral runs, and is not a token budget.
+  Deleting completion evidence does not silently release an uncertain reservation.
+- The durable runner's private `start` operation joins child creation to
+  `SessionRuntime.sendUserMessage` with admission completion. Its command ID is
+  derived from the stable start request. The same receipt and command are reused
+  on retry. It returns child session/branch IDs while the actor owns execution.
+  It requires durable persistence and sets parent tool identity from the host
+  input. This operation is not yet exposed to extensions or cells and does not
+  implement child budgets.
+- The durable runner's private `inspect` operation accepts the start request ID
+  and parent session/branch. It checks the workspace-scoped receipt before child
+  reads, then verifies child ancestry and branch ownership. It reads the exact
+  admitted message's `TurnCompleted` event in the same read transaction. A later
+  turn cannot replace this result. Missing completion means no recorded terminal
+  receipt, not proof of a running actor. Inspection does not start or resume work.
+  It returns the raw completion flags without claiming task success. The public
+  child-handle facade and cell integration remain unfinished.
+- The private durable `wait` operation repeats this same inspection with Effect
+  scheduling. The caller supplies an integer deadline of 1–30000 milliseconds.
+  Timeout stops the wait, not the child. Each read transaction closes before the
+  next delay; caller-owned transactions are rejected. Stored completion returns
+  without actor dispatch. No detached waiter or second event subscription exists.
+- The private durable `cancel` operation checks the same owned receipt and sends
+  a stable steering command for the admitted message only. A stored completion
+  makes cancellation a no-op. Caller transactions are rejected. The return value
+  confirms durable command submission, not completed cancellation; `wait` reads
+  the resulting completion. Processed targeted cancellation is retained before
+  queue admission; the full child creation-to-enqueue restart check remains open.
+- `Cancel` and `Interrupt` steering can include an expected message ID. Omission
+  preserves branch-wide behavior. The worker checks the target before signaling
+  and again when resuming an interaction. A local interruption permit serializes
+  running-turn cancellation cleanup with turn completion and next-turn selection.
+  It is separate from the side-mutation permit held by the running turn, so
+  cancellation can stop active work without waiting for that work to finish.
+- Targeted cancellation records `turn.cancel` in the existing workspace-scoped
+  durable-operation table before the steering handler starts the branch owner.
+  The receipt belongs to the child session/branch and survives until that branch
+  is deleted. Repeated cancellation is idempotent; a conflicting owner fails.
+  Turn entry checks this receipt before model work. It persists the user message
+  and clears the in-flight queue marker once per turn, including early-cancelled
+  turns, so cancellation has a stored message and terminal receipt. This does not
+  replay cell source, and it does not prevent effects that ran before cancellation.
+- Child cancellation also commits that intent before submitting steering, whose
+  acknowledgement does not wait for its handler. Start and cancel share message
+  submission from the saved start receipt and original command ID. This lets an
+  admitted but unsubmitted child complete as interrupted without a model call.
+  Retrying start or cancel does not create another child message.
 - local CLI routing uses the shared server lock by default; remote routing is explicit server topology
 - queue ownership is structural
 - turn resolution streams through `LanguageModel.streamText` from `ModelResolver`, with durable stream/tool/finalization events derived from the response stream.
+- New `TurnCompleted` receipts include `streamFailed`, including explicit false.
+  Historical receipts can omit it; absence does not prove model success. The
+  receipt commits with turn duration. This flag reports model failure only, not
+  task success or a complete child outcome. Actor Idle is not completion proof.
+- New turn-stream start/end receipts include the user-message ID and model-step
+  number. Model, external, failure, and interruption paths keep that identity.
+  Historical and forwarded ephemeral receipts can omit it and must not be treated
+  as exact per-turn budget evidence. Token-budget enforcement remains unfinished;
+  compaction invokes a separate model and needs accounting within the same policy.
+- Response projection treats token usage as known only when both totals are
+  nonnegative safe integers. Missing or invalid totals remain absent, not zero.
+  Compaction uses the same conversion and stores reported usage plus model ID in
+  the durable summary details. Summary reuse retains that receipt without another
+  model call. Failed attempts and crashes before summary persistence still need
+  durable attempt accounting; this metadata alone does not enforce a budget.
 - interactions are cold machine states, not blocked fibers
 - machine inspection events are published as diagnostics
-- `AgentRunnerConfig` is a plain interface passed to `InProcessRunner`/`SubprocessRunner`, not a service
+- `AgentRunnerConfig` is a plain interface passed to `InProcessRunner`, not a service
 
 Do not rebuild business logic from inspection events. They are receipts, not inputs.
 
 ### Agent Runs
 
+- `AgentRunnerService` exposes durable `start`, `inspect`, `wait`, and `cancel`
+  beside blocking `run`. Start takes a stable request ID and exact parent/tool
+  address. The service closes storage/runtime requirements at construction and
+  delegates to the existing durable child owner; it creates no worker or queue.
+  Storage failures become `AgentRunError`; wait preserves `TimeoutError`.
+  Inspect returns the original turn receipt, not a task-success assertion.
+  `ExtensionContext.Agent` exposes these operations with host-owned parent IDs.
+  Start requires a tool context and injects its tool-call ID. Requests can inspect,
+  wait, and cancel owned starts but cannot invent a tool identity to start work.
+  The opt-in `ChildAgentExtension` supplies `agent-start` and `agent-child` as
+  ordinary tools. Cells use `tools.call`; the bridge keeps permissions, bound
+  generations, and operation receipts. Start derives its request ID from the
+  host tool-call ID. It accepts the existing RunSpec overrides for model,
+  reasoning, tool selection, and added instructions. The host still fixes durable
+  persistence and the parent/tool address. Control returns pending or the original completed-turn
+  flags, not task success. Wait accepts 1–30000 ms and reports timeout without
+  cancelling work. Absent completion flags are omitted from the JSON result.
+  For a recovered Unknown agent-start operation, its inner toolCallId is the
+  child requestId. The parent can inspect or cancel that start without rerunning
+  cell source or issuing another start.
+  Parents read child output through the existing `read_session` tool using the
+  returned session and branch IDs. Omitting its extraction goal avoids another
+  model call. This reads the session tree, not an exact-turn result snapshot.
+  The extension is not in BuiltinExtensions yet. Default
+  cutover remains unfinished.
+- Admitted child sessions share a durable limit of 32 native-model resolution
+  attempts across their branches. SessionOperationStorage reserves each attempt
+  before model resolution, including the summary path. Reservations are not
+  refunded after failure or interruption. The counter uses the existing durable
+  operation store. An exhausted child produces a failed-turn receipt. External
+  drivers are rejected for admitted children because their internal model calls
+  have no accounting contract. Root sessions and legacy children without a start
+  receipt are outside this limit. This is not a token or whole-subtree budget.
+- The production root builds `SessionRuntime.Client` and `AgentRunnerService`
+  before registering AgentLoop handlers. Encore's client-only actor layer uses
+  the same cluster and memoized state registry as the handler layer. The handlers
+  capture the completed service context, so recursive calls have an agent runner.
+  Interaction recovery starts after handler registration. No second actor owner
+  or scheduler is created. `SessionRuntime.Live` retains the combined test surface.
 - Default persistence is durable.
 - Read-only helper agents (`explore`, `librarian`, `reviewer`, `auditor`, `summarizer`, `title`) default to ephemeral.
 - Durable runs persist a child session/branch and can be revisited with `read_session`.
 - Ephemeral runs still execute a full local `AgentLoop`, but against isolated in-memory storage; they return text/usage/tool-call metadata without polluting the session tree.
+- Child metadata reads only the requested branch. Stream totals remain unknown
+  if any stored stream has missing or invalid usage, or if the sum exceeds safe
+  integer precision. Explicit zero is retained; no stream receipts means unknown.
+  These are reported stream totals, not full model-attempt budget accounting.
 - Callers that need durable history must opt in explicitly, e.g. todo execution forces `persistence: "durable"`.
 
 ### Interactions (Cold Pattern)
 
-One interaction primitive: `ctx.Interaction.approve({ text, metadata? })` → `{ approved, notes? }`.
+Session snapshots and event replay use the same storage-backed event service,
+including when SQLite runs in memory. `EventStore.Memory` is an explicit test
+override, not the default for in-memory application sessions. This keeps the
+snapshot cursor aligned with replayed navigation and interaction events.
+
+One interaction primitive: `ctx.Interaction.approve({ text, metadata? })` → `{ approved, notes?, editedContent? }`.
 
 Tools that need human input call `ctx.Interaction.approve()`, which delegates to
 `ApprovalService`. The turn parks without keeping a blocked tool fiber. Cold
@@ -220,13 +353,13 @@ an unsupported restart or replacement.
 ```text
 tool calls ctx.Interaction.approve({ text, metadata? })
   → ApprovalService.present() checks for stored resolution (cold resume)
-    → if found: returns { approved, notes? }
+    → if found: returns { approved, notes?, editedContent? }
     → if not: persists to InteractionStorage, publishes InteractionPresented
       → InteractionPendingError thrown
         → machine parks in WaitingForInteraction (cold, no turn fiber)
 
 client responds via respondInteraction RPC
-  → storeResolution(requestId, { approved, notes? })
+  → storeResolution(requestId, { approved, notes?, editedContent? })
     → machine receives InteractionResponded
       → WaitingForInteraction → ExecutingTools
         → tool re-runs, calls ctx.Interaction.approve(), finds stored resolution
@@ -247,6 +380,17 @@ Key properties:
 - **Invalid replay.** Changed bindings and corrupt completed-result data fail
   explicitly. A paired failed result keeps later model turns usable. A corrupt
   completed result does not give permission to repeat the tool.
+- **One binding policy.** `runtime/agent/tool-binding-resolution.ts` owns
+  current capture, durable lookup, identity checks, and invalid local-binding
+  cleanup for native, external, and direct tool adapters. A missing durable row
+  permits only a same-process, same-generation capability with no durable
+  identity. A local copy cannot replace a missing durable row. Dynamic durable
+  markers cannot replay. Each adapter owns result persistence and interaction
+  handling.
+  `resolveStoredToolBinding` validates an already-owned durable identity without
+  reading an assistant-message binding row. Native replay uses this same check.
+  Inner-operation storage can use it without synthetic transcript tool calls.
+  Its caller must verify receipt ownership and hold the publication lease.
 - **Internal direct command.** `InvokeTool` is not a waiting turn. If its tool
   requests approval, the command closes the request, saves a paired failed result,
   and returns an explicit failure. Redelivery preserves that failure without
@@ -258,6 +402,196 @@ Files: `interaction-request.ts` (InteractionPendingError, makeInteractionService
 ## Platform Boundaries
 
 Core runtime should not reach for ambient process state unless the app shell is the real owner.
+
+The private Bun cell implementation in `runtime/code-cell/` is not yet selected
+by a model profile. `cell-kernel.ts` owns serialized evaluate/reset operations,
+evaluation deadlines, host-call dispatch, and worker disposal. Each evaluation
+receives its host service from the caller's Effect context. Worker faults lose
+working state; ordinary cell errors preserve it. No cell is automatically replayed.
+`cell-process.ts` owns the sandboxed macOS process and bounded pipes. This is not
+a second agent engine or persistence owner. After a fault, only explicit reset
+can replace the worker. Each kernel permits three replacement attempts by
+default, including failed starts. Close cancels active work and waits for its
+cleanup. The Gent policy bridge and other platform isolation remain unfinished.
+
+The core build compiles `runtime/code-cell/main.ts` into `dist/gent-cell`.
+Turbo builds that declared dependency before the TUI copies the worker into
+`bin/gent-cell` beside `bin/gent`. Core owns the worker build; the TUI only
+packages it. The worker embeds Bun and needs no external Bun executable. Its
+compile options disable automatic dotenv, bunfig, tsconfig, and package.json
+loading. The existing sandbox launcher can use this artifact as both its runtime
+and worker path. Turbo caches core's `dist` output and both TUI binaries. The
+TUI task hashes its build script. Run the root build for dependency ordering.
+This is a packaged worker, not a daemon or a new session owner.
+`GentPlatform.cellWorkerPath` selects the worker without opening it. The compiled
+host uses its sibling `gent-cell`. Source runs use core's `dist/gent-cell`, resolved
+from the platform module, not cwd or the Bun executable. Source runs need the core
+build first. The TUI build sets the compiled-host marker explicitly.
+`agent-loop.behavior.ts` builds `CellExecution.Branch` in the existing loop scope
+and supplies it to turn execution. Each branch owns a separate service and lazy
+worker. Closing the loop scope closes that worker. Source-mode durable builtin
+identity and default model dispatch remain unfinished. The existing interrupt
+command now also calls the branch cell service's cancellation operation. It
+signals active evaluation and waits for cleanup. Cells queued before cancellation
+cannot evaluate; the branch interrupt flag also stops later calls in that turn.
+
+When policy selects `cell` for a native model turn, only `cell` is advertised.
+ResolvedTurnContext keeps separate model and host binding maps. Both derive from
+the same policy result. The full host map supplies cell callbacks and recovery;
+the outer map cannot directly dispatch unadvertised host tools. Tool discovery
+returns the selected declaration's input schema and usage guidelines. External
+drivers and turns that do not select `cell` keep their existing tool surface.
+This does not register cell as a default builtin yet.
+Cancellation saves a failed outer receipt without replaying source. An active
+worker loses state and requires explicit reset; a cell stopped before evaluation
+reports that it did not start. The steering RPC still acknowledges durable
+delivery, not completed cancellation. Clients observe completion through events.
+
+`storage/cell-execution-storage.ts` provides outer cell admission in the existing
+SQLite database. A claim must refer to one `cell` call in an assistant message
+owned by the current workspace, session, and branch. Only the first claim returns
+the stored source for evaluation. Repeat claims return the saved tool result or
+`Incomplete`; that state does not prove a live worker and never permits another
+evaluation. Results are immutable. Receipts cascade with their assistant message.
+Admission rejects a caller-owned SQL transaction so its claim commits before
+external effects start. Cell execution must remain outside SQL transactions.
+`runtime/code-cell/cell-execution.ts` joins this store to the real kernel. Each
+layer fixes one session and branch. It serializes admission, evaluation, result
+storage, and reset. It opens a worker only after a fresh claim. Saved results and
+incomplete claims do not start a worker. Initial startup failures consume the
+same bounded replacement budget as later worker failures. Interruption leaves
+the claim incomplete; the next call reports a typed unknown outcome without
+running the source again. A saved result does not restore VM working state.
+The model profile does not start cells through this service yet.
+Inner operation bindings and durable approvals use the stores described below.
+
+`runtime/agent/current-tool-call.ts` carries the transcript-owned call address
+and the turn's selected tool bindings.
+The shared turn dispatcher supplies it for each bound tool invocation, including
+explicit tool invocation. `runtime/code-cell/cell-dispatch.ts` uses that address
+and the current live turn publication to enter branch-owned cell execution.
+It does not search messages or accept a call address from model input. It rejects
+an inner host operation that attempts to dispatch another outer cell. Missing
+branch ownership or recorded turn context returns an `AgentLoopError`, not a
+missing-service defect. The RPC test catches a nested-dispatch rejection inside
+the worker and verifies that the attempted source did not change retained state.
+The RPC lifetime test uses this adapter and checks two identical sources in one model
+response. Each source runs once and receives a distinct result receipt.
+`runtime/code-cell/cell-tool.ts` now declares the cell tool and is exercised by
+this RPC test. It is not installed in the default profile yet. It returns saved
+JSON success data or fails with the public `ToolResultFailure` type. The normal
+tool runner preserves that failure's JSON data and still supplies transcript
+identity itself. The type cannot select a call ID or tool name. Permission checks
+and preflight hooks still run before execution. The cell declaration maps worker
+suspension back to the original pending interaction for the actor. The fresh
+approval RPC test checks allow and deny through the real compiled worker. The
+host tool restarts at its approval boundary and records one decision. The outer
+source does not restart or continue after approval. Recovery returns the saved
+operation results in a failed outer result with visible worker state loss.
+
+The shared `domain/cell-input.ts` schema accepts optional `reset: true`. Admission
+reads this flag from the stored assistant call. After a fresh claim commits, the
+branch execution permit covers reset and evaluation together. Completed or
+incomplete calls do not reset the worker. A repeated reset call returns its saved
+result without clearing newer working state. Cancellation checks run before reset.
+Reset uses the existing worker reset and bounded replacement path; it does not
+replay old source or erase operation receipts.
+
+Fresh cell host calls select only from the supplied turn bindings. They do not
+search the full extension registry by name. Thus an agent-denied tool cannot be
+reached through a cell, and a newly registered replacement cannot replace the
+captured capability. The host still enters the current publication and checks
+permissions before execution. The RPC lifetime test verifies a registered but
+agent-denied tool receives no calls. Catalog discovery must use this selected
+set. Default cutover must retain a host binding set when the advertised model
+surface narrows to `cell`; it cannot reuse a cell-only advertised map for discovery.
+
+`runtime/code-cell/tool-catalog.ts` declares ordinary read-only discovery over
+that selected map. Search matches names and descriptions and returns up to 20
+sorted names with a total and next offset. Describe reads the selected tool's
+actual Effect AI input schema. It stores no separate catalog and does not grant
+execution permission. Called from a cell, discovery uses the normal host tool
+path and records an operation receipt. The RPC lifetime test searches the catalog
+and inspects a host schema through the compiled worker. An agent-denied tool is
+absent from its search result. Default profile installation remains unfinished.
+
+Tool dispatch accepts separate outer and host binding maps. Normal turns supply
+the selected map for both. Recovery validates pending outer calls against their
+saved binding identities. If an outer cell was never admitted, recovery also
+resolves the current agent policy to obtain its host set. It does not limit that
+set to pending outer call names or search the unrestricted registry. If current
+policy removes `cell`, the replay dispatcher receives no outer cell binding and
+returns a failure without executing it. Already admitted cells still use saved
+operation recovery and never evaluate their source again.
+
+`runtime/code-cell/cell-tool-call.ts` adapts one already-bound host call to
+`ToolRunner.runBound`. It requires an explicit `Permission` service and does not
+resolve a missing binding by name. The caller still owns the durable operation
+receipt and publication lease. Execution returns the original tool result.
+A separate result conversion runs after persistence and maps failures to cell errors.
+`CellToolCallSuspended` instead carries the pending interaction and inner call
+identity out of evaluation. The kernel stops and discards the worker; it does
+not send that signal to cell JavaScript as a catchable error. Recorded execution
+preserves the suspension and leaves its outer claim incomplete. Durable inner
+operation resume uses the recorded host below; suspension never authorizes cell replay.
+
+`storage/cell-tool-operation-storage.ts` records inner operations under an
+admitted outer cell in the same SQLite database. The operation's input, tool
+binding, and derived tool-call ID are immutable. Its state is Started, Waiting,
+Resuming, or Completed. Repeated admission never grants another execution.
+Resume requires the exact waiting request and a valid saved approval decision.
+It commits Resuming before tool execution; that state cannot be reclaimed after
+a crash. A unique request link prevents two operations from sharing an approval.
+The existing interaction service still owns the request and decision. Completed
+cells cannot admit or resume more host effects. Message deletion cascades to
+these receipts. Suspension persists a new approval through InteractionStorage
+and links its operation in one transaction. It rejects caller transactions and
+completed cells. The production approval callback uses this operation when the
+host supplies CurrentCellToolOperation. ApprovalService validates that owner and
+selects only its saved resume request. A fresh operation cannot consume a branch
+decision. The existing one-pending-request-per-branch constraint stays in place.
+The cell host supplies this address from admitted operation storage and validates
+the recorded binding under its publication lease.
+The store does not itself run tools or restore a worker continuation.
+
+`runtime/code-cell/cell-tool-host.ts` joins fresh inner-operation admission to
+the tool adapter. It enters the existing live turn publication lease, captures
+the exact capability, and requires a source identity before admission. It gives
+the approval service the host-owned operation address. It saves the original
+tool result before returning a JSON value or failure to the cell. Equal completed
+calls reuse their receipt; unfinished calls report an unknown outcome and never
+run again. `resumeCellToolOperation` enters the selected live publication, reads
+the owned operation, and validates its saved binding with the shared replay
+policy before committing one resume attempt. It executes only that inner call
+with its saved input and identity, then stores the original result. It never
+evaluates outer cell source or restores the worker stack. Concurrent or repeated
+resume attempts cannot execute the same waiting operation twice. Initial model
+dispatch does not select this host yet. Saved turn recovery does.
+`CellToolOperationStorage.listForCell` provides the durable recovery input for
+that integration. It checks workspace, session, branch, and the admitted outer
+call. It returns all operation receipts without granting another execution.
+The branch phase is held in memory; queue storage persists the in-flight item,
+not the complete Running state. Recovery must use stored cell receipts rather
+than depend on a new field in that transient phase.
+
+`runtime/code-cell/cell-recovery.ts` builds the paired outer result after the
+branch owner has stopped cell execution. It preserves undecided approvals,
+resumes only waiting operations with saved decisions, and reuses completed
+receipts. Started or Resuming operations remain unknown; recovery does not
+execute them again. Its saved outer result reports lost worker state and lists
+completed tool results separately from unknown operations. Repeated recovery
+returns that result. This adapter has no evaluator call. Callers must not run
+recovery beside an active cell.
+
+`agent-loop.turn-execution.ts` routes admitted saved cell calls through this
+adapter before native binding replay. `CellExecutionStorage.get` reads admission
+without creating it. Unadmitted calls keep the native path. Recovery requires a
+live publication. A suspended inner operation parks the actor with the outer
+cell call ID and the original request ID. After the response, the existing turn
+worker resumes recovery. Recovered cell results join native sibling results in
+one complete transcript message; no partial message marks the step complete.
+The branch runtime context supplies the existing storage services. This does not
+add a worker, runtime owner, or model-facing cell dispatch path.
 
 Explicit platform/runtime seams:
 
@@ -414,7 +748,8 @@ Rules:
   transport projections instead of privileged `@gent/extensions` registries
 - dispatch compiles once, then runs from typed registries and explicit runtime slots
 - public snapshot schema is enforced at runtime — invalid snapshots are dropped, not passed through
-- activation/startup failures degrade the extension instead of crashing host startup
+- declaration setup and validation failures exclude the affected extension;
+  resource start failures reject the live graph publication
 - stateful side effects cross explicit typed slots (`reactions:`, resources, or
   extension-owned services), not private host imports
 
@@ -433,7 +768,14 @@ There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContri
 
 Other notes:
 
-- Lifecycle effects live on Resources as `start` / `stop`; `start` failures degrade the owning extension, remove its dependent contributions from active registries, and surface through extension health / `gent doctor`. Other extensions keep running. `stop` runs at scope teardown via Effect's per-scope LIFO finalizer ordering.
+- Lifecycle effects live on Resources as `start` / `stop`. A failed start
+  rejects publication and closes newly acquired resources. First activation
+  leaves no cache entry. A failed replacement after retirement leaves no
+  active publication; it does not restore retired authority. Validation failure
+  before retirement preserves the previous publication. A missing optional
+  provider suspends affected extensions through the resource plan.
+  Scheduler failures remain extension health diagnostics. The graph host
+  owns resource stop order and scoped cleanup.
 - Prompt shaping, input normalization, permission policy, and turn reactions are explicit runtime slots compiled from extension reactions and typed leaves, not generic middleware buckets.
 - Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`.
 - `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send.

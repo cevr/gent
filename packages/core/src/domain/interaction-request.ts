@@ -6,7 +6,7 @@
  * publishes InteractionPresented, then fails with InteractionPendingError.
  * The agent loop machine catches this and parks in WaitingForInteraction.
  *
- * When the client responds, the resolution `{ approved, notes? }` is stored
+ * When the client responds, the resolution `{ approved, notes?, editedContent? }` is stored
  * keyed by requestId. The machine resumes ExecutingTools — the tool re-calls
  * approve(), finds the stored resolution, and continues.
  *
@@ -33,6 +33,7 @@ export type ApprovalRequest = Schema.Schema.Type<typeof ApprovalRequestSchema>
 export const ApprovalDecisionSchema = Schema.Struct({
   approved: Schema.Boolean,
   notes: Schema.optional(Schema.String),
+  editedContent: Schema.optional(Schema.String),
 })
 export type ApprovalDecision = Schema.Schema.Type<typeof ApprovalDecisionSchema>
 
@@ -142,7 +143,12 @@ export const decodeInteractionDecision = (
 export interface InteractionService {
   readonly present: (
     params: ApprovalRequest,
-    ctx: { sessionId: SessionId; branchId: BranchId },
+    ctx: {
+      sessionId: SessionId
+      branchId: BranchId
+      /** Absent uses native branch replay. None starts a fresh operation. */
+      resumeRequestId?: Option.Option<InteractionRequestId>
+    },
   ) => Effect.Effect<ApprovalDecision, EventStoreError | InteractionPendingError>
   readonly pendingRequestId: (ctx: {
     sessionId: SessionId
@@ -216,9 +222,13 @@ export const makeInteractionService = (
         storedResolutions: new Map(current.storedResolutions).set(requestId, decision),
       }))
 
-    const takeStoredResolution = (ctxKey: string) =>
+    const takeStoredResolution = (ctxKey: string, selected?: Option.Option<InteractionRequestId>) =>
       Ref.modify(state, (current) => {
-        const requestId = current.pendingByContext.get(ctxKey)
+        const requestId = Option.getOrUndefined(
+          Option.getOrElse(Option.fromUndefinedOr(selected), () =>
+            Option.fromUndefinedOr(current.pendingByContext.get(ctxKey)),
+          ),
+        )
         if (Predicate.isUndefined(requestId)) return [Option.none(), current]
 
         const decision = current.storedResolutions.get(requestId)
@@ -227,7 +237,7 @@ export const makeInteractionService = (
         const storedResolutions = new Map(current.storedResolutions)
         storedResolutions.delete(requestId)
         const pendingByContext = new Map(current.pendingByContext)
-        pendingByContext.delete(ctxKey)
+        if (pendingByContext.get(ctxKey) === requestId) pendingByContext.delete(ctxKey)
 
         return [
           Option.some({ requestId, decision }),
@@ -258,7 +268,7 @@ export const makeInteractionService = (
 
       present: Effect.fn("InteractionService.present")(function* (
         params: ApprovalRequest,
-        ctx: { sessionId: SessionId; branchId: BranchId },
+        ctx: Parameters<InteractionService["present"]>[1],
       ) {
         const auto = config.autoResolve?.(params)
         if (!Predicate.isUndefined(auto)) return auto
@@ -268,12 +278,17 @@ export const makeInteractionService = (
         // was stored by requestId via storeResolution(). We find the requestId
         // through the context reverse lookup.
         const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
-        const stored = yield* takeStoredResolution(ctxKey)
+        const stored = yield* takeStoredResolution(ctxKey, ctx.resumeRequestId)
         if (Option.isSome(stored)) {
           if (!Predicate.isUndefined(config.storage)) {
             yield* config.storage.resolve(stored.value.requestId)
           }
           return stored.value.decision
+        }
+        if (Option.isSome(Option.fromUndefinedOr(ctx.resumeRequestId).pipe(Option.flatten))) {
+          return yield* new EventStoreError({
+            message: "Selected interaction decision is unavailable",
+          })
         }
 
         const requestId = InteractionRequestId.make(yield* platform.randomId)

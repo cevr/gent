@@ -12,13 +12,14 @@ import {
   type AgentEvent,
 } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
-import { ToolCallId, type BranchId, type SessionId } from "../../domain/ids.js"
+import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import { hasMessage } from "../../domain/guards.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
 import {
   normalizeResponseParts,
   projectResponsePartsToMessageParts,
+  responseUsage,
 } from "../../domain/message-part-projection.js"
 import { ProviderError } from "../../domain/provider-error.js"
 import { encodeToolOutput, summarizeOutput, stringifyOutput } from "../../domain/tool-output.js"
@@ -120,26 +121,6 @@ export const toResponseFinishReason = (stopReason: string): Response.FinishReaso
   }
 }
 
-const finishedUsage = (
-  usage: Response.FinishPart["usage"],
-): Option.Option<NonNullable<AssistantDraft["usage"]>> =>
-  Option.fromUndefinedOr(usage).pipe(
-    Option.map((value) => ({
-      inputTokens: Option.getOrElse(
-        Option.fromUndefinedOr(value.inputTokens).pipe(
-          Option.flatMap(({ total }) => Option.fromUndefinedOr(total)),
-        ),
-        () => 0,
-      ),
-      outputTokens: Option.getOrElse(
-        Option.fromUndefinedOr(value.outputTokens).pipe(
-          Option.flatMap(({ total }) => Option.fromUndefinedOr(total)),
-        ),
-        () => 0,
-      ),
-    })),
-  )
-
 export const collectNormalizedResponse = (params: {
   responseParts: ReadonlyArray<Response.AnyPart>
   streamFailed: boolean
@@ -150,7 +131,7 @@ export const collectNormalizedResponse = (params: {
   const messages = projectResponsePartsToMessageParts(normalized)
   const usageOption = normalized
     .filter((part): part is Response.FinishPart => part.type === "finish")
-    .map((part) => finishedUsage(part.usage))
+    .map((part) => responseUsage(part.usage))
     .find(Option.isSome)
   const usage = Option.fromUndefinedOr(usageOption).pipe(
     Option.flatMap((value) => value),
@@ -192,6 +173,8 @@ const isObservableModelOutputPart = (part: Response.AnyPart): boolean => {
 }
 
 export const collectModelTurnResponse = (params: {
+  messageId: MessageId
+  step: number
   turnStream: Stream.Stream<Response.AnyPart, ProviderError>
   sessionId: SessionId
   branchId: BranchId
@@ -240,7 +223,12 @@ export const collectModelTurnResponse = (params: {
             Effect.annotateLogs({ error: String(streamError) }),
           )
           yield* publishEventOrDie(
-            StreamEnded.make({ sessionId: params.sessionId, branchId: params.branchId }),
+            StreamEnded.make({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              messageId: params.messageId,
+              step: params.step,
+            }),
           )
           yield* publishEventOrDie(
             ErrorOccurred.make({
@@ -264,6 +252,8 @@ export const collectModelTurnResponse = (params: {
   })
 
 export const collectFailedModelTurnResponse = (params: {
+  messageId: MessageId
+  step: number
   streamError: ProviderError
   sessionId: SessionId
   branchId: BranchId
@@ -277,7 +267,12 @@ export const collectFailedModelTurnResponse = (params: {
         Effect.annotateLogs({ error: String(params.streamError) }),
       )
       yield* publishEventOrDie(
-        StreamEnded.make({ sessionId: params.sessionId, branchId: params.branchId }),
+        StreamEnded.make({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          messageId: params.messageId,
+          step: params.step,
+        }),
       )
       yield* publishEventOrDie(
         ErrorOccurred.make({
@@ -379,6 +374,8 @@ const collectExternalResponsePart = (params: {
 }
 
 export const collectExternalTurnResponse = <R>(params: {
+  messageId: MessageId
+  step: number
   turnStream: Stream.Stream<Response.AnyPart, TurnError | InteractionPendingError, R>
   sessionId: SessionId
   branchId: BranchId
@@ -419,7 +416,12 @@ export const collectExternalTurnResponse = <R>(params: {
             Effect.annotateLogs({ error: String(streamError) }),
           )
           yield* publishEventOrDie(
-            StreamEnded.make({ sessionId: params.sessionId, branchId: params.branchId }),
+            StreamEnded.make({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              messageId: params.messageId,
+              step: params.step,
+            }),
           )
           yield* publishEventOrDie(
             ErrorOccurred.make({

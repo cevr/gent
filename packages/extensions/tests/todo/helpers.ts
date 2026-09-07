@@ -26,7 +26,7 @@ const causeMessage = (cause: unknown) => {
   return String(cause)
 }
 
-const mockRunnerSuccess: AgentRunner = {
+const mockRunnerSuccess: Pick<AgentRunner, "run"> = {
   run: (params) =>
     Effect.succeed(
       AgentRunResult.cases.success.make({

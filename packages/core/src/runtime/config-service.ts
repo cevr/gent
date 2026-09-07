@@ -19,6 +19,7 @@ import { RuntimeEnvironment } from "./runtime-environment.js"
 export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
   permissions: Schema.optional(Schema.Array(PermissionRule)),
   disabledExtensions: Schema.optional(Schema.Array(Schema.String)),
+  trustedProjects: Schema.optional(Schema.Array(Schema.String)),
   /**
    * Per-agent driver routing overrides. Keyed by agent name; the value is
    * a `DriverRef` (model or external). Project config shadows user config
@@ -36,6 +37,7 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
  * Merge user + project configs. Per-field semantics:
  *   - permissions: concatenated (project first, then user — historical order).
  *   - disabledExtensions: concatenated (user first — historical order).
+ *   - trustedProjects: user config only; project config cannot grant trust.
  *   - driverOverrides: object spread; project entries shadow user entries
  *     key-by-key. Idempotent set/clear is the load-bearing property —
  *     `Record<agent, DriverRef>` (vs `Array`) means `driver.set` / `clear`
@@ -73,7 +75,12 @@ const mergeConfigsImpl = (user: UserConfig, project: UserConfig): UserConfig => 
   if (disabledExtensions.length > 0) mergedDisabledExtensions = Option.some(disabledExtensions)
   let mergedDriverOverrides = Option.none<Readonly<Record<AgentName, DriverRef>>>()
   if (Object.keys(driverOverrides).length > 0) mergedDriverOverrides = Option.some(driverOverrides)
-  return userConfigFromOptions(mergedPermissions, mergedDisabledExtensions, mergedDriverOverrides)
+  return userConfigFromOptions(
+    mergedPermissions,
+    mergedDisabledExtensions,
+    mergedDriverOverrides,
+    Option.fromUndefinedOr(user.trustedProjects),
+  )
 }
 
 const selectConfigField = <A>(partial?: A, current?: A): Option.Option<A> =>
@@ -86,6 +93,7 @@ const userConfigFromOptions = (
   permissions: Option.Option<ReadonlyArray<PermissionRule>>,
   disabledExtensions: Option.Option<ReadonlyArray<string>>,
   driverOverrides: Option.Option<Readonly<Record<AgentName, DriverRef>>>,
+  trustedProjects: Option.Option<ReadonlyArray<string>>,
 ): UserConfig => {
   const config = Object.assign(
     {},
@@ -100,6 +108,10 @@ const userConfigFromOptions = (
     Option.match(driverOverrides, {
       onNone: () => ({}),
       onSome: (value) => ({ driverOverrides: value }),
+    }),
+    Option.match(trustedProjects, {
+      onNone: () => ({}),
+      onSome: (value) => ({ trustedProjects: value }),
     }),
   )
   return new UserConfig(config)
@@ -319,6 +331,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
               selectConfigField(partial.permissions, current.permissions),
               selectConfigField(partial.disabledExtensions, current.disabledExtensions),
               selectConfigField(partial.driverOverrides, current.driverOverrides),
+              selectConfigField(partial.trustedProjects, current.trustedProjects),
             )
             return { updated, save: true }
           })
@@ -335,6 +348,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
               Option.some(permissions),
               Option.fromUndefinedOr(current.disabledExtensions),
               Option.fromUndefinedOr(current.driverOverrides),
+              Option.fromUndefinedOr(current.trustedProjects),
             )
             return { updated, save: true }
           })
@@ -356,6 +370,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
                 nextPermissions,
                 Option.fromUndefinedOr(current.disabledExtensions),
                 Option.fromUndefinedOr(current.driverOverrides),
+                Option.fromUndefinedOr(current.trustedProjects),
               )
               return { updated, save: true }
             })
@@ -373,6 +388,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
               Option.fromUndefinedOr(current.permissions),
               Option.fromUndefinedOr(current.disabledExtensions),
               Option.some(driverOverrides),
+              Option.fromUndefinedOr(current.trustedProjects),
             )
             return { updated, save: true }
           })
@@ -395,6 +411,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
               Option.fromUndefinedOr(current.permissions),
               Option.fromUndefinedOr(current.disabledExtensions),
               nextOverrides,
+              Option.fromUndefinedOr(current.trustedProjects),
             )
             return { updated, save: true }
           })
@@ -480,6 +497,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
                 selectConfigField(partial.permissions, current.permissions),
                 selectConfigField(partial.disabledExtensions, current.disabledExtensions),
                 selectConfigField(partial.driverOverrides, current.driverOverrides),
+                selectConfigField(partial.trustedProjects, current.trustedProjects),
               ),
             ),
           addPermissionRule: (rule) =>
@@ -493,6 +511,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
                 Option.some(permissions),
                 Option.fromUndefinedOr(current.disabledExtensions),
                 Option.fromUndefinedOr(current.driverOverrides),
+                Option.fromUndefinedOr(current.trustedProjects),
               )
             }).pipe(Effect.asVoid),
           removePermissionRule: (tool, pattern) =>
@@ -510,6 +529,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
                 nextPermissions,
                 Option.fromUndefinedOr(current.disabledExtensions),
                 Option.fromUndefinedOr(current.driverOverrides),
+                Option.fromUndefinedOr(current.trustedProjects),
               )
             }).pipe(Effect.asVoid),
           setDriverOverride: (agent, driver) =>
@@ -523,6 +543,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
                 Option.fromUndefinedOr(current.permissions),
                 Option.fromUndefinedOr(current.disabledExtensions),
                 Option.some(driverOverrides),
+                Option.fromUndefinedOr(current.trustedProjects),
               )
             }).pipe(Effect.asVoid),
           clearDriverOverride: (agent) =>
@@ -540,6 +561,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
                 Option.fromUndefinedOr(current.permissions),
                 Option.fromUndefinedOr(current.disabledExtensions),
                 nextOverrides,
+                Option.fromUndefinedOr(current.trustedProjects),
               )
             }).pipe(Effect.asVoid),
           loadInstructions: () => Effect.succeed(""),

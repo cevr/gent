@@ -260,6 +260,10 @@ export const HostAgentRunnerRef = Context.Reference<AgentRunner>(
   "@gent/core/src/runtime/make-extension-host-context/HostAgentRunnerRef",
   {
     defaultValue: () => ({
+      start: unavailable("AgentRunnerService"),
+      inspect: unavailable("AgentRunnerService"),
+      wait: unavailable("AgentRunnerService"),
+      cancel: unavailable("AgentRunnerService"),
       run: unavailable("AgentRunnerService"),
     }),
   },
@@ -475,6 +479,32 @@ const makeExtensionHostContext = (
 
     agent: {
       listAgents: () => Effect.succeed([...deps.extensionRegistry.getResolved().agents.values()]),
+      start: (params) =>
+        deps.agentRunner.start({
+          ...params,
+          parentSessionId: runInfo.sessionId,
+          parentBranchId: runInfo.branchId,
+          cwd: params.cwd ?? runInfo.sessionCwd ?? deps.platform.cwd,
+        }),
+      inspect: (params) =>
+        deps.agentRunner.inspect({
+          requestId: params.requestId,
+          parentSessionId: runInfo.sessionId,
+          parentBranchId: runInfo.branchId,
+        }),
+      wait: (params) =>
+        deps.agentRunner.wait({
+          requestId: params.requestId,
+          waitMs: params.waitMs,
+          parentSessionId: runInfo.sessionId,
+          parentBranchId: runInfo.branchId,
+        }),
+      cancel: (params) =>
+        deps.agentRunner.cancel({
+          requestId: params.requestId,
+          parentSessionId: runInfo.sessionId,
+          parentBranchId: runInfo.branchId,
+        }),
       run: (params) =>
         deps.agentRunner.run({
           agent: params.agent,

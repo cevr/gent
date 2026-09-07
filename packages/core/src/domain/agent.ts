@@ -1,7 +1,8 @@
-import { Context, Effect, Predicate, Schema } from "effect"
+import { Context, Effect, Predicate, Schema, type Cause, type Option } from "effect"
 import type * as EffectNs from "effect/Effect"
 import { branded, SessionId, ToolCallId } from "./ids.js"
-import type { BranchId } from "./ids.js"
+import type { BranchId, RequestId } from "./ids.js"
+import type { TurnCompleted } from "./event.js"
 import { ModelId } from "./model"
 
 // Agent definitions
@@ -225,10 +226,14 @@ export const resolveRunPersistence = (runSpec?: RunSpec): AgentPersistence =>
 
 /**
  * Maximum session nesting depth for agent-run spawns. Derived from the persisted
- * parent chain (includes both subagent spawns and handoff sessions). A depth of 3
- * means root → child → grandchild → great-grandchild is blocked.
+ * parent chain (includes both subagent spawns and handoff sessions). Root depth
+ * is 0. A session at depth 3 cannot create another child.
  */
 export const DEFAULT_MAX_AGENT_RUN_DEPTH = 3
+/** Maximum unfinished durable start receipts owned by one parent branch. */
+export const DEFAULT_MAX_PENDING_AGENT_STARTS = 4
+/** Durable native-model resolution attempts per admitted child session. */
+export const DEFAULT_MAX_CHILD_MODEL_ATTEMPTS = 32
 
 // Agent runner types
 
@@ -278,6 +283,37 @@ export class AgentRunError extends Schema.TaggedError<AgentRunError>()("AgentRun
 }) {}
 
 export interface AgentRunner {
+  /** Admit one durable child. Reuse requestId only with identical input. */
+  readonly start: (params: {
+    agent: AgentDefinition
+    prompt: string
+    parentSessionId: SessionId
+    parentBranchId: BranchId
+    cwd: string
+    requestId: RequestId
+    toolCallId: ToolCallId
+    runSpec?: RunSpec
+  }) => EffectNs.Effect<{ sessionId: SessionId; branchId: BranchId }, AgentRunError>
+  /** Missing completion is unknown, not proof of a running child. */
+  readonly inspect: (params: {
+    requestId: RequestId
+    parentSessionId: SessionId
+    parentBranchId: BranchId
+  }) => EffectNs.Effect<
+    { sessionId: SessionId; branchId: BranchId; completion: Option.Option<TurnCompleted> },
+    AgentRunError
+  >
+  /** Timeout stops the waiter, not the child. */
+  readonly wait: (
+    params: Parameters<AgentRunner["inspect"]>[0] & { waitMs: number },
+  ) => EffectNs.Effect<
+    EffectNs.Success<ReturnType<AgentRunner["inspect"]>>,
+    AgentRunError | Cause.TimeoutError
+  >
+  /** Submit cancellation for the admitted turn only. Use wait for completion. */
+  readonly cancel: (
+    params: Parameters<AgentRunner["inspect"]>[0],
+  ) => EffectNs.Effect<void, AgentRunError>
   readonly run: (params: {
     agent: AgentDefinition
     prompt: string

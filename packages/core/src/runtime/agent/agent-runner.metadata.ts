@@ -42,15 +42,15 @@ interface ChildMetadata {
 }
 
 interface ChildMetadataAccumulator {
-  input: number
-  output: number
+  usage: Option.Option<{ input: number; output: number }>
+  sawStream: boolean
   started: Map<string, Pick<AgentRunToolCall, "toolName" | "args">>
   toolCalls: AgentRunToolCall[]
 }
 
 const createChildMetadataAccumulator = (): ChildMetadataAccumulator => ({
-  input: 0,
-  output: 0,
+  usage: Option.some({ input: 0, output: 0 }),
+  sawStream: false,
   started: new Map(),
   toolCalls: [],
 })
@@ -72,9 +72,23 @@ const appendFinishedToolCall = (
 const applyChildMetadataEnvelope = (state: ChildMetadataAccumulator, env: EventEnvelope) =>
   Match.value(env.event).pipe(
     Match.tag("StreamEnded", ({ usage }) => {
-      if (Predicate.isNotUndefined(usage)) {
-        state.input += usage.inputTokens
-        state.output += usage.outputTokens
+      state.sawStream = true
+      if (Option.isNone(state.usage)) return
+      if (
+        Predicate.isUndefined(usage) ||
+        !Number.isSafeInteger(usage.inputTokens) ||
+        !Number.isSafeInteger(usage.outputTokens) ||
+        usage.inputTokens < 0 ||
+        usage.outputTokens < 0
+      ) {
+        state.usage = Option.none()
+        return
+      }
+      const input = state.usage.value.input + usage.inputTokens
+      const output = state.usage.value.output + usage.outputTokens
+      state.usage = Option.none()
+      if (Number.isSafeInteger(input) && Number.isSafeInteger(output)) {
+        state.usage = Option.some({ input, output })
       }
     }),
     Match.tag("ToolCallStarted", (event) => {
@@ -94,8 +108,8 @@ const applyChildMetadataEnvelope = (state: ChildMetadataAccumulator, env: EventE
 
 const finalizeChildMetadata = (state: ChildMetadataAccumulator): ChildMetadata => {
   const metadata: ChildMetadata = {}
-  if (state.input > 0 || state.output > 0) {
-    metadata.usage = { input: state.input, output: state.output }
+  if (state.sawStream && Option.isSome(state.usage)) {
+    metadata.usage = state.usage.value
   }
   if (state.toolCalls.length > 0) metadata.toolCalls = state.toolCalls
   return metadata
@@ -112,10 +126,10 @@ const latestAssistantContent = (messages: ReadonlyArray<Message>) => {
   return { text: "", reasoning: "" }
 }
 
-const collectChildMetadata = (sessionId: SessionId) =>
+const collectChildMetadata = (sessionId: SessionId, branchId: BranchId) =>
   Effect.gen(function* () {
     const eventStorage = yield* EventStorage
-    return yield* eventStorage.listEvents({ sessionId }).pipe(
+    return yield* eventStorage.listEvents({ sessionId, branchId }).pipe(
       Effect.map((envelopes) => {
         const state = createChildMetadataAccumulator()
         for (const env of envelopes) applyChildMetadataEnvelope(state, env)
@@ -140,7 +154,7 @@ export const loadAgentRunSuccessData = (params: {
     const messageStorage = yield* MessageStorage
     const messages = yield* messageStorage.listMessages(params.branchId)
     const { text, reasoning } = latestAssistantContent(messages)
-    const meta = yield* collectChildMetadata(params.sessionId)
+    const meta = yield* collectChildMetadata(params.sessionId, params.branchId)
     let responseText = text
     if (responseText.length === 0) responseText = reasoning
     const success = AgentRunResult.cases.success.make({

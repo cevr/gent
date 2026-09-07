@@ -1,8 +1,24 @@
-import { Option } from "effect"
+import { Option, Predicate } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
 import { responseFilePartToImagePart } from "./message-image-conversion.js"
 import { normalizeResponseParts } from "./response-part-normalization.js"
+import type { Usage } from "./event.js"
+
+export const responseUsage = (usage: Response.FinishPart["usage"]): Option.Option<Usage> => {
+  const inputTokens = usage?.inputTokens?.total
+  const outputTokens = usage?.outputTokens?.total
+  if (
+    Predicate.isUndefined(inputTokens) ||
+    Predicate.isUndefined(outputTokens) ||
+    !Number.isSafeInteger(inputTokens) ||
+    !Number.isSafeInteger(outputTokens) ||
+    inputTokens < 0 ||
+    outputTokens < 0
+  )
+    return Option.none()
+  return Option.some({ inputTokens, outputTokens })
+}
 
 export interface MessagePartProjection {
   readonly assistant: ReadonlyArray<

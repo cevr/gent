@@ -1,0 +1,287 @@
+import {
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  FileSystem,
+  Option,
+  Path,
+  Schema,
+  Scope,
+  Semaphore,
+  Stream,
+} from "effect"
+import { ChildProcessSpawner } from "effect/unstable/process"
+import { InteractionPendingError } from "../../domain/interaction-request.js"
+import { ToolCallId } from "../../domain/ids.js"
+import { CellProcessError, openMacosCellProcess } from "./cell-process.js"
+import {
+  CellEvaluationError,
+  CellRequest,
+  type CellResponse,
+  maximumCallsPerCell,
+  maximumCellSourceLength,
+  maximumPendingCellCalls,
+} from "./cell-protocol.js"
+
+/** Supplied by the caller for each evaluation, never retained in the worker. */
+export class CellOperationHost extends Context.Service<
+  CellOperationHost,
+  {
+    readonly call: (
+      request: Extract<CellResponse, { _tag: "HostCall" }>,
+    ) => Effect.Effect<Schema.Json, CellEvaluationError | CellToolCallSuspended>
+  }
+>()("@gent/core/src/runtime/code-cell/cell-kernel/CellOperationHost") {}
+
+/** Host control signal. It must never become a catchable error inside cell code. */
+export class CellToolCallSuspended extends Schema.TaggedError<CellToolCallSuspended>()(
+  "CellToolCallSuspended",
+  {
+    operationId: Schema.NonEmptyString,
+    toolCallId: ToolCallId,
+    pending: InteractionPendingError,
+  },
+) {}
+
+export class CellKernelError extends Schema.TaggedError<CellKernelError>()("CellKernelError", {
+  reason: Schema.Literals([
+    "timeout",
+    "cancelled",
+    "protocol",
+    "process",
+    "closed",
+    "recovery-required",
+    "replacement-limit",
+  ]),
+  message: Schema.String,
+  diagnostics: Schema.String,
+  stateLost: Schema.Literal(true),
+}) {}
+
+const KernelStatus = Schema.Literals(["ready", "lost", "closed"])
+
+/** One worker at a time. Only explicit reset can replace a failed worker. */
+export const openMacosCellKernel = Effect.fn("CellKernel.openMacos")(function* (input: {
+  readonly binaryPath: string
+  readonly workerPath: string
+  readonly readinessTimeoutMs?: number
+  readonly evaluationTimeoutMs?: number
+  readonly maximumReplacements?: number
+}) {
+  const timeoutMs = input.evaluationTimeoutMs ?? 30000
+  const maximumReplacements = input.maximumReplacements ?? 3
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    return yield* new CellProcessError({
+      phase: "launch",
+      message: "Cell evaluation timeout must be a positive integer",
+      diagnostics: "",
+    })
+  }
+  if (!Number.isSafeInteger(maximumReplacements) || maximumReplacements < 0) {
+    return yield* new CellProcessError({
+      phase: "launch",
+      message: "Cell replacement limit must be a non-negative integer",
+      diagnostics: "",
+    })
+  }
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const ownerScope = yield* Scope.fork(yield* Effect.scope)
+  let status: typeof KernelStatus.Type = "lost"
+  yield* Scope.addFinalizer(
+    ownerScope,
+    Effect.sync(() => {
+      status = "closed"
+    }),
+  )
+  const openWorker = Effect.fn("CellKernel.openWorker")(() =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const scope = yield* Scope.fork(ownerScope)
+        const dispose = Scope.close(scope, Exit.void)
+        const process = yield* restore(
+          openMacosCellProcess(input).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.provideService(Path.Path, path),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Scope.provide(scope),
+            Effect.tap((child) => child.responses.pipe(Stream.runHead)),
+          ),
+        ).pipe(Effect.onError(() => dispose))
+        return { ...process, dispose }
+      }),
+    ),
+  )
+  let child = yield* openWorker().pipe(Effect.onError(() => Scope.close(ownerScope, Exit.void)))
+  status = "ready"
+  const permit = yield* Semaphore.make(1)
+  const shutdown = yield* Deferred.make<never, CellKernelError>()
+  let replacements = 0
+  let sequence = 0
+  const isClosed = () => status === "closed"
+  const failure = (reason: CellKernelError["reason"], message: string) =>
+    Effect.map(
+      child.diagnostics,
+      (diagnostics) => new CellKernelError({ reason, message, diagnostics, stateLost: true }),
+    ).pipe(Effect.flatMap(Effect.fail))
+  const processError = (error: CellProcessError) =>
+    new CellKernelError({
+      reason: "process",
+      message: error.message,
+      diagnostics: error.diagnostics,
+      stateLost: true,
+    })
+  const close = Effect.fn("CellKernel.close")(function* () {
+    status = "closed"
+    yield* Deferred.fail(
+      shutdown,
+      new CellKernelError({
+        reason: "closed",
+        message: "Cell kernel is closed",
+        diagnostics: yield* child.diagnostics,
+        stateLost: true,
+      }),
+    )
+    yield* Semaphore.withPermit(permit, Scope.close(ownerScope, Exit.void))
+  })
+  const discard = Effect.fn("CellKernel.discard")(function* () {
+    if (status !== "closed") status = "lost"
+    yield* child.stop.pipe(Effect.ensuring(child.dispose))
+  })
+  const deadline = {
+    duration: timeoutMs,
+    orElse: () => failure("timeout", "Cell deadline exceeded; working state was lost"),
+  }
+
+  const evaluate = Effect.fn("CellKernel.evaluate")(function* (source: string) {
+    if (status === "closed") return yield* failure("closed", "Cell kernel is closed")
+    if (status === "lost") {
+      return yield* failure("recovery-required", "Working state was lost; reset before evaluating")
+    }
+    if (source.length > maximumCellSourceLength) {
+      return yield* new CellEvaluationError({
+        phase: "source",
+        message: "Cell source exceeds the length limit",
+        output: "",
+      })
+    }
+    const host = yield* CellOperationHost
+    const cellId = String(++sequence)
+    const response = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const result = yield* Deferred.make<
+          Extract<CellResponse, { _tag: "Evaluated" | "Failed" }>,
+          CellKernelError | CellToolCallSuspended
+        >()
+        const seen = new Set<string>()
+        const pending = new Set<string>()
+        const receive = Effect.fn("CellKernel.receive")(function* (frame: CellResponse) {
+          if (frame._tag === "Ready" || frame._tag === "Reset" || frame.cellId !== cellId) {
+            return yield* failure("protocol", "Unexpected cell response")
+          }
+          if (frame._tag === "HostCall") {
+            if (
+              seen.has(frame.operationId) ||
+              seen.size >= maximumCallsPerCell ||
+              pending.size >= maximumPendingCellCalls
+            ) {
+              return yield* failure("protocol", "Duplicate or excessive cell host call")
+            }
+            seen.add(frame.operationId)
+            pending.add(frame.operationId)
+            yield* host.call(frame).pipe(
+              Effect.map((value) =>
+                CellRequest.cases.HostSucceeded.make({
+                  cellId,
+                  operationId: frame.operationId,
+                  value,
+                }),
+              ),
+              Effect.catchTag("CellEvaluationError", (error) =>
+                Effect.succeed(
+                  CellRequest.cases.HostFailed.make({
+                    cellId,
+                    operationId: frame.operationId,
+                    message: error.message,
+                  }),
+                ),
+              ),
+              Effect.flatMap((reply) => {
+                pending.delete(frame.operationId)
+                return child.send(reply).pipe(Effect.mapError(processError))
+              }),
+              Effect.catchCause((cause) => Deferred.failCause(result, cause)),
+              Effect.forkScoped,
+            )
+            return
+          }
+          if (pending.size > 0) {
+            return yield* failure("protocol", "Cell ended with pending host operations")
+          }
+          yield* Deferred.succeed(result, frame)
+        })
+        yield* child.responses.pipe(
+          Stream.mapError(processError),
+          Stream.runForEach(receive),
+          Effect.catchCause((cause) => Deferred.failCause(result, cause)),
+          Effect.forkScoped,
+        )
+        yield* child
+          .send(CellRequest.cases.Evaluate.make({ cellId, source }))
+          .pipe(Effect.mapError(processError))
+        return yield* Deferred.await(result)
+      }),
+    ).pipe(
+      Effect.timeoutOrElse(deadline),
+      Effect.onError(() => discard().pipe(Effect.orDie)),
+    )
+    if (response._tag === "Failed") return yield* response.error
+    return response.result
+  })
+
+  const reset = Effect.fn("CellKernel.reset")(function* () {
+    if (status === "closed") return yield* failure("closed", "Cell kernel is closed")
+    if (status === "lost") {
+      if (replacements >= maximumReplacements) {
+        return yield* failure("replacement-limit", "Cell worker replacement limit reached")
+      }
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          replacements++
+          child = yield* restore(openWorker()).pipe(Effect.mapError(processError))
+          // close can run while the replacement is starting. Never restore a closed owner.
+          if (isClosed()) return yield* failure("closed", "Cell kernel closed during replacement")
+          status = "ready"
+        }),
+      )
+    }
+    const requestId = String(++sequence)
+    yield* Effect.gen(function* () {
+      yield* child.send(CellRequest.cases.Reset.make({ requestId }))
+      const response = yield* child.responses.pipe(Stream.runHead)
+      if (
+        Option.isNone(response) ||
+        response.value._tag !== "Reset" ||
+        response.value.requestId !== requestId
+      ) {
+        return yield* failure("protocol", "Unexpected cell reset response")
+      }
+    }).pipe(
+      Effect.catchTag("CellProcessError", (error) => Effect.fail(processError(error))),
+      Effect.timeoutOrElse(deadline),
+      Effect.onError(() => discard().pipe(Effect.orDie)),
+    )
+  })
+
+  return {
+    evaluate: (source: string) =>
+      Semaphore.withPermit(
+        permit,
+        evaluate(source).pipe(Effect.raceFirst(Deferred.await(shutdown))),
+      ),
+    reset: Semaphore.withPermit(permit, reset().pipe(Effect.raceFirst(Deferred.await(shutdown)))),
+    close: close().pipe(Effect.uninterruptible),
+  }
+})

@@ -53,8 +53,8 @@ describe("E2E: Basics", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
-        expect(stripAnsi(ctx.output)).toContain("❯")
+        yield* waitForOutput(ctx, "┃", 10_000)
+        expect(stripAnsi(ctx.output)).toContain("┃")
       }),
     TEST_TIMEOUT,
   )
@@ -64,7 +64,7 @@ describe("E2E: Basics", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         const before = ctx.output.length
         ctx.pty.write("hello world")
         yield* shortPause(1_000)
@@ -79,7 +79,7 @@ describe("E2E: Basics", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         ctx.pty.write(ESC)
         yield* shortPause(ESC_KEY_DECODE_MS)
         ctx.pty.write(ESC)
@@ -96,8 +96,8 @@ describe("E2E: Auth", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(spawnNoAuth)
-        yield* ptyWaitFor(ctx.pty, "API Keys", { timeout: 10_000 })
-        yield* ptyWaitFor(ctx.pty, "Claude Code", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "API Keys", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "Claude Code", { timeout: 10_000 })
         yield* waitForOutput(ctx, "Manually enter API key", 10_000)
         expect(ctx.output).toContain("API Keys")
       }),
@@ -109,12 +109,12 @@ describe("E2E: Auth", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(spawnNoAuth)
-        yield* ptyWaitFor(ctx.pty, "API Keys", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "API Keys", { timeout: 10_000 })
         yield* shortPause(750)
         ctx.pty.write(DOWN)
         yield* shortPause(200)
         ctx.pty.write(ENTER)
-        yield* ptyWaitFor(ctx.pty, "(type key)", { timeout: 5_000 })
+        yield* ptyWaitFor(ctx, "(type key)", { timeout: 5_000 })
       }),
     TEST_TIMEOUT,
   )
@@ -126,9 +126,9 @@ describe("E2E: Slash Commands", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         ctx.pty.write("/")
-        yield* ptyWaitFor(ctx.pty, "Commands", { timeout: 5_000 })
+        yield* ptyWaitFor(ctx, "Commands", { timeout: 5_000 })
         yield* waitForOutput(ctx, "/new", 5_000)
         ctx.pty.write(ESC)
       }),
@@ -142,12 +142,12 @@ describe("E2E: Shell Mode", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         ctx.pty.write("!")
-        yield* ptyWaitFor(ctx.pty, "$", { timeout: 5_000 })
+        yield* ptyWaitFor(ctx, "$", { timeout: 5_000 })
         ctx.pty.write("echo zigpty-e2e")
         ctx.pty.write(ENTER)
-        yield* ptyWaitFor(ctx.pty, "zigpty-e2e", { timeout: 5_000 })
+        yield* ptyWaitFor(ctx, "zigpty-e2e", { timeout: 5_000 })
         ctx.pty.write(ESC)
       }),
     TEST_TIMEOUT,
@@ -158,16 +158,16 @@ describe("E2E: Shell Mode", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         ctx.pty.write("!")
-        yield* ptyWaitFor(ctx.pty, "$", { timeout: 5_000 })
+        yield* ptyWaitFor(ctx, "$", { timeout: 5_000 })
         ctx.pty.write("echo first-cmd")
         ctx.pty.write(ENTER)
-        yield* ptyWaitFor(ctx.pty, "first-cmd", { timeout: 5_000 })
+        yield* ptyWaitFor(ctx, "first-cmd", { timeout: 5_000 })
         yield* shortPause(500)
         ctx.pty.write("echo second-cmd")
         ctx.pty.write(ENTER)
-        yield* ptyWaitFor(ctx.pty, "second-cmd", { timeout: 5_000 })
+        yield* ptyWaitFor(ctx, "second-cmd", { timeout: 5_000 })
         ctx.pty.write(ESC)
       }),
     TEST_TIMEOUT,
@@ -180,7 +180,7 @@ describe("E2E: Session", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         ctx.pty.write("hi")
         yield* shortPause(300)
         ctx.pty.write(ENTER)
@@ -197,7 +197,7 @@ describe("E2E: Session", () => {
       Effect.gen(function* () {
         yield* resetClientLog
         const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         ctx.pty.write("hi")
         yield* shortPause(300)
         ctx.pty.write(ENTER)
@@ -233,10 +233,10 @@ describe("E2E: Prompt History", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         ctx.pty.write(UP)
         yield* shortPause(500)
-        expect(stripAnsi(ctx.output)).toContain("❯")
+        expect(stripAnsi(ctx.output)).toContain("┃")
       }),
     TEST_TIMEOUT,
   )
@@ -246,7 +246,7 @@ describe("E2E: Prompt History", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         ctx.pty.write("some text")
         yield* shortPause(500)
         ctx.pty.write(UP)
@@ -263,10 +263,10 @@ describe("E2E: Skill Popup", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(seedSkillAndSpawn)
-        yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         yield* shortPause(2_000)
         ctx.pty.write("$t")
-        yield* ptyWaitFor(ctx.pty, "Skills", { timeout: 5_000 })
+        yield* ptyWaitFor(ctx, "Skills", { timeout: 5_000 })
         const clean = stripAnsi(ctx.output)
         expect(clean).toContain("Skills")
         ctx.pty.write(ESC)
@@ -279,13 +279,13 @@ describe("E2E: Skill Popup", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(seedSkillAndSpawn)
-        yield* ptyWaitFor(ctx.pty, "❯", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         yield* shortPause(2_000)
         ctx.pty.write("$t")
-        yield* ptyWaitFor(ctx.pty, "Skills", { timeout: 5_000 })
+        yield* ptyWaitFor(ctx, "Skills", { timeout: 5_000 })
         ctx.pty.write(ESC)
         yield* shortPause(500)
-        expect(stripAnsi(ctx.output)).toContain("❯")
+        expect(stripAnsi(ctx.output)).toContain("┃")
       }),
     TEST_TIMEOUT,
   )

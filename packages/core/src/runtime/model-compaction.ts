@@ -4,7 +4,8 @@ import type { LanguageModel } from "effect/unstable/ai"
 import * as AiError from "effect/unstable/ai/AiError"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
-import type { EventStoreError } from "../domain/event.js"
+import { UsageSchema, type Usage, type EventStoreError } from "../domain/event.js"
+import { responseUsage } from "../domain/response-to-prompt.js"
 import type { ProviderAuthError } from "../domain/driver.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { Message } from "../domain/message.js"
@@ -41,6 +42,8 @@ const SUMMARY_CONTENT_MAX_TOKENS =
 export const ModelCompactionDetails = Schema.TaggedStruct("model-compaction", {
   sourceMessageIds: Schema.Array(MessageId),
   sourceRevision: Schema.NonEmptyString,
+  modelId: Schema.optional(ModelId),
+  usage: Schema.optional(UsageSchema),
 })
 export type ModelCompactionDetails = typeof ModelCompactionDetails.Type
 
@@ -250,6 +253,8 @@ const summaryPromptText = (messages: ReadonlyArray<Message>): string =>
   `${SUMMARY_USER_PREFIX}${formatConversation(messages)}`
 
 const summaryMessage = (params: {
+  readonly modelId: ModelId
+  readonly usage: Option.Option<Usage>
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly sourceMessages: ReadonlyArray<Message>
@@ -272,6 +277,8 @@ const summaryMessage = (params: {
       details: ModelCompactionDetails.make({
         sourceMessageIds: params.sourceMessages.map((message) => message.id),
         sourceRevision: params.revision,
+        modelId: params.modelId,
+        usage: Option.getOrUndefined(params.usage),
       }),
     },
     createdAt: params.createdAt,
@@ -298,12 +305,14 @@ const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
     createdAt: yield* DateTime.nowAsDate,
   })
   const text: Array<string> = []
+  let usage = Option.none<Usage>()
   yield* Effect.scoped(
     Stream.runForEach(
       params.model.streamText({
         prompt: toPrompt([input], { systemPrompt: SUMMARY_SYSTEM_PROMPT }),
       }),
       (part: Response.AnyPart) => {
+        if (part.type === "finish") usage = responseUsage(part.usage)
         if (part.type !== "text-delta") return Effect.void
         text.push(part.delta)
         const estimatedTokens = estimateTextTokens(text.join(""))
@@ -330,7 +339,7 @@ const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
   if (result.length === 0) {
     return yield* Effect.fail(ModelCompactionFailure.cases.SummaryEmpty.make({}))
   }
-  return result
+  return { text: result, usage }
 })
 
 const projectionFailure = (modelId: ModelId, failure: ModelContextError) =>
@@ -627,7 +636,7 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
     }
     const sourceMessages = sourceOption.value
     const revision = sourceRevision(hash, sourceMessages)
-    const summaryTextValue = yield* params.summaryModel.pipe(
+    const summaryResult = yield* params.summaryModel.pipe(
       Effect.mapError((error) =>
         compactionFailure(
           params.modelId,
@@ -644,11 +653,13 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
     )
 
     const generatedSummary = summaryMessage({
+      modelId: params.modelId,
+      usage: summaryResult.usage,
       sessionId: params.sessionId,
       branchId: params.branchId,
       sourceMessages,
       revision,
-      text: summaryTextValue,
+      text: summaryResult.text,
       createdAt: yield* DateTime.nowAsDate,
     })
     const currentMessages = yield* messageStorage.listMessages(params.branchId)

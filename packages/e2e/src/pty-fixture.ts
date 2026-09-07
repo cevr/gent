@@ -1,4 +1,4 @@
-import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures"
+import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { Clock, Config, Effect, Option } from "effect"
 import { spawn, type IPty } from "zigpty"
 import { seedAuthBoundary } from "./auth-seed-boundary"
@@ -133,23 +133,15 @@ export const seedSkillAndSpawn = Effect.gen(function* () {
   return spawnWithDir(tempDir, [], { HOME: fakeHome })
 })
 
-export const ptyWaitFor = (
-  pty: IPty,
-  text: string,
-  opts: { timeout: number },
-): Effect.Effect<void> => Effect.promise(() => pty.waitFor(text, opts))
+export const ptyWaitFor = (ctx: TestContext, text: string, opts: { timeout: number }) =>
+  waitFor(
+    Effect.sync(() => stripAnsi(ctx.output)),
+    (output) => output.includes(text),
+    opts.timeout,
+    `PTY output "${text}"`,
+  ).pipe(Effect.asVoid)
 
 // gent/no-sleep: allow PTY fixture primitive — deliberate OS-level pause for terminal redraw cycles
 export const shortPause = (ms: number): Effect.Effect<void> => Effect.sleep(`${ms} millis`)
 
-const escape = "\\u001b"
-const bell = "\\u0007"
-
-export const stripAnsi = (str: string): string =>
-  str
-    .replace(new RegExp(`${escape}\\[[0-9;]*[a-zA-Z]`, "g"), "")
-    .replace(new RegExp(`${escape}\\[[0-9;]*m`, "g"), "")
-    .replace(new RegExp(`${escape}\\[\\?[0-9;]*[a-zA-Z$]`, "g"), "")
-    .replace(new RegExp(`${escape}\\][^${bell}]*${bell}`, "g"), "")
-    .replace(new RegExp(`${escape}\\[>[0-9]*[a-zA-Z]`, "g"), "")
-    .replace(new RegExp(`${escape}\\[[0-9]*"`, "g"), "")
+export const stripAnsi = (str: string): string => Bun.stripANSI(str)

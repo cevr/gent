@@ -1,38 +1,6 @@
-/**
- * RuntimeProfileResolver — single discover/setup/reconcile pipeline used by
- * every composition root that needs to *discover* extensions.
- *
- * Three callers build the same registry / resource layer shape via
- * `buildExtensionLayers`:
- *
- *   1. Server startup (`packages/core/src/server/dependencies.ts`)
- *      → calls `resolveRuntimeProfile` + `buildExtensionLayers`
- *   2. Per-cwd profile cache (`packages/core/src/runtime/session-profile.ts`)
- *      → calls `resolveRuntimeProfile` + `buildExtensionLayers`
- *   3. Ephemeral child runs (`packages/core/src/runtime/agent/ephemeral-root.ts`)
- *      → forwards parent's already-resolved `ExtensionRegistry` (same cwd, no
- *        rediscovery needed) + calls `buildExtensionLayers(registry.getResolved())`
- *
- * All three end up with the same registry / resource shape — no more
- * drift between ephemeral and server runtimes.
- *
- * Per `subtract-before-you-add` and `foundational-thinking`: collapse parallel
- * construction paths into one layer builder; downstream code becomes obvious.
- *
- * @module
- */
+/** Profile declarations, catalog assembly, and isolated child resource wiring. */
 
-import {
-  Context,
-  DateTime,
-  Effect,
-  FileSystem,
-  Layer,
-  Option,
-  Path,
-  Predicate,
-  type Scope,
-} from "effect"
+import { Context, DateTime, Effect, FileSystem, Layer, Path, Predicate } from "effect"
 import type { GentExtension } from "../domain/extension.js"
 import type { ResourceGraphPublication } from "./extensions/resource-host/resource-graph-host.js"
 import { type PromptSection } from "../domain/prompt.js"
@@ -53,12 +21,9 @@ import {
 import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-registry.js"
 import { buildResourceLayer, buildResourceServiceLayer } from "./extensions/resource-host/index.js"
 import {
-  extensionKey,
-  reconcileExtensionDeclarations,
   setupBuiltinExtensions,
   setupDiscoveredExtensions,
   validateLoadedExtensions,
-  type ActivatedResourceContext,
   type ExtensionActivationResult,
 } from "./extensions/activation.js"
 import { discoverExtensions } from "./extensions/loader.js"
@@ -69,10 +34,6 @@ import type {
 } from "./extensions/resource-host/schedule-engine.js"
 import { buildBasePromptSections } from "../domain/prompt.js"
 import { ConfigService, type ConfigServiceService, type UserConfig } from "./config-service.js"
-import {
-  emptyErasedResourceLayer,
-  type ErasedResourceLayer,
-} from "./extensions/extension-effect-membrane.js"
 
 /**
  * Inputs that fully describe a runtime profile.
@@ -108,8 +69,6 @@ export interface RuntimeProfileInputs {
 export interface RuntimeProfile {
   readonly cwd: string
   readonly resolved: ResolvedExtensions
-  /** Process resource contexts acquired during reconciliation. */
-  readonly resourceContexts: ReadonlyArray<ActivatedResourceContext>
   readonly coreSections: ReadonlyArray<PromptSection>
   readonly extensionSectionInputs: ReadonlyArray<PromptSection>
   readonly instructions: string
@@ -183,44 +142,13 @@ export const makeProfilePermissionService = (params: {
   }
 }
 
-const extensionFailureLogMessage = (phase: "setup" | "validation" | "startup") => {
-  if (phase === "setup") return "extension.setup.failed"
-  if (phase === "validation") return "extension.validation.failed"
-  return "extension.startup.failed"
-}
-
-export const logRuntimeProfileFailures = (profile: RuntimeProfile) =>
-  Effect.gen(function* () {
-    for (const failed of profile.resolved.failedExtensions) {
-      const message = extensionFailureLogMessage(failed.phase)
-      yield* Effect.logWarning(message).pipe(
-        Effect.annotateLogs({
-          extensionId: failed.manifest.id,
-          phase: failed.phase,
-          error: failed.error,
-          cwd: profile.cwd,
-        }),
-      )
-    }
-    for (const failure of profile.scheduledJobFailures) {
-      yield* Effect.logWarning("extension.scheduled-job.failed").pipe(
-        Effect.annotateLogs({
-          extensionId: failure.extensionId,
-          jobId: failure.jobId,
-          error: failure.error,
-          cwd: profile.cwd,
-        }),
-      )
-    }
-  })
-
 /**
  * Load extension declarations and static prompt inputs for a runtime profile.
  *
  * This function performs discovery, trusted extension setup, validation, and
  * prompt input loading. It does not build Resource layers, invoke Resource
  * lifecycle hooks, or reconcile scheduled jobs. The returned declarations are
- * consumed by `resolveRuntimeProfile` at the process-resource boundary.
+ * consumed by the live Profile owner before resource acquisition.
  */
 export const loadRuntimeProfileDeclarations = (
   inputs: RuntimeProfileInputs,
@@ -327,53 +255,6 @@ export const loadRuntimeProfileDeclarations = (
   })
 
 /**
- * Run the discover → setup → declaration → reconcile → sections pipeline once.
- *
- * The returned `RuntimeProfile` carries profile data and successful process
- * resource contexts. Caller chooses scope:
- *   - server startup: invoke once at boot, hold for server lifetime.
- *   - per-cwd cache: invoke per unique cwd, cache by canonical path.
- *
- * Ephemeral runs do not call this — their child-run root forwards
- * `ExtensionRegistry` from the parent (same cwd, no rediscovery needed) and
- * calls `buildExtensionLayers` directly on the forwarded `ResolvedExtensions`.
- *
- * Requires `Scope.Scope` because activation registers scope-tied finalizers
- * for process resources and scheduled jobs.
- */
-export const resolveRuntimeProfile = (
-  inputs: RuntimeProfileInputs,
-): Effect.Effect<
-  RuntimeProfile,
-  never,
-  | FileSystem.FileSystem
-  | Path.Path
-  | ChildProcessSpawner
-  | ConfigService
-  | Scope.Scope
-  | GentPlatform
-> =>
-  Effect.gen(function* () {
-    const declarations = yield* loadRuntimeProfileDeclarations(inputs)
-    const reconciled = yield* reconcileExtensionDeclarations({
-      declarations: declarations.extensionDeclarations,
-      home: inputs.home,
-      command: inputs.scheduledJobCommand,
-      env: inputs.scheduledJobEnv,
-    })
-
-    return {
-      cwd: declarations.cwd,
-      resolved: reconciled.resolved,
-      resourceContexts: reconciled.resourceContexts,
-      coreSections: declarations.coreSections,
-      extensionSectionInputs: [...reconciled.resolved.promptSections.values()],
-      instructions: declarations.instructions,
-      scheduledJobFailures: reconciled.scheduledJobFailures,
-    }
-  })
-
-/**
  * Resolve the profile's prompt sections into a merged `PromptSection[]`.
  *
  * Must be called inside an Effect runtime where extension-contributed services
@@ -395,58 +276,24 @@ export const compileBaseSections = (
  * Build the extension-side layers (registry, state runtime, extension-contributed
  * services) from a resolved profile.
  *
- * Used by the server composition root, the per-cwd cache, and the ephemeral
- * child-run path. Ephemeral runs forward the parent's already-resolved
- * `ResolvedExtensions` (same cwd) instead of re-discovering, but they then
- * call this same builder so the wiring shape is identical.
+ * Ephemeral children forward the parent's declarations and rebuild private
+ * services with lifecycle disabled. Live profiles use the graph host and
+ * buildProfileCatalog instead. Direct test fixtures can own a scoped layer.
  */
 export const buildExtensionLayers = (
   resolved: ResolvedExtensions,
   options?: {
     readonly lifecycle?: "run" | "skip"
-    readonly resourceContexts?: ReadonlyArray<ActivatedResourceContext>
   },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- heterogeneous extension Resource services are intentionally erased at this host membrane
 ): Layer.Layer<any, never, never> => {
-  // Process-scope Resource layer. Runtime profiles pre-activate resources
-  // during reconciliation so startup failures can be attached to the owning
-  // extension before registries are resolved. When contexts are carried from
-  // reconciliation, the assembly boundary supplies each live context in
-  // resolved order. Declarative resource descriptors remain unchanged, and
-  // direct test/child builders keep the legacy layer path.
-  const activatedContexts = options?.resourceContexts ?? []
-  let resourceLayer: ErasedResourceLayer
-  if (activatedContexts.length === 0) {
+  // Child runs rebuild private resource values without process lifecycle hooks.
+  const resourceLayer = (() => {
     if (options?.lifecycle === "skip") {
-      resourceLayer = buildResourceServiceLayer(resolved.extensions, "process")
-    } else {
-      resourceLayer = buildResourceLayer(resolved.extensions, "process")
+      return buildResourceServiceLayer(resolved.extensions, "process")
     }
-  } else {
-    const contextsByExtension = new Map<string, ActivatedResourceContext["context"]>()
-    for (const { extension, context } of activatedContexts) {
-      contextsByExtension.set(extensionKey(extension), context)
-    }
-    const resourceLayers: ErasedResourceLayer[] = []
-    for (const extension of resolved.extensions) {
-      const context = Option.fromUndefinedOr(contextsByExtension.get(extensionKey(extension)))
-      if (Option.isSome(context)) {
-        // This is the assembly boundary for an already-acquired resource.
-        // Do not rewrite the authored Resource descriptor or its layer.
-        resourceLayers.push(Layer.succeedContext(context.value))
-        continue
-      }
-      if (options?.lifecycle === "skip") {
-        resourceLayers.push(buildResourceServiceLayer([extension], "process"))
-      } else {
-        resourceLayers.push(buildResourceLayer([extension], "process"))
-      }
-    }
-    resourceLayer = resourceLayers.reduce<ErasedResourceLayer>(
-      (acc, layer) => Layer.merge(acc, layer),
-      emptyErasedResourceLayer,
-    )
-  }
+    return buildResourceLayer(resolved.extensions, "process")
+  })()
 
   const baseLayers = Layer.mergeAll(
     ExtensionRegistry.fromResolved(resolved),
@@ -463,38 +310,6 @@ export const buildExtensionLayers = (
   // resource deps are satisfied AND base outputs stay in the result.
   return Layer.provideMerge(resourceLayer, baseLayers)
 }
-
-export const buildProfileRuntime = (params: {
-  readonly profile: RuntimeProfile
-  readonly configService: ConfigServiceService
-}) =>
-  Effect.gen(function* () {
-    const combinedLayer = buildExtensionLayers(params.profile.resolved, {
-      lifecycle: "skip",
-      resourceContexts: params.profile.resourceContexts,
-    })
-    const layerContext = yield* Layer.build(combinedLayer)
-    const registryService = Context.get(layerContext, ExtensionRegistry)
-    const driverRegistryService = Context.get(layerContext, DriverRegistry)
-    const permissionService = makeProfilePermissionService({
-      cwd: params.profile.cwd,
-      configService: params.configService,
-      extensionRules: params.profile.resolved.permissionRules,
-    })
-    const baseSections = yield* Effect.provideContext(
-      compileBaseSections(params.profile),
-      layerContext,
-    )
-
-    return {
-      profile: params.profile,
-      layerContext,
-      permissionService,
-      registryService,
-      driverRegistryService,
-      baseSections,
-    }
-  })
 
 /**
  * Build a profile catalog from a context already acquired by ResourceGraphHost.
@@ -541,13 +356,4 @@ export const buildProfileCatalog = (params: {
       driverRegistryService,
       baseSections,
     } satisfies RuntimeProfileCatalog
-  })
-
-export const resolveProfileRuntime = (inputs: RuntimeProfileInputs) =>
-  Effect.gen(function* () {
-    const configService = yield* ConfigService
-    const profile = yield* resolveRuntimeProfile(inputs)
-    const built = yield* buildProfileRuntime({ profile, configService })
-    yield* logRuntimeProfileFailures(profile)
-    return built
   })

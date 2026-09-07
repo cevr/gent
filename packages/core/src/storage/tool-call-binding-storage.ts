@@ -1,6 +1,6 @@
 import { Context, DateTime, Effect, Layer, Option, Predicate, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { decodeStoredPromptPart } from "./sqlite/rows.js"
+import { makeOwnedToolCallReader } from "./sqlite/owned-tool-call.js"
 import {
   decodeToolBindingIdentity,
   encodeToolBindingIdentity,
@@ -21,11 +21,6 @@ const ToolCallBindingRow = Schema.Struct({
   created_at: Schema.Finite,
 })
 type ToolCallBindingRow = typeof ToolCallBindingRow.Type
-
-const MessageCallRow = Schema.Struct({
-  part_json: Schema.NullOr(Schema.String),
-})
-type MessageCallRow = typeof MessageCallRow.Type
 
 export interface ToolCallBindingStorageWrite extends ToolCallBindingKey {
   readonly sessionId: SessionId
@@ -68,51 +63,11 @@ export class ToolCallBindingStorage extends Context.Service<
     ToolCallBindingStorage,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
-
-      const loadOwnedCall = Effect.fn("ToolCallBindingStorage.loadOwnedCall")(function* (params: {
-        readonly assistantMessageId: MessageId
-        readonly toolCallId: ToolCallId
-        readonly sessionId: SessionId
-        readonly branchId: BranchId
-      }) {
-        const workspaceId = yield* CurrentWorkspaceId
-        const rawRows = yield* sql<MessageCallRow>`
-          SELECT c.part_json
-          FROM messages m
-          JOIN sessions s ON s.id = m.session_id
-          LEFT JOIN message_chunks mc ON mc.message_id = m.id
-          LEFT JOIN content_chunks c ON c.id = mc.chunk_id
-          WHERE m.id = ${params.assistantMessageId}
-            AND m.session_id = ${params.sessionId}
-            AND m.branch_id = ${params.branchId}
-            AND m.role = 'assistant'
-            AND s.workspace_id = ${workspaceId}
-          ORDER BY mc.ordinal ASC
-        `
-        const rows = yield* Effect.forEach(rawRows, (rawRow) =>
-          Schema.decodeEffect(MessageCallRow)(rawRow),
+      const readOwnedCall = yield* makeOwnedToolCallReader
+      const loadOwnedCall = (params: Parameters<typeof readOwnedCall>[0]) =>
+        readOwnedCall(params).pipe(
+          Effect.map((call) => Option.getOrUndefined(Option.map(call, (part) => part.name))),
         )
-        const calls = yield* Effect.forEach(rows, (row) =>
-          Option.match(Option.fromNullishOr(row.part_json), {
-            onNone: () => Effect.succeed(Option.none<string>()),
-            onSome: (partJson) =>
-              decodeStoredPromptPart(partJson).pipe(
-                Effect.map((part) => {
-                  if (part.type === "tool-call" && part.id === params.toolCallId) {
-                    return Option.some(part.name)
-                  }
-                  return Option.none<string>()
-                }),
-              ),
-          }),
-        )
-        const matchingNames = calls.flatMap(
-          Option.match({ onNone: () => [], onSome: (name) => [name] }),
-        )
-        // oxlint-disable-next-line effect/noNullish -- Internal call lookup uses undefined for a missing call.
-        if (matchingNames.length !== 1) return undefined
-        return matchingNames[0]
-      })
 
       const loadOwnedRow = Effect.fn("ToolCallBindingStorage.loadOwnedRow")(function* (params: {
         readonly assistantMessageId: MessageId

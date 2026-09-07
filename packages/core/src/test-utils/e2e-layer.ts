@@ -45,8 +45,8 @@ export interface E2ELayerConfig {
   readonly extensionInputs: ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>>
   /** Pre-loaded extensions to wire directly (bypasses setup). Mutually exclusive with extensionInputs. */
   readonly extensions?: ReadonlyArray<LoadedExtension>
-  /** AgentRunner mock. Default: returns success with empty text */
-  readonly subagentRunner?: AgentRunner
+  /** Use "live" for real child sessions. Default mocks blocking run only. */
+  readonly subagentRunner?: "live" | Pick<AgentRunner, "run">
   /** Approval service override. Default auto-approves for E2E tests. */
   readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform>
   /** Use the production cold-interaction service with durable pending rows. */
@@ -69,7 +69,7 @@ export interface E2ELayerConfig {
   readonly layerOverrides?: Record<string, () => Layer.Layer<never>>
 }
 
-const defaultSubagentRunner: AgentRunner = {
+const defaultSubagentRunner: Pick<AgentRunner, "run"> = {
   run: () =>
     Effect.succeed(
       AgentRunResult.cases.success.make({
@@ -164,10 +164,21 @@ const approvalOverrideForConfig = (config: E2ELayerConfig) => {
  * through `createDependencies`/`buildServerRoot`.
  */
 export const createE2ELayer = (config: E2ELayerConfig) => {
-  const subagentRunnerLayer = Layer.succeed(
-    AgentRunnerService,
-    config.subagentRunner ?? defaultSubagentRunner,
-  )
+  let subagentRunnerLayer = Option.none<Layer.Layer<AgentRunnerService>>()
+  if (config.subagentRunner !== "live") {
+    subagentRunnerLayer = Option.some(
+      Layer.succeed(
+        AgentRunnerService,
+        AgentRunnerService.of({
+          start: () => Effect.die("AgentRunner.start not configured in test"),
+          inspect: () => Effect.die("AgentRunner.inspect not configured in test"),
+          wait: () => Effect.die("AgentRunner.wait not configured in test"),
+          cancel: () => Effect.die("AgentRunner.cancel not configured in test"),
+          ...(config.subagentRunner ?? defaultSubagentRunner),
+        }),
+      ),
+    )
+  }
 
   return makeServerRootLayer({
     dependencies: {
@@ -189,7 +200,8 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         permissionLayer: Permission.Test(),
         sessionProfileCacheLayer: config.sessionProfileCacheLayer,
         fileIndexLayer: Layer.provide(FallbackFileIndexLive, BunServices.layer),
-        extraLayers: [subagentRunnerLayer, ...(config.extraLayers ?? [])],
+        agentRunnerLayer: Option.getOrUndefined(subagentRunnerLayer),
+        extraLayers: config.extraLayers,
       },
     },
     identity: {

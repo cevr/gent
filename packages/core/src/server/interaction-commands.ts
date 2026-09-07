@@ -1,4 +1,4 @@
-import { Predicate, Effect, Layer, Context } from "effect"
+import { Predicate, Effect, Layer, Context, Option } from "effect"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InteractionResolved } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
@@ -16,6 +16,7 @@ export interface RespondInteractionInput {
   readonly branchId: BranchId
   readonly approved: boolean
   readonly notes?: string
+  readonly editedContent?: string
 }
 
 export interface InteractionCommandsService {
@@ -58,11 +59,16 @@ export class InteractionCommands extends Context.Service<
             })
           }
 
-          // 1. Store resolution durably so re-entering present() finds it
-          yield* approvalService.storeResolution(input.requestId, {
+          const decision = {
             approved: input.approved,
             notes: input.notes,
-          })
+            ...Option.match(Option.fromUndefinedOr(input.editedContent), {
+              onNone: () => ({}),
+              onSome: (editedContent) => ({ editedContent }),
+            }),
+          }
+          // 1. Store resolution durably so re-entering present() finds it
+          yield* approvalService.storeResolution(input.requestId, decision)
           // 2. Wake the machine. present() marks the row resolved only when the
           //    tool consumes the durable decision.
           yield* sessionRuntime.respondInteraction({
@@ -77,8 +83,7 @@ export class InteractionCommands extends Context.Service<
                 sessionId: input.sessionId,
                 branchId: input.branchId,
                 requestId: input.requestId,
-                approved: input.approved,
-                notes: input.notes,
+                ...decision,
               }),
             )
             .pipe(Effect.catchEager(() => Effect.void))

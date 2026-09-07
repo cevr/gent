@@ -11,7 +11,9 @@
 import { Context, Effect, Layer, Option } from "effect"
 import { isRecord } from "../domain/guards.js"
 import { EventPublisher } from "../domain/event-publisher.js"
-import { InteractionPresented } from "../domain/event.js"
+import { EventStoreError, InteractionPresented } from "../domain/event.js"
+import { CellToolOperationStorage } from "../storage/cell-tool-operation-storage.js"
+import { CurrentCellToolOperation } from "./code-cell/current-cell-tool-operation.js"
 import type { InteractionRequestId } from "../domain/ids.js"
 import {
   makeInteractionService,
@@ -85,7 +87,7 @@ function makeApprovalInteractionService(
 ): Effect.Effect<InteractionService, never, EventPublisher | GentPlatform> {
   return Effect.gen(function* () {
     const eventPublisher = yield* EventPublisher
-    return yield* makeInteractionService({
+    const service = yield* makeInteractionService({
       onPresent: (requestId, params, ctx) =>
         eventPublisher.publish(
           InteractionPresented.make({
@@ -98,5 +100,41 @@ function makeApprovalInteractionService(
         ),
       storage,
     })
+    return {
+      ...service,
+      present: Effect.fn("ApprovalService.present")(function* (params, ctx) {
+        const current = yield* Effect.serviceOption(CurrentCellToolOperation)
+        if (Option.isNone(current)) return yield* service.present(params, ctx)
+        if (Option.isNone(Option.fromUndefinedOr(storage)))
+          return yield* new EventStoreError({
+            message: "Cell approval requires durable interaction storage",
+          })
+        const key = current.value
+        if (key.cell.sessionId !== ctx.sessionId || key.cell.branchId !== ctx.branchId)
+          return yield* new EventStoreError({ message: "Cell approval belongs to another branch" })
+        const operations = yield* Effect.serviceOption(CellToolOperationStorage)
+        if (Option.isNone(operations))
+          return yield* new EventStoreError({
+            message: "Cell approval requires durable operation storage",
+          })
+        const operation = yield* operations.value
+          .get(key)
+          .pipe(
+            Effect.mapError(
+              (cause) => new EventStoreError({ message: "Cannot read cell approval owner", cause }),
+            ),
+          )
+        if (operation.state._tag === "Started")
+          return yield* service.present(params, { ...ctx, resumeRequestId: Option.none() })
+        if (operation.state._tag === "Resuming")
+          return yield* service.present(params, {
+            ...ctx,
+            resumeRequestId: Option.some(operation.state.requestId),
+          })
+        return yield* new EventStoreError({
+          message: "Cell operation is not admitted for approval",
+        })
+      }),
+    }
   })
 }

@@ -5,12 +5,13 @@ import { InteractionPendingError } from "@gent/core-internal/domain/interaction-
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { hook, tool, ExtensionContext } from "@gent/core/extensions/api"
 import { ToolRunner, type ResolvedToolCapability } from "../../src/runtime/agent/tool-runner"
+import { executeToolCalls } from "../../src/runtime/agent/turn-tool-execution"
 import { DynamicExtensionRegistry } from "../../src/domain/dynamic-extension-registry"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core-internal/domain/permission"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import type { AgentEvent, ToolCallStarted } from "../../src/domain/event"
-import type * as Prompt from "effect/unstable/ai/Prompt"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { provideCurrentHostCtx } from "../../src/runtime/agent/current-extension-host-context"
@@ -19,6 +20,7 @@ import {
   BranchId,
   ExtensionId,
   InteractionRequestId,
+  MessageId,
   SessionId,
   ToolCallId,
 } from "@gent/core-internal/domain/ids"
@@ -261,8 +263,25 @@ describe("tool execution", () => {
         const current = yield* runner.capture({ sessionId, toolName: "replaceable" })
         const currentTurn = yield* run("replacement-current", current)
         const hiddenTurn = yield* run("replacement-hidden", Option.none<ResolvedToolCapability>())
+        const hostEntry = yield* Effect.fromOption(current)
+        const hiddenOuterTurn = yield* executeToolCalls({
+          assistantMessageId: MessageId.make("outer-message"),
+          sessionId,
+          branchId,
+          currentTurnAgent: AgentName.make("cowork"),
+          toolCalls: [
+            Prompt.toolCallPart({
+              id: "outer-hidden",
+              name: "replaceable",
+              params: {},
+              providerExecuted: false,
+            }),
+          ],
+          toolBindings: new Map(),
+          hostToolBindings: new Map([["replaceable", hostEntry]]),
+        }).pipe(provideCurrentHostCtx(testToolContext({ sessionId, branchId })))
         yield* unregisterReplacement
-        return { oldTurn, currentTurn, hiddenTurn }
+        return { oldTurn, currentTurn, hiddenTurn, hiddenOuterTurn }
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
@@ -270,6 +289,13 @@ describe("tool execution", () => {
       expect(result.currentTurn.result).toEqual({ value: "B" })
       expect(result.hiddenTurn.isFailure).toBe(true)
       expect(result.hiddenTurn.result).toEqual({ error: "Unknown tool: replaceable" })
+      expect(result.hiddenOuterTurn).toMatchObject([
+        {
+          name: "replaceable",
+          isFailure: true,
+          result: { error: "Unknown tool: replaceable" },
+        },
+      ])
     }))
 
   test("provides host authority through ExtensionContext service", () =>

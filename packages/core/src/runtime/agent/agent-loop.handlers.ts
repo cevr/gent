@@ -95,6 +95,7 @@ import {
 import { MessageStorage } from "../../storage/message-storage.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
+import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import { DynamicExtensionRegistry } from "../../domain/dynamic-extension-registry.js"
 import type { CapabilityError, CapabilityNotFoundError } from "../../domain/capability.js"
 import { provideExtensionServices } from "../../domain/extension-services.js"
@@ -174,6 +175,7 @@ export const buildAgentLoopActorHandlers = (config: {
     const messageStorage = yield* MessageStorage
     const queueStorage = yield* AgentLoopQueueStorage
     const eventStorage = yield* EventStorage
+    const operations = yield* SessionOperationStorage
     const eventStore = yield* EventStore
     const dynamicRegistryOption = yield* Effect.serviceOption(DynamicExtensionRegistry)
     const sessionProfileCacheOption = yield* Effect.serviceOption(SessionProfileCache)
@@ -659,13 +661,29 @@ export const buildAgentLoopActorHandlers = (config: {
       yield* failIfTurnFailedAfterEpoch(handle, start.value.turnFailureBaseline)
     })
 
+    const isCancellation = Predicate.or(
+      Predicate.isTagged("Cancel"),
+      Predicate.isTagged("Interrupt"),
+    )
+
     const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
       commandId: ActorCommandId,
       command: SteerCommandType,
     ) {
-      const handle = yield* ensureStarted
       yield* ensureTarget(command)
       yield* markWrite
+      if (isCancellation(command) && Predicate.isNotUndefined(command.messageId)) {
+        yield* operations.cancelTurn({ sessionId, branchId, messageId: command.messageId }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new AgentLoopError({
+                message: "Cannot record targeted cancellation",
+                cause,
+              }),
+          ),
+        )
+      }
+      const handle = yield* ensureStarted
       const projectedState = yield* currentRuntimeState(handle)
 
       switch (command._tag) {
@@ -682,20 +700,24 @@ export const buildAgentLoopActorHandlers = (config: {
         case "Cancel":
         case "Interrupt":
           if (isActiveLoopState(projectedState)) {
-            yield* handle.interrupt.pipe(
-              Effect.catchEager((error) =>
-                cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-              ),
-            )
+            yield* handle
+              .interrupt(command.messageId)
+              .pipe(
+                Effect.catchEager((error) =>
+                  cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                ),
+              )
             return
           }
           const loopState = yield* handle.snapshot
           if (isActiveLoopState(loopState)) {
-            yield* handle.interrupt.pipe(
-              Effect.catchEager((error) =>
-                cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-              ),
-            )
+            yield* handle
+              .interrupt(command.messageId)
+              .pipe(
+                Effect.catchEager((error) =>
+                  cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+                ),
+              )
           }
           return
 

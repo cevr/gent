@@ -19,6 +19,7 @@ import { StorageError } from "../../domain/storage-error.js"
 import { toPrompt } from "../../providers/ai-transcript.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import { MessageStorage } from "../../storage/message-storage.js"
+import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
@@ -89,6 +90,8 @@ export type ExternalToolPersistence = {
 }
 
 export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
+  messageId: MessageId
+  step: number
   resolved: ResolvedTurnContext
   sessionId: SessionId
   branchId: BranchId
@@ -111,8 +114,27 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       yield* eventPublisher.publish(event).pipe(Effect.orDie)
     })
   const { resolved } = params
+  const operations = yield* SessionOperationStorage
+  const reserveAttempt = operations
+    .reserveChildModelAttempt({ sessionId: params.sessionId, branchId: params.branchId })
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderError({
+            message: "Cannot reserve child model attempt",
+            model: resolved.modelId,
+            cause,
+          }),
+      ),
+    )
   const resolvedDriver = resolved.driver
   if (Predicate.isNotUndefined(resolvedDriver) && resolvedDriver._tag === "external") {
+    if (Option.isSome(yield* reserveAttempt)) {
+      return yield* new ProviderError({
+        message: "Admitted child model budgets do not support external drivers",
+        model: resolved.modelId,
+      })
+    }
     const externalDriver = yield* driverRegistry.getExternal(resolvedDriver.id)
     const executor = Option.fromUndefinedOr(externalDriver).pipe(
       Option.flatMap((value) => Option.fromUndefinedOr(value.executor)),
@@ -185,6 +207,18 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   }
 
   const modelResolver = yield* ModelResolver
+  const resolveAdmittedModel = Effect.fn("TurnHelpers.resolveAdmittedModel")(function* (
+    request: ResolveModelRequest,
+  ) {
+    const admission = yield* reserveAttempt
+    if (Option.isSome(admission) && !admission.value) {
+      return yield* new ProviderError({
+        message: "Child model-attempt budget exhausted",
+        model: resolved.modelId,
+      })
+    }
+    return yield* modelResolver.resolve(request)
+  })
   let modelRequest: ResolveModelRequest = {
     modelId: resolved.modelId,
     hints: {
@@ -278,7 +312,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     budget,
     hash: params.hash,
     persistSummary,
-    summaryModel: modelResolver.resolve({
+    summaryModel: resolveAdmittedModel({
       ...modelRequest,
       hints: { ...modelRequest.hints, maxTokens: MODEL_COMPACTION_OUTPUT_TOKENS },
     }),
@@ -290,7 +324,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     hints: { ...modelRequest.hints, maxTokens: MODEL_OUTPUT_RESERVE_TOKENS },
   }
   const rawStream = Stream.unwrap(
-    modelResolver.resolve(modelRequest).pipe(
+    resolveAdmittedModel(modelRequest).pipe(
       Effect.map((model) => {
         if (resolved.tools.length > 0) {
           return model.streamText({
@@ -344,6 +378,8 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
         }),
         Effect.catchTag("ProviderError", (streamError) =>
           collectFailedModelTurnResponse({
+            messageId: params.messageId,
+            step: params.step,
             streamError,
             sessionId: params.sessionId,
             branchId: params.branchId,

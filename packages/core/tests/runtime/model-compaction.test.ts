@@ -86,7 +86,7 @@ describe("model context compaction", () => {
       return Effect.succeed(
         Stream.fromIterable([
           textDeltaPart("bounded summary"),
-          finishPart({ finishReason: "stop" }),
+          finishPart({ finishReason: "stop", usage: { inputTokens: 120, outputTokens: 8 } }),
         ]),
       )
     })
@@ -124,6 +124,8 @@ describe("model context compaction", () => {
         expect(Schema.is(ModelCompactionDetails)(details)).toBe(true)
         if (!Schema.is(ModelCompactionDetails)(details)) return yield* Effect.die("details missing")
         expect(details.sourceMessageIds.length).toBeGreaterThan(0)
+        expect(details.modelId).toBe(modelId)
+        expect(details.usage).toEqual({ inputTokens: 120, outputTokens: 8 })
         expect(details.sourceMessageIds.length).toBeLessThan(messages.length)
         expect(result.messages).not.toBe(messages)
 

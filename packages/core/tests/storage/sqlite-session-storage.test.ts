@@ -212,6 +212,8 @@ describe("Sessions", () => {
           "tool_call_bindings",
           "resource_graph_state",
           "message_insertion_order",
+          "cell_executions",
+          "cell_tool_operations",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -237,6 +239,8 @@ describe("Sessions", () => {
           "tool_call_bindings",
           "resource_graph_state",
           "message_insertion_order",
+          "cell_executions",
+          "cell_tool_operations",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -276,6 +280,8 @@ describe("Sessions", () => {
         }
         // Restore the version-10 schema in this temporary test database.
         const sql = yield* SqlClient.SqlClient
+        yield* sql.unsafe("DROP TABLE cell_tool_operations")
+        yield* sql.unsafe("DROP TABLE cell_executions")
         yield* sql.unsafe("DROP TRIGGER messages_assign_insertion_order")
         yield* sql.unsafe("DROP INDEX idx_messages_branch_created")
         yield* sql.unsafe("DROP INDEX idx_messages_insertion_order")
@@ -283,7 +289,7 @@ describe("Sessions", () => {
         yield* sql.unsafe(
           "CREATE INDEX idx_messages_branch_created ON messages(branch_id, created_at, id)",
         )
-        yield* sql.unsafe("DELETE FROM gent_storage_migrations WHERE migration_id = 11")
+        yield* sql.unsafe("DELETE FROM gent_storage_migrations WHERE migration_id >= 11")
         // oxlint-disable-next-line effect/noInlineProvide -- Each operation opens a fresh database owner.
       }).pipe(Effect.provide(layer))
       yield* Effect.gen(function* () {

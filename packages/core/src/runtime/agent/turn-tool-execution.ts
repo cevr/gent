@@ -15,28 +15,15 @@ import {
   CurrentExtensionHostContext,
   provideCurrentHostCtx,
 } from "./current-extension-host-context.js"
-import { ExtensionRegistry } from "../extensions/registry.js"
-import { GentPlatform } from "../gent-platform.js"
-import type { ResourceDescriptor } from "../../domain/resource-graph.js"
-import type { ResourceGenerationId } from "../../domain/resource-generation.js"
-import type { ToolBindingIdentity } from "../../domain/tool-binding.js"
 import { ToolRunner, type ResolvedToolCapability } from "./tool-runner"
-import {
-  attachToolBindingIdentity,
-  bindingMismatchReason,
-  bindingResourcesFromPlan,
-  makeBindingReplayError,
-  sameToolBindingIdentity,
-  type ToolBindingReplayReason,
-} from "./tool-binding-replay.js"
-import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
+import { CurrentToolCall } from "./current-tool-call.js"
+import { makeBindingReplayError, ToolBindingReplayError } from "./tool-binding-replay.js"
+import { captureCurrentToolBinding, resolveReplayToolBinding } from "./tool-binding-resolution.js"
 import { persistAssistantPartsWithBindings, persistToolParts } from "./turn-persistence.js"
 import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import {
   processLocalReplayBindingKey,
-  sameProcessLocalGeneration,
   ProcessLocalToolReplay,
-  type ProcessLocalToolReplayService,
 } from "./process-local-tool-replay.js"
 
 const TOOL_CONCURRENCY = 8
@@ -58,11 +45,13 @@ export class ToolInvocationInteractionError extends Schema.TaggedError<ToolInvoc
 }) {}
 
 export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(function* (params: {
+  assistantMessageId: MessageId
   toolCalls: ReadonlyArray<Prompt.ToolCallPart>
   sessionId: SessionId
   branchId: BranchId
   currentTurnAgent: AgentNameType
   toolBindings: ReadonlyMap<string, ResolvedToolCapability>
+  hostToolBindings: ReadonlyMap<string, ResolvedToolCapability>
 }) {
   const toolRunner = yield* ToolRunner
   const hostCtx = yield* CurrentExtensionHostContext
@@ -93,6 +82,13 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
                   }),
               ),
               provideCurrentHostCtx(toolHostCtx),
+              Effect.provideService(CurrentToolCall, {
+                toolBindings: params.hostToolBindings,
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                assistantMessageId: params.assistantMessageId,
+                toolCallId: toolCallInput.toolCallId,
+              }),
             )
         }),
       ),
@@ -122,160 +118,6 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
   return results
 })
 
-interface InvocationReplayParams {
-  readonly assistantMessageId: MessageId
-  readonly toolResultMessageId: MessageId
-  readonly toolCallId: ToolCallId
-  readonly toolName: string
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly current: Option.Option<ResolvedToolCapability>
-  readonly currentGeneration: Option.Option<ResourceGenerationId>
-  readonly localBindingKey: string
-  readonly processLocalReplay: ProcessLocalToolReplayService
-}
-
-const failInvocationReplay = (
-  params: InvocationReplayParams,
-  reason: ToolBindingReplayReason,
-  message: string,
-) => {
-  const error = makeBindingReplayError({
-    assistantMessageId: params.assistantMessageId,
-    toolCallId: params.toolCallId,
-    toolId: ToolId.make(params.toolName),
-    reason,
-    message,
-  })
-  return Effect.gen(function* () {
-    yield* persistToolParts({
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      messageId: params.toolResultMessageId,
-      parts: [
-        Prompt.toolResultPart({
-          id: params.toolCallId,
-          name: params.toolName,
-          isFailure: true,
-          providerExecuted: false,
-          result: { error: error.message, reason: error.reason },
-        }),
-      ],
-    })
-    return yield* error
-  })
-}
-
-const sameLocalEntry = (left: ResolvedToolCapability, right: ResolvedToolCapability) =>
-  left.extensionId === right.extensionId &&
-  left.origin === right.origin &&
-  left.capability === right.capability
-
-const localBindingMismatchReason = (
-  left: ResolvedToolCapability,
-  right: ResolvedToolCapability,
-): Option.Option<ToolBindingReplayReason> => {
-  if (Predicate.isUndefined(left.binding) && Predicate.isUndefined(right.binding)) {
-    return Option.none()
-  }
-  if (Predicate.isUndefined(left.binding) || Predicate.isUndefined(right.binding)) {
-    return Option.some("MissingSourceIdentity")
-  }
-  if (!sameToolBindingIdentity(left.binding, right.binding)) {
-    return Option.some(bindingMismatchReason(left.binding, right.binding))
-  }
-  return Option.none()
-}
-
-const resolveLocalInvocationBinding = Effect.fn("TurnHelpers.resolveLocalInvocationBinding")(
-  function* (params: InvocationReplayParams) {
-    const local = yield* params.processLocalReplay.getBinding(params.localBindingKey)
-    if (Option.isNone(local)) {
-      return yield* failInvocationReplay(
-        params,
-        "MissingBinding",
-        `No durable binding was recorded for tool ${params.toolName}`,
-      )
-    }
-    if (!sameProcessLocalGeneration(local.value.generationId, params.currentGeneration)) {
-      yield* params.processLocalReplay.removeBinding(params.localBindingKey)
-      return yield* failInvocationReplay(
-        params,
-        "SourceMismatch",
-        `Tool ${params.toolName} belongs to a retired resource generation`,
-      )
-    }
-    if (Option.isNone(params.current)) {
-      yield* params.processLocalReplay.removeBinding(params.localBindingKey)
-      return yield* failInvocationReplay(
-        params,
-        "ToolUnavailable",
-        `Tool ${params.toolName} is not available in the loaded extension profile`,
-      )
-    }
-    if (!sameLocalEntry(local.value.entry, params.current.value)) {
-      yield* params.processLocalReplay.removeBinding(params.localBindingKey)
-      return yield* failInvocationReplay(
-        params,
-        "SourceMismatch",
-        `Tool ${params.toolName} changed before same-process replay`,
-      )
-    }
-    const mismatch = localBindingMismatchReason(local.value.entry, params.current.value)
-    if (Option.isSome(mismatch)) {
-      yield* params.processLocalReplay.removeBinding(params.localBindingKey)
-      return yield* failInvocationReplay(
-        params,
-        mismatch.value,
-        `Tool ${params.toolName} binding identity changed (${mismatch.value})`,
-      )
-    }
-    return local.value.entry
-  },
-)
-
-const resolveDurableInvocationBinding = Effect.fn("TurnHelpers.resolveDurableInvocationBinding")(
-  function* (params: InvocationReplayParams & { readonly stored: ToolBindingIdentity }) {
-    if (params.stored.source._tag === "DynamicNonReplayable") {
-      return yield* failInvocationReplay(
-        params,
-        "DynamicNonReplayable",
-        `Tool ${params.toolName} was provided by a dynamic registration and cannot be replayed`,
-      )
-    }
-    if (Option.isNone(params.current)) {
-      return yield* failInvocationReplay(
-        params,
-        "ToolUnavailable",
-        `Tool ${params.toolName} is not available in the loaded extension profile`,
-      )
-    }
-    if (Predicate.isUndefined(params.current.value.binding)) {
-      return yield* failInvocationReplay(
-        params,
-        "MissingSourceIdentity",
-        `Tool ${params.toolName} has no trusted loaded source identity`,
-      )
-    }
-    if (!sameToolBindingIdentity(params.stored, params.current.value.binding)) {
-      const reason = bindingMismatchReason(params.stored, params.current.value.binding)
-      return yield* failInvocationReplay(
-        params,
-        reason,
-        `Tool ${params.toolName} binding identity changed (${reason})`,
-      )
-    }
-    return params.current.value
-  },
-)
-
-const resolveInvocationBinding = Effect.fn("TurnHelpers.resolveInvocationBinding")(function* (
-  params: InvocationReplayParams & { readonly stored: Option.Option<ToolBindingIdentity> },
-) {
-  if (Option.isNone(params.stored)) return yield* resolveLocalInvocationBinding(params)
-  return yield* resolveDurableInvocationBinding({ ...params, stored: params.stored.value })
-})
-
 export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params: {
   assistantMessageId: MessageId
   toolResultMessageId: MessageId
@@ -287,7 +129,6 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
   currentTurnAgent: AgentNameType
   turnProfile: AgentLoopTurnProfile
 }) {
-  const toolRunner = yield* ToolRunner
   const messageStorage = yield* MessageStorage
   const processLocalReplay = yield* ProcessLocalToolReplay
   const storageTransaction = yield* makeStorageTransaction
@@ -327,55 +168,44 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
       toolCall = storedToolCall
     }
 
-    const extensionRegistry = yield* ExtensionRegistry
-    const platform = yield* GentPlatform
-    const captured = yield* toolRunner.capture({
-      sessionId: params.sessionId,
-      toolName: toolCall.name,
-    })
-    let resources: ReadonlyArray<ResourceDescriptor> = []
-    if (Predicate.isNotUndefined(params.turnProfile.turnPublication)) {
-      resources = bindingResourcesFromPlan(
-        params.turnProfile.turnPublication.plan.descriptors,
-        params.turnProfile.turnPublication.plan.startOrder,
-      )
-    }
-    const bindingContext = {
-      extensions: extensionRegistry.getResolved().extensions,
-      resources,
-      publicationRevision: params.turnProfile.turnPublication?.publicationRevision,
-      hash: (input: string) => platform.hash("sha256", input),
-    }
-    const current = Option.map(captured, (entry) =>
-      attachToolBindingIdentity(entry, bindingContext),
-    )
     const toolBindings = new Map<string, ResolvedToolCapability>()
-    if (!Predicate.isUndefined(existingAssistant)) {
-      const bindingStorage = yield* ToolCallBindingStorage
-      const stored = Option.fromUndefinedOr(
-        yield* bindingStorage.get({
-          assistantMessageId: params.assistantMessageId,
-          toolCallId: params.toolCallId,
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-        }),
-      )
-      const binding = yield* resolveInvocationBinding({
-        assistantMessageId: params.assistantMessageId,
-        toolResultMessageId: params.toolResultMessageId,
-        toolCallId: params.toolCallId,
-        toolName: toolCall.name,
+    let current = Option.none<ResolvedToolCapability>()
+    if (Predicate.isNotUndefined(existingAssistant)) {
+      const binding = yield* resolveReplayToolBinding({
         sessionId: params.sessionId,
         branchId: params.branchId,
-        current,
-        currentGeneration,
-        localBindingKey,
-        processLocalReplay,
-        stored,
-      })
+        assistantMessageId: params.assistantMessageId,
+        toolCall,
+        publication: params.turnProfile.turnPublication,
+      }).pipe(
+        Effect.catchIf(Schema.is(ToolBindingReplayError), (error) =>
+          Effect.gen(function* () {
+            yield* persistToolParts({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              messageId: params.toolResultMessageId,
+              parts: [
+                Prompt.toolResultPart({
+                  id: params.toolCallId,
+                  name: toolCall.name,
+                  isFailure: true,
+                  providerExecuted: false,
+                  result: { error: error.message, reason: error.reason },
+                }),
+              ],
+            })
+            return yield* error
+          }),
+        ),
+      )
       toolBindings.set(toolCall.name, binding)
-    } else if (Option.isSome(current)) {
-      toolBindings.set(toolCall.name, current.value)
+    } else {
+      current = yield* captureCurrentToolBinding({
+        sessionId: params.sessionId,
+        toolName: toolCall.name,
+        publication: params.turnProfile.turnPublication,
+      })
+      if (Option.isSome(current)) toolBindings.set(toolCall.name, current.value)
     }
     const toolCalls = [toolCall]
 
@@ -396,6 +226,8 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
     }
 
     const toolResults = yield* executeToolCalls({
+      hostToolBindings: toolBindings,
+      assistantMessageId: params.assistantMessageId,
       toolCalls,
       sessionId: params.sessionId,
       branchId: params.branchId,

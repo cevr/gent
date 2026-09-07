@@ -14,7 +14,7 @@ import {
   type AgentEvent,
   type AgentEventTag,
 } from "../domain/event.js"
-import { BranchId, SessionId } from "../domain/ids.js"
+import { BranchId, SessionId, type MessageId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 import { SqlClient, SqlModel } from "effect/unstable/sql"
 import { decodeEvent, decodeEventRow, encodeEvent, toSqlNull } from "./sqlite/rows.js"
@@ -96,6 +96,7 @@ export interface EventStorageService {
     sessionId: SessionId
     branchId: BranchId
     tags: ReadonlyArray<AgentEventTag>
+    messageId?: MessageId
     // oxlint-disable-next-line effect/noNullish -- Event history lookup uses undefined when no matching event exists.
   }) => Effect.Effect<AgentEvent | undefined, EventStorageError>
 }
@@ -229,7 +230,7 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
         ),
 
         getLatestEvent: Effect.fn("EventStorage.getLatestEvent")(
-          function* ({ sessionId, branchId, tags }) {
+          function* ({ sessionId, branchId, tags, messageId }) {
             // oxlint-disable-next-line effect/noNullish -- Event history lookup uses undefined when no matching tag exists.
             if (tags.length === 0) return undefined
             const workspaceId = yield* CurrentWorkspaceId
@@ -240,6 +241,8 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
                 AND s.workspace_id = ${workspaceId}
                 AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
                 AND e.event_tag IN ${sql.in(tags)}
+                AND (${toSqlNull(messageId)} IS NULL
+                  OR json_extract(e.event_json, '$.messageId') = ${toSqlNull(messageId)})
               ORDER BY e.id DESC LIMIT 1`
             // oxlint-disable-next-line effect/noNullish -- Event history lookup uses undefined when no row exists.
             if (Predicate.isUndefined(rawRows[0])) return undefined

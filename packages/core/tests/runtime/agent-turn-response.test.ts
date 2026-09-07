@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Layer, Ref, Stream, type Scope } from "effect"
+import { Effect, Layer, Option, Ref, Schema, Stream, type Scope } from "effect"
+import { responseUsage } from "../../src/domain/response-to-prompt"
 import * as Response from "effect/unstable/ai/Response"
 import {
   collectExternalTurnResponse,
@@ -12,7 +13,7 @@ import {
   toResponseFinishReason,
   type ActiveStreamHandle,
 } from "../../src/runtime/agent/turn-response"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import type { TurnError } from "@gent/core-internal/domain/driver"
 import { ProviderError } from "@gent/core-internal/domain/provider-error"
 import { finishPart, textDeltaPart } from "@gent/core-internal/test-utils/language-model"
@@ -21,6 +22,7 @@ import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
 
 const sessionId = SessionId.make("collector-session")
 const branchId = BranchId.make("collector-branch")
+const streamAddress = { messageId: MessageId.make("collector-turn"), step: 1 }
 
 const makeActiveStream = (
   interrupted: boolean,
@@ -46,6 +48,21 @@ const captureEvents = () =>
   })
 
 describe("agent turn response collectors", () => {
+  test("missing or invalid token totals stay unknown while explicit zero stays known", () => {
+    const usage = Schema.decodeUnknownSync(Response.FinishPart)(
+      finishPart({ finishReason: "stop", usage: { inputTokens: 0, outputTokens: 0 } }),
+    ).usage
+    expect(responseUsage(usage)).toEqual(Option.some({ inputTokens: 0, outputTokens: 0 }))
+    for (const total of [Option.getOrUndefined(Option.none<number>()), -1, 1.5, Number.NaN]) {
+      expect(responseUsage({ ...usage, inputTokens: { ...usage.inputTokens, total } })).toEqual(
+        Option.none(),
+      )
+      expect(responseUsage({ ...usage, outputTokens: { ...usage.outputTokens, total } })).toEqual(
+        Option.none(),
+      )
+    }
+  })
+
   test("normalized response projects finish usage into message usage", () => {
     const collected = collectNormalizedResponse({
       responseParts: [
@@ -78,6 +95,7 @@ describe("agent turn response collectors", () => {
       const activeStream = yield* makeActiveStream(false)
       const { layer } = yield* captureEvents()
       const error = yield* collectModelTurnResponse({
+        ...streamAddress,
         turnStream: Stream.fail(new ProviderError({ message: "boom", model: "test/model" })),
         sessionId,
         branchId,
@@ -98,6 +116,7 @@ describe("agent turn response collectors", () => {
       const activeStream = yield* makeActiveStream(true)
       const { events, layer } = yield* captureEvents()
       const collected = yield* collectFailedModelTurnResponse({
+        ...streamAddress,
         streamError: new ProviderError({ message: "interrupted boom", model: "test/model" }),
         sessionId,
         branchId,
@@ -119,6 +138,7 @@ describe("agent turn response collectors", () => {
       const toolCallId = ToolCallId.make("collector-tool")
 
       const collected = yield* collectExternalTurnResponse({
+        ...streamAddress,
         turnStream: Stream.fromIterable([
           Response.makePart("tool-call", {
             id: toolCallId,
@@ -186,6 +206,7 @@ describe("agent turn response collectors", () => {
         })
 
         yield* collectExternalTurnResponse({
+          ...streamAddress,
           turnStream: Stream.fromIterable([toolCallPart, toolCallPart]),
           sessionId,
           branchId,
@@ -216,6 +237,7 @@ describe("agent turn response collectors", () => {
         })
 
         yield* collectExternalTurnResponse({
+          ...streamAddress,
           turnStream: Stream.fromIterable([toolResultPart, toolResultPart]),
           sessionId,
           branchId,
@@ -234,6 +256,7 @@ describe("agent turn response collectors", () => {
       const { events, layer } = yield* captureEvents()
 
       const collected = yield* collectModelTurnResponse({
+        ...streamAddress,
         turnStream: Stream.concat(
           Stream.fromIterable([textDeltaPart("partial")]),
           Stream.fail(new ProviderError({ message: "late boom", model: "test/model" })),

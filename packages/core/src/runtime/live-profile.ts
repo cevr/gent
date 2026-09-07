@@ -356,9 +356,6 @@ const runtimeProfileFromDeclarations = (params: {
   return {
     cwd: params.declarations.cwd,
     resolved,
-    // The live host owns the resource context. Legacy callers that need the
-    // old per-extension shape still use resolveRuntimeProfile/buildProfileRuntime.
-    resourceContexts: [],
     coreSections: params.declarations.coreSections,
     extensionSectionInputs: [...resolved.promptSections.values()],
     instructions: params.declarations.instructions,
@@ -550,10 +547,9 @@ export const makeRuntimeProfileOwner = (params: {
         Effect.provideService(ConfigService, params.configService),
         Effect.provideService(GentPlatform, params.platform),
       )
-      const resources = collectResourceEntries(
-        declarations.extensionDeclarations.active,
-        "process",
-      ).map(({ resource }) => resource)
+      const resources = collectResourceEntries(declarations.resolved.extensions, "process").map(
+        ({ resource }) => resource,
+      )
       const profile = runtimeProfileFromDeclarations({ declarations, scheduledJobFailures: [] })
       const revision = profileRevision(
         params.platform,

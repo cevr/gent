@@ -456,6 +456,38 @@ const messageInsertionOrderMigration = Effect.gen(function* () {
   )
 })
 
+const cellExecutionsMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`
+    CREATE TABLE cell_executions (
+      assistant_message_id TEXT NOT NULL,
+      tool_call_id TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      result_json TEXT,
+      completed_at INTEGER,
+      PRIMARY KEY (assistant_message_id, tool_call_id),
+      CHECK ((result_json IS NULL) = (completed_at IS NULL)),
+      FOREIGN KEY (assistant_message_id) REFERENCES messages(id) ON DELETE CASCADE
+    )
+  `)
+})
+
+const cellToolOperationsMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`
+    CREATE TABLE cell_tool_operations (
+      assistant_message_id TEXT NOT NULL,
+      cell_tool_call_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      record_json TEXT NOT NULL,
+      request_id TEXT UNIQUE,
+      PRIMARY KEY (assistant_message_id, cell_tool_call_id, operation_id),
+      FOREIGN KEY (assistant_message_id, cell_tool_call_id)
+        REFERENCES cell_executions(assistant_message_id, tool_call_id) ON DELETE CASCADE
+    )
+  `)
+})
+
 // oxlint-disable-next-line effect/noUnknownParameters -- SQLite migrations expose unknown failure causes.
 const wrapMigrationError = (error: unknown): StorageError =>
   new StorageError({ message: "Storage migration failed", cause: error })
@@ -493,6 +525,8 @@ const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient>
       "009_tool_call_bindings": toolCallBindingsMigration,
       "010_resource_graph_state": resourceGraphStateMigration,
       "011_message_insertion_order": messageInsertionOrderMigration,
+      "012_cell_executions": cellExecutionsMigration,
+      "013_cell_tool_operations": cellToolOperationsMigration,
     }),
     table: "gent_storage_migrations",
   }).pipe(

@@ -108,8 +108,18 @@ export interface ExtensionSessionService {
   readonly listBranches: Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
 }
 
-export interface ExtensionAgentService {
+export interface ExtensionAgentService extends Pick<
+  ExtensionHostContext.Agent,
+  "inspect" | "wait" | "cancel"
+> {
   readonly listAgents: Effect.Effect<ReadonlyArray<AgentDefinition>, ExtensionServiceError>
+  /** Start from a host-owned tool call. The host supplies parent and tool identity. */
+  readonly start: (
+    params: Omit<Parameters<ExtensionHostContext.Agent["start"]>[0], "toolCallId">,
+  ) => Effect.Effect<
+    Effect.Success<ReturnType<ExtensionHostContext.Agent["start"]>>,
+    AgentRunError | ExtensionServiceError
+  >
   readonly run: (params: {
     readonly agent: AgentDefinition
     readonly prompt: string
@@ -281,6 +291,19 @@ export const extensionServicesFromHostContext = (
     }
     const Agent: ExtensionAgentService = {
       listAgents: mapError("ExtensionAgent", "listAgents", ctx.agent.listAgents()),
+      start: Effect.fn("ExtensionAgent.start")(function* (params) {
+        if (Predicate.isUndefined(ctx.toolCallId)) {
+          return yield* new ExtensionServiceError({
+            service: "ExtensionAgent",
+            operation: "start",
+            message: "Child start requires a host-owned tool call",
+          })
+        }
+        return yield* ctx.agent.start({ ...params, toolCallId: ctx.toolCallId })
+      }),
+      inspect: ctx.agent.inspect,
+      wait: ctx.agent.wait,
+      cancel: ctx.agent.cancel,
       run: (params) =>
         ctx.agent.run(params).pipe(
           Effect.mapError((cause) => {

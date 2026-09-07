@@ -21,6 +21,45 @@ const fsLayer = Layer.provideMerge(
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 describe("setupExtension", () => {
+  it.scopedLive("requires user trust before project module code runs", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const directory = yield* fs.makeTempDirectoryScoped({
+        directory: path.resolve(import.meta.dir, "../../.."),
+        prefix: ".tmp-project-trust-",
+      })
+      const userDir = path.join(directory, "home/.gent/extensions")
+      const projectDir = path.join(directory, "project/.gent/extensions")
+      yield* fs.makeDirectory(userDir, { recursive: true })
+      yield* fs.makeDirectory(projectDir, { recursive: true })
+      const projectRoot = yield* fs.realPath(path.join(directory, "project"))
+      const marker = path.join(directory, "import-ran")
+      yield* fs.writeFileString(
+        path.join(projectDir, "entry.ts"),
+        `import { writeFileSync } from "node:fs";
+import { Effect } from "effect";
+writeFileSync(${encodeJson(marker)}, "ran");
+export default { manifest: { id: "trusted-project" }, setup: Effect.succeed({}) };`,
+      )
+      const grant = encodeJson({ trustedProjects: [projectRoot] })
+      yield* fs.writeFileString(path.join(projectDir, "../config.json"), grant)
+      const denied = yield* discoverExtensions({ userDir, projectDir })
+      expect(denied.loaded).toHaveLength(0)
+      expect(denied.skipped[0]?.error).toContain("not trusted")
+      expect(yield* fs.exists(marker)).toBe(false)
+      yield* fs.writeFileString(path.join(userDir, "../config.json"), grant)
+      const allowed = yield* discoverExtensions({ userDir, projectDir })
+      expect(allowed.loaded.map((entry) => entry.extension.manifest.id)).toEqual([
+        ExtensionId.make("trusted-project"),
+      ])
+      expect(yield* fs.readFileString(marker)).toBe("ran")
+      yield* fs.writeFileString(path.join(userDir, "../config.json"), "invalid JSON")
+      const revoked = yield* discoverExtensions({ userDir, projectDir })
+      expect(revoked.loaded).toHaveLength(0)
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
   it.live("preserves the explicit loaded artifact identity", () =>
     Effect.gen(function* () {
       const artifactIdentity = LoadedArtifactIdentity.make("@gent/test-loader@artifact-1")

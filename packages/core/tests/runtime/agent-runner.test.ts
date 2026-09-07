@@ -4,10 +4,12 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   Context,
   Effect,
+  Exit,
   Fiber,
   Layer,
   Option,
   Predicate,
+  Ref,
   Schema,
   Stream,
   SubscriptionRef,
@@ -19,6 +21,8 @@ import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-runner"
+import { makeDurableAgentRunRuntime } from "../../src/runtime/agent/agent-runner.durable"
+import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { makeEphemeralAgentRootLayerFactory } from "../../src/runtime/agent/ephemeral-root"
 import { ConfigService } from "../../src/runtime/config-service"
@@ -28,9 +32,12 @@ import { emptyQueueSnapshot } from "@gent/core-internal/domain/queue"
 import { dateFromMillis, Session, Branch, Message } from "@gent/core-internal/domain/message"
 import {
   AgentRunnerService,
+  AgentDefinition,
+  DEFAULT_AGENT_NAME,
   AgentRunError,
   AgentName,
   DEFAULT_MAX_AGENT_RUN_DEPTH,
+  makeRunSpec,
 } from "@gent/core-internal/domain/agent"
 import {
   AllBuiltinAgents,
@@ -40,6 +47,7 @@ import {
   BranchId,
   ExtensionId,
   MessageId,
+  RequestId,
   SessionId,
   ToolCallId,
 } from "@gent/core-internal/domain/ids"
@@ -48,20 +56,31 @@ import {
   AgentEvent,
   EventStore,
   EventStoreError,
+  StreamEnded,
   ToolCallStarted,
   ToolCallSucceeded,
+  TurnCompleted,
 } from "@gent/core-internal/domain/event"
 import { EventPublisher, EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { makeStorageTransaction, SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
+import { SessionOperationStorage } from "@gent/core-internal/storage/session-operation-storage"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { EventStorage } from "@gent/core-internal/storage/event-storage"
-import type { RelationshipStorage } from "@gent/core-internal/storage/relationship-storage"
+import { RelationshipStorage } from "@gent/core-internal/storage/relationship-storage"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { loadAgentRunSuccessData } from "../../src/runtime/agent/agent-runner.metadata"
-import { defineResource, ExtensionContext, tool } from "@gent/core/extensions/api"
+import {
+  defineResource,
+  defineExtension,
+  ExtensionContext,
+  request,
+  tool,
+} from "@gent/core/extensions/api"
+import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
+import { CapabilityError } from "@gent/core-internal/domain/capability"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
 import {
   SequenceRecorder,
@@ -69,6 +88,7 @@ import {
   assertSequence,
 } from "@gent/core-internal/test-utils"
 import { SessionCommands } from "../../src/server/session-commands"
+import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { Permission } from "@gent/core-internal/domain/permission"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import {
@@ -309,6 +329,621 @@ describe("helper run spec propagation", () => {
   )
 })
 describe("AgentRunner", () => {
+  it.scopedLive(
+    "extension RPC observes and cancels a child after its parent turn ends",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("start-child", {}),
+          { ...textStep("child reply"), gated: true },
+          textStep("parent finished"),
+        ])
+        const child = yield* Ref.make(Option.none<{ sessionId: SessionId; branchId: BranchId }>())
+        const requestId = RequestId.make("rpc-child")
+        const agent = new AgentDefinition({ name: AgentName.make("child") })
+        const input = { agent, prompt: "Wait for the parent", requestId }
+        const extension = defineExtension({
+          id: "child-lifecycle",
+          agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME }), agent],
+          tools: [
+            tool({
+              id: "start-child",
+              description: "Start a durable child",
+              params: Schema.Struct({}),
+              output: Schema.Boolean,
+              execute: Effect.fn("test.startChild")(function* () {
+                const ctx = yield* ExtensionContext
+                const first = yield* ctx.Agent.start(input)
+                expect(yield* ctx.Agent.start(input)).toEqual(first)
+                yield* Ref.set(child, Option.some(first))
+                // Hold the parent until the gated child model starts, fixing provider order.
+                yield* controls.waitForCall(1)
+                return true
+              }),
+            }),
+          ],
+          requests: [
+            request({
+              id: "child-status",
+              input: Schema.Literals(["inspect", "wait", "cancel", "unowned-start"]),
+              output: Schema.Boolean,
+              execute: Effect.fn("test.childStatus")(
+                function* (action) {
+                  const ctx = yield* ExtensionContext
+                  if (action === "unowned-start") {
+                    const error = yield* ctx.Agent.start(input).pipe(Effect.flip)
+                    return error.message === "Child start requires a host-owned tool call"
+                  }
+                  if (action === "inspect")
+                    return Option.isSome((yield* ctx.Agent.inspect({ requestId })).completion)
+                  if (action === "cancel") {
+                    yield* ctx.Agent.cancel({ requestId })
+                    const stopped = yield* ctx.Agent.wait({ requestId, waitMs: 2000 })
+                    return Option.getOrUndefined(stopped.completion)?.interrupted === true
+                  }
+                  return yield* ctx.Agent.wait({ requestId, waitMs: 25 }).pipe(
+                    Effect.map((result) => Option.isSome(result.completion)),
+                    Effect.catchTag("TimeoutError", () => Effect.succeed(false)),
+                  )
+                },
+                Effect.mapError(
+                  (cause) =>
+                    new CapabilityError({
+                      extensionId: ExtensionId.make("child-lifecycle"),
+                      capabilityId: "child-status",
+                      reason: String(cause),
+                    }),
+                ),
+              ),
+            }),
+          ],
+        })
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          providerLayer,
+          agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME }), agent],
+          extensionInputs: [extension],
+          subagentRunner: "live",
+        })
+        yield* client.message.send({ sessionId, branchId, content: "Start a child" })
+        const parentEvents = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.takeUntil((envelope) => envelope.event._tag === "TurnCompleted"),
+          Stream.runCollect,
+        )
+        expect(parentEvents.filter((envelope) => envelope.event._tag === "ErrorOccurred")).toEqual(
+          [],
+        )
+        expect(Option.isSome(yield* Ref.get(child))).toBe(true)
+        const address = {
+          sessionId,
+          branchId,
+          extensionId: ExtensionId.make("child-lifecycle"),
+          capabilityId: "child-status",
+        }
+        expect(yield* client.extension.request({ ...address, input: "inspect" })).toBe(false)
+        expect(yield* client.extension.request({ ...address, input: "wait" })).toBe(false)
+        expect(yield* client.extension.request({ ...address, input: "unowned-start" })).toBe(true)
+        const other = yield* client.branch.create({ sessionId })
+        const foreign = yield* client.extension
+          .request({ ...address, branchId: other.branchId, input: "cancel" })
+          .pipe(Effect.exit)
+        expect(Exit.isFailure(foreign)).toBe(true)
+        expect(yield* client.extension.request({ ...address, input: "inspect" })).toBe(false)
+        expect(yield* client.extension.request({ ...address, input: "cancel" })).toBe(true)
+        expect(yield* client.extension.request({ ...address, input: "inspect" })).toBe(true)
+        const handle = yield* Effect.fromOption(yield* Ref.get(child))
+        const messages = yield* client.message.list({ branchId: handle.branchId })
+        expect(messages.filter((message) => message.role === "user")).toHaveLength(1)
+        expect(yield* controls.callCount).toBe(3)
+      }).pipe(Effect.timeout("8 seconds")),
+    10000,
+  )
+
+  it.scopedLive(
+    "starts one queue-owned child and returns before its model completes",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...textStep("durable child completed"), gated: true },
+        ])
+        const context = yield* Layer.build(makeLiveAgentRunnerLayer(providerLayer))
+        yield* Effect.gen(function* () {
+          const runtime = yield* AgentRunnerService
+          const sessions = yield* SessionStorage
+          const branches = yield* BranchStorage
+          const parentSessionId = SessionId.make("start-parent")
+          const parentBranchId = BranchId.make("start-parent-branch")
+          const now = dateFromMillis(1_767_225_600_000)
+          yield* sessions.createSession(
+            new Session({ id: parentSessionId, createdAt: now, updatedAt: now }),
+          )
+          yield* branches.createBranch(
+            new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
+          )
+          const input = {
+            agent: yield* Effect.fromOption(Option.fromUndefinedOr(getBuiltinAgent("explore"))),
+            prompt: "Run independently",
+            cwd: "/tmp",
+            parentSessionId,
+            parentBranchId,
+            toolCallId: ToolCallId.make("start-tool-call"),
+            requestId: RequestId.make("stable-child-start"),
+          }
+          const first = yield* runtime.start(input).pipe(Effect.scoped)
+          yield* controls.waitForCall(0)
+          const handle = { requestId: input.requestId, parentSessionId, parentBranchId }
+          expect(yield* runtime.inspect(handle)).toEqual({ ...first, completion: Option.none() })
+          for (const invalid of [
+            { ...handle, parentSessionId: SessionId.make("other-parent") },
+            { ...handle, parentBranchId: BranchId.make("other-branch") },
+            { ...handle, requestId: RequestId.make("missing-start") },
+          ]) {
+            const rejected = yield* runtime.inspect(invalid).pipe(Effect.flip)
+            expect(rejected.message).toBe("Agent-start receipt not owned by parent")
+          }
+          const foreign = yield* runtime
+            .inspect(handle)
+            .pipe(
+              Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("1".repeat(64))),
+              Effect.flip,
+            )
+          expect(foreign.message).toBe("Agent-start receipt not owned by parent")
+          const timedOut = yield* runtime.wait({ ...handle, waitMs: 25 }).pipe(Effect.flip)
+          expect(timedOut._tag).toBe("TimeoutError")
+          const transaction = yield* makeStorageTransaction
+          const heldTransaction = yield* transaction(
+            runtime.wait({ ...handle, waitMs: 2000 }),
+          ).pipe(Effect.flip)
+          expect(heldTransaction.message).toBe("Child wait must run outside a caller transaction")
+          expect(yield* runtime.inspect(handle)).toEqual({ ...first, completion: Option.none() })
+          for (const waitMs of [0, -1, 30_001, 1.5, Number.NaN]) {
+            const invalidWait = yield* runtime.wait({ ...handle, waitMs }).pipe(Effect.flip)
+            expect(invalidWait._tag).toBe("AgentRunError")
+          }
+          expect(yield* runtime.start(input)).toEqual(first)
+          expect(yield* controls.callCount).toBe(1)
+          expect(
+            yield* (yield* RelationshipStorage).getChildSessions(parentSessionId),
+          ).toHaveLength(1)
+          yield* controls.emitAll(0)
+          const waited = yield* runtime.wait({ ...handle, waitMs: 2000 })
+          expect(Option.isSome(waited.completion)).toBe(true)
+          const storage = yield* MessageStorage
+          const completed = yield* waitFor(storage.listMessages(first.branchId), (messages) =>
+            messages.some((message) =>
+              message.parts.some(
+                (part) => part.type === "text" && part.text === "durable child completed",
+              ),
+            ),
+          )
+          expect(completed.map((message) => message.role)).toEqual(["user", "assistant"])
+          expect(completed[0]?.id).toBe(MessageId.make("agent-start:stable-child-start"))
+          const events = yield* EventStorage
+          const streamEnd = yield* events.getLatestEvent({
+            ...first,
+            tags: ["StreamEnded"],
+            messageId: MessageId.make("agent-start:stable-child-start"),
+          })
+          expect(streamEnd).toEqual(
+            expect.objectContaining({
+              _tag: "StreamEnded",
+              messageId: MessageId.make("agent-start:stable-child-start"),
+              step: 1,
+            }),
+          )
+          const completion = yield* waitFor(
+            events.getLatestEvent({ ...first, tags: ["TurnCompleted"] }),
+            (event) => event?._tag === "TurnCompleted",
+          )
+          expect(completion).toEqual(
+            expect.objectContaining({
+              messageId: MessageId.make("agent-start:stable-child-start"),
+              streamFailed: false,
+            }),
+          )
+          // A later turn receipt must not replace the admitted child's exact completion.
+          yield* events.appendEvent(
+            TurnCompleted.make({
+              ...first,
+              messageId: MessageId.make("unrelated-child-turn"),
+              durationMs: 1,
+              streamFailed: true,
+            }),
+          )
+          expect(yield* runtime.inspect(handle)).toEqual({
+            ...first,
+            completion: Option.some(yield* Schema.decodeUnknownEffect(TurnCompleted)(completion)),
+          })
+          expect(yield* runtime.wait({ ...handle, waitMs: 2000 })).toEqual(waited)
+          expect(yield* runtime.start(input)).toEqual(first)
+          expect(yield* controls.callCount).toBe(1)
+          yield* sessions.deleteSession(first.sessionId)
+          const deleted = yield* runtime.inspect(handle).pipe(Effect.flip)
+          expect(deleted.message).toBe("Agent-start child no longer exists")
+        }).pipe(Effect.provideContext(context))
+      }).pipe(Effect.timeout("6 seconds")),
+    8000,
+  )
+
+  it.scopedLive(
+    "cancels the owned child turn and leaves later work intact",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...textStep("cancelled reply"), gated: true },
+          { ...textStep("later reply"), gated: true },
+        ])
+        const context = yield* Layer.build(makeLiveAgentRunnerLayer(providerLayer))
+        yield* Effect.gen(function* () {
+          const runner = yield* AgentRunnerService
+          const runtime = yield* SessionRuntime
+          const sessions = yield* SessionStorage
+          const branches = yield* BranchStorage
+          const parentSessionId = SessionId.make("cancel-parent")
+          const parentBranchId = BranchId.make("cancel-parent-branch")
+          const now = dateFromMillis(1_767_225_600_000)
+          yield* sessions.createSession(
+            new Session({ id: parentSessionId, createdAt: now, updatedAt: now }),
+          )
+          yield* branches.createBranch(
+            new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
+          )
+          const handle = {
+            requestId: RequestId.make("cancel-child"),
+            parentSessionId,
+            parentBranchId,
+          }
+          const child = yield* runner.start({
+            agent: yield* Effect.fromOption(Option.fromUndefinedOr(getBuiltinAgent("explore"))),
+            prompt: "Wait for cancellation",
+            cwd: "/tmp",
+            parentSessionId,
+            parentBranchId,
+            toolCallId: ToolCallId.make("cancel-tool"),
+            requestId: handle.requestId,
+          })
+          yield* controls.waitForCall(0)
+          const foreign = yield* runner
+            .cancel({
+              ...handle,
+              parentBranchId: BranchId.make("foreign-branch"),
+            })
+            .pipe(Effect.flip)
+          expect(foreign.message).toBe("Agent-start receipt not owned by parent")
+          const transaction = yield* makeStorageTransaction
+          const held = yield* transaction(runner.cancel(handle)).pipe(Effect.flip)
+          expect(held.message).toBe("Child cancellation must run outside a caller transaction")
+          yield* runner.cancel(handle)
+          const stopped = yield* runner.wait({ ...handle, waitMs: 2000 })
+          expect(Option.getOrUndefined(stopped.completion)?.interrupted).toBe(true)
+          yield* runtime.sendUserMessage({
+            ...child,
+            content: "Later work",
+            requestId: RequestId.make("later-child-work"),
+            completion: "admission",
+          })
+          yield* controls.waitForCall(1)
+          yield* runner.cancel(handle)
+          yield* controls.emitAll(1)
+          const messages = yield* waitFor(
+            (yield* MessageStorage).listMessages(child.branchId),
+            (items) =>
+              items.some((item) =>
+                item.parts.some((part) => part.type === "text" && part.text === "later reply"),
+              ),
+          )
+          expect(messages.filter((message) => message.role === "user")).toHaveLength(2)
+          expect(yield* controls.callCount).toBe(2)
+          expect(yield* runner.inspect(handle)).toEqual(stopped)
+        }).pipe(Effect.provideContext(context))
+      }).pipe(Effect.timeout("6 seconds")),
+    8000,
+  )
+
+  it.scopedLive("reuses atomic child admission and rejects changed or deleted starts", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeDurableAgentRunRuntime
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const parentSessionId = SessionId.make("admission-parent")
+      const parentBranchId = BranchId.make("admission-parent-branch")
+      const now = dateFromMillis(1_767_225_600_000)
+      yield* sessions.createSession(
+        new Session({ id: parentSessionId, createdAt: now, updatedAt: now }),
+      )
+      yield* branches.createBranch(
+        new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
+      )
+      const input = {
+        agent: { name: AgentName.make("explore") },
+        prompt: "Admitted child",
+        cwd: "/tmp",
+        parentSessionId,
+        parentBranchId,
+        admission: { requestId: RequestId.make("child-start") },
+      }
+      const results = yield* Effect.forEach(
+        [1, 2],
+        () => runtime.createDurableAgentRunSession(input),
+        { concurrency: 2 },
+      )
+      expect(results[0]).toEqual(results[1])
+      const first = results[0]
+      if (Predicate.isUndefined(first)) return yield* Effect.die("Missing child")
+      expect(yield* (yield* RelationshipStorage).getChildSessions(parentSessionId)).toHaveLength(1)
+      const changed = yield* runtime
+        .createDurableAgentRunSession({ ...input, prompt: "Changed" })
+        .pipe(Effect.flip)
+      expect(changed).toMatchObject({
+        _tag: "AgentRunError",
+        message: "Agent-start request input changed",
+      })
+      yield* sessions.deleteSession(first.sessionId)
+      const deleted = yield* runtime.createDurableAgentRunSession(input).pipe(Effect.flip)
+      expect(deleted).toMatchObject({
+        _tag: "AgentRunError",
+        message: "Agent-start child no longer exists",
+      })
+      expect(yield* (yield* RelationshipStorage).getChildSessions(parentSessionId)).toEqual([])
+    }).pipe(
+      Effect.timeout("4 seconds"),
+      Effect.provide(makeLiveAgentRunnerLayer(LanguageModelLayers.debug())),
+    ),
+  )
+
+  it.scopedLive(
+    "concurrent admission caps children and cancellation completes an unsubmitted child",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          textStep("finished"),
+        ])
+        const context = yield* Layer.build(makeLiveAgentRunnerLayer(providerLayer))
+        yield* Effect.gen(function* () {
+          const runner = yield* makeDurableAgentRunRuntime
+          const parentSessionId = SessionId.make("limited-parent")
+          const parentBranchId = BranchId.make("limited-branch")
+          const now = dateFromMillis(1_767_225_600_000)
+          yield* (yield* SessionStorage).createSession(
+            new Session({ id: parentSessionId, createdAt: now, updatedAt: now }),
+          )
+          yield* (yield* BranchStorage).createBranch(
+            new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
+          )
+          const toolCallId = ToolCallId.make("limited-start-tool")
+          const runSpec = makeRunSpec({ persistence: "durable", parentToolCallId: toolCallId })
+          const base = {
+            agent: { name: AgentName.make("explore") },
+            prompt: "bounded child",
+            cwd: "/tmp",
+            parentSessionId,
+            parentBranchId,
+            toolCallId,
+          }
+          const inputs = [0, 1, 2, 3, 4].map((id) => ({
+            ...base,
+            admission: { requestId: RequestId.make(`limited-${id}`), runSpec },
+          }))
+          const results = yield* Effect.forEach(
+            inputs,
+            (input) =>
+              runner.createDurableAgentRunSession(input).pipe(
+                Effect.map((child) => ({ input, child })),
+                Effect.exit,
+              ),
+            { concurrency: 5 },
+          )
+          const accepted = results.filter(Exit.isSuccess)
+          expect(accepted).toHaveLength(4)
+          expect(results.filter(Exit.isFailure)).toHaveLength(1)
+          expect(yield* controls.callCount).toBe(0)
+          const first = accepted[0]
+          if (Predicate.isUndefined(first)) return yield* Effect.die("Missing admitted child")
+          const freshRunner = yield* makeDurableAgentRunRuntime
+          expect(yield* freshRunner.createDurableAgentRunSession(first.value.input)).toEqual(
+            first.value.child,
+          )
+          const extra = {
+            ...base,
+            admission: { requestId: RequestId.make("limited-extra"), runSpec },
+          }
+          const full = yield* freshRunner.createDurableAgentRunSession(extra).pipe(Effect.flip)
+          expect(full.message).toBe("Parent branch already has 4 unfinished child starts")
+          const wrongBranch = yield* freshRunner
+            .createDurableAgentRunSession({
+              ...extra,
+              parentBranchId: BranchId.make("not-parent-branch"),
+            })
+            .pipe(Effect.flip)
+          expect(wrongBranch.message).toBe("Agent-start branch does not belong to parent")
+          const handle = {
+            parentSessionId,
+            parentBranchId,
+            requestId: first.value.input.admission.requestId,
+          }
+          yield* freshRunner.cancel(handle)
+          const cancelled = yield* freshRunner.wait({ ...handle, waitMs: 2000 })
+          expect(Option.getOrUndefined(cancelled.completion)?.interrupted).toBe(true)
+          yield* runner.start(first.value.input)
+          yield* freshRunner.cancel(handle)
+          expect(
+            yield* (yield* MessageStorage).listMessages(first.value.child.branchId),
+          ).toHaveLength(1)
+          yield* freshRunner.createDurableAgentRunSession(extra)
+          expect(
+            yield* (yield* RelationshipStorage).getChildSessions(parentSessionId),
+          ).toHaveLength(5)
+          expect(yield* controls.callCount).toBe(0)
+        }).pipe(Effect.provideContext(context))
+      }).pipe(Effect.timeout("5 seconds")),
+    7000,
+  )
+
+  it.scopedLive(
+    "child model attempts share a durable limit across concurrent calls and branches",
+    () =>
+      Effect.gen(function* () {
+        const runner = yield* makeDurableAgentRunRuntime
+        const operations = yield* SessionOperationStorage
+        const branches = yield* BranchStorage
+        const parentSessionId = SessionId.make("model-limit-parent")
+        const parentBranchId = BranchId.make("model-limit-parent-branch")
+        const now = dateFromMillis(1_767_225_600_000)
+        yield* (yield* SessionStorage).createSession(
+          new Session({ id: parentSessionId, createdAt: now, updatedAt: now }),
+        )
+        yield* branches.createBranch(
+          new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
+        )
+        expect(
+          yield* operations.reserveChildModelAttempt({
+            sessionId: parentSessionId,
+            branchId: parentBranchId,
+          }),
+        ).toEqual(Option.none())
+        const toolCallId = ToolCallId.make("model-limit-tool")
+        const input = {
+          agent: { name: AgentName.make("explore") },
+          prompt: "Bound model calls",
+          cwd: "/tmp",
+          parentSessionId,
+          parentBranchId,
+          toolCallId,
+          admission: {
+            requestId: RequestId.make("model-limit-start"),
+            runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: toolCallId }),
+          },
+        }
+        const child = yield* runner.createDurableAgentRunSession(input)
+        const transaction = yield* makeStorageTransaction
+        const held = yield* transaction(operations.reserveChildModelAttempt(child)).pipe(
+          Effect.flip,
+        )
+        expect(held._tag).toBe("StorageError")
+        const wrong = yield* operations
+          .reserveChildModelAttempt({
+            sessionId: parentSessionId,
+            branchId: child.branchId,
+          })
+          .pipe(Effect.flip)
+        expect(wrong._tag).toBe("StorageError")
+        const results = yield* Effect.forEach(
+          Array.from({ length: 33 }, (_, index) => index),
+          () => operations.reserveChildModelAttempt(child),
+          { concurrency: 8 },
+        )
+        expect(results.filter((value) => Option.isSome(value) && value.value)).toHaveLength(32)
+        expect(results.filter((value) => Option.isSome(value) && !value.value)).toHaveLength(1)
+        const branchId = BranchId.make("model-limit-second-branch")
+        yield* branches.createBranch(
+          new Branch({ id: branchId, sessionId: child.sessionId, createdAt: now }),
+        )
+        expect(
+          yield* operations.reserveChildModelAttempt({ sessionId: child.sessionId, branchId }),
+        ).toEqual(Option.some(false))
+        const fresh = yield* Layer.build(Layer.fresh(SessionOperationStorage.Live))
+        expect(
+          yield* Context.get(fresh, SessionOperationStorage).reserveChildModelAttempt(child),
+        ).toEqual(Option.some(false))
+        yield* runner.start(input)
+        const completed = yield* runner.wait({
+          parentSessionId,
+          parentBranchId,
+          requestId: input.admission.requestId,
+          waitMs: 2000,
+        })
+        const receipt = yield* Effect.fromOption(completed.completion)
+        expect(receipt.streamFailed).toBe(true)
+        const events = yield* (yield* EventStorage).listEvents(child)
+        expect(
+          events.some(
+            ({ event }) =>
+              event._tag === "ErrorOccurred" &&
+              event.error.includes("Child model-attempt budget exhausted"),
+          ),
+        ).toBe(true)
+      }).pipe(
+        Effect.timeout("4 seconds"),
+        Effect.provide(makeLiveAgentRunnerLayer(LanguageModelLayers.debug())),
+      ),
+  )
+
+  it.scopedLive("stops a running child after 32 model attempts", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        ...Array.from({ length: 32 }, (_, index) =>
+          toolCallStep("bash", { command: `step-${index}` }),
+        ),
+        textStep("Must not reach this response"),
+      ])
+      const context = yield* Layer.build(makeLiveAgentRunnerLayer(providerLayer))
+      yield* Effect.gen(function* () {
+        const parentSessionId = SessionId.make("running-limit-parent")
+        const parentBranchId = BranchId.make("running-limit-branch")
+        const now = dateFromMillis(1_767_225_600_000)
+        yield* (yield* SessionStorage).createSession(
+          new Session({ id: parentSessionId, createdAt: now, updatedAt: now }),
+        )
+        yield* (yield* BranchStorage).createBranch(
+          new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
+        )
+        const runner = yield* AgentRunnerService
+        const requestId = RequestId.make("running-limit-start")
+        const child = yield* runner.start({
+          agent: { name: DEFAULT_AGENT_NAME },
+          prompt: "Keep calling bash",
+          cwd: "/tmp",
+          parentSessionId,
+          parentBranchId,
+          requestId,
+          toolCallId: ToolCallId.make("running-limit-tool"),
+        })
+        const completed = yield* runner.wait({
+          parentSessionId,
+          parentBranchId,
+          requestId,
+          waitMs: 3000,
+        })
+        const receipt = yield* Effect.fromOption(completed.completion)
+        expect(receipt.streamFailed).toBe(true)
+        expect(yield* controls.callCount).toBe(32)
+        const messages = yield* (yield* MessageStorage).listMessages(child.branchId)
+        expect(messages.filter((message) => message.role === "user")).toHaveLength(1)
+        const events = yield* (yield* EventStorage).listEvents(child)
+        expect(
+          events.some(
+            ({ event }) =>
+              event._tag === "ErrorOccurred" &&
+              event.error.includes("Child model-attempt budget exhausted"),
+          ),
+        ).toBe(true)
+      }).pipe(Effect.provideContext(context))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("does not create a durable child for a missing parent", () =>
+    Effect.gen(function* () {
+      const agent = getBuiltinAgent("explore")
+      if (Predicate.isUndefined(agent)) return yield* Effect.die("Missing agent fixture")
+      const runner = yield* AgentRunnerService
+      const parentSessionId = SessionId.make("missing-parent")
+      const result = yield* runner.run({
+        agent,
+        prompt: "Must not start",
+        parentSessionId,
+        parentBranchId: BranchId.make("missing-branch"),
+        cwd: "/tmp",
+        runSpec: { persistence: "durable" },
+      })
+      expect(result._tag).toBe("error")
+      if (result._tag === "error")
+        expect(result.error).toContain("ancestry is missing or incomplete")
+      expect(yield* (yield* RelationshipStorage).getChildSessions(parentSessionId)).toEqual([])
+    }).pipe(
+      Effect.timeout("4 seconds"),
+      Effect.provide(makeLiveAgentRunnerLayer(LanguageModelLayers.debug())),
+    ),
+  )
+
   it.live("publishes spawn and complete events", () =>
     Effect.gen(function* () {
       const recorderLayer = SequenceRecorder.Live
@@ -997,6 +1632,58 @@ describe("AgentRunner", () => {
   )
 })
 describe("agent runner metadata", () => {
+  it.live("reports only complete branch stream totals and preserves known zero", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const events = yield* EventStorage
+      const sessionId = SessionId.make("usage-session")
+      const now = dateFromMillis(1_767_225_600_000)
+      yield* sessions.createSession(
+        new Session({ id: sessionId, name: "Usage", createdAt: now, updatedAt: now }),
+      )
+      const known = { inputTokens: 10, outputTokens: 2 }
+      const missing = Option.getOrUndefined(Option.none<never>())
+      const cases = [
+        { name: "empty", usages: [], expected: missing },
+        {
+          name: "zero",
+          usages: [{ inputTokens: 0, outputTokens: 0 }],
+          expected: { input: 0, output: 0 },
+        },
+        { name: "known", usages: [known, known], expected: { input: 20, output: 4 } },
+        { name: "missing-last", usages: [known, missing], expected: missing },
+        { name: "missing-first", usages: [missing, known], expected: missing },
+        {
+          name: "negative",
+          usages: [known, { inputTokens: -1, outputTokens: 2 }],
+          expected: missing,
+        },
+        { name: "fraction", usages: [{ inputTokens: 1, outputTokens: 0.5 }], expected: missing },
+        {
+          name: "overflow",
+          usages: [{ inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: 2 }, known],
+          expected: missing,
+        },
+      ]
+      // All branches share a session. Prior branch receipts must not enter the next total.
+      for (const sample of cases) {
+        const branchId = BranchId.make(`usage-${sample.name}`)
+        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+        for (const usage of sample.usages) {
+          yield* events.appendEvent(StreamEnded.make({ sessionId, branchId, usage }))
+        }
+        const result = yield* loadAgentRunSuccessData({
+          sessionId,
+          branchId,
+          agentName: AgentName.make("explore"),
+          persistence: "durable",
+        })
+        expect(result.success.usage).toEqual(sample.expected)
+      }
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+  )
+
   it.live("keeps object tool arguments and ignores non-record inputs", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
@@ -1193,10 +1880,12 @@ describe("session depth guard", () => {
       }),
     ),
   )
-  it.live("nonexistent session returns depth 0", () =>
+  it.live("missing ancestry cannot grant root-level child admission", () =>
     run(
       Effect.gen(function* () {
-        expect(yield* getSessionDepth(SessionId.make("nonexistent"))).toBe(0)
+        const error = yield* getSessionDepth(SessionId.make("nonexistent")).pipe(Effect.flip)
+        expect(error._tag).toBe("AgentRunError")
+        expect(error.message).toContain("ancestry is missing or incomplete")
       }),
     ),
   )

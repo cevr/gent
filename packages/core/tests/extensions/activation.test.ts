@@ -1,8 +1,7 @@
 import { AgentName } from "@gent/core-internal/domain/agent"
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Path, Predicate, Schema } from "effect"
-import { narrowR } from "../helpers/effect"
+import { Context, Effect, Exit, FileSystem, Layer, Option, Path, Predicate, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import type {
   ExtensionLoadError,
@@ -11,14 +10,15 @@ import type {
 } from "../../src/domain/extension.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import {
-  reconcileLoadedExtensions,
   setupBuiltinExtensions,
   setupDiscoveredExtensions,
   validateLoadedExtensions,
 } from "../../src/runtime/extensions/activation"
-import { defineResource } from "@gent/core-internal/domain/contribution"
 import type { ExtensionContributions } from "@gent/core-internal/domain/contribution"
-import { tool } from "@gent/core/extensions/api"
+import { defineExtension, defineResource, ResourceId, tool } from "@gent/core/extensions/api"
+import { SessionProfileCache } from "../../src/runtime/session-profile"
+import { ConfigService } from "../../src/runtime/config-service"
+import { CronRuntime } from "../../src/runtime/extensions/resource-host/schedule-engine"
 import { GentToolMetadataTag, getToolMetadata } from "@gent/core-internal/domain/capability/tool"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
 import type { PromptSection } from "@gent/core-internal/domain/prompt"
@@ -49,6 +49,47 @@ const makeLoaded = (id: string, contributions: ExtensionContributions): LoadedEx
 })
 
 describe("extension activation isolation", () => {
+  it.scopedLive("failed replacement leaves no current Profile or usable old publication", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      let revision = "1"
+      const changing = makeBuiltin(
+        "changing",
+        Effect.sync(() => ({
+          resources: [
+            // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
+            defineResource({
+              id: "test/changing",
+              revision,
+              scope: "process",
+              layer: Layer.empty,
+              start: Effect.suspend(() => {
+                if (revision === "2") return Effect.die("replacement failed")
+                return Effect.void
+              }),
+            }) as never,
+          ],
+        })),
+      )
+      const context = yield* Layer.build(
+        SessionProfileCache.Live({
+          home,
+          platform: "test",
+          extensions: [changing],
+        }),
+      )
+      const cache = Context.get(context, SessionProfileCache)
+      const first = yield* cache.resolve(home)
+      if (!first.publication) return yield* Effect.die("Expected live publication")
+      revision = "2"
+      expect(Exit.isFailure(yield* cache.refresh(home).pipe(Effect.exit))).toBe(true)
+      expect(Option.isNone(yield* cache.current(home))).toBe(true)
+      expect(Exit.isFailure(yield* first.publication.run(Effect.void).pipe(Effect.exit))).toBe(true)
+      expect(Exit.isFailure(yield* cache.resolve(home).pipe(Effect.exit))).toBe(true)
+    }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
+  )
+
   it.live("builtin setup failure is isolated instead of crashing activation", () =>
     Effect.gen(function* () {
       const good = makeBuiltin(
@@ -411,169 +452,131 @@ describe("extension activation isolation", () => {
     }),
   )
 
-  it.scopedLive("reconciler owns startup and scheduler degradation in one result", () =>
-    narrowR(
+  it.scopedLive("live Profile isolates setup and scheduler failures", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const context = yield* Layer.build(
+        SessionProfileCache.Live({
+          home,
+          platform: "test",
+          extensions: [
+            makeBuiltin(
+              "healthy-ext",
+              Effect.succeed({
+                tools: [
+                  tool({
+                    id: "healthy_tool",
+                    description: "healthy",
+                    params: Schema.Struct({}),
+                    output: Schema.Void,
+                    execute: () => Effect.void,
+                  }),
+                ],
+                scheduledJobs: [
+                  {
+                    id: "reflect",
+                    cron: "0 21 * * 1-5",
+                    target: { agent: AgentName.make("memory:reflect"), prompt: "Reflect." },
+                  },
+                ],
+              }),
+            ),
+            makeBuiltin("broken-setup", Effect.die(new Error("setup boom"))),
+          ],
+          scheduledJobCommand: ["/usr/local/bin/gent"],
+          scheduledJobEnv: { HOME: home },
+        }).pipe(
+          Layer.provide(
+            Layer.succeed(
+              CronRuntime,
+              CronRuntime.of({
+                install: () => Effect.die(new Error("cron install boom")),
+                remove: () => Effect.void,
+              }),
+            ),
+          ),
+        ),
+      )
+      const cache = Context.get(context, SessionProfileCache)
+      const profile = yield* cache.resolve(home)
+      expect(profile.resolved.extensions.map((ext) => ext.manifest.id)).toEqual([
+        ExtensionId.make("healthy-ext"),
+      ])
+      expect([...profile.resolved.modelCapabilities.keys()]).toEqual(["healthy_tool"])
+      expect(profile.resolved.failedExtensions).toHaveLength(1)
+      expect(profile.resolved.failedExtensions[0]).toMatchObject({
+        manifest: { id: ExtensionId.make("broken-setup") },
+        phase: "setup",
+      })
+      expect(profile.resolved.failedExtensions[0]?.error).toContain("setup boom")
+      expect(profile.resolved.extensionStatuses[0]).toMatchObject({
+        status: "active",
+        scheduledJobFailures: [{ jobId: "reflect", error: "Error: cron install boom" }],
+      })
+    }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
+  )
+
+  it.scopedLive(
+    "failed first activation leaves no live Profile and closes acquired resources",
+    () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const home = yield* fs.makeTempDirectoryScoped()
-
-        const result = yield* reconcileLoadedExtensions({
-          extensions: [
-            makeLoaded("healthy-ext", {
-              tools: [
-                tool({
-                  id: "healthy_tool",
-                  description: "healthy",
-                  params: Schema.Struct({}),
-                  output: Schema.Void,
-                  execute: () => Effect.void,
-                }),
-              ],
-              resources: [
-                // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
-                defineResource({
-                  id: "test/activation/healthy/resource",
-                  scope: "process",
-                  layer: Layer.empty,
-                }) as never,
-              ],
-              scheduledJobs: [
-                {
-                  id: "reflect",
-                  cron: "0 21 * * 1-5",
-                  target: {
-                    agent: AgentName.make("memory:reflect"),
-                    prompt: "Reflect.",
-                  },
-                },
-              ],
-            }),
-          ],
-          failedExtensions: [
-            {
-              manifest: { id: ExtensionId.make("broken-setup") },
-              scope: "user",
-              sourcePath: "/tmp/broken.ts",
-              phase: "setup",
-              error: "setup boom",
-            },
-          ],
-          home,
-          command: ["/usr/local/bin/gent"],
-          env: { HOME: home },
-          schedulerRuntime: {
-            install: (_entryPath, _schedule, name) => {
-              if (name.includes("reflect")) {
-                return Effect.die(new Error("cron install boom"))
-              }
-              return Effect.void
-            },
-            remove: () => Effect.void,
-          },
-        })
-
-        expect(result.resolved.extensions.map((ext) => ext.manifest.id)).toEqual([
-          ExtensionId.make("healthy-ext"),
-        ])
-        expect(result.resolved.modelCapabilities.size).toBe(1)
-        expect(result.resolved.failedExtensions).toEqual([
-          {
-            manifest: { id: ExtensionId.make("broken-setup") },
-            scope: "user",
-            sourcePath: "/tmp/broken.ts",
-            phase: "setup",
-            error: "setup boom",
-          },
-        ])
-        expect(result.scheduledJobFailures).toHaveLength(1)
-        expect(result.scheduledJobFailures[0]).toMatchObject({
-          extensionId: ExtensionId.make("healthy-ext"),
-          jobId: "reflect",
-        })
-        expect(result.scheduledJobFailures[0]?.error).toContain("cron install boom")
-        expect(result.resolved.extensionStatuses).toEqual([
-          {
-            manifest: { id: ExtensionId.make("healthy-ext") },
-            scope: "builtin",
-            sourcePath: "builtin",
-            status: "active",
-            scheduledJobFailures: [{ jobId: "reflect", error: "Error: cron install boom" }],
-          },
-          {
-            manifest: { id: ExtensionId.make("broken-setup") },
-            scope: "user",
-            sourcePath: "/tmp/broken.ts",
-            phase: "setup",
-            error: "setup boom",
-            status: "failed",
-          },
-        ])
-      }).pipe(Effect.provide(fsLayer)),
-    ),
-  )
-
-  it.scopedLive("resource startup failure deactivates only the owning extension", () =>
-    narrowR(
-      Effect.gen(function* () {
-        const healthy = makeLoaded("healthy-ext", {
-          tools: [
-            tool({
-              id: "healthy_tool",
-              description: "healthy",
-              params: Schema.Struct({}),
-              output: Schema.Void,
-              execute: () => Effect.void,
-            }),
-          ],
+        let released = 0
+        let failStart = true
+        const healthy = defineExtension({
+          id: "healthy",
           resources: [
-            // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
+            // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
             defineResource({
-              id: "test/activation/healthy/start",
+              id: "test/healthy",
               scope: "process",
-              layer: Layer.empty,
-              start: Effect.void,
+              layer: Layer.effectDiscard(
+                Effect.addFinalizer(() =>
+                  Effect.sync(() => {
+                    released++
+                  }),
+                ),
+              ),
             }) as never,
           ],
         })
-        const broken = makeLoaded("broken-resource", {
-          tools: [
-            tool({
-              id: "broken_tool",
-              description: "broken",
-              params: Schema.Struct({}),
-              output: Schema.Void,
-              execute: () => Effect.void,
-            }),
-          ],
+        const broken = defineExtension({
+          id: "broken",
           resources: [
-            // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
+            // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
             defineResource({
-              id: "test/activation/broken/start",
+              id: "test/broken",
+              requires: [ResourceId.make("test/healthy")],
               scope: "process",
               layer: Layer.empty,
-              start: Effect.die(new Error("resource start boom")),
+              start: Effect.suspend(() => {
+                if (failStart) return Effect.die("resource start boom")
+                return Effect.void
+              }),
             }) as never,
           ],
         })
-
-        const result = yield* reconcileLoadedExtensions({
-          extensions: [healthy, broken],
-          home: "/tmp",
-          // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
-          command: undefined,
-        })
-
-        expect(result.resolved.extensions.map((ext) => ext.manifest.id)).toEqual([
-          ExtensionId.make("healthy-ext"),
+        const context = yield* Layer.build(
+          SessionProfileCache.Live({
+            home,
+            platform: "test",
+            extensions: [healthy, broken],
+          }),
+        )
+        const cache = Context.get(context, SessionProfileCache)
+        const failed = yield* cache.resolve(home).pipe(Effect.exit)
+        expect(Exit.isFailure(failed)).toBe(true)
+        expect(Option.isNone(yield* cache.current(home))).toBe(true)
+        expect(released).toBe(1)
+        failStart = false
+        const recovered = yield* cache.resolve(home)
+        expect(recovered.publication).toBeDefined()
+        expect(recovered.resolved.extensions.map((ext) => ext.manifest.id)).toEqual([
+          ExtensionId.make("broken"),
+          ExtensionId.make("healthy"),
         ])
-        expect(result.resolved.failedExtensions).toHaveLength(1)
-        expect(result.resolved.failedExtensions[0]).toMatchObject({
-          manifest: { id: ExtensionId.make("broken-resource") },
-          phase: "startup",
-        })
-        expect(result.resolved.failedExtensions[0]?.error).toContain("resource start boom")
-        expect([...result.resolved.modelCapabilities.keys()]).toEqual(["healthy_tool"])
-      }),
-    ),
+      }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
   )
 })

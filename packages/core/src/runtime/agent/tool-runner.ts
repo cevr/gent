@@ -23,7 +23,12 @@ import {
   type DynamicExtensionRegistryService,
   type DynamicToolEntry,
 } from "../../domain/dynamic-extension-registry.js"
-import { encodeToolOutput, summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
+import {
+  encodeToolOutput,
+  summarizeToolOutput,
+  stringifyOutput,
+  ToolResultFailure,
+} from "../../domain/tool-output.js"
 import { withWideEvent, WideEvent, WideEventBoundary } from "../wide-event-boundary"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { ToolCallId, type ExtensionId, type SessionId } from "../../domain/ids.js"
@@ -436,6 +441,18 @@ const runTool = Effect.fn("ToolRunner.execute")(function* (
       const failure: ToolExecutionError = executeResult.failure
       if (Schema.is(InteractionPendingError)(failure)) {
         return yield* failure
+      }
+      if (Schema.is(ToolResultFailure)(failure)) {
+        yield* WideEvent.failDomain("execution_failed", { message: failure.message })
+        return yield* finish(
+          Prompt.toolResultPart({
+            id: toolCall.toolCallId,
+            name: toolCall.toolName,
+            isFailure: true,
+            providerExecuted: false,
+            result: failure.result,
+          }),
+        )
       }
 
       const message = errorMessageFromAiError(toolCall.toolName, failure)

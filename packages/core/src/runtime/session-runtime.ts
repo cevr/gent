@@ -13,6 +13,7 @@ import {
   type Scope,
 } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
+import { Actor } from "effect-encore"
 import type { MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { SqlClient } from "effect/unstable/sql"
@@ -36,6 +37,7 @@ import type { BranchStorage } from "../storage/branch-storage.js"
 import type { EventStorage } from "../storage/event-storage.js"
 import type { MessageStorage } from "../storage/message-storage.js"
 import type { SessionStorage } from "../storage/session-storage.js"
+import type { SessionOperationStorage } from "../storage/session-operation-storage.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
 import { entityIdOf, parseEntityId } from "./agent/agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
@@ -47,6 +49,9 @@ import type { ApprovalService } from "./approval-service.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { ToolRunner } from "./agent/tool-runner.js"
 import type { ToolCallBindingStorage } from "../storage/tool-call-binding-storage.js"
+import type { CellExecutionStorage } from "../storage/cell-execution-storage.js"
+import type { CellToolOperationStorage } from "../storage/cell-tool-operation-storage.js"
+import type { InteractionStorage } from "../storage/interaction-storage.js"
 import type { ConfigService } from "./config-service.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
@@ -85,6 +90,8 @@ export type SessionRuntimeTarget = typeof SessionRuntimeTarget.Type
 const FollowUpSourceIdSchema = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))
 
 export const SendUserMessagePayload = Schema.Struct({
+  /** Admission returns after durable enqueue. Turn waits for the response. Omission preserves legacy behavior. */
+  completion: Schema.optional(Schema.Literals(["admission", "turn"])),
   commandId: Schema.optional(ActorCommandId),
   sessionId: SessionId,
   branchId: BranchId,
@@ -181,6 +188,7 @@ type SessionRuntimeLayerRequirements =
   | ModelRegistry
   | GentPlatform
   | SessionStorage
+  | SessionOperationStorage
   | MessageStorage
   | AgentLoopQueueStorage
   | BranchStorage
@@ -188,6 +196,9 @@ type SessionRuntimeLayerRequirements =
   | ModelResolver
   | ToolRunner
   | ToolCallBindingStorage
+  | CellExecutionStorage
+  | CellToolOperationStorage
+  | InteractionStorage
   | ConfigService
   | AgentLoopSessionGovernance
   | ChildProcessSpawner
@@ -473,7 +484,9 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       payload = { ...payload, runSpec: input.runSpec }
     }
     const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-    if (shouldHoldCompletion) {
+    if (input.completion === "admission") {
+      yield* ref.execute(AgentLoopActor.SubmitDurable.make(payload))
+    } else if (input.completion === "turn" || shouldHoldCompletion) {
       yield* ref.execute(AgentLoopActor.SubmitAndWait.make(payload))
     } else {
       yield* ref.execute(AgentLoopActor.Submit.make(payload))
@@ -671,6 +684,10 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
 export class SessionRuntime extends Context.Service<SessionRuntime, SessionRuntimeService>()(
   "@gent/core/src/runtime/session-runtime/SessionRuntime",
 ) {
+  /** Client-only composition lets child runners exist before actor handlers capture services. */
+  static readonly Client = Layer.effect(SessionRuntime, makeLiveSessionRuntime).pipe(
+    Layer.provideMerge(Actor.toLayer(AgentLoopActor)),
+  )
   static Live = (config: {
     readonly baseSections: ReadonlyArray<PromptSection>
   }): Layer.Layer<SessionRuntime, never, SessionRuntimeLayerRequirements> =>

@@ -65,6 +65,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
 
   yield* sessions.createSession(session)
   yield* branches.createBranch(branch)
+  yield* sessions.updateSession(new Session({ ...session, activeBranchId: branchId }))
 
   const user1 = Message.cases.regular.make({
     id: MessageId.make(yield* platform.randomId),
@@ -285,11 +286,21 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
         summary: { critical: 0, high: 0, medium: 1, low: 0 },
       }),
       makeJsonResult(asToolCallId("dbg-search-sessions"), "search_sessions", {
-        sessions: [{ sessionId: "019debug1-session", name: "tui renderer cleanup" }],
+        query: "tool renderer",
+        totalMatches: 1,
+        sessions: [
+          {
+            sessionId: "019debug1-session",
+            name: "tui renderer cleanup",
+            lastActivity: nowPlus(-120_000).toISOString(),
+            excerpts: ["Use one tool frame and preserve the queue's input behavior."],
+          },
+        ],
       }),
       makeJsonResult(asToolCallId("dbg-read-session"), "read_session", {
         sessionId: "019debug1-session",
         extracted: true,
+        goal: "Understand the renderer cleanup thread",
         content: "Audit said queue semantics and renderer chrome should be tested together.",
       }),
     ],

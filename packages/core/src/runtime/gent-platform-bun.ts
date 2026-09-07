@@ -16,11 +16,13 @@
 import * as os from "node:os"
 import { createServer } from "node:net"
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto"
-import { fileURLToPath as nodeFileURLToPath } from "node:url"
+import { fileURLToPath as nodeFileURLToPath, pathToFileURL } from "node:url"
 import { Predicate, Effect, Layer, Option, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform, SignalError } from "./gent-platform.js"
 import { CronRuntime, SchedulerRuntimeError } from "./extensions/resource-host/schedule-engine.js"
+
+declare const __GENT_COMPILED__: boolean
 
 const bunCronFunction = (): Option.Option<Function> => {
   const bun = Reflect.get(globalThis, "Bun")
@@ -98,6 +100,14 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
     pid: Effect.sync(() => process.pid),
 
     execPath: Effect.sync(() => process.execPath),
+
+    cellWorkerPath: Effect.sync(() => {
+      // oxlint-disable-next-line effect/noRuntimeTypeof -- This build symbol is absent in source runs; it is not external input.
+      if (typeof __GENT_COMPILED__ !== "undefined" && __GENT_COMPILED__) {
+        return nodeFileURLToPath(new URL("gent-cell", pathToFileURL(process.execPath)))
+      }
+      return nodeFileURLToPath(new URL("../../dist/gent-cell", import.meta.url))
+    }),
 
     homeDirectory: Effect.sync(() => os.homedir()),
 

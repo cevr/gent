@@ -419,25 +419,18 @@ const RpcHandlers = GentRpcs.toLayer(
           withWideEvent(WideEventBoundary.rpc("queue.get")),
         ),
 
-      "interaction.respondInteraction": ({
-        requestId,
-        sessionId,
-        branchId,
-        approved,
-        notes,
-      }: RespondInteractionInput) =>
-        interactions
-          .respond({
-            requestId,
-            sessionId,
-            branchId,
-            approved,
-            notes,
-          })
-          .pipe(
-            Effect.tap(() => WideEvent.set({ sessionId, branchId, requestId, approved })),
-            withWideEvent(WideEventBoundary.rpc("interaction.respondInteraction")),
+      "interaction.respondInteraction": (input: RespondInteractionInput) =>
+        interactions.respond(input).pipe(
+          Effect.tap(() =>
+            WideEvent.set({
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              requestId: input.requestId,
+              approved: input.approved,
+            }),
           ),
+          withWideEvent(WideEventBoundary.rpc("interaction.respondInteraction")),
+        ),
 
       // ----------------------------------------------------------------------
       // Durable resource graph

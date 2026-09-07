@@ -8,11 +8,9 @@ import {
   Option,
   Predicate,
   type Path,
-  Schema,
 } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import type { SqlClient } from "effect/unstable/sql"
-import { makeProcessRunner, type RunProcessOptions } from "../../utils/run-process.js"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import { AgentSwitched, EventStore, type AgentEvent } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
@@ -24,13 +22,13 @@ import {
   makeRunSpec,
   resolveRunPersistence,
   type AgentName,
-  RunSpecSchema,
 } from "../../domain/agent.js"
 import { SessionId, BranchId } from "../../domain/ids.js"
 import type { BranchStorage } from "../../storage/branch-storage.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
+import type { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import type { MessageStorage } from "../../storage/message-storage.js"
-import type { EventStorage } from "../../storage/event-storage.js"
+import { EventStorage } from "../../storage/event-storage.js"
 import type { RelationshipStorage } from "../../storage/relationship-storage.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { GentPlatform } from "../gent-platform.js"
@@ -57,6 +55,7 @@ export const InProcessRunner = (
   AgentRunnerService,
   never,
   | SessionStorage
+  | SessionOperationStorage
   | BranchStorage
   | MessageStorage
   | EventStorage
@@ -82,6 +81,7 @@ export const InProcessRunner = (
       const baseEventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
       const sessionRuntime = yield* SessionRuntime
+      const eventStorage = yield* EventStorage
       const extensionRegistry = yield* ExtensionRegistry
       const durableRuntime = yield* makeDurableAgentRunRuntime
       const metadataRuntime = yield* makeAgentRunMetadataRuntime
@@ -119,6 +119,47 @@ export const InProcessRunner = (
       }
 
       return AgentRunnerService.of({
+        start: Effect.fn("AgentRunner.start")(function* (params) {
+          return yield* durableRuntime
+            .start({
+              ...params,
+              admission: { requestId: params.requestId, runSpec: params.runSpec },
+            })
+            .pipe(
+              Effect.provideService(SessionRuntime, sessionRuntime),
+              Effect.catchTags({
+                StorageError: (cause) =>
+                  Effect.fail(new AgentRunError({ message: cause.message, cause })),
+                EventStoreError: (cause) =>
+                  Effect.fail(new AgentRunError({ message: cause.message, cause })),
+              }),
+            )
+        }),
+        inspect: Effect.fn("AgentRunner.inspect")((params) =>
+          durableRuntime.inspect(params).pipe(
+            Effect.provideService(EventStorage, eventStorage),
+            Effect.catchTag("StorageError", (cause) =>
+              Effect.fail(new AgentRunError({ message: cause.message, cause })),
+            ),
+          ),
+        ),
+        wait: Effect.fn("AgentRunner.wait")((params) =>
+          durableRuntime.wait(params).pipe(
+            Effect.provideService(EventStorage, eventStorage),
+            Effect.catchTag("StorageError", (cause) =>
+              Effect.fail(new AgentRunError({ message: cause.message, cause })),
+            ),
+          ),
+        ),
+        cancel: Effect.fn("AgentRunner.cancel")((params) =>
+          durableRuntime.cancel(params).pipe(
+            Effect.provideService(EventStorage, eventStorage),
+            Effect.provideService(SessionRuntime, sessionRuntime),
+            Effect.catchTag("StorageError", (cause) =>
+              Effect.fail(new AgentRunError({ message: cause.message, cause })),
+            ),
+          ),
+        ),
         run: Effect.fn("AgentRunner.run")(function* (params) {
           const persistence = resolveRunPersistence(params.runSpec)
           const normalizedRunSpec = normalizeRunSpec(params.runSpec)
@@ -244,214 +285,6 @@ export const InProcessRunner = (
               )
             }),
             Effect.catchCause(handleUnexpectedFailure),
-          )
-        }),
-      })
-    }),
-  )
-
-export const SubprocessRunner = (
-  config: AgentRunnerConfig,
-): Layer.Layer<
-  AgentRunnerService,
-  never,
-  | SessionStorage
-  | BranchStorage
-  | MessageStorage
-  | EventStorage
-  | RelationshipStorage
-  | SqlClient.SqlClient
-  | EventStore
-  | EventPublisher
-  | ExtensionRegistry
-  | ModelResolver
-  | RuntimeEnvironment
-  | FileSystem.FileSystem
-  | Path.Path
-  | ConfigService
-  | ModelRegistry
-  | ChildProcessSpawner.ChildProcessSpawner
-  | GentPlatform
-  | Crypto.Crypto
-> =>
-  Layer.effect(
-    AgentRunnerService,
-    Effect.gen(function* () {
-      const baseEventStore = yield* EventStore
-      const extensionRegistry = yield* ExtensionRegistry
-      const processRunner = yield* makeProcessRunner
-      const durableRuntime = yield* makeDurableAgentRunRuntime
-      const metadataRuntime = yield* makeAgentRunMetadataRuntime
-      const makeEphemeralAgentRootLayer = yield* makeEphemeralAgentRootLayerFactory
-
-      const platform = yield* GentPlatform
-      const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
-
-      return AgentRunnerService.of({
-        run: Effect.fn("AgentRunner.run")(function* (params) {
-          const persistence = resolveRunPersistence(params.runSpec)
-          const toolCallId = params.runSpec?.parentToolCallId
-          if (persistence === "ephemeral") {
-            const sessionId = SessionId.make(yield* platform.randomId)
-            const branchId = BranchId.make(yield* platform.randomId)
-            return yield* runEphemeralAgent({
-              runnerConfig: config,
-              durableRuntime,
-              metadataRuntime,
-              parentSessionId: params.parentSessionId,
-              parentBranchId: params.parentBranchId,
-              toolCallId,
-              cwd: params.cwd,
-              agentName: params.agent.name,
-              prompt: params.prompt,
-              runSpec: params.runSpec,
-              persistence,
-              parentBaseEventStore: baseEventStore,
-              notifyMirroredEventObservers,
-              sessionId,
-              branchId,
-              extensionRegistry,
-            }).pipe(
-              Effect.provideService(
-                EphemeralAgentRootLayerFactoryService,
-                makeEphemeralAgentRootLayer,
-              ),
-            )
-          }
-
-          return yield* durableRuntime.createDurableAgentRunSession({ ...params, toolCallId }).pipe(
-            Effect.flatMap(({ sessionId, branchId }) => {
-              const run = Effect.gen(function* () {
-                yield* WideEvent.set({ childSessionId: sessionId })
-
-                // Capture trace context for subprocess propagation
-                const currentSpan = yield* Effect.currentParentSpan.pipe(Effect.option)
-
-                const binary = config.subprocessBinaryPath ?? "gent"
-                // Merge parentToolCallId into runSpec for subprocess
-                let subprocessRunSpec = params.runSpec
-                if (Predicate.isNotUndefined(toolCallId)) {
-                  subprocessRunSpec = makeRunSpec({
-                    ...params.runSpec,
-                    parentToolCallId: toolCallId,
-                  })
-                }
-                const args = ["--headless", "--session", sessionId]
-                if (Predicate.isNotUndefined(config.sharedServerUrl)) {
-                  args.push("--connect", config.sharedServerUrl)
-                }
-                if (Predicate.isNotUndefined(subprocessRunSpec)) {
-                  const runSpecJson = yield* Schema.encodeEffect(
-                    Schema.fromJsonString(RunSpecSchema),
-                  )(subprocessRunSpec)
-                  args.push("--run-spec", runSpecJson)
-                }
-                args.push(params.prompt)
-
-                const parentEnv = yield* platform.env
-                const env: NonNullable<RunProcessOptions["env"]> = {
-                  ...parentEnv,
-                  GENT_DB_PATH: config.dbPath,
-                  GENT_SHARED_SERVER_URL: config.sharedServerUrl,
-                }
-                if (Option.isSome(currentSpan)) {
-                  env["GENT_TRACE_ID"] = currentSpan.value.traceId
-                  env["GENT_PARENT_SPAN_ID"] = currentSpan.value.spanId
-                }
-
-                const { exitCode, stderr: stderrText } = yield* processRunner
-                  .run(binary, args, {
-                    cwd: params.cwd,
-                    env,
-                    stdout: "pipe",
-                    stderr: "pipe",
-                  })
-                  .pipe(
-                    Effect.catchTag("ProcessError", () =>
-                      Effect.succeed({ exitCode: 1, stderr: "Subprocess failed" }),
-                    ),
-                  )
-
-                if (exitCode !== 0) {
-                  yield* durableRuntime.publishAgentRunFailed({
-                    parentSessionId: params.parentSessionId,
-                    parentBranchId: params.parentBranchId,
-                    toolCallId,
-                    sessionId,
-                    agentName: params.agent.name,
-                  })
-
-                  let error = `Subprocess exited with code ${exitCode}`
-                  if (stderrText.length > 0) error = stderrText.trim()
-                  return AgentRunResult.cases.error.make({
-                    error,
-                    sessionId,
-                    agentName: params.agent.name,
-                    persistence,
-                  })
-                }
-
-                const { success, reasoning } = yield* metadataRuntime.loadAgentRunSuccessData({
-                  branchId,
-                  sessionId,
-                  agentName: params.agent.name,
-                  persistence,
-                })
-                const savedPath = yield* metadataRuntime.saveAgentRunOutput({
-                  text: success.text,
-                  reasoning,
-                  agentName: params.agent.name,
-                  sessionId,
-                })
-                let preview = success.text
-                if (preview.length > 200) preview = preview.slice(0, 200) + "…"
-                yield* durableRuntime.publishAgentRunSucceeded({
-                  parentSessionId: params.parentSessionId,
-                  parentBranchId: params.parentBranchId,
-                  toolCallId,
-                  sessionId,
-                  agentName: params.agent.name,
-                  usage: success.usage,
-                  preview,
-                  savedPath: Option.getOrUndefined(savedPath),
-                })
-
-                yield* WideEvent.set({
-                  usage: success.usage,
-                  toolCallCount: success.toolCalls?.length ?? 0,
-                })
-
-                return AgentRunResult.cases.success.make({
-                  ...success,
-                  savedPath: Option.getOrUndefined(savedPath),
-                })
-              }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
-
-              return run.pipe(
-                handleAgentRunFailure(
-                  {
-                    parentSessionId: params.parentSessionId,
-                    parentBranchId: params.parentBranchId,
-                    toolCallId,
-                    sessionId,
-                    agentName: params.agent.name,
-                    persistence,
-                    spanName: "AgentRunner.subprocess",
-                  },
-                  durableRuntime.publishAgentRunFailed,
-                ),
-              )
-            }),
-            Effect.catchCause((cause) => {
-              if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-              return Effect.succeed(
-                AgentRunResult.cases.error.make({
-                  error: Cause.pretty(cause),
-                  agentName: params.agent.name,
-                  persistence,
-                }),
-              )
-            }),
           )
         }),
       })

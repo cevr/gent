@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Schema } from "effect"
 import {
   AgentRunFailed,
   AgentRunSpawned,
@@ -10,6 +11,7 @@ import {
   SessionNameUpdated,
   SessionSettingsUpdated,
   StreamChunk,
+  TurnCompleted,
 } from "@gent/core-internal/domain/event"
 import { AgentName } from "@gent/core-internal/domain/agent"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
@@ -17,6 +19,17 @@ import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 const session = SessionId.make("session-1")
 const branch = BranchId.make("branch-1")
 const child = SessionId.make("child-session")
+
+test("turn receipts preserve model failure and leave historical outcomes unspecified", () => {
+  const decode = Schema.decodeUnknownSync(Schema.fromJsonString(TurnCompleted))
+  const encode = Schema.encodeSync(Schema.fromJsonString(TurnCompleted))
+  const historical = TurnCompleted.make({ sessionId: session, branchId: branch, durationMs: 1 })
+  expect(decode(encode(historical)).streamFailed).toBeUndefined()
+  for (const streamFailed of [true, false]) {
+    const receipt = TurnCompleted.make({ ...historical, streamFailed })
+    expect(decode(encode(receipt)).streamFailed).toBe(streamFailed)
+  }
+})
 
 describe("event session routing", () => {
   test("standard variants surface the session field", () => {

@@ -1,7 +1,7 @@
 /**
  * RunSpec threading tests.
  *
- * Verifies the CLI serialization round-trip used by SubprocessRunner.
+ * Verifies the run-spec JSON contract used by the headless CLI.
  *
  * Public message.send runSpec behavior is covered by
  * tests/server/message-send.test.ts.

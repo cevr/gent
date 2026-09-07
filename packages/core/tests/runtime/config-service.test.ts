@@ -40,6 +40,72 @@ describe("user configuration", () => {
     )
   })
 
+  describe("trustedProjects", () => {
+    const checkTrustPreservation = Effect.gen(function* () {
+      const cfg = yield* ConfigService
+      const trustedProjects = ["/trusted/project"]
+      yield* cfg.set({ trustedProjects })
+      expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
+      yield* cfg.set({ disabledExtensions: ["@gent/todo"] })
+      expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
+      yield* cfg.addPermissionRule(
+        new PermissionRule({ tool: "Bash", pattern: "rm", action: "deny" }),
+      )
+      expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
+      yield* cfg.removePermissionRule("Bash", "rm")
+      expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
+      yield* cfg.setDriverOverride(
+        AgentName.make("cowork"),
+        ExternalDriverRef.make({ id: "acp-claude-code" }),
+      )
+      expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
+      yield* cfg.clearDriverOverride(AgentName.make("cowork"))
+      expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
+    })
+
+    it.live("in-memory updates preserve user trust and allow its removal", () =>
+      Effect.gen(function* () {
+        yield* checkTrustPreservation
+        const cfg = yield* ConfigService
+        yield* cfg.set({ trustedProjects: [] })
+        expect((yield* cfg.get()).trustedProjects).toEqual([])
+      }).pipe(Effect.provide(ConfigService.Test())),
+    )
+
+    it.scopedLive("only user config grants trust and live updates preserve it on disk", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const projectConfigPath = path.join(cwd, ConfigService.PROJECT_CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(projectConfigPath), { recursive: true })
+        yield* fs.writeFileString(projectConfigPath, encodeJson({ trustedProjects: [cwd] }))
+        const live = ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd, home, platform: "darwin" })),
+          Layer.provide(BunServices.layer),
+        )
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          expect((yield* cfg.get()).trustedProjects).toBeUndefined()
+          expect((yield* cfg.getFresh(cwd)).trustedProjects).toBeUndefined()
+          yield* checkTrustPreservation
+          expect((yield* cfg.getFresh(cwd)).trustedProjects).toEqual(["/trusted/project"])
+          const persistedText = yield* fs.readFileString(
+            path.join(home, ConfigService.USER_CONFIG_RELATIVE),
+          )
+          const persisted = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
+            persistedText,
+          )
+          expect(persisted.trustedProjects).toEqual(["/trusted/project"])
+          yield* cfg.set({ trustedProjects: [] })
+          expect((yield* cfg.getFresh(cwd)).trustedProjects).toEqual([])
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+  })
+
   describe("Permission rules", () => {
     it.live("seeded permission rules are exposed verbatim", () => {
       const initial = new UserConfig({

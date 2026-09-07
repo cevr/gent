@@ -1,0 +1,106 @@
+import { describe, expect, it } from "effect-bun-test"
+import { Deferred, Effect, Fiber, Ref } from "effect"
+import {
+  makeBunCellEvaluator,
+  CellHost,
+} from "@gent/core-internal/runtime/code-cell/bun-evaluator-boundary"
+import {
+  maximumCellDisplayLength,
+  maximumCellSourceLength,
+} from "@gent/core-internal/runtime/code-cell/cell-protocol"
+
+describe("Bun cell evaluation", () => {
+  it.scopedLive("accepts a host reply while a cell awaits it", () =>
+    Effect.gen(function* () {
+      const called = yield* Deferred.make<boolean>()
+      const reply = yield* Deferred.make<number>()
+      const kernel = yield* makeBunCellEvaluator.pipe(
+        Effect.provideService(CellHost, {
+          call: () => Deferred.succeed(called, true).pipe(Effect.andThen(Deferred.await(reply))),
+        }),
+      )
+      const cell = yield* kernel
+        .evaluate("(await tools.call('read', {})) + 1")
+        .pipe(Effect.forkScoped)
+      yield* Deferred.await(called)
+      yield* Deferred.succeed(reply, 41)
+      expect((yield* Fiber.join(cell)).display).toBe("42")
+    }).pipe(Effect.timeout("2 seconds")),
+  )
+
+  it.live("rejects non-data host arguments before dispatch", () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0)
+      const kernel = yield* makeBunCellEvaluator.pipe(
+        Effect.provideService(CellHost, {
+          call: () => Ref.update(calls, (count) => count + 1).pipe(Effect.as(0)),
+        }),
+      )
+      const error = yield* kernel
+        .evaluate("await tools.call('read', { callback: () => 1 })")
+        .pipe(Effect.flip)
+      expect(error.phase).toBe("execute")
+      expect(yield* Ref.get(calls)).toBe(0)
+    }),
+  )
+
+  it.live("keeps working values across cells and clears them on reset", () =>
+    Effect.gen(function* () {
+      const kernel = yield* makeBunCellEvaluator.pipe(
+        Effect.provideService(CellHost, { call: () => Effect.succeed(7) }),
+      )
+      yield* kernel.evaluate("const values: number[] = [1, 2, 3]")
+      const result = yield* kernel.evaluate("values.push(await tools.call('count', {})); values")
+      expect(result.display).toBe("[ 1, 2, 3, 7 ]")
+      expect(result.bindings).toEqual(["values"])
+      yield* kernel.reset
+      expect((yield* kernel.evaluate("typeof values")).display).toBe("undefined")
+    }),
+  )
+
+  it.live("keeps independent contexts for independent owners", () =>
+    Effect.gen(function* () {
+      const makeKernel = makeBunCellEvaluator.pipe(
+        Effect.provideService(CellHost, { call: () => Effect.succeed(0) }),
+      )
+      const first = yield* makeKernel
+      const second = yield* makeKernel
+      yield* first.evaluate("const onlyHere = 42")
+      expect((yield* second.evaluate("typeof onlyHere")).display).toBe("undefined")
+      expect((yield* first.evaluate("onlyHere")).display).toBe("42")
+    }),
+  )
+
+  it.live("limits captured output and rejects oversized source before execution", () =>
+    Effect.gen(function* () {
+      const kernel = yield* makeBunCellEvaluator.pipe(
+        Effect.provideService(CellHost, { call: () => Effect.succeed(0) }),
+      )
+      const result = yield* kernel.evaluate("console.log('x'.repeat(100000)); 'done'")
+      expect(result.display.length).toBe(maximumCellDisplayLength)
+      expect(result.truncated).toBe(true)
+      const error = yield* kernel
+        .evaluate(" ".repeat(maximumCellSourceLength + 1))
+        .pipe(Effect.flip)
+      expect(error.phase).toBe("source")
+    }),
+  )
+
+  it.live("reports a cell failure without replaying or clearing earlier work", () =>
+    Effect.gen(function* () {
+      const kernel = yield* makeBunCellEvaluator.pipe(
+        Effect.provideService(CellHost, { call: () => Effect.succeed(0) }),
+      )
+      yield* kernel.evaluate("let count = 0")
+      const error = yield* kernel
+        .evaluate("count++; console.log('before failure'); throw new Error('failed')")
+        .pipe(Effect.flip)
+      expect(error.phase).toBe("execute")
+      expect(error.output).toBe("before failure")
+      expect((yield* kernel.evaluate("count")).display).toBe("1")
+      const invalid = yield* kernel.evaluate("const = ;").pipe(Effect.flip)
+      expect(invalid.phase).toBe("compile")
+      expect((yield* kernel.evaluate("count")).display).toBe("1")
+    }),
+  )
+})

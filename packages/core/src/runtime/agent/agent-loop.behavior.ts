@@ -14,6 +14,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  Layer,
   Option,
   Predicate,
   Ref,
@@ -23,7 +24,10 @@ import {
   TxQueue,
   TxSubscriptionRef,
   type Stream,
+  type FileSystem,
+  type Path,
 } from "effect"
+import { CellExecution } from "../code-cell/cell-execution.js"
 import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
@@ -34,7 +38,8 @@ import {
 import { AgentSwitched, type AgentEvent } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import type { MessageMetadata } from "../../domain/message.js"
-import type { BranchId, InteractionRequestId, SessionId } from "../../domain/ids.js"
+import type { SessionOperationStorage } from "../../storage/session-operation-storage.js"
+import type { BranchId, InteractionRequestId, MessageId, SessionId } from "../../domain/ids.js"
 import { makeAmbientExtensionHostContextProvider } from "../make-extension-host-context.js"
 import type { ConfigService } from "../config-service.js"
 import type { PromptSection } from "../../domain/prompt.js"
@@ -44,6 +49,9 @@ import type { MessageStorage } from "../../storage/message-storage.js"
 import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
+import type { CellExecutionStorage } from "../../storage/cell-execution-storage.js"
+import type { CellToolOperationStorage } from "../../storage/cell-tool-operation-storage.js"
+import type { InteractionStorage } from "../../storage/interaction-storage.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import type { SessionProfileCacheService } from "../session-profile.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
@@ -132,7 +140,7 @@ export type AgentLoopBehavior = {
   snapshot: Effect.Effect<LoopState>
   startTurn: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
   interruptActiveStream: Effect.Effect<void>
-  interrupt: Effect.Effect<void, AgentLoopError>
+  interrupt: (messageId?: MessageId) => Effect.Effect<void, AgentLoopError>
   switchAgent: (agent: AgentNameType) => Effect.Effect<void, AgentLoopError>
   respondInteraction: (requestId: InteractionRequestId) => Effect.Effect<void, AgentLoopError>
   withSideMutation: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
@@ -197,7 +205,11 @@ export const makeAgentLoopBehavior = (
   | MessageStorage
   | AgentLoopQueueStorage
   | EventStorage
+  | SessionOperationStorage
   | ToolCallBindingStorage
+  | CellExecutionStorage
+  | CellToolOperationStorage
+  | InteractionStorage
   | SqlClient.SqlClient
   | ModelResolver
   | ExtensionRegistry
@@ -210,6 +222,8 @@ export const makeAgentLoopBehavior = (
   | ModelRegistry
   | ChildProcessSpawner
   | GentPlatform
+  | FileSystem.FileSystem
+  | Path.Path
 > =>
   Effect.gen(function* () {
     yield* ModelResolver
@@ -274,10 +288,14 @@ export const makeAgentLoopBehavior = (
     )
 
     const loopScope = yield* Scope.make()
+    const interruptedRef = yield* Ref.make(false)
+    const cellContext = yield* Layer.build(
+      CellExecution.Branch({ sessionId, branchId, interruptedRef }),
+    ).pipe(Scope.provide(loopScope))
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
     const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
-    const interruptedRef = yield* Ref.make(false)
+    const cells = Context.get(cellContext, CellExecution)
     const currentAgent = yield* resolveStoredAgent({
       sessionId,
       branchId,
@@ -373,15 +391,17 @@ export const makeAgentLoopBehavior = (
       sessionId,
       branchId,
       sideMutationSemaphore,
+      interruptSemaphore: yield* Semaphore.make(1),
       turnWorkerQueue,
       activeStreamRef,
       interruptedRef,
+      interruptCell: cells.cancel,
       currentLoopState,
       saveCheckpoint,
       takeNextQueuedTurn: takeNextQueuedTurnCommitted,
       recordTurnFailure,
       publishEvent,
-      runTurn,
+      runTurn: (state) => runTurn(state).pipe(Effect.provideContext(cellContext)),
       switchAgentOnState,
     })
 

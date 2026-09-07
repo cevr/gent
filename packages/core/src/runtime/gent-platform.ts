@@ -83,6 +83,7 @@ export interface GentPlatformApi {
   readonly osInfo: Effect.Effect<GentPlatformOsInfo>
   readonly pid: Effect.Effect<number>
   readonly execPath: Effect.Effect<string>
+  readonly cellWorkerPath: Effect.Effect<string>
   readonly homeDirectory: Effect.Effect<string>
   // oxlint-disable-next-line effect/noNullish -- Platform environment snapshots preserve undefined for absent process variables.
   readonly env: Effect.Effect<Record<string, string | undefined>>
@@ -124,6 +125,7 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           }),
           pid: Effect.succeed(1),
           execPath: Effect.succeed("/usr/bin/node"),
+          cellWorkerPath: Effect.succeed("/usr/bin/gent-cell"),
           homeDirectory: Effect.succeed("/tmp"),
           env: Effect.succeed({}),
           pathListSeparator: Effect.succeed(":"),

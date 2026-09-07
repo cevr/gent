@@ -41,8 +41,22 @@ export interface ResolvedTurnContext extends ResolvedTurn {
   tools: ReadonlyArray<ToolCapability>
   /** Exact owner and implementation selected for each advertised tool. */
   toolBindings: ReadonlyMap<string, ResolvedToolCapability>
+  /** Policy-selected host tools remain callable inside a cell, not directly by the model. */
+  hostToolBindings: ReadonlyMap<string, ResolvedToolCapability>
   /** Exact resource generation captured for process-local source-mode replay. */
   turnGenerationId?: ResourceGenerationId
+}
+
+const selectModelToolSurface = (
+  tools: ReadonlyArray<ToolCapability>,
+  toolBindings: ReadonlyMap<string, ResolvedToolCapability>,
+  agent: AgentDefinition,
+) => {
+  const cell = toolBindings.get("cell")
+  if (agent.driver?._tag === "external" || Predicate.isUndefined(cell)) {
+    return { tools, toolBindings }
+  }
+  return { tools: [cell.capability], toolBindings: new Map([["cell", cell]]) }
 }
 
 /**
@@ -251,7 +265,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   }
 
   // Resolve tools + extension prompt sections via ToolPolicy compiler
-  const { tools, promptSections: extensionSections } = compileToolPolicy(
+  const { tools: hostTools, promptSections: extensionSections } = compileToolPolicy(
     allTools,
     effectiveAgent,
     {
@@ -283,11 +297,12 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
       attachToolBindingIdentity(entry, bindingContext),
     ]),
   )
-  const toolBindings = new Map<string, ResolvedToolCapability>()
-  for (const tool of tools) {
+  const hostToolBindings = new Map<string, ResolvedToolCapability>()
+  for (const tool of hostTools) {
     const entry = entriesByToolId.get(String(getToolId(tool)))
-    if (Predicate.isNotUndefined(entry)) toolBindings.set(String(getToolId(tool)), entry)
+    if (Predicate.isNotUndefined(entry)) hostToolBindings.set(String(getToolId(tool)), entry)
   }
+  const { tools, toolBindings } = selectModelToolSurface(hostTools, hostToolBindings, dispatchAgent)
 
   // Build tool-aware prompt, then run through explicit prompt slots.
   // We hand the slot layer both the compiled `basePrompt` (for append-only
@@ -326,6 +341,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     agent: dispatchAgent,
     tools,
     toolBindings,
+    hostToolBindings,
     turnGenerationId: params.turnPublication?.generationId,
     systemPrompt,
     modelId: params.runSpec?.overrides?.modelId ?? resolveAgentModel(dispatchAgent),

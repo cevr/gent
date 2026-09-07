@@ -11,6 +11,7 @@ import { validateExtensionPackage } from "../../domain/extension-package-shape.j
 import type { PromptSection } from "../../domain/prompt.js"
 import { getToolMetadata } from "../../domain/capability/tool.js"
 import { makeExtensionHostPlatform } from "./host-platform.js"
+import { isProjectExtensionDirectoryTrusted } from "./project-trust.js"
 
 /** Static prompt sections live on capability leaf `prompt` (folded by the
  *  `tool()` smart constructor or declared directly). Surface them here for
@@ -219,6 +220,7 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
 }) {
   const userPaths = yield* discoverDir(opts.userDir)
   const projectPaths = yield* discoverDir(opts.projectDir)
+  const projectTrusted = yield* isProjectExtensionDirectoryTrusted(opts)
 
   const loaded: DiscoveredExtension[] = []
   const skipped: SkippedExtension[] = []
@@ -241,6 +243,15 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
   }
 
   for (const filePath of projectPaths) {
+    if (!projectTrusted) {
+      const error =
+        "Project code is not trusted. Add its canonical root to trustedProjects in the user config."
+      skipped.push({ path: filePath, scope: "project", error })
+      yield* Effect.logWarning("extension.load.untrusted").pipe(
+        Effect.annotateLogs({ path: filePath, error }),
+      )
+      continue
+    }
     const result = yield* loadExtensionFile(filePath).pipe(
       Effect.map((extension) => ({ _tag: "Success", extension }) satisfies LoadSuccess),
       Effect.catchEager((error) =>

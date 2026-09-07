@@ -51,7 +51,6 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     onSome: Effect.succeed,
   })
   const idleTimeoutOpt = yield* Config.option(Config.string("GENT_IDLE_TIMEOUT_MS"))
-  const sharedServerUrlOpt = yield* Config.option(Config.string("GENT_SHARED_SERVER_URL"))
 
   const home = Option.getOrElse(homeOpt, () => homeDefault)
   const dataDir = Option.getOrElse(dataDirOpt, () => joinPath(home, ".gent"))
@@ -81,7 +80,6 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     shell: shellOpt,
     serverId,
     idleTimeoutMs: Number(Option.getOrElse(idleTimeoutOpt, () => "30000")),
-    sharedServerUrl: sharedServerUrlOpt,
   }
 })
 
@@ -109,10 +107,6 @@ const program = Effect.scoped(
     if (httpServer.address._tag === "TcpAddress") boundPort = httpServer.address.port
     const baseUrl = `http://localhost:${boundPort}`
 
-    let sharedServerUrl = config.sharedServerUrl
-    if (Option.isNone(sharedServerUrl) && config.isManaged) {
-      sharedServerUrl = Option.some(`${baseUrl}/rpc`)
-    }
     const buildFingerprint = yield* (yield* BuildFingerprint).resolved
     const startedAt = yield* Clock.currentTimeMillis
 
@@ -128,7 +122,6 @@ const program = Effect.scoped(
         persistenceMode: config.persistenceMode,
         providerMode: config.providerMode,
         scheduledJobCommand: Option.getOrUndefined(config.scheduledJobCommand),
-        sharedServerUrl: Option.getOrUndefined(sharedServerUrl),
         extensions: BuiltinExtensions,
       },
       identity: {

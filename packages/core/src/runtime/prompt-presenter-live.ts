@@ -77,7 +77,16 @@ export const PromptPresenterLive: Layer.Layer<
           { sessionId: params.sessionId, branchId: params.branchId },
         )
 
-        if (decision.notes === "edit") {
+        if (decision.approved && decision.notes === "edit") {
+          const submittedContent = Option.fromUndefinedOr(decision.editedContent)
+          if (Option.isSome(submittedContent)) {
+            yield* fs.writeFileString(resolvedPath, submittedContent.value)
+            return {
+              decision: "edit",
+              path: resolvedPath,
+              content: submittedContent.value,
+            }
+          }
           const editedContent = yield* fs
             .readFileString(resolvedPath)
             .pipe(Effect.catchEager(() => Effect.succeed(text)))

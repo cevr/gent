@@ -21,7 +21,13 @@ import {
 import { ResourceId, ResourceRevision } from "@gent/core-internal/domain/resource-graph"
 import { MessageReceived, ToolCallSucceeded } from "@gent/core-internal/domain/event"
 import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
-import { ExtensionContext, tool, type ToolCapability } from "@gent/core/extensions/api"
+import {
+  ExtensionContext,
+  defineExtension,
+  defineResource,
+  tool,
+  type ToolCapability,
+} from "@gent/core/extensions/api"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { makeStorageTransaction, SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { ToolCallBindingStorage } from "@gent/core-internal/storage/tool-call-binding-storage"
@@ -36,11 +42,111 @@ import {
   persistAssistantPartsWithBindings,
   ToolResultReplayError,
 } from "../../../src/runtime/agent/turn-persistence"
-import type { ResolvedToolCapability } from "../../../src/runtime/agent/tool-runner"
-import { ProcessLocalToolReplay } from "../../../src/runtime/agent/process-local-tool-replay"
+import { ToolRunner, type ResolvedToolCapability } from "../../../src/runtime/agent/tool-runner"
+import { GentPlatform } from "../../../src/runtime/gent-platform"
+import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
+import {
+  ProcessLocalToolReplay,
+  processLocalReplayBindingKey,
+} from "../../../src/runtime/agent/process-local-tool-replay"
 import { ResourceGenerationId } from "@gent/core-internal/domain/resource-generation"
 import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import { encodeToolOutput } from "../../../src/domain/tool-output"
+import {
+  captureCurrentToolBinding,
+  resolveReplayToolBinding,
+  resolveStoredToolBinding,
+} from "../../../src/runtime/agent/tool-binding-resolution"
+import { createE2ELayer } from "../../../src/test-utils/e2e-layer"
+import { LanguageModelLayers } from "../../../src/test-utils/language-model"
+import { SessionProfileCache } from "../../../src/runtime/session-profile"
+
+class ReplayResource extends Context.Service<ReplayResource, { readonly value: string }>()(
+  "@gent/core/tests/runtime/agent-loop/tool-binding-replay.test/ReplayResource",
+) {}
+
+const replayCases = [
+  {
+    name: "same-process capability",
+    durable: false,
+    saved: false,
+    local: true,
+    retired: false,
+    changed: false,
+    dynamic: false,
+    reason: "",
+  },
+  {
+    name: "missing process binding",
+    durable: false,
+    saved: false,
+    local: false,
+    retired: false,
+    changed: false,
+    dynamic: false,
+    reason: "MissingBinding",
+  },
+  {
+    name: "retired process generation",
+    durable: false,
+    saved: false,
+    local: true,
+    retired: true,
+    changed: false,
+    dynamic: false,
+    reason: "SourceMismatch",
+  },
+  {
+    name: "matching durable identity",
+    durable: true,
+    saved: true,
+    local: false,
+    retired: false,
+    changed: false,
+    dynamic: false,
+    reason: "",
+  },
+  {
+    name: "absent durable row with local identity",
+    durable: true,
+    saved: false,
+    local: true,
+    retired: false,
+    changed: false,
+    dynamic: false,
+    reason: "MissingBinding",
+  },
+  {
+    name: "changed durable source",
+    durable: true,
+    saved: true,
+    local: true,
+    retired: false,
+    changed: true,
+    dynamic: false,
+    reason: "SourceMismatch",
+  },
+  {
+    name: "changed resource vector",
+    durable: true,
+    saved: true,
+    local: true,
+    retired: false,
+    changed: false,
+    dynamic: false,
+    reason: "ResourceMismatch",
+  },
+  {
+    name: "dynamic durable marker",
+    durable: true,
+    saved: true,
+    local: true,
+    retired: false,
+    changed: false,
+    dynamic: true,
+    reason: "DynamicNonReplayable",
+  },
+]
 
 const makeTool = (): ToolCapability =>
   tool({
@@ -80,6 +186,202 @@ const makeBinding = () =>
   })
 
 describe("tool binding replay", () => {
+  it.scopedLive(
+    "validates an inner operation binding without an assistant tool-call storage row",
+    () =>
+      Effect.gen(function* () {
+        const capability = makeTool()
+        const layer = Layer.mergeAll(
+          ExtensionRegistry.fromResolved(resolveExtensions([makeExtension(capability)])),
+          ToolRunner.Live,
+          GentPlatform.Test(),
+        )
+        const context = yield* Layer.build(layer)
+        yield* Effect.gen(function* () {
+          const sessionId = SessionId.make("inner-operation-session")
+          const current = yield* captureCurrentToolBinding({
+            sessionId,
+            toolName: "@test/replay-tool",
+          })
+          if (Option.isNone(current) || Predicate.isUndefined(current.value.binding))
+            return yield* Effect.die("Missing fixture binding")
+          const binding = current.value.binding
+          const address = {
+            sessionId,
+            assistantMessageId: MessageId.make("outer-cell-message"),
+            toolCallId: ToolCallId.make("inner-operation-call"),
+          }
+          const resolved = yield* resolveStoredToolBinding({ ...address, binding })
+          expect(resolved.capability).toBe(capability)
+          const changed = yield* resolveStoredToolBinding({
+            ...address,
+            binding: makeToolBindingIdentity({
+              ...binding,
+              source: ToolBindingSource.cases.Static.make({
+                sourceRevision: ToolSourceRevision.make("changed-source"),
+              }),
+            }),
+          }).pipe(Effect.flip)
+          expect(changed.reason).toBe("SourceMismatch")
+          expect(changed.toolCallId).toBe(address.toolCallId)
+          const dynamic = yield* resolveStoredToolBinding({
+            ...address,
+            binding: makeToolBindingIdentity({
+              ...binding,
+              source: ToolBindingSource.cases.DynamicNonReplayable.make({
+                sourceRevision: ToolSourceRevision.make("dynamic-source"),
+              }),
+            }),
+          }).pipe(Effect.flip)
+          expect(dynamic.reason).toBe("DynamicNonReplayable")
+        }).pipe(Effect.provideContext(context))
+      }),
+  )
+
+  for (const scenario of replayCases) {
+    it.scopedLive(`resolves ${scenario.name} through real storage and tool capture`, () =>
+      Effect.gen(function* () {
+        const capability = makeTool()
+        const declared = defineExtension({
+          id: "@test/replay-extension",
+          tools: [capability],
+          resources: [
+            defineResource({
+              id: "test/replay-policy-resource",
+              tag: ReplayResource,
+              scope: "process",
+              layer: Layer.succeed(ReplayResource, ReplayResource.of({ value: "live" })),
+            }),
+          ],
+        })
+        let extension = declared
+        if (scenario.durable) {
+          extension = {
+            ...declared,
+            artifactIdentity: LoadedArtifactIdentity.make("replay-artifact-1"),
+          }
+        }
+        const layer = Layer.merge(
+          createE2ELayer({
+            agents: [],
+            extensionInputs: [extension],
+            providerLayer: LanguageModelLayers.debug(),
+          }),
+          ProcessLocalToolReplay.Live,
+        )
+        yield* Effect.gen(function* () {
+          const sessionId = SessionId.make("replay-policy-session")
+          const branchId = BranchId.make("replay-policy-branch")
+          const assistantMessageId = MessageId.make("replay-policy-assistant")
+          const toolCallId = ToolCallId.make("replay-policy-call")
+          const address = { sessionId, branchId, assistantMessageId, toolCallId }
+          const toolCall = Prompt.toolCallPart({
+            id: toolCallId,
+            name: "@test/replay-tool",
+            params: { value: "input" },
+            providerExecuted: false,
+          })
+          yield* ensureStorageParents({ sessionId, branchId })
+          const messages = yield* MessageStorage
+          yield* messages.createMessage(
+            Message.cases.regular.make({
+              id: assistantMessageId,
+              sessionId,
+              branchId,
+              role: "assistant",
+              parts: [toolCall],
+              createdAt: dateFromMillis(0),
+            }),
+          )
+          const cache = yield* SessionProfileCache
+          const profile = yield* cache.resolve("/tmp")
+          const publication = profile.publication
+          if (Predicate.isUndefined(publication))
+            return yield* Effect.die("Expected live publication")
+          const current = yield* captureCurrentToolBinding({
+            sessionId,
+            toolName: toolCall.name,
+            publication,
+          })
+          if (Option.isNone(current)) return yield* Effect.die("Expected captured capability")
+          const replay = yield* ProcessLocalToolReplay
+          const key = processLocalReplayBindingKey(address)
+          if (scenario.local) {
+            let generationId = Option.some(publication.generationId)
+            if (scenario.retired) generationId = Option.some(ResourceGenerationId.make("retired"))
+            yield* replay.setBinding(key, { entry: current.value, generationId })
+            if (scenario.retired) {
+              yield* replay.setBinding("another-call-in-retired-generation", {
+                entry: current.value,
+                generationId,
+              })
+            }
+          }
+          if (scenario.saved) {
+            const storage = yield* ToolCallBindingStorage
+            let binding = current.value.binding
+            if (Predicate.isUndefined(binding))
+              return yield* Effect.die("Expected durable identity")
+            expect(binding.resources).toEqual([
+              {
+                id: ResourceId.make("test/replay-policy-resource"),
+                revision: ResourceRevision.make("1"),
+              },
+            ])
+            if (scenario.reason === "ResourceMismatch")
+              binding = makeToolBindingIdentity({
+                ...binding,
+                resources: [
+                  {
+                    id: ResourceId.make("test/replay-policy-resource"),
+                    revision: ResourceRevision.make("old"),
+                  },
+                ],
+              })
+            if (scenario.changed)
+              binding = makeToolBindingIdentity({
+                ...binding,
+                source: ToolBindingSource.cases.Static.make({
+                  sourceRevision: ToolSourceRevision.make("old-source"),
+                }),
+              })
+            if (scenario.dynamic)
+              binding = makeToolBindingIdentity({
+                ...binding,
+                source: ToolBindingSource.cases.DynamicNonReplayable.make({
+                  sourceRevision: binding.source.sourceRevision,
+                }),
+              })
+            yield* storage.save({ ...address, binding })
+          }
+          const result = yield* resolveReplayToolBinding({
+            ...address,
+            toolCall,
+            publication,
+          }).pipe(Effect.exit)
+          if (Exit.isSuccess(result)) {
+            expect(scenario.reason).toBe("")
+            expect(result.value.capability).toBe(capability)
+            return
+          }
+          expect(Cause.squash(result.cause)).toMatchObject({
+            _tag: "ToolBindingReplayError",
+            reason: scenario.reason,
+          })
+          expect(Option.isNone(yield* replay.getBinding(key))).toBe(true)
+          if (scenario.retired) {
+            expect(
+              Option.isNone(yield* replay.getBinding("another-call-in-retired-generation")),
+            ).toBe(true)
+          }
+        }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- Each scenario owns a production test root with its authored extension.
+          Effect.provide(layer),
+        )
+      }).pipe(Effect.timeout("5 seconds")),
+    )
+  }
+
   it.live("rejects a changed loaded publication revision with the same artifact and schema", () =>
     Effect.sync(() => {
       const capability = makeTool()

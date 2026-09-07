@@ -474,6 +474,50 @@ describe("SessionRuntime", () => {
         )
       }),
   )
+  it.scopedLive("durable admission returns before model completion and retries enqueue once", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...textStep("child reply"), gated: true },
+      ])
+      const layer = makeRuntimeLayer(providerLayer)
+      const context = yield* Layer.build(layer)
+      yield* narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* SessionRuntime
+          const messages = yield* MessageStorage
+          const { sessionId, branchId } = yield* createSessionBranch
+          yield* runtime.sendUserMessage({
+            sessionId,
+            branchId,
+            content: "admitted work",
+            requestId: "durable-admission",
+            completion: "admission",
+          })
+          yield* controls.waitForCall(0)
+          yield* runtime.sendUserMessage({
+            sessionId,
+            branchId,
+            content: "admitted work",
+            requestId: "durable-admission",
+            completion: "admission",
+          })
+          expect(yield* controls.callCount).toBe(1)
+          const pending = yield* messages.listMessages(branchId)
+          expect(pending.filter((message) => message.role === "user")).toHaveLength(1)
+          yield* controls.emitAll(0)
+          const completed = yield* waitFor(messages.listMessages(branchId), (current) =>
+            current.some((message) =>
+              message.parts.some((part) => part.type === "text" && part.text === "child reply"),
+            ),
+          )
+          expect(completed.map((message) => message.role)).toEqual(["user", "assistant"])
+          expect(completed[0]?.id).toBe(MessageId.make("message:durable-admission"))
+          expect(yield* controls.callCount).toBe(1)
+        }).pipe(Effect.timeout("4 seconds"), Effect.provideContext(context)),
+      )
+    }),
+  )
+
   it.live("retried sendUserMessage requestId reuses the durable user message", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([

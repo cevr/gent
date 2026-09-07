@@ -7,7 +7,7 @@
  */
 
 import { BunHttpServer, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { FetchHttpClient, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
+import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
 import { Clock, Effect, Layer, Context, Match, Option, Schema } from "effect"
 import type { Scope } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -18,6 +18,7 @@ import { BuiltinExtensions } from "@gent/extensions"
 import type { GentExtension } from "@gent/core/extensions/api"
 import type { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
 import { seedDebugSession } from "@gent/core-internal/debug/session.js"
+import { provideWorkspaceIdHeader } from "@gent/core-internal/server/workspace-rpc.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import type { LanguageModel } from "effect/unstable/ai"
 import { BuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
@@ -242,7 +243,6 @@ const buildOwnedServer = (
               sqlite: (): "disk" => "disk",
             }),
           ),
-          sharedServerUrl: url,
           extensions: options.extensions ?? BuiltinExtensions,
           languageModelLayerOverride: Option.getOrUndefined(languageModelLayer),
         },
@@ -270,8 +270,13 @@ const buildOwnedServer = (
       // Seed debug session if requested
       if (options.debug === true) {
         yield* seedDebugSession(options.cwd).pipe(
+          provideWorkspaceIdHeader(Headers.fromInput(workspaceHeaders)),
           Effect.provideContext(serverRoot.coreServices),
-          Effect.catchEager(() => Effect.void),
+          Effect.catchEager((error) =>
+            Effect.logWarning("Debug session seeding failed").pipe(
+              Effect.annotateLogs({ error: String(error) }),
+            ),
+          ),
         )
       }
 

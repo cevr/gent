@@ -33,7 +33,7 @@ import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { SequenceRecorder } from "@gent/core-internal/test-utils"
 import { emptyQueueSnapshot } from "@gent/core-internal/domain/queue"
 import { AgentName } from "@gent/core-internal/domain/agent"
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { BranchId, RequestId, SessionId } from "@gent/core-internal/domain/ids"
 import { assistantMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
 import {
   makeAgentLoopService,
@@ -68,6 +68,82 @@ describe("run completion", () => {
   )
 })
 describe("streaming", () => {
+  it.scopedLive(
+    "targeted cancellation before admission prevents model execution",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          textStep("later work still runs"),
+        ])
+        const context = yield* Layer.build(makeLayer(providerLayer))
+        yield* Effect.gen(function* () {
+          const loop = yield* makeAgentLoopService
+          const sessionId = SessionId.make("pre-admission-cancel-session")
+          const branchId = BranchId.make("pre-admission-cancel-branch")
+          const cancelled = makeMessage(sessionId, branchId, "cancel before start")
+          yield* steerAgentLoop({
+            _tag: "Cancel",
+            sessionId,
+            branchId,
+            requestId: RequestId.make("cancel-before-admission"),
+            messageId: cancelled.id,
+          })
+          yield* runAgentLoop(loop, cancelled)
+          expect(yield* controls.callCount).toBe(0)
+          expect(
+            (yield* (yield* MessageStorage).getMessage(cancelled.id))?.turnDurationMs,
+          ).toBeDefined()
+          const later = makeMessage(sessionId, branchId, "later")
+          yield* runAgentLoop(loop, later)
+          expect(yield* controls.callCount).toBe(1)
+          const reply = yield* (yield* MessageStorage).getMessage(
+            assistantMessageIdForTurn(later.id, 1),
+          )
+          expect(reply?.parts).toEqual([Prompt.textPart({ text: "later work still runs" })])
+        }).pipe(Effect.provideContext(context))
+      }).pipe(Effect.timeout("4 seconds")),
+    6000,
+  )
+
+  it.scopedLive(
+    "late turn-targeted cancellation leaves the current stream running",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          textStep("first reply"),
+          { ...textStep("second reply"), gated: true },
+        ])
+        const context = yield* Layer.build(makeLayer(providerLayer))
+        yield* Effect.gen(function* () {
+          const loop = yield* makeAgentLoopService
+          const sessionId = SessionId.make("targeted-cancel-session")
+          const branchId = BranchId.make("targeted-cancel-branch")
+          const first = makeMessage(sessionId, branchId, "first")
+          const second = makeMessage(sessionId, branchId, "second")
+          yield* runAgentLoop(loop, first)
+          const running = yield* runAgentLoop(loop, second).pipe(Effect.forkChild)
+          yield* controls.waitForCall(1)
+          // This helper awaits the actual actor handler, not only durable send admission.
+          yield* steerAgentLoop({
+            _tag: "Cancel",
+            sessionId,
+            branchId,
+            requestId: RequestId.make("late-first-cancel"),
+            messageId: first.id,
+          })
+          expect((yield* loop.getState({ sessionId, branchId }))._tag).toBe("Running")
+          yield* controls.emitAll(1)
+          yield* Fiber.join(running)
+          const reply = yield* (yield* MessageStorage).getMessage(
+            assistantMessageIdForTurn(second.id, 1),
+          )
+          expect(reply?.parts).toEqual([Prompt.textPart({ text: "second reply" })])
+          expect(yield* controls.callCount).toBe(2)
+        }).pipe(Effect.provideContext(context))
+      }).pipe(Effect.timeout("4 seconds")),
+    6000,
+  )
+
   it.live("concurrent sessions run independently", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>()
@@ -754,6 +830,17 @@ describe("streaming", () => {
         const tags = events.map((event) => event._tag)
         expect(streamCalls).toBe(3)
         expect(tags.filter((tag) => tag === "ProviderRetrying")).toHaveLength(2)
+        expect(events.filter((event) => event._tag === "StreamEnded")).toEqual([
+          expect.objectContaining({ messageId: message.id, step: 1 }),
+        ])
+        const completion = events.find((event) => event._tag === "TurnCompleted")
+        expect(completion).toEqual(
+          expect.objectContaining({
+            _tag: "TurnCompleted",
+            messageId: message.id,
+            streamFailed: true,
+          }),
+        )
         expect(tags).toContain("StreamEnded")
         expect(tags).toContain("ErrorOccurred")
         expect(tags).toContain("TurnCompleted")

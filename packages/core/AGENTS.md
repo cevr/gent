@@ -17,6 +17,8 @@
 - Server-facing code uses `SessionRuntime` only. `AgentLoop` is a runtime-internal implementation detail.
 - Server-facing orchestration flows through typed `SessionRuntime` methods: `sendUserMessage`, `recordToolResult`, `steer`, and `respondInteraction`.
 - Do not reintroduce a generic runtime command union or public dispatch bridge.
+- Profile tests use `SessionProfileCache.Live` and enter `publication.run` for resource effects. Do not rebuild the removed activation pipeline in test helpers. Resource assembly follows resolved extension order, not input order.
+- Tool adapters use `runtime/agent/tool-binding-resolution.ts` for replay identity checks. Keep result persistence and approval behavior in the adapter. A local identity cannot replace a missing durable binding row. See `../../ARCHITECTURE.md`.
 
 ## Extension Boundary
 

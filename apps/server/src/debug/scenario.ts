@@ -622,6 +622,10 @@ const runTodoLifecycle = (params: DebugScenarioParams) =>
       agent: {
         listAgents: () => Effect.succeed([]),
         run: () => Effect.die("debug scenario agent.run unavailable"),
+        start: () => Effect.die("debug scenario agent.start unavailable"),
+        inspect: () => Effect.die("debug scenario agent.inspect unavailable"),
+        wait: () => Effect.die("debug scenario agent.wait unavailable"),
+        cancel: () => Effect.die("debug scenario agent.cancel unavailable"),
       },
       session: {
         listMessages: () => Effect.succeed([]),

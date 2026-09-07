@@ -1,5 +1,5 @@
-import { Cause, Effect, Exit, Layer, Option, Predicate, Scope } from "effect"
-import type { Context, FileSystem, Path } from "effect"
+import { Cause, Effect, Option, Predicate } from "effect"
+import type { FileSystem, Path } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { GentPlatform } from "../gent-platform.js"
 import type {
@@ -19,39 +19,14 @@ import type { PromptSection } from "../../domain/prompt.js"
 
 const modelToolCount = (contribs: ExtensionContributions): number =>
   modelCapabilities(contribs).length
-import { resolveExtensions, type ResolvedExtensions } from "./registry.js"
 import type { DiscoveredBuiltinExtension, DiscoveredExtension } from "./loader.js"
 import { setupExtension } from "./loader.js"
-import {
-  reconcileScheduledJobs,
-  type ScheduledJobCommand,
-  type SchedulerFailure,
-} from "./resource-host/schedule-engine.js"
-import { buildResourceLayer, collectResourceEntries } from "./resource-host/resource-layer.js"
 
 type ExtensionSetupServices = FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform
 
 export interface ExtensionActivationResult {
   readonly active: ReadonlyArray<LoadedExtension>
   readonly failed: ReadonlyArray<FailedExtension>
-}
-
-/**
- * Process resources successfully built during extension reconciliation.
- *
- * The context is carried into the profile runtime so lifecycle resources are
- * not built a second time. The extension key is stable data, not an object
- * identity cache key.
- */
-export interface ActivatedResourceContext {
-  readonly extension: LoadedExtension
-  readonly context: Context.Context<unknown>
-}
-
-export interface ExtensionReconciliationResult {
-  readonly resolved: ResolvedExtensions
-  readonly scheduledJobFailures: ReadonlyArray<SchedulerFailure>
-  readonly resourceContexts: ReadonlyArray<ActivatedResourceContext>
 }
 
 const toFailedExtension = (
@@ -363,161 +338,4 @@ export const validateLoadedExtensions = (
       failed.push(toFailedExtension(ext, "validation", failure.errors.join("; ")))
     }
     return { active, failed }
-  })
-
-const groupScheduledJobFailures = (
-  failures: ReadonlyArray<SchedulerFailure>,
-): ReadonlyMap<string, ReadonlyArray<{ jobId: string; error: string }>> => {
-  const byExtension = new Map<string, Array<{ jobId: string; error: string }>>()
-  for (const failure of failures) {
-    const existing = byExtension.get(failure.extensionId) ?? []
-    existing.push({ jobId: failure.jobId, error: failure.error })
-    byExtension.set(failure.extensionId, existing)
-  }
-  return byExtension
-}
-
-const activateProcessResources = (
-  extensions: ReadonlyArray<LoadedExtension>,
-): Effect.Effect<
-  {
-    readonly active: ReadonlyArray<LoadedExtension>
-    readonly failed: ReadonlyArray<FailedExtension>
-    readonly resourceContexts: ReadonlyArray<ActivatedResourceContext>
-  },
-  never,
-  Scope.Scope
-> =>
-  Effect.gen(function* () {
-    const active: LoadedExtension[] = []
-    const failed: FailedExtension[] = []
-    const resourceContexts: ActivatedResourceContext[] = []
-
-    for (const ext of extensions) {
-      const hasLifecycle = collectResourceEntries([ext], "process").some(
-        ({ resource }) =>
-          !Predicate.isUndefined(resource.start) || !Predicate.isUndefined(resource.stop),
-      )
-      if (!hasLifecycle) {
-        active.push(ext)
-        continue
-      }
-
-      const resourceScope = yield* Scope.make()
-      const exit = yield* Layer.buildWithScope(
-        buildResourceLayer([ext], "process"),
-        resourceScope,
-      ).pipe(Effect.exit)
-      if (Exit.isSuccess(exit)) {
-        active.push(ext)
-        resourceContexts.push({ extension: ext, context: exit.value })
-        yield* Effect.addFinalizer(() => Scope.close(resourceScope, Exit.void))
-        continue
-      }
-
-      yield* Scope.close(resourceScope, Exit.void).pipe(Effect.ignore)
-      const error = Cause.pretty(exit.cause)
-      failed.push(toFailedExtension(ext, "startup", error))
-      yield* Effect.logWarning("extension.startup.failed").pipe(
-        Effect.annotateLogs({
-          extensionId: ext.manifest.id,
-          scope: ext.scope,
-          sourcePath: ext.sourcePath,
-          error,
-        }),
-      )
-    }
-
-    return { active, failed, resourceContexts }
-  })
-
-export const reconcileLoadedExtensions = (params: {
-  readonly extensions: ReadonlyArray<LoadedExtension>
-  readonly failedExtensions?: ReadonlyArray<FailedExtension>
-  readonly home: string
-  // oxlint-disable-next-line effect/noNullish -- The scheduler command is an optional host boundary input.
-  readonly command: ScheduledJobCommand | undefined
-  readonly env?: Readonly<Record<string, string>>
-  readonly schedulerRuntime?: Parameters<typeof reconcileScheduledJobs>[0]["runtime"]
-}): Effect.Effect<
-  ExtensionReconciliationResult,
-  never,
-  Scope.Scope | FileSystem.FileSystem | Path.Path
-> =>
-  Effect.gen(function* () {
-    const validated = yield* validateLoadedExtensions(params.extensions)
-    return yield* reconcileExtensionDeclarations({
-      declarations: {
-        active: validated.active,
-        failed: [...(params.failedExtensions ?? []), ...validated.failed],
-      },
-      home: params.home,
-      command: params.command,
-      env: params.env,
-      schedulerRuntime: params.schedulerRuntime,
-    })
-  })
-
-/**
- * Activate and reconcile declarations that already passed validation.
- *
- * Declaration loading is intentionally separate from this boundary. This
- * operation owns process resource acquisition, lifecycle hooks, and scheduled
- * job reconciliation. It keeps startup failure isolation unchanged while
- * allowing callers to inspect declarations without starting them.
- */
-export const reconcileExtensionDeclarations = (params: {
-  readonly declarations: ExtensionActivationResult
-  readonly home: string
-  // oxlint-disable-next-line effect/noNullish -- The scheduler command is an optional host boundary input.
-  readonly command: ScheduledJobCommand | undefined
-  readonly env?: Readonly<Record<string, string>>
-  readonly schedulerRuntime?: Parameters<typeof reconcileScheduledJobs>[0]["runtime"]
-}): Effect.Effect<
-  ExtensionReconciliationResult,
-  never,
-  Scope.Scope | FileSystem.FileSystem | Path.Path
-> =>
-  Effect.gen(function* () {
-    const activated = yield* activateProcessResources(params.declarations.active)
-    const scheduledJobFailures = yield* reconcileScheduledJobs({
-      extensions: activated.active,
-      home: params.home,
-      command: params.command,
-      env: params.env,
-      runtime: params.schedulerRuntime,
-    })
-
-    const allFailed = [...params.declarations.failed, ...activated.failed]
-    const resolved = resolveExtensions(
-      activated.active,
-      allFailed,
-      groupScheduledJobFailures(scheduledJobFailures),
-    )
-
-    type ReconciliationSummaryFields = {
-      active: number
-      failed: number
-      activeIds: string
-      failedDetails?: string
-    }
-    const summaryFields: ReconciliationSummaryFields = {
-      active: activated.active.length,
-      failed: allFailed.length,
-      activeIds: activated.active.map((ext) => ext.manifest.id).join(", "),
-    }
-    if (allFailed.length > 0) {
-      summaryFields.failedDetails = allFailed
-        .map((f) => `${f.manifest.id}(${f.phase}): ${f.error}`)
-        .join("; ")
-    }
-    yield* Effect.logInfo("extension.reconciliation.summary").pipe(
-      Effect.annotateLogs(summaryFields),
-    )
-
-    return {
-      resolved,
-      scheduledJobFailures,
-      resourceContexts: activated.resourceContexts,
-    }
   })
