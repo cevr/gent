@@ -66,6 +66,12 @@ export type AgentLoopQueue = {
     messageId: QueuedTurnItem["message"]["id"],
   ) => Effect.Effect<void, AgentLoopError>
   readonly appendSteering: (item: QueuedTurnItem) => Effect.Effect<LoopState, AgentLoopError>
+  /**
+   * Remove the steering items a running turn can deliver at its next step
+   * boundary. Items with an agent override or run spec need their own turn
+   * profile and stay queued for the turn boundary.
+   */
+  readonly takeSteeringForStep: Effect.Effect<ReadonlyArray<QueuedTurnItem>, AgentLoopError>
   readonly drainQueue: Effect.Effect<QueueSnapshot, AgentLoopError>
   readonly saveCheckpoint: (next: LoopState) => Effect.Effect<void, AgentLoopError>
 }
@@ -338,6 +344,20 @@ export const makeAgentLoopQueue = (
       })),
     )
 
+    const deliverableAtStep = (item: QueuedTurnItem) =>
+      Predicate.isUndefined(item.agentOverride) && Predicate.isUndefined(item.runSpec)
+
+    const takeSteeringForStep = commitQueueTransaction("delivered steering at step", (s) => {
+      const delivered = s.queue.steering.filter(deliverableAtStep)
+      if (delivered.length === 0) return { value: delivered, next: s, persist: false }
+      const kept = s.queue.steering.filter((item) => !deliverableAtStep(item))
+      return {
+        value: delivered,
+        next: { ...s, queue: { ...s.queue, steering: kept } },
+        persist: true,
+      }
+    }).pipe(Effect.withSpan("AgentLoop.takeSteeringForStep"))
+
     const drainQueue = commitQueueTransaction("drained queue", (s) => ({
       value: queueSnapshotFromQueueState(s.queue),
       next: { ...s, queue: drainVisibleQueueItems(s.queue) },
@@ -370,6 +390,7 @@ export const makeAgentLoopQueue = (
       takeNextQueuedTurn: takeNextQueuedTurnFromState({ onlyIfIdle: false }),
       clearInFlightTurn,
       appendSteering,
+      takeSteeringForStep,
       drainQueue,
       saveCheckpoint,
     }

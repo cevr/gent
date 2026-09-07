@@ -349,6 +349,7 @@ export const makeAgentLoopBehavior = (
       takeNextQueuedTurn: takeNextQueuedTurnCommitted,
       clearInFlightTurn,
       appendSteering,
+      takeSteeringForStep,
       drainQueue,
       saveCheckpoint,
     } = queue
@@ -388,6 +389,7 @@ export const makeAgentLoopBehavior = (
       turnMetricsRef,
       interruptedRef,
       clearInFlightTurn,
+      takeSteeringForStep,
     })
 
     const worker = makeAgentLoopWorker({

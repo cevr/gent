@@ -125,6 +125,7 @@ export type AgentLoopTurnExecutionContext = {
   readonly clearInFlightTurn: (
     messageId: QueuedTurnItem["message"]["id"],
   ) => Effect.Effect<void, AgentLoopError>
+  readonly takeSteeringForStep: Effect.Effect<ReadonlyArray<QueuedTurnItem>, AgentLoopError>
 }
 
 export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext) =>
@@ -826,6 +827,18 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       return { step: 1, interaction: Option.some(outcome.outcome) }
     })
 
+    /**
+     * A safe step boundary: tool results are stored and no stream is open.
+     * Steering admitted while the step ran joins the transcript here, so the
+     * next model call reads it without an interrupted stream.
+     */
+    const deliverSteeringAtStepBoundary = Effect.fn("AgentLoop.deliverSteering")(function* () {
+      const items = yield* scope.takeSteeringForStep
+      for (const item of items) {
+        yield* persistMessageReceived({ message: item.message })
+      }
+    })
+
     const runTurnStep = Effect.fn("AgentLoop.runTurnStep")(function* (params: {
       readonly state: RunningState
       readonly step: number
@@ -952,6 +965,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       yield* clearProcessLocalReplayBindings(
         assistantMessageIdForTurn(params.state.message.id, params.step),
       )
+      yield* deliverSteeringAtStepBoundary()
       return { _tag: "continue", currentTurnAgent } satisfies TurnStepResult
     })
 

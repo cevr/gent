@@ -782,11 +782,9 @@ export const buildAgentLoopActorHandlers = (config: {
             message: interjectMessage,
             agentOverride: command.agent,
           }
-          const loopState = yield* handle.appendSteering(item)
-          const shouldInterrupt = projectedState._tag === "Running" || loopState._tag === "Running"
-          if (shouldInterrupt) {
-            yield* handle.interruptActiveStream
-          }
+          // Steering joins the running turn at its next step boundary, or starts
+          // the next turn when the loop is idle. The open stream is not interrupted.
+          yield* handle.appendSteering(item)
           return
         }
       }

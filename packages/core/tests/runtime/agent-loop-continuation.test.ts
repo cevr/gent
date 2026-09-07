@@ -111,6 +111,57 @@ describe("continuation", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
+  it.live("an interjection during a tool step joins the same turn at the next step boundary", () =>
+    Effect.gen(function* () {
+      const latestUserText = (request: { readonly prompt: Prompt.RawInput }) => {
+        const latest = [...Prompt.make(request.prompt).content]
+          .reverse()
+          .find((message) => message.role === "user")
+        if (Predicate.isUndefined(latest)) return ""
+        return latest.content
+          .filter((part): part is Prompt.TextPart => part.type === "text")
+          .map((part) => part.text)
+          .join("\n")
+      }
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...toolCallStep("echo", { text: "step 1" }), gated: true },
+        {
+          ...textStep("Done after steering."),
+          assertOptions: (options) => {
+            expect(latestUserText(options)).toBe("steer now")
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const messageStorage = yield* MessageStorage
+        const turn = makeContMessage("steer at step boundary")
+        const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, turn))
+        yield* controls.waitForCall(0)
+        yield* steerAgentLoop({
+          _tag: "Interject",
+          sessionId: contSessionId,
+          branchId: contBranchId,
+          requestId: "req-interject-step-boundary",
+          message: "steer now",
+        })
+        yield* controls.emitAll(0)
+        yield* Fiber.join(fiber)
+        // One turn, two model calls: the steering did not interrupt the stream.
+        expect(yield* controls.callCount).toBe(2)
+        const events = yield* Ref.get(eventsRef)
+        expect(events.filter((event) => event._tag === "TurnCompleted")).toHaveLength(1)
+        expect(
+          events.some((event) => event._tag === "TurnCompleted" && event.interrupted === true),
+        ).toBe(false)
+        const messages = yield* messageStorage.listMessages(contBranchId)
+        expect(messages.filter((message) => message._tag === "interjection")).toHaveLength(1)
+        yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }),
+  )
   it.live("interrupt during tool execution stops continuation", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([

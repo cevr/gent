@@ -230,17 +230,29 @@ Shape:
   receipt, not proof of a running actor. Inspection does not start or resume work.
   It returns the raw completion flags without claiming task success. The public
   child-handle facade and cell integration remain unfinished.
-- The private durable `wait` operation repeats this same inspection with Effect
-  scheduling. The caller supplies an integer deadline of 1–30000 milliseconds.
-  Timeout stops the wait, not the child. Each read transaction closes before the
-  next delay; caller-owned transactions are rejected. Stored completion returns
-  without actor dispatch. No detached waiter or second event subscription exists.
+- There is no `wait` operation. A parent never blocks on a child. The private
+  `list` operation reads the parent-owned child registry from the same durable
+  start receipts, and `ChildCompletionDelivery` turns each child's terminal
+  receipt into one idempotent follow-up message on the parent branch (see
+  Agent Runs). The follow-up carries `wake`, so a parent branch with no prior
+  turn still starts a turn to read it.
 - The private durable `cancel` operation checks the same owned receipt and sends
   a stable steering command for the admitted message only. A stored completion
   makes cancellation a no-op. Caller transactions are rejected. The return value
   confirms durable command submission, not completed cancellation; `wait` reads
   the resulting completion. Processed targeted cancellation is retained before
   queue admission; the full child creation-to-enqueue restart check remains open.
+- `Interject` steering never interrupts an open stream. The item is admitted to
+  the durable steering queue; a running turn delivers it at its next safe step
+  boundary (tool results stored, no stream open) by persisting the interjection
+  as a transcript message before the next model call, so the same turn continues.
+  Items with an agent override or run spec need their own turn profile and wait
+  for the turn boundary, where steering still precedes queued follow-ups.
+- Follow-up admission from inside a held side-mutation permit (a running turn, a
+  tool invocation, an extension request) only appends to the durable queue. The
+  turn starts from a wake that runs after the permit is released, or at the next
+  turn boundary. `QueueFollowUp` carries an explicit `wake` flag; without it a
+  branch with no prior history keeps the item queued until a real turn arrives.
 - `Cancel` and `Interrupt` steering can include an expected message ID. Omission
   preserves branch-wide behavior. The worker checks the target before signaling
   and again when resuming an interaction. A local interruption permit serializes
