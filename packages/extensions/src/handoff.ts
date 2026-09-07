@@ -13,7 +13,6 @@ import {
   request,
 } from "@gent/core/extensions/api"
 import { HandoffTool } from "./handoff-tool.js"
-import { AutoRead } from "./auto/controller.js"
 
 const EXTENSION_ID = ExtensionId.make("@gent/handoff")
 
@@ -102,14 +101,6 @@ const autoHandoffImpl = (input: TurnAfterInput) =>
 
     // turnAfter is the natural place to drive the cooldown clock.
     yield* cooldown.turnCompleted.pipe(Effect.catchEager(() => Effect.void))
-
-    // Auto owns its own handoff flow — skip generic threshold handoff when active
-    const auto = yield* Effect.serviceOption(AutoRead)
-    let autoActive = false
-    if (auto._tag === "Some") {
-      autoActive = yield* auto.value.isActive.pipe(Effect.catchEager(() => Effect.succeed(false)))
-    }
-    if (autoActive) return
 
     const cooldownCount = yield* cooldown.get.pipe(Effect.catchEager(() => Effect.succeed(0)))
     if (cooldownCount > 0) return

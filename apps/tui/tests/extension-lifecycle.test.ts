@@ -1,6 +1,5 @@
 import { describe, it, expect, test } from "effect-bun-test"
 import { Deferred, Effect } from "effect"
-import autoBuiltin from "../src/extensions/builtins/auto.client"
 import artifactsBuiltin from "../src/extensions/builtins/artifacts.client"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import {
@@ -33,72 +32,6 @@ describe("transport-only extension widgets", () => {
       lifecycle.addCleanup(() => calls.push("after-throw"))
       yield* Effect.forEach(cleanups, (cleanup) => Effect.sync(cleanup).pipe(Effect.ignoreCause))
       expect(calls).toEqual(["before-throw", "after-throw"])
-    }),
-  )
-  it.live("auto widget drops a stale refetch after the session changes", () =>
-    Effect.gen(function* () {
-      const activeSession = makeActiveSessionRef({
-        sessionId: SessionId.make("session-A"),
-        branchId: BranchId.make("branch-A"),
-      })
-      const requestDeferred = yield* Deferred.make<unknown, never>()
-      const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
-      yield* Effect.gen(function* () {
-        const contributions = yield* runClientExtensionSetup(runtime, autoBuiltin)
-        const borderLabel = findBorderLabel(contributions, "top-left")
-        expect(borderLabel).toBeDefined()
-        activeSession.value = {
-          sessionId: SessionId.make("session-B"),
-          branchId: BranchId.make("branch-B"),
-        }
-        yield* Deferred.succeed(requestDeferred, { active: true, phase: "working", iteration: 1 })
-        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
-        yield* Effect.sleep("0 millis")
-        expect(borderLabel?.produce()).toEqual([])
-      }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
-    }),
-  )
-  it.live("auto widget renders a decoded snapshot", () =>
-    Effect.gen(function* () {
-      const activeSession = makeActiveSessionRef({
-        sessionId: SessionId.make("session-A"),
-        branchId: BranchId.make("branch-A"),
-      })
-      const requestDeferred = yield* Deferred.make<unknown, never>()
-      const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
-      yield* Effect.gen(function* () {
-        const contributions = yield* runClientExtensionSetup(runtime, autoBuiltin)
-        const borderLabel = findBorderLabel(contributions, "top-left")
-        expect(borderLabel).toBeDefined()
-        yield* Deferred.succeed(requestDeferred, {
-          active: true,
-          phase: "working",
-          iteration: 2,
-          maxIterations: 4,
-        })
-        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
-        yield* Effect.sleep("0 millis")
-        expect(borderLabel?.produce()).toEqual([{ text: "auto 2/4", color: "info" }])
-      }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
-    }),
-  )
-  it.live("auto widget rejects undecodable snapshots at the client seam", () =>
-    Effect.gen(function* () {
-      const activeSession = makeActiveSessionRef({
-        sessionId: SessionId.make("session-A"),
-        branchId: BranchId.make("branch-A"),
-      })
-      const requestDeferred = yield* Deferred.make<unknown, never>()
-      const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
-      yield* Effect.gen(function* () {
-        const contributions = yield* runClientExtensionSetup(runtime, autoBuiltin)
-        const borderLabel = findBorderLabel(contributions, "top-left")
-        expect(borderLabel).toBeDefined()
-        yield* Deferred.succeed(requestDeferred, { active: "yes" })
-        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
-        yield* Effect.sleep("0 millis")
-        expect(borderLabel?.produce()).toEqual([])
-      }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
     }),
   )
   it.live("artifacts widget drops a stale refetch after the branch changes", () =>

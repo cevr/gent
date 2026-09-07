@@ -9,12 +9,6 @@ export {
   type ArtifactStatus as ArtifactStatusType,
 } from "./artifacts-protocol.js"
 export {
-  AUTO_EXTENSION_ID,
-  AutoRpc,
-  AutoSnapshotReply,
-  type AutoSnapshotReply as AutoSnapshotReplyType,
-} from "./auto/protocol.js"
-export {
   SKILLS_EXTENSION_ID,
   SkillEntry,
   SkillsRpc,

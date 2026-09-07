@@ -412,7 +412,6 @@ export default defineClientExtension("@test/b", {
           }),
         )
         const borderPositions = new Set(resolved.borderLabels.map((label) => label.position))
-        expect(borderPositions.has("top-left")).toBe(true)
         expect(borderPositions.has("bottom-right")).toBe(true)
       }).pipe(
         Effect.ensuring(
