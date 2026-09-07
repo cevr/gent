@@ -119,12 +119,12 @@ Priority: headless → session → continue → prompt → home
 
 Special prefixes at input start trigger different modes:
 
-| Prefix | Behavior                                       |
-| ------ | ---------------------------------------------- |
-| `!`    | Shell mode - prompt changes to `$`, ESC exits  |
-| `$`    | Skills popup (scans ~/.claude/skills, etc.)    |
-| `@`    | File finder popup, supports `@file.ts#10-20`   |
-| `/`    | Command popup (/auto, /clear, /sessions, etc.) |
+| Prefix | Behavior                                      |
+| ------ | --------------------------------------------- |
+| `!`    | Shell mode - prompt changes to `$`, ESC exits |
+| `$`    | Skills popup (scans ~/.claude/skills, etc.)   |
+| `@`    | File finder popup, supports `@file.ts#10-20`  |
+| `/`    | Command popup (/clear, /sessions, etc.)       |
 
 ### Shell Mode
 
@@ -141,7 +141,6 @@ Special prefixes at input start trigger different modes:
 
 | Command     | Action               |
 | ----------- | -------------------- |
-| `/auto`     | Toggle auto mode     |
 | `/clear`    | Clear messages       |
 | `/sessions` | Open sessions picker |
 | `/branch`   | Create new branch    |
@@ -152,16 +151,15 @@ Special prefixes at input start trigger different modes:
 
 Builtins are individual `.client.{ts,tsx}` files in `src/extensions/builtins/`:
 
-| File                                 | Extension ID                                             | What                                               |
-| ------------------------------------ | -------------------------------------------------------- | -------------------------------------------------- |
-| `builtins/tool-renderers.client.tsx` | `@gent/tools` / `@gent/todo` / `@gent/interaction-tools` | Tool renderers, todo widget, interaction renderers |
-| `builtins/artifacts.client.ts`       | `@gent/artifacts`                                        | Artifact count border label                        |
-| `builtins/auto.client.ts`            | `@gent/auto`                                             | Auto loop progress                                 |
-| `builtins/connection.client.ts`      | `@gent/connection`                                       | Connection status widget                           |
-| `builtins/handoff.client.ts`         | `@gent/handoff`                                          | Handoff interaction renderer                       |
-| `builtins/skills.client.ts`          | `@gent/skills-ui`                                        | `$` autocomplete: skills popup                     |
-| `builtins/files.client.ts`           | `@gent/files-ui`                                         | `@` autocomplete: file search popup                |
-| `builtins/driver.client.ts`          | `@gent/driver-ui`                                        | `/driver` slash command                            |
+| File                                 | Extension ID                              | What                                  |
+| ------------------------------------ | ----------------------------------------- | ------------------------------------- |
+| `builtins/tool-renderers.client.tsx` | `@gent/tools` / `@gent/interaction-tools` | Tool renderers, interaction renderers |
+| `builtins/artifacts.client.ts`       | `@gent/artifacts`                         | Artifact count border label           |
+| `builtins/connection.client.ts`      | `@gent/connection`                        | Connection status widget              |
+| `builtins/handoff.client.ts`         | `@gent/handoff`                           | Handoff interaction renderer          |
+| `builtins/skills.client.ts`          | `@gent/skills-ui`                         | `$` autocomplete: skills popup        |
+| `builtins/files.client.ts`           | `@gent/files-ui`                          | `@` autocomplete: file search popup   |
+| `builtins/driver.client.ts`          | `@gent/driver-ui`                         | `/driver` slash command               |
 
 Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → `loader-boundary.ts` → `resolve.ts`
 

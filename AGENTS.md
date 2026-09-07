@@ -168,8 +168,6 @@ assertSequence(calls, [
 | `packages/core/src/test-utils/in-process-layer.ts`       | `baseLocalLayer` / `baseLocalLayerWithProvider`     |
 | `packages/core/src/debug/provider.ts`                    | step builders for `LanguageModelLayers.sequence`    |
 | `packages/core/src/test-utils/language-model.ts`         | `LanguageModelLayers` + stream-part helpers         |
-| `packages/extensions/src/auto/index.ts`                  | auto loop modality extension                        |
-| `packages/extensions/src/auto/checkpoint.ts`             | signal tool for auto loop iteration                 |
 | `apps/tui/tsconfig.json`                                 | `jsxImportSource: "@opentui/solid"` required        |
 
 ## Documentation

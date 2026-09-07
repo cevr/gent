@@ -443,13 +443,10 @@ Preview is not a sandbox or a general side-effect-free operation.
 
 ## In-tree Examples
 
-| Extension                               | Demonstrates                                     |
-| --------------------------------------- | ------------------------------------------------ |
-| `packages/extensions/src/session-tools` | `tool` + explicit prompt/policy integration      |
-| `packages/extensions/src/todo`          | `tool` + `request` + scoped storage resource     |
-| `packages/extensions/src/memory`        | `tool` + turn projection hook + `defineResource` |
-| `packages/extensions/src/auto/index.ts` | turn/tool hooks + scoped workflow services       |
-| `examples/extensions/session-notes.ts`  | one-file tool + slash request + state + hook     |
+| Extension                               | Demonstrates                                 |
+| --------------------------------------- | -------------------------------------------- |
+| `packages/extensions/src/session-tools` | `tool` + explicit prompt/policy integration  |
+| `examples/extensions/session-notes.ts`  | one-file tool + slash request + state + hook |
 
 ## Surface Invariants
 

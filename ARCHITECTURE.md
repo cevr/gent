@@ -371,7 +371,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   if any stored stream has missing or invalid usage, or if the sum exceeds safe
   integer precision. Explicit zero is retained; no stream receipts means unknown.
   These are reported stream totals, not full model-attempt budget accounting.
-- Callers that need durable history must opt in explicitly, e.g. todo execution forces `persistence: "durable"`.
+- Callers that need durable history must opt in explicitly with `persistence: "durable"`.
 
 ### Interactions (Cold Pattern)
 
@@ -807,13 +807,13 @@ Everything else is builtin/internal:
 - raw runtime host context and hook plumbing (`ExtensionHostContext`,
   `ToolExecuteInput`, `ProjectionTurnContext`, permission/context message
   internals);
-- storage, event publisher, event store, todo/session mutation services, and
+- storage, event publisher, event store, session mutation services, and
   interaction pending readers;
 - runtime/platform services and helpers (`GentPlatform`, `ToolRunner`,
   `ExtensionEventSink`, `runProcess`);
 - agent loop/session runtime internals and process runners that are only host
   implementation details;
-- raw event/todo/message domain internals that are not part of the serialized
+- raw event/message domain internals that are not part of the serialized
   authoring contract;
 - driver registry internals and provider auth persistence machinery;
 - test-only helpers such as `getToolEffect`, raw metadata tags, and fixture
@@ -842,7 +842,7 @@ There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContri
 - **Resource** — `defineResource({ id, revision?, requires?, required?, scope, layer?, start?, stop? })`. Long-lived state has a stable identity and explicit `scope`; `revision` records resource semantics, including configuration changes, and defaults to `"1"`; `requires` defaults to `[]`, and `required` defaults to `false`. Today only `"process"` is public, because it is the only lifecycle with a host owner. `cwd`, `session`, and `branch` lifetimes stay out of the author API until their runtime owners exist. Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
 - **Callable leaves** — `tool(...)` / `request(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Agent`, `Interaction`, `Process`, `Files`, `FileLock`, `State`); extension-private authority comes from extension-owned Effect service Tags. The `Files` / `FileLock` / `State` facets wrap the host-internal `FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so shipped and external extensions share the same surface. See `packages/core/src/domain/capability/{tool,request}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
 - **Reactions** — `reactions.turnProjection`, `systemPrompt`, `turnBefore`, `turnAfter`, `messageOutput`, and `toolResult` are the explicit runtime hooks. Reaction handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-reactions.ts`.
-- **Driver** — `modelDrivers` and `externalDrivers` are split buckets of `ModelDriverContribution` and `ExternalDriverContribution`. Model drivers provide LLM provider layers + auth; external drivers stream Effect AI response parts from process-owned executors such as ACP. See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
+- **Driver** — `modelDrivers` and `externalDrivers` are split buckets of `ModelDriverContribution` and `ExternalDriverContribution`. Model drivers provide LLM provider layers + auth; external drivers stream Effect AI response parts from process-owned executors. See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
 
 Other notes:
 
@@ -862,31 +862,13 @@ Other notes:
 
 `EventPublisherRouterLive` (`server/event-publisher.ts`) dispatches through per-cwd profiles. For a single-cwd run the profile is resolved once at boot; for multi-cwd server topologies the router resolves lazily per cwd and fans out to the correct extension runtime. Transport-level broadcast (session stream, WebSocket push) is cwd-agnostic; only the extension runtime dispatch is per-cwd.
 
-### Todo Service Ownership
-
-`TodoService.Live` is owned by the `@gent/todo` extension, not core:
-
-- Provided by `@gent/todo` as a process resource layer
-  (`TodoStorage.Live + TodoService.Live`).
-- Todo mutation flows through typed extension requests and extension tools yield
-  `TodoService` from their own extension runtime.
-- Todo UI reads through typed extension RPC and refetches when
-  `@gent/todo` emits an `ExtensionStateChanged` pulse on the normal
-  session stream.
-- Core has no product todo domain. Core `MachineTaskSucceeded` /
-  `MachineTaskFailed` events are runtime/tool telemetry and stay filtered from
-  public transport.
-- Event-publisher persists and broadcasts session events only. Client widgets
-  read state via typed RPC plus transport events; they do not consume a core
-  todo service or privileged builtin API.
-
 ### TUI Extensions
 
 - Builtins are individual `.client.{ts,tsx}` files in `apps/tui/src/extensions/builtins/`
 - Each follows `ExtensionClientModule` contract — same pipeline as user/project extensions
 - Loader (`apps/tui/src/extensions/loader-boundary.ts`) accepts `disabled` list to filter extensions by id before `setup` runs
 - One `setup` shape: Effect-typed `Effect<ClientContribution[], E, R>`. Setups yield from the per-provider `clientRuntime`, which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientLifecycle`. There is no imperative `ctx` argument, no sync `(ctx) => Array` arm, and no package wrapper around paired server/client modules. Shared server/client artifacts use `defineExtension({ client })`; TUI-only artifacts use `.client.{ts,tsx}` modules.
-- Widgets are transport-only: subscribe to `ClientTransport.onSessionEvent` for event-backed invalidation or `ClientTransport.onExtensionStateChanged` for explicit extension-state notifications, then call typed extension RPC via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins/{auto,artifacts,todos}.client.{ts,tsx}` for the canonical pattern.
+- Widgets are transport-only: subscribe to `ClientTransport.onSessionEvent` for event-backed invalidation or `ClientTransport.onExtensionStateChanged` for explicit extension-state notifications, then call typed extension RPC via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins/artifacts.client.ts` for the canonical pattern.
 - `ClientLifecycle.addCleanup` registers Solid `createRoot(dispose)` disposers and event unsubscribes; the provider's `onCleanup` reaps them on unmount, so widget setups leave no detached roots behind.
 - `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, and `clientRuntime` for widgets that need imperative access from the render layer.
 - Widgets are zero-prop components that self-source from context hooks.
@@ -903,7 +885,7 @@ or ask/reply infrastructure inside extension authoring.
 **Event-backed client invalidation**:
 
 - Server event publishing appends and broadcasts committed `AgentEvent`s only; it does not synthesize extension invalidation events from registry metadata.
-- TUI widgets that derive state from events subscribe with `ClientTransport.onSessionEvent` and refetch their typed extension RPC when relevant event tags arrive. `@gent/todo` is the canonical event-backed widget.
+- TUI widgets that derive state from events subscribe with `ClientTransport.onSessionEvent` and refetch their typed extension RPC when relevant event tags arrive. `@gent/artifacts` is the canonical event-backed widget.
 - `ExtensionStateChanged` remains available as an explicit, payload-free notification event for extensions that choose to publish it directly.
 
 **Ephemeral runtime builder**:
@@ -950,11 +932,11 @@ Use the smallest honest boundary:
 ```text
 tests/
 ├── domain/        # auth, agent, event, message, skills, ...
-├── extensions/    # api, registry, compile-tool-policy, hooks, loader, memory/, ...
+├── extensions/    # api, registry, compile-tool-policy, hooks, loader, ...
 ├── providers/     # provider, provider-auth, provider-resolution, anthropic-keychain
 ├── runtime/       # session-runtime, agent-loop, retry, agent-runner, tool-runner, ...
 ├── server/        # rpcs, session-queries, system-prompt
-├── storage/       # sqlite-storage, search-storage, todo storage
+├── storage/       # sqlite-storage, search-storage
 ├── debug/         # sequence-provider
 └── test-utils/    # sequence
 ```
@@ -995,35 +977,7 @@ The TUI renders interactions from the typed event feed (`InteractionPresented` e
 
 State: `{ items: Artifact[] }`. Upsert by `sourceTool + branchId` (last-writer-wins). Artifacts are branch-aware — prompt projection filters to current branch. Agent-facing tools: `artifact_save`, `artifact_read`, `artifact_update`, `artifact_clear`.
 
-Workflow commands (`/plan`, `/review`, `/audit`, `/counsel`, `/research`) live in `@gent/workflows` as prompt recipes: each queues a follow-up that composes `delegate`, `artifact_save`, `prompt`, and `repo` from one cell. There is no orchestration code for them; the model runs the recipe and saves the result with the matching `sourceTool`. The auto loop's review gate is a completed `delegate` call to the `reviewer` agent.
-
-## Auto Loop Extension
-
-`@gent/auto` — iterative workflow driver backed by scoped services plus
-`reactions.toolResult` / `turnAfter`.
-
-State: `Inactive | Working | AwaitingReview`. Signal tool: `auto_checkpoint`. Gate: a completed `delegate` call to the `reviewer` agent between iterations (proves adversarial review actually ran). Safety: `maxIterations` ceiling + `turnsSinceCheckpoint` wedge detection.
-
-### JSONL Persistence
-
-`AutoJournal` writes append-only `.gent/auto/<goal-slug>.jsonl` relative to cwd. `active.json` pointer tracks which journal to resume. Row types: `config`, `checkpoint`, `review`.
-
-Cross-session replay via `onInit`: child sessions verify ancestry includes `active.sessionId`. Pointers without `sessionId` fail closed. Root sessions never replay.
-
-### Handoff Ownership
-
-`@gent/auto` and `@gent/handoff` are cleanly separated:
-
-- Auto detects context fill → queues follow-up telling model to call `handoff` tool
-- Handoff extension owns presentation, cooldown, and user interaction
-- Handoff extension skips when auto is active (guard on `AutoRpc.IsActive`)
-
-### Todo Service
-
-`TodoService` is owned by the `@gent/todo` extension (not core). Todos are
-durable work items with optional nesting (`parentId`) plus dependency edges
-(`blockedBy`). Storage rejects parent/dependency cycles so the dependency graph
-stays a DAG.
+Workflow commands (`/plan`, `/review`, `/audit`, `/counsel`, `/research`) live in `@gent/workflows` as prompt recipes: each queues a follow-up that composes `delegate`, `artifact_save`, `prompt`, and `repo` from one cell. There is no orchestration code for them; the model runs the recipe and saves the result with the matching `sourceTool`.
 
 ### Test Utilities
 
@@ -1031,70 +985,6 @@ stays a DAG.
 - `trackingApprovalService()` — returns `{ layer, presentCalled: Ref<boolean> }` for approval assertions
 
 Both exported from `@gent/core-internal/test-utils/e2e-layer`.
-
-## Memory Extension
-
-Builtin extension (`@gent/memory`). Persistent memory across sessions via flat `.md` files.
-
-### Vault
-
-```text
-~/.gent/memory/
-├── index.md                          # Root index
-├── global/
-│   ├── index.md
-│   └── <topic>.md
-└── project/
-    └── <project-name>-<sha256_6>/
-        ├── index.md
-        └── <topic>.md
-```
-
-Session-local memories are volatile and stay in the in-process extension service. Promotion to disk is explicit via tools.
-
-Project key: `<basename>-<sha256_6>` of canonical repo root — collision-safe across same-named repos.
-
-### Tools
-
-- `memory_remember` — write to vault (project/global) or session state
-- `memory_recall` — search/list memories, full content for search, index for no-query
-- `memory_forget` — remove from vault or session state
-
-### Prompt Injection
-
-Compact summary injected as system prompt section. Capped at 8 entries (session + project + global). `memory_recall` tool available for deep dives beyond the cap.
-
-### Dreaming
-
-Extension-defined system agents run in headless mode for memory consolidation:
-
-- `memory:reflect` — review recent sessions, extract project-level memories (weekday evenings)
-- `memory:meditate` — consolidate vault, merge duplicates, promote patterns to global (weekly)
-
-Architecture:
-
-```text
-memory extension
-  → declarative scheduled job contributions
-  → host-owned scheduler reconciliation
-  → real gent executable in headless mode
-  → gent headless session with system agent
-  → agent uses memory_remember/recall/forget tools
-```
-
-Scheduling is host-owned, not an extension startup side effect. Memory contributes durable global jobs; the host reconciles installation/removal and degrades scheduler failures without crashing extension activation.
-
-Key files:
-
-| File                                                | Purpose                       |
-| --------------------------------------------------- | ----------------------------- |
-| `packages/extensions/src/memory/vault.ts`           | Vault I/O service             |
-| `packages/extensions/src/memory/state.ts`           | Extension state + helpers     |
-| `packages/extensions/src/memory/tools.ts`           | Agent tools                   |
-| `packages/extensions/src/memory/agents.ts`          | reflect + meditate agent defs |
-| `packages/core/src/runtime/extensions/scheduler.ts` | Host scheduler reconciliation |
-| `packages/extensions/src/memory/projection.ts`      | Prompt turn-projection helper |
-| `packages/extensions/src/memory/index.ts`           | Extension registration        |
 
 ## Observability
 

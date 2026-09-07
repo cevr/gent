@@ -301,7 +301,7 @@ const main = Command.make(
     ),
     agent: Flag.string("agent").pipe(
       Flag.withAlias("a"),
-      Flag.withDescription("Agent to use for headless mode (e.g. memory:reflect)"),
+      Flag.withDescription("Agent to use for headless mode (e.g. explore)"),
       Flag.optional,
     ),
     runSpec: Flag.string("run-spec").pipe(

@@ -123,8 +123,8 @@ describe("auth.listProviders", () => {
           const sessionCwd = yield* fs.makeTempDirectoryScoped()
           const home = yield* fs.makeTempDirectoryScoped()
           // Seed the session cwd's project config with a driver override
-          // for `cowork`. The id points at the acp-claude-code external
-          // driver that the ACP extension registers under e2ePreset.
+          // for `cowork`. Any external driver id marks the agent as
+          // externally routed, so no model provider is required.
           yield* fs.makeDirectory(path.join(sessionCwd, ".gent"), { recursive: true })
           yield* fs.writeFileString(
             path.join(sessionCwd, ".gent", "config.json"),
