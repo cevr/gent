@@ -62,6 +62,7 @@ export type { GentNamespacedClient, GentRuntime } from "./namespaced-client.js"
 
 // Server identity probe (shared by resolveServer + CLI `server stop`)
 export { probeServerLockEntryIdentity } from "./server.js"
+export { ShippedExtensions } from "./shipped-extensions.js"
 
 // Message types
 export type { AuthProviderInfo, AuthMethod, AuthAuthorization } from "./client.js"

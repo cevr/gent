@@ -14,7 +14,7 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 // @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution
 import { resolve as pathResolve, join as pathJoin } from "node:path"
 
-import { BuiltinExtensions } from "@gent/extensions"
+import { ShippedExtensions } from "./shipped-extensions.js"
 import type { GentExtension } from "@gent/core/extensions/api"
 import type { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
 import { seedDebugSession } from "@gent/core-internal/debug/session.js"
@@ -243,7 +243,7 @@ const buildOwnedServer = (
               sqlite: (): "disk" => "disk",
             }),
           ),
-          extensions: options.extensions ?? BuiltinExtensions,
+          extensions: options.extensions ?? ShippedExtensions,
           languageModelLayerOverride: Option.getOrUndefined(languageModelLayer),
         },
         identity: {

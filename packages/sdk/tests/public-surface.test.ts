@@ -23,6 +23,7 @@ describe("SDK public surface", () => {
       "ResourceRevision",
       "Session",
       "SessionSnapshot",
+      "ShippedExtensions",
       "SlashCommandInfo",
       "emptyQueueSnapshot",
       "extractImages",
