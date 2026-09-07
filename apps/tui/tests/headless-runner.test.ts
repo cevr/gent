@@ -24,6 +24,7 @@ const BashOutputJson = Schema.fromJsonString(
   }),
 )
 const encodeBashOutput = Schema.encodeSync(BashOutputJson)
+const encodeCellOutput = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
 const capturedWrites: string[] = []
 const stdout = Sink.forEach((chunk: string | Uint8Array): Effect.Effect<void> =>
@@ -218,6 +219,25 @@ describe("runHeadless", () => {
 
       expect(rendered).toContain("[tool done: read]")
       expect(rendered).toContain("plain output")
+    }),
+  )
+
+  headlessTest("renders cell operation receipts under the cell", () =>
+    Effect.sync(() => {
+      const rendered = renderHeadlessToolCall({
+        toolName: "cell",
+        status: "completed",
+        input: Option.some({ code: "await tools.call('read', {path: 'a.txt'})" }),
+        output: Option.some(
+          encodeCellOutput({
+            display: "ok",
+            operations: [{ tool: "read", outcome: "succeeded", summary: "12 lines" }],
+          }),
+        ),
+        summary: Option.none(),
+      })
+
+      expect(rendered).toBe("[tool done: cell]\n  ✓ read 12 lines\nok")
     }),
   )
 })

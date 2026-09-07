@@ -11,6 +11,8 @@ export interface ToolCall {
   summary: string | undefined
   // eslint-disable-next-line effect/noNullish -- Renderer payloads preserve omitted tool fields from the event stream.
   output: string | undefined
+  /** Inner calls a cell admitted. Live feed only; saved results carry receipts. */
+  operations?: ToolCall[]
 }
 
 export interface ToolRendererProps {

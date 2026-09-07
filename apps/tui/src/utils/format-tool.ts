@@ -142,6 +142,10 @@ const toolArgFormatters = {
     if (command.length === 0) return ""
     return command.split("\n")[0] ?? command
   },
+  cell: (args) => {
+    const code = getStringArg(args, "code")
+    return truncateText(code.split("\n")[0] ?? "", 60)
+  },
   read: summarizeRead,
   write: summarizeWrite,
   edit: (args, options) => {

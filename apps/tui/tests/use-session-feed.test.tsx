@@ -362,6 +362,134 @@ describe("useSessionFeed", () => {
     }),
   )
 
+  const expectNestedCellOperation = (
+    feed: ReturnType<typeof useSessionFeed>,
+    innerId: ToolCallId,
+  ) => {
+    const assistant = feed.messages().find((message) => message.role === "assistant")
+    // The inner read is not a transcript sibling of the cell.
+    expect(assistant?.toolCalls?.map((call) => call.toolName)).toEqual(["cell"])
+    const operation = assistant?.toolCalls?.[0]?.operations?.[0]
+    expect(assistant?.toolCalls?.[0]?.operations).toHaveLength(1)
+    expect(operation?.id).toBe(innerId)
+    expect(operation?.toolName).toBe("read")
+    expect(operation?.status).toBe("error")
+    expect(operation?.summary).toBe("missing file")
+    const segment = assistant?.segments?.find((entry) => entry._tag === "tool-call")
+    expect(segment?._tag === "tool-call" && segment.toolCall.operations?.[0]?.status).toBe("error")
+    expect(feed.activeTool()).toBeUndefined()
+  }
+
+  const cellNestingEnvelopes = (
+    sessionId: SessionId,
+    branchId: BranchId,
+    cellId: ToolCallId,
+    innerId: ToolCallId,
+  ): EventEnvelope[] => [
+    makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+    makeEnvelope(
+      2,
+      AgentEvent.cases.ToolCallStarted.make({
+        sessionId,
+        branchId,
+        toolCallId: cellId,
+        toolName: "cell",
+        input: { code: "await tools.call('read', {path: 'a.txt'})" },
+      }),
+    ),
+    makeEnvelope(
+      3,
+      AgentEvent.cases.ToolCallStarted.make({
+        sessionId,
+        branchId,
+        toolCallId: innerId,
+        toolName: "read",
+        input: { path: "a.txt" },
+        parentToolCallId: cellId,
+      }),
+    ),
+    makeEnvelope(
+      4,
+      AgentEvent.cases.ToolCallFailed.make({
+        sessionId,
+        branchId,
+        toolCallId: innerId,
+        toolName: "read",
+        summary: "missing file",
+        parentToolCallId: cellId,
+      }),
+    ),
+    makeEnvelope(
+      5,
+      AgentEvent.cases.ToolCallSucceeded.make({
+        sessionId,
+        branchId,
+        toolCallId: cellId,
+        toolName: "cell",
+        summary: "done",
+        output: "{}",
+      }),
+    ),
+    makeEnvelope(6, AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 })),
+  ]
+
+  it.live("nests cell-admitted tool calls under their cell with final status", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-cell")
+      const branchId = BranchId.make("branch-feed-cell")
+      const cellId = ToolCallId.make("tool-call-cell")
+      const innerId = ToolCallId.make("tool-call-cell-read")
+      const envelopes = cellNestingEnvelopes(sessionId, branchId, cellId, innerId)
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = {
+          session: active,
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+          setConnectionIssue: () => {},
+          waitForTransportReady: Effect.void,
+          applySessionSnapshot: () => {},
+          applySessionEvent: () => {},
+          applyBufferedSessionEvent: () => {},
+        } satisfies FeedClient
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            client.runtime.cast,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+
+      yield* waitFor(
+        () =>
+          Option.isSome(feed) &&
+          feed.value.messages().some((message) => message.toolCalls?.[0]?.status === "completed"),
+      )
+      yield* Effect.sync(() => {
+        if (Option.isNone(feed)) return
+        expectNestedCellOperation(feed.value, innerId)
+        dispose()
+      })
+    }),
+  )
+
   it.live("replays buffered event-only state before the snapshot cursor", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-feed-buffered")

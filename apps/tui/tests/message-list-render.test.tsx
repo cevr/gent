@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Option } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { Show } from "solid-js"
 import { MessageList, type Message, type SessionItem } from "../src/components/message-list"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/components/tool-frame"
@@ -85,7 +85,35 @@ const registeredFailureMessage = (id: string): Message => ({
   ],
 })
 
-function RegisteredToolMessageLists(props: { items: SessionItem[] }) {
+const cellMessage = (id: string): Message => ({
+  _tag: "regular-message",
+  id: "assistant-cell",
+  role: "assistant",
+  content: "",
+  reasoning: "",
+  images: [],
+  createdAt: 0,
+  toolCalls: [
+    {
+      id,
+      toolName: "cell",
+      status: "completed",
+      input: { code: "const note = await tools.call('read', {path: 'a.txt'})\nnote.content" },
+      summary: absent,
+      output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
+        display: "hello from a.txt",
+        bindings: ["note"],
+        truncated: false,
+        operations: [
+          { toolCallId: `${id}-op`, tool: "read", outcome: "succeeded", summary: "12 lines" },
+          { toolCallId: `${id}-op2`, tool: "write", outcome: "failed", summary: "denied" },
+        ],
+      }),
+    },
+  ],
+})
+
+function RegisteredToolMessageLists(props: { items: SessionItem[]; fullDetail?: boolean }) {
   const extensionUI = useExtensionUI()
   return (
     <Show when={!extensionUI.loading()} fallback={<text>loading renderers</text>}>
@@ -96,6 +124,15 @@ function RegisteredToolMessageLists(props: { items: SessionItem[] }) {
         streaming={false}
       />
       <MessageList items={props.items} toolsExpanded syntaxStyle={syntaxStyle} streaming={false} />
+      <Show when={props.fullDetail}>
+        <MessageList
+          items={props.items}
+          toolsExpanded
+          fullDetail
+          syntaxStyle={syntaxStyle}
+          streaming={false}
+        />
+      </Show>
     </Show>
   )
 }
@@ -261,6 +298,35 @@ describe("FX transcript treatment", () => {
       expect(frame.match(/✕ failed/g)?.length).toBe(2)
       expect(frame).not.toContain("[x read]")
       expect(frame.match(/read/g)?.length).toBeGreaterThanOrEqual(2)
+    }),
+  )
+
+  it.live("shows cell operation receipts in tree and detail frames", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => <RegisteredToolMessageLists items={[cellMessage("call-cell-7")]} fullDetail />,
+          { width: 100, height: 40 },
+        ),
+      )
+      const frame = yield* Effect.promise(() =>
+        waitForRenderedFrame(
+          setup,
+          (next) => next.includes("#call-cell-7") && next.includes("hello from a.txt"),
+          "cell renderer",
+        ),
+      )
+      // The compact tree keeps inner effects countable.
+      expect(frame).toContain("1 tool call · 1 cell")
+      expect(frame).toContain(
+        "└ cell const note = await tools.call('read', {path: 'a.txt'}) · 2 ops · 1 failed",
+      )
+      // The detail frame shows each receipt, the display value, and bindings.
+      expect(frame).toContain("✓ read 12 lines")
+      expect(frame).toContain("✕ write denied")
+      expect(frame).toContain("hello from a.txt")
+      expect(frame).toContain("note.content")
+      expect(frame).toContain("bindings: note")
     }),
   )
 })

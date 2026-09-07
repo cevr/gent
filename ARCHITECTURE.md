@@ -442,6 +442,13 @@ command now also calls the branch cell service's cancellation operation. It
 signals active evaluation and waits for cleanup. Cells queued before cancellation
 cannot evaluate; the branch interrupt flag also stops later calls in that turn.
 
+Inner calls a cell admits publish the ordinary tool events with a
+`parentToolCallId` naming the cell. `cell-operation-receipt.ts` attaches compact
+receipts (`tool`, `outcome`, `summary`) to the saved cell result whenever a cell
+made inner calls, so the transcript keeps effects visible after reload. The TUI
+nests live inner calls under the cell, counts them in the compact tree, and shows
+receipts in the `cell` renderer. The headless runner indents nested calls.
+
 When policy selects `cell` for a native model turn, only `cell` is advertised.
 ResolvedTurnContext keeps separate model and host binding maps. Both derive from
 the same policy result. The full host map supplies cell callbacks and recovery;

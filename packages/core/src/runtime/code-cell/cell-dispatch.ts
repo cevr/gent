@@ -1,9 +1,13 @@
 import { Effect, Option, Predicate } from "effect"
 import { CurrentToolCall } from "../agent/current-tool-call.js"
-import { CurrentAgentLoopTurnProfile } from "../agent/agent-loop.turn-profile.js"
+import {
+  CurrentAgentLoopTurnProfile,
+  runAgentLoopTurnProfile,
+} from "../agent/agent-loop.turn-profile.js"
 import { AgentLoopError } from "../agent/agent-loop.state.js"
 import { CellExecution } from "./cell-execution.js"
 import { CellOperationHost } from "./cell-kernel.js"
+import { withCellOperationReceipts } from "./cell-operation-receipt.js"
 import { makeCellToolHost, requireCellHostBranch } from "./cell-tool-host.js"
 import { CurrentCellToolOperation } from "./current-cell-tool-operation.js"
 
@@ -35,7 +39,8 @@ export const dispatchCell = Effect.fn("CellExecution.dispatch")(function* () {
     profile: { ...current, turnPublication },
   }
   yield* requireCellHostBranch(params)
-  return yield* execution.value
+  const result = yield* execution.value
     .run(cell)
     .pipe(Effect.provideService(CellOperationHost, makeCellToolHost(params)))
+  return yield* runAgentLoopTurnProfile(params.profile)(withCellOperationReceipts(cell, result))
 })

@@ -335,6 +335,49 @@ const updateLatestToolCall = (
   )
 }
 
+/** Find a tool call by id among direct calls and cell-admitted operations. */
+const locateToolCall = (
+  calls: Option.Option<ReadonlyArray<ToolCall>>,
+  toolCallId: string,
+): Option.Option<ToolCall> => {
+  if (Option.isNone(calls)) return Option.none()
+  for (const call of calls.value) {
+    if (call.id === toolCallId) return Option.some(call)
+    const nested = locateToolCall(Option.fromNullishOr(call.operations), toolCallId)
+    if (Option.isSome(nested)) return nested
+  }
+  return Option.none()
+}
+
+/** Attach a cell-admitted call under its parent instead of the transcript top level. */
+const attachOperation = (
+  calls: Option.Option<ReadonlyArray<ToolCall>>,
+  parentToolCallId: string,
+  operation: ToolCall,
+) => {
+  const parent = locateToolCall(calls, parentToolCallId)
+  if (Option.isNone(parent)) return
+  let operations = Option.fromNullishOr(parent.value.operations)
+  if (Option.isNone(operations)) {
+    parent.value.operations = []
+    operations = Option.fromNullishOr(parent.value.operations)
+  }
+  if (Option.isNone(operations)) return
+  if (operations.value.some((call) => call.id === operation.id)) return
+  operations.value.push(operation)
+}
+
+const applyToolCallResult = (
+  call: Option.Option<ToolCall>,
+  status: ToolCall["status"],
+  toolEvent: ToolResultEvent,
+) => {
+  if (Option.isNone(call)) return
+  call.value.status = status
+  call.value.summary = toolEvent.summary
+  call.value.output = toolEvent.output
+}
+
 const handleToolCallResult = (
   setStore: SetStoreFunction<SessionFeedStore>,
   setActiveTool: (value: Option.Option<string>) => void,
@@ -343,29 +386,25 @@ const handleToolCallResult = (
   let status: "error" | "completed" = "completed"
   if (toolEvent._tag === "ToolCallFailed") status = "error"
 
-  setActiveTool(Option.none())
+  if (Predicate.isUndefined(toolEvent.parentToolCallId)) setActiveTool(Option.none())
   updateLatestToolCall(setStore, (message) => {
-    const toolCalls = Option.fromNullishOr(message.toolCalls)
-    if (Option.isNone(toolCalls)) return
-    const tc = Option.fromNullishOr(toolCalls.value.find((t) => t.id === toolEvent.toolCallId))
-    if (Option.isNone(tc)) return
-    tc.value.status = status
-    tc.value.summary = toolEvent.summary
-    tc.value.output = toolEvent.output
+    applyToolCallResult(
+      locateToolCall(Option.fromNullishOr(message.toolCalls), toolEvent.toolCallId),
+      status,
+      toolEvent,
+    )
     // Also update the segment's toolCall
     const segments = Option.fromNullishOr(message.segments)
-    if (Option.isSome(segments)) {
-      const seg = Option.fromNullishOr(
-        segments.value.find(
-          (s) => s._tag === "tool-call" && s.toolCall.id === toolEvent.toolCallId,
-        ),
-      )
-      if (Option.isSome(seg) && seg.value._tag === "tool-call") {
-        seg.value.toolCall.status = tc.value.status
-        seg.value.toolCall.summary = tc.value.summary
-        seg.value.toolCall.output = tc.value.output
-      }
-    }
+    if (Option.isNone(segments)) return
+    const segmentCalls = segments.value.flatMap((segment) => {
+      if (segment._tag === "tool-call") return [segment.toolCall]
+      return []
+    })
+    applyToolCallResult(
+      locateToolCall(Option.some(segmentCalls), toolEvent.toolCallId),
+      status,
+      toolEvent,
+    )
   })
 }
 
@@ -781,7 +820,25 @@ export function useSessionFeed(
             summary: Option.getOrUndefined(Option.none<string>()),
             output: Option.getOrUndefined(Option.none<string>()),
           } satisfies ToolCall
+          const parentToolCallId = Option.fromUndefinedOr(event.parentToolCallId)
           updateLatestToolCall(setStore, (message) => {
+            if (Option.isSome(parentToolCallId)) {
+              attachOperation(
+                Option.fromNullishOr(message.toolCalls),
+                parentToolCallId.value,
+                toolCall,
+              )
+              const segmentCalls = Option.fromNullishOr(message.segments).pipe(
+                Option.map((segments) =>
+                  segments.flatMap((segment) => {
+                    if (segment._tag === "tool-call") return [segment.toolCall]
+                    return []
+                  }),
+                ),
+              )
+              attachOperation(segmentCalls, parentToolCallId.value, { ...toolCall })
+              return
+            }
             let toolCalls = Option.fromNullishOr(message.toolCalls)
             // Cold interaction resume starts the same call again, not a new call.
             if (

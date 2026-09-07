@@ -1,5 +1,5 @@
 import { createMemo, createSignal, For, Show, type Accessor } from "solid-js"
-import { Match, Option, Predicate } from "effect"
+import { Match, Option, Predicate, Schema } from "effect"
 import type { SyntaxStyle } from "@opentui/core"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
@@ -12,8 +12,31 @@ import type { SessionEvent } from "./session-event-label"
 import type { ImageInfo } from "../client"
 import type { ChildSessionEntry } from "../hooks/use-child-sessions"
 import { replaceMermaidBlocks } from "../utils/mermaid"
-import { getString } from "../utils/parse-tool-output"
+import { decodeToolOutputOption, getString } from "../utils/parse-tool-output"
 export type { ToolCall }
+
+const CellOperationOutcomes = Schema.Struct({
+  operations: Schema.optional(
+    Schema.Array(
+      Schema.Struct({ outcome: Schema.Literals(["succeeded", "failed", "incomplete"]) }),
+    ),
+  ),
+})
+
+/** Outcomes of calls a cell admitted: live nested calls first, saved receipts on reload. */
+const cellOperationOutcomes = (call: ToolCall): ReadonlyArray<string> => {
+  const live = Option.fromNullishOr(call.operations)
+  if (Option.isSome(live) && live.value.length > 0) {
+    return live.value.map((operation) => {
+      if (operation.status === "completed") return "succeeded"
+      return operation.status
+    })
+  }
+  return Option.match(decodeToolOutputOption(CellOperationOutcomes, call.output), {
+    onNone: () => [],
+    onSome: (value) => (value.operations ?? []).map((operation) => operation.outcome),
+  })
+}
 
 export interface MessageMetadataInfo {
   customType?: string
@@ -366,8 +389,18 @@ function ToolCallGroup(props: {
                 if (call.status === "running") return " · running"
                 return ""
               }
+              // Cell-admitted operations stay visible in the compact tree.
+              const operations = () => {
+                const receipts = cellOperationOutcomes(call)
+                if (receipts.length === 0) return ""
+                const failed = receipts.filter((outcome) => outcome !== "succeeded").length
+                let text = ` · ${receipts.length} ops`
+                if (failed > 0) text = `${text} · ${failed} failed`
+                return text
+              }
               const label = () => {
                 for (const key of [
+                  "code",
                   "path",
                   "url",
                   "command",
@@ -392,6 +425,7 @@ function ToolCallGroup(props: {
                   fallback={
                     <text style={{ fg: color() }}>
                       {connector()} {call.toolName} {label()}
+                      {operations()}
                       {status()}
                     </text>
                   }

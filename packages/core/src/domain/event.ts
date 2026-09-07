@@ -113,6 +113,8 @@ export const AgentEvent = Schema.TaggedUnion({
     toolCallId: ToolCallId,
     toolName: Schema.String,
     input: Schema.optional(Schema.Unknown),
+    /** Set when a cell admitted this call. Absent for direct model calls. */
+    parentToolCallId: Schema.optional(ToolCallId),
   },
   ToolCallSucceeded: {
     sessionId: SessionId,
@@ -122,6 +124,7 @@ export const AgentEvent = Schema.TaggedUnion({
     summary: Schema.optional(Schema.String),
     output: Schema.optional(Schema.String),
     resultJson: Schema.optional(Schema.String),
+    parentToolCallId: Schema.optional(ToolCallId),
   },
   ToolCallFailed: {
     sessionId: SessionId,
@@ -131,6 +134,7 @@ export const AgentEvent = Schema.TaggedUnion({
     summary: Schema.optional(Schema.String),
     output: Schema.optional(Schema.String),
     resultJson: Schema.optional(Schema.String),
+    parentToolCallId: Schema.optional(ToolCallId),
   },
   /** Generic interaction event — replaces PromptPresented, HandoffPresented, QuestionsAsked */
   InteractionPresented: {

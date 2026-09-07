@@ -35,6 +35,7 @@ import { ToolCallId, type ExtensionId, type SessionId } from "../../domain/ids.j
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
+import { CurrentCellToolOperation } from "../code-cell/current-cell-tool-operation.js"
 import {
   CurrentExtensionHostContext,
   provideCurrentHostCtx,
@@ -108,6 +109,11 @@ const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, mes
     result: { error: message },
   })
 
+/** The admitting cell, when this call runs inside one. */
+const parentToolCallId = Effect.map(Effect.serviceOption(CurrentCellToolOperation), (operation) =>
+  Option.getOrUndefined(Option.map(operation, (key) => key.cell.toolCallId)),
+)
+
 const publishStarted = (params: { ctx: ToolCapabilityContext; toolCall: ToolCall }) =>
   Effect.gen(function* () {
     const eventPublisher = yield* EventPublisher
@@ -119,6 +125,7 @@ const publishStarted = (params: { ctx: ToolCapabilityContext; toolCall: ToolCall
           toolCallId: params.toolCall.toolCallId,
           toolName: params.toolCall.toolName,
           input: params.toolCall.input,
+          parentToolCallId: yield* parentToolCallId,
         }),
       )
       .pipe(Effect.orDie)
@@ -136,6 +143,7 @@ const publishCompleted = (params: { ctx: ToolCapabilityContext; result: Prompt.T
       summary: outputSummary,
       output: stringifyOutput(params.result.result),
       resultJson: encodeToolOutput(params.result.result),
+      parentToolCallId: yield* parentToolCallId,
     }
     if (params.result.isFailure) {
       yield* eventPublisher.publish(ToolCallFailed.make(fields)).pipe(Effect.orDie)

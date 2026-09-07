@@ -1,4 +1,15 @@
-import { Cause, Deferred, Effect, Exit, Fiber, Option, Schedule, Stdio, Stream } from "effect"
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Option,
+  Predicate,
+  Schedule,
+  Stdio,
+  Stream,
+} from "effect"
 import type { AgentName, RunSpec } from "@gent/core-internal/domain/agent.js"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
 import { GentConnectionError, type GentNamespacedClient } from "@gent/sdk"
@@ -26,8 +37,16 @@ export const runHeadless = (
       const writeStderr = (text: string) => Stream.make(text).pipe(Stream.run(stdio.stderr()))
       const done = yield* Deferred.make<void>()
       const activeTools = new Map<string, HeadlessToolCall>()
-      const renderTool = (toolCall: HeadlessToolCall) =>
-        writeStdout(`${renderHeadlessToolCall(toolCall, toolRenderers)}\n`)
+      const renderTool = (toolCall: HeadlessToolCall, parentToolCallId?: string) => {
+        const rendered = renderHeadlessToolCall(toolCall, toolRenderers)
+        if (Predicate.isUndefined(parentToolCallId)) return writeStdout(`${rendered}\n`)
+        // Cell-admitted calls stay visibly nested under their cell.
+        const nested = rendered
+          .split("\n")
+          .map((line) => `  ${line}`)
+          .join("\n")
+        return writeStdout(`${nested}\n`)
+      }
       const streamFiber = yield* client.session.events({ sessionId, branchId }).pipe(
         Stream.tap((envelope) =>
           Effect.gen(function* () {
@@ -45,8 +64,8 @@ export const runHeadless = (
                   output: Option.none(),
                 }
                 activeTools.set(String(event.toolCallId), toolCall)
-                yield* writeStdout("\n")
-                yield* renderTool(toolCall)
+                if (Predicate.isUndefined(event.parentToolCallId)) yield* writeStdout("\n")
+                yield* renderTool(toolCall, event.parentToolCallId)
                 break
               }
               case "ToolCallSucceeded": {
@@ -61,7 +80,7 @@ export const runHeadless = (
                   output: Option.fromNullishOr(event.output),
                 }
                 activeTools.delete(String(event.toolCallId))
-                yield* renderTool(toolCall)
+                yield* renderTool(toolCall, event.parentToolCallId)
                 break
               }
               case "ToolCallFailed": {
@@ -76,7 +95,7 @@ export const runHeadless = (
                   output: Option.fromNullishOr(event.output),
                 }
                 activeTools.delete(String(event.toolCallId))
-                yield* renderTool(toolCall)
+                yield* renderTool(toolCall, event.parentToolCallId)
                 break
               }
               case "StreamEnded":

@@ -2,6 +2,7 @@ export type { ToolCall, ToolRendererProps, ToolRenderer } from "./types"
 export { ReadToolRenderer } from "./read"
 export { EditToolRenderer } from "./edit"
 export { BashToolRenderer } from "./bash"
+export { CellToolRenderer } from "./cell"
 export { WriteToolRenderer } from "./write"
 export { GrepToolRenderer } from "./grep"
 export { GlobToolRenderer } from "./glob"
@@ -14,7 +15,11 @@ export { SearchSessionsToolRenderer } from "./search-sessions"
 export { ReadSessionToolRenderer } from "./read-session"
 export { SkillsToolRenderer } from "./skills"
 import type { ToolRenderer } from "./types"
-import { BashHeadlessToolRenderer, type HeadlessToolRenderer } from "../../headless-tool-renderers"
+import {
+  BashHeadlessToolRenderer,
+  CellHeadlessToolRenderer,
+  type HeadlessToolRenderer,
+} from "../../headless-tool-renderers"
 
 interface BuiltinToolRendererEntry {
   readonly toolNames: ReadonlyArray<string>
@@ -24,6 +29,7 @@ interface BuiltinToolRendererEntry {
 import { ReadToolRenderer } from "./read"
 import { EditToolRenderer } from "./edit"
 import { BashToolRenderer } from "./bash"
+import { CellToolRenderer } from "./cell"
 import { WriteToolRenderer } from "./write"
 import { GrepToolRenderer } from "./grep"
 import { GlobToolRenderer } from "./glob"
@@ -41,6 +47,7 @@ export const BUILTIN_TOOL_RENDERERS: ReadonlyArray<BuiltinToolRendererEntry> = [
   { toolNames: ["read"], component: ReadToolRenderer },
   { toolNames: ["edit"], component: EditToolRenderer },
   { toolNames: ["bash"], component: BashToolRenderer, headless: BashHeadlessToolRenderer },
+  { toolNames: ["cell"], component: CellToolRenderer, headless: CellHeadlessToolRenderer },
   { toolNames: ["write"], component: WriteToolRenderer },
   { toolNames: ["grep"], component: GrepToolRenderer },
   { toolNames: ["glob"], component: GlobToolRenderer },

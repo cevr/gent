@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { Effect, FileSystem, Layer, Path, Predicate, Schema, Stream } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import { messageSingleText } from "@gent/core-internal/domain/message-part-projection"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
@@ -17,6 +17,11 @@ import { shippedPreset } from "../../../extensions/tests/helpers/test-preset.js"
 
 const platformLayer = Layer.merge(BunServices.layer, BunGentPlatformLive)
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
+
+const isToolLifecycleEvent = Predicate.or(
+  Predicate.isTagged("ToolCallStarted"),
+  Predicate.isTagged("ToolCallSucceeded"),
+)
 
 const cellOnly = (step: SequenceStep): SequenceStep => ({
   ...step,
@@ -76,8 +81,26 @@ describe.skipIf(process.platform !== "darwin")("shipped model surface", () => {
         expect(first).toHaveLength(1)
         expect(first[0]).toMatchObject({
           isFailure: false,
-          result: { display: expect.stringContaining("shipped surface") },
+          result: {
+            display: expect.stringContaining("shipped surface"),
+            // The saved result carries inner-operation receipts for the transcript.
+            operations: [{ tool: "read", outcome: "succeeded" }],
+          },
         })
+        const cellToolCallId = first[0]?.id
+        // The inner call is published as an event nested under its cell.
+        const innerEvents = yield* client.session.events({ sessionId, branchId, after: 0 }).pipe(
+          Stream.filter(
+            (envelope) =>
+              isToolLifecycleEvent(envelope.event) && envelope.event.toolName === "read",
+          ),
+          Stream.take(2),
+          Stream.runCollect,
+        )
+        expect(innerEvents.map((envelope) => envelope.event)).toMatchObject([
+          { _tag: "ToolCallStarted", parentToolCallId: cellToolCallId },
+          { _tag: "ToolCallSucceeded", parentToolCallId: cellToolCallId },
+        ])
 
         // Working data from the first cell is still bound in the next turn.
         const second = yield* runTurn("use the note", "second")
