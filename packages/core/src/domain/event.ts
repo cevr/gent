@@ -25,7 +25,7 @@ import {
 } from "./ids"
 import { AgentName, ReasoningEffort } from "./agent"
 import { ModelId } from "./model"
-import { makeSessionPubSubRegistry } from "./session-pubsub-registry"
+import { makeCursorReplayStream, makeSessionPubSubRegistry } from "./session-pubsub-registry"
 
 // ============================================================================
 // Shared sub-schemas
@@ -548,19 +548,18 @@ const makeMemoryEventStore = Effect.gen(function* () {
       Stream.scoped(
         Stream.unwrap(
           Effect.gen(function* () {
-            const afterId = after ?? EventId.make(0)
             const subscription = yield* registry.subscribe(sessionId)
-            const latestId = yield* Ref.get(idRef)
-            const buffered = (yield* Ref.get(eventsRef)).filter(
-              (env) =>
-                env.id > afterId &&
-                env.id <= latestId &&
-                matchesEventFilter(env, sessionId, branchId),
-            )
-            const live = Stream.fromSubscription(subscription).pipe(
-              Stream.filter((env) => env.id > latestId && matchesBranchFilter(env, branchId)),
-            )
-            return Stream.concat(Stream.fromIterable(buffered), live)
+            return makeCursorReplayStream({
+              subscription,
+              afterId: after ?? EventId.make(0),
+              branchId,
+              load: (afterId) =>
+                Ref.get(eventsRef).pipe(
+                  Effect.map((events) =>
+                    events.filter((env) => env.id > afterId && matchesEventFilter(env, sessionId)),
+                  ),
+                ),
+            })
           }),
         ),
       ),

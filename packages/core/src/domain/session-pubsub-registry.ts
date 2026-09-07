@@ -1,39 +1,37 @@
-import { Effect, HashMap, Option, PubSub, type Scope, TxRef } from "effect"
-import type { EventEnvelope } from "./event.js"
-import { getEventSessionId } from "./event.js"
-import type { SessionId } from "./ids.js"
+import { Effect, HashMap, Option, Predicate, PubSub, type Scope, Stream, TxRef } from "effect"
+import type { EventEnvelope, EventId } from "./event.js"
+import { getEventSessionId, matchesBranchFilter } from "./event.js"
+import type { BranchId, SessionId } from "./ids.js"
 
 /**
- * Per-session PubSub registry. Both the in-memory and durable
- * EventStore implementations need the same coordination primitive:
- * lazily create a `PubSub<EventEnvelope>` per session, broadcast
- * envelopes to the matching session's PubSub, and shut a session's
- * PubSub down on removal. Hand-rolled in two places before this
- * extraction; drift between the copies is a latent correctness
- * hazard.
+ * Slow-client policy: bounded notification plus durable cursor replay.
  *
- * `subscribe` returns a scoped subscription queue rather than
- * exposing the raw PubSub. Callers open the subscription before
- * loading the backlog so live events aren't dropped during the
- * race between historical-load and live-tail.
+ * Each session owns one sliding PubSub of event ids. A publisher never waits
+ * for subscribers, so a stalled client cannot block tool execution. A
+ * subscriber that falls behind loses only notifications, never events: every
+ * wake-up drains the durable store from the subscriber's own cursor, and the
+ * newest notification always survives eviction, so a subscriber that missed
+ * some notifications still drains once more.
  */
+export const SESSION_NOTIFICATION_CAPACITY = 64
+
 export interface SessionPubSubRegistry {
   readonly subscribe: (
     sessionId: SessionId,
-  ) => Effect.Effect<PubSub.Subscription<EventEnvelope>, never, Scope.Scope>
+  ) => Effect.Effect<PubSub.Subscription<EventId>, never, Scope.Scope>
   readonly broadcast: (envelope: EventEnvelope) => Effect.Effect<void>
   readonly remove: (sessionId: SessionId) => Effect.Effect<void>
 }
 
 export const makeSessionPubSubRegistry: Effect.Effect<SessionPubSubRegistry> = Effect.gen(
   function* () {
-    const sessionsRef = yield* TxRef.make(HashMap.empty<SessionId, PubSub.PubSub<EventEnvelope>>())
+    const sessionsRef = yield* TxRef.make(HashMap.empty<SessionId, PubSub.PubSub<EventId>>())
 
-    const getOrCreate = (sessionId: SessionId): Effect.Effect<PubSub.PubSub<EventEnvelope>> =>
+    const getOrCreate = (sessionId: SessionId): Effect.Effect<PubSub.PubSub<EventId>> =>
       Effect.gen(function* () {
         const existing = HashMap.get(yield* TxRef.get(sessionsRef), sessionId)
         if (existing._tag === "Some") return existing.value
-        const fresh = yield* PubSub.unbounded<EventEnvelope>()
+        const fresh = yield* PubSub.sliding<EventId>(SESSION_NOTIFICATION_CAPACITY)
         // Race-safe install: re-check, install only if still missing.
         return yield* TxRef.modify(sessionsRef, (current) => {
           const found = HashMap.get(current, sessionId)
@@ -44,7 +42,7 @@ export const makeSessionPubSubRegistry: Effect.Effect<SessionPubSubRegistry> = E
 
     const subscribe = (
       sessionId: SessionId,
-    ): Effect.Effect<PubSub.Subscription<EventEnvelope>, never, Scope.Scope> =>
+    ): Effect.Effect<PubSub.Subscription<EventId>, never, Scope.Scope> =>
       Effect.gen(function* () {
         const ps = yield* getOrCreate(sessionId)
         return yield* PubSub.subscribe(ps)
@@ -54,7 +52,7 @@ export const makeSessionPubSubRegistry: Effect.Effect<SessionPubSubRegistry> = E
       const eventSessionId = getEventSessionId(envelope.event)
       return Effect.gen(function* () {
         const ps = yield* getOrCreate(eventSessionId)
-        yield* PubSub.publish(ps, envelope)
+        yield* PubSub.publish(ps, envelope.id)
       })
     }
 
@@ -62,7 +60,7 @@ export const makeSessionPubSubRegistry: Effect.Effect<SessionPubSubRegistry> = E
       Effect.gen(function* () {
         const removed = yield* TxRef.modify(sessionsRef, (current) => {
           const found = HashMap.get(current, sessionId)
-          if (found._tag === "None") return [Option.none<PubSub.PubSub<EventEnvelope>>(), current]
+          if (found._tag === "None") return [Option.none<PubSub.PubSub<EventId>>(), current]
           return [Option.some(found.value), HashMap.remove(current, sessionId)]
         })
         if (Option.isSome(removed)) yield* PubSub.shutdown(removed.value)
@@ -71,3 +69,37 @@ export const makeSessionPubSubRegistry: Effect.Effect<SessionPubSubRegistry> = E
     return { subscribe, broadcast, remove }
   },
 )
+
+/**
+ * One ordered event stream from a durable cursor. The caller opens the
+ * subscription before calling this, so an append during the first drain
+ * leaves a notification behind and is drained next. Every drain reads the
+ * session's events after the cursor, so notifications may be lost or
+ * coalesced without losing or repeating events.
+ */
+export const makeCursorReplayStream = <E>(params: {
+  readonly subscription: PubSub.Subscription<EventId>
+  readonly afterId: EventId
+  readonly branchId?: BranchId
+  /** Session events with id greater than the cursor, ascending. */
+  readonly load: (afterId: EventId) => Effect.Effect<ReadonlyArray<EventEnvelope>, E>
+}): Stream.Stream<EventEnvelope, E> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      let cursor = params.afterId
+      const drain = Effect.gen(function* () {
+        const batch = yield* params.load(cursor)
+        const last = batch[batch.length - 1]
+        if (Predicate.isNotUndefined(last)) cursor = last.id
+        return batch.filter((env) => matchesBranchFilter(env, params.branchId))
+      })
+      const initial = yield* drain
+      const live = Stream.fromSubscription(params.subscription).pipe(
+        // One durable read per burst of notifications.
+        Stream.chunks,
+        Stream.mapEffect(() => drain),
+        Stream.flatMap(Stream.fromIterable),
+      )
+      return Stream.concat(Stream.fromIterable(initial), live)
+    }),
+  )

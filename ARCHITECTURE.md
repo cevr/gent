@@ -342,6 +342,16 @@ including when SQLite runs in memory. `EventStore.Memory` is an explicit test
 override, not the default for in-memory application sessions. This keeps the
 snapshot cursor aligned with replayed navigation and interaction events.
 
+Slow-client policy: `session-pubsub-registry.ts` gives each session one sliding
+PubSub of event ids, not envelopes. Publishing never waits for a subscriber, so a
+stalled client cannot block tool execution. `makeCursorReplayStream` opens the
+subscription first, drains the durable store from the subscriber's cursor, and
+drains again on every notification burst. Lost or coalesced notifications cost
+one extra read, never an event, and replay and live delivery share one ordered
+source, so there is no replay/live race. Both `EventStoreLive` and
+`EventStore.Memory` use this path; `tests/domain/event-stream-delivery.test.ts`
+proves the stalled-subscriber, race, and branch-filter properties for both.
+
 One interaction primitive: `ctx.Interaction.approve({ text, metadata? })` → `{ approved, notes?, editedContent? }`.
 
 Tools that need human input call `ctx.Interaction.approve()`, which delegates to

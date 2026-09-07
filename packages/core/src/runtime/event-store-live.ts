@@ -1,12 +1,15 @@
 import { Effect, Layer, Option, Predicate, Stream } from "effect"
 import {
+  EventId,
   EventStore,
   EventStoreError,
-  matchesBranchFilter,
   makeSerializedEventDelivery,
 } from "../domain/event.js"
 import type { EventStoreService } from "../domain/event.js"
-import { makeSessionPubSubRegistry } from "../domain/session-pubsub-registry.js"
+import {
+  makeCursorReplayStream,
+  makeSessionPubSubRegistry,
+} from "../domain/session-pubsub-registry.js"
 import { EventStorage, type EventStorageError } from "../storage/event-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 
@@ -59,21 +62,9 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
                   })
                 }
                 const subscription = yield* registry.subscribe(sessionId)
-                const initial = yield* eventStorage
-                  .listEvents({ sessionId, branchId, afterId })
-                  .pipe(Effect.mapError(toEventStoreError("Failed to load buffered events")))
-                const maxId = initial[initial.length - 1]?.id ?? afterId
-                const live = Stream.fromSubscription(subscription).pipe(
-                  Stream.filter((env) => env.id > maxId && matchesBranchFilter(env, branchId)),
-                )
 
                 yield* Effect.logInfo("EventStore.subscribe.open").pipe(
-                  Effect.annotateLogs({
-                    sessionId,
-                    branchId: branchId ?? "all",
-                    afterId,
-                    initialCount: initial.length,
-                  }),
+                  Effect.annotateLogs({ sessionId, branchId: branchId ?? "all", afterId }),
                 )
                 yield* Effect.addFinalizer(() =>
                   Effect.logInfo("EventStore.subscribe.close").pipe(
@@ -81,7 +72,15 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
                   ),
                 )
 
-                return Stream.concat(Stream.fromIterable(initial), live)
+                return makeCursorReplayStream({
+                  subscription,
+                  afterId: EventId.make(afterId),
+                  branchId,
+                  load: (cursor) =>
+                    eventStorage
+                      .listEvents({ sessionId, afterId: cursor })
+                      .pipe(Effect.mapError(toEventStoreError("Failed to load session events"))),
+                })
               }),
             ),
           ),
