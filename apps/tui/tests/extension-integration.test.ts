@@ -95,6 +95,9 @@ const loadTuiExtensions = (
 ): ReturnType<typeof _loadTuiExtensions> =>
   _loadTuiExtensions({ ...opts, runtime: opts.runtime ?? testRuntime })
 const TEST_DIR = join(import.meta.dir, "../.tmp-ext-integration")
+const encodeTrustGrant = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Struct({ trustedProjects: Schema.Array(Schema.String) })),
+)
 const USER_DIR = join(TEST_DIR, "user")
 const PROJECT_DIR = join(TEST_DIR, "project")
 const integrationFixture = Effect.acquireRelease(
@@ -103,9 +106,7 @@ const integrationFixture = Effect.acquireRelease(
     mkdirSync(PROJECT_DIR, { recursive: true })
     writeFileSync(
       join(TEST_DIR, "config.json"),
-      Schema.encodeSync(
-        Schema.fromJsonString(Schema.Struct({ trustedProjects: Schema.Array(Schema.String) })),
-      )({ trustedProjects: [realpathSync(join(PROJECT_DIR, "../.."))] }),
+      encodeTrustGrant({ trustedProjects: [realpathSync(join(PROJECT_DIR, "../.."))] }),
     )
     mkdirSync(join(USER_DIR, "custom-read"), { recursive: true })
     writeFileSync(

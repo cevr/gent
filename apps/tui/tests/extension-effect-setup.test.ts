@@ -18,6 +18,8 @@ import type { ClientEffect } from "../src/extensions/client-effect.js"
 import { ClientSetupError } from "../src/extensions/client-effect.js"
 import { loadTuiExtensions } from "../src/extensions/loader-boundary"
 import { makeClientExtensionRuntime } from "./extension-test-harness-boundary"
+
+const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 const runtime = makeClientExtensionRuntime()
 describe("loadTuiExtensions Effect setup", () => {
   it.scopedLive("does not import project code until the user grants trust", () =>
@@ -34,7 +36,6 @@ describe("loadTuiExtensions Effect setup", () => {
       yield* fs.makeDirectory(projectDir, { recursive: true })
       const canonicalRoot = yield* fs.realPath(path.join(root, "project"))
       const marker = path.join(root, "import-ran")
-      const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
       yield* fs.writeFileString(
         path.join(projectDir, "entry.client.ts"),
         `
