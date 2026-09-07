@@ -11,6 +11,7 @@ import {
 } from "@gent/core/extensions/api"
 import {
   allocateOpenAIAuthorization,
+  allocateOpenAIDeviceAuthorization,
   OPENAI_OAUTH_ALLOWED_MODELS,
   type OpenAIAuthorizationFlow,
 } from "./oauth.js"
@@ -38,6 +39,12 @@ type PendingCallbackEntry = {
   readonly timeoutFiber: Fiber.Fiber<void>
 }
 
+/** Index-aligned with the `oauth` entries of `auth.methods` below. */
+const OAUTH_ALLOCATORS: ReadonlyArray<typeof allocateOpenAIAuthorization> = [
+  allocateOpenAIAuthorization,
+  allocateOpenAIDeviceAuthorization,
+]
+
 type OpenAiResponsesConfig = Required<
   Parameters<typeof OpenAiResponsesLanguageModel.layer>[0]
 >["config"]
@@ -61,7 +68,10 @@ const buildOpenAiResponsesConfig = (hints: Option.Option<ProviderHints>): OpenAi
     if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
     const reasoning = Schema.decodeUnknownOption(OpenAiReasoningEffort)(hints.value.reasoning)
     if (Option.isSome(reasoning) && reasoning.value !== "none") {
-      config = { ...config, reasoning: { effort: reasoning.value, summary: "auto" } }
+      config = {
+        ...config,
+        reasoning: { effort: reasoning.value, summary: "auto" },
+      }
     }
   }
   return config
@@ -204,15 +214,20 @@ export const buildOpenAIModelDriver = (
   },
   auth: {
     methods: [
-      AuthMethod.make({ type: "oauth", label: "ChatGPT Pro/Plus" }),
+      AuthMethod.make({ type: "oauth", label: "ChatGPT Pro/Plus (browser)" }),
+      AuthMethod.make({
+        type: "oauth",
+        label: "ChatGPT Pro/Plus (device code)",
+      }),
       AuthMethod.make({ type: "api", label: "Manually enter API key" }),
     ],
     authorize: (
       ctx,
     ): Effect.Effect<Option.Option<ProviderAuthorizationResult>, ProviderAuthError> =>
       Effect.gen(function* () {
-        if (ctx.methodIndex !== 0) return Option.none()
-        const { flow, close } = yield* allocateOpenAIAuthorization.pipe(
+        const allocate = Option.fromNullishOr(OAUTH_ALLOCATORS[ctx.methodIndex])
+        if (Option.isNone(allocate)) return Option.none()
+        const { flow, close } = yield* allocate.value.pipe(
           Effect.mapError(
             (e) =>
               new ProviderAuthError({
@@ -234,7 +249,11 @@ export const buildOpenAIModelDriver = (
           ),
           Effect.forkChild,
         )
-        pendingCallbacks.set(ctx.authorizationId, { flow, close, timeoutFiber })
+        pendingCallbacks.set(ctx.authorizationId, {
+          flow,
+          close,
+          timeoutFiber,
+        })
         return Option.some(flow.authorization)
       }),
     callback: (ctx) =>

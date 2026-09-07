@@ -3,6 +3,7 @@ import {
   Clock,
   Crypto,
   Deferred,
+  Duration,
   Effect,
   Encoding,
   Exit,
@@ -44,6 +45,30 @@ const TokenResponseSchema = Schema.Struct({
 const decodeTokenResponse = Schema.decodeUnknownEffect(Schema.fromJsonString(TokenResponseSchema))
 type TokenResponse = typeof TokenResponseSchema.Type
 
+const DeviceAuthResponseSchema = Schema.Struct({
+  device_auth_id: Schema.String,
+  user_code: Schema.String,
+  interval: Schema.optional(Schema.Union([Schema.String, Schema.Finite])),
+})
+const decodeDeviceAuthResponse = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(DeviceAuthResponseSchema),
+)
+type DeviceAuthResponse = typeof DeviceAuthResponseSchema.Type
+
+const DeviceTokenResponseSchema = Schema.Struct({
+  authorization_code: Schema.String,
+  code_verifier: Schema.String,
+})
+const decodeDeviceTokenResponse = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(DeviceTokenResponseSchema),
+)
+
+const DeviceErrorSchema = Schema.Struct({
+  code: Schema.optional(Schema.String),
+  error: Schema.optional(Schema.String),
+})
+const decodeDeviceError = Schema.decodeUnknownOption(Schema.fromJsonString(DeviceErrorSchema))
+
 /**
  * Typed error for the OpenAI OAuth flow. `reason` discriminates the
  * failure mode so the surrounding `ProviderAuthError` boundary in
@@ -60,6 +85,9 @@ export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
     "cancelled",
     "pkce-failed",
     "server-failed",
+    "device-code-failed",
+    "device-code-denied",
+    "device-code-timeout",
   ]),
   message: Schema.String,
 }) {}
@@ -69,6 +97,11 @@ export const OPENAI_OAUTH_ALLOWED_MODELS = new Set(["gpt-5.4", "gpt-5.4-mini"])
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const ISSUER = "https://auth.openai.com"
 const OAUTH_PORT = 1455
+const DEVICE_REDIRECT_URI = `${ISSUER}/deviceauth/callback`
+const DEVICE_VERIFY_URL = `${ISSUER}/codex/device`
+const DEVICE_POLL_DEFAULT = Duration.seconds(5)
+const DEVICE_POLL_BACKOFF = Duration.seconds(5)
+const DEVICE_DEADLINE = Duration.minutes(15)
 
 interface PkceCodes {
   readonly verifier: string
@@ -184,7 +217,10 @@ const parseAuthorizationInput = (input: string): AuthorizationInput => {
 
   if (value.includes("#")) {
     const [code, state] = value.split("#", 2)
-    return { code: Option.fromNullishOr(code), state: Option.fromNullishOr(state) }
+    return {
+      code: Option.fromNullishOr(code),
+      state: Option.fromNullishOr(state),
+    }
   }
 
   if (value.includes("code=")) {
@@ -201,8 +237,8 @@ const parseAuthorizationInput = (input: string): AuthorizationInput => {
 const exchangeCodeForTokens = (
   code: string,
   redirectUri: string,
-  pkce: PkceCodes,
-): Effect.Effect<TokenResponse, OAuthError> =>
+  codeVerifier: string,
+): Effect.Effect<TokenResponse, OAuthError, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
     const request = HttpClientRequest.post(`${ISSUER}/oauth/token`).pipe(
@@ -211,7 +247,7 @@ const exchangeCodeForTokens = (
         code,
         redirect_uri: redirectUri,
         client_id: CLIENT_ID,
-        code_verifier: pkce.verifier,
+        code_verifier: codeVerifier,
       }),
     )
     const response = yield* http.execute(request)
@@ -240,6 +276,14 @@ const exchangeCodeForTokens = (
         }),
       ),
     ),
+  )
+
+const exchangeCodeWithFetch = (
+  code: string,
+  redirectUri: string,
+  codeVerifier: string,
+): Effect.Effect<TokenResponse, OAuthError> =>
+  exchangeCodeForTokens(code, redirectUri, codeVerifier).pipe(
     // @effect-diagnostics-next-line strictEffectProvide:off OAuth token endpoint at extension boundary
     Effect.provide(FetchHttpClient.layer),
   )
@@ -460,7 +504,7 @@ export const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError,
           code = payload.code
         }
 
-        const tokens = yield* exchangeCodeForTokens(code, redirectUri, pkce)
+        const tokens = yield* exchangeCodeWithFetch(code, redirectUri, pkce.verifier)
         const now = yield* Clock.currentTimeMillis
         return tokensToOAuthResult(tokens, now)
       })
@@ -496,6 +540,208 @@ export const refreshOpenAIOauth = (
     const now = yield* Clock.currentTimeMillis
     return tokensToRefreshResult(tokens, now)
   })
+
+const deviceFailure = (message: string) => new OAuthError({ reason: "device-code-failed", message })
+
+const encodeJsonBody = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+)
+
+const jsonRequest = (url: string, body: Record<string, string>) =>
+  HttpClientRequest.post(url).pipe(
+    HttpClientRequest.bodyText(encodeJsonBody(body), "application/json"),
+  )
+
+/**
+ * Request a device user code. A 404 means the account (or the
+ * endpoint) has device login disabled; report that plainly instead of
+ * a bare status code.
+ */
+const startDeviceAuthorization: Effect.Effect<
+  DeviceAuthResponse,
+  OAuthError,
+  HttpClient.HttpClient
+> = Effect.gen(function* () {
+  const http = yield* HttpClient.HttpClient
+  const response = yield* http.execute(
+    jsonRequest(`${ISSUER}/api/accounts/deviceauth/usercode`, {
+      client_id: CLIENT_ID,
+    }),
+  )
+  if (response.status === 404) {
+    return yield* deviceFailure("Device code login is not enabled for this account")
+  }
+  if (response.status >= 400) {
+    return yield* deviceFailure(`Device code request failed: ${response.status}`)
+  }
+  const body = yield* response.text
+  return yield* decodeDeviceAuthResponse(body).pipe(
+    Effect.mapError((e) => deviceFailure(`Device code response invalid: ${e.message}`)),
+  )
+}).pipe(
+  Effect.catchTag("HttpClientError", (e) =>
+    Effect.fail(deviceFailure(`Device code request HTTP failed: ${e.message}`)),
+  ),
+)
+
+const pollInterval = (auth: DeviceAuthResponse): Duration.Duration =>
+  Option.fromNullishOr(auth.interval).pipe(
+    Option.map((value) => {
+      if (Predicate.isString(value)) return Number.parseFloat(value)
+      return value
+    }),
+    Option.filter((value) => Number.isFinite(value) && value > 0),
+    Option.match({
+      onNone: () => DEVICE_POLL_DEFAULT,
+      onSome: (seconds) => Duration.seconds(seconds),
+    }),
+  )
+
+const DevicePoll = Schema.TaggedUnion({
+  Pending: { slowDown: Schema.Boolean },
+  Done: { code: Schema.String, verifier: Schema.String },
+})
+type DevicePoll = typeof DevicePoll.Type
+
+/**
+ * One poll of the device token endpoint. Pending is signalled by
+ * HTTP 403/404 or by a JSON error code; `slow_down` asks for a longer
+ * interval (RFC 8628 §3.5).
+ */
+const pollDeviceOnce = (
+  auth: DeviceAuthResponse,
+): Effect.Effect<DevicePoll, OAuthError, HttpClient.HttpClient> =>
+  Effect.gen(function* () {
+    const http = yield* HttpClient.HttpClient
+    const response = yield* http.execute(
+      jsonRequest(`${ISSUER}/api/accounts/deviceauth/token`, {
+        device_auth_id: auth.device_auth_id,
+        user_code: auth.user_code,
+      }),
+    )
+    if (response.status === 403 || response.status === 404) {
+      return DevicePoll.cases.Pending.make({ slowDown: false })
+    }
+    const body = yield* response.text
+    if (response.status >= 400) {
+      const parsed = decodeDeviceError(body)
+      const code = parsed.pipe(
+        Option.flatMap((value) => Option.fromNullishOr(value.code ?? value.error)),
+      )
+      if (Option.isSome(code)) {
+        if (code.value === "deviceauth_authorization_pending") {
+          return DevicePoll.cases.Pending.make({ slowDown: false })
+        }
+        if (code.value === "slow_down") {
+          return DevicePoll.cases.Pending.make({ slowDown: true })
+        }
+        if (code.value === "access_denied") {
+          return yield* new OAuthError({
+            reason: "device-code-denied",
+            message: "Device code authorization was denied",
+          })
+        }
+        return yield* deviceFailure(`Device code poll failed: ${code.value}`)
+      }
+      return yield* deviceFailure(`Device code poll failed: ${response.status}`)
+    }
+    const tokens = yield* decodeDeviceTokenResponse(body).pipe(
+      Effect.mapError((e) => deviceFailure(`Device token response invalid: ${e.message}`)),
+    )
+    return DevicePoll.cases.Done.make({
+      code: tokens.authorization_code,
+      verifier: tokens.code_verifier,
+    })
+  }).pipe(
+    Effect.catchTag("HttpClientError", (e) =>
+      Effect.fail(deviceFailure(`Device code poll HTTP failed: ${e.message}`)),
+    ),
+  )
+
+/**
+ * Poll until the user approves the code, then exchange the returned
+ * authorization code with the verifier the server minted. Bounded by
+ * `DEVICE_DEADLINE`; each `slow_down` adds `DEVICE_POLL_BACKOFF`.
+ */
+const completeDeviceAuthorization = (
+  auth: DeviceAuthResponse,
+): Effect.Effect<TokenResponse, OAuthError, HttpClient.HttpClient> => {
+  const loop = (
+    interval: Duration.Duration,
+  ): Effect.Effect<TokenResponse, OAuthError, HttpClient.HttpClient> =>
+    Effect.gen(function* () {
+      yield* Effect.sleep(interval)
+      const poll = yield* pollDeviceOnce(auth)
+      if (poll._tag === "Done") {
+        return yield* exchangeCodeForTokens(poll.code, DEVICE_REDIRECT_URI, poll.verifier)
+      }
+      if (poll.slowDown) return yield* loop(Duration.sum(interval, DEVICE_POLL_BACKOFF))
+      return yield* loop(interval)
+    })
+  return loop(pollInterval(auth)).pipe(
+    Effect.timeoutOrElse({
+      duration: DEVICE_DEADLINE,
+      orElse: () =>
+        Effect.fail(
+          new OAuthError({
+            reason: "device-code-timeout",
+            message: "Device code authorization timed out",
+          }),
+        ),
+    }),
+  )
+}
+
+/**
+ * Begin the OpenAI device-code flow (the "headless" ChatGPT login used
+ * by Codex CLI, OpenCode, and Pi). No local server: the user opens
+ * `auth.openai.com/codex/device`, enters the short code, and
+ * `callback()` polls until the server hands back an authorization
+ * code plus its verifier, then exchanges them.
+ *
+ * The HTTP client is taken from the environment so tests can stub the
+ * three endpoints; `allocateOpenAIDeviceAuthorization` binds fetch.
+ */
+export const authorizeOpenAIDevice: Effect.Effect<
+  OpenAIAuthorizationFlow,
+  OAuthError,
+  HttpClient.HttpClient
+> = Effect.gen(function* () {
+  const http = yield* HttpClient.HttpClient
+  const auth = yield* startDeviceAuthorization
+  const callback = (): Effect.Effect<OpenAIOAuthTokens, OAuthError> =>
+    Effect.gen(function* () {
+      const tokens = yield* completeDeviceAuthorization(auth)
+      const now = yield* Clock.currentTimeMillis
+      return tokensToOAuthResult(tokens, now)
+    }).pipe(Effect.provideService(HttpClient.HttpClient, http))
+  return {
+    authorization: {
+      url: DEVICE_VERIFY_URL,
+      method: "auto",
+      instructions: `Open ${DEVICE_VERIFY_URL} and enter code: ${auth.user_code}`,
+    },
+    callback,
+    cancel: Effect.void,
+  } satisfies OpenAIAuthorizationFlow
+})
+
+/**
+ * Device-code counterpart of `allocateOpenAIAuthorization`. Nothing to
+ * tear down, so `close` is a no-op; the shape matches so `index.ts`
+ * keeps one pending-callback table for both OAuth methods.
+ */
+export const allocateOpenAIDeviceAuthorization: Effect.Effect<
+  {
+    readonly flow: OpenAIAuthorizationFlow
+    readonly close: Effect.Effect<void>
+  },
+  OAuthError
+> = authorizeOpenAIDevice.pipe(
+  Effect.map((flow) => ({ flow, close: Effect.void })),
+  // @effect-diagnostics-next-line strictEffectProvide:off device endpoints at extension boundary
+  Effect.provide(FetchHttpClient.layer),
+)
 
 /**
  * Allocate a detached scope and run `authorizeOpenAI` inside it,

@@ -342,21 +342,27 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   },
   {
     file: "packages/extensions/src/openai/oauth.ts",
-    line: 245,
+    line: 287,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line strictEffectProvide:off OAuth token endpoint at extension boundary",
   },
   {
     file: "packages/extensions/src/openai/oauth.ts",
-    line: 285,
+    line: 327,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line strictEffectProvide:off OAuth token endpoint at extension boundary",
   },
   {
     file: "packages/extensions/src/openai/oauth.ts",
-    line: 482,
+    line: 526,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line strictEffectProvide:off OAuth authorization owns its crypto layer at the extension boundary",
+  },
+  {
+    file: "packages/extensions/src/openai/oauth.ts",
+    line: 742,
+    kind: "effect-diagnostics",
+    text: "// @effect-diagnostics-next-line strictEffectProvide:off device endpoints at extension boundary",
   },
   {
     file: "packages/extensions/src/anthropic/index.ts",
