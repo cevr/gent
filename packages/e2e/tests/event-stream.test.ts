@@ -252,11 +252,14 @@ describe("event stream contracts", () => {
               })
 
               const initialAfterEvents = yield* Ref.get(afterEvents.events)
-              expect(
-                initialAfterEvents.every(
-                  (envelope) => Option.isSome(afterId) && envelope.id > afterId.value,
-                ),
-              ).toBe(true)
+              // Nothing to replay: the synchronization marker sits at the cursor itself.
+              expect(initialAfterEvents.map((envelope) => envelope.event._tag)).toEqual([
+                "StreamSynchronized",
+              ])
+              expect(initialAfterEvents[0]?.id).toBe(Option.getOrUndefined(afterId))
+              expect(initialAfterEvents[0]?.event).toMatchObject({
+                lastEventId: Option.getOrUndefined(afterId),
+              })
 
               yield* client.branch
                 .create({ sessionId: created.sessionId, name: "stream-after-branch" })
@@ -266,9 +269,14 @@ describe("event stream contracts", () => {
                 current.some((envelope) => envelope.event._tag === "BranchCreated"),
               )
 
-              expect(liveOnly.length).toBeGreaterThan(0)
+              const liveEvents = liveOnly.filter(
+                (envelope) => envelope.event._tag !== "StreamSynchronized",
+              )
+              expect(liveEvents.length).toBeGreaterThan(0)
               expect(
-                liveOnly.every((envelope) => Option.isSome(afterId) && envelope.id > afterId.value),
+                liveEvents.every(
+                  (envelope) => Option.isSome(afterId) && envelope.id > afterId.value,
+                ),
               ).toBe(true)
               expect(liveOnly.some((envelope) => envelope.event._tag === "BranchCreated")).toBe(
                 true,

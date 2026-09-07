@@ -157,24 +157,36 @@ model benchmarks without explicit authority.
 
 ## Completion requirements
 
-- [ ] Stage exits have command/capture receipts tied to final source.
-- [ ] One default cell surface; state survives normal turns and compaction.
-- [ ] Host retains authority; security contract is tested and explicit.
-- [ ] No duplicate runtime, daemon, persistence owner, or host schema catalog.
-- [ ] Recursive children use Gent sessions and durable handles, with usage limits;
-      admission returns at once and results arrive on later turns.
-- [ ] Cell catalog is an instruction delta; tool output/content/metadata split
+Evidence as of `dee60987` (2026-09-07), recorded in `plans/bun-rlm-progress.md`:
+
+- [x] Stage exits have command/capture receipts tied to final source.
+- [x] One default cell surface; state survives normal turns and compaction
+      (`4d31eddf` namespace snapshot and restore; `cell-lifetime.test.ts`).
+- [x] Host retains authority; security contract is tested and explicit
+      (project trust gate; selected bindings only; `cell-tool-host.test.ts`).
+- [x] No duplicate runtime, daemon, persistence owner, or host schema catalog
+      (`f1a46c39` reads the catalog from the selected bindings).
+- [x] Recursive children use Gent sessions and durable handles, with usage limits;
+      admission returns at once and results arrive on later turns (`c30f2314`).
+- [x] Cell catalog is an instruction delta; tool output/content/metadata split
       and bounded content are in place; follow-ups admit through the durable
-      inbox with explicit wake.
-- [ ] Lost bindings and ambiguous effects are reported; no blind cell replay.
-- [ ] Old executor and superseded workflow code are actually removed.
+      inbox with explicit wake (`f1a46c39`, `2c531638`, `06b2dca2`).
+- [x] Lost bindings and ambiguous effects are reported; no blind cell replay
+      (`f7e45168` reconciliation; `cell-recovery.test.ts`).
+- [x] Old executor and superseded workflow code are actually removed
+      (`267eab59`, `85d3cb14`).
 - [ ] Gent runtime LOC decreases; combined Gent/Loom/library runtime LOC also
       decreases for the replaced scope. Report tests/data separately. If new
       safety behavior exceeds savings, record the tradeoff and obtain a revised
-      scope decision rather than claim completion.
-- [ ] Owned library changes are released properly where required; no local links.
-- [ ] FX UI, durable approvals, replay, cancellation, and live replacement pass.
-- [ ] Final gate/E2E pass; documents and examples match shipped behavior.
+      scope decision rather than claim completion. **Not met**: runtime is
+      88,468 lines against the 86,965 baseline (+1,503). The additions are the
+      prior-art contracts above, not moved code. Tests are 74,518 (+3,016).
+      Loom is unchanged. A scope decision is required.
+- [x] Owned library changes are released properly where required; no local
+      links (no owned-library edits were needed).
+- [x] FX UI, durable approvals, replay, cancellation, and live replacement pass
+      (mock-provider gate and E2E; Herdr live-model runs not authorized).
+- [x] Final gate/E2E pass; documents and examples match shipped behavior.
 
 Deliver 3–5 reviewable change groups. Validate each before proceeding. Keep code
 changes local until commit/release authority applies. Completion means the whole

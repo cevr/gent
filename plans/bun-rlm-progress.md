@@ -1,5 +1,136 @@
 # Bun RLM progress
 
+## Prime-model persistence and the OpenCode v2 contracts
+
+Nine commits after `d03bca7f`, all local on the Rift (not pushed, not merged):
+
+| Commit     | Unit                                                         | Runtime lines | Test lines |
+| ---------- | ------------------------------------------------------------ | ------------: | ---------: |
+| `4d31eddf` | Cell namespace persists across worker restarts               |          +528 |       +165 |
+| `c30f2314` | Child completion delivered as a parent message; `wait` gone  |          +233 |       +233 |
+| `2c531638` | `assistantMessageId` on tool events; bounded model content   |           +79 |        +84 |
+| `06b2dca2` | Durable follow-up admission with an explicit wake flag       |           +75 |       +112 |
+| `5b0dd465` | Steering delivered at safe step boundaries                   |           +35 |        +51 |
+| `f7e45168` | Orphan projection reconciliation; continuation after partial |          +144 |       +231 |
+| `f1a46c39` | Catalog as instruction section plus kernel-local `search`    |           +68 |       +170 |
+| `dee60987` | `StreamSynchronized` marker between replay and live          |           +87 |       +116 |
+
+Measurement (same method as `plans/bun-rlm-baseline.md`, calibrated: the method
+reproduces the `d03bca7f` receipt of 87,219 / 451 exactly): runtime 88,468
+lines across 454 files; tests 74,518 lines across 292 files. Net against the
+86,965 baseline is +1,503 runtime lines. Nothing in this group is moved code;
+every line is new behavior the plan's "Prior-art position" section requires.
+The plan's LOC completion rule is therefore not met. The tradeoff is recorded
+here and in the handoff; claiming completion needs a revised scope decision.
+
+Namespace persistence (`4d31eddf`). The host snapshots top-level bindings after
+each good cell into `cell_namespaces` per branch. A replaced worker or a new
+branch owner after a process restart restores the last good namespace; the
+first result names what was restored and what could not travel (functions,
+class instances, cycles, oversized values). Reset clears the saved namespace.
+
+Child completion (`c30f2314`). Admission returns a handle and never the answer.
+The host watches the child's turn receipt and queues one idempotent follow-up
+on the parent branch with the outcome, a bounded preview, and the saved output
+path, then publishes `AgentRunSucceeded`. Startup reconciles the durable start
+registry. Polling `wait` is gone; `list` exposes the registry through
+`agent-children`. This supersedes the "Child tools through the compiled Bun
+cell" receipt below where it describes `wait`.
+
+Tool events and bounded content (`2c531638`). `ToolCallStarted/Succeeded/Failed`
+carry `assistantMessageId`; the cell's inner operations carry the cell's
+assistant id and `parentToolCallId`. Tool results sent to the model are bounded
+at 64,000 characters with head-plus-tail text and a `truncated` record; the
+transcript keeps the full result. The cell result already splits `display`
+(model content) from `operations` (receipts for the transcript); the validated
+`output` is the tool's typed output inside the cell.
+
+Durable admission and wake (`06b2dca2`). `AgentLoopFollowUp.enqueue` admits a
+follow-up into the persisted queue without taking the turn permit; a wake flag
+on the item, or existing history, schedules the next turn after the current
+side mutation releases the permit. This closes the warm-branch
+`Session.queueFollowUp` hang recorded under "Workflow tools replaced by
+recipes": the reentrant admission used to reserve a start and call `startTurn`
+under the same non-reentrant permit. The regression test failed by timeout
+without the fix.
+
+Step-boundary steering (`5b0dd465`). Interject appends to the durable steering
+queue and no longer interrupts the stream. `runTurnStep` delivers queued
+steering as user messages before the next model call. The regression test saw
+the original prompt on the second call without the delivery.
+
+Reconciliation and continuation (`f7e45168`). Retry delays carry bounded jitter
+(`RETRY_JITTER_FRACTION`). After a provider failure with observable partial
+output, the loop persists a continuation user message (at most two per turn)
+and continues instead of retrying blindly. `reconcileToolProjections` fails
+stale running tool projections that lack a terminal event, after replay errors
+and on resume, before new model work. The regression test observed the missing
+`ToolCallFailed` without the resume-path reconciliation.
+
+Catalog (`f1a46c39`). The `tool-catalog` tool is deleted. The system prompt
+gains a `cell-catalog` section listing the selected host tools when the surface
+narrows to `cell`. `cell-catalog.ts` builds name, description, guidelines, and
+the actual input schema from the same selected map, hashed; the kernel sends it
+inside `Evaluate` only when the hash changes and again after a worker
+replacement. `tools.search` and `tools.describe` are worker-local. The
+replacement-resend test failed without the hash reset.
+
+Synchronization marker (`dee60987`). `StreamSynchronized` is emitted once by a
+`synchronize` subscription between replay and live, with the replay cursor as
+id and `lastEventId`. The RPC `session.events` stream always asks for it. Both
+event stores reject it in `append`. The TUI feed reads it as the end of replay.
+
+Per-execution limits and diagnostics as data were already in place and are
+kept: `evaluationTimeoutMs`, `maximumCallsPerCell`, `maximumPendingCellCalls`,
+`maximumCellDisplayLength` with head-plus-tail display, and `CellKernelError`
+with stable `reason` kinds and a `diagnostics` string. A cell that ends with
+pending host calls is a protocol failure, not a silent drop.
+
+Gates: `bun run gate` exit 0 after each commit (`gate-c.log`, `gate-d1.log`,
+`gate-d3.log`, `gate-e.log`, `gate-f.log`, `gate-g.log` in the session
+scratchpad). `bun run test:e2e` exit 0 after `dee60987` once
+`packages/e2e/tests/event-stream.test.ts` stated the marker contract (the
+envelope at the cursor is `StreamSynchronized`; live events have larger ids):
+36 pass across 8 files. Herdr live-model workflows were not run (paid; no
+authority). Loom's warm checkout has no edits. The `@cvr/bun-cell` extraction in
+the Loom Rift (`plans/shared-bun-cell-proof.md`) now lags Gent's evaluator: the
+namespace snapshot (`4d31eddf`) and the catalog reads (`f1a46c39`) exist only in
+`bun-evaluator-boundary.ts`. Gent still owns its evaluator; the extraction is
+not released and Gent has no dependency on it.
+
+Files:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/domain/event.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/domain/session-pubsub-registry.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/event-store-live.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/server/rpc-handlers.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/code-cell/cell-catalog.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/code-cell/cell-protocol.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/code-cell/cell-kernel.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/code-cell/cell-worker.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/code-cell/bun-evaluator-boundary.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/code-cell/cell-snapshot.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/agent/agent-loop.handlers.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/agent/agent-loop.queue.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/agent/agent-loop.turn-execution.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/agent/agent-loop.utils.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/agent/turn-persistence.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/agent/turn-resolve.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/agent/child-completion.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/retry.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/providers/ai-transcript.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/hooks/use-session-feed.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/tests/domain/event-stream-delivery.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/tests/server/extension-commands-rpc.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/tests/runtime/agent-loop/cell-lifetime.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/tests/runtime/agent-loop/turn-prompt-sections.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/tests/runtime/agent-loop/tool-projection-reconciliation.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/tests/runtime/agent-loop/agent-loop-continuation.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/tests/runtime/cell-process.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/tests/runtime/cell-worker.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/tests/runtime/bun-cell-evaluator.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/ARCHITECTURE.md`
+
 ## Workflow tools replaced by recipes
 
 Commit `85d3cb14`. Scope decision by the user on 2026-09-07: remove the fixed
@@ -497,6 +628,8 @@ owned start. Start derives the request ID from the host-owned tool-call ID. It
 returns that ID with child session and branch IDs. Control reports pending or
 the original completed-turn flags, not task success. Wait is bounded to 1–30000
 milliseconds and reports timeout without cancelling the child.
+Superseded by `c30f2314`: `wait` is removed and `list` reads the registry;
+completion arrives as a parent message.
 
 The tools use ExtensionContext.Agent. They do not import core internals or add
 a cell-only callback registry. The existing bridge applies tool permissions,

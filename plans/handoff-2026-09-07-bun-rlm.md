@@ -88,55 +88,53 @@ and TUI both route through it. Helper thread added the config field.
 
 ## Current state at handoff
 
-Updated by Claude after the handoff:
+Updated by Claude on 2026-09-07 (night) at Rift HEAD `dee60987`:
 
-- Inherited work is committed in the Rift as four commits (docs, FX UI, runtime,
-  test fix). The gate was red on two test-only type errors; both are fixed.
-- Stage 4 cutover landed: `@gent/cell` is a core builtin composed at the server
-  root, the Executor is deleted, and source runs use `ProcessLocal` bindings.
+- Inherited work is committed in the Rift. Stage 4 cutover landed: `@gent/cell`
+  is a core builtin composed at the server root, the Executor is deleted, and
+  source runs use `ProcessLocal` bindings (`267eab59`).
 - Stage 4 remainder and Stage 5 landed as `b58496ec`, `000c4003`, `6f89af4e`,
-  `c901616d`, `5fb89a76` (transcript receipts and nesting, single-task
-  delegate, bounded notification + cursor replay, doctor resource health,
-  shipped composition in the SDK server). Receipts in `plans/bun-rlm-progress.md`.
-- The user chose to remove the fixed workflow tools. `85d3cb14` replaces them
-  with `@gent/workflows` recipes, moves `architect` and `reviewer` into the
-  core agents, and gates auto reviews on a reviewer delegation.
-- Runtime lines: 87,219 (baseline 86,965, +254). Tests: 73,356.
+  `c901616d`, `5fb89a76`. The user chose to remove the fixed workflow tools
+  (`85d3cb14`).
+- The Prime-model and OpenCode v2 contracts from the plan's "Prior-art
+  position" landed as eight commits: `4d31eddf` (namespace persists across
+  worker restarts), `c30f2314` (child completion as a parent message; `wait`
+  removed), `2c531638` (`assistantMessageId` on tool events; bounded model
+  content), `06b2dca2` (durable follow-up admission with an explicit wake; fixes
+  the warm-branch `queueFollowUp` hang), `5b0dd465` (steering at step
+  boundaries), `f7e45168` (orphan projection reconciliation, continuation
+  after partial output, retry jitter), `f1a46c39` (catalog as instruction
+  section plus kernel-local `tools.search`/`tools.describe`; `tool-catalog`
+  deleted), `dee60987` (`StreamSynchronized` marker between replay and live).
+  Receipts: top section of `plans/bun-rlm-progress.md`.
+- Gates: `bun run gate` exit 0 after every commit. `bun run test:e2e` exit 0
+  (36 tests, 8 files) after the marker contract was stated in
+  `packages/e2e/tests/event-stream.test.ts`.
+- Runtime lines: 88,468 across 454 files (baseline 86,965, +1,503). Tests:
+  74,518 across 292 files. The method reproduces the earlier 87,219 receipt.
 
 ## Remaining work
 
-Stage 4.
-
-- Make `cell` the default model execution surface.
-- Generate host callable descriptions from existing declarations.
-- Render structured operations and file changes in the FX transcript.
-- Delete the Executor extension, its 3 test files, lint-inventory references,
-  and ARCHITECTURE.md mentions. MCP dependency stays for ACP.
-
-Stage 5.
-
-- Slow-client policy for the event stream. Prove no replay/live race.
-- Small command or view for resource health and repair.
-- Herdr workflow checks listed in the plan.
-- Full gate, relevant E2E, Loom consumer gate.
-
-Completion.
-
-- Measure net runtime reduction. If safety code exceeds savings, record the
-  tradeoff and ask for a scope decision instead of claiming completion.
-- Source-mode durable builtin tool identity is unsupported. Decide or document.
-- Commit in 3 to 5 reviewable groups. No push, merge, or release without authority.
+- Herdr workflow checks against a live model (plan Stage 5 list). Not run:
+  paid, no authority. Only the repo smoke ran.
+- Shared evaluator: the `@cvr/bun-cell` extraction in the Loom Rift lags
+  Gent's evaluator (snapshot, catalog). Either port those two features into the
+  package and release it with the pending Changeset, or drop the extraction.
+  Gent keeps its own evaluator until a published version exists.
+- Push, merge, or release need authority. Everything is local on the Rift.
 
 ## Open decisions for the user
 
-1. Decided: the fixed workflow tools are gone (`85d3cb14`). The tree is +254
-   runtime lines over the baseline; the remainder is the required transcript,
-   delivery, doctor, and composition safety code. Accept, or name a next
-   reduction target.
-2. `Session.queueFollowUp` from an extension request on a warm idle branch did
-   not return in the RPC harness (see `plans/bun-rlm-progress.md`). Decide
-   whether to fix it in the actor mailbox path.
-3. Source-mode durable tool identity is decided: `ProcessLocal` bindings resume
+1. **Runtime size (blocks completion).** The plan's completion rule requires a
+   net runtime reduction, or a recorded tradeoff and a revised scope decision.
+   Runtime is +1,503 lines over the baseline. The additions are the prior-art
+   safety and delivery contracts, not moved code. Options: accept the tradeoff
+   and close the plan; name deletion targets (candidates in
+   `docs/research/2026-09-06-gent-trim-candidates.md`); or drop specific
+   contracts.
+2. Herdr live-model runs: authorize the paid runs, or accept the mock-provider
+   gate and E2E as the evidence.
+3. `@cvr/bun-cell`: release with the pending Changeset after porting snapshot
+   and catalog, or abandon the extraction.
+4. Source-mode durable tool identity is decided: `ProcessLocal` bindings resume
    inside the live generation only; compiled hosts keep durable identities.
-4. Herdr pane workflows against a live model were not run (paid). Only the repo
-   smoke ran, twice.
