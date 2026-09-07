@@ -110,7 +110,7 @@ export interface ExtensionSessionService {
 
 export interface ExtensionAgentService extends Pick<
   ExtensionHostContext.Agent,
-  "inspect" | "wait" | "cancel"
+  "inspect" | "list" | "cancel"
 > {
   readonly listAgents: Effect.Effect<ReadonlyArray<AgentDefinition>, ExtensionServiceError>
   /** Start from a host-owned tool call. The host supplies parent and tool identity. */
@@ -302,7 +302,7 @@ export const extensionServicesFromHostContext = (
         return yield* ctx.agent.start({ ...params, toolCallId: ctx.toolCallId })
       }),
       inspect: ctx.agent.inspect,
-      wait: ctx.agent.wait,
+      list: ctx.agent.list,
       cancel: ctx.agent.cancel,
       run: (params) =>
         ctx.agent.run(params).pipe(

@@ -74,6 +74,7 @@ export {
   RunSpecSchema,
   AgentRunResult,
   AgentRunToolCallSchema,
+  ChildAgentRegistryEntry,
   getDurableAgentRunSessionId,
   AgentRunError,
   type RunSpec,

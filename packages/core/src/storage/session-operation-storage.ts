@@ -1,7 +1,7 @@
 import { Predicate, Context, DateTime, Effect, Layer, Option, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { AgentName, RunSpecSchema, DEFAULT_MAX_CHILD_MODEL_ATTEMPTS } from "../domain/agent.js"
-import { BranchId, MessageId, type RequestId, SessionId, ToolCallId } from "../domain/ids.js"
+import { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
@@ -38,6 +38,14 @@ export const StoredAgentStartResult = Schema.Struct({
 })
 export type StoredAgentStartResult = typeof StoredAgentStartResult.Type
 const StoredAgentStartResultJson = Schema.fromJsonString(StoredAgentStartResult)
+const decodeStoredAgentStartResult = Schema.decodeUnknownEffect(StoredAgentStartResultJson)
+
+/** One parent-owned child registry row. Completed means the admitted turn has a receipt. */
+export interface AgentStartRegistryRow {
+  readonly requestId: RequestId
+  readonly result: StoredAgentStartResult
+  readonly completed: boolean
+}
 
 export const StoredCreateSessionResult = Schema.Struct({
   sessionId: SessionId,
@@ -89,6 +97,10 @@ export interface SessionOperationStorageService {
   readonly getAgentStart: (
     requestId: RequestId,
   ) => Effect.Effect<Option.Option<StoredAgentStartResult>, StorageError>
+  /** The authoritative child registry. None lists every start in the workspace. */
+  readonly listAgentStarts: (
+    parent: Option.Option<{ readonly sessionId: SessionId; readonly branchId: BranchId }>,
+  ) => Effect.Effect<ReadonlyArray<AgentStartRegistryRow>, StorageError>
   readonly saveAgentStart: (
     requestId: RequestId,
     result: StoredAgentStartResult,
@@ -316,6 +328,46 @@ export class SessionOperationStorage extends Context.Service<
             return rows.length > 0
           },
           Effect.mapError(mapError("Failed to read turn cancellation")),
+        ),
+        listAgentStarts: Effect.fn("SessionOperationStorage.listAgentStarts")(
+          function* (parent) {
+            const workspaceId = yield* CurrentWorkspaceId
+            const completed = sql`EXISTS (
+                  SELECT 1 FROM messages m
+                  WHERE m.id = 'agent-start:' || d.request_id
+                    AND m.session_id = json_extract(d.result_json, '$.sessionId')
+                    AND m.branch_id = json_extract(d.result_json, '$.branchId')
+                    AND m.turn_duration_ms IS NOT NULL
+                )`
+            const rows = yield* Option.match(parent, {
+              onNone: () => sql<{ request_id: string; result_json: string; completed: number }>`
+                SELECT d.request_id, d.result_json, ${completed} AS completed
+                FROM durable_operations d
+                WHERE d.workspace_id = ${workspaceId} AND d.operation = ${START_AGENT_OPERATION}
+                ORDER BY d.created_at, d.request_id`,
+              onSome: (owner) => sql<{
+                request_id: string
+                result_json: string
+                completed: number
+              }>`
+                SELECT d.request_id, d.result_json, ${completed} AS completed
+                FROM durable_operations d
+                WHERE d.workspace_id = ${workspaceId} AND d.operation = ${START_AGENT_OPERATION}
+                  AND d.subject_session_id = ${owner.sessionId}
+                  AND d.subject_branch_id = ${owner.branchId}
+                ORDER BY d.created_at, d.request_id`,
+            })
+            return yield* Effect.forEach(rows, (row) =>
+              decodeStoredAgentStartResult(row.result_json).pipe(
+                Effect.map((result): AgentStartRegistryRow => ({
+                  requestId: RequestId.make(row.request_id),
+                  result,
+                  completed: row.completed === 1,
+                })),
+              ),
+            )
+          },
+          Effect.mapError(mapError("Failed to list agent-start receipts")),
         ),
         getAgentStart: Effect.fn("SessionOperationStorage.getAgentStart")(
           (requestId) =>

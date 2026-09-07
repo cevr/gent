@@ -46,16 +46,46 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
         const platform = yield* GentPlatform
         const artifact = yield* buildCellExecutable
         const handle = yield* Ref.make(Option.none<typeof ChildAgentHandle.Type>())
-        const sources = [
-          "const child = await tools.call('agent-start', {agent: 'child', prompt: 'Wait for cancellation'}); await tools.call('child-handle', {_tag: 'save', handle: child}); await tools.call('model-started', {}); true",
-          "(await tools.call('agent-child', {action: 'inspect', requestId: child.requestId}))._tag === 'pending'",
-          "typeof child === 'undefined' && (await tools.call('agent-child', {action: 'inspect', requestId: (await tools.call('child-handle', {_tag: 'get'})).requestId}))._tag === 'pending'",
-          "const id = (await tools.call('child-handle', {_tag: 'get'})).requestId; await tools.call('agent-child', {action: 'cancel', requestId: id}); (await tools.call('agent-child', {action: 'wait', requestId: id, waitMs: 2000})).interrupted === true",
-          "const finished = await tools.call('agent-start', {agent: 'child', prompt: 'Return the result', overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['read_session'], deniedTools: ['agent-start'], systemPromptAddendum: 'Report the verified result'}}); const observed = await tools.call('agent-child', {action: 'wait', requestId: finished.requestId, waitMs: 2000}); const reply = await tools.call('read_session', {sessionId: observed.sessionId, branchId: observed.branchId}); observed._tag === 'completed' && reply.extracted === false && reply.content.includes('verified child result')",
-        ]
-        const steps = sources.flatMap<SequenceStep>((code, index) => [
+        // A turn is either sent by the test or started by a child-completion message.
+        const turns: ReadonlyArray<{
+          readonly send: boolean
+          readonly code: string
+          readonly reset?: boolean
+        }> = [
           {
-            ...toolCallStep("cell", { code, reset: index === 2 }),
+            send: true,
+            code: "const child = await tools.call('agent-start', {agent: 'child', prompt: 'Wait for cancellation'}); await tools.call('child-handle', {_tag: 'save', handle: child}); await tools.call('model-started', {call: 1}); true",
+          },
+          {
+            send: true,
+            code: "(await tools.call('agent-child', {action: 'inspect', requestId: child.requestId}))._tag === 'pending'",
+          },
+          {
+            send: true,
+            reset: true,
+            code: "typeof child === 'undefined' && (await tools.call('agent-child', {action: 'inspect', requestId: (await tools.call('child-handle', {_tag: 'get'})).requestId}))._tag === 'pending'",
+          },
+          {
+            send: true,
+            code: "const id = (await tools.call('child-handle', {_tag: 'get'})).requestId; await tools.call('agent-child', {action: 'cancel', requestId: id}); true",
+          },
+          // The cancelled child's completion arrives as a message; no cell ever waited for it.
+          {
+            send: false,
+            code: "(await tools.call('agent-child', {action: 'inspect', requestId: (await tools.call('child-handle', {_tag: 'get'})).requestId})).interrupted === true",
+          },
+          {
+            send: true,
+            code: "const finished = await tools.call('agent-start', {agent: 'child', prompt: 'Return the result', overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['read_session'], deniedTools: ['agent-start'], systemPromptAddendum: 'Report the verified result'}}); await tools.call('child-handle', {_tag: 'save', handle: finished}); await tools.call('model-started', {call: 12}); true",
+          },
+          {
+            send: false,
+            code: "const h = await tools.call('child-handle', {_tag: 'get'}); const reply = await tools.call('read_session', {sessionId: h.sessionId, branchId: h.branchId}); const kids = await tools.call('agent-children', {}); kids.length === 2 && kids.every((kid) => kid.completed) && reply.extracted === false && reply.content.includes('verified child result')",
+          },
+        ]
+        const steps = turns.flatMap<SequenceStep>((turn, index) => [
+          {
+            ...toolCallStep("cell", { code: turn.code, reset: turn.reset === true }),
             assertOptions: (options) => {
               expect(options.tools.map((tool) => tool.name)).toEqual(["cell"])
             },
@@ -63,7 +93,7 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
           textStep(`done-${index}`),
         ])
         steps.splice(1, 0, { ...textStep("child reply"), gated: true })
-        steps.splice(10, 0, {
+        steps.splice(12, 0, {
           ...textStep("verified child result"),
           assertRequest: (request) => {
             expect(request.model).toBe("custom/model")
@@ -93,9 +123,9 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
             tool({
               id: "model-started",
               description: "Wait for the model boundary",
-              params: Schema.Struct({}),
+              params: Schema.Struct({ call: Schema.Int }),
               output: Schema.Boolean,
-              execute: () => controls.waitForCall(1).pipe(Effect.as(true)),
+              execute: (input) => controls.waitForCall(input.call).pipe(Effect.as(true)),
             }),
             tool({
               id: "child-handle",
@@ -133,15 +163,24 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
             ),
           ],
         })
-        for (const index of sources.keys()) {
+        let completions = 0
+        for (const [index, turn] of turns.entries()) {
           const content = `cell-child-${index}`
-          yield* client.message.send({ sessionId, branchId, content })
-          const messages = yield* waitFor(client.message.list({ branchId }), (items) =>
-            items.some((item) => item.role === "user" && messageSingleText(item.parts) === content),
-          )
-          const user = messages.find(
+          const isCompletion = (item: { metadata?: { customType?: string } }) =>
+            item.metadata?.customType === "child-completion"
+          if (turn.send) yield* client.message.send({ sessionId, branchId, content })
+          else completions += 1
+          const messages = yield* waitFor(client.message.list({ branchId }), (items) => {
+            if (turn.send)
+              return items.some(
+                (item) => item.role === "user" && messageSingleText(item.parts) === content,
+              )
+            return items.filter(isCompletion).length >= completions
+          })
+          let user = messages.find(
             (item) => item.role === "user" && messageSingleText(item.parts) === content,
           )
+          if (!turn.send) user = messages.filter(isCompletion).at(completions - 1)
           if (Predicate.isUndefined(user)) return yield* Effect.die("Missing parent message")
           yield* client.session.events({ sessionId, branchId }).pipe(
             Stream.filter(
@@ -157,10 +196,17 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
             .filter((part) => part.type === "tool-result" && part.name === "cell")
           expect(results.at(-1)).toMatchObject({ isFailure: false, result: { display: "true" } })
         }
+        const parentMessages = yield* client.message.list({ branchId })
+        const notices = parentMessages.filter(
+          (item) => item.metadata?.customType === "child-completion",
+        )
+        expect(notices).toHaveLength(2)
+        expect(messageSingleText(notices[0]?.parts ?? [])).toContain("interrupted")
+        expect(messageSingleText(notices[1]?.parts ?? [])).toContain("verified child result")
         const saved = yield* Effect.fromOption(yield* Ref.get(handle))
         const childMessages = yield* client.message.list({ branchId: saved.branchId })
         expect(childMessages.filter((message) => message.role === "user")).toHaveLength(1)
-        expect(yield* controls.callCount).toBe(12)
+        expect(yield* controls.callCount).toBe(16)
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
     20000,
   )

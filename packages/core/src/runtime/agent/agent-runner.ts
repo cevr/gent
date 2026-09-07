@@ -39,6 +39,7 @@ import type { ConfigService } from "../config-service.js"
 import type { ModelRegistry } from "../model-registry.js"
 import type { AgentRunnerConfig } from "./agent-runner.config.js"
 import { makeDurableAgentRunRuntime } from "./agent-runner.durable.js"
+import { ChildCompletionDelivery } from "./child-completion.js"
 import { runEphemeralAgent } from "./agent-runner.ephemeral.js"
 import {
   EphemeralAgentRootLayerFactoryService,
@@ -74,6 +75,7 @@ export const InProcessRunner = (
   | ChildProcessSpawner.ChildProcessSpawner
   | GentPlatform
   | Crypto.Crypto
+  | ChildCompletionDelivery
 > =>
   Layer.effect(
     AgentRunnerService,
@@ -86,6 +88,9 @@ export const InProcessRunner = (
       const durableRuntime = yield* makeDurableAgentRunRuntime
       const metadataRuntime = yield* makeAgentRunMetadataRuntime
       const makeEphemeralAgentRootLayer = yield* makeEphemeralAgentRootLayerFactory
+      const delivery = yield* ChildCompletionDelivery
+      // Startup recovery runs beside the server, not before it.
+      yield* Effect.forkScoped(delivery.reconcile)
 
       const platform = yield* GentPlatform
       const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
@@ -120,7 +125,7 @@ export const InProcessRunner = (
 
       return AgentRunnerService.of({
         start: Effect.fn("AgentRunner.start")(function* (params) {
-          return yield* durableRuntime
+          const child = yield* durableRuntime
             .start({
               ...params,
               admission: { requestId: params.requestId, runSpec: params.runSpec },
@@ -134,6 +139,20 @@ export const InProcessRunner = (
                   Effect.fail(new AgentRunError({ message: cause.message, cause })),
               }),
             )
+          // The handle returns now; the result arrives later as a parent message.
+          yield* delivery.watch(params.requestId, {
+            ...child,
+            input: {
+              parentSessionId: params.parentSessionId,
+              parentBranchId: params.parentBranchId,
+              agentName: params.agent.name,
+              prompt: params.prompt,
+              cwd: params.cwd,
+              toolCallId: params.toolCallId,
+              runSpec: params.runSpec,
+            },
+          })
+          return child
         }),
         inspect: Effect.fn("AgentRunner.inspect")((params) =>
           durableRuntime.inspect(params).pipe(
@@ -143,13 +162,14 @@ export const InProcessRunner = (
             ),
           ),
         ),
-        wait: Effect.fn("AgentRunner.wait")((params) =>
-          durableRuntime.wait(params).pipe(
-            Effect.provideService(EventStorage, eventStorage),
-            Effect.catchTag("StorageError", (cause) =>
-              Effect.fail(new AgentRunError({ message: cause.message, cause })),
+        list: Effect.fn("AgentRunner.list")((params) =>
+          durableRuntime
+            .list(params)
+            .pipe(
+              Effect.catchTag("StorageError", (cause) =>
+                Effect.fail(new AgentRunError({ message: cause.message, cause })),
+              ),
             ),
-          ),
         ),
         cancel: Effect.fn("AgentRunner.cancel")((params) =>
           durableRuntime.cancel(params).pipe(

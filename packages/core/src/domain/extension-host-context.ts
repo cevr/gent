@@ -71,9 +71,7 @@ export declare namespace ExtensionHostContext {
     readonly inspect: (
       params: Pick<Parameters<AgentRunner["inspect"]>[0], "requestId">,
     ) => ReturnType<AgentRunner["inspect"]>
-    readonly wait: (
-      params: Pick<Parameters<AgentRunner["wait"]>[0], "requestId" | "waitMs">,
-    ) => ReturnType<AgentRunner["wait"]>
+    readonly list: () => ReturnType<AgentRunner["list"]>
     readonly cancel: (
       params: Pick<Parameters<AgentRunner["cancel"]>[0], "requestId">,
     ) => ReturnType<AgentRunner["cancel"]>

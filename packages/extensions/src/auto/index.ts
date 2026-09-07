@@ -29,12 +29,18 @@ const AUTO_CHECKPOINT_TOOL = "auto_checkpoint"
 const DELEGATE_TOOL = "delegate"
 const REVIEWER_AGENT = "reviewer"
 const decodeDelegateAgent = Schema.decodeUnknownOption(
-  Schema.Struct({ agent: Schema.optional(Schema.String) }),
+  Schema.Struct({
+    agent: Schema.optional(Schema.String),
+    background: Schema.optional(Schema.Boolean),
+  }),
 )
-/** The review gate is satisfied by a completed delegation to the reviewer agent. */
+/** The review gate is satisfied by a completed foreground delegation to the reviewer agent. */
 const isReviewDelegation = (input: ToolResultInput) =>
   input.toolName === DELEGATE_TOOL &&
-  Option.exists(decodeDelegateAgent(input.input), (value) => value.agent === REVIEWER_AGENT)
+  Option.exists(
+    decodeDelegateAgent(input.input),
+    (value) => value.agent === REVIEWER_AGENT && value.background !== true,
+  )
 const DEFAULT_MAX_ITERATIONS = 10
 
 class AutoCheckpointDecodeError extends Schema.TaggedError<AutoCheckpointDecodeError>()(

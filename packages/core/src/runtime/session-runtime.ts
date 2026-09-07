@@ -249,7 +249,8 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
 }
 
 const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.make(commandId)
-const followUpMessageIdForSource = (input: {
+/** Follow-up admission is idempotent by source: the message id is the durable key. */
+export const followUpMessageIdForSource = (input: {
   readonly workspaceId: string
   readonly sessionId: SessionId
   readonly branchId: BranchId

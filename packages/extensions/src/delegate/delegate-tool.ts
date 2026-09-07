@@ -2,85 +2,26 @@ import { Data, Effect, Option, Predicate, Schema } from "effect"
 import {
   tool,
   AgentName,
+  AgentRunError,
+  BranchId,
   ExtensionContext,
   AgentRunToolCallSchema,
   defineExtension,
   getDurableAgentRunSessionId,
   makeRunSpec,
+  RequestId,
+  SessionId,
   type ExtensionContextService,
 } from "@gent/core/extensions/api"
-import { TodoService } from "../todo-service.js"
-import type { Todo, TodoId } from "../todo/domain.js"
 
-interface BackgroundDelegateTarget {
-  readonly toolCallId: ExtensionContextService["toolCallId"]
-  readonly Agent: Pick<ExtensionContextService["Agent"], "run">
-}
-
-type BackgroundDelegateAgent = Parameters<ExtensionContextService["Agent"]["run"]>[0]["agent"]
+type DelegateAgent = Parameters<ExtensionContextService["Agent"]["run"]>[0]["agent"]
 
 type AgentResolution = Data.TaggedEnum<{
-  Found: { readonly agent: BackgroundDelegateAgent }
+  Found: { readonly agent: DelegateAgent }
   Missing: { readonly error: string }
 }>
 
 const AgentResolution = Data.taggedEnum<AgentResolution>()
-
-const isTodoStillActive = (todoId: TodoId) =>
-  Effect.gen(function* () {
-    const todoService = yield* TodoService
-    const todo = yield* todoService.get(todoId)
-    return Option.isSome(todo) && todo.value.status !== "stopped" && todo.value.status !== "failed"
-  }).pipe(Effect.catchEager(() => Effect.succeed(false)))
-
-const runBackgroundDelegateTodo = Effect.fn("DelegateTool.runBackgroundDelegateTodo")(function* (
-  todo: Todo,
-  agent: BackgroundDelegateAgent,
-  target: BackgroundDelegateTarget,
-) {
-  const todoService = yield* TodoService
-  yield* todoService
-    .update(todo.id, { status: "in_progress" })
-    .pipe(Effect.catchEager(() => Effect.void))
-
-  // Background todos need durable sessions so users can navigate to them
-  // via the stored childSessionId after the run completes.
-  const result = yield* target.Agent.run({
-    agent,
-    prompt: todo.prompt ?? todo.subject,
-    runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: target.toolCallId }),
-  })
-
-  const active = yield* isTodoStillActive(todo.id)
-  if (!active) return
-
-  let metadata = {}
-  if (Predicate.isObjectOrArray(todo.metadata)) metadata = todo.metadata
-
-  if (result._tag === "success") {
-    yield* todoService
-      .update(todo.id, {
-        status: "completed",
-        owner: result.sessionId,
-        metadata: {
-          ...metadata,
-          childSessionId: result.sessionId,
-        },
-      })
-      .pipe(Effect.catchEager(() => Effect.void))
-    return
-  }
-
-  yield* todoService
-    .update(todo.id, {
-      status: "failed",
-      metadata: {
-        ...metadata,
-        error: result.error,
-      },
-    })
-    .pipe(Effect.catchEager(() => Effect.void))
-})
 
 /** One agent, one self-contained task. Cells compose parallel and chained delegations. */
 export const DelegateParams = Schema.Struct({
@@ -90,15 +31,17 @@ export const DelegateParams = Schema.Struct({
   background: Schema.optionalKey(
     Schema.Boolean.annotate({
       description:
-        "Run in the background via todo. Returns immediately with todoId. Poll with todo_get.",
+        "Start a durable child and return its handle now. The result arrives later as a message on this branch.",
     }),
   ),
 })
 
 export const DelegateResult = Schema.Struct({
   error: Schema.optional(Schema.String),
-  todoId: Schema.optional(Schema.String),
   status: Schema.optional(Schema.Literals(["running"])),
+  requestId: Schema.optional(RequestId),
+  sessionId: Schema.optional(SessionId),
+  branchId: Schema.optional(BranchId),
   output: Schema.optional(Schema.String),
   metadata: Schema.optional(
     Schema.Struct({
@@ -119,13 +62,14 @@ export const DelegateResult = Schema.Struct({
 export const DelegateTool = tool({
   id: "delegate",
   description:
-    "Delegate one self-contained task to a specialized agent. Set background: true to run asynchronously.",
+    "Delegate one self-contained task to a specialized agent. Set background: true to get a handle now and the result as a later message.",
   promptSnippet: "Delegate work to specialized subagents",
   promptGuidelines: [
     "Use for work that benefits from specialized focus or parallelism",
     "Do NOT delegate simple reads, searches, or single-file edits — do those directly",
     "Each todo prompt must be self-contained — delegated agents have no conversation history",
     "Run independent delegations concurrently from one cell with Promise.all; chain dependent ones with sequential awaits and pass earlier output in the next prompt",
+    "Background delegations never return output here. Do not poll; a message on this branch reports the result. agent-children lists them.",
     "For parallel exploration: don't share preliminary findings between agents — let each form independent conclusions",
     "Prefer focused tools: review (code review), counsel (second opinion), research (repo understanding)",
   ],
@@ -149,35 +93,21 @@ export const DelegateTool = tool({
       return `${error}\n\nFull session: session://${sessionId}`
     }
 
-    // Background mode: create durable todo and fire-and-forget
+    // Background mode: durable child admission; the host delivers completion as a message.
     if (params.background === true) {
-      const todoService = yield* TodoService
-      const todo = yield* todoService
-        .create({
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          subject: params.description ?? params.todo,
-          agentType: resolved.agent.name,
-          prompt: params.todo,
-          cwd: ctx.cwd,
+      if (Predicate.isUndefined(ctx.toolCallId)) {
+        return yield* new AgentRunError({
+          message: "Background delegation requires a host-owned tool call",
         })
-        .pipe(
-          Effect.asSome,
-          Effect.catchEager(() => Effect.succeed(Option.none<Todo>())),
-          Effect.catchDefect(() => Effect.succeed(Option.none<Todo>())),
-        )
-      if (Option.isNone(todo))
-        return { error: "Background todos unavailable — todo extension is disabled" }
-
-      const target: BackgroundDelegateTarget = {
-        toolCallId: ctx.toolCallId,
-        Agent: { run: ctx.Agent.run },
       }
-      yield* runBackgroundDelegateTodo(todo.value, resolved.agent, target).pipe(
-        Effect.catchEager(() => Effect.void),
-        Effect.forkChild,
-      )
-      return { todoId: todo.value.id, status: "running" } satisfies typeof DelegateResult.Type
+      const requestId = RequestId.make(ctx.toolCallId)
+      const child = yield* ctx.Agent.start({
+        agent: resolved.agent,
+        prompt: params.todo,
+        requestId,
+        runSpec: makeRunSpec({ persistence: "durable" }),
+      })
+      return { requestId, ...child, status: "running" } satisfies typeof DelegateResult.Type
     }
 
     // Foreground mode: blocking subagent dispatch

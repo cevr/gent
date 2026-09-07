@@ -262,7 +262,7 @@ export const HostAgentRunnerRef = Context.Reference<AgentRunner>(
     defaultValue: () => ({
       start: unavailable("AgentRunnerService"),
       inspect: unavailable("AgentRunnerService"),
-      wait: unavailable("AgentRunnerService"),
+      list: unavailable("AgentRunnerService"),
       cancel: unavailable("AgentRunnerService"),
       run: unavailable("AgentRunnerService"),
     }),
@@ -492,10 +492,8 @@ const makeExtensionHostContext = (
           parentSessionId: runInfo.sessionId,
           parentBranchId: runInfo.branchId,
         }),
-      wait: (params) =>
-        deps.agentRunner.wait({
-          requestId: params.requestId,
-          waitMs: params.waitMs,
+      list: () =>
+        deps.agentRunner.list({
           parentSessionId: runInfo.sessionId,
           parentBranchId: runInfo.branchId,
         }),

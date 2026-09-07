@@ -286,23 +286,35 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 
 ### Agent Runs
 
-- `AgentRunnerService` exposes durable `start`, `inspect`, `wait`, and `cancel`
+- `AgentRunnerService` exposes durable `start`, `inspect`, `list`, and `cancel`
   beside blocking `run`. Start takes a stable request ID and exact parent/tool
-  address. The service closes storage/runtime requirements at construction and
+  address, returns the child handle at once, and never returns the child's
+  answer. The service closes storage/runtime requirements at construction and
   delegates to the existing durable child owner; it creates no worker or queue.
-  Storage failures become `AgentRunError`; wait preserves `TimeoutError`.
-  Inspect returns the original turn receipt, not a task-success assertion.
+  Storage failures become `AgentRunError`. Inspect returns the original turn
+  receipt, not a task-success assertion. List reads the parent-owned child
+  registry (`durable_operations`), which survives restarts.
+- `ChildCompletionDelivery` is the host's completion path. It watches the
+  child's turn receipt and queues one ordinary user message on the parent branch
+  (`follow-up:…:child:<requestId>:complete`, metadata `customType:
+"child-completion"`) with the outcome, a bounded preview, and the saved output
+  path, then publishes `AgentRunSucceeded` for the transcript. The follow-up
+  message id is the idempotency key; delivery is serialized and watchers are
+  deduplicated per request. Startup reconciles the registry: finished children
+  are delivered, unfinished ones are watched again. No cell or tool waits for a
+  child; the model reads completion on a later turn.
   `ExtensionContext.Agent` exposes these operations with host-owned parent IDs.
   Start requires a tool context and injects its tool-call ID. Requests can inspect,
-  wait, and cancel owned starts but cannot invent a tool identity to start work.
-  The builtin `ChildAgentExtension` supplies `agent-start` and `agent-child` as
-  ordinary tools. Cells use `tools.call`; the bridge keeps permissions, bound
-  generations, and operation receipts. Start derives its request ID from the
-  host tool-call ID. It accepts the existing RunSpec overrides for model,
-  reasoning, tool selection, and added instructions. The host still fixes durable
-  persistence and the parent/tool address. Control returns pending or the original completed-turn
-  flags, not task success. Wait accepts 1–30000 ms and reports timeout without
-  cancelling work. Absent completion flags are omitted from the JSON result.
+  list, and cancel owned starts but cannot invent a tool identity to start work.
+  The builtin `ChildAgentExtension` supplies `agent-start`, `agent-child`, and
+  `agent-children` as ordinary tools. Cells use `tools.call`; the bridge keeps
+  permissions, bound generations, and operation receipts. Start derives its
+  request ID from the host tool-call ID. It accepts the existing RunSpec
+  overrides for model, reasoning, tool selection, and added instructions. The
+  host still fixes durable persistence and the parent/tool address. Control
+  returns pending or the original completed-turn flags, not task success.
+  Absent completion flags are omitted from the JSON result. `delegate` with
+  `background: true` is the same admission under the delegate tool-call ID.
   For a recovered Unknown agent-start operation, its inner toolCallId is the
   child requestId. The parent can inspect or cancel that start without rerunning
   cell source or issuing another start.

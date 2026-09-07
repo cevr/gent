@@ -19,7 +19,7 @@ const defaultAgent = (): ExtensionHostContext.Agent => ({
   listAgents: () => die("agent.listAgents"),
   start: () => die("agent.start"),
   inspect: () => die("agent.inspect"),
-  wait: () => die("agent.wait"),
+  list: () => die("agent.list"),
   cancel: () => die("agent.cancel"),
   run: () => die("agent.run"),
 })

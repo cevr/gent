@@ -1,4 +1,4 @@
-import { DateTime, Duration, Effect, Option, Predicate, Schedule, Schema, type Cause } from "effect"
+import { DateTime, Effect, Option, Predicate, Schema } from "effect"
 import { canonicalJsonString } from "effect-encore"
 import { SqlClient } from "effect/unstable/sql"
 import {
@@ -7,6 +7,7 @@ import {
   AgentRunError,
   makeRunSpec,
   type AgentName,
+  type ChildAgentRegistryEntry,
   type RunSpec,
 } from "../../domain/agent.js"
 import {
@@ -59,13 +60,10 @@ export interface DurableAgentRunRuntime {
   readonly cancel: (
     params: Parameters<DurableAgentRunRuntime["inspect"]>[0],
   ) => Effect.Effect<void, AgentRunError | StorageError, EventStorage | SessionRuntime>
-  readonly wait: (
-    params: Parameters<DurableAgentRunRuntime["inspect"]>[0] & { readonly waitMs: number },
-  ) => Effect.Effect<
-    { sessionId: SessionId; branchId: BranchId; completion: Option.Option<TurnCompleted> },
-    AgentRunError | StorageError | Cause.TimeoutError,
-    EventStorage
-  >
+  readonly list: (params: {
+    readonly parentSessionId: SessionId
+    readonly parentBranchId: BranchId
+  }) => Effect.Effect<ReadonlyArray<ChildAgentRegistryEntry>, StorageError>
   readonly inspect: (params: {
     readonly requestId: RequestId
     readonly parentSessionId: SessionId
@@ -454,29 +452,17 @@ export const makeDurableAgentRunRuntime: Effect.Effect<
         )
       yield* submitChildMessage(params.requestId)
     }),
-    wait: Effect.fn("AgentRunner.waitDurable")(function* (
-      params: Parameters<DurableAgentRunRuntime["wait"]>[0],
-    ) {
-      const waitMs = yield* Schema.decodeEffect(
-        Schema.Int.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(30_000)),
-      )(params.waitMs).pipe(
-        Effect.mapError(
-          (cause) =>
-            new AgentRunError({ message: "Child wait must be 1–30000 milliseconds", cause }),
-        ),
+    list: Effect.fn("AgentRunner.listDurable")(function* (params) {
+      const rows = yield* operations.listAgentStarts(
+        Option.some({ sessionId: params.parentSessionId, branchId: params.parentBranchId }),
       )
-      if (Option.isSome(yield* Effect.serviceOption(sql.transactionService))) {
-        return yield* new AgentRunError({
-          message: "Child wait must run outside a caller transaction",
-        })
-      }
-      return yield* inspect(params).pipe(
-        Effect.repeat({
-          schedule: Schedule.spaced("50 millis"),
-          until: (observed) => Option.isSome(observed.completion),
-        }),
-        Effect.timeout(Duration.millis(waitMs)),
-      )
+      return rows.map((row): ChildAgentRegistryEntry => ({
+        requestId: row.requestId,
+        sessionId: row.result.sessionId,
+        branchId: row.result.branchId,
+        agentName: row.result.input.agentName,
+        completed: row.completed,
+      }))
     }),
     start: Effect.fn("AgentRunner.startDurable")(function* (
       params: Parameters<DurableAgentRunRuntime["start"]>[0],

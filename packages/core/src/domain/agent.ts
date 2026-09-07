@@ -1,7 +1,6 @@
-import { Context, Effect, Predicate, Schema, type Cause, type Option } from "effect"
+import { Context, Effect, Predicate, Schema, type Option } from "effect"
 import type * as EffectNs from "effect/Effect"
-import { branded, SessionId, ToolCallId } from "./ids.js"
-import type { BranchId, RequestId } from "./ids.js"
+import { branded, BranchId, RequestId, SessionId, ToolCallId } from "./ids.js"
 import type { TurnCompleted } from "./event.js"
 import { ModelId } from "./model"
 
@@ -279,6 +278,16 @@ export class AgentRunError extends Schema.TaggedError<AgentRunError>()("AgentRun
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
+/** One child known to the parent host. Completed is a turn receipt, not task success. */
+export const ChildAgentRegistryEntry = Schema.Struct({
+  requestId: RequestId,
+  sessionId: SessionId,
+  branchId: BranchId,
+  agentName: AgentName,
+  completed: Schema.Boolean,
+})
+export type ChildAgentRegistryEntry = typeof ChildAgentRegistryEntry.Type
+
 export interface AgentRunner {
   /** Admit one durable child. Reuse requestId only with identical input. */
   readonly start: (params: {
@@ -300,14 +309,12 @@ export interface AgentRunner {
     { sessionId: SessionId; branchId: BranchId; completion: Option.Option<TurnCompleted> },
     AgentRunError
   >
-  /** Timeout stops the waiter, not the child. */
-  readonly wait: (
-    params: Parameters<AgentRunner["inspect"]>[0] & { waitMs: number },
-  ) => EffectNs.Effect<
-    EffectNs.Success<ReturnType<AgentRunner["inspect"]>>,
-    AgentRunError | Cause.TimeoutError
-  >
-  /** Submit cancellation for the admitted turn only. Use wait for completion. */
+  /** The parent-owned child registry for one branch. Completion arrives as a follow-up message. */
+  readonly list: (params: {
+    parentSessionId: SessionId
+    parentBranchId: BranchId
+  }) => EffectNs.Effect<ReadonlyArray<ChildAgentRegistryEntry>, AgentRunError>
+  /** Submit cancellation for the admitted turn only. Completion arrives as a follow-up message. */
   readonly cancel: (
     params: Parameters<AgentRunner["inspect"]>[0],
   ) => EffectNs.Effect<void, AgentRunError>

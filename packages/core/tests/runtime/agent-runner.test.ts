@@ -21,8 +21,10 @@ import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-runner"
+import { ChildCompletionDelivery } from "../../src/runtime/agent/child-completion"
 import { makeDurableAgentRunRuntime } from "../../src/runtime/agent/agent-runner.durable"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
+import { messageSingleText } from "@gent/core-internal/domain/message-part-projection"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { makeEphemeralAgentRootLayerFactory } from "../../src/runtime/agent/ephemeral-root"
 import { ConfigService } from "../../src/runtime/config-service"
@@ -32,6 +34,7 @@ import { emptyQueueSnapshot } from "@gent/core-internal/domain/queue"
 import { dateFromMillis, Session, Branch, Message } from "@gent/core-internal/domain/message"
 import {
   AgentRunnerService,
+  type AgentRunner,
   AgentDefinition,
   DEFAULT_AGENT_NAME,
   AgentRunError,
@@ -134,7 +137,10 @@ const withEventPublisher = (baseEventStoreLayer: Layer.Layer<EventStore>) =>
       RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ),
   )
-const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
+const makeLiveAgentRunnerLayer = (
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+  delivery: "silent" | "live" = "silent",
+) => {
   const resolved = resolveExtensions([
     {
       manifest: { id: ExtensionId.make("agents") },
@@ -192,9 +198,28 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<LanguageModel.Langu
     Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer),
   )
   const deps = Layer.mergeAll(baseDeps, sessionMutationsLayer, sessionRuntimeLayer)
-  const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
-  return Layer.mergeAll(deps, runnerLayer)
+  let deliverySource: typeof ChildCompletionDelivery.Live = ChildCompletionDelivery.Silent
+  if (delivery === "live") deliverySource = ChildCompletionDelivery.Live
+  const deliveryLayer = Layer.provide(deliverySource, deps)
+  const runnerLayer = InProcessRunner({}).pipe(Layer.provide(Layer.merge(deps, deliveryLayer)))
+  return Layer.mergeAll(deps, deliveryLayer, runnerLayer)
 }
+type ChildHandle = Parameters<AgentRunner["inspect"]>[0]
+const waitForCompletion = <E, R>(
+  runtime: {
+    readonly inspect: (
+      handle: ChildHandle,
+    ) => Effect.Effect<Effect.Success<ReturnType<AgentRunner["inspect"]>>, E, R>
+  },
+  handle: ChildHandle,
+  timeoutMs = 2000,
+) =>
+  waitFor(
+    runtime.inspect(handle),
+    (observed) => Option.isSome(observed.completion),
+    timeoutMs,
+    "child completion",
+  )
 // Extra services the parent context needs for ephemeral child runtime
 const ephemeralParentDeps = Layer.mergeAll(
   BunPlatformLive,
@@ -337,6 +362,8 @@ describe("AgentRunner", () => {
           toolCallStep("start-child", {}),
           { ...textStep("child reply"), gated: true },
           textStep("parent finished"),
+          // The cancelled child's completion arrives as a parent message and starts this turn.
+          textStep("parent noticed"),
         ])
         const child = yield* Ref.make(Option.none<{ sessionId: SessionId; branchId: BranchId }>())
         const requestId = RequestId.make("rpc-child")
@@ -365,7 +392,7 @@ describe("AgentRunner", () => {
           requests: [
             request({
               id: "child-status",
-              input: Schema.Literals(["inspect", "wait", "cancel", "unowned-start"]),
+              input: Schema.Literals(["inspect", "cancel", "unowned-start", "list"]),
               output: Schema.Boolean,
               execute: Effect.fn("test.childStatus")(
                 function* (action) {
@@ -378,13 +405,10 @@ describe("AgentRunner", () => {
                     return Option.isSome((yield* ctx.Agent.inspect({ requestId })).completion)
                   if (action === "cancel") {
                     yield* ctx.Agent.cancel({ requestId })
-                    const stopped = yield* ctx.Agent.wait({ requestId, waitMs: 2000 })
-                    return Option.getOrUndefined(stopped.completion)?.interrupted === true
+                    return true
                   }
-                  return yield* ctx.Agent.wait({ requestId, waitMs: 25 }).pipe(
-                    Effect.map((result) => Option.isSome(result.completion)),
-                    Effect.catchTag("TimeoutError", () => Effect.succeed(false)),
-                  )
+                  const children = yield* ctx.Agent.list()
+                  return children.length === 1 && children[0]?.requestId === requestId
                 },
                 Effect.mapError(
                   (cause) =>
@@ -420,7 +444,7 @@ describe("AgentRunner", () => {
           capabilityId: "child-status",
         }
         expect(yield* client.extension.request({ ...address, input: "inspect" })).toBe(false)
-        expect(yield* client.extension.request({ ...address, input: "wait" })).toBe(false)
+        expect(yield* client.extension.request({ ...address, input: "list" })).toBe(true)
         expect(yield* client.extension.request({ ...address, input: "unowned-start" })).toBe(true)
         const other = yield* client.branch.create({ sessionId })
         const foreign = yield* client.extension
@@ -429,11 +453,33 @@ describe("AgentRunner", () => {
         expect(Exit.isFailure(foreign)).toBe(true)
         expect(yield* client.extension.request({ ...address, input: "inspect" })).toBe(false)
         expect(yield* client.extension.request({ ...address, input: "cancel" })).toBe(true)
-        expect(yield* client.extension.request({ ...address, input: "inspect" })).toBe(true)
+        yield* waitFor(
+          client.extension.request({ ...address, input: "inspect" }),
+          (completed) => completed === true,
+          2000,
+          "cancelled child completion",
+        )
         const handle = yield* Effect.fromOption(yield* Ref.get(child))
         const messages = yield* client.message.list({ branchId: handle.branchId })
         expect(messages.filter((message) => message.role === "user")).toHaveLength(1)
-        expect(yield* controls.callCount).toBe(3)
+        // The parent receives the outcome as an ordinary message, never through the call.
+        const parentMessages = yield* waitFor(
+          client.message.list({ branchId }),
+          (items) =>
+            items.some(
+              (item) =>
+                item.role === "assistant" && messageSingleText(item.parts) === "parent noticed",
+            ),
+          4000,
+          "parent follow-up turn",
+        )
+        const notice = parentMessages.find(
+          (item) => item.role === "user" && item.metadata?.customType === "child-completion",
+        )
+        expect(notice).toBeDefined()
+        expect(messageSingleText(notice?.parts ?? [])).toContain("interrupted")
+        expect(messageSingleText(notice?.parts ?? [])).toContain(requestId)
+        expect(yield* controls.callCount).toBe(4)
       }).pipe(Effect.timeout("8 seconds")),
     10000,
   )
@@ -487,26 +533,27 @@ describe("AgentRunner", () => {
               Effect.flip,
             )
           expect(foreign.message).toBe("Agent-start receipt not owned by parent")
-          const timedOut = yield* runtime.wait({ ...handle, waitMs: 25 }).pipe(Effect.flip)
-          expect(timedOut._tag).toBe("TimeoutError")
-          const transaction = yield* makeStorageTransaction
-          const heldTransaction = yield* transaction(
-            runtime.wait({ ...handle, waitMs: 2000 }),
-          ).pipe(Effect.flip)
-          expect(heldTransaction.message).toBe("Child wait must run outside a caller transaction")
           expect(yield* runtime.inspect(handle)).toEqual({ ...first, completion: Option.none() })
-          for (const waitMs of [0, -1, 30_001, 1.5, Number.NaN]) {
-            const invalidWait = yield* runtime.wait({ ...handle, waitMs }).pipe(Effect.flip)
-            expect(invalidWait._tag).toBe("AgentRunError")
-          }
+          expect(yield* runtime.list({ parentSessionId, parentBranchId })).toEqual([
+            {
+              requestId: input.requestId,
+              sessionId: first.sessionId,
+              branchId: first.branchId,
+              agentName: input.agent.name,
+              completed: false,
+            },
+          ])
           expect(yield* runtime.start(input)).toEqual(first)
           expect(yield* controls.callCount).toBe(1)
           expect(
             yield* (yield* RelationshipStorage).getChildSessions(parentSessionId),
           ).toHaveLength(1)
           yield* controls.emitAll(0)
-          const waited = yield* runtime.wait({ ...handle, waitMs: 2000 })
+          const waited = yield* waitForCompletion(runtime, handle)
           expect(Option.isSome(waited.completion)).toBe(true)
+          expect(yield* runtime.list({ parentSessionId, parentBranchId })).toMatchObject([
+            { requestId: input.requestId, completed: true },
+          ])
           const storage = yield* MessageStorage
           const completed = yield* waitFor(storage.listMessages(first.branchId), (messages) =>
             messages.some((message) =>
@@ -553,7 +600,6 @@ describe("AgentRunner", () => {
             ...first,
             completion: Option.some(yield* Schema.decodeUnknownEffect(TurnCompleted)(completion)),
           })
-          expect(yield* runtime.wait({ ...handle, waitMs: 2000 })).toEqual(waited)
           expect(yield* runtime.start(input)).toEqual(first)
           expect(yield* controls.callCount).toBe(1)
           yield* sessions.deleteSession(first.sessionId)
@@ -562,6 +608,93 @@ describe("AgentRunner", () => {
         }).pipe(Effect.provideContext(context))
       }).pipe(Effect.timeout("6 seconds")),
     8000,
+  )
+
+  it.scopedLive(
+    "delivers a finished child to its parent once, even when recovery runs again",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...textStep("child says hi"), gated: true },
+          textStep("parent noticed"),
+        ])
+        const context = yield* Layer.build(makeLiveAgentRunnerLayer(providerLayer, "live"))
+        yield* Effect.gen(function* () {
+          const runner = yield* AgentRunnerService
+          const delivery = yield* ChildCompletionDelivery
+          const sessions = yield* SessionStorage
+          const branches = yield* BranchStorage
+          const messages = yield* MessageStorage
+          const events = yield* EventStorage
+          const parentSessionId = SessionId.make("deliver-parent")
+          const parentBranchId = BranchId.make("deliver-parent-branch")
+          const now = dateFromMillis(1_767_225_600_000)
+          yield* sessions.createSession(
+            new Session({ id: parentSessionId, createdAt: now, updatedAt: now }),
+          )
+          yield* branches.createBranch(
+            new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
+          )
+          // A real parent branch has history: the turn that admitted the child.
+          yield* messages.createMessage(
+            Message.cases.regular.make({
+              id: MessageId.make("deliver-parent-turn"),
+              sessionId: parentSessionId,
+              branchId: parentBranchId,
+              role: "user",
+              parts: [Prompt.textPart({ text: "Start a child" })],
+              createdAt: now,
+            }),
+          )
+          const requestId = RequestId.make("deliver-child")
+          const child = yield* runner.start({
+            agent: yield* Effect.fromOption(Option.fromUndefinedOr(getBuiltinAgent("explore"))),
+            prompt: "Say hi",
+            cwd: "/tmp",
+            parentSessionId,
+            parentBranchId,
+            toolCallId: ToolCallId.make("deliver-tool"),
+            requestId,
+          })
+          yield* controls.waitForCall(0)
+          expect(yield* messages.listMessages(parentBranchId)).toHaveLength(1)
+          yield* controls.emitAll(0)
+          const noticed = yield* waitFor(
+            messages.listMessages(parentBranchId),
+            (items) =>
+              items.some(
+                (item) =>
+                  item.role === "assistant" && messageSingleText(item.parts) === "parent noticed",
+              ),
+            4000,
+            "parent follow-up turn",
+          )
+          const isNotice = (item: { metadata?: { customType?: string } }) =>
+            item.metadata?.customType === "child-completion"
+          const notice = noticed.find(isNotice)
+          expect(notice).toMatchObject({
+            metadata: {
+              customType: "child-completion",
+              details: { requestId, sessionId: child.sessionId, branchId: child.branchId },
+            },
+          })
+          const text = messageSingleText(notice?.parts ?? [])
+          expect(text).toContain(`requestId ${requestId}`)
+          expect(text).toContain("child says hi")
+          expect(text).toContain("Full output:")
+          // A repeated delivery and a startup pass find the message and stop.
+          yield* delivery.deliver(requestId)
+          yield* delivery.reconcile
+          const after = yield* messages.listMessages(parentBranchId)
+          expect(after.filter(isNotice)).toHaveLength(1)
+          const receipts = yield* events.listEvents({ sessionId: parentSessionId })
+          expect(receipts.filter((entry) => entry.event._tag === "AgentRunSucceeded")).toHaveLength(
+            1,
+          )
+          expect(yield* controls.callCount).toBe(2)
+        }).pipe(Effect.provideContext(context))
+      }).pipe(Effect.timeout("8 seconds")),
+    10000,
   )
 
   it.scopedLive(
@@ -613,7 +746,7 @@ describe("AgentRunner", () => {
           const held = yield* transaction(runner.cancel(handle)).pipe(Effect.flip)
           expect(held.message).toBe("Child cancellation must run outside a caller transaction")
           yield* runner.cancel(handle)
-          const stopped = yield* runner.wait({ ...handle, waitMs: 2000 })
+          const stopped = yield* waitForCompletion(runner, handle)
           expect(Option.getOrUndefined(stopped.completion)?.interrupted).toBe(true)
           yield* runtime.sendUserMessage({
             ...child,
@@ -761,7 +894,7 @@ describe("AgentRunner", () => {
             requestId: first.value.input.admission.requestId,
           }
           yield* freshRunner.cancel(handle)
-          const cancelled = yield* freshRunner.wait({ ...handle, waitMs: 2000 })
+          const cancelled = yield* waitForCompletion(freshRunner, handle)
           expect(Option.getOrUndefined(cancelled.completion)?.interrupted).toBe(true)
           yield* runner.start(first.value.input)
           yield* freshRunner.cancel(handle)
@@ -845,11 +978,10 @@ describe("AgentRunner", () => {
           yield* Context.get(fresh, SessionOperationStorage).reserveChildModelAttempt(child),
         ).toEqual(Option.some(false))
         yield* runner.start(input)
-        const completed = yield* runner.wait({
+        const completed = yield* waitForCompletion(runner, {
           parentSessionId,
           parentBranchId,
           requestId: input.admission.requestId,
-          waitMs: 2000,
         })
         const receipt = yield* Effect.fromOption(completed.completion)
         expect(receipt.streamFailed).toBe(true)
@@ -897,12 +1029,11 @@ describe("AgentRunner", () => {
           requestId,
           toolCallId: ToolCallId.make("running-limit-tool"),
         })
-        const completed = yield* runner.wait({
-          parentSessionId,
-          parentBranchId,
-          requestId,
-          waitMs: 3000,
-        })
+        const completed = yield* waitForCompletion(
+          runner,
+          { parentSessionId, parentBranchId, requestId },
+          3000,
+        )
         const receipt = yield* Effect.fromOption(completed.completion)
         expect(receipt.streamFailed).toBe(true)
         expect(yield* controls.callCount).toBe(32)
@@ -963,6 +1094,7 @@ describe("AgentRunner", () => {
         BunFileSystem.layer,
       )
       const runnerLayer = InProcessRunner({}).pipe(
+        Layer.provide(ChildCompletionDelivery.Silent),
         Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -1063,6 +1195,7 @@ describe("AgentRunner", () => {
         sessionRuntimeStub(),
       )
       const runnerLayer = InProcessRunner({}).pipe(
+        Layer.provide(ChildCompletionDelivery.Silent),
         Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -1119,6 +1252,7 @@ describe("AgentRunner", () => {
         eventPublisherLayer,
       )
       const runnerLayer = InProcessRunner({}).pipe(
+        Layer.provide(ChildCompletionDelivery.Silent),
         Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -1170,6 +1304,7 @@ describe("AgentRunner", () => {
         eventPublisherLayer,
       )
       const runnerLayer = InProcessRunner({ timeoutMs: 5 }).pipe(
+        Layer.provide(ChildCompletionDelivery.Silent),
         Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -1226,7 +1361,10 @@ describe("AgentRunner", () => {
         sessionRuntimeStub(),
         ephemeralParentDeps,
       )
-      const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+      const runnerLayer = InProcessRunner({}).pipe(
+        Layer.provide(ChildCompletionDelivery.Silent),
+        Layer.provide(deps),
+      )
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
         const sessions = yield* SessionStorage
@@ -1289,7 +1427,10 @@ describe("AgentRunner", () => {
         sessionRuntimeStub(),
         ephemeralParentDeps,
       )
-      const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+      const runnerLayer = InProcessRunner({}).pipe(
+        Layer.provide(ChildCompletionDelivery.Silent),
+        Layer.provide(deps),
+      )
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
         const sessions = yield* SessionStorage
@@ -1349,6 +1490,7 @@ describe("AgentRunner", () => {
         eventPublisherLayer,
       )
       const runnerLayer = InProcessRunner({}).pipe(
+        Layer.provide(ChildCompletionDelivery.Silent),
         Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -1424,6 +1566,7 @@ describe("AgentRunner", () => {
         BunFileSystem.layer,
       )
       const runnerLayer = InProcessRunner({}).pipe(
+        Layer.provide(ChildCompletionDelivery.Silent),
         Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -1500,6 +1643,7 @@ describe("AgentRunner", () => {
         BunFileSystem.layer,
       )
       const runnerLayer = InProcessRunner({}).pipe(
+        Layer.provide(ChildCompletionDelivery.Silent),
         Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -1576,6 +1720,7 @@ describe("AgentRunner", () => {
         BunFileSystem.layer,
       )
       const runnerLayer = InProcessRunner({}).pipe(
+        Layer.provide(ChildCompletionDelivery.Silent),
         Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -1905,7 +2050,10 @@ describe("ephemeral service propagation", () => {
       sessionRuntimeStub(),
       ephemeralParentDeps,
     )
-    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({}).pipe(
+      Layer.provide(ChildCompletionDelivery.Silent),
+      Layer.provide(deps),
+    )
     return Layer.mergeAll(deps, runnerLayer)
   }
   const setupParentSession = (id: SessionId) =>
@@ -2050,7 +2198,10 @@ describe("ephemeral service propagation", () => {
         sessionRuntimeStub(),
         ephemeralParentDeps,
       )
-      const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+      const runnerLayer = InProcessRunner({}).pipe(
+        Layer.provide(ChildCompletionDelivery.Silent),
+        Layer.provide(deps),
+      )
       const layer = Layer.mergeAll(deps, runnerLayer)
       yield* Effect.gen(function* () {
         const runner = yield* AgentRunnerService
@@ -2143,7 +2294,10 @@ describe("ephemeral service propagation", () => {
         sessionRuntimeStub(),
         ephemeralParentDeps,
       )
-      const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+      const runnerLayer = InProcessRunner({}).pipe(
+        Layer.provide(ChildCompletionDelivery.Silent),
+        Layer.provide(deps),
+      )
       const layer = Layer.mergeAll(deps, runnerLayer)
       yield* Effect.gen(function* () {
         const runner = yield* AgentRunnerService

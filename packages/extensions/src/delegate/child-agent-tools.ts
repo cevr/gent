@@ -3,6 +3,7 @@ import {
   AgentName,
   AgentRunError,
   BranchId,
+  ChildAgentRegistryEntry,
   ExtensionContext,
   RequestId,
   RunSpecSchema,
@@ -30,9 +31,11 @@ const ChildObservation = Schema.TaggedUnion({
 
 export const StartChildAgent = tool({
   id: "agent-start",
-  description: "Start one durable child and return its handle without waiting for completion.",
+  description:
+    "Start one durable child and return its handle. The result never returns here: it arrives later as a message on this branch.",
   promptGuidelines: [
-    "Keep the returned requestId. Use agent-child to inspect, wait, or cancel that start.",
+    "Keep the returned requestId. Use agent-child to inspect or cancel that start, and agent-children to list every start on this branch.",
+    "Do not poll for completion. When the child finishes, a message on this branch reports its requestId, session, outcome, and output preview.",
     "A new call starts new work. Do not repeat a start to recover an unknown outcome.",
     "For a recovered Unknown agent-start operation, use its toolCallId as the requestId for agent-child inspect or cancel.",
   ],
@@ -62,46 +65,21 @@ export const StartChildAgent = tool({
 export const ControlChildAgent = tool({
   id: "agent-child",
   description:
-    "Inspect, wait for, or cancel an owned child start. Pending is not proof that work is running; completed is a turn receipt, not task success.",
+    "Inspect or cancel an owned child start. Pending is not proof that work is running; completed is a turn receipt, not task success.",
   promptGuidelines: [
+    "Completion arrives as a message on this branch; inspect is for a point-in-time check, not a wait.",
     "After completion, use read_session with the returned sessionId and branchId to read the child output. Omit goal to avoid another model call.",
     "Read the output before treating completion as task success. Interrupted or failed turns can have partial output.",
   ],
   params: Schema.Struct({
-    action: Schema.Literals(["inspect", "wait", "cancel"]),
+    action: Schema.Literals(["inspect", "cancel"]),
     requestId: RequestId,
-    waitMs: Schema.optionalKey(
-      Schema.Int.check(
-        Schema.isGreaterThanOrEqualTo(1),
-        Schema.isLessThanOrEqualTo(30000),
-      ).annotate({ description: "Required for wait: how long to wait for completion" }),
-    ),
   }),
   output: ChildObservation,
   execute: Effect.fn("ControlChildAgent.execute")(function* (params) {
     const ctx = yield* ExtensionContext
     if (params.action === "cancel") yield* ctx.Agent.cancel({ requestId: params.requestId })
-    let observation
-    if (params.action === "wait") {
-      const waitMs = Option.fromUndefinedOr(params.waitMs)
-      if (Option.isNone(waitMs))
-        return yield* new AgentRunError({ message: "agent-child wait requires waitMs" })
-      observation = yield* ctx.Agent.wait({
-        requestId: params.requestId,
-        waitMs: waitMs.value,
-      }).pipe(
-        Effect.catchTag("TimeoutError", (cause) =>
-          Effect.fail(
-            new AgentRunError({
-              message: "Child wait timed out; the child was not cancelled",
-              cause,
-            }),
-          ),
-        ),
-      )
-    } else {
-      observation = yield* ctx.Agent.inspect({ requestId: params.requestId })
-    }
+    const observation = yield* ctx.Agent.inspect({ requestId: params.requestId })
     const handle = {
       requestId: params.requestId,
       sessionId: observation.sessionId,
@@ -121,8 +99,32 @@ export const ControlChildAgent = tool({
   }),
 })
 
+export const ListChildAgents = tool({
+  id: "agent-children",
+  description:
+    "List every child start owned by this branch from the host registry. The registry survives restarts.",
+  promptGuidelines: [
+    "Use this after a restart or compaction to recover child handles you no longer hold.",
+  ],
+  params: Schema.Struct({
+    completed: Schema.optionalKey(
+      Schema.Boolean.annotate({
+        description: "Keep only finished (true) or unfinished (false) children",
+      }),
+    ),
+  }),
+  output: Schema.Array(ChildAgentRegistryEntry),
+  execute: Effect.fn("ListChildAgents.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
+    const children = yield* ctx.Agent.list()
+    const wanted = Option.fromUndefinedOr(params.completed)
+    if (Option.isNone(wanted)) return children
+    return children.filter((child) => child.completed === wanted.value)
+  }),
+})
+
 /** Durable child admission and control for cells. Registered as a builtin. */
 export const ChildAgentExtension = defineExtension({
   id: "@gent/child-agents",
-  tools: [StartChildAgent, ControlChildAgent],
+  tools: [StartChildAgent, ControlChildAgent, ListChildAgents],
 })

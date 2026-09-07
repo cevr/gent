@@ -1,4 +1,5 @@
 import { expect, it } from "effect-bun-test"
+import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { Effect, Fiber, Layer, Option, Predicate, Ref, Schema, Stream } from "effect"
 import { Gent } from "@gent/sdk"
 import {
@@ -73,7 +74,12 @@ const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
   }
   expect(Option.isNone((yield* runner.inspect(handle)).completion)).toBe(true)
   yield* runner.cancel(handle)
-  const cancelled = yield* runner.wait({ ...handle, waitMs: 2000 })
+  const cancelled = yield* waitFor(
+    runner.inspect(handle),
+    (observed) => Option.isSome(observed.completion),
+    2000,
+    "cancelled child completion",
+  )
   expect(Option.getOrUndefined(cancelled.completion)?.interrupted).toBe(true)
 })
 

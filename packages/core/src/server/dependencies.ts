@@ -23,6 +23,7 @@ import { ProviderAuth } from "../providers/provider-auth.js"
 import { DebugSlowLanguageModelDelayMs, LanguageModelLayers } from "../test-utils/language-model.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InProcessRunner } from "../runtime/agent/agent-runner.js"
+import { ChildCompletionDelivery } from "../runtime/agent/child-completion.js"
 import { AgentLoopLiveActor } from "../runtime/agent/agent-loop.actor.js"
 import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-governance.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
@@ -357,7 +358,7 @@ const makeAgentRuntimeLayer = <A, E, R>(
         const runnerConfig: AgentRunnerConfig = {
           baseSections: baseSectionsSeed.value,
         }
-        return InProcessRunner(runnerConfig)
+        return InProcessRunner(runnerConfig).pipe(Layer.provideMerge(ChildCompletionDelivery.Live))
       }),
     ),
     allWithRuntime,

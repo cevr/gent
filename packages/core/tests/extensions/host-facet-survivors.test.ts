@@ -90,7 +90,7 @@ const baseDeps = (overrides: {
     run: die("agentRunner.run"),
     start: die("agentRunner.start"),
     inspect: die("agentRunner.inspect"),
-    wait: die("agentRunner.wait"),
+    list: die("agentRunner.list"),
     cancel: die("agentRunner.cancel"),
   },
   sessionMutations: {

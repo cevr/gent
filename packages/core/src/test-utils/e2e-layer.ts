@@ -172,7 +172,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         AgentRunnerService.of({
           start: () => Effect.die("AgentRunner.start not configured in test"),
           inspect: () => Effect.die("AgentRunner.inspect not configured in test"),
-          wait: () => Effect.die("AgentRunner.wait not configured in test"),
+          list: () => Effect.die("AgentRunner.list not configured in test"),
           cancel: () => Effect.die("AgentRunner.cancel not configured in test"),
           ...(config.subagentRunner ?? defaultSubagentRunner),
         }),
