@@ -195,14 +195,6 @@ describe("formatToolInput", () => {
     expect(formatToolInput("delegate", { agent: "explore", todo: "find the bug" })).toBe(
       "explore:find the bug",
     )
-    expect(
-      formatToolInput("delegate", {
-        todos: [
-          { agent: "a", todo: "x" },
-          { agent: "b", todo: "y" },
-        ],
-      }),
-    ).toBe("2 parallel")
   })
 
   test("read supports file_path field", () => {

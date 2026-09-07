@@ -124,11 +124,6 @@ function summarizeScopedPattern(
 function summarizeDelegate(args: Schema.JsonObject): string {
   const agent = getStringArg(args, "agent")
   const todo = getStringArg(args, "todo")
-  const todos = Option.liftPredicate(args["todos"], Array.isArray)
-  const chain = Option.liftPredicate(args["chain"], Array.isArray)
-
-  if (Option.isSome(todos)) return `${todos.value.length} parallel`
-  if (Option.isSome(chain)) return `${chain.value.length} chain`
   if (agent.length === 0) return ""
   if (todo.length === 0) return agent
   return `${agent}:${truncateText(todo, 40)}`

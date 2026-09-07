@@ -151,27 +151,10 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("repo", {})).toBe("")
   })
 
-  test("delegate: single/parallel/chain modes", () => {
+  test("delegate: agent and todo", () => {
     expect(toolArgSummary("delegate", { agent: "explore", todo: "find the bug" })).toBe(
       "explore:find the bug",
     )
-    expect(
-      toolArgSummary("delegate", {
-        todos: [
-          { agent: "a", todo: "x" },
-          { agent: "b", todo: "y" },
-        ],
-      }),
-    ).toBe("2 parallel")
-    expect(
-      toolArgSummary("delegate", {
-        chain: [
-          { agent: "a", todo: "x" },
-          { agent: "b", todo: "y" },
-          { agent: "c", todo: "z" },
-        ],
-      }),
-    ).toBe("3 chain")
     expect(toolArgSummary("delegate", { agent: "explore" })).toBe("explore")
   })
 

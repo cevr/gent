@@ -110,4 +110,68 @@ describe.skipIf(process.platform !== "darwin")("shipped model surface", () => {
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
     18000,
   )
+
+  it.scopedLive(
+    "composes concurrent host calls inside one cell",
+    () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const artifact = yield* buildCellExecutable
+        const directory = yield* fs.makeTempDirectoryScoped()
+        const left = path.join(directory, "left.txt")
+        const right = path.join(directory, "right.txt")
+        yield* fs.writeFileString(left, "left half")
+        yield* fs.writeFileString(right, "right half")
+        // Parallel delegation is a cell recipe, not a tool mode.
+        const code = [
+          `const [a, b] = await Promise.all([`,
+          `  tools.call('read', {path: ${encodeJson(left)}}),`,
+          `  tools.call('read', {path: ${encodeJson(right)}}),`,
+          `]); a.content + ' | ' + b.content`,
+        ].join("\n")
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          cellOnly(toolCallStep("cell", { code })),
+          textStep("joined"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          providerLayer,
+          extraLayers: [
+            Layer.succeed(
+              GentPlatform,
+              GentPlatform.of({ ...platform, cellWorkerPath: Effect.succeed(artifact.binaryPath) }),
+            ),
+          ],
+        })
+        yield* client.message.send({ sessionId, branchId, content: "read both" })
+        const messages = yield* waitFor(
+          client.message.list({ branchId }),
+          (list) =>
+            list.some(
+              (message) =>
+                message.role === "assistant" && messageSingleText(message.parts) === "joined",
+            ),
+          10_000,
+          "assistant reply joined",
+        )
+        const results = messages
+          .flatMap((message) => message.parts)
+          .filter((part): part is Prompt.ToolResultPart => part.type === "tool-result")
+        expect(results).toHaveLength(1)
+        expect(results[0]).toMatchObject({
+          isFailure: false,
+          result: {
+            display: "1\tleft half | 1\tright half",
+            operations: [
+              { tool: "read", outcome: "succeeded" },
+              { tool: "read", outcome: "succeeded" },
+            ],
+          },
+        })
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
+    18000,
+  )
 })
