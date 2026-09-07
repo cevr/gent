@@ -113,8 +113,9 @@ Gates: `bun run gate` exit 0 at `e710ac3f`, `308b5b47`, and `d3128b47`.
 
 Open: the OpenAI OAuth token needs a refresh before OpenAI-backed agents work
 in this environment. The TUI drops text typed within about a second of a
-branch switch (seen twice; not reproduced in a test). The Loom `@cvr/bun-cell`
-extraction still lags Gent's evaluator.
+branch switch (seen twice; not reproduced in a test). The evaluator stays inline
+in Gent by the user's decision; the Loom `@cvr/bun-cell` extraction Rift is
+removed and `plans/shared-bun-cell-proof.md` is deleted.
 
 ## One interpreter and the dead-code sweep
 

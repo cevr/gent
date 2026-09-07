@@ -113,14 +113,13 @@ Updated by Claude on 2026-09-07 (late night) at Rift HEAD `d3128b47`:
   refreshed. Environment, not product.
 - The TUI dropped text typed within about a second of a branch switch, twice.
   Not reproduced in a test.
-- Shared evaluator: the `@cvr/bun-cell` extraction in the Loom Rift lags
-  Gent's evaluator (snapshot, catalog). Either port those two features into the
-  package and release it with the pending Changeset, or drop the extraction.
-  Gent keeps its own evaluator until a published version exists.
+- Shared evaluator: decided 2026-09-07. The user chose to keep the evaluator
+  inline in Gent (`packages/core/src/runtime/code-cell/`). The `@cvr/bun-cell`
+  extraction Rift in Loom was removed with its uncommitted package and
+  Changeset; the warm Loom checkout was never edited. `plans/shared-bun-cell-proof.md`
+  is deleted.
 
 ## Open decisions for the user
 
-1. `@cvr/bun-cell`: release with the pending Changeset after porting snapshot
-   and catalog, or abandon the extraction.
-2. Source-mode durable tool identity is decided: `ProcessLocal` bindings resume
+1. Source-mode durable tool identity is decided: `ProcessLocal` bindings resume
    inside the live generation only; compiled hosts keep durable identities.

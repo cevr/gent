@@ -93,6 +93,9 @@ decision, stop that cutover and request it; continue independent reductions.
 Exit: executable evidence; small evaluate/reset/close interface; no Loom daemon
 dependency; no second lifecycle owner; Pi consumer still works if shared code moves.
 
+Decision (2026-09-07): the evaluator is inlined in Gent and stays there. No
+shared `@cvr/bun-cell` package; the Loom extraction was dropped unreleased.
+
 ## Stage 3 — Gent host bridge and recursive work
 
 Bind a lazy kernel to the existing branch/session execution owner. Use typed
