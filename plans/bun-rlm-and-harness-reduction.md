@@ -175,18 +175,21 @@ Evidence as of `dee60987` (2026-09-07), recorded in `plans/bun-rlm-progress.md`:
       (`f7e45168` reconciliation; `cell-recovery.test.ts`).
 - [x] Old executor and superseded workflow code are actually removed
       (`267eab59`, `85d3cb14`).
-- [ ] Gent runtime LOC decreases; combined Gent/Loom/library runtime LOC also
+- [x] Gent runtime LOC decreases; combined Gent/Loom/library runtime LOC also
       decreases for the replaced scope. Report tests/data separately. If new
       safety behavior exceeds savings, record the tradeoff and obtain a revised
-      scope decision rather than claim completion. **Not met**: runtime is
-      87,705 lines against the 86,965 baseline (+740, down from +1,503 after
-      `a815f6b7`, `33a6de71`, `30f0f9e1`, `9f8e3d0a`). The additions are the prior-art
-      contracts above, not moved code. Tests are 74,688 (+3,186). Loom is
-      unchanged. A scope decision is required.
+      scope decision rather than claim completion. **Met at `d3128b47`**:
+      runtime is 79,961 lines at 418 files against the 86,965 baseline
+      (-7,004). Tests are 69,689 (-1,813). The user's scope decision removed
+      the todo, auto loop, memory, and ACP agents extensions (`d26c5bba`,
+      `bcce24f4`, `9791ca64`, `d77f1894`); nothing counted is moved code. Loom
+      is unchanged.
 - [x] Owned library changes are released properly where required; no local
       links (no owned-library edits were needed).
 - [x] FX UI, durable approvals, replay, cancellation, and live replacement pass
-      (mock-provider gate and E2E; Herdr live-model runs not authorized).
+      (mock-provider gate and E2E, and the Herdr live-model checks with Claude
+      Opus 4.6 recorded in `plans/bun-rlm-progress.md`: cancellation,
+      delegation, approval, branch switch, handoff, worker crash, host restart).
 - [x] Final gate/E2E pass; documents and examples match shipped behavior.
 
 Deliver 3–5 reviewable change groups. Validate each before proceeding. Keep code

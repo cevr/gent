@@ -88,58 +88,39 @@ and TUI both route through it. Helper thread added the config field.
 
 ## Current state at handoff
 
-Updated by Claude on 2026-09-07 (night) at Rift HEAD `9f8e3d0a`:
+Updated by Claude on 2026-09-07 (late night) at Rift HEAD `d3128b47`:
 
-- Inherited work is committed in the Rift. Stage 4 cutover landed: `@gent/cell`
-  is a core builtin composed at the server root, the Executor is deleted, and
-  source runs use `ProcessLocal` bindings (`267eab59`).
-- Stage 4 remainder and Stage 5 landed as `b58496ec`, `000c4003`, `6f89af4e`,
-  `c901616d`, `5fb89a76`. The user chose to remove the fixed workflow tools
-  (`85d3cb14`).
-- The Prime-model and OpenCode v2 contracts from the plan's "Prior-art
-  position" landed as eight commits: `4d31eddf` (namespace persists across
-  worker restarts), `c30f2314` (child completion as a parent message; `wait`
-  removed), `2c531638` (`assistantMessageId` on tool events; bounded model
-  content), `06b2dca2` (durable follow-up admission with an explicit wake; fixes
-  the warm-branch `queueFollowUp` hang), `5b0dd465` (steering at step
-  boundaries), `f7e45168` (orphan projection reconciliation, continuation
-  after partial output, retry jitter), `f1a46c39` (catalog as instruction
-  section plus kernel-local `tools.search`/`tools.describe`; `tool-catalog`
-  deleted), `dee60987` (`StreamSynchronized` marker between replay and live).
-  Receipts: top section of `plans/bun-rlm-progress.md`.
-- After the receipts commit `71cf164a`: `a815f6b7` (three unreferenced
-  files), `33a6de71` (ACP code mode runs through the branch cell; the
-  `new Function` interpreter is gone), `30f0f9e1` (31 unreferenced exports), `9f8e3d0a` (nine barrel-only
-  exports).
-- Gates: `bun run gate` exit 0 after every commit. `bun run test:e2e` exit 0
-  (36 tests, 8 files) after the marker contract was stated in
-  `packages/e2e/tests/event-stream.test.ts`.
-- Runtime lines: 87,705 across 450 files (baseline 86,965, +740). Tests:
-  74,688 across 293 files. The method reproduces the earlier 87,219 receipt.
+- Everything above through `9f8e3d0a` stands. After the receipts commit
+  `b48572dd`, the user chose the minimal scope ("memory, auto, todo, acp"):
+  `d26c5bba` (todo), `bcce24f4` (auto loop), `9791ca64` (memory), `d77f1894`
+  (ACP agents and its three dependencies), `ddc138b4` (docs).
+- The Herdr live-model checks ran with Claude Opus 4.6 (user authorized the
+  paid runs). They found three defects, fixed as `e710ac3f` (allow lists
+  dropped the cell surface), `308b5b47` (deadline counted host waits;
+  suspension did not mark recovery), and `d3128b47` (confirmed handoff created
+  no session). Receipts: top section of `plans/bun-rlm-progress.md`.
+- Gates: `bun run gate` exit 0 at each of the last three commits.
+  `bun run test:e2e` exit 0 at `d3128b47`.
+- Runtime lines: 79,961 across 418 files (baseline 86,965, -7,004). Tests:
+  69,689 across 267 files. The plan's LOC rule is met.
+- The user authorized "Push and merge to main". The push and merge state is
+  recorded in the progress log's final section.
 
 ## Remaining work
 
-- Herdr workflow checks against a live model (plan Stage 5 list). Not run:
-  paid, no authority. Only the repo smoke ran.
+- OpenAI OAuth token in `~/.gent/auth` is expired (401 on refresh);
+  OpenAI-backed agents (`explore`, `reviewer` default model) fail until it is
+  refreshed. Environment, not product.
+- The TUI dropped text typed within about a second of a branch switch, twice.
+  Not reproduced in a test.
 - Shared evaluator: the `@cvr/bun-cell` extraction in the Loom Rift lags
   Gent's evaluator (snapshot, catalog). Either port those two features into the
   package and release it with the pending Changeset, or drop the extraction.
   Gent keeps its own evaluator until a published version exists.
-- Push, merge, or release need authority. Everything is local on the Rift.
 
 ## Open decisions for the user
 
-1. **Runtime size (blocks completion).** The plan's completion rule requires a
-   net runtime reduction, or a recorded tradeoff and a revised scope decision.
-   Runtime is +740 lines over the baseline after every provable dead-code
-   deletion and the ACP interpreter consolidation. The additions are the
-   prior-art safety and delivery contracts, not moved code. Options: accept
-   the tradeoff and close the plan; name product features to drop (the
-   trim-candidate ranks 1-5 are done; rank 6, profile defaults, does not
-   delete code); or drop specific contracts.
-2. Herdr live-model runs: authorize the paid runs, or accept the mock-provider
-   gate and E2E as the evidence.
-3. `@cvr/bun-cell`: release with the pending Changeset after porting snapshot
+1. `@cvr/bun-cell`: release with the pending Changeset after porting snapshot
    and catalog, or abandon the extraction.
-4. Source-mode durable tool identity is decided: `ProcessLocal` bindings resume
+2. Source-mode durable tool identity is decided: `ProcessLocal` bindings resume
    inside the live generation only; compiled hosts keep durable identities.

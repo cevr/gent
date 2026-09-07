@@ -1,5 +1,121 @@
 # Bun RLM progress
 
+## Minimal harness, live-model checks, and three fixes they found
+
+Eight commits after `b48572dd`, all local on the Rift until the push recorded
+in the handoff. Line counts use the baseline method (`git ls-tree` at each
+commit; runtime is TS/TSX under `src` outside `tests`, tests are TS/TSX under
+`tests`).
+
+| Commit     | Unit                                                        | Runtime lines | Test lines |
+| ---------- | ----------------------------------------------------------- | ------------: | ---------: |
+| `d26c5bba` | Todo extension removed                                      |        -2,137 |     -1,497 |
+| `bcce24f4` | Auto loop extension removed                                 |        -1,359 |       -919 |
+| `9791ca64` | Memory extension removed                                    |        -1,060 |       -676 |
+| `d77f1894` | ACP agents extension removed with its three dependencies    |        -3,250 |     -2,120 |
+| `ddc138b4` | Docs drop the todo, auto, memory, and ACP sections          |             0 |          0 |
+| `e710ac3f` | Cell surface kept under agent allow lists                   |            +5 |        +75 |
+| `308b5b47` | Cell deadline bounds compute only; restore after suspension |           +22 |        +79 |
+| `d3128b47` | Confirmed handoff opens the linked session                  |           +35 |        +59 |
+
+Runtime is 79,961 lines across 418 files at `d3128b47` (baseline 86,965 at
+445 files: -7,004). Tests are 69,689 lines across 267 files (baseline
+71,502: -1,813). The removals are product scope the user chose ("make it very
+minimal: memory, auto, todo, acp"), not moved code. The three fixes add 62
+runtime lines for behavior the live checks proved missing.
+
+Scope decision (`d26c5bba`..`ddc138b4`). The user chose to drop the todo,
+auto loop, memory, and ACP agents extensions. Each removal is one commit that
+deletes the extension, its TUI renderers and widgets, its tests, its rows in
+`ARCHITECTURE.md`, `CLAUDE.md`, `docs/extensions.md`, and `apps/tui/AGENTS.md`,
+and its entries in the core test chunk list and the suppression inventory.
+`@anthropic-ai/claude-agent-sdk`, `@modelcontextprotocol/sdk`, and `zod` leave
+`packages/extensions/package.json`. `bun run gate` exit 0 after each commit.
+
+Live-model checks (Herdr pane, `gent` binary from `apps/tui/bin`, Claude Opus
+4.6, fixture repo in the scratchpad). Each item names the check, the result,
+and the evidence.
+
+- Cross-turn namespace: `rows` set in one turn reads back as `alpha+beta` in
+  the next. Pass.
+- File edit through a cell: `mul` added to `src/math.ts`. Pass.
+- Cancellation: Ctrl+C during `sleep 20` yields "Cell cancelled. Its effects
+  may have occurred; its source was not replayed." and the "Interrupted" turn
+  end. Pass.
+- Long host command: `sleep 45` failed with "Cell deadline exceeded; working
+  state was lost" twice. Fail, fixed in `308b5b47` (below).
+- Delegation: the `explore` and `reviewer` children ended with "model stream
+  failed". Headless reproduction: `OpenAiClient.createResponseStream:
+TransportError: Failed to refresh ChatGPT OAuth credentials: Token refresh
+failed: 401`. Environment, not product: the OpenAI OAuth token in
+  `~/.gent/auth` is expired and both agents use OpenAI models. The `architect`
+  child (Anthropic) failed with "Invalid request. Schema is too complex."
+  Fail, fixed in `e710ac3f`; after the fix the architect child answered
+  `add, greet, mul` through its own cell. Pass.
+- Approval: `git push origin main` raised the bash guardrail prompt. "No"
+  returned "Command blocked: git push". "Yes" after a 40-second wait ran the
+  command (no remote). The sibling cell in the same step failed with
+  "recovery-required" before `308b5b47`; after it, `rows` read back as
+  `alpha+beta` in the next turn. Pass after the fix.
+- Branch switch: `/branch` created a branch; the palette "Branches" group
+  switched to it. `typeof rows` is `undefined` on the new branch and
+  `alpha+beta` again after switching back. Branch-owned namespaces. Pass.
+- Handoff: `/handoff` produced the summary prompt. "Yes" returned `handoff:
+true` and nothing created a session. Fail, fixed in `d3128b47`; after the
+  fix the TUI opened a session linked to the parent (`parent_session_id` set
+  in `sessions`), seeded with the summary, and the model replied there. Pass.
+- Worker crash: `tools.call.constructor('process.exit(7)')()` returned
+  `CellKernelError` reason `process` with `stateLost: true`; the next cell
+  restored all eight bindings and reported them. `process` itself is not
+  defined in the sandbox. Pass.
+- Host restart: quit, `gent -c`, branch picker, then `marker` and
+  `rows.join('+')` read back with a restore report. Pass.
+
+Allow lists (`e710ac3f`). `filterToolsForAgent` dropped `cell` whenever an
+agent's `allowedTools` omitted it, so the model got the raw host tools. The
+cell is the surface: the filter keeps `cell` and the allow list scopes the
+host tools inside it; `deniedTools` still removes entries from the catalog.
+Evidence: `packages/core/tests/extensions/cell-default-surface.test.ts`
+("allowedTools scopes host tools inside the cell instead of replacing the
+surface") routes a turn through a `scoped` agent that allows `read` only,
+asserts the advertised surface is `["cell"]`, and reads
+`1\tscoped surface | grep unreachable`. The test timed out against the
+unfixed registry. `cell-lifetime.test.ts` now asserts the child's surface is
+`cell` with `**read_session**` in its catalog and `**agent-start**` absent.
+`memory_search` leaves the shipped allow lists.
+
+Deadline and suspension (`308b5b47`). `CellKernel.evaluate` wrapped the whole
+evaluation in `Effect.timeoutOrElse`, so approval waits and long host
+operations counted against the 30-second compute deadline. Two latches track
+pending host operations; a watchdog waits while one is pending and restarts
+the deadline when the worker gets its reply. `CellExecution.run` now marks
+`recoveryPending` when a cell is suspended, so the next cell restores the
+saved namespace instead of failing with "recovery-required". Evidence:
+`cell-process.test.ts` ("pauses the deadline while a host operation is
+pending": a 900 ms host call completes under a 400 ms deadline, and a busy
+loop after it still times out) and `cell-execution.test.ts` ("restores the
+saved namespace in the cell after a suspended one without an explicit
+reset"). Both failed before the fix ("Cell deadline exceeded" and
+`recovery-required`).
+
+Handoff (`d3128b47`). The handoff tool's confirmed result had no consumer
+since `3055a060` replaced the handoff handler with the generic interaction
+path. `HandoffRenderer` now calls `openHandoffSession` on "Yes", which creates
+a session with `parentSessionId`, `parentBranchId`, and `initialPrompt` set to
+the summary, then navigates to it. `/new` and the handoff share
+`createSessionWith`. Evidence: `apps/tui/tests/components/interaction-renderers/handoff.test.tsx`
+("confirming opens a linked session seeded with the summary") presses Enter and
+reads the `session.create` input; it fails when the call is removed.
+
+Gates: `bun run gate` exit 0 at `e710ac3f`, `308b5b47`, and `d3128b47`.
+`bun run test:e2e` exit 0 at `d3128b47` (36 tests in 8 files for `@gent/e2e`,
+26 tests in 6 files for `@gent/tui`).
+
+Open: the OpenAI OAuth token needs a refresh before OpenAI-backed agents work
+in this environment. The TUI drops text typed within about a second of a
+branch switch (seen twice; not reproduced in a test). The Loom `@cvr/bun-cell`
+extraction still lags Gent's evaluator.
+
 ## One interpreter and the dead-code sweep
 
 Four commits after `71cf164a`, all local on the Rift (not pushed, not merged):
