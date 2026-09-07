@@ -33,7 +33,7 @@ import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { SequenceRecorder } from "@gent/core-internal/test-utils"
 import { emptyQueueSnapshot } from "@gent/core-internal/domain/queue"
 import { AgentName } from "@gent/core-internal/domain/agent"
-import { BranchId, RequestId, SessionId } from "@gent/core-internal/domain/ids"
+import { BranchId, MessageId, RequestId, SessionId } from "@gent/core-internal/domain/ids"
 import { assistantMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
 import {
   makeAgentLoopService,
@@ -718,6 +718,112 @@ describe("streaming", () => {
       )
     }),
   )
+  it.live(
+    "persists a continuation instruction after partial output and finishes the same turn",
+    () =>
+      Effect.gen(function* () {
+        const eventsRef = yield* Ref.make<AgentEvent[]>([])
+        const latestUserTexts: string[] = []
+        let streamCalls = 0
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          latestUserTexts.push(
+            [...Prompt.make(options.prompt).content]
+              .reverse()
+              .find((message) => message.role === "user")
+              ?.content.filter((part): part is Prompt.TextPart => part.type === "text")
+              .map((part) => part.text)
+              .join("\n") ?? "",
+          )
+          streamCalls += 1
+          if (streamCalls === 1) {
+            return Effect.succeed(
+              Stream.concat(
+                Stream.fromIterable([textDeltaPart("partial ")]),
+                Stream.fail(
+                  AiError.make({
+                    module: "Test",
+                    method: "streamText",
+                    reason: new AiError.UnknownError({ description: "connection reset" }),
+                  }),
+                ),
+              ),
+            )
+          }
+          return Effect.succeed(
+            Stream.fromIterable([textDeltaPart("rest"), finishPart({ finishReason: "stop" })]),
+          )
+        })
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            const messageStorage = yield* MessageStorage
+            const message = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "write it")
+            yield* runAgentLoop(agentLoop, message)
+            expect(streamCalls).toBe(2)
+            expect(latestUserTexts[1]).toContain("Continue from where you stopped")
+            const messages = yield* messageStorage.listMessages(BranchId.make("b1"))
+            expect(
+              messages
+                .filter((item) => item.role === "assistant")
+                .map((item) => item.parts.find((part) => part.type === "text")?.text),
+            ).toEqual(["partial ", "rest"])
+            const continuation = messages.find(
+              (item) => item.metadata?.customType === "continuation",
+            )
+            expect(continuation).toMatchObject({
+              id: `${message.id}:continuation:1`,
+              role: "user",
+              metadata: { customType: "continuation", details: { step: 1 } },
+            })
+            const events = yield* Ref.get(eventsRef)
+            const completed = events.filter((event) => event._tag === "TurnCompleted")
+            expect(completed).toHaveLength(1)
+            expect(completed[0]).not.toMatchObject({ streamFailed: true })
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef))),
+        )
+      }),
+  )
+  it.live("bounds continuation instructions per turn and then reports the stream failure", () =>
+    Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      let streamCalls = 0
+      const providerLayer = LanguageModelLayers.testStream(() => {
+        streamCalls += 1
+        return Effect.succeed(
+          Stream.concat(
+            Stream.fromIterable([textDeltaPart(`part ${streamCalls}`)]),
+            Stream.fail(
+              AiError.make({
+                module: "Test",
+                method: "streamText",
+                reason: new AiError.UnknownError({ description: "connection reset" }),
+              }),
+            ),
+          ),
+        )
+      })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* makeAgentLoopService
+          const messageStorage = yield* MessageStorage
+          const message = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "write it")
+          yield* runAgentLoop(agentLoop, message)
+          // Two continuations, then the third partial failure ends the turn.
+          expect(streamCalls).toBe(3)
+          const messages = yield* messageStorage.listMessages(BranchId.make("b1"))
+          expect(
+            messages.filter((item) => item.metadata?.customType === "continuation"),
+          ).toHaveLength(2)
+          const events = yield* Ref.get(eventsRef)
+          expect(events.filter((event) => event._tag === "TurnCompleted")).toMatchObject([
+            { streamFailed: true },
+          ])
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef))),
+      )
+    }),
+  )
   it.live("retries retryable provider stream-consumption failures before output", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
@@ -850,44 +956,56 @@ describe("streaming", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }),
   )
-  it.live("does not retry retryable provider stream failures after partial output", () =>
-    Effect.gen(function* () {
-      const eventsRef = yield* Ref.make<AgentEvent[]>([])
-      let streamCalls = 0
-      const providerLayer = LanguageModelLayers.testStream(() =>
-        Effect.sync(() => {
-          streamCalls += 1
-          if (streamCalls === 1) {
-            return Stream.concat(
-              Stream.fromIterable([textDeltaPart("partial answer")]),
-              Stream.fail(retryableStreamError()),
-            )
-          }
-          return Stream.fromIterable([
-            textDeltaPart("duplicate answer"),
-            finishPart({ finishReason: "stop" }),
-          ])
-        }),
-      )
-      yield* Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        const messageStorage = yield* MessageStorage
-        const message = makeMessage(
-          SessionId.make("stream-no-retry-session"),
-          BranchId.make("stream-no-retry-branch"),
-          "retry",
+  it.live(
+    "does not blindly retry after partial output; a durable continuation follows instead",
+    () =>
+      Effect.gen(function* () {
+        const eventsRef = yield* Ref.make<AgentEvent[]>([])
+        let streamCalls = 0
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.sync(() => {
+            streamCalls += 1
+            if (streamCalls === 1) {
+              return Stream.concat(
+                Stream.fromIterable([textDeltaPart("partial answer")]),
+                Stream.fail(retryableStreamError()),
+              )
+            }
+            return Stream.fromIterable([
+              textDeltaPart("duplicate answer"),
+              finishPart({ finishReason: "stop" }),
+            ])
+          }),
         )
-        yield* runAgentLoop(agentLoop, message)
-        const events = yield* Ref.get(eventsRef)
-        const tags = events.map((event) => event._tag)
-        expect(streamCalls).toBe(1)
-        expect(tags).not.toContain("ProviderRetrying")
-        expect(tags).toContain("ErrorOccurred")
-        const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
-        expect(assistant?.parts).toEqual([Prompt.textPart({ text: "partial answer" })])
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
-    }),
+        yield* Effect.gen(function* () {
+          const agentLoop = yield* makeAgentLoopService
+          const messageStorage = yield* MessageStorage
+          const message = makeMessage(
+            SessionId.make("stream-no-retry-session"),
+            BranchId.make("stream-no-retry-branch"),
+            "retry",
+          )
+          yield* runAgentLoop(agentLoop, message)
+          const events = yield* Ref.get(eventsRef)
+          const tags = events.map((event) => event._tag)
+          // The second call is a continuation step with the partial output kept,
+          // not a provider retry of the same prompt.
+          expect(streamCalls).toBe(2)
+          expect(tags).not.toContain("ProviderRetrying")
+          expect(tags).toContain("ErrorOccurred")
+          const assistant = yield* messageStorage.getMessage(
+            assistantMessageIdForTurn(message.id, 1),
+          )
+          expect(assistant?.parts).toEqual([Prompt.textPart({ text: "partial answer" })])
+          const continuation = yield* messageStorage.getMessage(
+            MessageId.make(`${message.id}:continuation:1`),
+          )
+          expect(continuation?.metadata?.customType).toBe("continuation")
+          const second = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 2))
+          expect(second?.parts).toEqual([Prompt.textPart({ text: "duplicate answer" })])
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
+      }),
   )
   it.live("native response error parts fail the stream and preserve partial output", () =>
     Effect.gen(function* () {

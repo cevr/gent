@@ -190,6 +190,52 @@ export const persistMessageReceived = Effect.fn("TurnHelpers.persistMessageRecei
   },
 )
 
+/**
+ * Close stale running tool projections. A stored result without a terminal
+ * tool event (a recovered cell, a replay failure, a host that died mid-call)
+ * gets its terminal event here, before any new model work reads the transcript.
+ */
+export const reconcileToolProjections = Effect.fn("TurnHelpers.reconcileToolProjections")(
+  function* (params: {
+    sessionId: SessionId
+    branchId: BranchId
+    assistantMessageId: MessageId
+    parts: ReadonlyArray<Prompt.ToolResultPart>
+  }) {
+    if (params.parts.length === 0) return
+    const eventStorage = yield* EventStorage
+    const eventPublisher = yield* EventPublisher
+    const events = yield* eventStorage.listEvents({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+    })
+    const closed = new Set(
+      events.flatMap((envelope) => {
+        if (!isToolTerminalEvent(envelope.event)) return []
+        return [envelope.event.toolCallId]
+      }),
+    )
+    for (const part of params.parts) {
+      const toolCallId = ToolCallId.make(part.id)
+      if (closed.has(toolCallId)) continue
+      const fields = {
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        toolCallId,
+        toolName: part.name,
+        summary: summarizeToolOutput(part),
+        output: stringifyOutput(part.result),
+        resultJson: encodeToolOutput(part.result),
+        assistantMessageId: params.assistantMessageId,
+      }
+      let terminal: AgentEvent = ToolCallSucceeded.make(fields)
+      if (part.isFailure) terminal = ToolCallFailed.make(fields)
+      yield* eventPublisher.publish(terminal)
+      closed.add(toolCallId)
+    }
+  },
+)
+
 export const recordToolResult = Effect.fn("TurnHelpers.recordToolResult")(function* (params: {
   toolResultMessageId: MessageId
   assistantMessageId?: MessageId

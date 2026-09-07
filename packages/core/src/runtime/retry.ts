@@ -1,4 +1,4 @@
-import { Cause, Clock, Duration, Effect, Option, Predicate, Schedule, Schema } from "effect"
+import { Cause, Clock, Duration, Effect, Option, Predicate, Random, Schedule, Schema } from "effect"
 import { ProviderError } from "../domain/provider-error.js"
 import type { ProviderAuthError } from "../domain/driver.js"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -113,11 +113,16 @@ export const getRetryAfter = (error: unknown, nowMs = 0): number | undefined =>
 // unit coverage flows through `retryProviderCall({ onRetry })` reporting the
 // computed delay (see retry-progress test).
 
-const getRetryDelay = (
+/** Upper bound of the random spread added to a backoff delay, as a fraction of it. */
+export const RETRY_JITTER_FRACTION = 0.25
+
+export const getRetryDelay = (
   attempt: number,
   error: ProviderError,
   nowMs: number,
   config: RetryConfig = DEFAULT_RETRY_CONFIG,
+  /** Uniform sample in [0, 1). Spreads concurrent retries; never exceeds `maxDelay`. */
+  jitter = 0,
 ): number => {
   // Check retry-after header first
   const retryAfter = getRetryAfterOption(error, nowMs)
@@ -125,8 +130,9 @@ const getRetryDelay = (
     return Math.min(retryAfter.value, config["maxDelay"])
   }
 
-  // Exponential backoff
-  const delay = config["initialDelay"] * Math.pow(config["backoffFactor"], attempt)
+  // Exponential backoff with bounded jitter
+  const base = config["initialDelay"] * Math.pow(config["backoffFactor"], attempt)
+  const delay = Math.round(base * (1 + RETRY_JITTER_FRACTION * jitter))
   return Math.min(delay, config["maxDelay"])
 }
 
@@ -176,7 +182,8 @@ export const retryProviderCall =
         const error = meta.input
         return Effect.gen(function* () {
           const nowMs = yield* Clock.currentTimeMillis
-          const delayMs = getRetryDelay(meta.attempt - 1, error, nowMs, config)
+          const jitter = yield* Random.next
+          const delayMs = getRetryDelay(meta.attempt - 1, error, nowMs, config, jitter)
           if (!Predicate.isUndefined(options?.onRetry)) {
             yield* options.onRetry({
               attempt: meta.attempt,

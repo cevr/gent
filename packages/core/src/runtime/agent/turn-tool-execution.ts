@@ -19,7 +19,11 @@ import { ToolRunner, type ResolvedToolCapability } from "./tool-runner"
 import { CurrentToolCall } from "./current-tool-call.js"
 import { makeBindingReplayError, ToolBindingReplayError } from "./tool-binding-replay.js"
 import { captureCurrentToolBinding, resolveReplayToolBinding } from "./tool-binding-resolution.js"
-import { persistAssistantPartsWithBindings, persistToolParts } from "./turn-persistence.js"
+import {
+  persistAssistantPartsWithBindings,
+  persistToolParts,
+  reconcileToolProjections,
+} from "./turn-persistence.js"
 import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import {
   processLocalReplayBindingKey,
@@ -180,19 +184,26 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
       }).pipe(
         Effect.catchIf(Schema.is(ToolBindingReplayError), (error) =>
           Effect.gen(function* () {
+            const parts = [
+              Prompt.toolResultPart({
+                id: params.toolCallId,
+                name: toolCall.name,
+                isFailure: true,
+                providerExecuted: false,
+                result: { error: error.message, reason: error.reason },
+              }),
+            ]
             yield* persistToolParts({
               sessionId: params.sessionId,
               branchId: params.branchId,
               messageId: params.toolResultMessageId,
-              parts: [
-                Prompt.toolResultPart({
-                  id: params.toolCallId,
-                  name: toolCall.name,
-                  isFailure: true,
-                  providerExecuted: false,
-                  result: { error: error.message, reason: error.reason },
-                }),
-              ],
+              parts,
+            })
+            yield* reconcileToolProjections({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              assistantMessageId: params.assistantMessageId,
+              parts,
             })
             return yield* error
           }),
@@ -251,22 +262,29 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
         if (Exit.isFailure(exit)) {
           const assistant = yield* messageStorage.getMessage(params.assistantMessageId)
           if (Predicate.isNotUndefined(assistant)) {
+            const parts = assistant.parts.flatMap((part) => {
+              if (part.type !== "tool-call" || part.id !== params.toolCallId) return []
+              return [
+                Prompt.toolResultPart({
+                  id: part.id,
+                  name: part.name,
+                  isFailure: true,
+                  providerExecuted: false,
+                  result: { error: Cause.pretty(exit.cause) },
+                }),
+              ]
+            })
             yield* persistToolParts({
               sessionId: params.sessionId,
               branchId: params.branchId,
               messageId: params.toolResultMessageId,
-              parts: assistant.parts.flatMap((part) => {
-                if (part.type !== "tool-call" || part.id !== params.toolCallId) return []
-                return [
-                  Prompt.toolResultPart({
-                    id: part.id,
-                    name: part.name,
-                    isFailure: true,
-                    providerExecuted: false,
-                    result: { error: Cause.pretty(exit.cause) },
-                  }),
-                ]
-              }),
+              parts,
+            })
+            yield* reconcileToolProjections({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              assistantMessageId: params.assistantMessageId,
+              parts,
             })
           }
         }

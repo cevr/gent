@@ -151,7 +151,7 @@ export const collectNormalizedResponse = (params: {
   }
 }
 
-const isObservableModelOutputPart = (part: Response.AnyPart): boolean => {
+export const isObservableModelOutputPart = (part: Response.AnyPart): boolean => {
   switch (part.type) {
     case "text":
       return part.text.length > 0

@@ -154,6 +154,9 @@ export const assistantMessageIdForTurn = (messageId: MessageId, step = 1): Messa
 
 export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
   MessageId.make(`${messageId}:tool-result:${step}`)
+/** The durable instruction that follows a step whose stream failed after partial output. */
+export const continuationMessageIdForTurn = (messageId: MessageId, step: number): MessageId =>
+  MessageId.make(`${messageId}:continuation:${step}`)
 
 export const toolCallIdForCommand = (commandId: ActorCommandId) => ToolCallId.make(commandId)
 

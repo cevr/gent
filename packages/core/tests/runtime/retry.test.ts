@@ -5,10 +5,25 @@ import { TestClock } from "effect/testing"
 import {
   isRetryable,
   getRetryAfter,
+  getRetryDelay,
   DEFAULT_RETRY_CONFIG,
+  RETRY_JITTER_FRACTION,
   retryProviderCall,
 } from "../../src/runtime/retry"
 import { ProviderError } from "@gent/core-internal/domain/provider-error"
+
+describe("getRetryDelay", () => {
+  const config = { initialDelay: 1000, maxDelay: 60_000, backoffFactor: 2, maxAttempts: 3 }
+  const error = new ProviderError({ message: "overloaded", model: "test" })
+  test("backoff delays spread by a bounded jitter and never exceed the maximum", () => {
+    expect(getRetryDelay(0, error, 0, config, 0)).toBe(1000)
+    const spread = getRetryDelay(0, error, 0, config, 0.999)
+    expect(spread).toBeGreaterThan(1000)
+    expect(spread).toBeLessThanOrEqual(1000 * (1 + RETRY_JITTER_FRACTION))
+    expect(getRetryDelay(1, error, 0, config, 0.5)).toBe(2250)
+    expect(getRetryDelay(0, error, 0, { ...config, maxDelay: 1100 }, 0.999)).toBe(1100)
+  })
+})
 
 describe("getRetryAfter", () => {
   test("parses retry-after seconds from Headers", () => {

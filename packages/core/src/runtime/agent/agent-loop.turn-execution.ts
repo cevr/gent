@@ -18,7 +18,7 @@ import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { TurnError } from "../../domain/driver.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
-import type { Message } from "../../domain/message.js"
+import { Message } from "../../domain/message.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { ConfigService } from "../config-service.js"
 import { GentPlatform } from "../gent-platform.js"
@@ -31,6 +31,7 @@ import { recoverCellExecution } from "../code-cell/cell-recovery.js"
 import {
   assistantDraftFromMessage,
   assistantMessageIdForTurn,
+  continuationMessageIdForTurn,
   toolResultMessageIdForTurn,
 } from "./agent-loop.utils.js"
 import {
@@ -39,6 +40,7 @@ import {
   emptyTurnMetrics,
   makeActiveStreamHandle,
   type ActiveStreamHandle,
+  isObservableModelOutputPart,
   type CollectedTurnResponse,
   type TurnMetrics,
 } from "./turn-response.js"
@@ -49,6 +51,7 @@ import {
   persistAssistantPartsWithBindings,
   persistMessageReceived,
   persistToolParts,
+  reconcileToolProjections,
   ToolResultReplayError,
   type AssistantResponsePart,
   type ToolResponsePart,
@@ -104,6 +107,10 @@ type TurnStepResult =
     }
 
 const MAX_TURN_STEPS = 200
+/** Continuation instructions one turn may persist after partial-output stream failures. */
+const MAX_CONTINUATIONS_PER_TURN = 2
+const CONTINUATION_INSTRUCTION =
+  "Your previous reply was cut off by a provider error after partial output. The partial output is saved above. Continue from where you stopped. Do not repeat text you already wrote."
 
 export const TurnOutcome = Schema.TaggedUnion({
   Done: {},
@@ -228,6 +235,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               messageId: toolResultMessageId,
               parts: failureParts,
             }).pipe(Effect.orDie)
+            yield* reconcileToolProjections({
+              sessionId: scope.sessionId,
+              branchId: scope.branchId,
+              assistantMessageId: assistantMessageIdForTurn(params.messageId, params.step),
+              parts: failureParts,
+            }).pipe(Effect.orDie)
             return yield* error
           }),
         ),
@@ -280,6 +293,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         sessionId: scope.sessionId,
         branchId: scope.branchId,
         messageId: toolResultMessageId,
+        parts: toolResults,
+      })
+      yield* reconcileToolProjections({
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
+        assistantMessageId: assistantMessageIdForTurn(params.messageId, params.step),
         parts: toolResults,
       })
       yield* processLocalReplay.removeResults(
@@ -793,11 +812,18 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                 result: { error: error.message, reason: error.reason },
               }),
             )
+            const parts = [...recoveredResults, ...failureParts]
             yield* persistToolParts({
               sessionId: scope.sessionId,
               branchId: scope.branchId,
               messageId: toolResultMessageIdForTurn(params.messageId, pendingStep),
-              parts: [...recoveredResults, ...failureParts],
+              parts,
+            }).pipe(Effect.orDie)
+            yield* reconcileToolProjections({
+              sessionId: scope.sessionId,
+              branchId: scope.branchId,
+              assistantMessageId: pendingAssistant.value.id,
+              parts,
             }).pipe(Effect.orDie)
             return yield* error
           }),
@@ -838,6 +864,44 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         yield* persistMessageReceived({ message: item.message })
       }
     })
+
+    /**
+     * Narrow retry after partial output: the partial assistant message stays,
+     * a durable continuation instruction follows it, and the same turn runs one
+     * more model step. Bounded per turn; a further failure ends the turn.
+     */
+    const continueAfterPartialOutput = Effect.fn("AgentLoop.continueAfterPartialOutput")(
+      function* (params: {
+        readonly messageId: RunningState["message"]["id"]
+        readonly step: number
+        readonly collected: CollectedTurnResponse
+      }) {
+        if (!params.collected.responseParts.some(isObservableModelOutputPart)) return false
+        let used = 0
+        for (let step = 1; step < params.step; step++) {
+          const existing = yield* messageStorage.getMessage(
+            continuationMessageIdForTurn(params.messageId, step),
+          )
+          if (Predicate.isNotUndefined(existing)) used += 1
+        }
+        if (used >= MAX_CONTINUATIONS_PER_TURN) return false
+        yield* persistMessageReceived({
+          message: Message.cases.regular.make({
+            id: continuationMessageIdForTurn(params.messageId, params.step),
+            sessionId: scope.sessionId,
+            branchId: scope.branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: CONTINUATION_INSTRUCTION })],
+            createdAt: yield* DateTime.nowAsDate,
+            metadata: { customType: "continuation", details: { step: params.step } },
+          }),
+        })
+        yield* Effect.logInfo("turn.continue-after-partial-output").pipe(
+          Effect.annotateLogs({ step: params.step, continuation: used + 1 }),
+        )
+        return true
+      },
+    )
 
     const runTurnStep = Effect.fn("AgentLoop.runTurnStep")(function* (params: {
       readonly state: RunningState
@@ -926,6 +990,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         } satisfies TurnStepResult
       }
       if (collected.streamFailed) {
+        const continued = yield* continueAfterPartialOutput({
+          messageId: params.state.message.id,
+          step: params.step,
+          collected,
+        })
+        if (continued) return { _tag: "continue", currentTurnAgent } satisfies TurnStepResult
         return {
           _tag: "stop",
           currentTurnAgent,

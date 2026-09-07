@@ -253,6 +253,20 @@ Shape:
   turn starts from a wake that runs after the permit is released, or at the next
   turn boundary. `QueueFollowUp` carries an explicit `wake` flag; without it a
   branch with no prior history keeps the item queued until a real turn arrives.
+- Orphan reconciliation: a stored tool result that has no terminal tool event
+  (a recovered cell, a binding replay failure, a host that died mid-call) gets
+  its `ToolCallSucceeded`/`ToolCallFailed` event from `reconcileToolProjections`
+  when the result is persisted, before the turn reads the transcript for new
+  model work. Clients replaying `ToolCallStarted` never keep a stale running
+  projection. Ambiguous side effects are not replayed; the exact binding replay
+  rules decide whether a native call runs again or fails.
+- Narrow retry: `retryProviderCall` retries retryable provider failures with
+  bounded exponential backoff plus jitter, and only before observable output.
+  After partial output the partial assistant message stays, a durable
+  continuation instruction (`<turn>:continuation:<step>`, `customType`
+  `continuation`) follows it, and the same turn runs one more model step. Two
+  continuations per turn; a further partial failure ends the turn as
+  `streamFailed`.
 - `Cancel` and `Interrupt` steering can include an expected message ID. Omission
   preserves branch-wide behavior. The worker checks the target before signaling
   and again when resuming an interaction. A local interruption permit serializes
