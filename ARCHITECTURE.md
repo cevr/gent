@@ -946,7 +946,7 @@ Workflow commands (`/plan`, `/review`, `/audit`, `/counsel`, `/research`) live i
 `@gent/auto` — iterative workflow driver backed by scoped services plus
 `reactions.toolResult` / `turnAfter`.
 
-State: `Inactive | Working | AwaitingReview`. Signal tool: `auto_checkpoint`. Gate: `review` tool completion between iterations (proves adversarial review actually ran). Safety: `maxIterations` ceiling + `turnsSinceCheckpoint` wedge detection.
+State: `Inactive | Working | AwaitingReview`. Signal tool: `auto_checkpoint`. Gate: a completed `delegate` call to the `reviewer` agent between iterations (proves adversarial review actually ran). Safety: `maxIterations` ceiling + `turnsSinceCheckpoint` wedge detection.
 
 ### JSONL Persistence
 

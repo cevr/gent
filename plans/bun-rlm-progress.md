@@ -1,5 +1,48 @@
 # Bun RLM progress
 
+## Workflow tools replaced by recipes
+
+Commit `85d3cb14`. Scope decision by the user on 2026-09-07: remove the fixed
+workflow tools.
+
+Deleted: `plan.ts`, `plan-tool.ts`, `workflow-helpers.ts`, `review/`, `audit/`,
+`counsel/`, `research/` in `packages/extensions/src`, their nine test files,
+the `review`, `counsel`, and `research` TUI renderers and formatters, the
+`dbg-review-tool` debug fixture entries, and the `auditor` agent.
+
+Kept through a smaller path:
+
+- Slash commands `/plan` (keybind `ctrl+shift+p`), `/audit`, `/review`,
+  `/counsel`, `/research` live in `packages/extensions/src/workflows.ts`
+  (`@gent/workflows`). Each queues a follow-up recipe that composes
+  `delegate` with `Promise.all`, `artifact_save` with the old `sourceTool`
+  names, `prompt`, and `repo` from one cell. No orchestration code remains.
+- `architect` and a read-only `reviewer` agent (the old review worker prompt)
+  are core agents in `packages/extensions/src/agents.ts`.
+- The auto loop's review gate accepts a completed `delegate` call whose input
+  names the `reviewer` agent (`packages/extensions/src/auto/index.ts`). The
+  awaiting-review prompts say so. The journal row type stays `review`.
+
+Evidence: `packages/extensions/tests/workflows.test.ts` lists the five commands
+through RPC and checks the queued `/plan` recipe; `auto-integration.test.ts`
+drives the gate with a reviewer delegation; the gate (typecheck, lint, fmt,
+build, test) passed.
+
+Found, not fixed (pre-existing runtime behavior, out of this scope): an
+extension request that calls `Session.queueFollowUp` on a warm, idle branch
+through `client.extension.request` did not return within 15 seconds in the RPC
+harness, and the queued turn did not run. The cold-branch path (queue, then
+`client.queue.get`) works and is what the acceptance test uses. The same code
+path served the old `/plan` command.
+
+Measurement (same method as `plans/bun-rlm-baseline.md`): runtime 87,219 lines
+across 451 files; tests 73,356 lines across 289 files. Previous 88,934 / 462.
+This unit removed 1,715 runtime lines net (1,825 deleted, 110 added for
+`workflows.ts` and the two agent prompts). Net against the 86,965 baseline is
++254 runtime lines. The remaining additions are the safety and transcript
+units listed below (receipts +434, delivery +30, doctor +105, shipped list
++15, delegate −188), which the plan requires.
+
 ## Stage 4 remainder and Stage 5: transcript, delegate, delivery, health
 
 Commits after the cutover (`267eab59`): `b58496ec`, `000c4003`, `6f89af4e`,

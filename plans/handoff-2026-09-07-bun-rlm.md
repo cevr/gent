@@ -98,7 +98,10 @@ Updated by Claude after the handoff:
   `c901616d`, `5fb89a76` (transcript receipts and nesting, single-task
   delegate, bounded notification + cursor replay, doctor resource health,
   shipped composition in the SDK server). Receipts in `plans/bun-rlm-progress.md`.
-- Runtime lines: 88,934 (baseline 86,965). Net reduction is not achieved.
+- The user chose to remove the fixed workflow tools. `85d3cb14` replaces them
+  with `@gent/workflows` recipes, moves `architect` and `reviewer` into the
+  core agents, and gates auto reviews on a reviewer delegation.
+- Runtime lines: 87,219 (baseline 86,965, +254). Tests: 73,356.
 
 ## Remaining work
 
@@ -109,9 +112,6 @@ Stage 4.
 - Render structured operations and file changes in the FX transcript.
 - Delete the Executor extension, its 3 test files, lint-inventory references,
   and ARCHITECTURE.md mentions. MCP dependency stays for ACP.
-- Replace plan/review/audit/counsel/research orchestration with recipes over
-  host calls only where the same behavior remains available.
-- Move delegate parallel and chain composition into cells.
 
 Stage 5.
 
@@ -129,14 +129,14 @@ Completion.
 
 ## Open decisions for the user
 
-1. The plan requires net runtime reduction. The tree is +1,969 lines over the
-   baseline after all units. The fixed workflow tools (plan, review, audit,
-   counsel, research, helpers, three renderers; 1,825 lines) are the only
-   remaining large reduction, and deleting them removes slash commands,
-   artifact writes, the plan review interaction, and typed renderers. Choose:
-   delete them in favour of cell recipes over `delegate`/`agent-start`, keep
-   them and accept no net reduction, or fund a smaller shared workflow path.
-2. Source-mode durable tool identity is decided: `ProcessLocal` bindings resume
+1. Decided: the fixed workflow tools are gone (`85d3cb14`). The tree is +254
+   runtime lines over the baseline; the remainder is the required transcript,
+   delivery, doctor, and composition safety code. Accept, or name a next
+   reduction target.
+2. `Session.queueFollowUp` from an extension request on a warm idle branch did
+   not return in the RPC harness (see `plans/bun-rlm-progress.md`). Decide
+   whether to fix it in the actor mailbox path.
+3. Source-mode durable tool identity is decided: `ProcessLocal` bindings resume
    inside the live generation only; compiled hosts keep durable identities.
-3. Herdr pane workflows against a live model were not run (paid). Only the repo
+4. Herdr pane workflows against a live model were not run (paid). Only the repo
    smoke ran, twice.
