@@ -215,6 +215,36 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
   )
 
   it.scopedLive(
+    "pauses the deadline while a host operation is pending",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openMacosCellKernel({
+          ...(yield* buildWorker),
+          evaluationTimeoutMs: 400,
+          maximumReplacements: 1,
+        })
+        // Host operations own their bounds: a slow one outlives the compute deadline.
+        const host = CellOperationHost.of({
+          // gent/no-sleep: allow real-clock host operation that outlives the kernel deadline
+          call: () => Effect.sleep("900 millis").pipe(Effect.as(5)),
+        })
+        const slow = yield* kernel
+          .evaluate("const v = await tools.call('slow', 0); v + 1")
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(slow.display).toBe("6")
+        // Compute after the host operation returns is bounded again.
+        const spun = yield* kernel
+          .evaluate("await tools.call('slow', 0); while (true) {}")
+          .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
+        expect(spun._tag).toBe("CellKernelError")
+        if (spun._tag !== "CellKernelError") return yield* spun
+        expect(spun.reason).toBe("timeout")
+        expect(spun.stateLost).toBe(true)
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
+    10000,
+  )
+
+  it.scopedLive(
     "ships the catalog once per hash and again to a replacement worker",
     () =>
       Effect.gen(function* () {

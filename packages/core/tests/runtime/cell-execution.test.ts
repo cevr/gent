@@ -213,6 +213,55 @@ describe.skipIf(process.platform !== "darwin")("recorded cell execution", () => 
   )
 
   it.scopedLive(
+    "restores the saved namespace in the cell after a suspended one without an explicit reset",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [keep, suspend, reuse] = yield* setupCalls([
+          "const kept = 7; kept",
+          "await tools.call('approve', {})",
+          "kept + 1",
+        ])
+        if (!keep || !suspend || !reuse) return yield* Effect.die("Missing test cell")
+        const pending = new InteractionPendingError({
+          requestId: InteractionRequestId.make("cell-pending-sibling"),
+          sessionId,
+          branchId,
+        })
+        const host = CellOperationHost.of({
+          call: (request) =>
+            Effect.fail(
+              new CellToolCallSuspended({
+                operationId: request.operationId,
+                toolCallId: ToolCallId.make("cell-inner-sibling"),
+                pending,
+              }),
+            ),
+        })
+        const execution = Context.get(
+          yield* Layer.build(CellExecution.Live({ ...worker, sessionId, branchId })),
+          CellExecution,
+        )
+        const kept = yield* execution.run(keep).pipe(Effect.provideService(CellOperationHost, host))
+        expect(kept.result).toMatchObject({ display: "7" })
+        const suspended = yield* execution
+          .run(suspend)
+          .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
+        expect(suspended._tag).toBe("CellToolCallSuspended")
+        // The suspended cell lost its worker; the next cell gets the last good namespace back.
+        const reused = yield* execution
+          .run(reuse)
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(reused.isFailure).toBe(false)
+        expect(reused.result).toMatchObject({
+          display: "8",
+          restored: { restored: ["kept"], omitted: [] },
+        })
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
     "stops on host approval without exposing it to a cell catch block or replaying source",
     () =>
       Effect.gen(function* () {

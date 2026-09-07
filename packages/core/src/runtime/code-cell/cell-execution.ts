@@ -243,6 +243,9 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
               onFailure: (
                 error,
               ): Effect.Effect<Prompt.ToolResultPart, StorageError | CellToolCallSuspended> => {
+                // A suspended cell loses its worker like any kernel failure: the next
+                // run restores the last good namespace instead of demanding a reset.
+                if (error._tag === "CellToolCallSuspended") recoveryPending = true
                 if (isPassThrough(error)) return Effect.fail(error)
                 if (error._tag !== "CellEvaluationError") recoveryPending = true
                 return Schema.encodeEffect(CellFailure)(error).pipe(

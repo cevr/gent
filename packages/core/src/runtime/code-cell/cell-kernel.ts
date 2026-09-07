@@ -3,6 +3,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  Latch,
   FileSystem,
   Option,
   Path,
@@ -187,6 +188,21 @@ export const openMacosCellKernel = Effect.fn("CellKernel.openMacos")(function* (
         >()
         const seen = new Set<string>()
         const pending = new Set<string>()
+        // The deadline bounds worker compute only. Host operations own their bounds
+        // (tool timeouts, approvals), so the clock stops while one is pending and a
+        // fresh compute stretch starts when the worker gets its reply.
+        const idle = yield* Latch.make(true)
+        const busy = yield* Latch.make(false)
+        const watchdog: Effect.Effect<never, CellKernelError> = Effect.gen(function* () {
+          while (true) {
+            yield* idle.await
+            const timedOut = yield* busy.await.pipe(
+              Effect.as(false),
+              Effect.timeoutOrElse({ duration: timeoutMs, orElse: () => Effect.succeed(true) }),
+            )
+            if (timedOut) return yield* deadline.orElse()
+          }
+        })
         const receive = Effect.fn("CellKernel.receive")(function* (frame: CellResponse) {
           if (
             frame._tag === "Ready" ||
@@ -207,6 +223,8 @@ export const openMacosCellKernel = Effect.fn("CellKernel.openMacos")(function* (
             }
             seen.add(frame.operationId)
             pending.add(frame.operationId)
+            yield* idle.close
+            yield* busy.open
             yield* host.call(frame).pipe(
               Effect.map((value) =>
                 CellRequest.cases.HostSucceeded.make({
@@ -227,6 +245,10 @@ export const openMacosCellKernel = Effect.fn("CellKernel.openMacos")(function* (
               Effect.flatMap((reply) => {
                 pending.delete(frame.operationId)
                 return child.send(reply).pipe(Effect.mapError(processError))
+              }),
+              Effect.tap(() => {
+                if (pending.size > 0) return Effect.void
+                return busy.close.pipe(Effect.andThen(idle.open))
               }),
               Effect.catchCause((cause) => Deferred.failCause(result, cause)),
               Effect.forkScoped,
@@ -254,12 +276,9 @@ export const openMacosCellKernel = Effect.fn("CellKernel.openMacos")(function* (
           )
           .pipe(Effect.mapError(processError))
         if (Option.isSome(catalog)) workerCatalogHash = Option.some(catalog.value.hash)
-        return yield* Deferred.await(result)
+        return yield* Deferred.await(result).pipe(Effect.raceFirst(watchdog))
       }),
-    ).pipe(
-      Effect.timeoutOrElse(deadline),
-      Effect.onError(() => discard().pipe(Effect.orDie)),
-    )
+    ).pipe(Effect.onError(() => discard().pipe(Effect.orDie)))
     if (response._tag === "Failed") return yield* response.error
     return response.result
   })
