@@ -916,6 +916,12 @@ export const buildAgentLoopActorHandlers = (config: {
             })
             yield* recordToolResult({
               toolResultMessageId,
+              assistantMessageId: Option.getOrUndefined(
+                Option.map(
+                  Option.fromUndefinedOr(operation.commandId),
+                  assistantMessageIdForCommand,
+                ),
+              ),
               sessionId: operation.sessionId,
               branchId: operation.branchId,
               toolCallId: operation.toolCallId,
@@ -961,6 +967,7 @@ export const buildAgentLoopActorHandlers = (config: {
                       sessionId: operation.sessionId,
                       branchId: operation.branchId,
                       toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
+                      assistantMessageId: assistantMessageIdForCommand(operation.commandId),
                       toolCallId: pending.toolCallId,
                       toolName: operation.toolName,
                       output: { error: error.message, reason: error._tag },

@@ -192,6 +192,7 @@ export const persistMessageReceived = Effect.fn("TurnHelpers.persistMessageRecei
 
 export const recordToolResult = Effect.fn("TurnHelpers.recordToolResult")(function* (params: {
   toolResultMessageId: MessageId
+  assistantMessageId?: MessageId
   sessionId: SessionId
   branchId: BranchId
   toolCallId: ToolCallId
@@ -227,6 +228,7 @@ export const recordToolResult = Effect.fn("TurnHelpers.recordToolResult")(functi
     summary: summarizeToolOutput(part),
     output: stringifyOutput(part.result),
     resultJson: encodeToolOutput(part.result),
+    assistantMessageId: params.assistantMessageId,
   }
 
   yield* commitWithEvent(

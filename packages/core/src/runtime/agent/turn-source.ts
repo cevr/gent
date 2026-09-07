@@ -11,6 +11,7 @@ import {
 } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
+import { CurrentToolCall } from "./current-tool-call.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import { type Message } from "../../domain/message.js"
 import { ModelId, parseModelId } from "../../domain/model.js"
@@ -177,6 +178,13 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
               provideCurrentHostCtx(hostCtx),
               Effect.provideService(ExtensionRegistry, extensionRegistry),
               Effect.provideService(EventPublisher, eventPublisher),
+              Effect.provideService(CurrentToolCall, {
+                toolBindings: resolved.toolBindings,
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                assistantMessageId: persistence.assistantMessageId,
+                toolCallId,
+              }),
             )
           yield* params.persistExternalToolResult(persistence, result).pipe(Effect.orDie)
           return result

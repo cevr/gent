@@ -6,7 +6,12 @@ import {
   projectResponsePartsToMessageParts,
   responsePartsFromMessages,
 } from "@gent/core-internal/domain/message-part-projection"
-import { toPrompt, toPromptMessages } from "@gent/core-internal/providers/ai-transcript"
+import {
+  boundToolResultForModel,
+  maximumModelToolResultChars,
+  toPrompt,
+  toPromptMessages,
+} from "@gent/core-internal/providers/ai-transcript"
 import {
   BranchId,
   ExtensionId,
@@ -16,6 +21,13 @@ import {
 } from "@gent/core-internal/domain/ids"
 import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import * as Response from "effect/unstable/ai/Response"
+import { Schema } from "effect"
+
+const BoundedToolResult = Schema.Struct({
+  truncated: Schema.Boolean,
+  totalChars: Schema.Finite,
+  text: Schema.String,
+})
 
 const baseMessage = (
   message: Omit<Parameters<typeof Message.cases.regular.make>[0], "createdAt">,
@@ -34,6 +46,40 @@ const baseInterjectionMessage = (
   })
 
 describe("AI transcript projection", () => {
+  test("oversized tool results reach the model as head-plus-tail text while the message keeps the full result", () => {
+    const full = "x".repeat(maximumModelToolResultChars + 500)
+    const part = Prompt.toolResultPart({
+      id: ToolCallId.make("tc-big"),
+      name: "bash",
+      isFailure: false,
+      providerExecuted: false,
+      result: { output: full },
+    })
+    const message = baseMessage({
+      id: MessageId.make("tool-big"),
+      sessionId: SessionId.make("session"),
+      branchId: BranchId.make("branch"),
+      role: "tool",
+      parts: [part],
+    })
+
+    const [promptMessage] = toPromptMessages([message])
+    expect(promptMessage).toMatchObject({
+      role: "tool",
+      content: [{ id: "tc-big", name: "bash", result: { truncated: true } }],
+    })
+    const bounded = boundToolResultForModel(part)
+    const boundedResult = Schema.decodeUnknownSync(BoundedToolResult)(bounded.result)
+    expect(boundedResult.truncated).toBe(true)
+    expect(boundedResult.totalChars).toBe(full.length + '{"output":""}'.length)
+    expect(boundedResult.text).toContain("characters truncated")
+    expect(boundedResult.text.length).toBeLessThan(full.length)
+    // The stored part is unchanged and small results pass through untouched.
+    expect(message.parts[0]).toEqual(part)
+    const small = Prompt.toolResultPart({ ...part, result: { output: "short" } })
+    expect(boundToolResultForModel(small)).toEqual(small)
+  })
+
   test("converts visible Gent messages to Effect Prompt messages without Gent metadata", () => {
     const prompt = toPrompt(
       [

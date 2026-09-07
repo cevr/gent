@@ -22,7 +22,11 @@ import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
 
 const sessionId = SessionId.make("collector-session")
 const branchId = BranchId.make("collector-branch")
-const streamAddress = { messageId: MessageId.make("collector-turn"), step: 1 }
+const streamAddress = {
+  messageId: MessageId.make("collector-turn"),
+  assistantMessageId: MessageId.make("collector-turn:assistant:1"),
+  step: 1,
+}
 
 const makeActiveStream = (
   interrupted: boolean,
@@ -180,12 +184,18 @@ describe("agent turn response collectors", () => {
       const published = yield* Ref.get(events)
       expect(published.map((event) => event._tag)).toEqual(["ToolCallStarted", "ToolCallSucceeded"])
       const started = published.find((event) => event._tag === "ToolCallStarted")
-      expect(started).toEqual(expect.objectContaining({ input: { value: "x" } }))
+      expect(started).toEqual(
+        expect.objectContaining({
+          input: { value: "x" },
+          assistantMessageId: streamAddress.assistantMessageId,
+        }),
+      )
       const succeeded = published.find((event) => event._tag === "ToolCallSucceeded")
       expect(succeeded).toEqual(
         expect.objectContaining({
           summary: '{"ok":true}',
           output: '{\n  "ok": true\n}',
+          assistantMessageId: streamAddress.assistantMessageId,
         }),
       )
     }),

@@ -36,6 +36,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
 import { CurrentCellToolOperation } from "../code-cell/current-cell-tool-operation.js"
+import { CurrentToolCall } from "./current-tool-call.js"
 import {
   CurrentExtensionHostContext,
   provideCurrentHostCtx,
@@ -114,6 +115,14 @@ const parentToolCallId = Effect.map(Effect.serviceOption(CurrentCellToolOperatio
   Option.getOrUndefined(Option.map(operation, (key) => key.cell.toolCallId)),
 )
 
+/** The assistant message that holds the tool-call part: the direct call, else the admitting cell. */
+const assistantMessageId = Effect.gen(function* () {
+  const current = yield* Effect.serviceOption(CurrentToolCall)
+  if (Option.isSome(current)) return current.value.assistantMessageId
+  const operation = yield* Effect.serviceOption(CurrentCellToolOperation)
+  return Option.getOrUndefined(Option.map(operation, (key) => key.cell.assistantMessageId))
+})
+
 const publishStarted = (params: { ctx: ToolCapabilityContext; toolCall: ToolCall }) =>
   Effect.gen(function* () {
     const eventPublisher = yield* EventPublisher
@@ -126,6 +135,7 @@ const publishStarted = (params: { ctx: ToolCapabilityContext; toolCall: ToolCall
           toolName: params.toolCall.toolName,
           input: params.toolCall.input,
           parentToolCallId: yield* parentToolCallId,
+          assistantMessageId: yield* assistantMessageId,
         }),
       )
       .pipe(Effect.orDie)
@@ -144,6 +154,7 @@ const publishCompleted = (params: { ctx: ToolCapabilityContext; result: Prompt.T
       output: stringifyOutput(params.result.result),
       resultJson: encodeToolOutput(params.result.result),
       parentToolCallId: yield* parentToolCallId,
+      assistantMessageId: yield* assistantMessageId,
     }
     if (params.result.isFailure) {
       yield* eventPublisher.publish(ToolCallFailed.make(fields)).pipe(Effect.orDie)

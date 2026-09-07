@@ -57,6 +57,8 @@ const reparentEphemeralChildEvent = (
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         input: event.input,
+        parentToolCallId: event.parentToolCallId,
+        assistantMessageId: event.assistantMessageId,
       })
     case "ToolCallSucceeded":
       return ToolCallSucceeded.make({
@@ -67,6 +69,8 @@ const reparentEphemeralChildEvent = (
         summary: event.summary,
         output: event.output,
         resultJson: event.resultJson,
+        parentToolCallId: event.parentToolCallId,
+        assistantMessageId: event.assistantMessageId,
       })
     case "ToolCallFailed":
       return ToolCallFailed.make({
@@ -77,6 +81,8 @@ const reparentEphemeralChildEvent = (
         summary: event.summary,
         output: event.output,
         resultJson: event.resultJson,
+        parentToolCallId: event.parentToolCallId,
+        assistantMessageId: event.assistantMessageId,
       })
     default:
       return event

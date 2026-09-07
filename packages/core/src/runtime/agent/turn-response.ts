@@ -316,12 +316,14 @@ const publishExternalStreamChunk = (params: {
 const publishExternalToolCallStarted = (params: {
   sessionId: SessionId
   branchId: BranchId
+  assistantMessageId: MessageId
   part: Extract<Response.AnyPart, { readonly type: "tool-call" }>
 }) =>
   publishEventOrDie(
     ToolCallStarted.make({
       sessionId: params.sessionId,
       branchId: params.branchId,
+      assistantMessageId: params.assistantMessageId,
       toolCallId: ToolCallId.make(params.part.id),
       toolName: params.part.name,
       input: params.part.params,
@@ -331,12 +333,14 @@ const publishExternalToolCallStarted = (params: {
 const publishExternalToolResult = (params: {
   sessionId: SessionId
   branchId: BranchId
+  assistantMessageId: MessageId
   part: Extract<Response.AnyPart, { readonly type: "tool-result" }>
 }) => {
   const output = externalToolOutput(params.part)
   const fields = {
     sessionId: params.sessionId,
     branchId: params.branchId,
+    assistantMessageId: params.assistantMessageId,
     toolCallId: ToolCallId.make(params.part.id),
     toolName: params.part.name,
     summary: summarizeOutput(output),
@@ -350,6 +354,7 @@ const publishExternalToolResult = (params: {
 const collectExternalResponsePart = (params: {
   sessionId: SessionId
   branchId: BranchId
+  assistantMessageId: MessageId
   part: Response.AnyPart
   publishedToolCallIds: Set<string>
   publishedToolResultIds: Set<string>
@@ -375,6 +380,8 @@ const collectExternalResponsePart = (params: {
 
 export const collectExternalTurnResponse = <R>(params: {
   messageId: MessageId
+  /** The assistant message that receives this step's provider-executed tool calls. */
+  assistantMessageId: MessageId
   step: number
   turnStream: Stream.Stream<Response.AnyPart, TurnError | InteractionPendingError, R>
   sessionId: SessionId
@@ -401,6 +408,7 @@ export const collectExternalTurnResponse = <R>(params: {
           yield* collectExternalResponsePart({
             sessionId: params.sessionId,
             branchId: params.branchId,
+            assistantMessageId: params.assistantMessageId,
             part,
             publishedToolCallIds,
             publishedToolResultIds,

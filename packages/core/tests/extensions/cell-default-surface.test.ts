@@ -97,9 +97,23 @@ describe.skipIf(process.platform !== "darwin")("shipped model surface", () => {
           Stream.take(2),
           Stream.runCollect,
         )
+        const cellAssistant = (yield* client.message.list({ branchId })).find(
+          (message) =>
+            message.role === "assistant" &&
+            message.parts.some((part) => part.type === "tool-call" && part.id === cellToolCallId),
+        )
+        expect(cellAssistant).toBeDefined()
         expect(innerEvents.map((envelope) => envelope.event)).toMatchObject([
-          { _tag: "ToolCallStarted", parentToolCallId: cellToolCallId },
-          { _tag: "ToolCallSucceeded", parentToolCallId: cellToolCallId },
+          {
+            _tag: "ToolCallStarted",
+            parentToolCallId: cellToolCallId,
+            assistantMessageId: cellAssistant?.id,
+          },
+          {
+            _tag: "ToolCallSucceeded",
+            parentToolCallId: cellToolCallId,
+            assistantMessageId: cellAssistant?.id,
+          },
         ])
 
         // Working data from the first cell is still bound in the next turn.

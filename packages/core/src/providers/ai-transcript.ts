@@ -1,6 +1,7 @@
-import { Option, Predicate } from "effect"
+import { Option, Predicate, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type { Message } from "../domain/message.js"
+import { headTailChars } from "../domain/output-buffer.js"
 import {
   assistantMessagePartToPromptPart,
   normalizeResponseParts,
@@ -74,9 +75,40 @@ const toAssistantMessage = (message: Message): Option.Option<Prompt.AssistantMes
   return Option.some(Prompt.assistantMessage({ content }))
 }
 
+/** Model-facing tool results keep this many characters. The transcript keeps the full result. */
+export const maximumModelToolResultChars = 64_000
+
+const encodeToolResultJson = Schema.encodeUnknownOption(Schema.fromJsonString(Schema.Json))
+
+/**
+ * Bound one tool result for the model with head-plus-tail text.
+ * The stored message and its events keep the full result.
+ */
+export const boundToolResultForModel = (
+  part: Prompt.ToolResultPart,
+  maxChars: number = maximumModelToolResultChars,
+): Prompt.ToolResultPart => {
+  const encoded = encodeToolResultJson(part.result)
+  if (Option.isNone(encoded) || encoded.value.length <= maxChars) return part
+  const bounded = headTailChars(encoded.value, maxChars)
+  return Prompt.toolResultPart({
+    id: part.id,
+    name: part.name,
+    isFailure: part.isFailure,
+    providerExecuted: part.providerExecuted,
+    result: {
+      truncated: true,
+      totalChars: bounded.totalChars,
+      omittedChars: bounded.totalChars - maxChars,
+      text: bounded.text,
+    },
+  })
+}
+
 const toToolMessage = (message: Message): Option.Option<Prompt.ToolMessage> => {
   const content = message.parts.flatMap((part): ReadonlyArray<Prompt.ToolMessagePart> => {
-    if (part.type !== "tool-result" && part.type !== "tool-approval-response") return []
+    if (part.type === "tool-result") return [boundToolResultForModel(part)]
+    if (part.type !== "tool-approval-response") return []
     return [toolMessagePartToPromptPart(part)]
   })
 

@@ -467,6 +467,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         collected = yield* source.collect(
           collectExternalTurnResponse({
             messageId: params.messageId,
+            assistantMessageId: assistantMessageIdForTurn(params.messageId, params.step),
             step: params.step,
             turnStream: source.stream,
             sessionId: scope.sessionId,

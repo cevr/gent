@@ -59,6 +59,20 @@ describe("FsToolsExtension via model turn", () => {
           if (succeeded?.event._tag === "ToolCallSucceeded") {
             expect(succeeded.event.output).toContain("Hello from fs model turn")
           }
+          // Every tool event names the assistant message that holds its tool-call part.
+          const messages = yield* client.message.list({ branchId })
+          const assistant = messages.find(
+            (message) =>
+              message.role === "assistant" &&
+              message.parts.some(
+                (part) => part.type === "tool-call" && part.id === succeeded?.event.toolCallId,
+              ),
+          )
+          expect(assistant).toBeDefined()
+          expect(events.map((event) => event.event.assistantMessageId)).toEqual([
+            assistant?.id,
+            assistant?.id,
+          ])
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
