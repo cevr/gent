@@ -28,6 +28,7 @@ import type { ClientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { useRequiredContext } from "../utils/solid-context"
 import { randomId } from "../utils/random-id"
+import type { CreateSessionInput } from "@gent/core-internal/server/transport-contract"
 import { useWorkspace } from "../workspace/context"
 import { AgentStatus, type AgentState } from "./agent-state"
 import { createClientEventHub } from "./event-hub"
@@ -171,6 +172,11 @@ export interface ClientSessionValue {
   // Session actions (fire-and-forget, update state internally)
   // eslint-disable-next-line effect/noNullish -- callback is optional at this UI boundary.
   createSession: (onCreated?: (sessionId: SessionId, branchId: BranchId) => void) => void
+  /** Open the session a confirmed handoff produces: linked to the current one, seeded with the summary. */
+  openHandoffSession: (
+    summary: string,
+    onCreated: (sessionId: SessionId, branchId: BranchId) => void,
+  ) => void
   // eslint-disable-next-line effect/noNullish -- session switching accepts an optional agent override.
   switchSession: (sessionId: SessionId, branchId: BranchId, name: string, agent?: AgentName) => void
   clearSession: () => void
@@ -673,6 +679,64 @@ export function ClientProvider(props: ClientProviderProps) {
     applyBufferedSessionEvent,
   }
 
+  const createSessionWith = (
+    input: Pick<CreateSessionInput, "parentSessionId" | "parentBranchId" | "initialPrompt">,
+    onCreated: Option.Option<(sessionId: SessionId, branchId: BranchId) => void>,
+  ) => {
+    dispatchSession(SessionStateEvent.cases.CreateRequested.make({}))
+    const createSessionEffect = Effect.fn("TUI.createSession")(function* () {
+      const requestId = yield* randomId
+      yield* Effect.sync(() => {
+        log.info("createSession", { requestId })
+      })
+      return yield* client.session.create({ ...input, requestId, cwd: workspace.cwd })
+    })
+    cast(
+      createSessionEffect().pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            // Replicate `switchSession`'s side-effect resets so `/new`
+            // does not inherit stale agent status / token counts / error
+            // banners / extension-health from the previous session.
+            // Create always transitions out of a prior session (or from
+            // "none"), so the extensionHealth reset is unconditional.
+            setAgentStore({
+              agent: Option.some(defaultAgent),
+              status: AgentStatus.cases["idle"].make({}),
+              cost: 0,
+              lastModelId: Option.none(),
+            })
+            setLatestInputTokens(0)
+            clearConnectionIssue()
+            setExtensionHealth(EMPTY_EXTENSION_HEALTH)
+            dispatchSession(
+              SessionStateEvent.cases.CreateSucceeded.make({
+                session: {
+                  sessionId: result.sessionId,
+                  branchId: result.branchId,
+                  name: result.name,
+                  reasoningLevel: Option.getOrUndefined(Option.none()),
+                },
+              }),
+            )
+            if (Option.isSome(onCreated)) {
+              onCreated.value(SessionId.make(result.sessionId), BranchId.make(result.branchId))
+            }
+          }),
+        ),
+        Effect.catchEager((err) =>
+          Effect.sync(() => {
+            log.error("createSession.failed", { error: String(err) })
+            dispatchSession(SessionStateEvent.cases.CreateFailed.make({}))
+            setAgentStore({
+              status: AgentStatus.cases["error"].make({ error: formatError(err) }),
+            })
+          }),
+        ),
+      ),
+    )
+  }
+
   const sessionValue: ClientSessionValue = {
     // Session state
     sessionState,
@@ -680,59 +744,18 @@ export function ClientProvider(props: ClientProviderProps) {
     isActive,
     isLoading,
 
-    createSession: (onCreated) => {
-      dispatchSession(SessionStateEvent.cases.CreateRequested.make({}))
-      const createSessionEffect = Effect.fn("TUI.createSession")(function* () {
-        const requestId = yield* randomId
-        yield* Effect.sync(() => {
-          log.info("createSession", { requestId })
-        })
-        return yield* client.session.create({ requestId, cwd: workspace.cwd })
-      })
-      cast(
-        createSessionEffect().pipe(
-          Effect.tap((result) =>
-            Effect.sync(() => {
-              // Replicate `switchSession`'s side-effect resets so `/new`
-              // does not inherit stale agent status / token counts / error
-              // banners / extension-health from the previous session.
-              // Create always transitions out of a prior session (or from
-              // "none"), so the extensionHealth reset is unconditional.
-              setAgentStore({
-                agent: Option.some(defaultAgent),
-                status: AgentStatus.cases["idle"].make({}),
-                cost: 0,
-                lastModelId: Option.none(),
-              })
-              setLatestInputTokens(0)
-              clearConnectionIssue()
-              setExtensionHealth(EMPTY_EXTENSION_HEALTH)
-              dispatchSession(
-                SessionStateEvent.cases.CreateSucceeded.make({
-                  session: {
-                    sessionId: result.sessionId,
-                    branchId: result.branchId,
-                    name: result.name,
-                    reasoningLevel: Option.getOrUndefined(Option.none()),
-                  },
-                }),
-              )
-              const callback = Option.fromNullishOr(onCreated)
-              if (Option.isSome(callback)) {
-                callback.value(SessionId.make(result.sessionId), BranchId.make(result.branchId))
-              }
-            }),
-          ),
-          Effect.catchEager((err) =>
-            Effect.sync(() => {
-              log.error("createSession.failed", { error: String(err) })
-              dispatchSession(SessionStateEvent.cases.CreateFailed.make({}))
-              setAgentStore({
-                status: AgentStatus.cases["error"].make({ error: formatError(err) }),
-              })
-            }),
-          ),
-        ),
+    createSession: (onCreated) => createSessionWith({}, Option.fromNullishOr(onCreated)),
+
+    openHandoffSession: (summary, onCreated) => {
+      const current = sessionOption()
+      if (Option.isNone(current)) return
+      createSessionWith(
+        {
+          parentSessionId: current.value.sessionId,
+          parentBranchId: current.value.branchId,
+          initialPrompt: summary,
+        },
+        Option.some(onCreated),
       )
     },
 
