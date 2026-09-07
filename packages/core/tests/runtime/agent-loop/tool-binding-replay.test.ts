@@ -54,6 +54,7 @@ import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import { encodeToolOutput } from "../../../src/domain/tool-output"
 import {
   captureCurrentToolBinding,
+  cellOperationBindingIdentity,
   resolveReplayToolBinding,
   resolveStoredToolBinding,
 } from "../../../src/runtime/agent/tool-binding-resolution"
@@ -381,6 +382,79 @@ describe("tool binding replay", () => {
       }).pipe(Effect.timeout("5 seconds")),
     )
   }
+
+  it.scopedLive("resumes a process-local binding only inside its live generation", () =>
+    Effect.gen(function* () {
+      const capability = makeTool()
+      const extension = defineExtension({ id: "@test/replay-extension", tools: [capability] })
+      const layer = Layer.merge(
+        createE2ELayer({
+          agents: [],
+          extensionInputs: [extension],
+          providerLayer: LanguageModelLayers.debug(),
+        }),
+        ProcessLocalToolReplay.Live,
+      )
+      yield* Effect.gen(function* () {
+        const sessionId = SessionId.make("process-local-session")
+        const address = {
+          sessionId,
+          assistantMessageId: MessageId.make("process-local-assistant"),
+          toolCallId: ToolCallId.make("process-local-call"),
+        }
+        const cache = yield* SessionProfileCache
+        const profile = yield* cache.resolve("/tmp")
+        const publication = profile.publication
+        if (Predicate.isUndefined(publication))
+          return yield* Effect.die("Expected live publication")
+        const current = yield* captureCurrentToolBinding({
+          sessionId,
+          toolName: "@test/replay-tool",
+          publication,
+        })
+        if (Option.isNone(current)) return yield* Effect.die("Expected captured capability")
+        // A source-loaded extension has no build artifact, so no durable identity.
+        expect(current.value.binding).toBeUndefined()
+        const identity = yield* cellOperationBindingIdentity(current.value, publication)
+        if (Option.isNone(identity)) return yield* Effect.die("Expected process-local identity")
+        expect(identity.value.source).toEqual({
+          _tag: "ProcessLocal",
+          sourceRevision: ToolSourceRevision.make(`process:${publication.generationId}`),
+        })
+
+        const live = yield* resolveStoredToolBinding({
+          ...address,
+          binding: identity.value,
+          publication,
+        })
+        expect(live.capability).toBe(capability)
+
+        const retired = yield* resolveStoredToolBinding({
+          ...address,
+          binding: makeToolBindingIdentity({
+            ...identity.value,
+            source: ToolBindingSource.cases.ProcessLocal.make({
+              sourceRevision: ToolSourceRevision.make("process:retired-generation"),
+            }),
+          }),
+          publication,
+        }).pipe(Effect.flip)
+        expect(retired).toMatchObject({ _tag: "ToolBindingReplayError", reason: "SourceMismatch" })
+
+        const withoutPublication = yield* resolveStoredToolBinding({
+          ...address,
+          binding: identity.value,
+        }).pipe(Effect.flip)
+        expect(withoutPublication).toMatchObject({
+          _tag: "ToolBindingReplayError",
+          reason: "SourceMismatch",
+        })
+      }).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- The scenario owns a production test root with its authored extension.
+        Effect.provide(layer),
+      )
+    }).pipe(Effect.timeout("5 seconds")),
+  )
 
   it.live("rejects a changed loaded publication revision with the same artifact and schema", () =>
     Effect.sync(() => {

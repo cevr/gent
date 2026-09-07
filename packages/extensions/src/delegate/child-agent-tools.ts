@@ -67,21 +67,29 @@ export const ControlChildAgent = tool({
     "After completion, use read_session with the returned sessionId and branchId to read the child output. Omit goal to avoid another model call.",
     "Read the output before treating completion as task success. Interrupted or failed turns can have partial output.",
   ],
-  params: Schema.TaggedUnion({
-    inspect: { requestId: RequestId },
-    wait: {
-      requestId: RequestId,
-      waitMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(30000)),
-    },
-    cancel: { requestId: RequestId },
+  params: Schema.Struct({
+    action: Schema.Literals(["inspect", "wait", "cancel"]),
+    requestId: RequestId,
+    waitMs: Schema.optionalKey(
+      Schema.Int.check(
+        Schema.isGreaterThanOrEqualTo(1),
+        Schema.isLessThanOrEqualTo(30000),
+      ).annotate({ description: "Required for wait: how long to wait for completion" }),
+    ),
   }),
   output: ChildObservation,
   execute: Effect.fn("ControlChildAgent.execute")(function* (params) {
     const ctx = yield* ExtensionContext
-    if (params._tag === "cancel") yield* ctx.Agent.cancel({ requestId: params.requestId })
+    if (params.action === "cancel") yield* ctx.Agent.cancel({ requestId: params.requestId })
     let observation
-    if (params._tag === "wait") {
-      observation = yield* ctx.Agent.wait(params).pipe(
+    if (params.action === "wait") {
+      const waitMs = Option.fromUndefinedOr(params.waitMs)
+      if (Option.isNone(waitMs))
+        return yield* new AgentRunError({ message: "agent-child wait requires waitMs" })
+      observation = yield* ctx.Agent.wait({
+        requestId: params.requestId,
+        waitMs: waitMs.value,
+      }).pipe(
         Effect.catchTag("TimeoutError", (cause) =>
           Effect.fail(
             new AgentRunError({
@@ -113,7 +121,7 @@ export const ControlChildAgent = tool({
   }),
 })
 
-/** Opt-in until the cell cutover and usage-limit checks are complete. */
+/** Durable child admission and control for cells. Registered as a builtin. */
 export const ChildAgentExtension = defineExtension({
   id: "@gent/child-agents",
   tools: [StartChildAgent, ControlChildAgent],

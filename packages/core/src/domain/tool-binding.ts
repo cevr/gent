@@ -36,10 +36,19 @@ const canonicalResourceVector = Schema.Array(ToolBindingResource).pipe(
 /** The source identity for a tool binding.
  *
  * Dynamic registrations are intentionally marked non-replayable. Their
- * process-local registration token is not a durable identity.
+ * process-local registration token is not a durable identity. A process-local
+ * static binding is replayable only inside the generation that recorded it.
  */
 export const ToolBindingSource = Schema.TaggedUnion({
   Static: {
+    sourceRevision: ToolSourceRevision,
+  },
+  /**
+   * A static tool loaded without a build-owned artifact, as in a source run.
+   * The revision names one resource generation of one process. It is valid for
+   * resume inside that generation and never across a process restart.
+   */
+  ProcessLocal: {
     sourceRevision: ToolSourceRevision,
   },
   DynamicNonReplayable: {

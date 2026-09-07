@@ -88,13 +88,13 @@ and TUI both route through it. Helper thread added the config field.
 
 ## Current state at handoff
 
-- Full gate in the Rift is red. One error: `packages/core/tests/extensions/loader.test.ts:54`
-  compares a plain string against a branded `ExtensionId`.
-- Runtime lines now: 90,325 (baseline 86,965). Net reduction is unproved.
-- Executor extension still exists (9 files, 1,898 lines) and is still registered
-  in `packages/extensions/src/index.ts`.
-- `cell` is not the default model surface. It is advertised only for selected
-  cell turns.
+Updated by Claude after the handoff:
+
+- Inherited work is committed in the Rift as four commits (docs, FX UI, runtime,
+  test fix). The gate was red on two test-only type errors; both are fixed.
+- Stage 4 cutover landed: `@gent/cell` is a core builtin composed at the server
+  root, the Executor is deleted, and source runs use `ProcessLocal` bindings.
+- Runtime lines: 88,534 (baseline 86,965). Net reduction is still unproved.
 
 ## Remaining work
 

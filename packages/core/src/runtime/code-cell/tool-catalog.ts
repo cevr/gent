@@ -4,12 +4,19 @@ import { getToolMetadata, tool } from "../../domain/capability/tool.js"
 import { ToolResultFailure } from "../../domain/tool-output.js"
 import { CurrentToolCall } from "../agent/current-tool-call.js"
 
-const CatalogInput = Schema.TaggedUnion({
-  search: {
-    query: Schema.String.check(Schema.isMaxLength(256)),
-    offset: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
-  },
-  describe: { name: Schema.String },
+const CatalogInput = Schema.Struct({
+  action: Schema.Literals(["search", "describe"]),
+  query: Schema.optionalKey(
+    Schema.String.check(Schema.isMaxLength(256)).annotate({
+      description: "search: substring of a tool name or description; empty lists every tool",
+    }),
+  ),
+  offset: Schema.optionalKey(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).annotate({
+      description: "search: page start from a previous nextOffset",
+    }),
+  ),
+  name: Schema.optionalKey(Schema.String.annotate({ description: "describe: the tool name" })),
 })
 
 /** Read the selected capabilities directly. No second schema registry or execution authority. */
@@ -28,23 +35,24 @@ export const ToolCatalog = tool({
       })
     }
     const bindings = current.value.toolBindings
-    if (input._tag === "describe") {
-      const selected = Option.fromUndefinedOr(bindings.get(input.name))
+    if (input.action === "describe") {
+      const name = Option.getOrElse(Option.fromUndefinedOr(input.name), () => "")
+      const selected = Option.fromUndefinedOr(bindings.get(name))
       if (Option.isNone(selected)) {
         return yield* new ToolResultFailure({
           message: "Tool is not selected for this turn",
-          result: { error: "Tool is not selected for this turn", name: input.name },
+          result: { error: "Tool is not selected for this turn", name },
         })
       }
       const capability = selected.value.capability
       return yield* Schema.decodeUnknownEffect(Schema.Json)({
-        name: input.name,
+        name,
         description: capability.description,
         guidelines: getToolMetadata(capability).promptGuidelines ?? [],
         parameters: AiTool.getJsonSchema(capability),
       })
     }
-    const query = input.query.toLowerCase()
+    const query = Option.getOrElse(Option.fromUndefinedOr(input.query), () => "").toLowerCase()
     const names = [...bindings.entries()]
       .filter(
         ([name, entry]) =>

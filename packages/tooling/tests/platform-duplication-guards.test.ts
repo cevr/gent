@@ -182,7 +182,7 @@ describe("platform duplication guards", () => {
         [
           "const withConnection = <A>(",
           "  baseUrl: string,",
-          "  use: (conn: McpConnection) => Effect.Effect<A, ExecutorMcpError>,",
+          "  use: (conn: McpConnection) => Effect.Effect<A, ExampleMcpError>,",
           ") => Effect.acquireUseRelease(acquireConnection(baseUrl), use, releaseConnection)",
         ].join("\n"),
       ),
@@ -300,7 +300,7 @@ describe("platform duplication guards", () => {
 
     expect(
       findPlatformDuplicationViolations(
-        "packages/extensions/src/executor/mcp-bridge.ts",
+        "packages/extensions/src/example/mcp-bridge.ts",
         [
           "withConnection(baseUrl, (conn) =>",
           "  Effect.tryPromise(() => conn.client.callTool({ name: 'execute' })),",
@@ -309,7 +309,7 @@ describe("platform duplication guards", () => {
       ),
     ).toEqual([
       {
-        file: "packages/extensions/src/executor/mcp-bridge.ts",
+        file: "packages/extensions/src/example/mcp-bridge.ts",
         line: 1,
         message:
           "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`.",

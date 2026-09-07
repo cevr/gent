@@ -2,6 +2,7 @@ import { canonicalJsonString } from "effect-encore"
 import { Option, Predicate, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import type { LoadedExtension } from "../../domain/extension.js"
+import type { ResourceGenerationId } from "../../domain/resource-generation.js"
 import {
   makeToolBindingIdentity,
   ToolBindingSource,
@@ -134,6 +135,29 @@ export const attachToolBindingIdentity = (
     resources: resourceVectorFor(context.resources),
   })
   return { ...entry, binding }
+}
+
+/** Identity for a static tool without a build artifact. It names one process generation. */
+export const processLocalToolBindingIdentity = (
+  entry: ResolvedToolCapability,
+  context: {
+    readonly generationId: ResourceGenerationId
+    readonly resources: ReadonlyArray<ResourceDescriptor>
+    readonly hash: (input: string) => string
+  },
+): Option.Option<ToolBindingIdentity> => {
+  if (entry.origin === "dynamic" || Predicate.isNotUndefined(entry.binding)) return Option.none()
+  return Option.some(
+    makeToolBindingIdentity({
+      toolId: getToolId(entry.capability),
+      extensionId: entry.extensionId,
+      source: ToolBindingSource.cases.ProcessLocal.make({
+        sourceRevision: ToolSourceRevision.make(`process:${context.generationId}`),
+      }),
+      schemaRevision: schemaRevisionFor(entry.capability, context.hash),
+      resources: resourceVectorFor(context.resources),
+    }),
+  )
 }
 
 const sameResource = (

@@ -30,7 +30,7 @@ import { PlanExtension } from "./plan.js"
 import { TodoExtension } from "./todo/index.js"
 import { HandoffExtension } from "./handoff.js"
 import { ArtifactsExtension } from "./artifacts/index.js"
-import { ExecutorExtension } from "./executor/index.js"
+import { ChildAgentExtension } from "./delegate/child-agent-tools.js"
 import { ReadTool } from "./fs-tools/read.js"
 import { WriteTool } from "./fs-tools/write.js"
 import { EditTool } from "./fs-tools/edit.js"
@@ -120,7 +120,6 @@ export {
   TodoExtension,
   HandoffExtension,
   ArtifactsExtension,
-  ExecutorExtension,
 }
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner>> = [
@@ -128,7 +127,7 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner>
   FsToolsExtension,
   ExecToolsExtension,
   NetworkToolsExtension,
-  ExecutorExtension,
+  ChildAgentExtension,
   DelegateExtension,
   InteractionToolsExtension,
   SessionToolsExtension,

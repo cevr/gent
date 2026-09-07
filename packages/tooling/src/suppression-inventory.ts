@@ -377,18 +377,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "// @effect-diagnostics-next-line strictEffectProvide:off",
   },
   {
-    file: "packages/extensions/src/executor/sidecar.ts",
-    line: 258,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics preferSchemaOverJson:off — parsing sidecar registry file",
-  },
-  {
-    file: "packages/extensions/src/executor/mcp-bridge.ts",
-    line: 317,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line preferSchemaOverJson:off",
-  },
-  {
     file: "packages/core/src/test-utils/extension-harness.ts",
     line: 3,
     kind: "effect-diagnostics",

@@ -5,7 +5,7 @@ import { homedir } from "node:os"
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
 import { getToolId } from "@gent/core/extensions/api"
-import { BuiltinExtensions } from "@gent/extensions"
+import { shippedPreset } from "./helpers/test-preset.js"
 import { GentPlatform } from "../../core/src/runtime/gent-platform"
 import { setupExtension } from "../../core/src/runtime/extensions/loader"
 
@@ -17,7 +17,7 @@ describe("builtin tool schemas", () => {
       Effect.gen(function* () {
         const failures: string[] = []
 
-        for (const extension of BuiltinExtensions) {
+        for (const extension of shippedPreset.extensionInputs) {
           const loaded = yield* setupExtension(
             { extension, scope: "builtin", sourcePath: "builtin" },
             process.cwd(),

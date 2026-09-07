@@ -48,10 +48,10 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
         const handle = yield* Ref.make(Option.none<typeof ChildAgentHandle.Type>())
         const sources = [
           "const child = await tools.call('agent-start', {agent: 'child', prompt: 'Wait for cancellation'}); await tools.call('child-handle', {_tag: 'save', handle: child}); await tools.call('model-started', {}); true",
-          "(await tools.call('agent-child', {_tag: 'inspect', requestId: child.requestId}))._tag === 'pending'",
-          "typeof child === 'undefined' && (await tools.call('agent-child', {_tag: 'inspect', requestId: (await tools.call('child-handle', {_tag: 'get'})).requestId}))._tag === 'pending'",
-          "const id = (await tools.call('child-handle', {_tag: 'get'})).requestId; await tools.call('agent-child', {_tag: 'cancel', requestId: id}); (await tools.call('agent-child', {_tag: 'wait', requestId: id, waitMs: 2000})).interrupted === true",
-          "const finished = await tools.call('agent-start', {agent: 'child', prompt: 'Return the result', overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['read_session'], deniedTools: ['agent-start'], systemPromptAddendum: 'Report the verified result'}}); const observed = await tools.call('agent-child', {_tag: 'wait', requestId: finished.requestId, waitMs: 2000}); const reply = await tools.call('read_session', {sessionId: observed.sessionId, branchId: observed.branchId}); observed._tag === 'completed' && reply.extracted === false && reply.content.includes('verified child result')",
+          "(await tools.call('agent-child', {action: 'inspect', requestId: child.requestId}))._tag === 'pending'",
+          "typeof child === 'undefined' && (await tools.call('agent-child', {action: 'inspect', requestId: (await tools.call('child-handle', {_tag: 'get'})).requestId}))._tag === 'pending'",
+          "const id = (await tools.call('child-handle', {_tag: 'get'})).requestId; await tools.call('agent-child', {action: 'cancel', requestId: id}); (await tools.call('agent-child', {action: 'wait', requestId: id, waitMs: 2000})).interrupted === true",
+          "const finished = await tools.call('agent-start', {agent: 'child', prompt: 'Return the result', overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['read_session'], deniedTools: ['agent-start'], systemPromptAddendum: 'Report the verified result'}}); const observed = await tools.call('agent-child', {action: 'wait', requestId: finished.requestId, waitMs: 2000}); const reply = await tools.call('read_session', {sessionId: observed.sessionId, branchId: observed.branchId}); observed._tag === 'completed' && reply.extracted === false && reply.content.includes('verified child result')",
         ]
         const steps = sources.flatMap<SequenceStep>((code, index) => [
           {
@@ -176,7 +176,7 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             const sources = [
-              "const catalog = await tools.call('tool-catalog', {_tag: 'search', query: ''}); if (catalog.names.includes('hidden') || !catalog.names.includes('worker')) throw new Error('Wrong catalog'); const spec = await tools.call('tool-catalog', {_tag: 'describe', name: 'worker'}); if (spec.parameters.type !== 'number' || !spec.guidelines.includes('Supply the current worker PID')) throw new Error('Wrong tool description'); let kept = 21; await tools.call('worker', tools.call.constructor('return process.pid')()); kept",
+              "const catalog = await tools.call('tool-catalog', {action: 'search', query: ''}); if (catalog.names.includes('hidden') || !catalog.names.includes('worker')) throw new Error('Wrong catalog'); const spec = await tools.call('tool-catalog', {action: 'describe', name: 'worker'}); if (spec.parameters.type !== 'number' || !spec.guidelines.includes('Supply the current worker PID')) throw new Error('Wrong tool description'); let kept = 21; await tools.call('worker', tools.call.constructor('return process.pid')()); kept",
               "kept += 1",
               "await tools.call('worker', tools.call.constructor('return process.pid')()); typeof kept",
               "let rejected = false; try { await tools.call('cell', {code: 'kept = 0'}) } catch (error) { rejected = error.message.includes('A cell cannot invoke another outer cell as a host tool') }; let hiddenRejected = false; try { await tools.call('hidden', {}) } catch { hiddenRejected = true }; rejected && hiddenRejected && kept === 23",

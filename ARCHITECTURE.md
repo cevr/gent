@@ -295,7 +295,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   `ExtensionContext.Agent` exposes these operations with host-owned parent IDs.
   Start requires a tool context and injects its tool-call ID. Requests can inspect,
   wait, and cancel owned starts but cannot invent a tool identity to start work.
-  The opt-in `ChildAgentExtension` supplies `agent-start` and `agent-child` as
+  The builtin `ChildAgentExtension` supplies `agent-start` and `agent-child` as
   ordinary tools. Cells use `tools.call`; the bridge keeps permissions, bound
   generations, and operation receipts. Start derives its request ID from the
   host tool-call ID. It accepts the existing RunSpec overrides for model,
@@ -403,8 +403,11 @@ Files: `interaction-request.ts` (InteractionPendingError, makeInteractionService
 
 Core runtime should not reach for ambient process state unless the app shell is the real owner.
 
-The private Bun cell implementation in `runtime/code-cell/` is not yet selected
-by a model profile. `cell-kernel.ts` owns serialized evaluate/reset operations,
+The Bun cell implementation in `runtime/code-cell/` is the shipped model
+execution surface. `cell-extension.ts` declares the `@gent/cell` builtin with the
+`cell` and `tool-catalog` tools; core owns it because the turn resolver owns the
+`cell` surface rule. The server root composes it ahead of the extension package
+builtins. Test presets that exercise host tools directly omit it. `cell-kernel.ts` owns serialized evaluate/reset operations,
 evaluation deadlines, host-call dispatch, and worker disposal. Each evaluation
 receives its host service from the caller's Effect context. Worker faults lose
 working state; ordinary cell errors preserve it. No cell is automatically replayed.
@@ -429,8 +432,12 @@ from the platform module, not cwd or the Bun executable. Source runs need the co
 build first. The TUI build sets the compiled-host marker explicitly.
 `agent-loop.behavior.ts` builds `CellExecution.Branch` in the existing loop scope
 and supplies it to turn execution. Each branch owns a separate service and lazy
-worker. Closing the loop scope closes that worker. Source-mode durable builtin
-identity and default model dispatch remain unfinished. The existing interrupt
+worker. Closing the loop scope closes that worker. Source runs have no
+build artifact, so builtin tools carry no durable identity there; cells record a
+`ProcessLocal` binding that names the live resource generation instead. Such an
+operation resumes only inside that generation and is rejected with
+`SourceMismatch` after a restart or replacement. Compiled hosts keep durable
+artifact identities. The existing interrupt
 command now also calls the branch cell service's cancellation operation. It
 signals active evaluation and waits for cleanup. Cells queued before cancellation
 cannot evaluate; the branch interrupt flag also stops later calls in that turn.
@@ -441,7 +448,6 @@ the same policy result. The full host map supplies cell callbacks and recovery;
 the outer map cannot directly dispatch unadvertised host tools. Tool discovery
 returns the selected declaration's input schema and usage guidelines. External
 drivers and turns that do not select `cell` keep their existing tool surface.
-This does not register cell as a default builtin yet.
 Cancellation saves a failed outer receipt without replaying source. An active
 worker loses state and requires explicit reset; a cell stopped before evaluation
 reports that it did not start. The steering RPC still acknowledges durable
@@ -462,7 +468,6 @@ incomplete claims do not start a worker. Initial startup failures consume the
 same bounded replacement budget as later worker failures. Interruption leaves
 the claim incomplete; the next call reports a typed unknown outcome without
 running the source again. A saved result does not restore VM working state.
-The model profile does not start cells through this service yet.
 Inner operation bindings and durable approvals use the stores described below.
 
 `runtime/agent/current-tool-call.ts` carries the transcript-owned call address

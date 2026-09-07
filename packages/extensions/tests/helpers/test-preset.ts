@@ -6,6 +6,7 @@ import { Layer, Path } from "effect"
 import { tmpdir } from "node:os"
 import { BunFileSystem } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
+import { CellExtension } from "@gent/core-internal/runtime/code-cell/cell-extension"
 import { AllBuiltinAgents } from "./builtin-agents.js"
 import { GitReader } from "../../src/librarian/index.js"
 import { Test as MemoryVaultTest } from "../../src/memory/vault.js"
@@ -19,6 +20,19 @@ const memoryVaultTestLayer = () =>
     Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
   )
 
+/** The shipped composition: core's cell builtin plus the extension builtins. */
+export const shippedPreset = {
+  agents: AllBuiltinAgents,
+  extensionInputs: [CellExtension, ...BuiltinExtensions],
+  layerOverrides: {
+    "@gent/memory": memoryVaultTestLayer,
+  },
+} satisfies Pick<E2ELayerConfig, "agents" | "extensionInputs" | "layerOverrides">
+
+/**
+ * Native tool surface for tool-behavior tests. Without the cell builtin the
+ * model calls host tools directly; the same bound execution path serves cells.
+ */
 export const e2ePreset = {
   agents: AllBuiltinAgents,
   extensionInputs: BuiltinExtensions,

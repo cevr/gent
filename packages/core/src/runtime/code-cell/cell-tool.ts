@@ -13,8 +13,8 @@ export const CellTool = tool({
   promptGuidelines: [
     "Values remain available in later cells on this branch while its worker lives.",
     "Call host tools with await tools.call(name, input).",
-    "Discover selected tools with await tools.call('tool-catalog', {_tag: 'search', query: ''}). Search returns 20 names; pass nextOffset as offset for the next page.",
-    "Get an input schema with await tools.call('tool-catalog', {_tag: 'describe', name: 'tool-name'}). Descriptions do not grant permission to execute.",
+    "Discover selected tools with await tools.call('tool-catalog', {action: 'search', query: ''}). Search returns 20 names; pass nextOffset as offset for the next page.",
+    "Get an input schema with await tools.call('tool-catalog', {action: 'describe', name: 'tool-name'}). Descriptions do not grant permission to execute.",
     "Set reset: true to discard retained values before running new code. Use this after worker state loss.",
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
   ],

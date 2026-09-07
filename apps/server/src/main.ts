@@ -6,6 +6,7 @@ import { Clock, Config, Console, Context, Deferred, Effect, Layer, Option } from
 import { seedDebugSession } from "@gent/core-internal/debug/session.js"
 import { startDebugScenario } from "./debug/scenario.js"
 import { BuiltinExtensions } from "@gent/extensions"
+import { CellExtension } from "@gent/core-internal/runtime/code-cell/cell-extension.js"
 import { BuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
 import { buildServerRoot } from "@gent/core-internal/server/server-root.js"
 
@@ -122,7 +123,7 @@ const program = Effect.scoped(
         persistenceMode: config.persistenceMode,
         providerMode: config.providerMode,
         scheduledJobCommand: Option.getOrUndefined(config.scheduledJobCommand),
-        extensions: BuiltinExtensions,
+        extensions: [CellExtension, ...BuiltinExtensions],
       },
       identity: {
         serverId: config.serverId,

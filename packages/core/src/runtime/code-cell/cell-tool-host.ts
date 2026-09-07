@@ -2,7 +2,10 @@ import { Effect, Option } from "effect"
 import type { InteractionRequestId } from "../../domain/ids.js"
 import { CellToolOperationStorage } from "../../storage/cell-tool-operation-storage.js"
 import type { OwnedToolCallAddress } from "../../storage/sqlite/owned-tool-call.js"
-import { resolveStoredToolBinding } from "../agent/tool-binding-resolution.js"
+import {
+  cellOperationBindingIdentity,
+  resolveStoredToolBinding,
+} from "../agent/tool-binding-resolution.js"
 import type { ResolvedToolCapability } from "../agent/tool-runner.js"
 import {
   runAgentLoopTurnProfile,
@@ -81,13 +84,20 @@ export const makeCellToolHost = (
           yield* requireCellHostBranch(params)
           const storage = yield* CellToolOperationStorage
           const captured = Option.fromUndefinedOr(params.toolBindings.get(request.name))
-          const identity = Option.flatMap(captured, (entry) =>
-            Option.fromUndefinedOr(entry.binding),
-          )
-          if (Option.isNone(captured) || Option.isNone(identity))
+          if (Option.isNone(captured))
             return yield* new CellEvaluationError({
               phase: "execute",
-              message: "Cell tool requires an available bound source identity",
+              message: `Tool ${request.name} is not selected for this turn`,
+              output: "",
+            })
+          const identity = yield* cellOperationBindingIdentity(
+            captured.value,
+            params.profile.turnPublication,
+          )
+          if (Option.isNone(identity))
+            return yield* new CellEvaluationError({
+              phase: "execute",
+              message: `Tool ${request.name} has no bindable source identity`,
               output: "",
             })
           const key = { cell: params.cell, operationId: request.operationId }

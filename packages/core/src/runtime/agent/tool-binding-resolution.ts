@@ -22,10 +22,11 @@ import {
   bindingMismatchReason,
   bindingResourcesFromPlan,
   makeBindingReplayError,
+  processLocalToolBindingIdentity,
   sameToolBindingIdentity,
   type ToolBindingReplayReason,
 } from "./tool-binding-replay.js"
-import { ToolRunner } from "./tool-runner.js"
+import { ToolRunner, type ResolvedToolCapability } from "./tool-runner.js"
 
 /** Capture the loaded capability and its exact publication identity. */
 export const captureCurrentToolBinding = Effect.fn("ToolBinding.captureCurrent")(
@@ -51,6 +52,26 @@ export const captureCurrentToolBinding = Effect.fn("ToolBinding.captureCurrent")
         hash: (input: string) => platform.hash("sha256", input),
       }),
     )
+  },
+)
+
+const publicationResources = (publication: RuntimeProfilePublication) =>
+  bindingResourcesFromPlan(publication.plan.descriptors, publication.plan.startOrder)
+
+/**
+ * The identity a cell records for one inner host operation. A build-owned
+ * binding is durable. A source run has none, so the operation names the live
+ * process generation instead; resume is then valid only inside that generation.
+ */
+export const cellOperationBindingIdentity = Effect.fn("ToolBinding.cellOperationIdentity")(
+  function* (entry: ResolvedToolCapability, publication: RuntimeProfilePublication) {
+    if (Predicate.isNotUndefined(entry.binding)) return Option.some(entry.binding)
+    const platform = yield* GentPlatform
+    return processLocalToolBindingIdentity(entry, {
+      generationId: publication.generationId,
+      resources: publicationResources(publication),
+      hash: (input: string) => platform.hash("sha256", input),
+    })
   },
 )
 
@@ -89,6 +110,32 @@ export const resolveStoredToolBinding = Effect.fn("ToolBinding.resolveStored")(f
       "ToolUnavailable",
       `Tool ${toolName} is not available in the loaded extension profile`,
     )
+  }
+  if (params.binding.source._tag === "ProcessLocal") {
+    const publication = Option.fromUndefinedOr(params.publication)
+    if (Option.isNone(publication)) {
+      return yield* fail(
+        "SourceMismatch",
+        `Tool ${toolName} was bound to a process generation that is no longer live`,
+      )
+    }
+    const platform = yield* GentPlatform
+    const live = processLocalToolBindingIdentity(current.value, {
+      generationId: publication.value.generationId,
+      resources: publicationResources(publication.value),
+      hash: (input: string) => platform.hash("sha256", input),
+    })
+    if (Option.isNone(live)) {
+      return yield* fail(
+        "SourceMismatch",
+        `Tool ${toolName} now has a different source identity than its process-local binding`,
+      )
+    }
+    if (!sameToolBindingIdentity(params.binding, live.value)) {
+      const reason = bindingMismatchReason(params.binding, live.value)
+      return yield* fail(reason, `Tool ${toolName} binding identity changed (${reason})`)
+    }
+    return current.value
   }
   if (Predicate.isUndefined(current.value.binding)) {
     return yield* fail(

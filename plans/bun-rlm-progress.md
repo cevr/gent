@@ -1,5 +1,61 @@
 # Bun RLM progress
 
+## Stage 4: default cell surface and Executor removal
+
+Core now declares the `@gent/cell` builtin in `runtime/code-cell/cell-extension.ts`
+with the `cell` and `tool-catalog` tools. Core owns it because the turn resolver
+owns the `cell` surface rule, and the extensions package lint forbids runtime
+imports. The server root composes `[CellExtension, ...BuiltinExtensions]`.
+`ChildAgentExtension` joined the extension builtins. The old Executor extension,
+its nine source files, its three test files, and its two approved suppression
+entries are deleted. The MCP dependency stays for ACP.
+
+Source runs had no bound identity for builtin tools, so cells could not call them
+outside a compiled host. A new `ProcessLocal` binding source names the live
+resource generation. The cell host records it when a captured tool has no
+durable artifact identity. Resume validates it against the current publication
+generation and rejects a retired generation or a missing publication with
+`SourceMismatch`. Compiled hosts keep durable artifact identities. Native tool
+replay is unchanged.
+
+`agent-child` and `tool-catalog` now take flat object inputs with an `action`
+field. The Anthropic structured-output check rejects top-level unions, and the
+builtin schema test now covers the shipped composition.
+
+Test presets split: `shippedPreset` is the shipped composition; `e2ePreset` keeps
+the native tool surface for tool-behavior tests, which exercise the same bound
+execution path that serves cell calls.
+
+Evidence: the shipped-surface RPC test proves both model calls advertise only
+`cell`, a cell reads a file through the builtin `read` tool from a source host,
+and the bound value survives into the next turn. The replay test proves a
+process-local binding resumes inside its generation and fails outside it.
+Focused runs: 26 cell and replay tests, the builtin schema test, 85 tooling
+tests, and the extension suite passed. The full gate runs in the commit hook.
+
+Measurement: runtime lines 88,534 across 459 files (previous receipt 90,223;
+baseline 86,965). This unit removed 1,945 runtime lines and added 137. Test
+lines: 1,173 removed, 97 added. Net runtime remains 1,569 above the baseline;
+the fixed workflow tools and delegate composition paths are still present.
+
+Sources:
+
+- `packages/core/src/runtime/code-cell/cell-extension.ts`
+- `packages/core/src/runtime/code-cell/cell-tool-host.ts`
+- `packages/core/src/runtime/code-cell/tool-catalog.ts`
+- `packages/core/src/runtime/agent/tool-binding-resolution.ts`
+- `packages/core/src/runtime/agent/tool-binding-replay.ts`
+- `packages/core/src/domain/tool-binding.ts`
+- `packages/extensions/src/delegate/child-agent-tools.ts`
+- `packages/extensions/src/index.ts`
+- `packages/extensions/tests/helpers/test-preset.ts`
+- `packages/extensions/tests/tool-schema.test.ts`
+- `apps/server/src/main.ts`
+- `packages/core/tests/extensions/cell-default-surface.test.ts`
+- `packages/core/tests/runtime/agent-loop/tool-binding-replay.test.ts`
+- `packages/tooling/src/suppression-inventory.ts`
+- `ARCHITECTURE.md`
+
 ## Worker launch supports source and compiled hosts
 
 CellExecution.Branch now reads the installed worker path from GentPlatform.
