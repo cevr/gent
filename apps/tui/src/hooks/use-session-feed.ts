@@ -652,6 +652,20 @@ export function useSessionFeed(
     Effect.gen(function* () {
       // Drop events if identity changed
       if (Option.isNone(currentKey) || currentKey.value !== key) return
+      if (envelope.event._tag === "StreamSynchronized") {
+        // Replay is complete; later envelopes are live. The marker shares the cursor id
+        // with the last replayed event, so it must not enter the duplicate set.
+        const lastSeen = Option.getOrElse(
+          Option.fromNullishOr(lastSeenEventIdByKey.get(key)),
+          () => 0,
+        )
+        lastSeenEventIdByKey.set(key, Math.max(lastSeen, envelope.event.lastEventId))
+        client.log.info("feed.stream.synchronized", {
+          key,
+          lastEventId: envelope.event.lastEventId,
+        })
+        return
+      }
       if (processedEnvelopeIds.has(envelope.id)) {
         client.log.debug("feed.event.duplicate", { key, eventId: envelope.id })
         return

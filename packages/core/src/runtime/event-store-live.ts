@@ -4,6 +4,7 @@ import {
   EventStore,
   EventStoreError,
   makeSerializedEventDelivery,
+  rejectStreamMarker,
 } from "../domain/event.js"
 import type { EventStoreService } from "../domain/event.js"
 import {
@@ -29,6 +30,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
 
       const service: EventStoreService = {
         append: Effect.fn("EventStore.append")(function* (event) {
+          yield* rejectStreamMarker(event)
           const currentSpan = yield* Effect.currentParentSpan.pipe(Effect.option)
           const appendOptions = Option.match(currentSpan, {
             onNone: () => ({}),
@@ -48,7 +50,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
           yield* deliver(envelope)
         }),
 
-        subscribe: ({ sessionId, branchId, after }) =>
+        subscribe: ({ sessionId, branchId, after, synchronize }) =>
           Stream.scoped(
             Stream.unwrap(
               Effect.gen(function* () {
@@ -74,8 +76,10 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
 
                 return makeCursorReplayStream({
                   subscription,
+                  sessionId,
                   afterId: EventId.make(afterId),
                   branchId,
+                  synchronize,
                   load: (cursor) =>
                     eventStorage
                       .listEvents({ sessionId, afterId: cursor })

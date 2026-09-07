@@ -64,6 +64,9 @@ export type Question = typeof QuestionSchema.Type
 // unchanged. Wire shape: `{ _tag: "VariantName", ...fields }`.
 // ============================================================================
 
+export const EventId = Schema.Finite.pipe(branded("EventId"))
+export type EventId = typeof EventId.Type
+
 export const AgentEvent = Schema.TaggedUnion({
   SessionStarted: {
     sessionId: SessionId,
@@ -270,6 +273,17 @@ export const AgentEvent = Schema.TaggedUnion({
     branchId: BranchId,
     extensionId: ExtensionId,
   },
+  /**
+   * Synchronization marker. A subscription opened with `synchronize` emits it
+   * once, after the durable replay and before the first live event. Its
+   * envelope id equals the replay cursor, so a client that stores the last
+   * seen id keeps an exact resume point. It is never stored: `append` rejects it.
+   */
+  StreamSynchronized: {
+    sessionId: SessionId,
+    branchId: Schema.optional(BranchId),
+    lastEventId: EventId,
+  },
 })
 export type AgentEvent = Schema.Schema.Type<typeof AgentEvent>
 
@@ -333,6 +347,8 @@ export const AgentRestarted = AgentEvent.cases.AgentRestarted
 export type AgentRestarted = typeof AgentEvent.cases.AgentRestarted.Type
 export const ExtensionStateChanged = AgentEvent.cases.ExtensionStateChanged
 export type ExtensionStateChanged = typeof AgentEvent.cases.ExtensionStateChanged.Type
+export const StreamSynchronized = AgentEvent.cases.StreamSynchronized
+export type StreamSynchronized = typeof AgentEvent.cases.StreamSynchronized.Type
 
 /** Union of all `_tag` literal strings across `AgentEvent` variants. */
 export type AgentEventTag = Schema.Schema.Type<typeof AgentEvent>["_tag"]
@@ -355,9 +371,6 @@ export type ApprovalResult = {
 // EventEnvelope + EventStore
 // ============================================================================
 
-export const EventId = Schema.Finite.pipe(branded("EventId"))
-export type EventId = typeof EventId.Type
-
 export class EventEnvelope extends Schema.Class<EventEnvelope>("EventEnvelope")({
   id: EventId,
   event: AgentEvent,
@@ -379,6 +392,8 @@ export interface EventStoreService {
     sessionId: SessionId
     branchId?: BranchId
     after?: EventId
+    /** Emit one `StreamSynchronized` marker between the durable replay and live delivery. */
+    synchronize?: boolean
   }) => Stream.Stream<EventEnvelope, EventStoreError>
   /** Remove session PubSub, shutting down any active subscribers. */
   readonly removeSession: (sessionId: SessionId) => Effect.Effect<void>
@@ -453,6 +468,7 @@ const matchEventSessionId = AgentEvent.match({
   AgentRunFailed: (e) => e.parentSessionId,
   AgentRestarted: (e) => e.sessionId,
   ExtensionStateChanged: (e) => e.sessionId,
+  StreamSynchronized: (e) => e.sessionId,
 })
 
 export const getEventSessionId = (event: AgentEvent): SessionId => matchEventSessionId(event)
@@ -493,6 +509,7 @@ const matchEventBranchId = AgentEvent.match({
   AgentRunFailed: (e) => e.branchId,
   AgentRestarted: (e) => e.branchId,
   ExtensionStateChanged: (e) => e.branchId,
+  StreamSynchronized: (e) => e.branchId,
 })
 
 // oxlint-disable-next-line effect/noNullish -- Some event variants intentionally have no branch identity.
@@ -518,6 +535,16 @@ export const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): bo
 
 // EventStore Service
 
+/** The marker describes one subscription's position. Storing it would replay a lie. */
+export const rejectStreamMarker = (event: AgentEvent) =>
+  Effect.gen(function* () {
+    if (event._tag === "StreamSynchronized") {
+      return yield* new EventStoreError({
+        message: "StreamSynchronized is a subscription marker and is never stored",
+      })
+    }
+  })
+
 const makeMemoryEventStore = Effect.gen(function* () {
   const registry = yield* makeSessionPubSubRegistry
   const eventsRef = yield* Ref.make<EventEnvelope[]>([])
@@ -527,6 +554,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
 
   const service: EventStoreService = {
     append: Effect.fn("EventStore.append")(function* (event) {
+      yield* rejectStreamMarker(event)
       const id = yield* Ref.modify(idRef, (n) => [n + 1, n + 1])
       const currentSpan = yield* Effect.currentParentSpan.pipe(Effect.option)
       const fields = {
@@ -548,15 +576,17 @@ const makeMemoryEventStore = Effect.gen(function* () {
       yield* deliver(envelope)
     }),
 
-    subscribe: ({ sessionId, branchId, after }) =>
+    subscribe: ({ sessionId, branchId, after, synchronize }) =>
       Stream.scoped(
         Stream.unwrap(
           Effect.gen(function* () {
             const subscription = yield* registry.subscribe(sessionId)
             return makeCursorReplayStream({
               subscription,
+              sessionId,
               afterId: after ?? EventId.make(0),
               branchId,
+              synchronize,
               load: (afterId) =>
                 Ref.get(eventsRef).pipe(
                   Effect.map((events) =>

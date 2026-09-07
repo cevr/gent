@@ -289,7 +289,7 @@ const RpcHandlers = GentRpcs.toLayer(
         ),
 
       "session.events": ({ sessionId, branchId, after }: SubscribeEventsInput) => {
-        const subscription = { sessionId, branchId }
+        const subscription = { sessionId, branchId, synchronize: true }
         if (!Predicate.isUndefined(after))
           Object.assign(subscription, { after: EventId.make(after) })
         return eventStore.subscribe(subscription).pipe(Stream.filter(isPublicTransportEvent))

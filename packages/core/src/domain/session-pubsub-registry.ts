@@ -1,6 +1,21 @@
-import { Effect, HashMap, Option, Predicate, PubSub, type Scope, Stream, TxRef } from "effect"
-import type { EventEnvelope, EventId } from "./event.js"
-import { getEventSessionId, matchesBranchFilter } from "./event.js"
+import {
+  Clock,
+  Effect,
+  HashMap,
+  Option,
+  Predicate,
+  PubSub,
+  type Scope,
+  Stream,
+  TxRef,
+} from "effect"
+import type { EventId } from "./event.js"
+import {
+  EventEnvelope,
+  getEventSessionId,
+  matchesBranchFilter,
+  StreamSynchronized,
+} from "./event.js"
 import type { BranchId, SessionId } from "./ids.js"
 
 /**
@@ -79,8 +94,16 @@ export const makeSessionPubSubRegistry: Effect.Effect<SessionPubSubRegistry> = E
  */
 export const makeCursorReplayStream = <E>(params: {
   readonly subscription: PubSub.Subscription<EventId>
+  readonly sessionId: SessionId
   readonly afterId: EventId
   readonly branchId?: BranchId
+  /**
+   * Emit one `StreamSynchronized` envelope after the replay and before live
+   * delivery. Its id is the replay cursor, so a client resuming from the last
+   * seen id neither skips nor repeats an event. Transport subscriptions ask for
+   * it; in-process consumers that only await specific events do not.
+   */
+  readonly synchronize?: boolean
   /** Session events with id greater than the cursor, ascending. */
   readonly load: (afterId: EventId) => Effect.Effect<ReadonlyArray<EventEnvelope>, E>
 }): Stream.Stream<EventEnvelope, E> =>
@@ -94,12 +117,28 @@ export const makeCursorReplayStream = <E>(params: {
         return batch.filter((env) => matchesBranchFilter(env, params.branchId))
       })
       const initial = yield* drain
+      const marker = Effect.gen(function* () {
+        if (params.synchronize !== true) return []
+        const envelope = EventEnvelope.make({
+          id: cursor,
+          event: StreamSynchronized.make({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            lastEventId: cursor,
+          }),
+          createdAt: yield* Clock.currentTimeMillis,
+        })
+        return [envelope]
+      })
       const live = Stream.fromSubscription(params.subscription).pipe(
         // One durable read per burst of notifications.
         Stream.chunks,
         Stream.mapEffect(() => drain),
         Stream.flatMap(Stream.fromIterable),
       )
-      return Stream.concat(Stream.fromIterable(initial), live)
+      return Stream.concat(
+        Stream.fromIterable(initial),
+        Stream.concat(Stream.fromIterable(yield* marker), live),
+      )
     }),
   )

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
-import { AgentEvent, EventStore, type EventEnvelope } from "@gent/core-internal/domain/event"
+import {
+  AgentEvent,
+  EventId,
+  EventStore,
+  type EventEnvelope,
+} from "@gent/core-internal/domain/event"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
 import { SESSION_NOTIFICATION_CAPACITY } from "@gent/core-internal/domain/session-pubsub-registry"
@@ -105,6 +110,64 @@ describe("event stream delivery", () => {
           yield* eventStore.publish(chunk(4))
           const received = yield* Fiber.join(collector).pipe(Effect.timeout("5 seconds"))
           expect(ids(received)).toEqual([1, 4])
+        }).pipe(Effect.provide(store.layer), Effect.timeout("15 seconds")),
+      )
+
+      it.scopedLive("a synchronized subscriber sees one marker between replay and live", () =>
+        Effect.gen(function* () {
+          yield* ensureSession
+          const eventStore = yield* EventStore
+          yield* eventStore.publish(chunk(1))
+          yield* eventStore.publish(chunk(2))
+          // The marker carries the replay cursor even when the branch filter hid the last event.
+          yield* eventStore.publish(chunk(3, otherBranch))
+          // The live append happens only after the marker, so replay and live are distinct.
+          const received = yield* eventStore
+            .subscribe({ sessionId, branchId, after: EventId.make(1), synchronize: true })
+            .pipe(
+              Stream.tap((env) =>
+                Effect.gen(function* () {
+                  if (env.event._tag === "StreamSynchronized") yield* eventStore.publish(chunk(4))
+                }),
+              ),
+              Stream.take(3),
+              Stream.runCollect,
+              Effect.timeout("5 seconds"),
+            )
+          expect(received.map((env) => [Number(env.id), env.event._tag])).toEqual([
+            [2, "StreamChunk"],
+            [3, "StreamSynchronized"],
+            [4, "StreamChunk"],
+          ])
+          expect(received[1]?.event).toMatchObject({ sessionId, branchId, lastEventId: 3 })
+          // Plain subscribers keep the bare event sequence.
+          const plain = yield* eventStore
+            .subscribe({ sessionId, branchId })
+            .pipe(Stream.take(3), Stream.runCollect)
+          expect(ids(plain)).toEqual([1, 2, 4])
+        }).pipe(Effect.provide(store.layer), Effect.timeout("15 seconds")),
+      )
+
+      it.scopedLive("the synchronization marker is never stored", () =>
+        Effect.gen(function* () {
+          yield* ensureSession
+          const eventStore = yield* EventStore
+          const error = yield* eventStore
+            .publish(
+              AgentEvent.cases.StreamSynchronized.make({
+                sessionId,
+                branchId,
+                lastEventId: EventId.make(0),
+              }),
+            )
+            .pipe(Effect.flip)
+          expect(error._tag).toBe("EventStoreError")
+          const events = yield* eventStore
+            .subscribe({ sessionId, synchronize: true })
+            .pipe(Stream.take(1), Stream.runCollect)
+          expect(events.map((env) => [Number(env.id), env.event._tag])).toEqual([
+            [0, "StreamSynchronized"],
+          ])
         }).pipe(Effect.provide(store.layer), Effect.timeout("15 seconds")),
       )
     })

@@ -390,6 +390,15 @@ source, so there is no replay/live race. Both `EventStoreLive` and
 `EventStore.Memory` use this path; `tests/domain/event-stream-delivery.test.ts`
 proves the stalled-subscriber, race, and branch-filter properties for both.
 
+Synchronization marker: a subscription opened with `synchronize` emits one
+`StreamSynchronized` envelope after the replay drain and before the first live
+event. Its id and `lastEventId` are the replay cursor, so a client that resumes
+from the last id it saw neither skips nor repeats an event. The RPC
+`session.events` stream always asks for it; in-process consumers that await a
+specific event do not. The marker is never stored: both event stores reject it
+in `append`. The TUI feed reads it as the end of replay and keeps it out of its
+duplicate set, since it shares an id with the last replayed event.
+
 One interaction primitive: `ctx.Interaction.approve({ text, metadata? })` → `{ approved, notes?, editedContent? }`.
 
 Tools that need human input call `ctx.Interaction.approve()`, which delegates to

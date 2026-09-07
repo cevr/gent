@@ -318,6 +318,59 @@ describe("extension command RPCs", () => {
       )
     }),
   )
+  it.live("RPC event subscriptions mark the move from replay to live", () =>
+    narrowR(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("synced reply"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [],
+            cwd: "/tmp/gent-extension-stream-synchronized",
+          })
+          const untilMarker = (after: number) =>
+            client.session.events({ sessionId, branchId, after }).pipe(
+              Stream.takeUntil((env) => env.event._tag === "StreamSynchronized"),
+              Stream.runCollect,
+            )
+          // A fresh branch replays its creation events, then the marker closes the replay.
+          const fresh = yield* untilMarker(0)
+          expect(fresh.map((env) => env.event._tag)).toEqual([
+            "SessionStarted",
+            "StreamSynchronized",
+          ])
+          expect(fresh[1]?.id).toBe(fresh[0]?.id)
+          yield* client.message.send({ sessionId, branchId, content: "sync" })
+          yield* waitFor(
+            client.message.list({ branchId }),
+            (messages) =>
+              messages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  messageSingleText(message.parts) === "synced reply",
+              ),
+            4000,
+            "synced reply",
+          )
+          // After a turn, the marker closes the replay and names the last replayed id.
+          const replayed = yield* untilMarker(0)
+          const marker = replayed[replayed.length - 1]
+          const events = replayed.slice(0, -1)
+          expect(marker?.event).toMatchObject({ _tag: "StreamSynchronized", sessionId, branchId })
+          expect(events.length).toBeGreaterThan(1)
+          expect(events.every((env) => env.event._tag !== "StreamSynchronized")).toBe(true)
+          expect(marker?.id).toBe(events[events.length - 1]?.id)
+          // Resuming from the marker id replays nothing and synchronizes at once.
+          const resumed = yield* untilMarker(Number(marker?.id))
+          expect(resumed.map((env) => env.event._tag)).toEqual(["StreamSynchronized"])
+        }),
+      ),
+    ).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+  )
+
   it.live("RPC request follow-up on a warm idle branch runs the queued turn", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/queue-follow-up-warm")
