@@ -30,11 +30,10 @@ import { executeSlashCommand } from "../commands/slash-commands"
 import { useCommand } from "../command/context"
 import { useRuntime } from "../hooks/use-runtime"
 import { usePromptHistory } from "../hooks/use-prompt-history"
-import { useScopedKeyboard } from "../keyboard/context"
+import { useScopedKeyboard, type ScopedKeyboardEvent } from "../keyboard/context"
 import { useRouter } from "../router"
 import { formatError } from "../utils/format-error"
 import { useExtensionUI } from "../extensions/context"
-import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useChildSessions } from "../hooks/use-child-sessions"
 import { useSessionFeed } from "../hooks/use-session-feed"
 import {
@@ -59,12 +58,9 @@ import {
   setQueue,
   type QueueState,
 } from "./session-controller-state"
-import {
-  currentMillis,
-  defaultActivityDecor,
-  pickActivityDecor,
-} from "./session-controller-activity"
+import { currentMillis, pickThinkingWord } from "./session-controller-activity"
 import { createSessionCommandRegistry } from "./session-command-registry"
+import { useComposerDrafts, type ComposerDraft } from "../components/composer-drafts"
 
 export interface SessionController {
   client: ClientContextValue
@@ -73,6 +69,7 @@ export interface SessionController {
   queueState: () => QueueState
   composerState: () => ComposerState
   interactionState: () => ComposerInteractionState
+  saveDraft: (draft: ComposerDraft) => void
   uiState: () => ReturnType<typeof SessionUiState.initial>
   promptEntries: () => readonly string[]
   promptSearchState: () => ReturnType<typeof getPromptSearchState>
@@ -83,7 +80,6 @@ export interface SessionController {
     | { phase: "idle"; turn: number }
     | { phase: "thinking"; turn: number }
     | { phase: "tool"; turn: number; toolInfo: string }
-  spinner: () => string
   phaseLabel: () => string
   elapsed: () => number
   getChildren: ReturnType<typeof useChildSessions>["getChildren"]
@@ -168,7 +164,6 @@ export function createSessionController(props: {
     },
   }
   const history = usePromptHistory()
-  const tick = useSpinnerClock()
 
   // ── Auth gate ──
   const [controllerState, setControllerState] = createSignal(
@@ -232,7 +227,12 @@ export function createSessionController(props: {
 
   const [uiState, setUiState] = createSignal(SessionUiState.initial())
   const [composerState, setComposerState] = createSignal<ComposerState>(ComposerState.idle())
-  const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
+  const drafts = useComposerDrafts()
+  const draftBranchId = props.branchId
+  const [interactionState, setInteractionState] = createSignal({
+    ...ComposerInteractionState.initial(),
+    ...Option.getOrElse(drafts.get(draftBranchId), ComposerInteractionState.initial),
+  })
   let activityStartTime = currentMillis()
 
   const handleSessionUiEffect = (effect: SessionUiEffect) => {
@@ -292,8 +292,12 @@ export function createSessionController(props: {
       onNone: () => request,
       onSome: (notes) => ({ ...request, notes }),
     })
+    const requestWithContent = Option.match(Option.fromUndefinedOr(result.editedContent), {
+      onNone: () => requestWithNotes,
+      onSome: (editedContent) => ({ ...requestWithNotes, editedContent }),
+    })
     cast(
-      client.client.interaction.respondInteraction(requestWithNotes).pipe(
+      client.client.interaction.respondInteraction(requestWithContent).pipe(
         Effect.tapError((error) =>
           Effect.sync(() => {
             client.setError(formatError(error))
@@ -381,8 +385,7 @@ export function createSessionController(props: {
     })
   })
 
-  // Pick a random spinner + thinking word each time activity starts
-  let activityDecor = defaultActivityDecor()
+  let thinkingWord = "thinking"
   createEffect(
     on(
       () => activity().phase,
@@ -390,11 +393,9 @@ export function createSessionController(props: {
         if (phase !== "idle") {
           client.runtime.cast(
             Effect.gen(function* () {
-              const spinnerRandom = yield* Random.next
               const wordRandom = yield* Random.next
-              const nextDecor = pickActivityDecor({ spinnerRandom, wordRandom })
               yield* Effect.sync(() => {
-                activityDecor = nextDecor
+                thinkingWord = pickThinkingWord(wordRandom)
               })
             }),
           )
@@ -403,12 +404,6 @@ export function createSessionController(props: {
     ),
   )
 
-  const spinner = createMemo(() => {
-    const t = tick()
-    const step = Math.floor(t / activityDecor.spinner.multiplier)
-    return activityDecor.spinner.frames[step % activityDecor.spinner.frames.length] ?? "·"
-  })
-
   const phaseLabel = createMemo(() => {
     const nextActivity = activity()
     switch (nextActivity.phase) {
@@ -416,7 +411,7 @@ export function createSessionController(props: {
         if (nextActivity.turn > 0) return "idle"
         return "ready"
       case "thinking":
-        return activityDecor.word
+        return thinkingWord
       case "tool":
         return nextActivity.toolInfo
     }
@@ -572,12 +567,56 @@ export function createSessionController(props: {
     client.sendMessage(content)
   }
 
+  const clearMessages = () => {
+    dispatchSessionUi(SessionUiEvent.cases.ClearDisplay.make({}))
+  }
+
+  const handleTranscriptKey = (event: ScopedKeyboardEvent) => {
+    if (event.ctrl !== true) return false
+    if (event.name === "l") {
+      clearMessages()
+      return true
+    }
+    if (event.name !== "o") return false
+    if (event.shift === true) {
+      dispatchSessionUi(SessionUiEvent.cases.ToggleTools.make({}))
+    } else {
+      dispatchSessionUi(SessionUiEvent.cases.ToggleTranscript.make({}))
+    }
+    return true
+  }
+
+  const handleInterrupt = () => {
+    quitChain.reset()
+    if (uiState().overlay._tag !== "none") {
+      exit()
+      return
+    }
+    if (uiState().transcriptExpanded) {
+      dispatchSessionUi(SessionUiEvent.cases.ToggleTranscript.make({}))
+      return
+    }
+    if (interactionState().draft.length > 0) {
+      onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
+      return
+    }
+    if (client.isStreaming()) {
+      client.steer(SteerCommandInput.cases.Cancel.make({}))
+      return
+    }
+    exit()
+  }
+
   useScopedKeyboard((event) => {
     if (promptSearch.handleKey(event)) {
       return true
     }
 
     if (command.handleKeybind(event)) return true
+    if (event.ctrl === true && event.name === "c") {
+      handleInterrupt()
+      return true
+    }
     if (uiState().overlay._tag !== "none") return false
 
     const clearComposer = () => {
@@ -598,6 +637,11 @@ export function createSessionController(props: {
     }
 
     if (event.name === "escape") {
+      if (uiState().transcriptExpanded && !command.paletteOpen()) {
+        dispatchSessionUi(SessionUiEvent.cases.ToggleTranscript.make({}))
+        quitChain.reset()
+        return true
+      }
       if (command.paletteOpen()) {
         command.closePalette()
         quitChain.reset()
@@ -614,21 +658,13 @@ export function createSessionController(props: {
       return true
     }
 
-    if (event.ctrl === true && event.name === "c") {
-      exit()
-      return true
-    }
-
     if (event.ctrl === true && event.name === "r") {
       promptSearch.open()
       quitChain.reset()
       return true
     }
 
-    if (event.ctrl === true && event.name === "o") {
-      dispatchSessionUi(SessionUiEvent.cases.ToggleTools.make({}))
-      return true
-    }
+    if (handleTranscriptKey(event)) return true
 
     if (event.ctrl === true && event.shift === true && event.name === "m") {
       dispatchSessionUi(SessionUiEvent.cases.OpenMermaid.make({}))
@@ -645,6 +681,7 @@ export function createSessionController(props: {
     queueState,
     composerState,
     interactionState,
+    saveDraft: (draft) => drafts.set(draftBranchId, draft),
     uiState,
     promptEntries: history.entries,
     promptSearchState: () => getPromptSearchState(uiState()),
@@ -652,11 +689,10 @@ export function createSessionController(props: {
     toolsExpanded: () => uiState().toolsExpanded,
     treeOverlay: () => getTreeOverlay(uiState().overlay),
     activity,
-    spinner,
     phaseLabel,
     elapsed,
     getChildren,
-    clearMessages: feed.clear,
+    clearMessages,
     onComposerInteraction,
     onSubmit,
     onSlashCommand,

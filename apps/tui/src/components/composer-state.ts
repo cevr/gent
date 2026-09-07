@@ -15,6 +15,7 @@ import {
 const ApprovalResultSchema = Schema.Struct({
   approved: Schema.Boolean,
   notes: Schema.optional(Schema.String),
+  editedContent: Schema.optional(Schema.String),
 })
 
 export type ComposerState =

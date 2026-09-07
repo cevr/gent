@@ -2,7 +2,7 @@
  * Unified composer with autocomplete, interaction renderers, and submit flows.
  */
 
-import { createContext, Show, type Accessor, type JSX } from "solid-js"
+import { createContext, createSignal, Show, type Accessor, type JSX } from "solid-js"
 import { Option, Schema } from "effect"
 import type { ActiveInteraction, ApprovalResult } from "@gent/core-internal/domain/event.js"
 import { useTheme } from "../theme/index"
@@ -12,6 +12,7 @@ import { ComposerInteractionEvent } from "./composer-interaction-state"
 import { useSessionController } from "../routes/session-controller"
 import { useExtensionUI } from "../extensions/context"
 import { useRequiredContext } from "../utils/solid-context"
+import { useTerminalDimensions } from "../terminal-dimensions"
 
 interface ComposerContextValue {
   // eslint-disable-next-line effect/noNullish -- AutocompletePopup uses null for its closed Solid state.
@@ -31,6 +32,10 @@ export function Composer(props: ComposerProps) {
   const sc = useSessionController()
   const controller = useComposerController()
   const ext = useExtensionUI()
+  const dimensions = useTerminalDimensions()
+  const [pickerHeight, setPickerHeight] = createSignal(0)
+  // Keep one transcript row and the composer's spacing/status rows visible.
+  const editorHeight = () => Math.max(1, Math.min(8, dimensions().height - pickerHeight() - 4))
   const decodeMetadata = Schema.decodeUnknownOption(Schema.JsonObject)
   const decodeString = Schema.decodeUnknownOption(Schema.String)
   const composerMode = (): "editing" | "shell" => {
@@ -75,8 +80,6 @@ export function Composer(props: ComposerProps) {
 
   return (
     <ComposerContext.Provider value={contextValue}>
-      {props.children}
-
       <Show when={Option.getOrUndefined(activeInteraction())} keyed>
         {(interaction) => {
           const Renderer = interactionRenderer()
@@ -117,8 +120,17 @@ export function Composer(props: ComposerProps) {
       </Show>
 
       <Show when={controller.mode() !== "interaction" && Option.isNone(composerSurface())}>
-        <box flexShrink={0} flexDirection="row">
-          <text style={{ fg: promptColor() }}>{controller.promptSymbol()}</text>
+        <box
+          flexShrink={0}
+          flexDirection="row"
+          border={["left"]}
+          borderStyle="heavy"
+          borderColor={promptColor()}
+          paddingLeft={1}
+        >
+          <Show when={controller.mode() === "shell"}>
+            <text style={{ fg: promptColor() }}>$ </text>
+          </Show>
           <box flexGrow={1}>
             <textarea
               ref={controller.attachTextarea}
@@ -127,7 +139,7 @@ export function Composer(props: ComposerProps) {
               onSubmit={controller.handleSubmitFromTextarea}
               wrapMode="word"
               minHeight={1}
-              maxHeight={8}
+              maxHeight={editorHeight()}
               keyBindings={[
                 { name: "return", action: "submit" },
                 { name: "return", shift: true, action: "newline" },
@@ -142,6 +154,15 @@ export function Composer(props: ComposerProps) {
           </box>
         </box>
       </Show>
+      <box
+        flexDirection="column"
+        flexShrink={0}
+        onSizeChange={function () {
+          setPickerHeight(this.height)
+        }}
+      >
+        {props.children}
+      </box>
     </ComposerContext.Provider>
   )
 }

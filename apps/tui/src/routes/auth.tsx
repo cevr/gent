@@ -734,7 +734,7 @@ export function Auth(props: AuthProps) {
   // ── Render ──
 
   return (
-    <box flexDirection="column" width="100%" height="100%">
+    <box position="absolute" top={0} left={0} flexDirection="column" width="100%" height="100%">
       <ChromePanel.Root
         title="API Keys"
         width={panelWidth()}

@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 
-import { useTerminalDimensions as useRendererTerminalDimensions } from "@opentui/solid"
+import { useRenderer, useTerminalDimensions as useRendererTerminalDimensions } from "@opentui/solid"
 import { Option } from "effect"
-import { createContext, useContext, type Accessor, type ParentProps } from "solid-js"
+import { createContext, createMemo, useContext, type Accessor, type ParentProps } from "solid-js"
 
 export interface TerminalDimensions {
   readonly width: number
@@ -14,7 +14,12 @@ const TerminalDimensionsContext = createContext<Option.Option<Accessor<TerminalD
 )
 
 export function TerminalDimensionsProvider(props: ParentProps) {
-  const dimensions = useRendererTerminalDimensions()
+  const renderer = useRenderer()
+  const surfaceDimensions = useRendererTerminalDimensions()
+  const dimensions = createMemo(() => {
+    surfaceDimensions()
+    return { width: renderer.terminalWidth, height: renderer.terminalHeight }
+  })
   return (
     <TerminalDimensionsContext.Provider value={Option.some(dimensions)}>
       {props.children}

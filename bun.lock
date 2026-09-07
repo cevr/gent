@@ -172,6 +172,9 @@
       "version": "0.0.0",
     },
   },
+  "patchedDependencies": {
+    "@opentui/core@0.5.10": "patches/@opentui%2Fcore@0.5.10.patch",
+  },
   "overrides": {
     "@effect/ai-anthropic": "4.0.0-rc.112",
     "@effect/ai-openai": "4.0.0-rc.112",

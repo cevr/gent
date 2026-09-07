@@ -211,8 +211,8 @@ export function ThemeProvider(props: ThemeProviderProps) {
   const [store, setStore] = createStore({
     themes: initialThemes,
     mode: initialMode(),
-    active: "system",
-    ready: false,
+    active: "fx",
+    ready: true,
   })
 
   function init() {
@@ -227,11 +227,11 @@ export function ThemeProvider(props: ThemeProviderProps) {
       .then((colors) => {
         const firstColor = Option.fromNullishOr(colors.palette[0])
         if (Option.isNone(firstColor)) {
-          // No palette available, fall back to opencode theme
+          // Keep the default when the terminal does not report its palette.
           if (store.active === "system") {
             setStore(
               produce((draft) => {
-                draft.active = "opencode"
+                draft.active = "fx"
                 draft.ready = true
               }),
             )
@@ -248,11 +248,11 @@ export function ThemeProvider(props: ThemeProviderProps) {
         )
       })
       .catch(() => {
-        // Fall back to opencode theme
+        // Keep the default when palette detection fails.
         if (store.active === "system") {
           setStore(
             produce((draft) => {
-              draft.active = "opencode"
+              draft.active = "fx"
               draft.ready = true
             }),
           )
@@ -276,9 +276,9 @@ export function ThemeProvider(props: ThemeProviderProps) {
   const values = createMemo(() => {
     const activeTheme = Option.getOrElse(
       Option.orElse(Option.fromNullishOr(store.themes[store.active]), () =>
-        Option.fromNullishOr(store.themes["opencode"]),
+        Option.fromNullishOr(store.themes["fx"]),
       ),
-      () => DEFAULT_THEMES.opencode,
+      () => DEFAULT_THEMES.fx,
     )
     return resolveTheme(activeTheme, store.mode)
   })

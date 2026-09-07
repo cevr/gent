@@ -7,7 +7,8 @@ import { describe, it, expect } from "effect-bun-test"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous filesystem fixture setup is a test boundary.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous path fixture setup is a test boundary.
-import { Effect, FileSystem, Path, Predicate } from "effect"
+import { Effect, FileSystem, Path, Predicate, Schema } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import {
   autocompleteContribution,
   type ClientContributions,
@@ -19,6 +20,40 @@ import { loadTuiExtensions } from "../src/extensions/loader-boundary"
 import { makeClientExtensionRuntime } from "./extension-test-harness-boundary"
 const runtime = makeClientExtensionRuntime()
 describe("loadTuiExtensions Effect setup", () => {
+  it.scopedLive("does not import project code until the user grants trust", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.makeTempDirectoryScoped({
+        directory: path.resolve(import.meta.dir, ".."),
+        prefix: ".tmp-client-trust-",
+      })
+      const userDir = path.join(root, "home/.gent/extensions")
+      const projectDir = path.join(root, "project/.gent/extensions")
+      yield* fs.makeDirectory(userDir, { recursive: true })
+      yield* fs.makeDirectory(projectDir, { recursive: true })
+      const canonicalRoot = yield* fs.realPath(path.join(root, "project"))
+      const marker = path.join(root, "import-ran")
+      const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
+      yield* fs.writeFileString(
+        path.join(projectDir, "entry.client.ts"),
+        `
+import { writeFileSync } from "node:fs";
+import { Effect } from "effect";
+writeFileSync(${encode(marker)}, "ran");
+export default { id: "trusted-client", setup: Effect.succeed([]) };
+`,
+      )
+      const grant = encode({ trustedProjects: [canonicalRoot] })
+      yield* fs.writeFileString(path.join(projectDir, "../config.json"), grant)
+      yield* Effect.promise(() => loadTuiExtensions({ userDir, projectDir, runtime }))
+      expect(yield* fs.exists(marker)).toBe(false)
+      yield* fs.writeFileString(path.join(userDir, "../config.json"), grant)
+      yield* Effect.promise(() => loadTuiExtensions({ userDir, projectDir, runtime }))
+      expect(yield* fs.readFileString(marker)).toBe("ran")
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   it.live("Effect setup is run through the runtime; FileSystem is provided", () =>
     Effect.gen(function* () {
       const fxSetup: ClientEffect<ClientContributions> = Effect.gen(function* () {

@@ -1,0 +1,9 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "inputs": ["$TURBO_EXTENDS$", "scripts/**/*.ts"],
+      "outputs": ["bin/gent", "bin/gent-cell"]
+    }
+  }
+}

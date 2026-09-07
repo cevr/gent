@@ -28,6 +28,7 @@ export interface CommandPaletteState {
   readonly levelStack: readonly PaletteLevel[]
   readonly selectedIndex: number
   readonly searchQuery: string
+  readonly category: string
 }
 
 const PaletteSourceSchema = Schema.declare<PaletteLevel["source"]>(
@@ -51,6 +52,7 @@ export const CommandPaletteEvent = Schema.TaggedUnion({
   SearchTyped: { char: Schema.String },
   SearchBackspaced: {},
   ClearSearch: {},
+  SelectCategory: { category: Schema.String },
   MoveUp: { itemCount: Schema.Finite },
   MoveDown: { itemCount: Schema.Finite },
 })
@@ -60,6 +62,7 @@ const initial = (): CommandPaletteState => ({
   levelStack: [],
   selectedIndex: 0,
   searchQuery: "",
+  category: "",
 })
 
 const currentLevel = (state: CommandPaletteState): Option.Option<PaletteLevel> =>
@@ -68,6 +71,7 @@ const currentLevel = (state: CommandPaletteState): Option.Option<PaletteLevel> =
 const pushLevel = (state: CommandPaletteState, level: PaletteLevel): CommandPaletteState => ({
   ...state,
   levelStack: [...state.levelStack, level],
+  category: "",
   selectedIndex: 0,
   searchQuery: "",
 })
@@ -77,6 +81,7 @@ const popLevel = (state: CommandPaletteState): CommandPaletteState => {
   return {
     ...state,
     levelStack: state.levelStack.slice(0, -1),
+    category: "",
     selectedIndex: 0,
     searchQuery: "",
   }
@@ -128,6 +133,7 @@ export function transitionCommandPalette(
       SearchTyped: (event) => setSearchQuery(state, state.searchQuery + event.char),
       SearchBackspaced: () => setSearchQuery(state, state.searchQuery.slice(0, -1)),
       ClearSearch: () => setSearchQuery(state, ""),
+      SelectCategory: (event) => ({ ...state, category: event.category, selectedIndex: 0 }),
       MoveUp: (event) => moveSelection(state, event.itemCount, "up"),
       MoveDown: (event) => moveSelection(state, event.itemCount, "down"),
     }),

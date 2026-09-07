@@ -1,0 +1,26 @@
+diff --git a/chunk-bun-bb3k0yt8.js b/chunk-bun-bb3k0yt8.js
+index 24a80812099c87952ae8ef910845c88617c9edbd..24e56a6345cb536bfe5cc086bd587d8dd5b02b1f 100644
+--- a/chunk-bun-bb3k0yt8.js
++++ b/chunk-bun-bb3k0yt8.js
+@@ -9444,7 +9444,7 @@ Captured external output:
+     if (splitFooterActive) {
+       let clearStart = null;
+       if (width < prevWidth && visiblePreviousSplitHeight > 0) {
+-        clearStart = Math.max(previousTerminalHeight - visiblePreviousSplitHeight * 2, 1);
++        clearStart = Math.min(this.renderOffset + 1, Math.max(previousTerminalHeight - visiblePreviousSplitHeight * 2, 1));
+       }
+       if (pendingSplitFooterTransition !== null) {
+         clearStart = clearStart === null ? pendingSplitFooterTransition.sourceTopLine : Math.min(clearStart, pendingSplitFooterTransition.sourceTopLine);
+diff --git a/chunk-node-6bg8r2m7.js b/chunk-node-6bg8r2m7.js
+index db548a77a33608f7d57dc3d3d96443855bb61e95..bed5ff7850cdf6796e8d6bdab2ea00639a7f3096 100644
+--- a/chunk-node-6bg8r2m7.js
++++ b/chunk-node-6bg8r2m7.js
+@@ -9443,7 +9443,7 @@ Captured external output:
+     if (splitFooterActive) {
+       let clearStart = null;
+       if (width < prevWidth && visiblePreviousSplitHeight > 0) {
+-        clearStart = Math.max(previousTerminalHeight - visiblePreviousSplitHeight * 2, 1);
++        clearStart = Math.min(this.renderOffset + 1, Math.max(previousTerminalHeight - visiblePreviousSplitHeight * 2, 1));
+       }
+       if (pendingSplitFooterTransition !== null) {
+         clearStart = clearStart === null ? pendingSplitFooterTransition.sourceTopLine : Math.min(clearStart, pendingSplitFooterTransition.sourceTopLine);

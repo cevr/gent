@@ -7,7 +7,7 @@
  */
 import { it, describe, expect, test } from "effect-bun-test"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import { mkdirSync, rmSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous filesystem fixture setup is a test boundary.
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous filesystem fixture setup is a test boundary.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous path fixture setup is a test boundary.
 import { Cause, Effect, Layer, ManagedRuntime, Option, Schema } from "effect"
@@ -101,6 +101,12 @@ const integrationFixture = Effect.acquireRelease(
   Effect.sync(() => {
     mkdirSync(USER_DIR, { recursive: true })
     mkdirSync(PROJECT_DIR, { recursive: true })
+    writeFileSync(
+      join(TEST_DIR, "config.json"),
+      Schema.encodeSync(
+        Schema.fromJsonString(Schema.Struct({ trustedProjects: Schema.Array(Schema.String) })),
+      )({ trustedProjects: [realpathSync(join(PROJECT_DIR, "../.."))] }),
+    )
     mkdirSync(join(USER_DIR, "custom-read"), { recursive: true })
     writeFileSync(
       join(USER_DIR, "custom-read", "index.ts"),

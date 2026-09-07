@@ -11,6 +11,8 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
+import { PickerFrame, pickerHeight } from "./picker-frame"
+import { pickerText } from "./picker-text"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useExtensionUI } from "../extensions/context"
@@ -82,12 +84,12 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   // Handle keyboard navigation
   useScopedKeyboard((e) => {
     const list = visibleItems()
-    if (list.length === 0) return false
-
     if (e.name === "escape") {
       props.onClose()
       return true
     }
+
+    if (list.length === 0) return false
 
     if (e.name === "return" || e.name === "tab") {
       const item = Option.fromNullishOr(list[selectedIndex()])
@@ -115,10 +117,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   const dimensions = useTerminalDimensions()
 
-  const popupHeight = () => 14
-
-  const popupWidth = () => Math.min(60, dimensions().width - 2)
-  const popupLeft = () => Math.floor((dimensions().width - popupWidth()) / 2)
+  const popupHeight = () => pickerHeight(visibleItems().length, dimensions().height)
 
   // Title from the first matching contribution
   const title = () =>
@@ -127,23 +126,26 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   const loading = () => items.loading && visibleItems().length === 0
   const empty = () => !items.loading && visibleItems().length === 0
+  const labelWidth = () => Math.max(8, Math.min(24, Math.floor(dimensions().width * 0.28)))
+
+  const footerHint = () => {
+    if (dimensions().width < 44) return "↑↓ Move · ↵ Select · Esc Close"
+    return "↑↓ Navigate     Enter Select     Esc Close"
+  }
 
   return (
-    <ChromePanel.Root
-      title={title()}
-      width={popupWidth()}
-      height={popupHeight()}
-      left={popupLeft()}
-      bottom={3}
-    >
+    <PickerFrame height={popupHeight()} footer={footerHint()}>
+      <box height={1} flexShrink={0}>
+        <text style={{ fg: theme.textMuted }}>{title()}</text>
+      </box>
       {/* Filter display */}
-      <Show when={props.state.filter.length > 0}>
-        <ChromePanel.Section>
-          <text style={{ fg: theme.textMuted }}>
+      <ChromePanel.Section>
+        <text style={{ fg: theme.textMuted }}>
+          <Show when={props.state.filter.length > 0}>
             › <span style={{ fg: theme.text }}>{props.state.filter}</span>
-          </text>
-        </ChromePanel.Section>
-      </Show>
+          </Show>
+        </text>
+      </ChromePanel.Section>
 
       {/* Items / Loading / Empty */}
       <ChromePanel.Body
@@ -164,26 +166,30 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         <For each={visibleItems()}>
           {(item, index) => {
             const isSelected = () => selectedIndex() === index()
-            const backgroundColor = () => {
-              if (isSelected()) return theme.primary
-              return "transparent"
-            }
             const textColor = () => {
-              if (isSelected()) return theme.selectedListItemText
+              if (isSelected()) return theme.primary
               return theme.text
             }
             const descriptionColor = () => {
-              if (isSelected()) return theme.selectedListItemText
+              if (isSelected()) return theme.primary
               return theme.textMuted
             }
             return (
-              <box id={`ac-item-${index()}`} backgroundColor={backgroundColor()} paddingLeft={1}>
+              <box id={`ac-item-${index()}`} paddingLeft={2} flexDirection="row" height={1} gap={2}>
                 <text
+                  width={labelWidth() - 2}
+                  flexShrink={0}
+                  wrapMode="none"
+                  truncate
                   style={{
                     fg: textColor(),
                   }}
                 >
-                  {item.label}
+                  <span style={{ bold: isSelected() }}>
+                    {pickerText(item.label, labelWidth() - 2)}
+                  </span>
+                </text>
+                <text flexGrow={1} wrapMode="none" truncate style={{ fg: descriptionColor() }}>
                   {/* Optional description is supplied by the external extension contribution. */}
                   <Show when={Option.getOrUndefined(Option.fromNullishOr(item.description))}>
                     <span
@@ -192,8 +198,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
                         dim: !isSelected(),
                       }}
                     >
-                      {"  "}
-                      {item.description}
+                      {pickerText(item.description ?? "", dimensions().width - labelWidth() - 2)}
                     </span>
                   </Show>
                 </text>
@@ -202,8 +207,6 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
           }}
         </For>
       </ChromePanel.Body>
-
-      <ChromePanel.Footer>↑↓ navigate · enter select · esc close</ChromePanel.Footer>
-    </ChromePanel.Root>
+    </PickerFrame>
   )
 }

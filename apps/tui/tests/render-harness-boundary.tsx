@@ -3,7 +3,8 @@
 import { afterEach } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
 import { Context, Effect, Layer, Option, Scope, Stream } from "effect"
-import { testRender } from "@opentui/solid"
+import { render } from "@opentui/solid"
+import { createTestRenderer } from "@opentui/core/testing"
 import type { JSX } from "solid-js"
 import { RegistryProvider } from "../src/atom-solid"
 import { KeyboardScopeProvider } from "../src/keyboard/context"
@@ -15,6 +16,7 @@ import { ClientProvider } from "../src/client"
 import type { DomainSession, GentNamespacedClient, GentRuntime, Session } from "../src/client"
 import { ExtensionUIProvider } from "../src/extensions/context"
 import { TerminalDimensionsProvider } from "../src/terminal-dimensions"
+import { ComposerDraftsProvider } from "../src/components/composer-drafts"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
 import { ConnectionState, emptyQueueSnapshot } from "@gent/sdk"
 import type { SessionRuntimeState } from "@gent/core-internal/server/transport-contract"
@@ -27,7 +29,7 @@ import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/bui
 const noop = () => {}
 const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }
 
-type TestRenderSetup = Awaited<ReturnType<typeof testRender>>
+type TestRenderSetup = Awaited<ReturnType<typeof createTestRenderer>>
 
 let currentSetup: Option.Option<TestRenderSetup> = Option.none()
 let sharedServices: Option.Option<Context.Context<unknown>> = Option.none()
@@ -260,58 +262,66 @@ export const renderWithProviders = (
       const runtime = Option.getOrElse(Option.fromNullishOr(options?.runtime), createMockRuntime)
 
       const setup = yield* Effect.promise(() =>
-        testRender(
-          () => (
-            <TerminalDimensionsProvider>
-              <RegistryProvider services={services}>
-                <KeyboardScopeProvider>
-                  <ThemeProvider mode="dark">
-                    <EnvProvider
-                      env={{ visual: Option.none(), editor: Option.none(), shutdown: () => {} }}
-                    >
-                      <CommandProvider>
-                        <RouterProvider
-                          initialRoute={
-                            options?.initialRoute ??
-                            Route.session(
-                              SessionId.make("test-session"),
-                              BranchId.make("test-branch"),
-                            )
-                          }
-                        >
-                          <WorkspaceProvider
-                            cwd={options?.cwd ?? defaultWorkspaceCwd}
-                            home="/tmp"
-                            services={services}
-                          >
-                            <ClientProvider
-                              client={client}
-                              runtime={runtime}
-                              services={services}
-                              log={noopLog}
-                              initialSession={Option.getOrUndefined(
-                                toInitialSession(Option.fromNullishOr(options?.initialSession)),
-                              )}
-                              initialAgent={options?.initialAgent}
-                            >
-                              <ExtensionUIProvider>{node()}</ExtensionUIProvider>
-                            </ClientProvider>
-                          </WorkspaceProvider>
-                        </RouterProvider>
-                      </CommandProvider>
-                    </EnvProvider>
-                  </ThemeProvider>
-                </KeyboardScopeProvider>
-              </RegistryProvider>
-            </TerminalDimensionsProvider>
-          ),
-          {
-            width: options?.width ?? 80,
-            height: options?.height ?? 24,
-          },
-        ),
+        createTestRenderer({
+          width: options?.width ?? 80,
+          height: options?.height ?? 24,
+          exitOnCtrlC: false,
+        }),
       )
       currentSetup = Option.some(setup)
+      // Exercise terminal lifecycle operations against OpenTUI's in-memory streams.
+      yield* Effect.promise(() => setup.renderer.setupTerminal())
+      yield* Effect.promise(() =>
+        render(
+          () => (
+            <TerminalDimensionsProvider>
+              <ComposerDraftsProvider>
+                <RegistryProvider services={services}>
+                  <KeyboardScopeProvider>
+                    <ThemeProvider mode="dark">
+                      <EnvProvider
+                        env={{ visual: Option.none(), editor: Option.none(), shutdown: () => {} }}
+                      >
+                        <CommandProvider>
+                          <RouterProvider
+                            initialRoute={
+                              options?.initialRoute ??
+                              Route.session(
+                                SessionId.make("test-session"),
+                                BranchId.make("test-branch"),
+                              )
+                            }
+                          >
+                            <WorkspaceProvider
+                              cwd={options?.cwd ?? defaultWorkspaceCwd}
+                              home="/tmp"
+                              services={services}
+                            >
+                              <ClientProvider
+                                client={client}
+                                runtime={runtime}
+                                services={services}
+                                log={noopLog}
+                                initialSession={Option.getOrUndefined(
+                                  toInitialSession(Option.fromNullishOr(options?.initialSession)),
+                                )}
+                                initialAgent={options?.initialAgent}
+                              >
+                                <ExtensionUIProvider>{node()}</ExtensionUIProvider>
+                              </ClientProvider>
+                            </WorkspaceProvider>
+                          </RouterProvider>
+                        </CommandProvider>
+                      </EnvProvider>
+                    </ThemeProvider>
+                  </KeyboardScopeProvider>
+                </RegistryProvider>
+              </ComposerDraftsProvider>
+            </TerminalDimensionsProvider>
+          ),
+          setup.renderer,
+        ),
+      )
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.promise(() => setup.renderOnce())
       return setup

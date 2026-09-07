@@ -111,7 +111,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
   },
   {
     id: "session.tree",
-    title: "Browse Branch Tree",
+    title: "Browse Session Tree",
     category: "Session",
     slash: "tree",
     slashPriority: 0,

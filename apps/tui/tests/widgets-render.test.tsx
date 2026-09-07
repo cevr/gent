@@ -220,7 +220,7 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("11 todos")
       expect(frame).toContain("Resolve transport DTOs")
       expect(frame).toContain("Add renderer coverage")
-      expect(frame).toContain("+1 more")
+      expect(frame).toContain("+7 more")
     }),
   )
   it.live("ConnectionWidget renders nothing when no connection issue", () =>

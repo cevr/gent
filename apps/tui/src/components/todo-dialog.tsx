@@ -19,6 +19,9 @@ import { useClient } from "../client/context"
 import { useRuntime } from "../hooks/use-runtime"
 import { useTheme } from "../theme/index"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
+import type { ScrollBoxRenderable } from "@opentui/core"
+import { pickerText } from "./picker-text"
+import { useScrollSync } from "../hooks/use-scroll-sync"
 
 const STATUS_ICONS = {
   pending: "◻",
@@ -46,6 +49,12 @@ export function TodoDialog(props: {
 
   const [selectedIdx, setSelectedIdx] = createSignal(0)
   const [detailTodoId, setDetailTodoId] = createSignal<Option.Option<TodoIdType>>(Option.none())
+  let body = Option.none<ScrollBoxRenderable>()
+
+  useScrollSync(() => `todo-${selectedIdx()}`, {
+    enabled: () => props.open && Option.isNone(detailTodoId()),
+    getRef: () => Option.getOrUndefined(body),
+  })
 
   // Reset selection when todos change
   createEffect(() => {
@@ -72,6 +81,19 @@ export function TodoDialog(props: {
     )
   }
 
+  const scrollDetail = (key: string) => {
+    if (Option.isNone(body)) return false
+    if (key === "pageup") {
+      body.value.scrollBy(-body.value.height)
+      return true
+    }
+    if (key === "pagedown") {
+      body.value.scrollBy(body.value.height)
+      return true
+    }
+    return false
+  }
+
   useScopedKeyboard(
     (event) => {
       if (!props.open) return false
@@ -85,7 +107,9 @@ export function TodoDialog(props: {
         return true
       }
 
-      if (Option.isSome(detailTodoId())) return false
+      if (Option.isSome(detailTodoId())) {
+        return scrollDetail(event.name)
+      }
 
       const todos = props.todos
       if (todos.length === 0) return false
@@ -159,21 +183,31 @@ export function TodoDialog(props: {
       onSome: (todo) => `Todo: ${todo.subject}`,
     })
 
-  const left = () => Math.max(0, Math.floor((dimensions().width - PANEL_WIDTH) / 2))
-  const top = () => Math.max(0, Math.floor((dimensions().height - PANEL_HEIGHT) / 2))
+  const panelWidth = () => Math.min(PANEL_WIDTH, dimensions().width)
+  const panelHeight = () => Math.min(PANEL_HEIGHT, dimensions().height)
+  const left = () => Math.max(0, Math.floor((dimensions().width - panelWidth()) / 2))
+  const top = () => Math.max(0, Math.floor((dimensions().height - panelHeight()) / 2))
+  const footer = () => {
+    if (dimensions().width < 60) return "↑↓ Move · Enter Detail · x Stop · Esc"
+    return "↑↓ navigate · enter detail · x stop · esc close"
+  }
 
   return (
     <Show when={props.open}>
       <ChromePanel.Root
-        title={detailTitle()}
-        width={PANEL_WIDTH}
-        height={PANEL_HEIGHT}
+        title={pickerText(detailTitle(), panelWidth() - 6)}
+        width={panelWidth()}
+        height={panelHeight()}
         left={left()}
         top={top()}
       >
-        <ChromePanel.Body>
+        <ChromePanel.Body
+          ref={(value) => {
+            body = Option.some(value)
+          }}
+        >
           <Show
-            when={Option.getOrUndefined(detailTodo())}
+            when={Option.isNone(detailTodo())}
             fallback={
               <box flexDirection="column" paddingLeft={1}>
                 {Option.match(detailTodo(), {
@@ -220,12 +254,15 @@ export function TodoDialog(props: {
                     return theme.textMuted
                   }
                   return (
-                    <text>
+                    <text id={`todo-${idx()}`} height={1} wrapMode="none" truncate>
                       <span style={{ fg: selectionColor() }}>{selectionMarker()}</span>
                       <span style={{ fg: statusColor(todo.status) }}>
                         {statusIcon(todo.status)}
                       </span>
-                      <span style={{ fg: subjectColor() }}> {todo.subject}</span>
+                      <span style={{ fg: subjectColor() }}>
+                        {" "}
+                        {pickerText(todo.subject, panelWidth() - 9)}
+                      </span>
                     </text>
                   )
                 }}
@@ -234,8 +271,8 @@ export function TodoDialog(props: {
           </Show>
         </ChromePanel.Body>
         <ChromePanel.Footer>
-          <Show when={Option.isNone(detailTodo())} fallback="esc back">
-            {"↑↓ navigate · enter detail · x stop · esc close"}
+          <Show when={Option.isNone(detailTodo())} fallback="PgUp/PgDn scroll · Esc back">
+            {footer()}
           </Show>
         </ChromePanel.Footer>
       </ChromePanel.Root>

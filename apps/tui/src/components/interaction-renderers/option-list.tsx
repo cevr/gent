@@ -5,12 +5,14 @@
 
 /** @jsxImportSource @opentui/solid */
 
-import { createSignal, Show, For, type JSX } from "solid-js"
-import { SyntaxStyle } from "@opentui/core"
+import { createSignal, createUniqueId, Show, For, type JSX } from "solid-js"
+import { SyntaxStyle, type ScrollBoxRenderable } from "@opentui/core"
 import { Option } from "effect"
 import type { QuestionOption } from "@gent/core-internal/domain/event.js"
 import { useTheme } from "../../theme/index"
 import { useScopedKeyboard } from "../../keyboard/context"
+import { useTerminalDimensions } from "../../terminal-dimensions"
+import { textWidth } from "../../platform/text-width-adapter"
 
 const markdownSyntaxStyle = SyntaxStyle.create()
 
@@ -27,10 +29,28 @@ export interface OptionListProps {
 
 export function OptionList(props: OptionListProps): JSX.Element {
   const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
 
   const [selected, setSelected] = createSignal<Set<string>>(new Set())
   const [freeformText, setFreeformText] = createSignal("")
   const [focusIndex, setFocusIndex] = createSignal(0)
+  const [documentHeight, setDocumentHeight] = createSignal(1)
+  const [controlsChromeHeight, setControlsChromeHeight] = createSignal(0)
+  const [optionsHeight, setOptionsHeight] = createSignal(0)
+  const optionId = createUniqueId()
+  let documentViewport: Option.Option<ScrollBoxRenderable> = Option.none()
+  let optionsViewport: Option.Option<ScrollBoxRenderable> = Option.none()
+  const sectionSpacing = () => {
+    if (dimensions().height < 18) return 0
+    return 1
+  }
+  const contentRows = () =>
+    Math.max(2, dimensions().height - controlsChromeHeight() - 4 - sectionSpacing() * 3)
+  const optionsRows = () => Math.min(optionsHeight(), Math.max(1, Math.floor(contentRows() / 2)))
+  const optionsScrollable = () => optionsHeight() > optionsRows()
+  // Reserve the answer controls, panel padding, composer status, and one transcript row.
+  const documentRows = () => Math.max(1, contentRows() - optionsRows())
+  const documentScrollable = () => documentHeight() > documentRows()
 
   const options = () => Option.getOrElse(Option.fromNullishOr(props.options), () => [])
   const hasOptions = () => options().length > 0
@@ -58,17 +78,41 @@ export function OptionList(props: OptionListProps): JSX.Element {
     return true
   }
 
+  const scrollDocument = (pages: number) => {
+    if (Option.isNone(documentViewport)) return false
+    documentViewport.value.scrollBy(pages * documentViewport.value.height)
+    return true
+  }
+
+  const scrollPage = (pages: number, question: boolean) => {
+    if (!question && optionsScrollable() && Option.isSome(optionsViewport)) {
+      optionsViewport.value.scrollBy(pages * optionsViewport.value.height)
+      return true
+    }
+    return scrollDocument(pages)
+  }
+
+  const moveFocus = (direction: number) => {
+    const index = (focusIndex() + direction + focusableCount()) % focusableCount()
+    setFocusIndex(index)
+    if (Option.isSome(optionsViewport)) {
+      optionsViewport.value.scrollChildIntoView(`${optionId}-${index}`)
+    }
+  }
+
   useScopedKeyboard((e) => {
+    if (e.name === "pageup") return scrollPage(-1, e.shift === true)
+    if (e.name === "pagedown") return scrollPage(1, e.shift === true)
     if (e.name === "escape") {
       props.onCancel()
       return true
     }
     if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
-      setFocusIndex((index) => (index - 1 + focusableCount()) % focusableCount())
+      moveFocus(-1)
       return true
     }
     if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
-      setFocusIndex((index) => (index + 1) % focusableCount())
+      moveFocus(1)
       return true
     }
 
@@ -136,73 +180,149 @@ export function OptionList(props: OptionListProps): JSX.Element {
     if (isFreeformFocused()) return "> "
     return "  "
   }
+  const compactSelectionHint = () => {
+    if (isMultiple()) return "Space select"
+    return "↑↓ move"
+  }
   const footer = () => {
-    if (isMultiple()) return "up/down navigate - space select - enter submit - esc cancel"
-    return "up/down navigate - space/enter select - esc cancel"
+    const hints = [
+      "↑↓ move · Space select · Enter submit · Esc cancel",
+      `${compactSelectionHint()} · Enter submit · Esc cancel`,
+    ]
+    return (
+      hints.find((hint) => textWidth(hint) <= dimensions().width - 2) ?? "Enter submit · Esc cancel"
+    )
   }
 
   return (
-    <box flexDirection="column" paddingLeft={1} paddingTop={1} paddingBottom={1}>
-      <Show when={Option.exists(Option.fromNullishOr(props.header), (header) => header.length > 0)}>
-        <text style={{ fg: theme.textMuted }}>
-          <b>
-            {props.header}
-            {Option.match(Option.fromNullishOr(props.progress), {
-              onNone: () => "",
-              onSome: (progress) => ` ${progress}`,
-            })}
-          </b>
-        </text>
-      </Show>
+    <box
+      flexDirection="column"
+      paddingLeft={1}
+      paddingTop={sectionSpacing()}
+      paddingBottom={sectionSpacing()}
+    >
+      <scrollbox
+        ref={(value) => {
+          documentViewport = Option.some(value)
+        }}
+        height={Math.min(documentHeight(), documentRows())}
+        flexShrink={0}
+        overflow="hidden"
+        viewportOptions={{ overflow: "scroll" }}
+        contentOptions={{ minHeight: 0 }}
+        verticalScrollbarOptions={{ visible: false }}
+        horizontalScrollbarOptions={{ visible: false }}
+        focusable={false}
+      >
+        <box
+          flexDirection="column"
+          flexShrink={0}
+          onSizeChange={function () {
+            setDocumentHeight(this.height)
+          }}
+        >
+          <Show
+            when={Option.exists(Option.fromNullishOr(props.header), (header) => header.length > 0)}
+          >
+            <text style={{ fg: theme.textMuted }}>
+              <b>
+                {props.header}
+                {Option.match(Option.fromNullishOr(props.progress), {
+                  onNone: () => "",
+                  onSome: (progress) => ` ${progress}`,
+                })}
+              </b>
+            </text>
+          </Show>
 
-      <text style={{ fg: theme.text }}>{props.question}</text>
+          <text style={{ fg: theme.text }}>{props.question}</text>
 
-      <Show when={Option.getOrUndefined(Option.fromNullishOr(props.markdown))} keyed>
-        {(markdown) => (
-          <box marginTop={1} paddingRight={1}>
-            <markdown syntaxStyle={markdownSyntaxStyle} content={markdown} />
-          </box>
-        )}
-      </Show>
-
-      <Show when={hasOptions()}>
-        <box flexDirection="column" marginTop={1}>
-          <For each={options()}>
-            {(opt, idx) => (
-              <box flexDirection="row">
-                <text style={{ fg: optionColor(idx()) }}>
-                  {optionPrefix(idx())}
-                  {optionMarker(opt.label)}
-                  {opt.label}
-                </text>
-                <Show
-                  when={Option.exists(
-                    Option.fromNullishOr(opt.description),
-                    (description) => description.length > 0,
-                  )}
-                >
-                  <text style={{ fg: theme.textMuted }}> - {opt.description}</text>
-                </Show>
+          <Show when={Option.getOrUndefined(Option.fromNullishOr(props.markdown))} keyed>
+            {(markdown) => (
+              <box marginTop={1} paddingRight={1}>
+                <markdown syntaxStyle={markdownSyntaxStyle} content={markdown} />
               </box>
             )}
-          </For>
+          </Show>
         </box>
-      </Show>
+      </scrollbox>
+      <box flexDirection="column" flexShrink={0}>
+        <Show when={hasOptions()}>
+          <scrollbox
+            ref={(value) => {
+              optionsViewport = Option.some(value)
+            }}
+            height={optionsRows()}
+            marginTop={sectionSpacing()}
+            flexShrink={0}
+            overflow="hidden"
+            viewportOptions={{ overflow: "scroll" }}
+            contentOptions={{ minHeight: 0 }}
+            verticalScrollbarOptions={{ visible: false }}
+            horizontalScrollbarOptions={{ visible: false }}
+            focusable={false}
+          >
+            <box
+              flexDirection="column"
+              flexShrink={0}
+              onSizeChange={function () {
+                setOptionsHeight(this.height)
+              }}
+            >
+              <For each={options()}>
+                {(opt, idx) => (
+                  <box id={`${optionId}-${idx()}`} flexDirection="column">
+                    <text style={{ fg: optionColor(idx()) }}>
+                      {optionPrefix(idx())}
+                      {optionMarker(opt.label)}
+                      {opt.label}
+                      <Show
+                        when={Option.exists(
+                          Option.fromNullishOr(opt.description),
+                          (description) => description.length > 0,
+                        )}
+                      >
+                        <span style={{ fg: theme.textMuted }}> - {opt.description}</span>
+                      </Show>
+                    </text>
+                  </box>
+                )}
+              </For>
+            </box>
+          </scrollbox>
+        </Show>
 
-      <box flexDirection="row" marginTop={1}>
-        <text style={{ fg: freeformColor() }}>{freeformPrefix()}Other: </text>
-        <box flexGrow={1}>
-          <input
-            focused={isFreeformFocused()}
-            onInput={setFreeformText}
-            onSubmit={submitAnswer}
-            backgroundColor="transparent"
-            focusedBackgroundColor="transparent"
-          />
+        <box
+          flexDirection="column"
+          flexShrink={0}
+          onSizeChange={function () {
+            setControlsChromeHeight(this.height)
+          }}
+        >
+          <box flexDirection="row" marginTop={sectionSpacing()}>
+            <text style={{ fg: freeformColor() }}>{freeformPrefix()}Other: </text>
+            <box flexGrow={1}>
+              <input
+                focused={isFreeformFocused()}
+                onInput={setFreeformText}
+                onSubmit={submitAnswer}
+                backgroundColor="transparent"
+                focusedBackgroundColor="transparent"
+              />
+            </box>
+          </box>
+
+          <text style={{ fg: theme.textMuted, marginTop: sectionSpacing() }}>{footer()}</text>
+          <Show when={optionsScrollable()}>
+            <text style={{ fg: theme.textMuted }}>PgUp/PgDn scroll choices</text>
+          </Show>
+          <Show when={documentScrollable()}>
+            <text style={{ fg: theme.textMuted }}>
+              <Show when={optionsScrollable()}>Shift+</Show>PgUp/PgDn scroll question
+            </text>
+          </Show>
         </box>
       </box>
-
-      <text style={{ fg: theme.textMuted, marginTop: 1 }}>{footer()}</text>
     </box>
   )
 }

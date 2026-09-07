@@ -1,4 +1,4 @@
-import { Switch, Match, ErrorBoundary } from "solid-js"
+import { Switch, Match, Show, ErrorBoundary } from "solid-js"
 import { Option, Schema } from "effect"
 import { CommandPalette } from "./components/command-palette"
 import { ThemeProvider } from "./theme/index"
@@ -6,7 +6,9 @@ import { CommandProvider } from "./command/context"
 import { useRouter, isRoute, type AppRoute } from "./router"
 import { Session } from "./routes/session"
 import { BranchPicker } from "./routes/branch-picker"
-import { KeyboardScopeProvider } from "./keyboard/context"
+import { KeyboardScopeProvider, useScopedKeyboard } from "./keyboard/context"
+import { useRenderer } from "@opentui/solid"
+import { useEnv } from "./env/context"
 
 type SessionRoute = Extract<AppRoute, { _tag: "session" }>
 type BranchPickerRoute = Extract<AppRoute, { _tag: "branchPicker" }>
@@ -18,6 +20,14 @@ export interface AppProps {
 }
 
 function AppContent(props: AppProps) {
+  const renderer = useRenderer()
+  const env = useEnv()
+  useScopedKeyboard((event) => {
+    if (event.ctrl !== true || event.name !== "c") return false
+    renderer.destroy()
+    env.shutdown()
+    return true
+  })
   const router = useRouter()
   const sessionRoute = (): SessionRoute | false => {
     const route = router.route()
@@ -60,7 +70,9 @@ function AppContent(props: AppProps) {
       </Switch>
 
       {/* Command Palette */}
-      <CommandPalette />
+      <Show when={!sessionRoute()}>
+        <CommandPalette />
+      </Show>
     </box>
   )
 }

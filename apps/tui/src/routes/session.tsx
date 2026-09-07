@@ -2,25 +2,25 @@
  * Session route - message list, composer, streaming
  */
 
-import { createMemo, For } from "solid-js"
+import { createMemo, createSignal, For, Show } from "solid-js"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { Option, Predicate } from "effect"
 import type { RGBA } from "@opentui/core"
 import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
 import { MessageList } from "../components/message-list"
+import { NativeTranscript } from "../components/native-transcript"
 import { Composer } from "../components/composer"
+import { ComposerFrame } from "../components/composer-frame"
+import { pickerText } from "../components/picker-text"
+import { CommandPalette } from "../components/command-palette"
+import { useCommand } from "../command/context"
 import { useTheme, buildSyntaxStyle } from "../theme/index"
 import { SessionTree } from "../components/session-tree"
 import { MessagePicker } from "../components/message-picker"
 import { collectDiagrams, MermaidViewer } from "../components/mermaid-viewer"
 import { QueueWidget } from "../components/queue-widget"
 import { useWorkspace } from "../workspace/context"
-import {
-  BorderedInput,
-  formatCwdGit,
-  formatElapsed,
-  type BorderLabelItem,
-} from "../components/bordered-input"
+import { formatCwdGit, formatElapsed, type BorderLabelItem } from "../components/bordered-input"
 import { buildTopRightLabels } from "../utils/session-labels"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { createSessionController, SessionControllerContext } from "./session-controller"
@@ -53,6 +53,7 @@ function ExtensionWidgets(props: { slot: WidgetSlot }) {
 
 export function Session(props: SessionProps) {
   const { theme } = useTheme()
+  const command = useCommand()
   const dimensions = useTerminalDimensions()
   const workspace = useWorkspace()
   const controller = createSessionController(props)
@@ -60,19 +61,13 @@ export function Session(props: SessionProps) {
   const ext = useExtensionUI()
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
+  const [footerHeight, setFooterHeight] = createSignal(4)
   const mermaidDiagrams = createMemo(() => {
     if (controller.uiState().overlay._tag === "mermaid") {
       return collectDiagrams(controller.messages(), dimensions().width)
     }
     return []
   })
-
-  const borderColor = () => {
-    if (client.isError()) return theme.error
-    if (props.debugMode === true) return theme.warning
-    if (client.isStreaming()) return theme.borderActive
-    return theme.border
-  }
 
   // Map semantic color names from extensions to resolved theme colors
   const resolveColor = (color: BorderLabelColor | string): RGBA => {
@@ -119,29 +114,29 @@ export function Session(props: SessionProps) {
     return items
   }
 
-  const topRightLabels = (): BorderLabelItem[] =>
-    buildTopRightLabels(
-      client.session()?.reasoningLevel,
-      client.latestInputTokens(),
-      client.modelInfo()?.contextLength,
-      theme,
-      { debugMode: props.debugMode },
+  const topRightLabels = (): BorderLabelItem[] => {
+    const model = Option.fromNullishOr(client.modelInfo())
+    const items: BorderLabelItem[] = []
+    if (Option.isSome(model)) items.push({ text: model.value.name, color: theme.textMuted })
+    return items.concat(
+      buildTopRightLabels(
+        client.session()?.reasoningLevel,
+        client.latestInputTokens(),
+        client.modelInfo()?.contextLength,
+        theme,
+        { debugMode: props.debugMode },
+      ),
     )
+  }
 
   const bottomLeftLabels = (): BorderLabelItem[] => {
     const a = controller.activity()
     const items: BorderLabelItem[] = []
-    if (a.phase !== "idle") {
-      items.push({ text: controller.spinner(), color: theme.textMuted })
+    if (controller.uiState().transcriptExpanded) {
+      items.push({ text: "transcript · Esc to return", color: theme.textMuted })
     }
-    let activityColor = theme.info
-    if (a.phase === "idle") activityColor = theme.textMuted
-    items.push({
-      text: controller.phaseLabel(),
-      color: activityColor,
-    })
-    if (a.phase !== "idle" && controller.elapsed() >= 1000) {
-      items.push({ text: formatElapsed(controller.elapsed()), color: theme.textMuted })
+    if (a.phase === "idle") {
+      items.push({ text: controller.phaseLabel(), color: theme.textMuted })
     }
 
     // Extension-contributed labels
@@ -163,7 +158,7 @@ export function Session(props: SessionProps) {
       Option.fromNullishOr(workspace.gitRoot()),
       Option.fromNullishOr(workspace.gitStatus()?.branch),
     )
-    items.push({ text: label, color: theme.textMuted })
+    if (props.debugMode) items.push({ text: label, color: theme.textMuted })
 
     // Extension-contributed labels
     for (const bl of ext.borderLabels()) {
@@ -181,46 +176,80 @@ export function Session(props: SessionProps) {
     <SessionControllerContext.Provider value={controller}>
       <box flexDirection="column" flexGrow={1}>
         {/* Messages */}
-        <scrollbox
-          flexGrow={1}
-          stickyScroll
-          stickyStart="bottom"
-          focusable={false}
-          verticalScrollbarOptions={{ visible: false }}
-        >
-          <box flexDirection="column">
+        <NativeTranscript
+          items={controller.items()}
+          streaming={controller.activity().phase !== "idle"}
+          footerHeight={footerHeight()}
+          expanded={controller.uiState().transcriptExpanded}
+          toolsExpanded={controller.toolsExpanded()}
+          displayRevision={controller.uiState().displayRevision}
+          overlayOpen={command.paletteOpen() || controller.uiState().overlay._tag !== "none"}
+          renderItems={(items, streaming) => (
             <MessageList
-              items={controller.items()}
+              items={items}
               toolsExpanded={controller.toolsExpanded()}
+              fullDetail={controller.uiState().transcriptExpanded}
               syntaxStyle={syntaxStyle}
-              streaming={client.isStreaming()}
+              streaming={streaming}
               getChildSessions={controller.getChildren}
             />
-
-            <ExtensionWidgets slot="below-messages" />
-            {/* QueueWidget stays hardwired because its data comes from session controller
-              state that is not exposed through the extension context. */}
-            <QueueWidget
-              queuedMessages={controller.queueState().followUp}
-              steerMessages={controller.queueState().steering}
-            />
-          </box>
-        </scrollbox>
-
-        <ExtensionWidgets slot="above-input" />
-
-        {/* Bordered input */}
-        <BorderedInput
-          topLeft={topLeftLabels()}
-          topRight={topRightLabels()}
-          bottomLeft={bottomLeftLabels()}
-          bottomRight={bottomRightLabels()}
-          borderColor={borderColor()}
+          )}
         >
-          <Composer>
-            <Composer.Autocomplete />
-          </Composer>
-        </BorderedInput>
+          <Show when={controller.items().length === 0}>
+            <box height={1} flexShrink={0}>
+              <text>
+                <span style={{ fg: theme.primary, bold: true }}>gent</span>
+                <span style={{ fg: theme.textMuted }}> · Ctrl+P for commands</span>
+              </text>
+            </box>
+          </Show>
+          <ExtensionWidgets slot="below-messages" />
+          {/* QueueWidget stays hardwired because its data comes from session controller
+              state that is not exposed through the extension context. */}
+          <QueueWidget
+            queuedMessages={controller.queueState().followUp}
+            steerMessages={controller.queueState().steering}
+          />
+        </NativeTranscript>
+
+        <box
+          flexDirection="column"
+          flexShrink={0}
+          onSizeChange={function () {
+            setFooterHeight(this.height)
+          }}
+        >
+          <ExtensionWidgets slot="above-input" />
+
+          <Show when={controller.activity().phase !== "idle"}>
+            <box height={1} flexShrink={0} paddingLeft={2} marginTop={1} overflow="hidden">
+              <text wrapMode="none" style={{ fg: theme.textMuted }}>
+                {(() => {
+                  let label = "Generating"
+                  if (controller.activity().phase === "tool") label = controller.phaseLabel()
+                  if (controller.elapsed() >= 1000)
+                    label += ` (${formatElapsed(controller.elapsed())})`
+                  return pickerText(label, Math.max(1, dimensions().width - 2))
+                })()}
+              </text>
+            </box>
+          </Show>
+
+          <ComposerFrame
+            labels={[
+              ...bottomLeftLabels(),
+              ...topLeftLabels(),
+              ...topRightLabels(),
+              ...bottomRightLabels(),
+            ]}
+          >
+            <Composer>
+              <Composer.Autocomplete />
+              <CommandPalette />
+            </Composer>
+          </ComposerFrame>
+          <ExtensionWidgets slot="below-input" />
+        </box>
 
         <SessionTree
           open={controller.uiState().overlay._tag === "tree"}
@@ -273,8 +302,6 @@ export function Session(props: SessionProps) {
               return <></>
           }
         })()}
-
-        <ExtensionWidgets slot="below-input" />
       </box>
     </SessionControllerContext.Provider>
   )

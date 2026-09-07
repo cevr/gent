@@ -35,18 +35,24 @@ export type SessionOverlayState =
 
 export interface SessionUiState {
   readonly toolsExpanded: boolean
+  readonly transcriptExpanded: boolean
+  readonly displayRevision: number
   readonly overlay: SessionOverlayState
 }
 
 export const SessionUiState = {
   initial: (): SessionUiState => ({
-    toolsExpanded: false,
+    toolsExpanded: true,
+    transcriptExpanded: false,
+    displayRevision: 0,
     overlay: { _tag: "none" },
   }),
 }
 
 export const SessionUiEvent = Schema.TaggedUnion({
   ToggleTools: {},
+  ToggleTranscript: {},
+  ClearDisplay: {},
   OpenTree: {
     tree: SessionTreeNode,
     sessions: Schema.Array(SessionSchema),
@@ -93,6 +99,14 @@ export function transitionSessionUi(
 ): SessionUiTransitionResult {
   return Match.value(event).pipe(
     Match.tagsExhaustive({
+      ClearDisplay: (): SessionUiTransitionResult => ({
+        state: { ...state, displayRevision: state.displayRevision + 1, transcriptExpanded: false },
+        effects: [],
+      }),
+      ToggleTranscript: (): SessionUiTransitionResult => ({
+        state: { ...state, transcriptExpanded: !state.transcriptExpanded },
+        effects: [],
+      }),
       ToggleTools: (): SessionUiTransitionResult => ({
         state: {
           ...state,

@@ -57,7 +57,7 @@ function ChromePanelRoot(props: ChromePanelRootProps) {
         bottom={props.bottom}
         width={props.width}
         height={props.height}
-        backgroundColor={theme.background}
+        backgroundColor={theme.backgroundMenu}
         border
         borderStyle="rounded"
         borderColor={theme.borderSubtle}
@@ -84,6 +84,8 @@ function ChromePanelBody(props: ChromePanelBodyProps) {
     <scrollbox
       ref={props.ref}
       flexGrow={1}
+      verticalScrollbarOptions={{ visible: false }}
+      horizontalScrollbarOptions={{ visible: false }}
       paddingLeft={props.paddingLeft ?? 1}
       paddingRight={props.paddingRight ?? 1}
     >

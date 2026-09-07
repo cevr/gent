@@ -1,4 +1,4 @@
-import { mkdirSync, lstatSync, unlinkSync, symlinkSync } from "fs"
+import { copyFileSync, mkdirSync, lstatSync, unlinkSync, symlinkSync } from "fs"
 import { dirname, join } from "path"
 import { fileURLToPath } from "url"
 import { randomUUID } from "node:crypto"
@@ -16,12 +16,16 @@ mkdirSync(binDir, { recursive: true })
 
 console.log("Transforming Solid JSX, bundling, and compiling to binary...")
 
+// Turbo builds the declared core dependency before packaging this application.
+copyFileSync(join(rootDir, "../../packages/core/dist/gent-cell"), join(binDir, "gent-cell"))
+
 const buildResult = await Bun.build({
   entrypoints: [join(rootDir, "src/main.tsx")],
   target: "bun",
   plugins: [solidTransformPlugin],
   minify: false,
   define: {
+    __GENT_COMPILED__: "true",
     __GENT_BUILTIN_ARTIFACT_ID__: JSON.stringify(`build:${randomUUID()}`),
   },
   compile: {

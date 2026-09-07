@@ -1,22 +1,8 @@
-/**
- * ToolFrame — inline chrome wrapper for tool output.
- *
- * Provides visual framing with:
- * - Status icon (spinner/check/error)
- * - Tool name + input summary
- * - Optional duration
- * - Expandable content area
- *
- * Layout:
- *   ╭─[tool-name input-summary]
- *   │ content...
- *   ╰── 1.2s
- */
+/** Tool status header with expandable, indented output. */
 
 import { createContext, Show, useContext, createEffect, createSignal, type JSX } from "solid-js"
 import { Option } from "effect"
 import { useTheme } from "../theme/index"
-import { InlineChrome } from "./inline-chrome"
 
 const ToolCallIdentityContext = createContext<Option.Option<string>>(Option.none())
 
@@ -78,13 +64,12 @@ export function ToolFrame(props: ToolFrameProps) {
   const statusIcon = () => {
     if (props.status === "running") return "⋯"
     if (props.status === "error") return "✕"
-    return "✓"
+    return "●"
   }
 
   const statusColor = () => {
-    if (props.status === "running") return theme.warning
     if (props.status === "error") return theme.error
-    return theme.success
+    return theme.textMuted
   }
 
   const footer = () =>
@@ -101,50 +86,54 @@ export function ToolFrame(props: ToolFrameProps) {
     )
 
   return (
-    <InlineChrome.Root paddingLeft={2} onMouseDown={() => setLocalExpanded((prev) => !prev)}>
-      <InlineChrome.Header
-        accentColor={statusColor()}
-        leading={
-          <>
-            <span style={{ fg: statusColor() }}>{statusIcon()}</span>
-            <Show when={props.status === "error"}>
-              <span style={{ fg: theme.error }}> failed</span>
+    <box flexDirection="column" marginBottom={1}>
+      <box flexDirection="row" onMouseDown={() => setLocalExpanded((prev) => !prev)}>
+        <text flexGrow={1} flexShrink={1}>
+          <span style={{ fg: statusColor() }}>{statusIcon()} </span>
+          <Show when={props.status === "error"}>
+            <span style={{ fg: theme.error }}>failed </span>
+          </Show>
+          <span style={{ fg: theme.text, bold: true }}>{props.title}</span>
+          <Show when={props.subtitle}>
+            <Show
+              when={props.subtitleHref}
+              fallback={<span style={{ fg: theme.textMuted }}> {props.subtitle}</span>}
+            >
+              {(href) => (
+                <a href={href()}>
+                  <span style={{ fg: theme.textMuted }}> {props.subtitle}</span>
+                </a>
+              )}
             </Show>
-          </>
-        }
-        title={<span style={{ fg: theme.info, bold: true }}>{props.title}</span>}
-        subtitle={props.subtitle}
-        subtitleHref={props.subtitleHref}
-        subtitleColor={theme.textMuted}
-        trailing={
-          <>
-            <Show when={callIdentityLabel()}>
-              {(identity) => <span style={{ fg: theme.textMuted }}>{identity()} </span>}
-            </Show>
-            <Show when={footer()}>
-              <span style={{ fg: theme.textMuted }}>{footer()} </span>
-            </Show>
-            <span style={{ fg: theme.textMuted }}>{expandIndicator()}</span>
-          </>
-        }
-      />
+          </Show>
+        </text>
+        <text flexShrink={0} wrapMode="none">
+          <Show when={callIdentityLabel()}>
+            {(identity) => <span style={{ fg: theme.textMuted }}> {identity()}</span>}
+          </Show>
+          <Show when={footer()}>
+            <span style={{ fg: theme.textMuted }}> {footer()}</span>
+          </Show>
+          <span style={{ fg: theme.textMuted }}> {expandIndicator()}</span>
+        </text>
+      </box>
 
       <Show
         when={localExpanded()}
         fallback={
           <Show when={props.collapsedContent}>
-            <InlineChrome.Body accentColor={statusColor()}>
+            <box paddingLeft={2} flexDirection="column">
               {props.collapsedContent}
-            </InlineChrome.Body>
+            </box>
           </Show>
         }
       >
         <Show when={props.children}>
-          <InlineChrome.Body accentColor={statusColor()}>{props.children}</InlineChrome.Body>
+          <box paddingLeft={2} flexDirection="column">
+            {props.children}
+          </box>
         </Show>
       </Show>
-
-      <InlineChrome.Footer accentColor={statusColor()} />
-    </InlineChrome.Root>
+    </box>
   )
 }

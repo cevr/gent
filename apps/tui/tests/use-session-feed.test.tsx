@@ -127,7 +127,76 @@ const isSessionEvent = Predicate.or(
 )
 
 describe("useSessionFeed", () => {
-  it.live("displays repeated event envelopes at most once across visible feed items", () =>
+  it.live("changes route when a branch event changes the active client identity", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("branch-navigation-session")
+      const branchId = BranchId.make("branch-navigation-first")
+      const nextBranchId = BranchId.make("branch-navigation-second")
+      const switched = yield* Deferred.make<void>()
+      let snapshotCount = 0
+      const dispose = createRoot((disposeRoot) => {
+        const [active, setActive] = createSignal(makeSession(sessionId, branchId))
+        const runtime = createMockRuntime()
+        const client = {
+          session: active,
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () =>
+                Stream.concat(
+                  Stream.make(
+                    makeEnvelope(
+                      1,
+                      AgentEvent.cases.BranchSwitched.make({
+                        sessionId,
+                        fromBranchId: branchId,
+                        toBranchId: nextBranchId,
+                      }),
+                    ),
+                  ),
+                  Stream.never,
+                ),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime,
+          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+          setConnectionIssue: () => {},
+          waitForTransportReady: Effect.void,
+          applySessionSnapshot: () => {
+            snapshotCount += 1
+            setActive(makeSession(sessionId, branchId))
+          },
+          applySessionEvent: () => setActive(makeSession(sessionId, nextBranchId)),
+          applyBufferedSessionEvent: () => {},
+        } satisfies FeedClient
+        useSessionFeed(
+          () => sessionId,
+          () => branchId,
+          client,
+          runtime.cast,
+          {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onQueueSnapshot: () => {},
+            onBranchSwitch: (nextSession, nextBranch) => {
+              expect(nextSession).toBe(sessionId)
+              expect(nextBranch).toBe(nextBranchId)
+              runtime.cast(Deferred.succeed(switched, void 0))
+            },
+          },
+        )
+        return disposeRoot
+      })
+      yield* Deferred.await(switched).pipe(
+        Effect.timeout("1 second"),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
+      expect(snapshotCount).toBe(1)
+    }),
+  )
+
+  it.live("displays repeated events and resumed tool calls once with their final status", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-feed-duplicates")
       const branchId = BranchId.make("branch-feed-duplicates")
@@ -159,7 +228,7 @@ describe("useSessionFeed", () => {
         }),
       )
       const toolSucceededEnvelope = makeEnvelope(
-        5,
+        6,
         AgentEvent.cases.ToolCallSucceeded.make({
           sessionId,
           branchId,
@@ -170,7 +239,7 @@ describe("useSessionFeed", () => {
         }),
       )
       const turnCompletedEnvelope = makeEnvelope(
-        6,
+        7,
         AgentEvent.cases.TurnCompleted.make({
           sessionId,
           branchId,
@@ -178,7 +247,7 @@ describe("useSessionFeed", () => {
         }),
       )
       const retryEnvelope = makeEnvelope(
-        7,
+        8,
         AgentEvent.cases.ProviderRetrying.make({
           sessionId,
           branchId,
@@ -189,7 +258,7 @@ describe("useSessionFeed", () => {
         }),
       )
       const errorEnvelope = makeEnvelope(
-        8,
+        9,
         AgentEvent.cases.ErrorOccurred.make({
           sessionId,
           branchId,
@@ -201,6 +270,7 @@ describe("useSessionFeed", () => {
         streamStartedEnvelope,
         streamChunkEnvelope,
         toolStartedEnvelope,
+        makeEnvelope(5, toolStartedEnvelope.event),
         toolSucceededEnvelope,
         turnCompletedEnvelope,
         retryEnvelope,
@@ -279,6 +349,11 @@ describe("useSessionFeed", () => {
         expect(assistantMessage?.content).toBe("assistant text")
         expect(assistantMessage?.toolCalls).toHaveLength(1)
         expect(assistantMessage?.toolCalls?.[0]?.status).toBe("completed")
+        const toolSegments = assistantMessage?.segments?.filter(
+          (segment) => segment._tag === "tool-call",
+        )
+        expect(toolSegments).toHaveLength(1)
+        expect(toolSegments?.[0]?.toolCall.status).toBe("completed")
         expect(events?.map((event) => event._tag)).toEqual(["turn-ended", "retrying", "error"])
         const retry = events?.find((event) => event._tag === "retrying")
         expect(retry?._tag === "retrying" && retry.resolved).toBe(true)
@@ -311,7 +386,7 @@ describe("useSessionFeed", () => {
         AgentEvent.cases.BranchSwitched.make({
           sessionId,
           fromBranchId: branchId,
-          toBranchId: branchId,
+          toBranchId: BranchId.make("historical-other-branch"),
         }),
       )
       const liveEvent = makeEnvelope(
@@ -378,11 +453,7 @@ describe("useSessionFeed", () => {
       yield* Deferred.await(liveSeen)
       yield* Effect.sync(() => {
         expect(Option.getOrElse(requestedAfter, () => -1)).toBe(0)
-        expect(bufferedTags).toEqual([
-          "ExtensionStateChanged",
-          "InteractionPresented",
-          "BranchSwitched",
-        ])
+        expect(bufferedTags).toEqual(["ExtensionStateChanged", "InteractionPresented"])
         expect(interaction.requestId).toBe(InteractionRequestId.make("interaction-buffered"))
         expect(branchSwitches).toEqual([])
         dispose()

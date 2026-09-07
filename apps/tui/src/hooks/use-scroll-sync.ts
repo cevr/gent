@@ -8,9 +8,12 @@
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { Effect, Fiber, Option } from "effect"
 import { createEffect, onCleanup, type Accessor } from "solid-js"
+import { useRenderer } from "@opentui/solid"
 import { waitFor } from "../utils/wait-for"
 
 interface ScrollSyncOptions {
+  /** Synchronize only while the target list is mounted. */
+  enabled?: Accessor<boolean>
   /** The scrollbox ref getter */
   // eslint-disable-next-line effect/noNullish -- OpenTUI refs are absent before attachment and after cleanup.
   getRef: () => ScrollBoxRenderable | undefined
@@ -25,6 +28,7 @@ interface ScrollSyncOptions {
  */
 export function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncOptions) {
   const { getRef, retries = 15, retryDelay = 30 } = options
+  const renderer = useRenderer()
 
   const syncScroll = (id: string): Option.Option<true> => {
     const scrollRef = Option.fromNullishOr(getRef())
@@ -47,21 +51,25 @@ export function useScrollSync(selectedId: Accessor<string>, options: ScrollSyncO
   }
 
   createEffect(() => {
+    if (options.enabled && !options.enabled()) return
     const id = selectedId()
-    const fiber = Effect.runFork(
-      Effect.yieldNow.pipe(
-        Effect.andThen(
+    let fiber = Option.none<Fiber.Fiber<void>>()
+    const afterLayout = () => {
+      fiber = Option.some(
+        Effect.runFork(
           waitFor(() => syncScroll(id), {
             label: `scroll-target ${id}`,
             intervalMs: retryDelay,
             timeoutMs: retries * retryDelay,
-          }),
+          }).pipe(Effect.ignore),
         ),
-        Effect.ignore,
-      ),
-    )
+      )
+    }
+    renderer.once("frame", afterLayout)
+    renderer.requestRender()
     onCleanup(() => {
-      Effect.runFork(Fiber.interrupt(fiber))
+      renderer.off("frame", afterLayout)
+      if (Option.isSome(fiber)) Effect.runFork(Fiber.interrupt(fiber.value))
     })
   })
 }

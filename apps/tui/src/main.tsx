@@ -36,6 +36,7 @@ import { createCliRenderer, type CliRenderer } from "@opentui/core"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { App } from "./app"
 import { TerminalDimensionsProvider } from "./terminal-dimensions"
+import { ComposerDraftsProvider } from "./components/composer-drafts"
 import { detectColorScheme } from "./theme/index"
 import { ClientProvider } from "./client/index"
 import { RouterProvider } from "./router"
@@ -455,6 +456,7 @@ const main = Command.make(
 
       const renderer = yield* Effect.promise(() =>
         createCliRenderer({
+          exitOnCtrlC: false,
           onDestroy: () => {
             shutdownLog("exit.renderer-destroy")
           },
@@ -477,11 +479,13 @@ const main = Command.make(
                     <ExtensionUIProvider>
                       <RouterProvider initialRoute={bootstrap.initialRoute}>
                         <TerminalDimensionsProvider>
-                          <App
-                            debugMode={debug}
-                            missingAuthProviders={missingAuth}
-                            initialThemeMode={initialThemeMode}
-                          />
+                          <ComposerDraftsProvider>
+                            <App
+                              debugMode={debug}
+                              missingAuthProviders={missingAuth}
+                              initialThemeMode={initialThemeMode}
+                            />
+                          </ComposerDraftsProvider>
                         </TerminalDimensionsProvider>
                       </RouterProvider>
                     </ExtensionUIProvider>

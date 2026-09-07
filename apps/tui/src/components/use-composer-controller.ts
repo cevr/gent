@@ -63,7 +63,6 @@ export interface ComposerController {
   // eslint-disable-next-line effect/noNullish -- Solid autocomplete accessors use null while closed.
   readonly autocomplete: Accessor<AutocompleteState | null>
   readonly mode: Accessor<"editing" | "shell" | "interaction">
-  readonly promptSymbol: Accessor<string>
   readonly inputFocused: Accessor<boolean>
   // eslint-disable-next-line effect/noNullish -- OpenTUI refs pass null before attachment and on cleanup.
   readonly attachTextarea: (renderable: TextareaRenderable | null) => void
@@ -540,6 +539,8 @@ export function useComposerController(): ComposerController {
   })
 
   onCleanup(() => {
+    const state = sc.interactionState()
+    sc.saveDraft({ draft: paste.expandPlaceholders(state.draft), mode: state.mode })
     paste.clear()
     tokenStyle.destroy()
   })
@@ -547,10 +548,6 @@ export function useComposerController(): ComposerController {
   return {
     autocomplete,
     mode: effectiveMode,
-    promptSymbol: () => {
-      if (effectiveMode() === "shell") return "$ "
-      return "❯ "
-    },
     inputFocused: () =>
       !command.paletteOpen() && sc.promptSearchOpen() !== true && effectiveMode() !== "interaction",
     attachTextarea: (renderable) => {

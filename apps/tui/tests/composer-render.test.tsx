@@ -26,6 +26,7 @@ function TestComposer(props: {
     messages: () => [],
     queueState: () => ({ steering: [], followUp: [] }),
     interactionState,
+    saveDraft: () => {},
     uiState: SessionUiState.initial,
     composerState: () => ComposerState.idle(),
     promptEntries: () => [],
@@ -34,7 +35,6 @@ function TestComposer(props: {
     toolsExpanded: () => false,
     treeOverlay: () => Option.getOrNull(Option.none()),
     activity: () => ({ phase: "idle", turn: 0 }),
-    spinner: () => "",
     phaseLabel: () => "idle",
     elapsed: () => 0,
     getChildren: () => [],
@@ -75,11 +75,11 @@ describe("Composer renderer", () => {
       )
       setup.mockInput.pressKeys(["h", "i"])
       yield* Effect.promise(() => setup.renderOnce())
-      expect(renderFrame(setup)).toContain("❯ hi")
+      expect(renderFrame(setup)).toContain("┃ hi")
       setup.mockInput.pressKey("RETURN")
       yield* Effect.promise(() => setup.renderOnce())
       expect(submitted).toEqual([{ content: "hi", mode: "queue" }])
-      expect(renderFrame(setup)).not.toContain("❯ hi")
+      expect(renderFrame(setup)).not.toContain("┃ hi")
     }),
   )
   it.live("suspended composer blocks enter submission", () =>
@@ -99,7 +99,7 @@ describe("Composer renderer", () => {
       setup.mockInput.pressKey("RETURN")
       yield* Effect.promise(() => setup.renderOnce())
       expect(submitted).toEqual([])
-      expect(renderFrame(setup)).toContain("❯ hi")
+      expect(renderFrame(setup)).toContain("┃ hi")
     }),
   )
   it.live("slash trigger renders the command popup", () =>

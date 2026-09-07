@@ -1,7 +1,6 @@
 import { Show } from "solid-js"
 import { Option } from "effect"
 import { useTheme } from "../theme/index"
-import { InlineChrome } from "./inline-chrome"
 import { useClient } from "../client/index"
 
 export function ConnectionWidget() {
@@ -59,42 +58,34 @@ export function ConnectionWidget() {
 
   return (
     <Show when={visible()}>
-      <InlineChrome.Root paddingLeft={2} marginTop={1} marginBottom={1}>
-        <InlineChrome.Header
-          accentColor={accent()}
-          leading={<span style={{ fg: accent() }}>•</span>}
-          title={<span style={{ fg: accent(), bold: true }}>connection</span>}
-          subtitle={subtitle()}
-          subtitleColor={theme.textMuted}
-        />
-        <InlineChrome.Body accentColor={accent()}>
+      <box flexDirection="column" paddingLeft={2} marginTop={1} marginBottom={1}>
+        <text>
+          <span style={{ fg: accent(), bold: true }}>• connection</span>
+          <span style={{ fg: theme.textMuted }}> · {subtitle()}</span>
+        </text>
+        <box flexDirection="column" paddingLeft={2}>
           <Show when={client.isReconnecting()}>
             <text>
-              <span style={{ fg: accent() }}>{"│ "}</span>
-              <span style={{ fg: theme.text }}>reconnecting to worker...</span>
+              <span style={{ fg: theme.text }}>reconnecting to worker…</span>
             </text>
           </Show>
           <Show when={restartCount() > 0}>
             <text>
-              <span style={{ fg: accent() }}>{"│ "}</span>
               <span style={{ fg: theme.textMuted }}>restart count: {restartCount()}</span>
             </text>
           </Show>
           <Show when={Option.isSome(connectionIssue())}>
             <text>
-              <span style={{ fg: accent() }}>{"│ "}</span>
               <span style={{ fg: theme.text }}>{Option.getOrUndefined(connectionIssue())}</span>
             </text>
           </Show>
           <Show when={Option.isSome(disconnectedReason())}>
             <text>
-              <span style={{ fg: accent() }}>{"│ "}</span>
               <span style={{ fg: theme.text }}>{Option.getOrUndefined(disconnectedReason())}</span>
             </text>
           </Show>
           <Show when={hasFailedExtensions()}>
             <text>
-              <span style={{ fg: accent() }}>{"│ "}</span>
               <span style={{ fg: theme.text }}>
                 failed extensions: {failedExtensions().join(", ")}
               </span>
@@ -102,15 +93,13 @@ export function ConnectionWidget() {
           </Show>
           <Show when={hasFailedScheduledJobs()}>
             <text>
-              <span style={{ fg: accent() }}>{"│ "}</span>
               <span style={{ fg: theme.text }}>
                 failed scheduled jobs: {failedScheduledJobs().join(", ")}
               </span>
             </text>
           </Show>
-        </InlineChrome.Body>
-        <InlineChrome.Footer accentColor={accent()} />
-      </InlineChrome.Root>
+        </box>
+      </box>
     </Show>
   )
 }

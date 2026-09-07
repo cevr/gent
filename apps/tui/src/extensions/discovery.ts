@@ -9,6 +9,7 @@
  */
 
 import { Effect, FileSystem, Option, Path } from "effect"
+import { isProjectExtensionDirectoryTrusted } from "@gent/core-internal/runtime/extensions/project-trust"
 
 export interface DiscoveredTuiExtension {
   readonly filePath: string
@@ -91,9 +92,8 @@ export const discoverTuiExtensions = (opts: {
   FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
-    const [user, project] = yield* Effect.all(
-      [discoverDir(opts.userDir, "user"), discoverDir(opts.projectDir, "project")],
-      { concurrency: 2 },
-    )
+    const user = yield* discoverDir(opts.userDir, "user")
+    if (!(yield* isProjectExtensionDirectoryTrusted(opts))) return user
+    const project = yield* discoverDir(opts.projectDir, "project")
     return [...user, ...project]
   })

@@ -9,7 +9,7 @@ import { Show, For, createMemo } from "solid-js"
 import type { JSX } from "solid-js"
 import { Option } from "effect"
 import { windowItems, headTailExcerpts } from "@gent/core-internal/domain/windowing.js"
-import { useTheme } from "../../theme/index"
+import { buildSyntaxStyle, useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
 import { fileUrl, isAbsPath } from "../../utils/file-refs"
@@ -35,8 +35,8 @@ function diffLineKind(text: string): DiffLineKind {
 }
 
 function diffLineColor(kind: DiffLineKind, theme: ReturnType<typeof useTheme>["theme"]) {
-  if (kind === "add") return theme.success
-  if (kind === "remove") return theme.error
+  if (kind === "add") return theme.diffAdded
+  if (kind === "remove") return theme.diffRemoved
   return theme.textMuted
 }
 
@@ -54,13 +54,15 @@ const renderDiffLine = (
   }
   return (
     <text>
-      <span style={{ fg: diffLineColor(item.kind, theme) }}>{item.text}</span>
+      <span style={{ fg: diffLineColor(item.kind, theme) }}>{item.text.slice(0, 1)}</span>
+      <span style={{ fg: theme.text }}>{item.text.slice(1)}</span>
     </text>
   )
 }
 
 export function EditToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
+  const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
 
   const editData = () => getEditUnifiedDiff(props.toolCall.input)
   const path = () => getPath(props.toolCall.input)
@@ -108,9 +110,9 @@ export function EditToolRenderer(props: ToolRendererProps) {
           collapsedContent={
             <box flexDirection="column">
               <text>
-                <span style={{ fg: theme.success, bold: true }}>+{data().added}</span>
+                <span style={{ fg: theme.diffAdded, bold: true }}>+{data().added}</span>
                 <span style={{ fg: theme.textMuted }}> </span>
-                <span style={{ fg: theme.error, bold: true }}>-{data().removed}</span>
+                <span style={{ fg: theme.diffRemoved, bold: true }}>-{data().removed}</span>
               </text>
               <Show when={collapsedDiffLines().length > 0}>
                 <For each={collapsedDiffLines()}>{(item) => renderDiffLine(item, theme)}</For>
@@ -122,13 +124,20 @@ export function EditToolRenderer(props: ToolRendererProps) {
             diff={data().diff}
             view="unified"
             filetype={data().filetype}
+            syntaxStyle={syntaxStyle()}
+            fg={theme.text}
             showLineNumbers={true}
-            addedBg="#1a4d1a"
-            removedBg="#4d1a1a"
-            addedContentBg="#2d6b2d"
-            removedContentBg="#6b2d2d"
-            addedSignColor="#22c55e"
-            removedSignColor="#ef4444"
+            addedBg={theme.diffAddedBg}
+            removedBg={theme.diffRemovedBg}
+            contextBg={theme.diffContextBg}
+            addedContentBg={theme.diffAddedBg}
+            removedContentBg={theme.diffRemovedBg}
+            contextContentBg={theme.diffContextBg}
+            addedSignColor={theme.diffAdded}
+            removedSignColor={theme.diffRemoved}
+            addedLineNumberBg={theme.diffAddedLineNumberBg}
+            removedLineNumberBg={theme.diffRemovedLineNumberBg}
+            lineNumberBg={theme.background}
             lineNumberFg={theme.textMuted}
             width="100%"
           />

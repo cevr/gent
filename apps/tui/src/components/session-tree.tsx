@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { matchSorter } from "match-sorter"
@@ -109,20 +109,14 @@ export function SessionTree(props: SessionTreeProps) {
     getRef: () => Option.getOrUndefined(scrollRef),
   })
 
-  createEffect(() => {
-    if (!props.open) return
-    const currentIndex = items().findIndex((item) => item.isCurrent)
-    let selectedIndex = 0
-    if (currentIndex >= 0) selectedIndex = currentIndex
-    setState(
-      transitionSessionTree(
-        state(),
-        SessionTreeEvent.cases.Open.make({
-          selectedIndex,
-        }),
-      ),
-    )
-  })
+  createEffect(
+    on([() => props.open, () => props.tree, () => props.currentSessionId], ([open, tree, id]) => {
+      // eslint-disable-next-line effect/noNullish -- the tree is absent while its query loads.
+      if (!open || tree === null) return
+      const currentIndex = buildTreeLines(tree, id, "").findIndex((item) => item.isCurrent)
+      setState(SessionTreeState.initial(Math.max(0, currentIndex)))
+    }),
+  )
 
   useScopedKeyboard(
     (e) => {

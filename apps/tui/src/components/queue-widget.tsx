@@ -1,7 +1,6 @@
 import { For, Show } from "solid-js"
 import type { QueueEntryInfo } from "@gent/sdk"
 import { useTheme } from "../theme/index"
-import { InlineChrome } from "./inline-chrome"
 
 export interface QueueWidgetProps {
   queuedMessages: readonly QueueEntryInfo[]
@@ -22,39 +21,25 @@ export function QueueWidget(props: QueueWidgetProps) {
 
   return (
     <Show when={hasItems()}>
-      <InlineChrome.Root paddingLeft={2} marginBottom={1}>
-        <InlineChrome.Header
-          accentColor={theme.warning}
-          leading={<span style={{ fg: theme.warning }}>•</span>}
-          title={<span style={{ fg: theme.warning, bold: true }}>queue</span>}
-          subtitle="pending messages"
-          subtitleColor={theme.textMuted}
-        />
-        <InlineChrome.Body accentColor={theme.warning}>
-          <For each={props.steerMessages}>
-            {(message, index) => (
-              <text>
-                <span style={{ fg: theme.warning }}>{"│ "}</span>
-                <span style={{ fg: theme.warning }}>[steer {index() + 1}]</span>
-                <span style={{ fg: theme.text }}> {summaryText(message.content)}</span>
-              </text>
-            )}
-          </For>
-          <For each={props.queuedMessages}>
-            {(message, index) => (
-              <text>
-                <span style={{ fg: theme.warning }}>{"│ "}</span>
-                <span style={{ fg: theme.textMuted }}>[queued {index() + 1}]</span>
-                <span style={{ fg: theme.text }}> {summaryText(message.content)}</span>
-              </text>
-            )}
-          </For>
-        </InlineChrome.Body>
-        <InlineChrome.Footer
-          accentColor={theme.warning}
-          trailing={<span style={{ fg: theme.textMuted }}>cmd+up restore</span>}
-        />
-      </InlineChrome.Root>
+      <box flexDirection="column" paddingLeft={2} marginBottom={1}>
+        <For each={props.steerMessages}>
+          {(message, index) => (
+            <text>
+              <span style={{ fg: theme.textMuted }}>┋ [steer {index() + 1}]</span>
+              <span style={{ fg: theme.text }}> {summaryText(message.content)}</span>
+            </text>
+          )}
+        </For>
+        <For each={props.queuedMessages}>
+          {(message, index) => (
+            <text>
+              <span style={{ fg: theme.textMuted }}>┋ [queued {index() + 1}]</span>
+              <span style={{ fg: theme.text }}> {summaryText(message.content)}</span>
+            </text>
+          )}
+        </For>
+        <text style={{ fg: theme.textMuted }}> cmd+up restore</text>
+      </box>
     </Show>
   )
 }

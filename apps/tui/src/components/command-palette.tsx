@@ -24,6 +24,9 @@ import {
   type PaletteLevel,
 } from "./command-palette-state"
 import { ChromePanel } from "./chrome-panel"
+import { PickerFrame, pickerHeight } from "./picker-frame"
+import { pickerQueryText, pickerText } from "./picker-text"
+import { textWidth } from "../platform/text-width-adapter"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useRouter } from "../router"
@@ -122,7 +125,7 @@ export function CommandPalette() {
           id: "theme.dark",
           title: selectedTitle("Dark", !isSystem && currentMode === "dark"),
           onSelect: () => {
-            set("opencode")
+            set("fx")
             setMode("dark")
             closePalette()
           },
@@ -131,7 +134,7 @@ export function CommandPalette() {
           id: "theme.light",
           title: selectedTitle("Light", !isSystem && currentMode === "light"),
           onSelect: () => {
-            set("opencode")
+            set("fx")
             setMode("light")
             closePalette()
           },
@@ -194,6 +197,30 @@ export function CommandPalette() {
     }
   }
 
+  const branchesLevel = (): PaletteLevel => {
+    const [branches] = createResource(() => client.runtime.run(client.listBranches))
+    return {
+      id: "branches",
+      title: "Branches",
+      source: () =>
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(branches()), (items) =>
+            items.map((branch) => ({
+              id: `branch.${branch.id}`,
+              title: selectedTitle(
+                branch.name ?? `Branch ${branch.id.slice(0, 8)}…${branch.id.slice(-4)}`,
+                client.session()?.branchId === branch.id,
+              ),
+              onSelect: () => {
+                if (client.session()?.branchId !== branch.id) client.switchBranch(branch.id)
+                closePalette()
+              },
+            })),
+          ),
+        ),
+    }
+  }
+
   const pushLevel = (level: PaletteLevel) => {
     dispatch(CommandPaletteEvent.cases.PushLevel.make({ level }))
     level.onEnter?.()
@@ -207,21 +234,21 @@ export function CommandPalette() {
         id: "sessions",
         title: "Sessions",
         description: "Browse and switch sessions",
-        category: "nav",
+        category: "Session",
         onSelect: () => pushLevel(sessionsLevel()),
       },
       {
         id: "theme",
         title: "Theme",
         description: "Switch color theme",
-        category: "config",
+        category: "Appearance",
         onSelect: () => pushLevel(themeLevel()),
       },
       {
         id: "new-session",
         title: "New Session",
         description: "Start a fresh session",
-        category: "cmd",
+        category: "Session",
         shortcut: "Ctrl+N",
         onSelect: () => {
           client.createSession((sessionId, branchId) =>
@@ -230,21 +257,32 @@ export function CommandPalette() {
           closePalette()
         },
       },
-      ...command.commands().map((cmd) => ({
-        id: `ext:${cmd.id}`,
-        title: cmd.title,
-        category: cmd.category ?? "ext",
-        shortcut: cmd.keybind,
-        onSelect: () => {
-          const nextLevel = Option.fromNullishOr(cmd.paletteLevel)
-          if (Option.isSome(nextLevel)) {
-            pushLevel(nextLevel.value())
-          } else {
-            cmd.onSelect()
-            closePalette()
-          }
-        },
-      })),
+      {
+        id: "branches",
+        title: "Branches",
+        description: "Switch branches in this session",
+        category: "Session",
+        onSelect: () => pushLevel(branchesLevel()),
+      },
+      ...command
+        .commands()
+        .filter((cmd) => cmd.id !== "session.new" && cmd.id !== "session.sessions")
+        .map((cmd) => ({
+          id: `ext:${cmd.id}`,
+          title: cmd.title,
+          description: cmd.description,
+          category: cmd.category ?? "General",
+          shortcut: cmd.keybind,
+          onSelect: () => {
+            const nextLevel = Option.fromNullishOr(cmd.paletteLevel)
+            if (Option.isSome(nextLevel)) {
+              pushLevel(nextLevel.value())
+            } else {
+              cmd.onSelect()
+              closePalette()
+            }
+          },
+        })),
     ],
   })
 
@@ -259,15 +297,27 @@ export function CommandPalette() {
     return level.value.source() ?? []
   })
 
-  const filteredItems = createMemo(() => filterItems(levelItems(), searchQuery()))
-
-  const maxCategoryWidth = createMemo(() => {
-    let max = 0
-    for (const item of filteredItems()) {
-      max = Math.max(max, item.category?.length ?? 0)
-    }
-    return max
+  const categories = createMemo(() => [
+    "",
+    ...new Set(levelItems().map((item) => item.category ?? "General")),
+  ])
+  const category = () => {
+    if (categories().includes(state().category)) return state().category
+    return ""
+  }
+  const filteredItems = createMemo(() => {
+    const items = filterItems(levelItems(), searchQuery())
+    if (category() === "") return items
+    return items.filter((item) => (item.category ?? "General") === category())
   })
+  const categoryHeader = () => {
+    const selected = category()
+    const label = selected || "All"
+    const others = categories()
+      .filter((value) => value !== selected)
+      .map((value) => value || "All")
+    return `[${label}]  ${others.join("  ")}`
+  }
 
   const popLevel = () => {
     if (state().levelStack.length <= 1) {
@@ -283,14 +333,30 @@ export function CommandPalette() {
     item.value.onSelect()
   }
 
+  const cycleCategory = (backward: boolean) => {
+    const items = categories()
+    let step = 1
+    if (backward) step = -1
+    const index = (items.indexOf(category()) + step + items.length) % items.length
+    dispatch(CommandPaletteEvent.cases.SelectCategory.make({ category: items[index] ?? "" }))
+  }
+
+  const escapeLevel = () => {
+    if (searchQuery().length > 0) {
+      dispatch(CommandPaletteEvent.cases.ClearSearch.make({}))
+      return
+    }
+    popLevel()
+  }
+
   useScopedKeyboard(
     (event) => {
+      if (event.name === "tab") {
+        cycleCategory(event.shift === true)
+        return true
+      }
       if (event.name === "escape") {
-        if (searchQuery().length > 0) {
-          dispatch(CommandPaletteEvent.cases.ClearSearch.make({}))
-          return true
-        }
-        popLevel()
+        escapeLevel()
         return true
       }
 
@@ -345,10 +411,21 @@ export function CommandPalette() {
     }
   })
 
-  const paletteWidth = () => Math.min(50, dimensions().width - 4)
-  const paletteHeight = () => Math.min(14, dimensions().height - 6)
-  const left = () => Math.floor((dimensions().width - paletteWidth()) / 2)
-  const top = () => Math.floor((dimensions().height - paletteHeight()) / 2)
+  const paletteHeight = () => pickerHeight(filteredItems().length, dimensions().height)
+
+  const hasDetails = () =>
+    filteredItems().some((item) => Boolean(item.description?.trim() || item.shortcut))
+  const labelWidth = () => {
+    if (!hasDetails()) return dimensions().width
+    return Math.max(8, Math.min(24, Math.floor(dimensions().width * 0.28)))
+  }
+
+  const footerHint = () => {
+    let close = "Close"
+    if (state().levelStack.length > 1) close = "Back"
+    if (dimensions().width < 56) return `↑↓ Move · Tab Group · ↵ Open · Esc ${close}`
+    return `↑↓ Navigate     Tab Category     Enter Open     Esc ${close}`
+  }
 
   const breadcrumb = () => {
     const stack = state().levelStack
@@ -367,6 +444,14 @@ export function CommandPalette() {
       onSome: (level) => level.title,
     })
 
+  const queryPrefix = () => {
+    if (searchQuery().length === 0) return pickerText(breadcrumb(), dimensions().width - 2)
+    const available = Math.max(1, Math.floor((dimensions().width - 3) / 2))
+    return `${pickerText(breadcrumb() || "›", available)} `
+  }
+  const visibleQuery = () =>
+    pickerQueryText(searchQuery(), dimensions().width - 3 - textWidth(queryPrefix()))
+
   const LoadingIndicator = () => (
     <box paddingLeft={1}>
       <text style={{ fg: theme.textMuted }}>Loading…</text>
@@ -379,38 +464,39 @@ export function CommandPalette() {
         {(item, index) => {
           const isSelected = () => state().selectedIndex === index()
           const disabled = item.disabled === true
-          const catWidth = maxCategoryWidth()
           const itemTextColor = () => {
             if (disabled) return theme.textMuted
-            if (isSelected()) return theme.selectedListItemText
+            if (isSelected()) return theme.primary
             return theme.text
           }
           const metaColor = () => {
             if (disabled) return theme.textMuted
-            if (isSelected()) return theme.selectedListItemText
+            if (isSelected()) return theme.primary
             return theme.textMuted
           }
-          const background = () => {
-            if (isSelected() && !disabled) return theme.primary
-            return "transparent"
+          const detail = () => {
+            let text = item.description ?? ""
+            if (item.shortcut) text += ` [${item.shortcut}]`
+            return pickerText(text, dimensions().width - labelWidth() - 3)
           }
-
           return (
-            <box id={`item-${index()}`} backgroundColor={background()} paddingLeft={1}>
-              <text style={{ fg: itemTextColor() }}>
-                <Show when={catWidth > 0}>
-                  <span style={{ fg: metaColor() }}>
-                    {(item.category ?? "").padEnd(catWidth)}
-                  </span>{" "}
-                </Show>
-                {item.title}
-                <Show when={Option.isSome(Option.fromNullishOr(item.description))}>
-                  <span style={{ fg: metaColor() }}> {item.description}</span>
-                </Show>
-                <Show when={Option.isSome(Option.fromNullishOr(item.shortcut))}>
-                  <span style={{ fg: metaColor() }}> [{item.shortcut}]</span>
-                </Show>
+            <box id={`item-${index()}`} paddingLeft={1} flexDirection="row" height={1} gap={2}>
+              <text
+                width={labelWidth() - 2}
+                flexShrink={0}
+                wrapMode="none"
+                truncate
+                style={{ fg: itemTextColor() }}
+              >
+                <span style={{ bold: isSelected() && !disabled }}>
+                  {pickerText(item.title, labelWidth() - 2)}
+                </span>
               </text>
+              <Show when={hasDetails()}>
+                <text flexGrow={1} wrapMode="none" truncate style={{ fg: metaColor() }}>
+                  {detail()}
+                </text>
+              </Show>
             </box>
           )
         }}
@@ -425,21 +511,17 @@ export function CommandPalette() {
 
   return (
     <Show when={command.paletteOpen()}>
-      <ChromePanel.Root
-        title={levelTitle()}
-        width={paletteWidth()}
-        height={paletteHeight()}
-        left={left()}
-        top={top()}
-      >
+      <PickerFrame height={paletteHeight()} footer={footerHint()}>
+        <box height={1} flexShrink={0} overflow="hidden">
+          <text style={{ fg: theme.textMuted }}>
+            {levelTitle()} {filteredItems().length} {categoryHeader()}
+          </text>
+        </box>
         <ChromePanel.Section>
-          <text style={{ fg: theme.text }}>
-            <Show when={breadcrumb().length > 0}>
-              <span style={{ fg: theme.textMuted }}>{breadcrumb()} </span>
-            </Show>
+          <text height={1} wrapMode="none" truncate style={{ fg: theme.text }}>
+            <span style={{ fg: theme.textMuted }}>{queryPrefix()}</span>
             <Show when={searchQuery().length > 0}>
-              <span style={{ fg: theme.textMuted }}>› </span>
-              {searchQuery()}
+              {visibleQuery()}
               <span style={{ fg: theme.primary }}>│</span>
             </Show>
           </text>
@@ -454,13 +536,7 @@ export function CommandPalette() {
             <ItemList />
           </Suspense>
         </ChromePanel.Body>
-
-        <ChromePanel.Footer>
-          <Show when={state().levelStack.length > 1} fallback="↑↓ · →/Enter · Esc · type to search">
-            ↑↓ · →/Enter · ←/Esc · type to search
-          </Show>
-        </ChromePanel.Footer>
-      </ChromePanel.Root>
+      </PickerFrame>
     </Show>
   )
 }

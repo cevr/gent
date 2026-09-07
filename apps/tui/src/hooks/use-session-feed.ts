@@ -6,9 +6,9 @@
  * UpdateBypass/UpdateReasoningLevel re-run footgun.
  */
 
-import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
+import { batch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { createStore, produce, type SetStoreFunction } from "solid-js/store"
-import { Clock, Effect, Fiber, Option, Predicate, Schedule, Stream } from "effect"
+import { Clock, Effect, Equal, Fiber, Option, Predicate, Schedule, Stream } from "effect"
 import type {
   ActiveInteraction,
   AgentEvent,
@@ -94,7 +94,6 @@ export interface SessionFeed {
   turnCount: () => number
   // eslint-disable-next-line effect/noNullish -- Solid accessor omits an inactive tool.
   activeTool: () => string | undefined
-  clear: () => void
 }
 
 type SessionFeedClient = Pick<ClientSessionValue, "session"> &
@@ -431,11 +430,15 @@ export function useSessionFeed(
   const feedKey = createMemo(() => `${sessionId()}:${branchId()}`)
 
   // Wait for session to become active before subscribing
-  const activeSessionKey = createMemo((): Option.Option<string> => {
-    const session = Option.fromNullishOr(client.session())
-    if (Option.isNone(session)) return Option.none()
-    return Option.some(`${session.value.sessionId}:${session.value.branchId}`)
-  })
+  const activeSessionKey = createMemo(
+    (): Option.Option<string> => {
+      const session = Option.fromNullishOr(client.session())
+      if (Option.isNone(session)) return Option.none()
+      return Option.some(`${session.value.sessionId}:${session.value.branchId}`)
+    },
+    Option.none(),
+    { equals: Equal.equals },
+  )
 
   // Track which prompts have been sent (keyed by feedKey to handle re-navigation)
   const sentPrompts = new Set<string>()
@@ -621,15 +624,29 @@ export function useSessionFeed(
       )
       lastSeenEventIdByKey.set(key, Math.max(lastSeen, envelope.id))
       if (Option.isSome(snapshotLastEventId) && envelope.id <= snapshotLastEventId.value) {
+        // Historical navigation must not replace the branch selected for this snapshot.
+        if (envelope.event._tag === "BranchSwitched") return
         client.applyBufferedSessionEvent(envelope)
-        processBufferedEvent(envelope, branch, key)
+        processBufferedEvent(envelope, key)
+        return
+      }
+      const event = envelope.event
+      if (event._tag === "BranchSwitched") {
+        // Changing client identity stops this subscription. Route before cleanup.
+        batch(() => {
+          client.applySessionEvent(envelope)
+          if (event.toBranchId !== branch) {
+            setStore({ messages: [], events: [] })
+            callbacks.onBranchSwitch(event.sessionId, event.toBranchId)
+          }
+        })
         return
       }
       client.applySessionEvent(envelope)
       yield* processEvent(envelope.event, branch, key)
     })
 
-  const processBufferedEvent = (envelope: EventEnvelope, branch: BranchId, key: string) => {
+  const processBufferedEvent = (envelope: EventEnvelope, key: string) => {
     if (Option.isNone(currentKey) || currentKey.value !== key) return
     const event = envelope.event
 
@@ -681,11 +698,7 @@ export function useSessionFeed(
 
     // Snapshot data already contains message, lifecycle, and metrics state.
     // Buffered replay only hydrates event-only UI state that is absent from the
-    // snapshot, such as pending interactions and route navigation.
-    if (event._tag === "BranchSwitched") {
-      if (event.toBranchId !== branch) callbacks.onBranchSwitch(event.sessionId, event.toBranchId)
-      return
-    }
+    // snapshot, such as pending interactions.
 
     if (event._tag === "InteractionResolved") {
       callbacks.onInteractionDismissed(event.requestId)
@@ -721,13 +734,6 @@ export function useSessionFeed(
         case "MessageReceived":
           if (event.message.role === "user" || isCompactionMessage(event.message)) {
             upsertReceivedMessage(setStore, projectMessage(event.message, []))
-          }
-          break
-
-        case "BranchSwitched":
-          if (event.toBranchId !== branch) {
-            setStore({ messages: [], events: [] })
-            callbacks.onBranchSwitch(event.sessionId, event.toBranchId)
           }
           break
 
@@ -777,6 +783,13 @@ export function useSessionFeed(
           } satisfies ToolCall
           updateLatestToolCall(setStore, (message) => {
             let toolCalls = Option.fromNullishOr(message.toolCalls)
+            // Cold interaction resume starts the same call again, not a new call.
+            if (
+              Option.isSome(toolCalls) &&
+              toolCalls.value.some((call) => call.id === event.toolCallId)
+            ) {
+              return
+            }
             if (Option.isNone(toolCalls)) {
               message.toolCalls = []
               toolCalls = Option.fromNullishOr(message.toolCalls)
@@ -823,6 +836,5 @@ export function useSessionFeed(
     messages: () => store.messages,
     turnCount,
     activeTool: () => Option.getOrUndefined(activeTool()),
-    clear: resetProjection,
   }
 }

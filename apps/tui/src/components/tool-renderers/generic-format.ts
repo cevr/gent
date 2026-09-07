@@ -7,6 +7,18 @@ const decodeString = Schema.decodeUnknownOption(Schema.String)
 const decodeStringArray = Schema.decodeUnknownOption(Schema.Array(Schema.String))
 const encodePrettyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json, { space: 2 }))
 
+export const formatGenericToolInput = (input: ToolCall["input"]) =>
+  Schema.decodeUnknownOption(Schema.Json)(input).pipe(
+    Option.map(encodePrettyJson),
+    Option.getOrElse(() => "(none)"),
+  )
+
+export const formatGenericToolDetail = (text: string) =>
+  decodeJson(text).pipe(
+    Option.map(encodePrettyJson),
+    Option.getOrElse(() => text),
+  )
+
 function uniqueNonEmpty(parts: ReadonlyArray<Option.Option<string>>): string[] {
   const seen = new Set<string>()
   const result: string[] = []
