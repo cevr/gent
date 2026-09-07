@@ -7,7 +7,6 @@ import type { ExtensionHealthSnapshot, QueueEntryInfo, Session } from "@gent/sdk
 import { MessageList, type Message, type SessionItem } from "../src/components/message-list"
 import { ConnectionWidget } from "../src/components/connection-widget"
 import { QueueWidget } from "../src/components/queue-widget"
-import { TodoWidget } from "../src/components/todo-widget"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { runEffectBoundary } from "./run-effect-boundary"
 import { useClient, type GentRuntime } from "../src/client"
@@ -192,35 +191,6 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("[steer 1] switch to deepwork")
       expect(frame).toContain("[queued 1] line one +2 lines")
       expect(frame).toContain("cmd+up restore")
-    }),
-  )
-  it.live("TodoWidget preview renders summary and overflow", () =>
-    Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <TodoWidget
-            previewTodos={[
-              { subject: "Resolve transport DTOs", status: "completed" },
-              { subject: "Add renderer coverage", status: "in_progress" },
-              { subject: "Clean debug boot", status: "pending" },
-              { subject: "Document final architecture", status: "failed" },
-              { subject: "Overflow 1", status: "pending" },
-              { subject: "Overflow 2", status: "pending" },
-              { subject: "Overflow 3", status: "pending" },
-              { subject: "Overflow 4", status: "pending" },
-              { subject: "Overflow 5", status: "pending" },
-              { subject: "Overflow 6", status: "pending" },
-              { subject: "Overflow 7", status: "pending" },
-            ]}
-          />
-        )),
-      )
-      const frame = renderFrame(setup)
-      expect(frame).toContain("todos")
-      expect(frame).toContain("11 todos")
-      expect(frame).toContain("Resolve transport DTOs")
-      expect(frame).toContain("Add renderer coverage")
-      expect(frame).toContain("+7 more")
     }),
   )
   it.live("ConnectionWidget renders nothing when no connection issue", () =>

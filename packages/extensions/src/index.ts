@@ -22,7 +22,6 @@ import { SkillsExtension } from "./skills/index.js"
 import { LibrarianExtension } from "./librarian/index.js"
 import { AcpAgentsExtension } from "./acp-agents/index.js"
 import { AutoExtension } from "./auto/index.js"
-import { TodoExtension } from "./todo/index.js"
 import { WorkflowsExtension } from "./workflows.js"
 import { HandoffExtension } from "./handoff.js"
 import { ArtifactsExtension } from "./artifacts/index.js"
@@ -109,7 +108,6 @@ export {
   AcpAgentsExtension,
   AutoExtension,
   WorkflowsExtension,
-  TodoExtension,
   HandoffExtension,
   ArtifactsExtension,
 }
@@ -123,7 +121,6 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner>
   DelegateExtension,
   InteractionToolsExtension,
   SessionToolsExtension,
-  TodoExtension,
   AgentsExtension,
   WorkflowsExtension,
   AutoExtension,

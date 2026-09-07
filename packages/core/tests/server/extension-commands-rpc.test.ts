@@ -66,7 +66,6 @@ import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/work
 import { ConfigService } from "../../src/runtime/config-service"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { ProcessRunnerLive } from "../../src/utils/run-process"
-import { TodoStorage } from "../../../extensions/src/todo-storage.js"
 import { WideEventLogger, type LogEvent } from "../../src/runtime/wide-event-boundary"
 import DynamicScratchpadExtension from "../../../../examples/extensions/dynamic-scratchpad.js"
 import { ExtensionProtocolError } from "../../src/server/errors"
@@ -1335,7 +1334,6 @@ describe("extension command RPCs", () => {
               output: Schema.Struct({
                 hasSessionMutations: Schema.Boolean,
                 hasAgentRun: Schema.Boolean,
-                profileStorageAvailable: Schema.Boolean,
                 extensionContextProcessAvailable: Schema.Boolean,
                 extensionContextFollowUpQueued: Schema.Boolean,
                 extensionContextParentEnvIsObject: Schema.Boolean,
@@ -1343,7 +1341,6 @@ describe("extension command RPCs", () => {
               execute: () =>
                 narrowR(
                   Effect.gen(function* () {
-                    const todoStorage = yield* Effect.serviceOption(TodoStorage)
                     const extensionCtx = yield* ExtensionContext
                     const processExit = yield* Effect.exit(extensionCtx.Process.run("echo", ["hi"]))
                     const followUpExit = yield* Effect.exit(
@@ -1355,7 +1352,6 @@ describe("extension command RPCs", () => {
                     return {
                       hasSessionMutations: false,
                       hasAgentRun: false,
-                      profileStorageAvailable: Option.isSome(todoStorage),
                       extensionContextProcessAvailable: Exit.isSuccess(processExit),
                       extensionContextFollowUpQueued: Exit.isSuccess(followUpExit),
                       extensionContextParentEnvIsObject: Predicate.isObjectOrArray(
@@ -1388,7 +1384,6 @@ describe("extension command RPCs", () => {
           expect(result).toEqual({
             hasSessionMutations: false,
             hasAgentRun: false,
-            profileStorageAvailable: true,
             extensionContextProcessAvailable: true,
             extensionContextFollowUpQueued: true,
             extensionContextParentEnvIsObject: true,

@@ -2,10 +2,7 @@ import { describe, it, expect, test } from "effect-bun-test"
 import { Deferred, Effect } from "effect"
 import autoBuiltin from "../src/extensions/builtins/auto.client"
 import artifactsBuiltin from "../src/extensions/builtins/artifacts.client"
-import todosBuiltin from "../src/extensions/builtins/tool-renderers.client"
-import { AgentEvent, EventId, type EventEnvelope } from "@gent/core-internal/domain/event"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
-import { TODO_EXTENSION_ID } from "@gent/extensions/client.js"
 import {
   findBorderLabel,
   makeActiveSessionRef,
@@ -181,101 +178,6 @@ describe("transport-only extension widgets", () => {
         const borderLabel = findBorderLabel(contributions, "bottom-right")
         expect(borderLabel).toBeDefined()
         yield* Deferred.succeed(requestDeferred, [{ status: "active" }])
-        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
-        yield* Effect.sleep("0 millis")
-        expect(borderLabel?.produce()).toEqual([])
-      }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
-    }),
-  )
-  it.live("todos widget renders decoded todo list responses", () =>
-    Effect.gen(function* () {
-      const activeSession = makeActiveSessionRef({
-        sessionId: SessionId.make("session-A"),
-        branchId: BranchId.make("branch-A"),
-      })
-      const requestDeferred = yield* Deferred.make<unknown, never>()
-      const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
-      yield* Effect.gen(function* () {
-        const contributions = yield* runClientExtensionSetup(runtime, todosBuiltin)
-        const borderLabel = findBorderLabel(contributions, "bottom-left")
-        expect(borderLabel).toBeDefined()
-        yield* Deferred.succeed(requestDeferred, [
-          {
-            id: "todo-1",
-            sessionId: SessionId.make("session-A"),
-            branchId: BranchId.make("branch-A"),
-            subject: "Audit",
-            status: "in_progress",
-            createdAt: 1,
-            updatedAt: 2,
-          },
-        ])
-        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
-        yield* Effect.sleep("0 millis")
-        expect(borderLabel?.produce()).toEqual([{ text: "1 todo ↓", color: "info" }])
-      }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
-    }),
-  )
-  it.live("todos widget refetches from todo state change event", () =>
-    Effect.gen(function* () {
-      const sessionId = SessionId.make("session-A")
-      const branchId = BranchId.make("branch-A")
-      const makeEnvelope = (): EventEnvelope => {
-        const event = AgentEvent.cases.ExtensionStateChanged.make({
-          sessionId,
-          branchId,
-          extensionId: TODO_EXTENSION_ID,
-        })
-        return { id: EventId.make(1), event, createdAt: 0 }
-      }
-      const activeSession = makeActiveSessionRef({ sessionId, branchId })
-      let todos: readonly unknown[] = []
-      const sessionEventSubscribers = new Set<(envelope: EventEnvelope) => void>()
-      const runtime = makeClientExtensionRuntime({
-        activeSession,
-        sessionEventSubscribers,
-        requestEffect: () => Effect.succeed(todos),
-      })
-      yield* Effect.gen(function* () {
-        const contributions = yield* runClientExtensionSetup(runtime, todosBuiltin)
-        const borderLabel = findBorderLabel(contributions, "bottom-left")
-        expect(borderLabel).toBeDefined()
-        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
-        yield* Effect.sleep("0 millis")
-        expect(borderLabel?.produce()).toEqual([])
-        todos = [
-          {
-            id: "todo-1",
-            sessionId,
-            branchId,
-            subject: "Audit",
-            status: "in_progress",
-            createdAt: 1,
-            updatedAt: 2,
-          },
-        ]
-        for (const cb of sessionEventSubscribers) cb(makeEnvelope())
-        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
-        yield* Effect.sleep("0 millis")
-        // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
-        yield* Effect.sleep("0 millis")
-        expect(borderLabel?.produce()).toEqual([{ text: "1 todo ↓", color: "info" }])
-      }).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())))
-    }),
-  )
-  it.live("todos widget rejects undecodable todo lists at the client seam", () =>
-    Effect.gen(function* () {
-      const activeSession = makeActiveSessionRef({
-        sessionId: SessionId.make("session-A"),
-        branchId: BranchId.make("branch-A"),
-      })
-      const requestDeferred = yield* Deferred.make<unknown, never>()
-      const runtime = makeClientExtensionRuntime({ activeSession, requestDeferred })
-      yield* Effect.gen(function* () {
-        const contributions = yield* runClientExtensionSetup(runtime, todosBuiltin)
-        const borderLabel = findBorderLabel(contributions, "bottom-left")
-        expect(borderLabel).toBeDefined()
-        yield* Deferred.succeed(requestDeferred, [{ subject: "missing id", status: "pending" }])
         // gent/no-sleep: allow microtask drain — extension widget fiber must observe queued state pulse before assertion
         yield* Effect.sleep("0 millis")
         expect(borderLabel?.produce()).toEqual([])

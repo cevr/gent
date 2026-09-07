@@ -7,7 +7,7 @@ import builtinArtifacts from "./artifacts.client"
 import builtinAuto from "./auto.client"
 import builtinDriver from "./driver.client"
 import builtinFiles from "./files.client"
-import { builtinInteractions, builtinTodos, builtinTools } from "./tool-renderers.client"
+import { builtinInteractions, builtinTools } from "./tool-renderers.client"
 import {
   defineClientExtension,
   autocompleteContribution,
@@ -74,6 +74,5 @@ export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinHandoff,
   builtinInteractions,
   builtinSkills,
-  builtinTodos,
   builtinTools,
 ]

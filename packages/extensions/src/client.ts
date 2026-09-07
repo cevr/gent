@@ -20,22 +20,3 @@ export {
   SkillsRpc,
   type SkillEntry as SkillEntryType,
 } from "./skills/protocol.js"
-export {
-  TODO_EXTENSION_ID,
-  TodoEntrySchema,
-  TodoUiModel,
-  type TodoEntry,
-  type TodoUiModel as TodoUiModelType,
-} from "./todo/domain.js"
-export {
-  TodoId,
-  TodoStatus,
-  type TodoId as TodoIdType,
-  type TodoStatus as TodoStatusType,
-} from "./todo/domain.js"
-export {
-  TodoCreateRequest,
-  TodoDeleteRequest,
-  TodoListRequest,
-  TodoUpdateRequest,
-} from "./todo/requests.js"

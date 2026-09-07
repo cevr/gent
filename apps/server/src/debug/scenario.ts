@@ -1,4 +1,4 @@
-import { Clock, DateTime, Effect, Option, Ref, Schema } from "effect"
+import { Clock, DateTime, Effect, Ref, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   AgentSwitched,
@@ -16,35 +16,11 @@ import {
 } from "@gent/core-internal/domain/event.js"
 import { dateFromMillis, Branch, Message, Session } from "@gent/core-internal/domain/message.js"
 import { AgentName } from "@gent/core-internal/domain/agent.js"
-import {
-  BranchId,
-  ExtensionId,
-  MessageId,
-  RpcId,
-  SessionId,
-  ToolCallId,
-} from "@gent/core-internal/domain/ids.js"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids.js"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage.js"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage.js"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
-import { ExtensionRegistry } from "@gent/core-internal/runtime/extensions/registry.js"
-import { provideCurrentHostCtx } from "@gent/core-internal/runtime/agent/current-extension-host-context.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
-import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment.js"
-import type { CapabilityRef } from "@gent/core-internal/domain/capability.js"
-import { ref } from "@gent/core/extensions/api"
-import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension.js"
-import {
-  TodoCreateRequest,
-  TodoDeleteRequest,
-  TodoListRequest,
-  TodoUpdateRequest,
-} from "@gent/extensions/client.js"
-
-const TodoCreateRef = ref(TodoCreateRequest)
-const TodoDeleteRef = ref(TodoDeleteRequest)
-const TodoListRef = ref(TodoListRequest)
-const TodoUpdateRef = ref(TodoUpdateRequest)
 
 export interface DebugScenarioParams {
   sessionId: SessionId
@@ -85,7 +61,7 @@ const createParentTurnMessages = (
       role: "assistant",
       parts: [
         Prompt.reasoningPart({
-          text: "Scripted debug scenario. Exercise child sessions, todo chrome, retries, and tool output renderers.",
+          text: "Scripted debug scenario. Exercise child sessions, retries, and tool output renderers.",
         }),
         makeText(`Running debug inspection cycle ${iteration}.`),
         Prompt.toolCallPart({
@@ -115,7 +91,7 @@ const createParentTurnMessages = (
           },
           providerExecuted: false,
         }),
-        makeText("Inspection pass complete. Check the live tool timeline and todo widget."),
+        makeText("Inspection pass complete. Check the live tool timeline."),
       ],
       createdAt: dateFromMillis(nowMillis + 1),
     })
@@ -551,7 +527,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
       StreamChunk.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
-        chunk: "Inspection pass complete. Check the live tool timeline and todo widget.",
+        chunk: "Inspection pass complete. Check the live tool timeline.",
       }),
     )
     yield* eventStore.publish(
@@ -578,122 +554,6 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     )
   })
 
-const runTodoLifecycle = (params: DebugScenarioParams) =>
-  Effect.gen(function* () {
-    const registry = yield* ExtensionRegistry
-    const platform = yield* RuntimeEnvironment
-    const gentPlatform = yield* GentPlatform
-    const rpcRegistry = registry.getResolved().rpcRegistry
-    const osInfo = yield* gentPlatform.osInfo
-    const execPath = yield* gentPlatform.execPath
-    const homeDirectory = yield* gentPlatform.homeDirectory
-    const parentEnv = yield* gentPlatform.env
-    const pathListSeparator = yield* gentPlatform.pathListSeparator
-    const absent = Option.getOrUndefined(Option.none())
-    const ctx = {
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      cwd: platform.cwd,
-      home: platform.home,
-      host: {
-        osInfo,
-        execPath,
-        homeDirectory,
-        parentEnv,
-        randomId: gentPlatform.randomId,
-        pathListSeparator,
-        commandCandidates: gentPlatform.commandCandidates,
-        isPortFree: gentPlatform.isPortFree,
-        isPidAlive: (pid: number) =>
-          gentPlatform.signal(pid, 0).pipe(
-            Effect.as(true),
-            Effect.catchEager(() => Effect.succeed(false)),
-          ),
-        signalPid: (pid: number, signal: string | 0) =>
-          gentPlatform.signal(pid, signal).pipe(Effect.catchEager(() => Effect.void)),
-        runProcess: (command: string) =>
-          Effect.fail(
-            new ExtensionHostProcessError({
-              command,
-              message: "debug scenario host.runProcess unavailable",
-            }),
-          ),
-      },
-      agent: {
-        listAgents: () => Effect.succeed([]),
-        run: () => Effect.die("debug scenario agent.run unavailable"),
-        start: () => Effect.die("debug scenario agent.start unavailable"),
-        inspect: () => Effect.die("debug scenario agent.inspect unavailable"),
-        list: () => Effect.die("debug scenario agent.list unavailable"),
-        cancel: () => Effect.die("debug scenario agent.cancel unavailable"),
-      },
-      session: {
-        listMessages: () => Effect.succeed([]),
-        getSession: () => Effect.succeed(absent),
-        getDetail: () => Effect.die("debug scenario session.getDetail unavailable"),
-        renameCurrent: () => Effect.succeed({ renamed: false }),
-        search: () => Effect.succeed([]),
-        queueFollowUp: () => Effect.succeed(absent),
-        listBranches: () => Effect.succeed([]),
-      },
-      interaction: {
-        approve: () => Effect.die("debug scenario interaction.approve unavailable"),
-        present: () => Effect.succeed(absent),
-        confirm: (): Effect.Effect<"no"> => Effect.succeed("no"),
-        review: () => Effect.die("debug scenario interaction.review unavailable"),
-      },
-    }
-
-    const invoke = <Input, Output>(requestRef: CapabilityRef<Input, Output>, input: Input) =>
-      rpcRegistry
-        .run(ExtensionId.make(requestRef.extensionId), RpcId.make(requestRef.capabilityId), input)
-        .pipe(
-          provideCurrentHostCtx(ctx),
-          Effect.flatMap((value) =>
-            Schema.decodeUnknownEffect(requestRef.output)(value).pipe(Effect.orDie),
-          ),
-        )
-
-    while (true) {
-      const existing = yield* invoke(TodoListRef, {})
-      for (const todo of existing) {
-        yield* invoke(TodoDeleteRef, { todoId: todo.id }).pipe(Effect.catchEager(() => Effect.void))
-      }
-
-      const inspect = yield* invoke(TodoCreateRef, {
-        subject: "Inspect codebase",
-      })
-      const verify = yield* invoke(TodoCreateRef, {
-        subject: "Run verification",
-      })
-      const summarize = yield* invoke(TodoCreateRef, {
-        subject: "Summarize outcome",
-      })
-
-      const setStatus = (todoId: typeof inspect.id, status: "in_progress" | "completed") =>
-        invoke(TodoUpdateRef, { todoId, status })
-
-      yield* setStatus(inspect.id, "in_progress")
-      yield* Effect.sleep("2 seconds")
-      yield* setStatus(inspect.id, "completed")
-      yield* setStatus(verify.id, "in_progress")
-      yield* Effect.sleep("2 seconds")
-      yield* setStatus(verify.id, "completed")
-      yield* setStatus(summarize.id, "in_progress")
-      yield* Effect.sleep("2 seconds")
-      yield* setStatus(summarize.id, "completed")
-      yield* Effect.sleep("2 seconds")
-
-      const deleteTodo = (todoId: string) =>
-        invoke(TodoDeleteRef, { todoId }).pipe(Effect.catchEager(() => Effect.void))
-
-      yield* deleteTodo(inspect.id)
-      yield* deleteTodo(verify.id)
-      yield* deleteTodo(summarize.id)
-      yield* Effect.sleep("2 seconds")
-    }
-  })
-
 const runTurnLifecycle = (params: DebugScenarioParams) =>
   Effect.gen(function* () {
     const iterationRef = yield* Ref.make(0)
@@ -708,6 +568,5 @@ const runTurnLifecycle = (params: DebugScenarioParams) =>
 export const startDebugScenario = Effect.fn("DebugScenario.start")(function* (
   params: DebugScenarioParams,
 ) {
-  yield* Effect.forkScoped(runTodoLifecycle(params))
   yield* Effect.forkScoped(runTurnLifecycle(params))
 })
