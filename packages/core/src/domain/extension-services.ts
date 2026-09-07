@@ -104,6 +104,7 @@ export interface ExtensionSessionService {
     readonly content: string
     readonly metadata?: MessageMetadata
     readonly branchId?: BranchId
+    readonly wake?: boolean
   }) => Effect.Effect<void, ExtensionServiceError>
   readonly listBranches: Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
 }

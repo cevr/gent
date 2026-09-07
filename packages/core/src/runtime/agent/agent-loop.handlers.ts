@@ -37,6 +37,7 @@
  */
 
 import {
+  Cause,
   DateTime,
   Effect,
   Exit,
@@ -84,6 +85,7 @@ import {
   AgentLoopError,
   emptyLoopQueueState,
   projectRuntimeState,
+  queueRequestsWake,
   type QueuedTurnItem,
 } from "./agent-loop.state.js"
 import {
@@ -152,6 +154,9 @@ export const buildAgentLoopActorHandlers = (config: {
 }) =>
   Effect.gen(function* () {
     const sideMutationSemaphore = yield* Semaphore.make(1)
+    // Set by admissions that run under the side-mutation permit. The wake runs
+    // after the permit is released, so admission never starts a turn re-entrantly.
+    const wakeRequested = yield* Ref.make(false)
     // Serializes per-entity `handle` rebuild. The actor mailbox is
     // `concurrency: "unbounded"`, so concurrent ops can both observe a
     // closed loop and race into `openLoop`, leaking the first behavior's
@@ -352,18 +357,19 @@ export const buildAgentLoopActorHandlers = (config: {
     //   - the `QueueFollowUp` mailbox handler resolves it via `ensureStarted`.
     // Taking it as a parameter eliminates the implicit two-step contract
     // that previously bypassed `ensureStarted` for non-reentrant callers.
-    const enqueueMessage = Effect.fn("AgentLoopActor.enqueueMessage")(function* (
-      handle: AgentLoopBehavior,
-      input: {
-        readonly message?: MessageType
-        readonly content?: string
-        readonly metadata?: MessageMetadata
-        readonly agentOverride?: AgentName
-        readonly runSpec?: RunSpec
-        readonly interactive?: boolean
-      },
+    type FollowUpInput = {
+      readonly message?: MessageType
+      readonly content?: string
+      readonly metadata?: MessageMetadata
+      readonly agentOverride?: AgentName
+      readonly runSpec?: RunSpec
+      readonly interactive?: boolean
+      readonly wake?: boolean
+    }
+
+    const buildFollowUpItem = Effect.fn("AgentLoopActor.buildFollowUpItem")(function* (
+      input: FollowUpInput,
     ) {
-      const wasAlreadyWarm = yield* markWrite
       const message =
         input.message ??
         Message.cases.regular.make({
@@ -375,16 +381,41 @@ export const buildAgentLoopActorHandlers = (config: {
           createdAt: yield* DateTime.nowAsDate,
           metadata: input.metadata,
         })
-
       yield* ensureTarget(message)
-      const item = buildQueuedTurnItem({
+      return buildQueuedTurnItem({
         message,
         agentOverride: input.agentOverride,
         runSpec: input.runSpec,
         interactive: input.interactive,
+        wake: input.wake,
       })
+    })
+
+    /**
+     * Re-entrant admission: the caller already holds the side-mutation permit
+     * (a running turn, a tool invocation, or an extension request). The item is
+     * queued durably here; the turn starts after the permit is released.
+     */
+    const admitFollowUp = Effect.fn("AgentLoopActor.admitFollowUp")(function* (
+      handle: AgentLoopBehavior,
+      input: FollowUpInput,
+    ) {
+      yield* markWrite
+      const item = yield* buildFollowUpItem(input)
+      yield* handle.reserveStartOrQueueFollowUp(item, { queueOnly: true })
+      const shouldWake =
+        input.wake === true || (yield* hasIncompleteUserTurn) || (yield* hasPriorMessageHistory)
+      if (shouldWake) yield* Ref.set(wakeRequested, true)
+    })
+
+    const enqueueMessage = Effect.fn("AgentLoopActor.enqueueMessage")(function* (
+      handle: AgentLoopBehavior,
+      input: FollowUpInput,
+    ) {
+      const wasAlreadyWarm = yield* markWrite
+      const item = yield* buildFollowUpItem(input)
       const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
-        coldQueueOnly: !wasAlreadyWarm,
+        queueOnly: !wasAlreadyWarm,
       })
       if (Option.isSome(reservedStart)) {
         yield* handle
@@ -396,12 +427,29 @@ export const buildAgentLoopActorHandlers = (config: {
           )
       }
       if (!wasAlreadyWarm) {
-        if ((yield* hasIncompleteUserTurn) || (yield* hasPriorMessageHistory)) {
+        if (
+          input.wake === true ||
+          (yield* hasIncompleteUserTurn) ||
+          (yield* hasPriorMessageHistory)
+        ) {
           yield* startNextQueuedTurnIfIdle(handle)
         }
         return
       }
     })
+
+    /** Start a queued turn requested by a re-entrant admission once the permit is free. */
+    const drainWake = (handle: AgentLoopBehavior) =>
+      Effect.gen(function* () {
+        if (!(yield* Ref.getAndSet(wakeRequested, false))) return
+        yield* startNextQueuedTurnIfIdle(handle)
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("failed to start a queued turn after admission").pipe(
+            Effect.annotateLogs({ sessionId, branchId, error: Cause.pretty(cause) }),
+          ),
+        ),
+      )
 
     const openLoop = Effect.gen(function* () {
       const initialQueueExit = yield* Effect.exit(
@@ -445,7 +493,7 @@ export const buildAgentLoopActorHandlers = (config: {
         Option.getOrUndefined(sessionProfileCacheOption),
       ).pipe(
         Effect.provideService(AgentLoopFollowUp, {
-          enqueue: (input) => reentrantHandle.pipe(Effect.flatMap((h) => enqueueMessage(h, input))),
+          enqueue: (input) => reentrantHandle.pipe(Effect.flatMap((h) => admitFollowUp(h, input))),
         }),
       )
       yield* Ref.set(handleRef, Option.some(handle))
@@ -478,7 +526,7 @@ export const buildAgentLoopActorHandlers = (config: {
                 initialQueue.steering.length > 0 ||
                 initialQueue.followUp.length > 0
               if (!hasRecoveredQueue) return
-              if (yield* hasPriorMessageHistory) {
+              if (queueRequestsWake(initialQueue) || (yield* hasPriorMessageHistory)) {
                 yield* startNextQueuedTurnIfIdle(handle, { startupPermitHeld: true })
               }
             }),
@@ -556,7 +604,7 @@ export const buildAgentLoopActorHandlers = (config: {
       yield* markWrite
       const item = buildQueuedTurnItem(operation)
       const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
-        coldQueueOnly: false,
+        queueOnly: false,
       })
       if (Option.isSome(reservedStart)) {
         yield* handle
@@ -611,7 +659,7 @@ export const buildAgentLoopActorHandlers = (config: {
       yield* markWrite
       const item = buildQueuedTurnItem(operation)
       const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
-        coldQueueOnly: false,
+        queueOnly: false,
       })
       if (Option.isSome(reservedStart)) {
         yield* handle
@@ -765,6 +813,7 @@ export const buildAgentLoopActorHandlers = (config: {
             const handle = yield* ensureStarted
             yield* enqueueMessage(handle, {
               message: operation.message,
+              wake: operation.wake,
             })
           }).pipe(provideActorWorkspace),
       ),
@@ -928,7 +977,7 @@ export const buildAgentLoopActorHandlers = (config: {
               toolName: operation.toolName,
               output: operation.output,
               isError: operation.isError,
-            }).pipe(handle.withSideMutation)
+            }).pipe(handle.withSideMutation, Effect.ensuring(drainWake(handle)))
           }).pipe(
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
             provideActorWorkspace,
@@ -1002,7 +1051,7 @@ export const buildAgentLoopActorHandlers = (config: {
                 ),
                 runAgentLoopTurnProfileOrLegacy(environment),
               )
-            }).pipe(handle.withSideMutation)
+            }).pipe(handle.withSideMutation, Effect.ensuring(drainWake(handle)))
           }).pipe(
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
             provideActorWorkspace,
@@ -1048,7 +1097,7 @@ export const buildAgentLoopActorHandlers = (config: {
                 })
               }
               return yield* runExtensionRequest(environment, dynamicRequest)
-            }).pipe(handle.withSideMutation)
+            }).pipe(handle.withSideMutation, Effect.ensuring(drainWake(handle)))
           }).pipe(
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
             provideActorWorkspace,

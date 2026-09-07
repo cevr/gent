@@ -55,7 +55,7 @@ export type AgentLoopQueue = {
   readonly setStartingState: (state: RunningState) => Effect.Effect<void>
   readonly reserveStartOrQueueFollowUp: (
     item: QueuedTurnItem,
-    options: { readonly coldQueueOnly: boolean },
+    options: { readonly queueOnly: boolean },
   ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError>
   readonly reserveRunStartOrQueueFollowUp: (
     item: QueuedTurnItem,
@@ -192,7 +192,7 @@ export const makeAgentLoopQueue = (
     )
 
     const reserveStartOrQueueFollowUp = Effect.fn("AgentLoop.reserveStartOrQueueFollowUp")(
-      function* (item: QueuedTurnItem, options: { readonly coldQueueOnly: boolean }) {
+      function* (item: QueuedTurnItem, options: { readonly queueOnly: boolean }) {
         const startedAtMs = yield* Clock.currentTimeMillis
         return yield* commitQueueTransaction<Option.Option<RunningState> | AgentLoopError>(
           "reserved or queued follow-up",
@@ -208,7 +208,7 @@ export const makeAgentLoopQueue = (
             }
 
             const nextQueue = appendFollowUpQueueState(current.queue, item)
-            if (options.coldQueueOnly) {
+            if (options.queueOnly) {
               return {
                 value: Option.none(),
                 next: { ...current, queue: nextQueue },

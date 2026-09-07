@@ -121,7 +121,7 @@ export type AgentLoopBehavior = {
   setStartingState: (state: RunningState) => Effect.Effect<void>
   reserveStartOrQueueFollowUp: (
     item: QueuedTurnItem,
-    options: { readonly coldQueueOnly: boolean },
+    options: { readonly queueOnly: boolean },
   ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError>
   reserveRunStartOrQueueFollowUp: (item: QueuedTurnItem) => Effect.Effect<
     Option.Option<{
@@ -173,6 +173,7 @@ export type EnqueueFollowUp = (input: {
   branchId: BranchId
   content: string
   metadata?: MessageMetadata
+  wake?: boolean
 }) => Effect.Effect<void, AgentLoopError | StorageError>
 
 export interface AgentLoopFollowUpService {

@@ -126,6 +126,8 @@ export declare namespace ExtensionHostContext {
       readonly content: string
       readonly metadata?: MessageMetadata
       readonly branchId?: BranchId
+      /** Start a turn even when the branch has no prior history. */
+      readonly wake?: boolean
     }) => Effect.Effect<void, ExtensionHostError>
 
     readonly listBranches: () => Effect.Effect<ReadonlyArray<Branch>, ExtensionHostError>

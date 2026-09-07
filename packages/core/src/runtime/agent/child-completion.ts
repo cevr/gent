@@ -126,6 +126,8 @@ export class ChildCompletionDelivery extends Context.Service<
         yield* sessionRuntime.queueFollowUp({
           sourceId,
           ...parent,
+          // A parent with no prior turn still gets to read the completion.
+          wake: true,
           content: describe({
             requestId,
             agentName: child.input.agentName,

@@ -32,7 +32,10 @@ import {
   waitForPhase,
 } from "./helpers"
 import {
+  appendFollowUpQueueState,
+  emptyLoopQueueState,
   LoopQueueState,
+  queueRequestsWake,
   type LoopQueueState as LoopQueueStateType,
 } from "../../../src/runtime/agent/agent-loop.state"
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
@@ -58,6 +61,32 @@ describe("agent loop command ids", () => {
     expect(String(toolResultMessageIdForToolCall(toolCallIdForCommand(commandId)))).toBe(
       `tool-call:${commandId}:tool-result`,
     )
+  })
+})
+
+describe("wake admission", () => {
+  const queuedMessage = (id: string, text: string) =>
+    Message.cases.regular.make({
+      id: MessageId.make(id),
+      sessionId: SessionId.make("wake-session"),
+      branchId: BranchId.make("wake-branch"),
+      role: "user",
+      parts: [Prompt.textPart({ text })],
+      createdAt: dateFromMillis(1_767_225_600_000),
+    })
+
+  test("a batched follow-up keeps the wake request and the queue reports it", () => {
+    const quiet = appendFollowUpQueueState(emptyLoopQueueState(), {
+      message: queuedMessage("wake-a", "first"),
+    })
+    expect(queueRequestsWake(quiet)).toBe(false)
+    const woken = appendFollowUpQueueState(quiet, {
+      message: queuedMessage("wake-b", "second"),
+      wake: true,
+    })
+    expect(woken.followUp).toHaveLength(1)
+    expect(woken.followUp[0]?.wake).toBe(true)
+    expect(queueRequestsWake(woken)).toBe(true)
   })
 })
 

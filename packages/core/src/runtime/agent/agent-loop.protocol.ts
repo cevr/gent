@@ -36,6 +36,8 @@ const TurnSubmissionFields = {
 const QueueFollowUpFields = {
   ...WorkspaceFields,
   message: Message,
+  /** Start a turn for this item even on a branch with no prior history. */
+  wake: Schema.optional(Schema.Boolean),
 }
 
 const SteerFields = {
@@ -150,6 +152,7 @@ export type TurnSubmissionInput = WorkspaceInput & {
 }
 export type QueueFollowUpInput = WorkspaceInput & {
   readonly message: MessageType
+  readonly wake?: boolean
 }
 export type SteerInput = WorkspaceInput & {
   readonly commandId: ActorCommandId

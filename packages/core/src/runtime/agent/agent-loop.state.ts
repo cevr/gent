@@ -38,8 +38,16 @@ export const QueuedTurnItemSchema = Schema.Struct({
   agentOverride: Schema.optional(AgentName),
   runSpec: Schema.optional(RunSpecSchema),
   interactive: Schema.optional(Schema.Boolean),
+  /** The admitter asked for a turn even when the branch has no prior history. */
+  wake: Schema.optional(Schema.Boolean),
 })
 export type QueuedTurnItem = typeof QueuedTurnItemSchema.Type
+
+/** True when any admitted item carries an explicit wake request. */
+export const queueRequestsWake = (queue: LoopQueueState): boolean =>
+  queue.followUp.some((item) => item.wake === true) ||
+  queue.steering.some((item) => item.wake === true) ||
+  queue.inFlight?.wake === true
 
 export const LoopQueueState = Schema.Struct({
   steering: Schema.Array(QueuedTurnItemSchema),
@@ -76,7 +84,7 @@ const mergeQueuedFollowUp = (
   const incomingText = getSingleText(incoming.message)
   if (Option.isNone(existingText) || Option.isNone(incomingText)) return incoming
 
-  return {
+  const merged: QueuedTurnItem = {
     ...existing,
     message: Message.cases.regular.make({
       id: existing.message.id,
@@ -89,6 +97,8 @@ const mergeQueuedFollowUp = (
       metadata: existing.message.metadata,
     }),
   }
+  if (incoming.wake === true) return { ...merged, wake: true }
+  return merged
 }
 
 const appendFollowUpItem = (

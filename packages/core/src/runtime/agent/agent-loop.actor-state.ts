@@ -9,11 +9,13 @@ export const buildQueuedTurnItem = (operation: {
   readonly agentOverride?: AgentName
   readonly runSpec?: RunSpec
   readonly interactive?: boolean
+  readonly wake?: boolean
 }): QueuedTurnItem => ({
   message: operation.message,
   agentOverride: operation.agentOverride,
   runSpec: operation.runSpec,
   interactive: operation.interactive,
+  wake: operation.wake,
 })
 
 export const waitForIdleAfterEpoch = (

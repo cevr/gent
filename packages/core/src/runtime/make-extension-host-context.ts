@@ -41,6 +41,7 @@ export interface ExtensionSessionControlService {
     readonly branchId: BranchId
     readonly content: string
     readonly metadata?: MessageMetadata
+    readonly wake?: boolean
   }) => Effect.Effect<void, Error>
 }
 
@@ -555,6 +556,7 @@ const makeExtensionHostContext = (
             branchId: params.branchId ?? runInfo.branchId,
             content: params.content,
             metadata: params.metadata,
+            wake: params.wake,
           })
           .pipe(Effect.mapError(toHostError("session.queueFollowUp"))),
 

@@ -153,6 +153,8 @@ export const QueueFollowUpPayload = Schema.Struct({
   branchId: BranchId,
   content: Schema.String,
   metadata: Schema.optional(MessageMetadata),
+  /** Start a turn for the item even on a branch with no prior history. */
+  wake: Schema.optional(Schema.Boolean),
 })
 export type QueueFollowUpPayload = typeof QueueFollowUpPayload.Type
 
@@ -422,6 +424,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       const payload = {
         workspaceId,
         message,
+        wake: input.wake,
       }
       const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
       yield* ref.execute(AgentLoopActor.QueueFollowUp.make(payload)).pipe(

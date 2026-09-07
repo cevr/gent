@@ -635,17 +635,7 @@ describe("AgentRunner", () => {
           yield* branches.createBranch(
             new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
           )
-          // A real parent branch has history: the turn that admitted the child.
-          yield* messages.createMessage(
-            Message.cases.regular.make({
-              id: MessageId.make("deliver-parent-turn"),
-              sessionId: parentSessionId,
-              branchId: parentBranchId,
-              role: "user",
-              parts: [Prompt.textPart({ text: "Start a child" })],
-              createdAt: now,
-            }),
-          )
+          // The parent branch has no history: the completion must wake it by itself.
           const requestId = RequestId.make("deliver-child")
           const child = yield* runner.start({
             agent: yield* Effect.fromOption(Option.fromUndefinedOr(getBuiltinAgent("explore"))),
@@ -657,7 +647,7 @@ describe("AgentRunner", () => {
             requestId,
           })
           yield* controls.waitForCall(0)
-          expect(yield* messages.listMessages(parentBranchId)).toHaveLength(1)
+          expect(yield* messages.listMessages(parentBranchId)).toHaveLength(0)
           yield* controls.emitAll(0)
           const noticed = yield* waitFor(
             messages.listMessages(parentBranchId),

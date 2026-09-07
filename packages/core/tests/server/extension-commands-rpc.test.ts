@@ -31,6 +31,8 @@ import {
   textDeltaPart,
 } from "@gent/core-internal/test-utils/language-model"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
+import { messageSingleText } from "@gent/core-internal/domain/message-part-projection"
+import type { Message } from "@gent/core-internal/domain/message"
 import {
   ExtensionRegistry,
   listSlashCommands,
@@ -312,6 +314,97 @@ describe("extension command RPCs", () => {
               }),
             ])
           }).pipe(Effect.timeout("4 seconds")),
+        ),
+      )
+    }),
+  )
+  it.live("RPC request follow-up on a warm idle branch runs the queued turn", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/queue-follow-up-warm")
+      const ext: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          requests: [
+            request({
+              id: "queue-follow-up",
+              extensionId,
+              input: Schema.String,
+              output: Schema.Void,
+              execute: (input) =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  yield* ctx.Session.queueFollowUp({
+                    sourceId: "test-warm-request",
+                    content: input,
+                  })
+                }).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new CapabilityError({
+                        extensionId,
+                        capabilityId: "queue-follow-up",
+                        reason: cause.message,
+                      }),
+                  ),
+                ),
+            }),
+          ],
+        },
+      }
+      yield* narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+              textStep("first reply"),
+              textStep("follow-up reply"),
+            ])
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [ext],
+              cwd: "/tmp/gent-extension-queue-follow-up-warm",
+            })
+            const assistantReplies = (
+              messages: ReadonlyArray<{ role: string; parts: Message["parts"] }>,
+            ) =>
+              messages
+                .filter((message) => message.role === "assistant")
+                .map((message) => messageSingleText(message.parts))
+            yield* client.message.send({ sessionId, branchId, content: "warm the branch" })
+            yield* waitFor(
+              client.message.list({ branchId }),
+              (messages) => assistantReplies(messages).includes("first reply"),
+              4000,
+              "first reply",
+            )
+            // The request runs under the loop's side-mutation permit. Admission
+            // queues the item; the turn starts once the permit is released.
+            yield* client.extension
+              .request({
+                sessionId,
+                branchId,
+                extensionId,
+                capabilityId: "queue-follow-up",
+                input: "queued while idle",
+              })
+              .pipe(Effect.timeout("4 seconds"))
+            const messages = yield* waitFor(
+              client.message.list({ branchId }),
+              (current) => assistantReplies(current).includes("follow-up reply"),
+              4000,
+              "follow-up reply",
+            )
+            expect(
+              messages.some(
+                (message) =>
+                  message.role === "user" &&
+                  messageSingleText(message.parts) === "queued while idle",
+              ),
+            ).toBe(true)
+            yield* controls.assertDone
+          }).pipe(Effect.timeout("10 seconds")),
         ),
       )
     }),
