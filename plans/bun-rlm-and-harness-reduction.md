@@ -14,8 +14,46 @@ Gent keeps one session engine, one durable control system, and the FX UI.
 The old executor path and superseded workflow machinery are deleted.
 The combined maintained implementation is smaller and has fewer public concepts.
 
-Research: `docs/research/2026-09-06-bun-rlm-and-loom.md` and
-`docs/research/2026-09-06-gent-trim-candidates.md`.
+Research: `docs/research/2026-09-06-bun-rlm-and-loom.md`,
+`docs/research/2026-09-06-gent-trim-candidates.md`, and
+`docs/research/2026-09-07-opencode-v2-prior-art.md`.
+
+## Prior-art position
+
+The cell follows Prime Agent's RLM model: one persistent tool, a namespace that
+survives turns, compaction, and kernel restart through host-owned snapshot and
+restore, host tools as async callables, and children admitted through a host
+request that returns a handle at once and reports back through later messages
+or files. Unawaited work may outlive a turn; the host delivers completion
+messages the model reads on later turns. Host requests are served while a cell
+runs.
+
+From OpenCode v2 take only the contracts that fit that model:
+
+- Catalog delivered as instructions with diff updates and a `search()` callable
+  for exact paths and signatures, in place of a catalog tool.
+- Tool responses split into validated `output` (what the cell sees), `content`
+  (what the model and transcript keep), and optional `metadata`.
+- Per-execution limits (timeout, tool-call count, output bytes); unfinished
+  promises interrupted and reported as warnings; diagnostics returned as data
+  with stable kinds, not as tool failures.
+- Head-plus-tail bounding of model content with full text retained.
+- Durable inbox admission before execution, idempotent item ids, and an
+  explicit wake flag separate from admission. Steer and queue delivery at safe
+  step boundaries. This also closes the warm-branch follow-up hang recorded in
+  `plans/bun-rlm-progress.md`.
+- Write-ahead execution claims with bounded startup recovery, and orphan
+  reconciliation that fails stale running tool projections before new model
+  work. No replay of ambiguous side effects.
+- Narrow, observable retry: bounded jittered retries for rate limits, provider
+  failures, unknown delivery, and incomplete streams; a durable continuation
+  instruction after partial output.
+- `assistantMessageID` on tool events; a synchronization marker when a client
+  moves from replay to live.
+
+Do not copy OpenCode v2's stateless per-call interpreter, its native/hidden
+split where core tools stay native and only plugin and MCP tools enter code
+mode, its per-connection dropping queues, or OpenClaw-style exec/wait snapshots.
 
 ## Boundaries
 
@@ -79,7 +117,10 @@ unknown-outcome handling without duplicate effects; full gate and RPC checks.
 
 Make `cell` the default model execution surface after Stage 3 passes. Preserve
 human slash commands and extension RPC. Generate host callable descriptions from
-existing declarations. Render structured operations and file changes in the FX
+existing declarations and deliver them as instruction deltas with `search()`;
+retire the catalog tool. Give the cell validated tool `output` and keep model
+`content` bounded head-plus-tail with full retention. Return cell diagnostics
+as data with stable kinds and per-execution limits. Render structured operations and file changes in the FX
 transcript, with full details and visible failures. Verify the packaged worker.
 Delete the replaced executor binary discovery, port scan, MCP bridge, controller,
 execute/resume tool wrappers, unused dependencies, and superseded tests/docs.
@@ -97,7 +138,10 @@ default cell tool; old executor removed; examples and author docs use the new pa
 
 ## Stage 5 — Bounded delivery, trust, and completion audit
 
-Add a project-code trust decision before project module import. Set a slow-client
+Add a project-code trust decision before project module import. Admit follow-ups
+and steers through a durable inbox with an explicit wake flag, delivered at safe
+step boundaries. Start each busy period with a write-ahead claim; on host start,
+reconcile orphaned running tool projections before new model work. Set a slow-client
 policy for the existing event stream. Prefer bounded notification plus durable
 cursor replay over a second event bus or silent loss. Verify no race between
 history replay and live events, and no slow-client deadlock of tool execution.
@@ -117,7 +161,11 @@ model benchmarks without explicit authority.
 - [ ] One default cell surface; state survives normal turns and compaction.
 - [ ] Host retains authority; security contract is tested and explicit.
 - [ ] No duplicate runtime, daemon, persistence owner, or host schema catalog.
-- [ ] Recursive children use Gent sessions and durable handles, with usage limits.
+- [ ] Recursive children use Gent sessions and durable handles, with usage limits;
+      admission returns at once and results arrive on later turns.
+- [ ] Cell catalog is an instruction delta; tool output/content/metadata split
+      and bounded content are in place; follow-ups admit through the durable
+      inbox with explicit wake.
 - [ ] Lost bindings and ambiguous effects are reported; no blind cell replay.
 - [ ] Old executor and superseded workflow code are actually removed.
 - [ ] Gent runtime LOC decreases; combined Gent/Loom/library runtime LOC also

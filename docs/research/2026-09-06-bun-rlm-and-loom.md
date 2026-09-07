@@ -50,18 +50,20 @@ This is not a full Loom gate or proof of Gent integration.
 
 ## Prior-art decisions
 
-| Source           | Take                                                                                               | Do not copy                                                                                 |
-| ---------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| FX               | Small kernel interface; bounded output; explicit cancellation; generation-bound tool use           | A second agent loop or a second application transport                                       |
-| Pi               | Distinct steering/follow-up admission; staged registration; stale-context rejection; project trust | A second durable lane engine or assumed parity for every client UI                          |
-| OpenCode         | Typed provider events; replay identity/order checks; interrupted tool states                       | Volatile-only approvals, whole-instance reload as the default, a large provider catalog     |
-| DeepSeek Harness | Explicit dependency generations and ordered cleanup                                                | Cordis beside Effect or claims that scope cleanup reverses external writes                  |
-| Exo              | Durable desired/applied revisions; repair control outside replaced execution                       | A self-rebuild daemon or automatic source rollback claims                                   |
-| Prime Agent      | Persistent programming surface; host-owned recursive children; small admission handles             | Python provisioning, a second provider stack, or assumptions about safe namespace snapshots |
-| Loom             | Bun cell evaluation, structured results, bounded process recovery, foreground leases               | Loom daemon, Job/Workflow/Goal stores duplicated inside Gent                                |
+| Source           | Take                                                                                                                                                                                                                      | Do not copy                                                                                                               |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| FX               | Small kernel interface; bounded output; explicit cancellation; generation-bound tool use                                                                                                                                  | A second agent loop or a second application transport                                                                     |
+| Pi               | Distinct steering/follow-up admission; staged registration; stale-context rejection; project trust                                                                                                                        | A second durable lane engine or assumed parity for every client UI                                                        |
+| OpenCode         | Typed provider events; replay identity/order checks; interrupted tool states                                                                                                                                              | Volatile-only approvals, whole-instance reload as the default, a large provider catalog                                   |
+| DeepSeek Harness | Explicit dependency generations and ordered cleanup                                                                                                                                                                       | Cordis beside Effect or claims that scope cleanup reverses external writes                                                |
+| Exo              | Durable desired/applied revisions; repair control outside replaced execution                                                                                                                                              | A self-rebuild daemon or automatic source rollback claims                                                                 |
+| Prime Agent      | Persistent programming surface; host-owned recursive children; small admission handles                                                                                                                                    | Python provisioning, a second provider stack, or assumptions about safe namespace snapshots                               |
+| OpenCode v2      | Catalog as instruction deltas with `search()`; output/content/metadata split; execution limits; diagnostics as data; durable inbox admission with explicit wake; execution claims and orphan reconciliation; narrow retry | Stateless per-call interpreter; native/hidden tool split; per-connection dropping queues; a second interpreter beside Bun |
+| Loom             | Bun cell evaluation, structured results, bounded process recovery, foreground leases                                                                                                                                      | Loom daemon, Job/Workflow/Goal stores duplicated inside Gent                                                              |
 
 The first five source snapshots and detailed receipts are in
-`docs/research/2026-09-06-malleability-and-harness-prior-art.md`.
+`docs/research/2026-09-06-malleability-and-harness-prior-art.md`. OpenCode v2
+(branch `v2`, 2026-09-07) is in `docs/research/2026-09-07-opencode-v2-prior-art.md`.
 
 Prime's current documentation separates the Python kernel from the TypeScript
 host. Child creation returns an admission handle; answers arrive later. Host
