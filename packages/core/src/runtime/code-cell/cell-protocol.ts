@@ -8,6 +8,24 @@ export const maximumCellFrameBytes = 1024 * 1024
 export const maximumCellDisplayHeadLength = 48 * 1024
 export const maximumPendingCellCalls = 32
 export const maximumCallsPerCell = 4096
+export const maximumCatalogEntries = 512
+export const catalogPageSize = 20
+
+/** One selected host tool as the kernel describes it. Descriptions never grant execution. */
+export const CellCatalogEntry = Schema.Struct({
+  name: Schema.String,
+  description: Schema.String,
+  guidelines: Schema.Array(Schema.String),
+  parameters: Schema.Json,
+})
+export type CellCatalogEntry = typeof CellCatalogEntry.Type
+
+/** The kernel keeps the last catalog it received; the host resends only when the hash changes. */
+export const CellCatalog = Schema.Struct({
+  hash: Schema.String,
+  tools: Schema.Array(CellCatalogEntry).check(Schema.isMaxLength(maximumCatalogEntries)),
+})
+export type CellCatalog = typeof CellCatalog.Type
 
 export class CellEvaluationError extends Schema.TaggedError<CellEvaluationError>()(
   "CellEvaluationError",
@@ -40,6 +58,8 @@ export const CellRequest = Schema.TaggedUnion({
   Evaluate: {
     cellId: CorrelationId,
     source: Schema.String.check(Schema.isMaxLength(maximumCellSourceLength)),
+    /** Present only when the host catalog changed since the worker last received one. */
+    catalog: Schema.optional(CellCatalog),
   },
   Reset: { requestId: CorrelationId },
   Snapshot: { requestId: CorrelationId },

@@ -4,6 +4,8 @@ import { inspect } from "node:util"
 import { createContext, runInContext } from "node:vm"
 
 import {
+  catalogPageSize,
+  type CellCatalogEntry,
   CellEvaluation,
   CellEvaluationError,
   maximumCellBindings,
@@ -85,7 +87,34 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       message: display(cause).slice(0, maximumCellDisplayLength),
       output: rendered(),
     })
+  // The catalog is data the host already validated. Search and describe never leave the worker.
+  let catalog: ReadonlyArray<CellCatalogEntry> = []
+  const search = (query: string = "", offset: number = 0) => {
+    const needle = String(query).toLowerCase()
+    const matches = catalog.filter(
+      (entry) =>
+        entry.name.toLowerCase().includes(needle) ||
+        entry.description.toLowerCase().includes(needle),
+    )
+    const start = Math.max(0, Math.trunc(Number(offset)) || 0)
+    const page = matches.slice(start, start + catalogPageSize)
+    return {
+      tools: page.map((entry) => ({ name: entry.name, description: entry.description })),
+      total: matches.length,
+      nextOffset: start + page.length,
+    }
+  }
+  const describe = (name: string) => {
+    const entry = catalog.find((candidate) => candidate.name === String(name))
+    if (Predicate.isUndefined(entry)) {
+      // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- This runs inside model code in the VM realm; a thrown Error is the cell's failure contract, like any host call rejection.
+      throw new Error(`Tool ${String(name)} is not selected for this turn`)
+    }
+    return { ...entry, guidelines: [...entry.guidelines] }
+  }
   const proxy = {
+    search,
+    describe,
     call: (name: string, input: Schema.Json) =>
       runPromise(
         Effect.all([
@@ -135,6 +164,12 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     return CellEvaluation.make({ display: rendered(), bindings: bindingNames(), truncated })
   })
 
+  /** Replace the catalog that search and describe read. It is not part of the namespace. */
+  const setCatalog = (tools: ReadonlyArray<CellCatalogEntry>) =>
+    Effect.sync(() => {
+      catalog = tools
+    })
+
   /** Encode the namespace in this realm; the codec names every value it cannot carry. */
   const snapshot = Effect.sync(() => encodeSnapshot(namespace()))
 
@@ -162,6 +197,8 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
 
   return {
     evaluate: (source: string) => Semaphore.withPermit(permit, evaluate(source)),
+    setCatalog: (tools: ReadonlyArray<CellCatalogEntry>) =>
+      Semaphore.withPermit(permit, setCatalog(tools)),
     snapshot: Semaphore.withPermit(permit, snapshot),
     restore: (bindings: ReadonlyArray<SnapshotBinding>) =>
       Semaphore.withPermit(permit, restore(bindings)),

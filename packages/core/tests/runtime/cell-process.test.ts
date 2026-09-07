@@ -215,6 +215,50 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
   )
 
   it.scopedLive(
+    "ships the catalog once per hash and again to a replacement worker",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openMacosCellKernel({
+          ...(yield* buildWorker),
+          evaluationTimeoutMs: 1000,
+          maximumReplacements: 1,
+        })
+        const catalog = {
+          hash: "read-v1",
+          tools: [{ name: "read", description: "Read a file", guidelines: [], parameters: {} }],
+        }
+        const host = CellOperationHost.of({ catalog, call: () => Effect.succeed(true) })
+        const describe = "tools.describe('read').description"
+        const first = yield* kernel
+          .evaluate(describe)
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(first.display).toBe("Read a file")
+        // Same hash: the worker keeps its copy and the second cell still reads it.
+        const again = yield* kernel
+          .evaluate(describe)
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(again.display).toBe("Read a file")
+        // A host without a catalog leaves the worker's catalog unchanged.
+        const bare = CellOperationHost.of({ call: () => Effect.succeed(true) })
+        const kept = yield* kernel
+          .evaluate(describe)
+          .pipe(Effect.provideService(CellOperationHost, bare))
+        expect(kept.display).toBe("Read a file")
+        const lost = yield* kernel
+          .evaluate("while (true) {}")
+          .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
+        expect(lost._tag).toBe("CellKernelError")
+        yield* kernel.reset
+        // The replacement worker started empty and received the full catalog again.
+        const restored = yield* kernel
+          .evaluate(describe)
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(restored.display).toBe("Read a file")
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
+    10000,
+  )
+
+  it.scopedLive(
     "counts failed replacement starts and does not reopen a closed kernel",
     () =>
       Effect.gen(function* () {

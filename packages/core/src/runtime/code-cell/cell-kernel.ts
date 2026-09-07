@@ -16,6 +16,7 @@ import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { ToolCallId } from "../../domain/ids.js"
 import { CellProcessError, openMacosCellProcess } from "./cell-process.js"
 import {
+  type CellCatalog,
   CellEvaluationError,
   CellRequest,
   type CellResponse,
@@ -25,10 +26,12 @@ import {
 } from "./cell-protocol.js"
 import type { CellSnapshot, SnapshotBinding } from "./cell-snapshot.js"
 
-/** Supplied by the caller for each evaluation, never retained in the worker. */
+/** Supplied by the caller for each evaluation. Only the catalog is retained in the worker. */
 export class CellOperationHost extends Context.Service<
   CellOperationHost,
   {
+    /** Selected host tools for `tools.search` and `tools.describe`. Absent leaves the worker's catalog unchanged. */
+    readonly catalog?: CellCatalog
     readonly call: (
       request: Extract<CellResponse, { _tag: "HostCall" }>,
     ) => Effect.Effect<Schema.Json, CellEvaluationError | CellToolCallSuspended>
@@ -121,6 +124,9 @@ export const openMacosCellKernel = Effect.fn("CellKernel.openMacos")(function* (
   const shutdown = yield* Deferred.make<never, CellKernelError>()
   let replacements = 0
   let sequence = 0
+  // Catalog delta: the worker keeps the last catalog, so only a changed hash travels. A
+  // replacement worker starts empty and receives the full catalog on its first cell.
+  let workerCatalogHash = Option.none<string>()
   const isClosed = () => status === "closed"
   const failure = (reason: CellKernelError["reason"], message: string) =>
     Effect.map(
@@ -170,6 +176,9 @@ export const openMacosCellKernel = Effect.fn("CellKernel.openMacos")(function* (
     }
     const host = yield* CellOperationHost
     const cellId = String(++sequence)
+    const catalog = Option.fromUndefinedOr(host.catalog).pipe(
+      Option.filter((next) => !Option.contains(workerCatalogHash, next.hash)),
+    )
     const response = yield* Effect.scoped(
       Effect.gen(function* () {
         const result = yield* Deferred.make<
@@ -236,8 +245,15 @@ export const openMacosCellKernel = Effect.fn("CellKernel.openMacos")(function* (
           Effect.forkScoped,
         )
         yield* child
-          .send(CellRequest.cases.Evaluate.make({ cellId, source }))
+          .send(
+            CellRequest.cases.Evaluate.make({
+              cellId,
+              source,
+              catalog: Option.getOrUndefined(catalog),
+            }),
+          )
           .pipe(Effect.mapError(processError))
+        if (Option.isSome(catalog)) workerCatalogHash = Option.some(catalog.value.hash)
         return yield* Deferred.await(result)
       }),
     ).pipe(
@@ -257,6 +273,7 @@ export const openMacosCellKernel = Effect.fn("CellKernel.openMacos")(function* (
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           replacements++
+          workerCatalogHash = Option.none()
           child = yield* restore(openWorker()).pipe(Effect.mapError(processError))
           // close can run while the replacement is starting. Never restore a closed owner.
           if (isClosed()) return yield* failure("closed", "Cell kernel closed during replacement")

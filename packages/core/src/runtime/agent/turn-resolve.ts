@@ -54,9 +54,13 @@ const selectModelToolSurface = (
 ) => {
   const cell = toolBindings.get("cell")
   if (agent.driver?._tag === "external" || Predicate.isUndefined(cell)) {
-    return { tools, toolBindings }
+    return { tools, toolBindings, cellHostTools: [] }
   }
-  return { tools: [cell.capability], toolBindings: new Map([["cell", cell]]) }
+  return {
+    tools: [cell.capability],
+    toolBindings: new Map([["cell", cell]]),
+    cellHostTools: tools,
+  }
 }
 
 /**
@@ -302,7 +306,11 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     const entry = entriesByToolId.get(String(getToolId(tool)))
     if (Predicate.isNotUndefined(entry)) hostToolBindings.set(String(getToolId(tool)), entry)
   }
-  const { tools, toolBindings } = selectModelToolSurface(hostTools, hostToolBindings, dispatchAgent)
+  const { tools, toolBindings, cellHostTools } = selectModelToolSurface(
+    hostTools,
+    hostToolBindings,
+    dispatchAgent,
+  )
 
   // Build tool-aware prompt, then run through explicit prompt slots.
   // We hand the slot layer both the compiled `basePrompt` (for append-only
@@ -317,6 +325,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     tools,
     extensionSections,
     allAgents,
+    cellHostTools,
   )
   const turnPrompt = compileSystemPrompt(sections)
   const driverToolSurface = yield* resolveDriverToolSurface(dispatchAgent)

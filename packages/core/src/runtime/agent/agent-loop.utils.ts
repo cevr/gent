@@ -31,6 +31,7 @@ export const buildTurnPromptSections = (
   tools: ReadonlyArray<ToolCapability>,
   extraSections?: ReadonlyArray<PromptSection>,
   delegationTargets?: ReadonlyArray<AgentDefinition>,
+  cellHostTools: ReadonlyArray<ToolCapability> = [],
 ): ReadonlyArray<PromptSection> => {
   const sections: PromptSection[] = [...baseSections]
 
@@ -61,6 +62,25 @@ export const buildTurnPromptSections = (
       id: "tool-list",
       content: withSectionMarkers("tool-list", `## Available Tools\n\n${snippets.join("\n")}`),
       priority: 42,
+    })
+  }
+
+  // Cell catalog — host tools callable only inside the cell. The system prompt is the
+  // instruction delivery: it is rebuilt each turn, so live composition changes reach the
+  // model without a catalog tool. Full schemas stay in the kernel behind tools.describe.
+  const hostEntries = cellHostTools
+    .map((tool) => ({ id: getToolId(tool), metadata: getToolMetadata(tool), tool }))
+    .filter((entry) => entry.id !== "cell")
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map((entry) => `- **${entry.id}**: ${entry.metadata.promptSnippet ?? entry.tool.description}`)
+  if (hostEntries.length > 0) {
+    sections.push({
+      id: "cell-catalog",
+      content: withSectionMarkers(
+        "cell-catalog",
+        `## Host Tools\n\nCallable inside \`cell\` with \`await tools.call(name, input)\`. \`tools.describe(name)\` returns the input schema.\n\n${hostEntries.join("\n")}`,
+      ),
+      priority: 43,
     })
   }
 

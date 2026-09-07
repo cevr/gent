@@ -453,8 +453,7 @@ Core runtime should not reach for ambient process state unless the app shell is 
 
 The Bun cell implementation in `runtime/code-cell/` is the shipped model
 execution surface. `cell-extension.ts` declares the `@gent/cell` builtin with the
-`cell` and `tool-catalog` tools; core owns it because the turn resolver owns the
-`cell` surface rule. The server root composes it ahead of the extension package
+`cell` tool; core owns it because the turn resolver owns the `cell` surface rule. The server root composes it ahead of the extension package
 builtins. Test presets that exercise host tools directly omit it. `cell-kernel.ts` owns serialized evaluate/reset operations,
 evaluation deadlines, host-call dispatch, and worker disposal. Each evaluation
 receives its host service from the caller's Effect context. Worker faults lose
@@ -566,14 +565,24 @@ agent-denied tool receives no calls. Catalog discovery must use this selected
 set. Default cutover must retain a host binding set when the advertised model
 surface narrows to `cell`; it cannot reuse a cell-only advertised map for discovery.
 
-`runtime/code-cell/tool-catalog.ts` declares ordinary read-only discovery over
-that selected map. Search matches names and descriptions and returns up to 20
-sorted names with a total and next offset. Describe reads the selected tool's
-actual Effect AI input schema. It stores no separate catalog and does not grant
-execution permission. Called from a cell, discovery uses the normal host tool
-path and records an operation receipt. The RPC lifetime test searches the catalog
-and inspects a host schema through the compiled worker. An agent-denied tool is
-absent from its search result. Default profile installation remains unfinished.
+The catalog is instruction plus data, not a tool. When the surface narrows to
+`cell`, `buildTurnPromptSections` adds a `cell-catalog` section that lists every
+selected host tool with its prompt snippet or description; the section is
+rebuilt each turn, so live composition changes reach the model as ordinary
+instruction changes. `runtime/code-cell/cell-catalog.ts` builds the data half
+from the same selected map: name, description, guidelines, and the actual Effect
+AI input schema, hashed over its encoding. `dispatchCell` hands it to the cell
+host; `cell-kernel.ts` sends it inside `Evaluate` only when the hash differs
+from what the current worker holds, and clears that memory when a replacement
+worker starts, so the first cell on a new worker carries the full catalog. The
+worker keeps the catalog beside the namespace: `reset` clears bindings, not the
+catalog, and a snapshot never contains it. Inside the cell `tools.search(query,
+offset)` and `tools.describe(name)` are local synchronous reads over that data,
+20 names per page with a next offset; they record no operation receipt and grant
+no execution permission. The RPC lifetime test checks the search set and a host
+schema through the compiled worker, and that a later cell without a catalog
+still describes the tool. An agent-denied tool and the outer `cell` are absent
+from search.
 
 Tool dispatch accepts separate outer and host binding maps. Normal turns supply
 the selected map for both. Recovery validates pending outer calls against their

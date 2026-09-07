@@ -5,6 +5,7 @@ import {
   runAgentLoopTurnProfile,
 } from "../agent/agent-loop.turn-profile.js"
 import { AgentLoopError } from "../agent/agent-loop.state.js"
+import { buildCellCatalog } from "./cell-catalog.js"
 import { CellExecution } from "./cell-execution.js"
 import { CellOperationHost } from "./cell-kernel.js"
 import { withCellOperationReceipts } from "./cell-operation-receipt.js"
@@ -36,6 +37,7 @@ export const dispatchCell = Effect.fn("CellExecution.dispatch")(function* () {
   const params = {
     cell,
     toolBindings: call.value.toolBindings,
+    catalog: yield* buildCellCatalog(call.value.toolBindings),
     profile: { ...current, turnPublication },
   }
   yield* requireCellHostBranch(params)

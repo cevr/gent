@@ -71,6 +71,47 @@ describe("cell worker", () => {
     }).pipe(Effect.timeout("3 seconds")),
   )
 
+  it.scopedLive("keeps the shipped catalog for later cells that carry none", () =>
+    Effect.gen(function* () {
+      const worker = yield* makeHarness
+      yield* worker.send(
+        CellRequest.cases.Evaluate.make({
+          cellId: "one",
+          source: "tools.describe('read').description",
+          catalog: {
+            hash: "a",
+            tools: [{ name: "read", description: "Read a file", guidelines: [], parameters: {} }],
+          },
+        }),
+      )
+      const first = yield* worker.next
+      if (first._tag !== "Evaluated")
+        return yield* new CellProtocolError({ message: "Expected result" })
+      expect(first.result.display).toBe("Read a file")
+      yield* worker.send(
+        CellRequest.cases.Evaluate.make({ cellId: "two", source: "tools.search('').total" }),
+      )
+      const second = yield* worker.next
+      if (second._tag !== "Evaluated")
+        return yield* new CellProtocolError({ message: "Expected result" })
+      expect(second.result.display).toBe("1")
+      yield* worker.send(
+        CellRequest.cases.Evaluate.make({
+          cellId: "three",
+          source: "tools.search('').tools.map((t) => t.name).join(',')",
+          catalog: {
+            hash: "b",
+            tools: [{ name: "write", description: "Write a file", guidelines: [], parameters: {} }],
+          },
+        }),
+      )
+      const third = yield* worker.next
+      if (third._tag !== "Evaluated")
+        return yield* new CellProtocolError({ message: "Expected result" })
+      expect(third.result.display).toBe("write")
+    }).pipe(Effect.timeout("3 seconds")),
+  )
+
   it.scopedLive("rejects overlapping evaluations while waiting for a host reply", () =>
     Effect.gen(function* () {
       const worker = yield* makeHarness

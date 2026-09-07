@@ -12,7 +12,7 @@ import {
   type LiveAgentLoopTurnProfile,
 } from "../agent/agent-loop.turn-profile.js"
 import { CellOperationHost } from "./cell-kernel.js"
-import { CellEvaluationError } from "./cell-protocol.js"
+import { type CellCatalog, CellEvaluationError } from "./cell-protocol.js"
 import { CurrentCellToolOperation } from "./current-cell-tool-operation.js"
 import { executeBoundCellTool, cellToolResultValue } from "./cell-tool-call.js"
 
@@ -75,9 +75,11 @@ export const resumeCellToolOperation = Effect.fn("CellToolHost.resume")(
 export const makeCellToolHost = (
   params: CellToolHostParams & {
     readonly toolBindings: ReadonlyMap<string, ResolvedToolCapability>
+    readonly catalog?: CellCatalog
   },
 ): typeof CellOperationHost.Service =>
   CellOperationHost.of({
+    catalog: params.catalog,
     call: Effect.fn("CellToolHost.call")((request) =>
       runAgentLoopTurnProfile(params.profile)(
         Effect.gen(function* () {

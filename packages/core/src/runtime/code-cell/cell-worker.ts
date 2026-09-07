@@ -147,6 +147,7 @@ export const runCellWorker = Effect.scoped(
         )
         return
       }
+      if (Predicate.isNotUndefined(request.catalog)) yield* kernel.setCatalog(request.catalog.tools)
       activeCell = Option.some(request.cellId)
       cellCalls = 0
       yield* kernel.evaluate(request.source).pipe(

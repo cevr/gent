@@ -14,7 +14,6 @@ import { SteerCommand } from "@gent/core-internal/domain/steer"
 import { messageSingleText } from "@gent/core-internal/domain/message-part-projection"
 import { dispatchCell } from "@gent/core-internal/runtime/code-cell/cell-dispatch"
 import { CellTool } from "@gent/core-internal/runtime/code-cell/cell-tool"
-import { ToolCatalog } from "@gent/core-internal/runtime/code-cell/tool-catalog"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
@@ -222,8 +221,8 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             const sources = [
-              "const catalog = await tools.call('tool-catalog', {action: 'search', query: ''}); if (catalog.names.includes('hidden') || !catalog.names.includes('worker')) throw new Error('Wrong catalog'); const spec = await tools.call('tool-catalog', {action: 'describe', name: 'worker'}); if (spec.parameters.type !== 'number' || !spec.guidelines.includes('Supply the current worker PID')) throw new Error('Wrong tool description'); let kept = 21; await tools.call('worker', tools.call.constructor('return process.pid')()); kept",
-              "kept += 1",
+              "const names = tools.search('').tools.map((entry) => entry.name); if (names.includes('hidden') || names.includes('cell') || !names.includes('worker')) throw new Error('Wrong catalog'); const spec = tools.describe('worker'); if (spec.parameters.type !== 'number' || !spec.guidelines.includes('Supply the current worker PID')) throw new Error('Wrong tool description'); let kept = 21; await tools.call('worker', tools.call.constructor('return process.pid')()); kept",
+              "if (tools.describe('worker').parameters.type !== 'number') throw new Error('Catalog was not retained'); kept += 1",
               "await tools.call('worker', tools.call.constructor('return process.pid')()); typeof kept",
               "let rejected = false; try { await tools.call('cell', {code: 'kept = 0'}) } catch (error) { rejected = error.message.includes('A cell cannot invoke another outer cell as a host tool') }; let hiddenRejected = false; try { await tools.call('hidden', {}) } catch { hiddenRejected = true }; rejected && hiddenRejected && kept === 23",
               "typeof kept",
@@ -267,7 +266,6 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
                         Ref.update(pids, (values) => [...values, pid]).pipe(Effect.as(true)),
                     }),
                     CellTool,
-                    ToolCatalog,
                   ],
                 },
               },

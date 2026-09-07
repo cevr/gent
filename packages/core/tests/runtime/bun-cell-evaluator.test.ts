@@ -28,6 +28,41 @@ describe("Bun cell evaluation", () => {
     }).pipe(Effect.timeout("2 seconds")),
   )
 
+  it.live("searches and describes the shipped catalog locally without a host call", () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0)
+      const kernel = yield* makeBunCellEvaluator.pipe(
+        Effect.provideService(CellHost, {
+          call: () => Ref.update(calls, (count) => count + 1).pipe(Effect.as(0)),
+        }),
+      )
+      yield* kernel.setCatalog([
+        {
+          name: "read",
+          description: "Read a file",
+          guidelines: ["Prefer read over bash"],
+          parameters: { type: "object", properties: { path: { type: "string" } } },
+        },
+        { name: "write", description: "Write a file", guidelines: [], parameters: {} },
+      ])
+      const search = yield* kernel.evaluate(
+        "const page = tools.search('file', 1); `${page.total}:${page.nextOffset}:${page.tools.map((t) => t.name).join(',')}`",
+      )
+      expect(search.display).toBe("2:2:write")
+      const described = yield* kernel.evaluate(
+        "const spec = tools.describe('read'); `${spec.parameters.properties.path.type}:${spec.guidelines[0]}`",
+      )
+      expect(described.display).toBe("string:Prefer read over bash")
+      const missing = yield* kernel.evaluate("tools.describe('bash')").pipe(Effect.flip)
+      expect(missing.message).toContain("Tool bash is not selected for this turn")
+      // Catalog reads are worker-local and never become host operations.
+      expect(yield* Ref.get(calls)).toBe(0)
+      // A reset clears the namespace, not the catalog.
+      yield* kernel.reset
+      expect((yield* kernel.evaluate("tools.search('').total")).display).toBe("2")
+    }),
+  )
+
   it.live("rejects non-data host arguments before dispatch", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0)
