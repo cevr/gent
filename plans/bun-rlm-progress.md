@@ -1,5 +1,56 @@
 # Bun RLM progress
 
+## One interpreter and the dead-code sweep
+
+Three commits after `71cf164a`, all local on the Rift (not pushed, not merged):
+
+| Commit     | Unit                                                          | Runtime lines | Test lines |
+| ---------- | ------------------------------------------------------------- | ------------: | ---------: |
+| `a815f6b7` | Unreferenced TUI components and the SDK boundary module gone  |          -383 |          0 |
+| `33a6de71` | ACP code mode runs through the branch cell                    |            -2 |       +170 |
+| `30f0f9e1` | 31 unreferenced exports removed with their orphaned imports   |          -270 |          0 |
+
+One interpreter (`33a6de71`). The ACP `execute` MCP tool no longer evaluates
+JavaScript with `new Function` and a `gent.*` Proxy. It forwards the code to
+the branch's `cell` tool through `ExternalToolRunner`, so external drivers
+share the host kernel: the persistent namespace, the limits, the inner
+operation receipts, and the approval path. `makeAcpRunTool` runs the tool
+effect with the turn's captured services (`Effect.runPromiseWith`) so `cell`
+finds the branch cell owner across the MCP Promise boundary. The instruction
+text and the tool description describe `tools.call`, `tools.search`, and
+`tools.describe`. `McpCodemodeUnknownToolError`, the Proxy, and
+`executeCodemodeFunction` are deleted. The plan's "no second interpreter" rule
+now holds for ACP as well as the native surface.
+
+Evidence: `packages/core/tests/extensions/cell-external-driver.test.ts` admits
+an external driver through the `driver.set` RPC override and runs two `cell`
+calls that share one namespace (`const kept = 20; kept + 1` then `kept + 2`
+yields `21,22`). `packages/extensions/tests/acp-agents/acp-agents.test.ts`
+checks the forwarding contract, the failed-cell-result error shape, the
+threaded services, and the pending-interaction tap. A first attempt captured
+`CellExecution` inside `turn-source.ts`; the test passed with that change
+reverted because the external tool effect already runs inside the turn's
+context, so the capture was not added.
+
+Dead code (`a815f6b7`, `30f0f9e1`). `branch-tree.tsx`, `inline-chrome.tsx`,
+and `domain/sdk-boundary.ts` had no importers. A reference sweep over every
+`export` in `packages/*/src` and `apps/*/src` found 31 symbols with no reader
+outside their own file (`formatKeybind`, `GentLoggerJson`, `fetchRepo`,
+`TurnSource`, `CapabilityCoreContext`, `saveArtifactBestEffort`, and others);
+they are removed with the imports they orphaned and the empty e2e cleanup
+module. The sweep script lives outside the repository; rerun it with a
+per-export `\bName\b` search across all `.ts/.tsx` files.
+
+Measurement (same method; reproduces the `d03bca7f` receipt): runtime 87,813
+lines across 450 files; tests 74,688 lines across 293 files. Net against the
+86,965 baseline is +848 runtime lines (was +1,503). The remaining additions
+are the prior-art contracts in the next section, not moved code. The plan's
+LOC completion rule is still not met. Every provable deletion and the
+plan-mandated consolidation are done; the remaining gap can close only by
+dropping product behavior or a listed contract, which is a scope decision.
+
+Gates: `bun run gate` exit 0 after each of the three commits.
+
 ## Prime-model persistence and the OpenCode v2 contracts
 
 Nine commits after `d03bca7f`, all local on the Rift (not pushed, not merged):

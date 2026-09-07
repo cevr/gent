@@ -88,7 +88,7 @@ and TUI both route through it. Helper thread added the config field.
 
 ## Current state at handoff
 
-Updated by Claude on 2026-09-07 (night) at Rift HEAD `dee60987`:
+Updated by Claude on 2026-09-07 (night) at Rift HEAD `30f0f9e1`:
 
 - Inherited work is committed in the Rift. Stage 4 cutover landed: `@gent/cell`
   is a core builtin composed at the server root, the Executor is deleted, and
@@ -107,11 +107,14 @@ Updated by Claude on 2026-09-07 (night) at Rift HEAD `dee60987`:
   section plus kernel-local `tools.search`/`tools.describe`; `tool-catalog`
   deleted), `dee60987` (`StreamSynchronized` marker between replay and live).
   Receipts: top section of `plans/bun-rlm-progress.md`.
+- After the receipts commit `71cf164a`: `a815f6b7` (three unreferenced
+  files), `33a6de71` (ACP code mode runs through the branch cell; the
+  `new Function` interpreter is gone), `30f0f9e1` (31 unreferenced exports).
 - Gates: `bun run gate` exit 0 after every commit. `bun run test:e2e` exit 0
   (36 tests, 8 files) after the marker contract was stated in
   `packages/e2e/tests/event-stream.test.ts`.
-- Runtime lines: 88,468 across 454 files (baseline 86,965, +1,503). Tests:
-  74,518 across 292 files. The method reproduces the earlier 87,219 receipt.
+- Runtime lines: 87,813 across 450 files (baseline 86,965, +848). Tests:
+  74,688 across 293 files. The method reproduces the earlier 87,219 receipt.
 
 ## Remaining work
 
