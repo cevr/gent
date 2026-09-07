@@ -8,9 +8,6 @@ export { GrepToolRenderer } from "./grep"
 export { GlobToolRenderer } from "./glob"
 export { WebfetchToolRenderer } from "./webfetch"
 export { SubagentToolRenderer } from "./subagent"
-export { ReviewToolRenderer } from "./review"
-export { CounselToolRenderer } from "./counsel"
-export { ResearchToolRenderer } from "./research"
 export { SearchSessionsToolRenderer } from "./search-sessions"
 export { ReadSessionToolRenderer } from "./read-session"
 export { SkillsToolRenderer } from "./skills"
@@ -35,9 +32,6 @@ import { GrepToolRenderer } from "./grep"
 import { GlobToolRenderer } from "./glob"
 import { WebfetchToolRenderer } from "./webfetch"
 import { SubagentToolRenderer } from "./subagent"
-import { ReviewToolRenderer } from "./review"
-import { CounselToolRenderer } from "./counsel"
-import { ResearchToolRenderer } from "./research"
 import { SearchSessionsToolRenderer } from "./search-sessions"
 import { ReadSessionToolRenderer } from "./read-session"
 import { SkillsToolRenderer } from "./skills"
@@ -53,9 +47,6 @@ export const BUILTIN_TOOL_RENDERERS: ReadonlyArray<BuiltinToolRendererEntry> = [
   { toolNames: ["glob"], component: GlobToolRenderer },
   { toolNames: ["webfetch"], component: WebfetchToolRenderer },
   { toolNames: ["delegate"], component: SubagentToolRenderer },
-  { toolNames: ["review"], component: ReviewToolRenderer },
-  { toolNames: ["counsel"], component: CounselToolRenderer },
-  { toolNames: ["research"], component: ResearchToolRenderer },
   {
     toolNames: ["search_sessions"],
     component: SearchSessionsToolRenderer,

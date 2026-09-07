@@ -8,7 +8,7 @@
  * Row types:
  * - config: initial goal + maxIterations
  * - checkpoint: per auto_checkpoint call
- * - review: per review tool completion (peer review)
+ * - review: per reviewer delegation completion (peer review)
  */
 
 import type { PlatformError } from "effect"

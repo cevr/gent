@@ -285,7 +285,7 @@ export const RepoExplorerResult = Schema.Struct({
 })
 
 // ---------------------------------------------------------------------------
-// Shared helpers — used by research-tool.ts
+// Shared helpers for repository fetch and cache paths
 // ---------------------------------------------------------------------------
 
 export interface ParsedSpec {

@@ -26,7 +26,15 @@ export { AutoRead, AutoState, AutoWrite, projectSnapshot, viewForState } from ".
 export { AUTO_EXTENSION_ID } from "./protocol.js"
 
 const AUTO_CHECKPOINT_TOOL = "auto_checkpoint"
-const REVIEW_TOOL = "review"
+const DELEGATE_TOOL = "delegate"
+const REVIEWER_AGENT = "reviewer"
+const decodeDelegateAgent = Schema.decodeUnknownOption(
+  Schema.Struct({ agent: Schema.optional(Schema.String) }),
+)
+/** The review gate is satisfied by a completed delegation to the reviewer agent. */
+const isReviewDelegation = (input: ToolResultInput) =>
+  input.toolName === DELEGATE_TOOL &&
+  Option.exists(decodeDelegateAgent(input.input), (value) => value.agent === REVIEWER_AGENT)
 const DEFAULT_MAX_ITERATIONS = 10
 
 class AutoCheckpointDecodeError extends Schema.TaggedError<AutoCheckpointDecodeError>()(
@@ -127,7 +135,7 @@ const tellAutoFromTool = Effect.fn("Auto.tellFromTool")(function* (input: ToolRe
     return
   }
 
-  if (input.toolName === REVIEW_TOOL) {
+  if (isReviewDelegation(input)) {
     yield* auto.value.reviewSignal
   }
 })
@@ -170,7 +178,7 @@ const onToolResult = (input: ToolResultInput) =>
         }
       }
 
-      if (input.toolName === REVIEW_TOOL) {
+      if (isReviewDelegation(input)) {
         yield* journal.value.appendReview(snapshot.value.iteration ?? 1)
       }
     }).pipe(Effect.catchEager(() => Effect.void))

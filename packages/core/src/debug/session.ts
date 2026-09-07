@@ -241,11 +241,6 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
         params: { agent: "explore", todo: "Sanity-check the debug session bootstrap." },
       }),
       makeToolCall({
-        id: asToolCallId("dbg-review-tool"),
-        name: "review",
-        params: { description: "Review the debug bootstrap" },
-      }),
-      makeToolCall({
         id: asToolCallId("dbg-search-sessions"),
         name: "search_sessions",
         params: { query: "tool renderer" },
@@ -281,9 +276,6 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
       }),
       makeJsonResult(asToolCallId("dbg-review"), "delegate", {
         output: "Move debug boot into core-side scenario code and keep the shell thin.",
-      }),
-      makeJsonResult(asToolCallId("dbg-review-tool"), "review", {
-        summary: { critical: 0, high: 0, medium: 1, low: 0 },
       }),
       makeJsonResult(asToolCallId("dbg-search-sessions"), "search_sessions", {
         query: "tool renderer",

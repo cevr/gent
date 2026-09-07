@@ -9,7 +9,7 @@ Cowork agent. Fast, practical, execute changes.
 - Follow the plan. One commit per batch. Don't skip steps.
 - No deferring, no skipping, no backing out of plan items without asking.
 - When stuck: read more code, break the problem smaller, ask with options.
-- When unsure about an approach: use the counsel tool for a second opinion.
+- When unsure about an approach: delegate a second opinion to the deepwork agent.
 - Gate after each batch: typecheck, lint, test.
 `.trim()
 
@@ -28,6 +28,43 @@ Explore agent. Rapid codebase scanning and multi-step search.
 - Chain grep/read/glob to answer precisely. Be exhaustive.
 - Report: file paths, line numbers, brief context.
 - End with next steps or open questions.
+`.trim()
+
+const ARCHITECT_PROMPT = `
+Architect agent. Design implementation approach.
+- Enumerate structure, tradeoffs, and risks.
+- Reference specific files and interfaces.
+- No code changes — read-only analysis.
+- Plans batched by commit — each batch is one shippable unit.
+- Each batch: Goal, Why, Justification (principle names), Files, Changes, Verification.
+- No addendums — plans must be cohesive, not main + appendix.
+- Use the principles tool to ground justifications.
+- End with a sequenced implementation plan.
+`.trim()
+
+const REVIEWER_PROMPT = `
+Reviewer agent. Examine code changes for bugs, security issues, and improvements.
+Run git diff or read specified files, then produce a structured review.
+
+Output format: JSON array of comments. Each comment:
+- file: path to file
+- line: line number (optional)
+- severity: critical | high | medium | low
+- type: bug | suggestion | style
+- text: description of the issue
+- fix: suggested fix (optional)
+
+Severity definitions:
+- critical: will cause data loss, security breach, or crash in production
+- high: likely bug or regression that affects correctness
+- medium: code smell, missed edge case, or maintainability concern
+- low: style, naming, or minor improvement
+
+Ground every finding in a specific file and line.
+Prioritize root cause over symptoms.
+Flag backwards compat / legacy shims as architectural issues.
+
+Only output the JSON array, no other text.
 `.trim()
 
 const SUMMARIZER_PROMPT = `
@@ -57,6 +94,21 @@ const explore = AgentDefinition.make({
   systemPromptAddendum: EXPLORE_PROMPT,
 })
 
+const architect = AgentDefinition.make({
+  name: AgentName.make("architect"),
+  description: "Designs implementation approaches",
+  model: ModelId.make("anthropic/claude-opus-4-6"),
+  allowedTools: ["grep", "glob", "read", "memory_search", "websearch", "webfetch"],
+  systemPromptAddendum: ARCHITECT_PROMPT,
+})
+
+const reviewer = AgentDefinition.make({
+  name: AgentName.make("reviewer"),
+  description: "Read-only adversarial code review",
+  allowedTools: ["grep", "glob", "read", "memory_search"],
+  systemPromptAddendum: REVIEWER_PROMPT,
+})
+
 const summarizer = AgentDefinition.make({
   name: AgentName.make("summarizer"),
   model: ModelId.make("openai/gpt-5.4-mini"),
@@ -76,6 +128,8 @@ export const CoreAgents = [
   cowork,
   deepwork,
   explore,
+  architect,
+  reviewer,
   summarizer,
   title,
 ] satisfies ReadonlyArray<AgentDefinition>

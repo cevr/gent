@@ -98,7 +98,7 @@ const buildPromptSection = (snapshot: AutoSnapshotReply): Option.Option<PromptSe
         "",
         `Iteration ${iteration}/${maxIterations} is complete.`,
         "",
-        "You MUST call the `review` tool to run an adversarial review of this iteration before continuing.",
+        "You MUST delegate an adversarial review of this iteration to the `reviewer` agent (delegate with agent 'reviewer') before continuing.",
         "The loop cannot proceed until the review is done.",
       ].join("\n"),
       priority: 91,
@@ -174,7 +174,7 @@ const followUpForWorkingTurn = (state: {
 }
 
 const FOLLOW_UP_AWAITING_REVIEW =
-  "Run the `review` tool to perform an adversarial review of this iteration before continuing."
+  "Delegate an adversarial review of this iteration to the `reviewer` agent before continuing."
 
 type StartInput = {
   readonly goal: string

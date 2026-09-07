@@ -25,7 +25,6 @@ import { AutoRead, AutoWrite } from "../../../extensions/src/auto/controller.js"
 const sessionId = SessionId.make("auto-e2e-session")
 const branchId = BranchId.make("auto-e2e-branch")
 const FIXTURE_DATE = dateFromMillis(0)
-const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 const makeMessage = (text: string) =>
   Message.cases.regular.make({
@@ -56,15 +55,10 @@ const runAgentMessage = (message: Message) =>
     })
   })
 
-/** Mock subagent runner that returns valid review JSON for review tool compatibility */
+/** Mock subagent runner that answers reviewer delegations */
 const reviewCompatibleRunner = {
-  run: (params: { prompt: string }) => {
-    let text = "No issues found."
-    if (params.prompt.includes("Synthesize")) {
-      text = encodeJson([
-        { file: "test.ts", line: 1, severity: "low", type: "suggestion", text: "ok" },
-      ])
-    }
+  run: () => {
+    const text = "No issues found."
     return Effect.succeed(
       AgentRunResult.cases.success.make({
         text,
@@ -149,11 +143,8 @@ describe("Auto extension E2E", () => {
         }),
         // Step 3: tool continuation → text (loop stops, queued review follow-up dequeued)
         textStep("Checkpoint recorded."),
-        // Step 4: review follow-up → call review tool → Working(iteration 2)
-        toolCallStep("review", {
-          content: "diff placeholder",
-          description: "Reviewed iteration 1. Proceed.",
-        }),
+        // Step 4: review follow-up → delegate to reviewer → Working(iteration 2)
+        toolCallStep("delegate", { agent: "reviewer", todo: "Review iteration 1." }),
         // Step 5: tool continuation → text (loop stops, queued iteration-2 follow-up dequeued)
         textStep("Review complete."),
         // Step 6: iteration 2 → checkpoint(complete) → Inactive
@@ -190,7 +181,7 @@ describe("Auto extension E2E", () => {
           nextIdea: "Fix them",
         }),
         textStep("Checkpoint recorded."),
-        toolCallStep("review", { content: "diff placeholder", description: "Review iteration 1." }),
+        toolCallStep("delegate", { agent: "reviewer", todo: "Review iteration 1." }),
         textStep("Review done."),
         toolCallStep("auto_checkpoint", {
           status: "complete",
@@ -216,10 +207,10 @@ describe("Auto extension E2E", () => {
           const envelopes = yield* Ref.get(envelopesRef)
           const toolSucceeded = envelopes.map((e) => e.event).filter(Schema.is(ToolCallSucceeded))
 
-          // Should have auto_checkpoint (x2) and review (x1)
+          // Should have auto_checkpoint (x2) and the reviewer delegation (x1)
           const toolNames = toolSucceeded.map((e) => e.toolName)
           expect(toolNames.filter((n) => n === "auto_checkpoint").length).toBe(2)
-          expect(toolNames.filter((n) => n === "review").length).toBe(1)
+          expect(toolNames.filter((n) => n === "delegate").length).toBe(1)
 
           // TurnCompleted fires once per user-initiated turn, plus once per queued follow-up turn
           // With tool continuation, each tool-call step auto-continues within the same turn
@@ -329,7 +320,7 @@ describe("Auto extension E2E", () => {
           summary: "First pass",
           nextIdea: "Keep going",
         }),
-        toolCallStep("review", { content: "diff placeholder", description: "Review" }),
+        toolCallStep("delegate", { agent: "reviewer", todo: "Review" }),
         toolCallStep("auto_checkpoint", {
           status: "complete",
           summary: "Done",

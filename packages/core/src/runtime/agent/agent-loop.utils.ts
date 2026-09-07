@@ -87,7 +87,7 @@ export const buildTurnPromptSections = (
 
   // Delegation targets — synthesized from registered agents when delegate is available
   // Internal agents are hidden — only user-facing agents appear as delegation targets
-  const INTERNAL_AGENTS = new Set(["auditor", "architect", "summarizer", "title", "librarian"])
+  const INTERNAL_AGENTS = new Set(["reviewer", "architect", "summarizer", "title", "librarian"])
   const hasDelegate = toolsWithMetadata.some((tool) => tool.id === "delegate")
   if (hasDelegate && !Predicate.isUndefined(delegationTargets) && delegationTargets.length > 0) {
     const targets = delegationTargets

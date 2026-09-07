@@ -64,7 +64,7 @@ export const DEFAULT_AGENT_NAME = AgentName.make("cowork")
  * overrides, parent-tool linkage, tags) live on `RunSpec`.
  *
  * Built-in prompts moved to their owning extensions (`@gent/agents`,
- * `@gent/audit`, `@gent/librarian`, `@gent/research`).
+ * `@gent/librarian`).
  */
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")({
   name: AgentName,
@@ -81,9 +81,7 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
 export type AgentDefinitionInput = ConstructorParameters<typeof AgentDefinition>[0]
 
 // Built-in agents and their prompts live in their owning extensions:
-// - @gent/agents (extensions/agents.ts): cowork, deepwork, explore, summarizer, title
-// - @gent/research (extensions/research/index.ts): architect
-// - @gent/audit (extensions/audit/index.ts): auditor
+// - @gent/agents (extensions/agents.ts): cowork, deepwork, explore, architect, reviewer, summarizer, title
 // - @gent/librarian (extensions/librarian/index.ts): librarian
 
 // Default model — used when an agent has no model set
@@ -95,9 +93,8 @@ export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
 
 // ── Dual-model pair resolution ──
 //
-// Resolves the primary + reviewer model pair used by dual-model workflows
-// (plan/review/research/counsel/audit tools and the auth-guard required-provider
-// check). Algorithm: name-based (`cowork` + `deepwork`) first, then positional
+// Resolves the primary + reviewer model pair used by the auth-guard
+// required-provider check. Algorithm: name-based (`cowork` + `deepwork`) first, then positional
 // fallback to the first two modeled agents, then single-agent self-pair, then
 // fail.
 

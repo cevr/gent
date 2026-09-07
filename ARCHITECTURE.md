@@ -326,7 +326,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   Interaction recovery starts after handler registration. No second actor owner
   or scheduler is created. `SessionRuntime.Live` retains the combined test surface.
 - Default persistence is durable.
-- Read-only helper agents (`explore`, `librarian`, `reviewer`, `auditor`, `summarizer`, `title`) default to ephemeral.
+- Read-only helper agents (`explore`, `librarian`, `architect`, `reviewer`, `summarizer`, `title`) default to ephemeral.
 - Durable runs persist a child session/branch and can be revisited with `read_session`.
 - Ephemeral runs still execute a full local `AgentLoop`, but against isolated in-memory storage; they return text/usage/tool-call metadata without polluting the session tree.
 - Child metadata reads only the requested branch. Stream totals remain unknown
@@ -939,7 +939,7 @@ The TUI renders interactions from the typed event feed (`InteractionPresented` e
 
 State: `{ items: Artifact[] }`. Upsert by `sourceTool + branchId` (last-writer-wins). Artifacts are branch-aware — prompt projection filters to current branch. Agent-facing tools: `artifact_save`, `artifact_read`, `artifact_update`, `artifact_clear`.
 
-Plan, audit, and review tools save artifacts deterministically after producing results. The `@gent/plan` extension is tool-only (no actor) — planning results are persisted as artifacts.
+Workflow commands (`/plan`, `/review`, `/audit`, `/counsel`, `/research`) live in `@gent/workflows` as prompt recipes: each queues a follow-up that composes `delegate`, `artifact_save`, `prompt`, and `repo` from one cell. There is no orchestration code for them; the model runs the recipe and saves the result with the matching `sourceTool`. The auto loop's review gate is a completed `delegate` call to the `reviewer` agent.
 
 ## Auto Loop Extension
 
