@@ -1,10 +1,10 @@
 /**
  * Boundary helper for {@link createAcpTurnExecutor}.
  *
- * The MCP Codemode `runTool` callback hands tool invocations to a JS sandbox;
- * that sandbox is a Promise-returning host. Core owns actual tool execution and
- * passes this external driver a narrow typed Effect callback, so this file only
- * adapts Effect to the sandbox Promise contract.
+ * The MCP Codemode `runTool` callback hands the `execute` code to the branch
+ * cell; the MCP SDK is a Promise-returning host. Core owns actual tool
+ * execution and passes this external driver a narrow typed Effect callback, so
+ * this file only adapts Effect to the MCP Promise contract.
  *
  * Per `gent/no-runpromise-outside-boundary`, that call lives here.
  * Each export NAMES a specific external seam — there is no generic
@@ -16,21 +16,23 @@ import type { InteractionPendingError, TurnError } from "@gent/core/extensions/a
 import type { CodemodeConfig } from "./mcp-codemode.js"
 
 /**
- * Build the `runTool` adapter that the MCP Codemode JS sandbox calls.
+ * Build the `runTool` adapter that the MCP Codemode server calls.
  *
  * The Effect crossing the boundary is exactly one shape:
- *   `toolRunner.run({ toolCallId, toolName, input }, toolCtx)`
- * — pinned by this function. No other Effect leaves Effect-land here.
+ *   `toolRunner.runTool(toolName, args)`
+ * — pinned by this function. It runs with the turn's captured services so the
+ * `cell` tool finds the branch cell owner and turn profile.
  */
 export const makeAcpRunTool =
   (params: {
+    readonly services: Context.Context<never>
     readonly runTool: (
       toolName: string,
       args: Parameters<CodemodeConfig["runTool"]>[1],
     ) => Effect.Effect<unknown, InteractionPendingError | TurnError>
   }): CodemodeConfig["runTool"] =>
   (toolName, args) =>
-    Effect.runPromise(params.runTool(toolName, args))
+    Effect.runPromiseWith(params.services)(params.runTool(toolName, args))
 
 export const makeAcpInteractionPendingNotifier =
   (params: {

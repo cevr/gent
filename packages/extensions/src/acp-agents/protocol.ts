@@ -171,7 +171,9 @@ export const makeAcpConnection = (
   Effect.gen(function* () {
     const nextIdRef = yield* Ref.make<RequestId>(1)
     const stateRef = yield* Ref.make<ConnState>(
-      ConnState.cases.open.make({ pending: HashMap.empty<RequestId, PendingRequest>() }),
+      ConnState.cases.open.make({
+        pending: HashMap.empty<RequestId, PendingRequest>(),
+      }),
     )
     const updatesPubSub = yield* PubSub.unbounded<SessionNotification>()
     const writeQueue = yield* TxQueue.unbounded<string>()
@@ -246,7 +248,9 @@ export const makeAcpConnection = (
             if (found._tag === "None") return [Option.none(), s]
             return [
               Option.some(found.value),
-              ConnState.cases.open.make({ pending: HashMap.remove(s.pending, id) }),
+              ConnState.cases.open.make({
+                pending: HashMap.remove(s.pending, id),
+              }),
             ]
           },
         )
@@ -300,7 +304,10 @@ export const makeAcpConnection = (
             )
             let outcome: Schema.Schema.Type<typeof Schema.Unknown>
             if (Option.isSome(allowOption)) {
-              outcome = { outcome: "selected", optionId: allowOption.value.optionId }
+              outcome = {
+                outcome: "selected",
+                optionId: allowOption.value.optionId,
+              }
             } else {
               outcome = { outcome: "cancelled" }
             }

@@ -1,11 +1,11 @@
 /**
- * ACP agents — unit tests for protocol mapping and codemode proxy.
+ * ACP agents — unit tests for protocol mapping and the cell-backed codemode server.
  *
  * Tests the ACP SessionNotification → response part mapping and the
- * codemode proxy dispatch/rejection behavior.
+ * codemode `execute` forwarding into the branch cell.
  */
 import { describe, test, expect, it } from "effect-bun-test"
-import { Effect, Option, Schema } from "effect"
+import { Context, Effect, Option, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { InteractionPendingError, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
@@ -26,7 +26,10 @@ import { externalWireNull } from "../helpers/external-wire.js"
 
 // ── ACP → response part mapping ──
 const makeNotification = (update: SessionNotification["update"]) =>
-  Schema.decodeSync(SessionNotification)({ sessionId: SessionId.make("s1"), update })
+  Schema.decodeSync(SessionNotification)({
+    sessionId: SessionId.make("s1"),
+    update,
+  })
 describe("mapAcpUpdateToResponsePart", () => {
   test("maps agent_message_chunk with text content to text-delta", () => {
     const part = mapAcpUpdateToResponsePart(
@@ -138,7 +141,11 @@ describe("mapAcpUpdateToResponsePart", () => {
         content: [
           {
             type: "content",
-            content: { type: "image", data: "base64...", mimeType: "image/png" },
+            content: {
+              type: "image",
+              data: "base64...",
+              mimeType: "image/png",
+            },
           },
         ],
       }),
@@ -148,7 +155,11 @@ describe("mapAcpUpdateToResponsePart", () => {
       id: "tc-out-2",
       name: "external",
       result: { type: "image", data: "base64...", mimeType: "image/png" },
-      encodedResult: { type: "image", data: "base64...", mimeType: "image/png" },
+      encodedResult: {
+        type: "image",
+        data: "base64...",
+        mimeType: "image/png",
+      },
       isFailure: false,
     })
   })
@@ -162,7 +173,11 @@ describe("mapAcpUpdateToResponsePart", () => {
           { type: "content", content: { type: "text", text: "see image:" } },
           {
             type: "content",
-            content: { type: "image", data: "base64...", mimeType: "image/png" },
+            content: {
+              type: "image",
+              data: "base64...",
+              mimeType: "image/png",
+            },
           },
         ],
       }),
@@ -326,8 +341,11 @@ const callMcp = (
     headers: mcpHeaders,
     body: encodeJsonUnknown(payload),
   })
-describe("codemode proxy", () => {
-  it.scopedLive("dispatches known tool to runTool", () =>
+class BoundaryProbe extends Context.Service<BoundaryProbe, { readonly value: string }>()(
+  "@gent/extensions/tests/acp-agents/acp-agents.test/BoundaryProbe",
+) {}
+describe("codemode execute", () => {
+  it.scopedLive("forwards the code to the branch cell tool", () =>
     Effect.gen(function* () {
       const calls: Array<{
         toolName: string
@@ -354,14 +372,18 @@ describe("codemode proxy", () => {
           method: "tools/call",
           params: {
             name: "execute",
-            arguments: { code: 'return gent.echo({ text: "hello" })' },
+            arguments: {
+              code: "await tools.call('echo', { text: \"hello\" })",
+            },
           },
         }),
       )
       const result = yield* parseSseResult(response)
       expect(calls.length).toBe(1)
-      expect(calls[0]!.toolName).toBe("echo")
-      expect(calls[0]!.args).toEqual({ text: "hello" })
+      expect(calls[0]!.toolName).toBe("cell")
+      expect(calls[0]!.args).toEqual({
+        code: "await tools.call('echo', { text: \"hello\" })",
+      })
       expect(Option.isSome(result)).toBe(true)
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
@@ -390,7 +412,9 @@ describe("codemode proxy", () => {
           method: "tools/call",
           params: {
             name: "execute",
-            arguments: { code: 'return gent.echo({ text: "hello" })' },
+            arguments: {
+              code: "await tools.call('echo', { text: \"hello\" })",
+            },
           },
         })
 
@@ -407,7 +431,7 @@ describe("codemode proxy", () => {
       expect(calls).toEqual(["first", "second"])
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
-  it.scopedLive("rejects unknown tool in proxy", () =>
+  it.scopedLive("reports a failed cell result as an MCP error", () =>
     Effect.gen(function* () {
       const server = yield* startCodemodeServer({
         tools: [],
@@ -427,7 +451,9 @@ describe("codemode proxy", () => {
           method: "tools/call",
           params: {
             name: "execute",
-            arguments: { code: 'return gent.nonexistent({ foo: "bar" })' },
+            arguments: {
+              code: "await tools.call('nonexistent', { foo: \"bar\" })",
+            },
           },
         }),
       )
@@ -435,7 +461,7 @@ describe("codemode proxy", () => {
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
 })
-// ── Codemode proxy via real makeAcpRunTool boundary ──
+// ── Codemode execute via real makeAcpRunTool boundary ──
 //
 // The previous block stubs `runTool` directly. This block drives the same
 // dispatch through `makeAcpRunTool`, which is the boundary helper used in
@@ -443,7 +469,7 @@ describe("codemode proxy", () => {
 // Effect-runtime crossing (e.g. leaking Effect requirements into the
 // Promise boundary, or pulling ToolRunner from the wrong context)
 // surfaces here and not in the stubbed test above.
-describe("codemode proxy via makeAcpRunTool", () => {
+describe("codemode execute via makeAcpRunTool", () => {
   it.scopedLive("runs through the boundary helper and reaches core runTool", () =>
     Effect.gen(function* () {
       const calls: Array<{
@@ -451,6 +477,7 @@ describe("codemode proxy via makeAcpRunTool", () => {
         input: unknown
       }> = []
       const runTool = makeAcpRunTool({
+        services: Context.empty(),
         runTool: (toolName, input) => {
           calls.push({ name: toolName, input })
           return Effect.succeed(
@@ -471,7 +498,10 @@ describe("codemode proxy via makeAcpRunTool", () => {
         output: Schema.Struct({ echoed: Schema.Boolean }),
         execute: () => Effect.succeed({ echoed: true }),
       })
-      const server = yield* startCodemodeServer({ tools: [mockTool], runTool })
+      const server = yield* startCodemodeServer({
+        tools: [mockTool],
+        runTool,
+      })
       const response = yield* Effect.promise(() =>
         callMcp(server.url, {
           jsonrpc: "2.0",
@@ -479,31 +509,40 @@ describe("codemode proxy via makeAcpRunTool", () => {
           method: "tools/call",
           params: {
             name: "execute",
-            arguments: { code: 'return gent.echo({ text: "via-boundary" })' },
+            arguments: {
+              code: "await tools.call('echo', { text: \"via-boundary\" })",
+            },
           },
         }),
       )
       const result = yield* parseSseResult(response)
       expect(calls.length).toBe(1)
-      expect(calls[0]!.name).toBe("echo")
-      expect(calls[0]!.input).toEqual({ text: "via-boundary" })
+      expect(calls[0]!.name).toBe("cell")
+      expect(calls[0]!.input).toEqual({
+        code: "await tools.call('echo', { text: \"via-boundary\" })",
+      })
       expect(Option.isSome(result)).toBe(true)
     }).pipe(Effect.provide(BunGentPlatformLive)),
   )
-  it.scopedLive("uses the closed tool runner service at the Promise boundary", () =>
+  it.scopedLive("runs the tool effect with the turn's captured services", () =>
     Effect.gen(function* () {
       const observed: string[] = []
-      const boundaryProbe = { value: "from-boundary-service" }
       const runTool = makeAcpRunTool({
+        services: Context.make(BoundaryProbe, {
+          value: "from-boundary-service",
+        }),
         runTool: (toolName) =>
-          Effect.sync(() => {
-            observed.push(boundaryProbe.value)
+          Effect.gen(function* () {
+            const probe = yield* Effect.serviceOption(BoundaryProbe)
+            observed.push(
+              Option.map(probe, (service) => service.value).pipe(Option.getOrElse(() => "missing")),
+            )
             return Prompt.toolResultPart({
               id: ToolCallId.make("tc-acp-boundary-context"),
               name: toolName,
               isFailure: false,
               providerExecuted: false,
-              result: { boundary: boundaryProbe.value },
+              result: { boundary: "ok" },
             })
           }),
       })
@@ -522,7 +561,9 @@ describe("codemode proxy via makeAcpRunTool", () => {
           method: "tools/call",
           params: {
             name: "execute",
-            arguments: { code: 'return gent.echo({ text: "needs-context" })' },
+            arguments: {
+              code: "await tools.call('echo', { text: \"needs-context\" })",
+            },
           },
         }),
       )
@@ -534,6 +575,7 @@ describe("codemode proxy via makeAcpRunTool", () => {
   it.scopedLive("propagates core runTool errors back through the SDK boundary", () =>
     Effect.gen(function* () {
       const runTool = makeAcpRunTool({
+        services: Context.empty(),
         runTool: () => Effect.die("tool runner exploded"),
       })
       const mockTool: ToolCapability = tool({
@@ -543,7 +585,10 @@ describe("codemode proxy via makeAcpRunTool", () => {
         output: Schema.Struct({ echoed: Schema.Boolean }),
         execute: () => Effect.succeed({ echoed: true }),
       })
-      const server = yield* startCodemodeServer({ tools: [mockTool], runTool })
+      const server = yield* startCodemodeServer({
+        tools: [mockTool],
+        runTool,
+      })
       const response = yield* Effect.promise(() =>
         callMcp(server.url, {
           jsonrpc: "2.0",
@@ -551,7 +596,9 @@ describe("codemode proxy via makeAcpRunTool", () => {
           method: "tools/call",
           params: {
             name: "execute",
-            arguments: { code: 'return gent.echo({ text: "fail" })' },
+            arguments: {
+              code: "await tools.call('echo', { text: \"fail\" })",
+            },
           },
         }),
       )
@@ -570,6 +617,7 @@ describe("codemode proxy via makeAcpRunTool", () => {
       })
       const observed: InteractionPendingError[] = []
       const runTool = makeAcpRunTool({
+        services: Context.empty(),
         runTool: () => Effect.fail(pending),
       })
       const mockTool: ToolCapability = tool({
@@ -593,7 +641,9 @@ describe("codemode proxy via makeAcpRunTool", () => {
           method: "tools/call",
           params: {
             name: "execute",
-            arguments: { code: 'return gent.echo({ text: "park" })' },
+            arguments: {
+              code: "await tools.call('echo', { text: \"park\" })",
+            },
           },
         }),
       )
@@ -633,7 +683,9 @@ describe("codemode proxy via makeAcpRunTool", () => {
           method: "tools/call",
           params: {
             name: "execute",
-            arguments: { code: 'return gent.echo({ text: "sync-park" })' },
+            arguments: {
+              code: "await tools.call('echo', { text: \"sync-park\" })",
+            },
           },
         }),
       )

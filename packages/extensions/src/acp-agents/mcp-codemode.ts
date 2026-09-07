@@ -1,11 +1,11 @@
 /**
- * MCP Codemode Server — exposes gent's tools to ACP agents via a single
- * `execute` MCP tool that runs JavaScript code with a `gent.*` proxy.
+ * MCP Codemode Server — exposes gent's cell to ACP agents via a single
+ * `execute` MCP tool.
  *
  * The ACP agent in bare mode has zero built-in tools. This server gives it
- * one: `execute` — which dispatches to gent's full tool surface through
- * the proxy. Tool execution routes through `ToolRunner.run()` via the
- * `runTool` callback provided by the executor.
+ * one: `execute` — which forwards the code to the branch's persistent `cell`
+ * tool through the `runTool` callback provided by the executor. The host cell
+ * is the only interpreter: this server never evaluates code itself.
  *
  * @module
  */
@@ -22,25 +22,12 @@ import {
   type ToolCapability,
 } from "@gent/core/extensions/api"
 import {
-  executeCodemodeFunction,
   inspectMcpResult,
-  invokeCodemodeTool,
+  invokeCodemodeCell,
   makeStatelessMcpTransport,
-  rejectUnknownCodemodeTool,
 } from "./mcp-codemode-boundary.js"
 
 export { inspectMcpResult as inspectForMcp } from "./mcp-codemode-boundary.js"
-
-export class McpCodemodeUnknownToolError extends Schema.TaggedError<McpCodemodeUnknownToolError>()(
-  "McpCodemodeUnknownToolError",
-  {
-    toolName: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `Unknown tool: ${this.toolName}`
-  }
-}
 
 export class McpCodemodeServerError extends Schema.TaggedError<McpCodemodeServerError>()(
   "McpCodemodeServerError",
@@ -80,31 +67,43 @@ const ToolDescriptionSchema = Schema.Struct({
 
 const ExecuteArguments = Schema.Struct({ code: Schema.String })
 
+/** The saved shape of a `cell` tool result as it crosses the external runner. */
+const CellToolResult = Schema.Struct({
+  isFailure: Schema.Boolean,
+  result: Schema.Unknown,
+})
+const CellDisplay = Schema.Struct({ display: Schema.String })
+
 // ── Tool description generator ──
 
 /**
  * Build a markdown description of the codemode `execute` surface listing
- * every available tool as `gent.<name>({ ...params })`. Used as the MCP
+ * every host tool as `tools.call('<name>', { ...params })`. Used as the MCP
  * tool's description AND as the ACP system prompt's tools section
  * (replaces the default per-tool listing for external-routed agents).
  */
 export const generateToolDescription = (tools: ReadonlyArray<ToolCapability>): string => {
   const lines = [
-    "Execute JavaScript with access to gent tools.",
+    "Execute JavaScript in the session's persistent cell.",
     "",
     "## Workflow",
-    '1. `return await gent.grep({ pattern: "TODO", path: "src/" })`',
-    '2. Compose: `const files = await gent.glob({ pattern: "**/*.ts" }); return files`',
-    "3. Use `return` to send results back",
+    '1. `await tools.call(\'grep\', { pattern: "TODO", path: "src/" })`',
+    "2. Compose: `const files = await tools.call('glob', { pattern: \"**/*.ts\" }); files`",
+    "3. The value of the last expression is the result; top-level variables persist across calls",
+    "4. `tools.search(query)` and `tools.describe(name)` inspect the host tools locally",
     "",
     "## Available tools",
   ]
 
   for (const tool of tools) {
-    const schema = AiTool.getJsonSchema(tool)
     const id = getToolId(tool)
+    if (id === "cell") continue
+    const schema = AiTool.getJsonSchema(tool)
     const decoded = Schema.decodeOption(ToolDescriptionSchema)(schema)
-    const description = Option.getOrElse(decoded, () => ({ properties: {}, required: [] }))
+    const description = Option.getOrElse(decoded, () => ({
+      properties: {},
+      required: [],
+    }))
     const props = Option.getOrElse(Option.fromNullishOr(description.properties), () => ({}))
     const required = new Set(Option.getOrElse(Option.fromNullishOr(description.required), () => []))
 
@@ -117,51 +116,37 @@ export const generateToolDescription = (tools: ReadonlyArray<ToolCapability>): s
       .join(", ")
 
     const toolDescription = Option.getOrElse(Option.fromNullishOr(tool.description), () => "")
-    lines.push(`- \`gent.${id}({ ${params} })\` — ${toolDescription}`)
+    lines.push(`- \`tools.call('${id}', { ${params} })\` — ${toolDescription}`)
   }
 
   return lines.join("\n")
 }
 
-// ── Proxy factory ──
+// ── Result projection ──
 
-const makeGentProxy = (
-  tools: ReadonlyArray<ToolCapability>,
-  runTool: CodemodeConfig["runTool"],
-  onInteractionPending: CodemodeConfig["onInteractionPending"],
-) => {
-  const toolNames = new Set(tools.map((tool) => String(getToolId(tool))))
+type CellRunResult = Awaited<ReturnType<CodemodeConfig["runTool"]>>
 
-  return new Proxy(
-    {},
-    {
-      get: (_target, toolName: string) => {
-        if (!toolNames.has(toolName)) {
-          return () => rejectUnknownCodemodeTool(new McpCodemodeUnknownToolError({ toolName }))
-        }
-
-        return (args: Parameters<CodemodeConfig["runTool"]>[1]) =>
-          invokeCodemodeTool(toolName, args, runTool, onInteractionPending)
-      },
-    },
-  )
+const cellResultText = (value: CellRunResult) => {
+  const saved = Schema.decodeUnknownOption(CellToolResult)(value)
+  if (Option.isNone(saved)) return { text: inspectMcpResult(value), isError: false }
+  const display = Schema.decodeUnknownOption(CellDisplay)(saved.value.result)
+  if (Option.isSome(display)) return { text: display.value.display, isError: saved.value.isFailure }
+  return {
+    text: inspectMcpResult(saved.value.result),
+    isError: saved.value.isFailure,
+  }
 }
-
-export type GentToolProxy = ReturnType<typeof makeGentProxy>
 
 // ── MCP server factory (one per request for stateless mode) ──
 
-const createMcpServerForRequest = (
-  proxy: ReturnType<typeof makeGentProxy>,
-  toolDescription: string,
-) => {
+const createMcpServerForRequest = (config: CodemodeConfig) => {
   const server = new Server({ name: "gent", version: "0.0.0" }, { capabilities: { tools: {} } })
 
   server.setRequestHandler(ListToolsRequestSchema, () => ({
     tools: [
       {
         name: "execute",
-        description: toolDescription,
+        description: generateToolDescription(config.tools),
         inputSchema: {
           type: "object",
           properties: {
@@ -184,22 +169,14 @@ const createMcpServerForRequest = (
       }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval -- intentional: trusted ACP agent code execution
-    const fn = new Function(
-      "gent",
-      `"use strict"; return (async function() { ${executeArguments.value.code} })()`,
+    return invokeCodemodeCell(
+      executeArguments.value.code,
+      config.runTool,
+      config.onInteractionPending,
     )
-    return executeCodemodeFunction(fn, proxy)
       .then((value) => {
-        let text: string
-        const presentValue = Option.fromNullishOr(value)
-        if (Option.isNone(presentValue)) text = "(no result)"
-        else {
-          const stringValue = Schema.decodeUnknownOption(Schema.String)(presentValue.value)
-          if (Option.isSome(stringValue)) text = stringValue.value
-          else text = inspectMcpResult(presentValue.value)
-        }
-        return { content: [{ type: "text", text }] }
+        const { text, isError } = cellResultText(value)
+        return { content: [{ type: "text", text }], isError }
       })
       .catch((err) => {
         const decodedError = Schema.decodeUnknownOption(Schema.instanceOf(Error))(err)
@@ -235,14 +212,7 @@ export const startCodemodeServer = (
         const rawRequest = yield* Schema.decodeUnknownEffect(Schema.instanceOf(Request))(
           request.source,
         ).pipe(Effect.orDie)
-        const mcpServer = createMcpServerForRequest(
-          makeGentProxy(
-            currentConfig.tools,
-            currentConfig.runTool,
-            currentConfig.onInteractionPending,
-          ),
-          generateToolDescription(currentConfig.tools),
-        )
+        const mcpServer = createMcpServerForRequest(currentConfig)
         const transport = makeStatelessMcpTransport()
         const response = yield* Effect.promise(() =>
           mcpServer.connect(transport).then(() => transport.handleRequest(rawRequest)),

@@ -1,9 +1,9 @@
-/** Named adapters for Promise contracts owned by MCP and the codemode sandbox. */
+/** Named adapters for Promise contracts owned by MCP and the codemode host. */
 
 import { Effect, Option, Predicate, Schema } from "effect"
 import { InteractionPendingError } from "@gent/core/extensions/api"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
-import type { CodemodeConfig, GentToolProxy, McpCodemodeUnknownToolError } from "./mcp-codemode.js"
+import type { CodemodeConfig } from "./mcp-codemode.js"
 
 class CodemodeInvocationError extends Schema.TaggedError<CodemodeInvocationError>(
   "@gent/extensions/src/acp-agents/mcp-codemode-boundary/CodemodeInvocationError",
@@ -11,11 +11,11 @@ class CodemodeInvocationError extends Schema.TaggedError<CodemodeInvocationError
   cause: Schema.Unknown,
 }) {}
 
-// The MCP sandbox may throw any host value. Normalize it before it enters the
+// The runTool host may throw any value. Normalize it before it enters the
 // typed Effect error channel.
-// oxlint-disable-next-line effect/noUnknownParameters -- vendor sandbox throw boundary
+// oxlint-disable-next-line effect/noUnknownParameters -- host throw boundary
 const normalizeThrownError = (
-  // oxlint-disable-next-line effect/noUnknownParameters -- vendor sandbox throw boundary
+  // oxlint-disable-next-line effect/noUnknownParameters -- host throw boundary
   error: unknown,
 ): InteractionPendingError | CodemodeInvocationError => {
   if (Schema.is(InteractionPendingError)(error)) return error
@@ -34,15 +34,18 @@ const normalizeCodemodeResult = (
   return Effect.succeed(result)
 }
 
-export const invokeCodemodeTool = (
-  toolName: string,
-  args: Parameters<CodemodeConfig["runTool"]>[1],
+/**
+ * Forward one `execute` request to the branch's `cell` tool. The MCP SDK owns
+ * the Promise contract, so this is the single `runPromise` for that seam.
+ */
+export const invokeCodemodeCell = (
+  code: string,
   runTool: CodemodeConfig["runTool"],
   onInteractionPending: CodemodeConfig["onInteractionPending"],
 ) =>
   Effect.runPromise(
     Effect.try({
-      try: () => runTool(toolName, args),
+      try: () => runTool("cell", { code }),
       catch: normalizeThrownError,
     }).pipe(
       Effect.flatMap(normalizeCodemodeResult),
@@ -55,22 +58,6 @@ export const invokeCodemodeTool = (
         })
       }),
     ),
-  )
-
-export const rejectUnknownCodemodeTool = (error: McpCodemodeUnknownToolError): never => {
-  // oxlint-disable-next-line effect/noThrowStatement -- preserve synchronous unknown-tool errors at the JS sandbox boundary
-  throw error
-}
-
-export const executeCodemodeFunction = (
-  fn: ReturnType<FunctionConstructor>,
-  proxy: GentToolProxy,
-): Promise<ReturnType<typeof Reflect.apply>> =>
-  Effect.runPromise(
-    Effect.tryPromise({
-      try: () => Reflect.apply(fn, Object.create(null), [proxy]),
-      catch: normalizeThrownError,
-    }),
   )
 
 /** Build the MCP SDK transport with no session identifier. */

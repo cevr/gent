@@ -76,7 +76,7 @@ describe("ACP systemPrompt slot", () => {
       })
       expect(result.startsWith("BASE\n\n")).toBe(true)
       expect(result).toContain("External Tool Surface (codemode)")
-      expect(result).toContain("gent.echo({ text: string })")
+      expect(result).toContain("tools.call('echo', { text: string })")
     }),
   )
   it.live("no-op when driverToolSurface is undefined (model-routed)", () =>

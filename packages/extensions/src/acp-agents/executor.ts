@@ -84,7 +84,10 @@ export const makeAcpResponsePartMapper = (): AcpResponsePartMapper => ({
 
 const AcpPayload = Schema.Record(Schema.String, Schema.Unknown)
 const decodeAcpPayload = Schema.decodeUnknownOption(AcpPayload)
-const AcpTextContent = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String })
+const AcpTextContent = Schema.Struct({
+  type: Schema.Literal("text"),
+  text: Schema.String,
+})
 const decodeAcpTextContent = Schema.decodeUnknownOption(AcpTextContent)
 
 /** Extract text from an ACP content block. Return None for non-text content. */
@@ -241,13 +244,14 @@ export const makeAcpTurnExecutor = (
 ): TurnExecutor => ({
   executeTurn: (ctx: TurnContext) => {
     const runTurn = Effect.gen(function* () {
-      // SDK boundary: the codemode JS sandbox invokes `runTool` as a
+      // SDK boundary: the MCP codemode server invokes `runTool` as a
       // Promise-returning function. Adapter built in `executor-boundary.ts`;
       // core owns actual tool execution through ExternalToolRunner.
       const services = yield* Effect.context<never>()
       const toolRunner = yield* ExternalToolRunner
       const pendingInteraction = yield* Ref.make(Option.none<InteractionPendingError>())
       const runTool: CodemodeConfig["runTool"] = makeAcpRunTool({
+        services,
         runTool: toolRunner.runTool,
       })
 
@@ -270,7 +274,10 @@ export const makeAcpTurnExecutor = (
         .pipe(
           Effect.mapError((e) => {
             if (Schema.is(AcpClosedError)(e))
-              return new TurnError({ message: `driver invalidated: ${e.reason}`, cause: e })
+              return new TurnError({
+                message: `driver invalidated: ${e.reason}`,
+                cause: e,
+              })
             return new TurnError({ message: e.message })
           }),
         )
@@ -314,7 +321,10 @@ export const makeAcpTurnExecutor = (
             if (Schema.is(AcpClosedError)(e))
               return Deferred.fail(
                 promptDone,
-                new TurnError({ message: `driver invalidated: ${e.reason}`, cause: e }),
+                new TurnError({
+                  message: `driver invalidated: ${e.reason}`,
+                  cause: e,
+                }),
               )
             let message = String(e)
             if (Schema.is(AcpError)(e)) message = e.message

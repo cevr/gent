@@ -197,7 +197,12 @@ const mapStreamEvent = (
   let index = 0
   if (Predicate.isNumber(e.index)) index = e.index
   if (d["type"] === "text_delta" && Predicate.isString(d["text"]) && d["text"] !== "") {
-    return [Response.makePart("text-delta", { id: `claude-text-${index}`, delta: d["text"] })]
+    return [
+      Response.makePart("text-delta", {
+        id: `claude-text-${index}`,
+        delta: d["text"],
+      }),
+    ]
   }
   if (d["type"] === "thinking_delta" && Predicate.isString(d["thinking"]) && d["thinking"] !== "") {
     return [
@@ -398,7 +403,12 @@ export const createClaudeCodeSessionManager = (
         const server = yield* startCodemodeServer(codemodeConfig).pipe(
           Scope.provide(localCodemodeScope),
           Effect.mapError(
-            (e) => new ClaudeSdkError({ kind: "init", message: e.message, cause: e }),
+            (e) =>
+              new ClaudeSdkError({
+                kind: "init",
+                message: e.message,
+                cause: e,
+              }),
           ),
           // Close codemode scope on startup failure so the bound HTTP port
           // is released even if startCodemodeServer fails after acquireRelease
@@ -406,7 +416,9 @@ export const createClaudeCodeSessionManager = (
           Effect.tapError(() => Scope.close(localCodemodeScope, Exit.void).pipe(Effect.ignore)),
         )
         codemode = Option.some(server)
-        mcpServers = Option.some({ gent: { type: "http", url: `${server.url}/mcp` } })
+        mcpServers = Option.some({
+          gent: { type: "http", url: `${server.url}/mcp` },
+        })
       }
 
       const session = yield* sdk
@@ -485,6 +497,7 @@ export const makeClaudeCodeTurnExecutor = (manager: ClaudeCodeSessionManager): T
         Option.none(),
       )
       const runTool: CodemodeConfig["runTool"] = makeAcpRunTool({
+        services,
         runTool: toolRunner.runTool,
       })
 

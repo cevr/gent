@@ -181,13 +181,20 @@ export const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, Ch
         }).pipe(
           Scope.provide(procScope),
           Effect.catchTag("PlatformError", (e) =>
-            Effect.fail(new AcpError({ message: `failed to spawn ACP agent: ${e.message}` })),
+            Effect.fail(
+              new AcpError({
+                message: `failed to spawn ACP agent: ${e.message}`,
+              }),
+            ),
           ),
           Effect.tapError(() => Scope.close(procScope, Exit.void)),
         )
 
         const killProc = handle
-          .kill({ killSignal: "SIGTERM", forceKillAfter: Duration.millis(ACP_KILL_GRACE_MS) })
+          .kill({
+            killSignal: "SIGTERM",
+            forceKillAfter: Duration.millis(ACP_KILL_GRACE_MS),
+          })
           .pipe(Effect.ignore)
 
         let codemode = Option.none<CodemodeServer>()
