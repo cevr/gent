@@ -6,6 +6,7 @@ import { messageSingleText } from "@gent/core-internal/domain/message-part-proje
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
+import { AgentDefinition, AgentName, defineExtension } from "@gent/core/extensions/api"
 import {
   LanguageModelLayers,
   type SequenceStep,
@@ -183,6 +184,78 @@ describe.skipIf(process.platform !== "darwin")("shipped model surface", () => {
               { tool: "read", outcome: "succeeded" },
             ],
           },
+        })
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
+    18000,
+  )
+
+  it.scopedLive(
+    "allowedTools scopes host tools inside the cell instead of replacing the surface",
+    () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const artifact = yield* buildCellExecutable
+        const directory = yield* fs.makeTempDirectoryScoped()
+        const file = path.join(directory, "note.txt")
+        yield* fs.writeFileString(file, "scoped surface")
+        // The agent allows `read` only and never names `cell`: the cell stays the model
+        // surface and `grep` is unreachable from inside it.
+        const scopedAgent = defineExtension({
+          id: "@test/scoped-agent",
+          agents: [
+            AgentDefinition.make({
+              name: AgentName.make("scoped"),
+              description: "reads only",
+              allowedTools: ["read"],
+            }),
+          ],
+        })
+        const code = [
+          `let grep = 'reachable'`,
+          `try { await tools.call('grep', {pattern: 'scoped', path: ${encodeJson(directory)}}) } catch { grep = 'unreachable' }`,
+          `(await tools.call('read', {path: ${encodeJson(file)}})).content + ' | grep ' + grep`,
+        ].join("\n")
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          cellOnly(toolCallStep("cell", { code })),
+          textStep("scoped"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          extensionInputs: [...shippedPreset.extensionInputs, scopedAgent],
+          providerLayer,
+          extraLayers: [
+            Layer.succeed(
+              GentPlatform,
+              GentPlatform.of({ ...platform, cellWorkerPath: Effect.succeed(artifact.binaryPath) }),
+            ),
+          ],
+        })
+        yield* client.message.send({
+          sessionId,
+          branchId,
+          content: "read the note",
+          agentOverride: AgentName.make("scoped"),
+        })
+        const messages = yield* waitFor(
+          client.message.list({ branchId }),
+          (list) =>
+            list.some(
+              (message) =>
+                message.role === "assistant" && messageSingleText(message.parts) === "scoped",
+            ),
+          10_000,
+          "assistant reply scoped",
+        )
+        const results = messages
+          .flatMap((message) => message.parts)
+          .filter((part): part is Prompt.ToolResultPart => part.type === "tool-result")
+        expect(results).toHaveLength(1)
+        expect(results[0]).toMatchObject({
+          isFailure: false,
+          result: { display: "1\tscoped surface | grep unreachable" },
         })
         yield* controls.assertDone
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),

@@ -577,8 +577,13 @@ const filterToolsForAgent = (
   let tools: ToolCapability[]
 
   if (!Predicate.isUndefined(agent.allowedTools)) {
+    // `cell` is the model surface, not a host tool: an allow list scopes the host
+    // tools reachable inside the cell and never swaps the model back to raw tools.
     const names = new Set(agent.allowedTools)
-    tools = allTools.filter((t) => names.has(String(getToolId(t))))
+    tools = allTools.filter((t) => {
+      const id = String(getToolId(t))
+      return id === "cell" || names.has(id)
+    })
   } else {
     tools = [...allTools]
   }

@@ -22,7 +22,7 @@ export const librarian = AgentDefinition.make({
   name: AgentName.make("librarian"),
   description: "Answers questions about external repos using local cached clones",
   model: ModelId.make("openai/gpt-5.4-mini"),
-  allowedTools: ["grep", "glob", "read", "memory_search", "repo"],
+  allowedTools: ["grep", "glob", "read", "repo"],
   systemPromptAddendum: LIBRARIAN_PROMPT,
 })
 

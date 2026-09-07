@@ -90,7 +90,7 @@ const explore = AgentDefinition.make({
   name: AgentName.make("explore"),
   description: "Fast codebase exploration - finds files, searches patterns",
   model: ModelId.make("openai/gpt-5.4-mini"),
-  allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
+  allowedTools: ["grep", "glob", "read", "bash"],
   systemPromptAddendum: EXPLORE_PROMPT,
 })
 
@@ -98,14 +98,14 @@ const architect = AgentDefinition.make({
   name: AgentName.make("architect"),
   description: "Designs implementation approaches",
   model: ModelId.make("anthropic/claude-opus-4-6"),
-  allowedTools: ["grep", "glob", "read", "memory_search", "websearch", "webfetch"],
+  allowedTools: ["grep", "glob", "read", "websearch", "webfetch"],
   systemPromptAddendum: ARCHITECT_PROMPT,
 })
 
 const reviewer = AgentDefinition.make({
   name: AgentName.make("reviewer"),
   description: "Read-only adversarial code review",
-  allowedTools: ["grep", "glob", "read", "memory_search"],
+  allowedTools: ["grep", "glob", "read"],
   systemPromptAddendum: REVIEWER_PROMPT,
 })
 

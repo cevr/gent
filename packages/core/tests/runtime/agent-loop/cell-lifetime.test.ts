@@ -99,14 +99,16 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
             expect(request.reasoning).toBe("high")
           },
           assertOptions: (options) => {
-            expect(options.tools.map((tool) => tool.name)).toEqual(["read_session"])
-            expect(
-              options.prompt.content.some(
-                (message) =>
-                  message.role === "system" &&
-                  message.content.includes("Report the verified result"),
-              ),
-            ).toBe(true)
+            // The allow list scopes the host tools inside the child's cell; the cell
+            // stays the surface and the denied tool leaves the catalog.
+            expect(options.tools.map((tool) => tool.name)).toEqual(["cell"])
+            const system = options.prompt.content
+              .filter((message) => message.role === "system")
+              .map((message) => message.content)
+              .join("\n")
+            expect(system).toContain("Report the verified result")
+            expect(system).toContain("**read_session**")
+            expect(system).not.toContain("**agent-start**")
           },
         })
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(steps)
