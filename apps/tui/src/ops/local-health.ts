@@ -40,12 +40,27 @@ export interface ExtensionDoctorHealth {
   readonly error?: string
 }
 
+export interface ResourceGraphEntry {
+  readonly workspaceId: string
+  readonly cwd: string
+  readonly state: "pending" | "applying" | "applied" | "failed"
+  readonly failure?: string
+}
+
+/** Durable resource graph owners, read from storage without a live server. */
+export interface ResourceGraphHealth {
+  readonly status: "unavailable" | "ok" | "attention"
+  readonly entries: ReadonlyArray<ResourceGraphEntry>
+  readonly error?: string
+}
+
 export interface DoctorReport {
   readonly home: string
   readonly storage: StorageHealth
   readonly server: ServerHealth
   readonly logs: LogHealth
   readonly extensions: ExtensionDoctorHealth
+  readonly resources: ResourceGraphHealth
 }
 
 export interface StorageResetResult {
@@ -106,6 +121,67 @@ const readSqliteHealth = (dbPath: string): Effect.Effect<SqliteHealth> =>
         status: "unreadable",
         error: String(error),
       } satisfies SqliteHealth),
+    ),
+  )
+
+const ResourceGraphStateRow = Schema.Struct({
+  workspace_id: Schema.String,
+  cwd: Schema.String,
+  state: Schema.Literals(["pending", "applying", "applied", "failed"]),
+  failure_json: Schema.NullOr(Schema.String),
+})
+const decodeResourceGraphRows = Schema.decodeUnknownOption(Schema.Array(ResourceGraphStateRow))
+const decodeFailureMessage = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ message: Schema.optional(Schema.String) })),
+)
+
+const resourceGraphEntry = (row: typeof ResourceGraphStateRow.Type): ResourceGraphEntry => {
+  const failure = Option.fromNullishOr(row.failure_json).pipe(
+    Option.flatMap((json) =>
+      decodeFailureMessage(json).pipe(
+        Option.flatMap((decoded) => Option.fromNullishOr(decoded.message)),
+        Option.orElse(() => Option.some(json)),
+      ),
+    ),
+  )
+  return {
+    workspaceId: row.workspace_id,
+    cwd: row.cwd,
+    state: row.state,
+    ...Option.match(failure, { onNone: () => ({}), onSome: (message) => ({ failure: message }) }),
+  }
+}
+
+export const inspectResourceGraphs = (dbPath: string): Effect.Effect<ResourceGraphHealth> =>
+  Effect.acquireUseRelease(
+    Effect.try(() => new Database(dbPath, { readonly: true })),
+    (db) =>
+      Effect.try((): ResourceGraphHealth => {
+        const tables = db
+          .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table'")
+          .all()
+          .map((row) => row.name)
+        if (!tables.includes("resource_graph_state")) return { status: "ok", entries: [] }
+        const rows = db
+          .query(
+            "SELECT workspace_id, cwd, state, failure_json FROM resource_graph_state ORDER BY updated_at DESC",
+          )
+          .all()
+        const entries = Option.getOrElse(decodeResourceGraphRows(rows), () => []).map(
+          resourceGraphEntry,
+        )
+        let status: ResourceGraphHealth["status"] = "ok"
+        if (entries.some((entry) => entry.state !== "applied")) status = "attention"
+        return { status, entries }
+      }),
+    (db) => Effect.sync(() => db.close()),
+  ).pipe(
+    Effect.catchEager((error) =>
+      Effect.succeed({
+        status: "unavailable",
+        entries: [],
+        error: String(error),
+      } satisfies ResourceGraphHealth),
     ),
   )
 
@@ -239,12 +315,16 @@ export const makeDoctorReport = (
       if (server.status === "alive") summary = "Extension health was not queried."
       return extensionHealthUnavailable(summary)
     }
+    const storage = yield* inspectStorage(home)
+    let resources: ResourceGraphHealth = { status: "unavailable", entries: [] }
+    if (storage.exists) resources = yield* inspectResourceGraphs(storage.dbPath)
     return {
       home,
-      storage: yield* inspectStorage(home),
+      storage,
       server,
       logs: yield* inspectLogs,
       extensions: Option.getOrElse(Option.fromNullishOr(extensions), defaultExtensions),
+      resources,
     }
   })
 
@@ -312,6 +392,28 @@ const formatExtensions = (extensions: ExtensionDoctorHealth): ReadonlyArray<stri
   return lines
 }
 
+const formatResources = (resources: ResourceGraphHealth): ReadonlyArray<string> => {
+  if (resources.status === "unavailable") {
+    const detail = Option.getOrElse(Option.fromNullishOr(resources.error), () => "no storage")
+    return [`  Saved resource graphs unavailable (${detail})`]
+  }
+  if (resources.entries.length === 0) return ["  No saved resource graphs."]
+  const lines = resources.entries.flatMap((entry) => {
+    const line = `  ${entry.state} ${entry.cwd} (workspace ${entry.workspaceId})`
+    const failure = Option.fromNullishOr(entry.failure)
+    if (Option.isNone(failure)) return [line]
+    return [line, `    failure: ${failure.value}`]
+  })
+  if (resources.status === "attention") {
+    lines.push(
+      "  A graph that is not applied blocks launches for its cwd. Recovery runs at",
+      "  the next server start; if it fails again, `gent storage reset` archives the",
+      "  whole database (all sessions). No per-cwd repair exists.",
+    )
+  }
+  return lines
+}
+
 export const formatDoctorReport = (report: DoctorReport): string => {
   const storage = report.storage
   let storageLine = `missing (${storage.dbPath})`
@@ -342,6 +444,9 @@ export const formatDoctorReport = (report: DoctorReport): string => {
     "",
     "Extensions:",
     ...formatExtensions(report.extensions),
+    "",
+    "Resources:",
+    ...formatResources(report.resources),
     "",
     "Logs:",
     `  Directory: ${report.logs.dir}`,

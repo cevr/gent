@@ -12,6 +12,7 @@ import {
 import {
   extensionHealthFromSnapshot,
   formatDoctorReport,
+  inspectResourceGraphs,
   inspectStorage,
   makeDoctorReport,
   resetStorage,
@@ -20,10 +21,10 @@ import {
 
 const absentServerEntry = Option.getOrUndefined(Option.none())
 
-const createDb = (dbPath: string, statement: string) =>
+const createDb = (dbPath: string, ...statements: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
-    yield* sql.unsafe(statement)
+    for (const statement of statements) yield* sql.unsafe(statement)
   }).pipe(Effect.provide(BunSqliteClient.layer({ filename: dbPath })))
 
 describe("local health", () => {
@@ -116,5 +117,47 @@ describe("local health", () => {
       expect(result.archiveDir).toBeUndefined()
       expect(result.archived).toEqual([])
     }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("doctor report lists saved resource graphs that need attention", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      const { dbPath } = storagePaths(home)
+      yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true })
+      yield* createDb(
+        dbPath,
+        "CREATE TABLE gent_storage_migrations (name TEXT PRIMARY KEY)",
+        "CREATE TABLE resource_graph_state (workspace_id TEXT NOT NULL, cwd TEXT NOT NULL, state TEXT NOT NULL, failure_json TEXT, updated_at INTEGER NOT NULL)",
+        "INSERT INTO resource_graph_state VALUES ('ws-1', '/repo/a', 'applied', NULL, 2)",
+        `INSERT INTO resource_graph_state VALUES ('ws-1', '/repo/b', 'failed', '{"message":"module import failed"}', 1)`,
+      )
+
+      const health = yield* inspectResourceGraphs(dbPath)
+      expect(health.status).toBe("attention")
+      expect(health.entries.map((entry) => entry.state)).toEqual(["applied", "failed"])
+
+      const report = formatDoctorReport(yield* makeDoctorReport(home, absentServerEntry))
+      expect(report).toContain("Resources:")
+      expect(report).toContain("applied /repo/a (workspace ws-1)")
+      expect(report).toContain("failed /repo/b (workspace ws-1)")
+      expect(report).toContain("failure: module import failed")
+      expect(report).toContain("No per-cwd repair exists.")
+    }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
+  )
+
+  it.scopedLive("doctor report says when no resource graphs are saved", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      const { dbPath } = storagePaths(home)
+      yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true })
+      yield* createDb(dbPath, "CREATE TABLE gent_storage_migrations (name TEXT PRIMARY KEY)")
+
+      const report = formatDoctorReport(yield* makeDoctorReport(home, absentServerEntry))
+      expect(report).toContain("No saved resource graphs.")
+    }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
   )
 })
