@@ -14,20 +14,17 @@
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots tests"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.260",
     "@anthropic-ai/sdk": "^0.123.0",
     "@effect/ai-anthropic": "catalog:",
     "@effect/ai-openai": "catalog:",
     "@effect/ai-openai-compat": "catalog:",
     "@gent/core": "workspace:*",
     "@gent/core-internal": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/turndown": "^5.0.6",
     "es-git": "^0.7.0",
     "linkedom": "^0.18.13",
     "picomatch": "catalog:",
-    "turndown": "^7.2.4",
-    "zod": "^4.5.4"
+    "turndown": "^7.2.4"
   },
   "peerDependencies": {
     "@effect/platform-bun": "catalog:",

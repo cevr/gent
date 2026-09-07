@@ -371,12 +371,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "// @effect-diagnostics-next-line strictEffectProvide:off",
   },
   {
-    file: "packages/extensions/src/acp-agents/index.ts",
-    line: 89,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off",
-  },
-  {
     file: "packages/core/src/test-utils/extension-harness.ts",
     line: 3,
     kind: "effect-diagnostics",

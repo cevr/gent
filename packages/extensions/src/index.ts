@@ -19,7 +19,6 @@ import { GoogleExtension, MistralExtension } from "./openai-compatible-driver.js
 import { PrinciplesExtension } from "./principles/principles-tool.js"
 import { SkillsExtension } from "./skills/index.js"
 import { LibrarianExtension } from "./librarian/index.js"
-import { AcpAgentsExtension } from "./acp-agents/index.js"
 import { WorkflowsExtension } from "./workflows.js"
 import { HandoffExtension } from "./handoff.js"
 import { ArtifactsExtension } from "./artifacts/index.js"
@@ -102,7 +101,6 @@ export {
   PrinciplesExtension,
   SkillsExtension,
   LibrarianExtension,
-  AcpAgentsExtension,
   WorkflowsExtension,
   HandoffExtension,
   ArtifactsExtension,
@@ -122,7 +120,6 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner>
   PrinciplesExtension,
   SkillsExtension,
   LibrarianExtension,
-  AcpAgentsExtension,
   AnthropicExtension,
   OpenAIExtension,
   GoogleExtension,
