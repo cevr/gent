@@ -3,7 +3,7 @@
 ## Result
 
 The full gate passed. All 62 automated E2E tests passed: 26 TUI tests and 36 process/RPC tests.
-The live Herdr run found three open defects. Do not describe this build as fully verified or free of defects.
+The first live Herdr run found three defects. The follow-up fixed all three and repeated their live checks. Broader coverage remains open; do not describe all features as verified.
 
 The run used Herdr 0.9.0, pane `wZ:pH`, and `openai/gpt-5.6-luna`.
 The test directory was `/tmp/gent-feature-e2e-20260908`.
@@ -114,3 +114,32 @@ The final preview duplicate fix has a render regression test. The rebuilt live r
 
 Fix the three open defects above. Add RPC tests that call each tool through a real cell. Native-tool tests alone did not detect these live failures.
 Use the existing fixture directory and receipts to repeat each failed path. Do not rerun successful paid model checks without a new reason.
+
+## Follow-up: three live defects fixed
+
+The follow-up used Rift `/Users/cvr/Developer/personal/.rifts/gent/e2e-green` and Herdr pane `wZ:pH`.
+The earlier matrix records the first run. These results replace its three failed rows.
+
+- `f3fe3e76`: Background shell results retain their owning workspace. A queued result wakes an idle parent actor. The RPC test checks completion during a turn and after the parent becomes idle. The live check waited for the parent to become idle before it released the shell process. Evidence: `/tmp/gent-e2e-green/background-before-release.txt` and `/tmp/gent-e2e-green/background-delivered.txt`.
+- `c114911f`: Artifact save, update, and clear publish state changes from the store. The RPC test checks all three notifications. The live badge appeared after save and disappeared after clear. Evidence: `/tmp/gent-e2e-green/artifact-saved.txt` and `/tmp/gent-e2e-green/artifact-cleared.txt`.
+- `4b1286bc`: Present mode saves an informational transcript message without an approval request. The TUI shows the message and keeps later model output separate. Tool results still update the original cell when a notice follows it. The RPC test checks that the same cell continues. Feed and render tests check visibility. The live run showed the notice, cell output, and final reply without user input. Evidence: `/tmp/gent-e2e-green/present-green.txt`.
+
+Validation: `/tmp/gent-present-green-gate.log` passed the full gate. `/tmp/gent-present-green-e2e.log` passed all 62 automated E2E tests. An earlier gate attempt and a later receipt commit hook failed in GitReader with ENOENT during scoped temporary-directory cleanup. A full gate passed between those failures. The receipt commit was rejected by its test hook. The cause is not established. Focused repetition passed 200 tests; the full extension process passed 366 tests in isolation and again beside the core test process. Temporary filesystem tracing found no failed or duplicate fixture removal in the passing run. Evidence: `/tmp/gent-e2e-green-receipt-commit.log`, `/tmp/gent-git-reader-repeat.log`, `/tmp/gent-extension-repro.log`, `/tmp/gent-extension-contention.log`, and `/tmp/gent-fs-trace.log`.
+
+The live fork picker accepted a message and returned to the transcript. Capture: `/tmp/gent-e2e-green/fork-completed.txt`. This capture alone does not prove the new branch identity.
+
+Source files for these conclusions:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/e2e-green/packages/core/src/domain/extension-services.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/e2e-green/packages/core/src/runtime/agent/agent-loop.handlers.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/e2e-green/packages/extensions/tests/exec-tools/bash-execution.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/e2e-green/packages/extensions/src/artifacts/store.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/e2e-green/packages/extensions/tests/artifacts/artifacts.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/e2e-green/packages/core/src/runtime/prompt-presenter-live.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/e2e-green/apps/tui/src/hooks/use-session-feed.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/e2e-green/apps/tui/src/components/message-list.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/e2e-green/apps/tui/tests/use-session-feed.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/e2e-green/apps/tui/tests/message-list-render.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/e2e-green/packages/extensions/tests/interaction-tools/interaction-tools-rpc.test.ts`
+
+Remaining work: complete the coverage limits listed above, verify the new branch identity, and investigate the intermittent fixture failure. The RLM design review identified artifact state duplication. Removal of that extension is a separate design change and is not included in this defect fix.
