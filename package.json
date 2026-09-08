@@ -30,14 +30,14 @@
     "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "@effect/tsgo": "0.41.0",
-    "@types/bun": "^1.4.1",
+    "@types/bun": "^1.4.2",
     "@types/picomatch": "catalog:",
     "concurrently": "^10.0.5",
     "effect": "catalog:",
     "effect-bun-test": "catalog:",
     "lefthook": "^2.1.12",
-    "oxfmt": "^0.66.0",
-    "oxlint": "^1.81.0",
+    "oxfmt": "^0.67.0",
+    "oxlint": "^1.82.0",
     "oxlint-plugin-effect": "^0.12.1",
     "oxlint-tsgolint": "^7.0.2001",
     "turbo": "^2.10.12",
@@ -57,7 +57,7 @@
     "@effect/sql-pg": "4.0.0-rc.112",
     "@effect/sql-sqlite-bun": "4.0.0-rc.112",
     "effect-encore": "^0.29.2",
-    "effect-machine": "0.25.4",
+    "effect-machine": "0.27.0",
     "effect-wide-event": "0.3.0",
     "msgpackr": "^2.1.0",
     "multipasta": "^0.2.8",
@@ -71,6 +71,6 @@
     "@ff-labs/fff-bun": "0.10.6"
   },
   "patchedDependencies": {
-    "@opentui/core@0.5.10": "patches/@opentui%2Fcore@0.5.10.patch"
+    "@opentui/core@0.5.11": "patches/@opentui%2Fcore@0.5.11.patch"
   }
 }

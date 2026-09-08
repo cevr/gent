@@ -1,6 +1,6 @@
 # OpenTUI patches
 
-## `@opentui/core@0.5.10`
+## `@opentui/core@0.5.11`
 
 The Bun and Node renderer bundles use the same resize correction.
 `processResize` must clear from the actual split-footer origin when it is
@@ -16,4 +16,5 @@ from 120×40. See `docs/fx-ui-acceptance.md` for captures and validation.
 
 Remove this patch when an OpenTUI release handles non-bottom-pinned
 split-footer resize cleanup. Recheck these paths before removing it.
+Rechecked on 2026-09-08: 0.5.11 still ships the unbounded clear, so the patch was regenerated for that release.
 This is a local dependency patch, not an upstream release.
