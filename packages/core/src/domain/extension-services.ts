@@ -9,8 +9,7 @@ import {
   type PlatformError,
 } from "effect"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent.js"
-import { DEFAULT_AGENT_NAME, DEFAULT_MODEL_ID } from "./agent.js"
-import { estimateContextPercent as pureEstimateContextPercent } from "../runtime/context-estimation.js"
+import { DEFAULT_AGENT_NAME } from "./agent.js"
 import type { AgentEvent, EventStoreError } from "./event.js"
 import { hasMessage } from "./guards.js"
 import type {
@@ -571,14 +570,4 @@ export const requireAgent = (
       operation: "require",
       message: `Agent "${name}" not found in registry`,
     })
-  })
-
-export const estimateContextPercent = (options?: {
-  readonly modelId?: string
-}): Effect.Effect<number, ExtensionServiceError, ExtensionContext> =>
-  Effect.gen(function* () {
-    const ctx = yield* ExtensionContext
-    const messages = yield* ctx.Session.listMessages()
-    const modelId = options?.modelId ?? DEFAULT_MODEL_ID
-    return pureEstimateContextPercent(messages, modelId)
   })

@@ -2,10 +2,9 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { narrowR } from "../../core/tests/helpers/effect"
 import { HandoffTool } from "../src/handoff-tool.js"
-import { HandoffCooldown, HandoffExtension } from "../src/handoff.js"
 import { AgentRunResult, SessionId, type ExtensionContextService } from "@gent/core/extensions/api"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { runToolWithCtx, collectTestContributions } from "@gent/core-internal/test-utils"
+import { runToolWithCtx } from "@gent/core-internal/test-utils"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
@@ -81,53 +80,4 @@ describe("HandoffTool", () => {
       ),
     )
   })
-})
-
-// ============================================================================
-// Cooldown service
-//
-// Pin the cooldown semantics from the old FSM implementation:
-// suppress(n) SETS the counter to N (overwrite, not add);
-// get() reads it; every turnCompleted() decrements until zero.
-// ============================================================================
-
-describe("HandoffCooldown", () => {
-  it.live("suppress and turnCompleted preserve cooldown semantics", () =>
-    Effect.gen(function* () {
-      const contributions = yield* collectTestContributions(HandoffExtension.setup)
-      expect((contributions.resources ?? []).length).toBe(1)
-
-      const program = Effect.gen(function* () {
-        const cooldown = yield* HandoffCooldown
-
-        // Initial cooldown is 0.
-        expect(yield* cooldown.get).toBe(0)
-
-        // suppress(5) sets cooldown to 5.
-        yield* cooldown.suppress(5)
-        expect(yield* cooldown.get).toBe(5)
-
-        // Each turnCompleted decrements the counter.
-        yield* cooldown.turnCompleted
-        expect(yield* cooldown.get).toBe(4)
-
-        yield* cooldown.turnCompleted
-        yield* cooldown.turnCompleted
-        expect(yield* cooldown.get).toBe(2)
-
-        // suppress(2) re-arms (overwrite, not add).
-        yield* cooldown.suppress(2)
-        expect(yield* cooldown.get).toBe(2)
-
-        // Decrement clamps at zero.
-        yield* cooldown.turnCompleted
-        yield* cooldown.turnCompleted
-        yield* cooldown.turnCompleted
-        expect(yield* cooldown.get).toBe(0)
-      })
-
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      return yield* program.pipe(Effect.provide(HandoffCooldown.Live))
-    }),
-  )
 })

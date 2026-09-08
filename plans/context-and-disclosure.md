@@ -105,4 +105,16 @@ counsel review.
   (`findByToolCallId`). Deviation: no trailing `[id: …]` marker on bounded
   results; cell receipts already carry inner call ids, and bash saves full
   output to a file path it names in the result.
-- S1, S3 open.
+- S1 shipped 2026-09-08. A summary records `paths.read` and `paths.modified`
+  on `ModelCompactionDetails` and appends `Files read:` / `Files modified:`
+  lines to the summary text, bounded by `SUMMARY_PATHS_MAX_CHARS`; each
+  revision carries the newest earlier summary's paths forward. Cell calls
+  contribute their inner `read`/`write`/`edit` operations. The summary prompt
+  names the retained cell namespace bindings so the summary records what they
+  hold. A failed summary no longer fails the turn: `turn-source.ts` publishes an
+  `ErrorOccurred` notice (`Context compaction failed (...)`) and continues with
+  the plain truncated projection (`tests/runtime/model-context-degrade.test.ts`).
+- S3 shipped 2026-09-08. `@gent/handoff` keeps only the `/handoff` request and
+  the `handoff` tool; the cooldown resource, the automatic `turnAfter` handoff,
+  and the `estimateContextPercent` extension helper are gone. Context pressure
+  is visible on the status line and the model acts on it through `context.*`.

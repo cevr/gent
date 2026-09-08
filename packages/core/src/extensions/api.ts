@@ -69,11 +69,7 @@ export {
   type RunSpec,
   resolveDefaultAgentModel,
 } from "../domain/agent.js"
-export {
-  requireAgent,
-  requireCurrentAgent,
-  estimateContextPercent,
-} from "../domain/extension-services.js"
+export { requireAgent, requireCurrentAgent } from "../domain/extension-services.js"
 export {
   type GentExtension,
   LoadedArtifactIdentity,
