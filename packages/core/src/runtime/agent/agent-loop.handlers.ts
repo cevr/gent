@@ -100,7 +100,7 @@ import { EventStorage } from "../../storage/event-storage.js"
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import { DynamicExtensionRegistry } from "../../domain/dynamic-extension-registry.js"
 import type { CapabilityError, CapabilityNotFoundError } from "../../domain/capability.js"
-import { provideExtensionServices } from "../../domain/extension-services.js"
+import { provideExtensionLeaf } from "../extensions/extension-effect-membrane.js"
 import { parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { recordToolResult } from "./turn-persistence.js"
@@ -114,7 +114,7 @@ import {
   runAgentLoopTurnProfileOrLegacy,
   type AgentLoopTurnProfile,
 } from "./agent-loop.turn-profile.js"
-import { CurrentExtensionHostContext } from "./current-extension-host-context.js"
+import type { CurrentExtensionHostContext } from "./current-extension-host-context.js"
 import { runExtensionCapability } from "../extensions/registry.js"
 import {
   buildQueuedTurnItem,
@@ -1113,16 +1113,12 @@ export const buildAgentLoopActorHandlers = (config: {
                     capabilityId: operation.capabilityId,
                   })
                   if (Option.isNone(dynamic)) return yield* staticRequest
-                  const hostCtx = yield* CurrentExtensionHostContext
-                  return yield* provideExtensionServices(
-                    { ...hostCtx, extensionId: dynamic.value.extensionId },
-                    runExtensionCapability(
-                      dynamic.value.extensionId,
-                      RpcId.make(operation.capabilityId),
-                      dynamic.value.capability,
-                      input,
-                    ),
-                  )
+                  return yield* runExtensionCapability(
+                    dynamic.value.extensionId,
+                    RpcId.make(operation.capabilityId),
+                    dynamic.value.capability,
+                    input,
+                  ).pipe(provideExtensionLeaf({ extensionId: dynamic.value.extensionId }))
                 })
               }
               return yield* runExtensionRequest(environment, dynamicRequest)

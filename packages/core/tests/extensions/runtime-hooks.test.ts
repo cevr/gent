@@ -10,7 +10,7 @@ import { hook } from "../../src/domain/extension.js"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
-import { provideHookHostContext } from "../../src/runtime/extensions/extension-hook-context"
+import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
 import { AgentName } from "@gent/core-internal/domain/agent"
 
 const stubCtx = testExtensionHostContext()
@@ -68,7 +68,9 @@ describe("runtime hooks", () => {
       ])
 
       const exit = yield* Effect.exit(
-        compiled.emitTurnAfter(stubEvent).pipe(provideHookHostContext(stubCtx)),
+        compiled
+          .emitTurnAfter(stubEvent)
+          .pipe(Effect.provideService(CurrentExtensionHostContext, stubCtx)),
       )
       expect(Exit.isSuccess(exit)).toBe(true)
       expect(calls).toEqual(["failing", "after"])
@@ -90,7 +92,9 @@ describe("runtime hooks", () => {
         ext("m-user", "user", { hooks: make("user") }),
       ])
 
-      yield* compiled.emitTurnAfter(stubEvent).pipe(provideHookHostContext(stubCtx))
+      yield* compiled
+        .emitTurnAfter(stubEvent)
+        .pipe(Effect.provideService(CurrentExtensionHostContext, stubCtx))
       expect(calls).toEqual(["builtin", "user", "project"])
     }))
 })

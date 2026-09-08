@@ -1,5 +1,10 @@
 import { Effect, Layer } from "effect"
-import type { Exit, Schema } from "effect"
+import type { Exit, FileSystem, Path, Schema } from "effect"
+import type { ExtensionId, ToolCallId } from "../../domain/ids.js"
+import type { ExtensionTurnContext } from "../../domain/extension.js"
+import { type ExtensionContext, provideExtensionServices } from "../../domain/extension-services.js"
+import { CurrentExtensionHostContext } from "../agent/current-extension-host-context.js"
+import { provideExtensionCapabilityContext } from "./extension-capability-context.js"
 
 type ErasedValue = Schema.Schema.Type<typeof Schema.Unknown>
 
@@ -63,3 +68,33 @@ export const eraseResourceLayer = <A, E, R>(layer: Layer.Layer<A, E, R>): Erased
 
 // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The empty layer is the erased identity for heterogeneous resource composition.
 export const emptyErasedResourceLayer: ErasedResourceLayer = Layer.empty as ErasedResourceLayer
+
+/** Per-leaf facts layered over the current run's host context. */
+export interface ExtensionLeafFrame {
+  readonly extensionId?: ExtensionId
+  readonly toolCallId?: ToolCallId
+  readonly turn?: ExtensionTurnContext
+}
+
+/**
+ * The one boundary every extension leaf crosses: tools, requests, and hooks
+ * all read the current run's host context here, receive the `ExtensionContext`
+ * facets built from it plus the leaf frame, and see the run's capability
+ * context. Error and requirement sealing stays with the caller because each
+ * leaf kind reports failures differently.
+ */
+export const provideExtensionLeaf =
+  (frame: ExtensionLeafFrame) =>
+  <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<
+    A,
+    E,
+    Exclude<R, ExtensionContext> | CurrentExtensionHostContext | FileSystem.FileSystem | Path.Path
+  > =>
+    Effect.gen(function* () {
+      const host = yield* CurrentExtensionHostContext
+      return yield* provideExtensionServices({ ...host, ...frame }, effect).pipe(
+        provideExtensionCapabilityContext,
+      )
+    })

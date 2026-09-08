@@ -4,27 +4,12 @@ import { BunServices } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { hook } from "../../src/domain/extension.js"
-import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
+import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
-import { provideExtensionHookContext } from "../../src/runtime/extensions/extension-hook-context"
+import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
-import { AgentName } from "@gent/core-internal/domain/agent"
 
 const stubHostCtx = testExtensionHostContext()
-
-const stubProjectionCtx = {
-  sessionId: SessionId.make("test-session"),
-  branchId: BranchId.make("test-branch"),
-  cwd: "/tmp",
-  home: "/tmp",
-  turn: {
-    sessionId: SessionId.make("test-session"),
-    branchId: BranchId.make("test-branch"),
-    agent: getBuiltinAgent("cowork")!,
-    allTools: [],
-    agentName: AgentName.make("cowork"),
-  },
-}
 
 const ext = (
   id: string,
@@ -52,7 +37,7 @@ describe("prompt slots", () => {
     return compiled
       .resolveSystemPrompt({ basePrompt: "x", agent: getBuiltinAgent("cowork")! })
       .pipe(
-        provideExtensionHookContext({ projection: stubProjectionCtx, host: stubHostCtx }),
+        Effect.provideService(CurrentExtensionHostContext, stubHostCtx),
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("x[builtin][user][project]"))),
       )
   })
@@ -61,7 +46,7 @@ describe("prompt slots", () => {
     compileExtensionHooks([])
       .resolveSystemPrompt({ basePrompt: "x", agent: getBuiltinAgent("cowork")! })
       .pipe(
-        provideExtensionHookContext({ projection: stubProjectionCtx, host: stubHostCtx }),
+        Effect.provideService(CurrentExtensionHostContext, stubHostCtx),
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("x"))),
       ))
 })

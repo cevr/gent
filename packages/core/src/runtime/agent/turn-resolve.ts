@@ -21,7 +21,6 @@ import { SessionStorage } from "../../storage/session-storage.js"
 import { ConfigService } from "../config-service.js"
 import { DynamicExtensionRegistry } from "../../domain/dynamic-extension-registry.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
-import { provideExtensionHookContext } from "../extensions/extension-hook-context.js"
 import { compileToolPolicy, ExtensionRegistry } from "../extensions/registry.js"
 import type { ResolvedTurn } from "./agent-loop.state.js"
 import { buildTurnPromptSections, resolveReasoning } from "./agent-loop.utils.js"
@@ -254,13 +253,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   // Filter out hidden messages — visible in transcript but excluded from LLM context
   const messages = rawMessages.filter((m) => m.metadata?.hidden !== true)
 
-  const hookCtx = {
-    projection: projectionCtx,
-    host: hostCtx,
-  }
-  const projEval = yield* extensionRegistry.extensionHooks.resolveTurnProjection.pipe(
-    provideExtensionHookContext(hookCtx),
-  )
+  const projEval = yield* extensionRegistry.extensionHooks.resolveTurnProjection(projectionCtx)
   const extensionProjections: TurnProjection[] = projEval.policyFragments.map((p) => ({
     toolPolicy: p,
   }))
@@ -327,17 +320,15 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   )
   const turnPrompt = compileSystemPrompt(sections)
   const driverToolSurface = yield* resolveDriverToolSurface(dispatchAgent)
-  const systemPrompt = yield* extensionRegistry.extensionHooks
-    .resolveSystemPrompt({
-      basePrompt: turnPrompt,
-      agent: dispatchAgent,
-      interactive: params.interactive,
-      driverSource: driverResolution.source,
-      tools,
-      driverToolSurface,
-      sections,
-    })
-    .pipe(provideExtensionHookContext(hookCtx))
+  const systemPrompt = yield* extensionRegistry.extensionHooks.resolveSystemPrompt({
+    basePrompt: turnPrompt,
+    agent: dispatchAgent,
+    interactive: params.interactive,
+    driverSource: driverResolution.source,
+    tools,
+    driverToolSurface,
+    sections,
+  })
   const session = yield* sessionStorage
     .getSession(params.sessionId)
     .pipe(Effect.catchEager(() => Effect.void))

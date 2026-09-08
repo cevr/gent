@@ -27,27 +27,13 @@ import { GentToolMetadataTag, getToolMetadata } from "@gent/core-internal/domain
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
 import { PermissionRule } from "@gent/core-internal/domain/permission"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
-import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
+import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
-import { provideExtensionHookContext } from "../../src/runtime/extensions/extension-hook-context"
+import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
 import { collectTestContributions, testExtensionHostContext } from "@gent/core-internal/test-utils"
 import { DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 
 const stubHostCtx = testExtensionHostContext()
-
-const stubProjectionCtx = {
-  sessionId: SessionId.make("test-session"),
-  branchId: BranchId.make("test-branch"),
-  cwd: "/tmp",
-  home: "/tmp",
-  turn: {
-    sessionId: SessionId.make("test-session"),
-    branchId: BranchId.make("test-branch"),
-    agent: builtinAgent,
-    allTools: [],
-    agentName: DEFAULT_AGENT_NAME,
-  },
-}
 
 const setupOf = <R>(ext: GentExtension<R>) => collectTestContributions(ext.setup)
 
@@ -287,7 +273,7 @@ describe("defineExtension", () => {
       const compiled = compileExtensionHooks([loaded])
       const result = yield* compiled
         .resolveSystemPrompt({ basePrompt: "yo", agent: builtinAgent })
-        .pipe(provideExtensionHookContext({ projection: stubProjectionCtx, host: stubHostCtx }))
+        .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx))
       expect(result).toBe("yo!!")
     }))
 

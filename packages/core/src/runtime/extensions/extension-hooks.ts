@@ -1,4 +1,4 @@
-import { Cause, Effect, Option, Predicate, Schema, type FileSystem, type Path } from "effect"
+import { Cause, Effect, Option, Predicate, Schema } from "effect"
 import {
   SCOPE_PRECEDENCE,
   type AnyExtensionHook,
@@ -13,32 +13,30 @@ import {
   type ProjectionTurnContext,
 } from "../../domain/extension.js"
 import type { ExtensionId } from "../../domain/ids.js"
-import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import type { PromptSection } from "../../domain/prompt.js"
-import { type ExtensionContext, provideExtensionServices } from "../../domain/extension-services.js"
-import { exitErasedEffect, sealErasedEffect } from "./extension-effect-membrane.js"
-import { CurrentProjectionHookContext, CurrentHookHostContext } from "./extension-hook-context.js"
-import { provideExtensionCapabilityContext } from "./extension-capability-context.js"
-export type { ExtensionHookContext } from "./extension-hook-context.js"
+import {
+  exitErasedEffect,
+  sealErasedEffect,
+  provideExtensionLeaf,
+} from "./extension-effect-membrane.js"
+import type { CurrentExtensionHostContext } from "../agent/current-extension-host-context.js"
 
 export interface CompiledExtensionHooks {
   readonly resolveSystemPrompt: (
     input: SystemPromptInput,
-  ) => Effect.Effect<string, never, CurrentHookHostContext>
-  readonly resolveTurnProjection: Effect.Effect<
-    ExtensionTurnProjection,
-    never,
-    CurrentHookHostContext | CurrentProjectionHookContext
-  >
+  ) => Effect.Effect<string, never, CurrentExtensionHostContext>
+  readonly resolveTurnProjection: (
+    projection: ProjectionTurnContext,
+  ) => Effect.Effect<ExtensionTurnProjection, never, CurrentExtensionHostContext>
   readonly transformToolResult: (
     input: ToolResultInput,
-  ) => Effect.Effect<unknown, never, CurrentHookHostContext>
+  ) => Effect.Effect<unknown, never, CurrentExtensionHostContext>
   readonly preflightToolCall: (
     input: ToolCallInput,
-  ) => Effect.Effect<ToolCallPreflightResult, never, CurrentHookHostContext>
+  ) => Effect.Effect<ToolCallPreflightResult, never, CurrentExtensionHostContext>
   readonly emitTurnAfter: (
     input: TurnAfterInput,
-  ) => Effect.Effect<void, never, CurrentHookHostContext>
+  ) => Effect.Effect<void, never, CurrentExtensionHostContext>
 }
 
 export interface ExtensionTurnProjection {
@@ -103,13 +101,9 @@ const sortExtensions = (extensions: ReadonlyArray<LoadedExtension>) =>
 
 const runHook = <Input>(input: Input, registered: RegisteredHook<Input>) =>
   Effect.gen(function* () {
-    const ctx = yield* CurrentHookHostContext
     const exit = yield* exitErasedEffect(() =>
-      provideLifecycleHostContext(
-        { ...ctx, extensionId: registered.extensionId },
-        // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-        registered.handler(input),
-      ),
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+      registered.handler(input).pipe(provideExtensionLeaf({ extensionId: registered.extensionId })),
     )
     if (exit._tag === "Success") return
     yield* Effect.logWarning("extension.hook.handler.failed").pipe(
@@ -119,26 +113,6 @@ const runHook = <Input>(input: Input, registered: RegisteredHook<Input>) =>
       }),
     )
   })
-
-const provideLifecycleHostContext = <A, E, R>(
-  ctx: ExtensionHostContext & { readonly turn?: ProjectionTurnContext["turn"] },
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, Exclude<R, ExtensionContext> | FileSystem.FileSystem | Path.Path> =>
-  provideExtensionServices(ctx, effect).pipe(provideExtensionCapabilityContext)
-
-const provideProjectionContext = <A, E, R>(
-  projection: ProjectionTurnContext,
-  host: ExtensionHostContext,
-  extensionId: ExtensionId,
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, Exclude<R, ExtensionContext> | FileSystem.FileSystem | Path.Path> => {
-  const hostCtx: ExtensionHostContext & { readonly turn: ProjectionTurnContext["turn"] } = {
-    ...host,
-    extensionId,
-    turn: projection.turn,
-  }
-  return provideLifecycleHostContext(hostCtx, effect)
-}
 
 const collectTurnProjection = (
   projection: Option.Option<ExtensionTurnProjection>,
@@ -150,32 +124,26 @@ const collectTurnProjection = (
   for (const fragment of projection.value.policyFragments) policyFragments.push(fragment)
 }
 
-const runTurnProjectionHook = (slot: HookTurnProjectionSlot) =>
+const runTurnProjectionHook = (slot: HookTurnProjectionSlot, projection: ProjectionTurnContext) =>
   sealErasedEffect<Option.Option<ExtensionTurnProjection>, never>(
     () =>
-      Effect.gen(function* () {
-        const projection = yield* CurrentProjectionHookContext
-        const host = yield* CurrentHookHostContext
-        return yield* provideProjectionContext(
-          projection,
-          host,
-          slot.extensionId,
-          // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-          slot.handler().pipe(
-            Effect.map((projection) => {
-              const promptSections = Option.getOrElse(
-                Option.fromUndefinedOr(projection.promptSections),
-                () => [],
-              )
-              let policyFragments: ReadonlyArray<ToolPolicyFragment> = []
-              if (!Predicate.isUndefined(projection.toolPolicy)) {
-                policyFragments = [projection.toolPolicy]
-              }
-              return Option.some({ promptSections, policyFragments })
-            }),
-          ),
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+      slot
+        .handler()
+        .pipe(
+          Effect.map((projection) => {
+            const promptSections = Option.getOrElse(
+              Option.fromUndefinedOr(projection.promptSections),
+              () => [],
+            )
+            let policyFragments: ReadonlyArray<ToolPolicyFragment> = []
+            if (!Predicate.isUndefined(projection.toolPolicy)) {
+              policyFragments = [projection.toolPolicy]
+            }
+            return Option.some({ promptSections, policyFragments })
+          }),
         )
-      }),
+        .pipe(provideExtensionLeaf({ extensionId: slot.extensionId, turn: projection.turn })),
     {
       onFailure: (error) =>
         Effect.logWarning("extension.hook.turn-projection.failed").pipe(
@@ -262,16 +230,14 @@ export const compileExtensionHooks = (
   return {
     resolveSystemPrompt: (input) =>
       Effect.gen(function* () {
-        const ctx = yield* CurrentHookHostContext
         let current = input.basePrompt
         for (const slot of systemPromptSlots) {
           current = yield* sealErasedEffect(
             () =>
-              provideLifecycleHostContext(
-                { ...ctx, extensionId: slot.extensionId },
-                // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-                slot.handler({ ...input, basePrompt: current }),
-              ),
+              // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+              slot
+                .handler({ ...input, basePrompt: current })
+                .pipe(provideExtensionLeaf({ extensionId: slot.extensionId })),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.hook.system-prompt.failed").pipe(
@@ -295,29 +261,32 @@ export const compileExtensionHooks = (
         return current
       }),
 
-    resolveTurnProjection: Effect.gen(function* () {
-      const sectionsById = new Map<string, PromptSection>()
-      const policyFragments: ToolPolicyFragment[] = []
+    resolveTurnProjection: (projection) =>
+      Effect.gen(function* () {
+        const sectionsById = new Map<string, PromptSection>()
+        const policyFragments: ToolPolicyFragment[] = []
 
-      for (const slot of turnProjectionSlots) {
-        collectTurnProjection(yield* runTurnProjectionHook(slot), sectionsById, policyFragments)
-      }
+        for (const slot of turnProjectionSlots) {
+          collectTurnProjection(
+            yield* runTurnProjectionHook(slot, projection),
+            sectionsById,
+            policyFragments,
+          )
+        }
 
-      return { promptSections: [...sectionsById.values()], policyFragments }
-    }),
+        return { promptSections: [...sectionsById.values()], policyFragments }
+      }),
 
     transformToolResult: (input) =>
       Effect.gen(function* () {
-        const ctx = yield* CurrentHookHostContext
         let current: unknown = input.result
         for (const slot of toolResultSlots) {
           const next = yield* sealErasedEffect(
             () =>
-              provideLifecycleHostContext(
-                { ...ctx, extensionId: slot.extensionId },
-                // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous tool-result slot
-                slot.handler({ ...input, result: current }),
-              ),
+              // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous tool-result slot
+              slot
+                .handler({ ...input, result: current })
+                .pipe(provideExtensionLeaf({ extensionId: slot.extensionId })),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.hook.tool-result.failed").pipe(
@@ -345,14 +314,12 @@ export const compileExtensionHooks = (
     preflightToolCall: (input) =>
       Effect.gen(function* () {
         for (const slot of toolCallSlots) {
-          const ctx = yield* CurrentHookHostContext
           const decision = yield* sealErasedEffect<Option.Option<ToolCallDenial>, never>(
             () =>
-              provideLifecycleHostContext(
-                { ...ctx, extensionId: slot.extensionId },
-                // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-                eraseHookEffect(slot.handler(input)).pipe(Effect.map(toToolCallDenial)),
-              ),
+              // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+              eraseHookEffect(slot.handler(input))
+                .pipe(Effect.map(toToolCallDenial))
+                .pipe(provideExtensionLeaf({ extensionId: slot.extensionId })),
             {
               onFailure: (error) =>
                 Effect.logWarning("extension.hook.tool-call.failed").pipe(

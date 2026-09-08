@@ -125,5 +125,15 @@ Decision: step 6 (per-extension `Scope`) is dropped. The live profile already re
 on refresh and the resource graph owns acquisition and release; a second lifecycle owner would
 add a scope with nothing to close. Hot reload remains a profile refresh.
 
-Remaining: 3 (single membrane), 4 (facets once per branch actor), 5 (tool metadata off the
-brand), 7 (slash auto-derivation).
+Step 3 landed: `provideExtensionLeaf(frame)` in
+`packages/core/src/runtime/extensions/extension-effect-membrane.ts` is the one boundary tools,
+requests, and hooks cross. It reads the run's `CurrentExtensionHostContext`, layers the leaf frame
+(extension id, tool call id, turn), and provides the `ExtensionContext` facets plus the capability
+context. `extension-hook-context.ts` and its two tags are deleted; the turn projection is an input
+to `resolveTurnProjection(projection)`, not ambient context.
+
+Step 4 resolved by step 3: the host context is already built once per run by
+`ExtensionHostContextProvider.forRun` and read through one tag; the facets are thin closures over
+it. A separate per-branch facet cache would duplicate the run record for no measured gain.
+
+Remaining: 5 (tool metadata off the brand), 7 (slash auto-derivation).

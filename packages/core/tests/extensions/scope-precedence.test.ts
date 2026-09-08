@@ -14,11 +14,11 @@ import { Effect, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
-import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
+import { ExtensionId } from "@gent/core-internal/domain/ids"
 
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
-import { provideExtensionHookContext } from "../../src/runtime/extensions/extension-hook-context"
+import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
 import { PermissionRule } from "@gent/core-internal/domain/permission"
 import { hook, tool, type ToolCapability } from "@gent/core/extensions/api"
 import {
@@ -26,24 +26,10 @@ import {
   testExtensionHostContext,
   testToolContext,
 } from "@gent/core-internal/test-utils"
-import { AgentDefinition, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
+import { AgentDefinition } from "@gent/core-internal/domain/agent"
 import { isToolCapability } from "@gent/core-internal/domain/capability/tool"
 
 const stubCtx = testExtensionHostContext()
-
-const stubProjectionCtx = {
-  sessionId: SessionId.make("test-session"),
-  branchId: BranchId.make("test-branch"),
-  cwd: "/tmp",
-  home: "/tmp",
-  turn: {
-    sessionId: SessionId.make("test-session"),
-    branchId: BranchId.make("test-branch"),
-    agent: builtinAgent,
-    allTools: [],
-    agentName: DEFAULT_AGENT_NAME,
-  },
-}
 
 const toolReturning = (name: string, label: string): ToolCapability<{}, string, never> =>
   tool({
@@ -227,7 +213,7 @@ describe("scope precedence", () => {
       ])
 
       return compiled.resolveSystemPrompt({ basePrompt: "x", agent: builtinAgent }).pipe(
-        provideExtensionHookContext({ projection: stubProjectionCtx, host: stubCtx }),
+        Effect.provideService(CurrentExtensionHostContext, stubCtx),
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("x[builtin][user][project]"))),
       )
     })

@@ -19,7 +19,7 @@ import { hook } from "../../src/domain/extension.js"
 import { BranchId, SessionId, ExtensionId } from "@gent/core-internal/domain/ids"
 import { ProjectionError } from "@gent/core/extensions/api"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
-import { provideExtensionHookContext } from "../../src/runtime/extensions/extension-hook-context"
+import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 
 const turnCtx: ExtensionTurnContext = {
@@ -85,9 +85,9 @@ describe("turn projection hooks", () => {
         ),
       ])
 
-      const result = yield* compiled.resolveTurnProjection.pipe(
-        provideExtensionHookContext(hookCtx),
-      )
+      const result = yield* compiled
+        .resolveTurnProjection(hookCtx.projection)
+        .pipe(Effect.provideService(CurrentExtensionHostContext, hookCtx.host))
       expect(result.promptSections).toEqual([
         { id: "shared", content: "project", priority: 50 },
         { id: "project-only", content: "project-only", priority: 60 },
@@ -112,9 +112,9 @@ describe("turn projection hooks", () => {
         ),
       ])
 
-      const result = yield* compiled.resolveTurnProjection.pipe(
-        provideExtensionHookContext(hookCtx),
-      )
+      const result = yield* compiled
+        .resolveTurnProjection(hookCtx.projection)
+        .pipe(Effect.provideService(CurrentExtensionHostContext, hookCtx.host))
       expect(result.promptSections).toEqual([{ id: "good", content: "still-runs", priority: 50 }])
       expect(result.policyFragments).toEqual([{ include: ["still-runs"] }])
     }))
@@ -130,9 +130,9 @@ describe("turn projection hooks", () => {
         ),
       ])
 
-      const result = yield* compiled.resolveTurnProjection.pipe(
-        provideExtensionHookContext(hookCtx),
-      )
+      const result = yield* compiled
+        .resolveTurnProjection(hookCtx.projection)
+        .pipe(Effect.provideService(CurrentExtensionHostContext, hookCtx.host))
       expect(result.promptSections).toEqual([{ id: "good", content: "after-defect", priority: 50 }])
       expect(result.policyFragments).toEqual([])
     }))
@@ -141,9 +141,9 @@ describe("turn projection hooks", () => {
     Effect.gen(function* () {
       const compiled = compile([hookExt("empty-hook", "builtin", () => Effect.succeed({}))])
 
-      const result = yield* compiled.resolveTurnProjection.pipe(
-        provideExtensionHookContext(hookCtx),
-      )
+      const result = yield* compiled
+        .resolveTurnProjection(hookCtx.projection)
+        .pipe(Effect.provideService(CurrentExtensionHostContext, hookCtx.host))
       expect(result.promptSections).toEqual([])
       expect(result.policyFragments).toEqual([])
     }))

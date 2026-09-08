@@ -20,7 +20,7 @@ import {
   loadRuntimeProfileDeclarations,
   type RuntimeProfileInputs,
 } from "../../src/runtime/profile"
-import { provideExtensionHookContext } from "../../src/runtime/extensions/extension-hook-context"
+import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { CronRuntime } from "../../src/runtime/extensions/resource-host/schedule-engine"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
@@ -407,10 +407,12 @@ describe("live Profile", () => {
               }),
             }
 
-            const result = yield* runtime.registryService.extensionHooks.resolveTurnProjection.pipe(
-              provideExtensionHookContext(hookCtx),
-              runtime.publication.run,
-            )
+            const result = yield* runtime.registryService.extensionHooks
+              .resolveTurnProjection(hookCtx.projection)
+              .pipe(
+                Effect.provideService(CurrentExtensionHostContext, hookCtx.host),
+                runtime.publication.run,
+              )
             expect(result.promptSections).toEqual([
               { id: "pure-probe", priority: 1, content: "pure" },
             ])
@@ -560,9 +562,13 @@ describe("live Profile", () => {
             home: "/tmp",
           }),
         }
-        const result = yield* registryService.extensionHooks.resolveTurnProjection
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(provideExtensionHookContext(hookCtx), Effect.provide(layer))
+        const result = yield* registryService.extensionHooks
+          .resolveTurnProjection(hookCtx.projection)
+          .pipe(
+            Effect.provideService(CurrentExtensionHostContext, hookCtx.host),
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+            Effect.provide(layer),
+          )
 
         expect(result.promptSections).toContainEqual({
           id: "rp-dynamic-section",

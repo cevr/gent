@@ -22,7 +22,6 @@ import { Message } from "../../domain/message.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { ConfigService } from "../config-service.js"
 import { GentPlatform } from "../gent-platform.js"
-import { provideHookHostContext } from "../extensions/extension-hook-context.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { WideEvent } from "../wide-event-boundary.js"
 import { AgentLoopError, type QueuedTurnItem, type RunningState } from "./agent-loop.state.js"
@@ -65,7 +64,6 @@ import {
 } from "./turn-source.js"
 import type { ResolvedToolCapability } from "./tool-runner.js"
 import { executeToolCalls, ToolInteractionPending } from "./turn-tool-execution.js"
-import { CurrentExtensionHostContext } from "./current-extension-host-context.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
 import { ToolBindingReplayError } from "./tool-binding-replay.js"
@@ -607,7 +605,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       currentAgent: AgentNameType
     }) {
       const extensionRegistry = yield* ExtensionRegistry
-      const hostCtx = yield* CurrentExtensionHostContext
       const existingMessage = yield* messageStorage.getMessage(params.messageId)
       if (!Predicate.isUndefined(existingMessage?.turnDurationMs)) {
         const envelope = yield* findPersistedEvent({
@@ -646,16 +643,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       yield* Effect.logDebug("finalize.turn-after.start")
       const metrics = yield* Ref.get(scope.turnMetricsRef)
-      yield* extensionRegistry.extensionHooks
-        .emitTurnAfter({
-          sessionId: scope.sessionId,
-          branchId: scope.branchId,
-          durationMs: Number(turnDurationMs),
-          agentName: params.currentAgent,
-          interrupted: params.turnInterrupted,
-          usage: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
-        })
-        .pipe(provideHookHostContext(hostCtx))
+      yield* extensionRegistry.extensionHooks.emitTurnAfter({
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
+        durationMs: Number(turnDurationMs),
+        agentName: params.currentAgent,
+        interrupted: params.turnInterrupted,
+        usage: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
+      })
       yield* Effect.logDebug("finalize.turn-after.done")
 
       yield* Effect.logInfo("turn.completed").pipe(

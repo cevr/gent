@@ -16,7 +16,8 @@ import {
   CapabilityError as CapabilityErrorClass,
   CapabilityNotFoundError as CapabilityNotFoundErrorClass,
 } from "../../domain/capability.js"
-import { provideExtensionServices } from "../../domain/extension-services.js"
+import { provideExtensionLeaf, sealErasedEffect } from "./extension-effect-membrane.js"
+import type { CurrentExtensionHostContext } from "../agent/current-extension-host-context.js"
 import {
   SCOPE_PRECEDENCE,
   type ExtensionStatusInfo,
@@ -36,8 +37,6 @@ import {
   type ToolCapability,
 } from "../../domain/capability/tool.js"
 import { compileExtensionHooks, type CompiledExtensionHooks } from "./extension-hooks.js"
-import { sealErasedEffect } from "./extension-effect-membrane.js"
-import { CurrentExtensionHostContext } from "../agent/current-extension-host-context.js"
 
 // SlashCommand — public-facing slash entry. Built from `requests:` bucket
 // winners that carry a `slash:` presentation block. The slash block is the
@@ -260,11 +259,12 @@ const compileRpcRegistry = (
     if (Option.isNone(entry) || entry.value.kind !== "rpc") {
       return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
     }
-    const hostCtx = yield* CurrentExtensionHostContext
-    return yield* provideExtensionServices(
-      { ...hostCtx, extensionId },
-      runExtensionCapability(extensionId, capabilityId, entry.value.capability, input),
-    )
+    return yield* runExtensionCapability(
+      extensionId,
+      capabilityId,
+      entry.value.capability,
+      input,
+    ).pipe(provideExtensionLeaf({ extensionId }))
   }),
 })
 

@@ -15,28 +15,11 @@ import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { provideCurrentCapabilityContext } from "../../src/runtime/extensions/extension-capability-context"
-import {
-  provideExtensionHookContext,
-  provideHookHostContext,
-} from "../../src/runtime/extensions/extension-hook-context"
+import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
 import { AgentName } from "@gent/core-internal/domain/agent"
 import { ExtensionContext } from "../../src/domain/extension-services.js"
 
 const stubHostCtx = testExtensionHostContext()
-
-const stubProjectionCtx = {
-  sessionId: SessionId.make("test-session"),
-  branchId: BranchId.make("test-branch"),
-  cwd: "/tmp",
-  home: "/tmp",
-  turn: {
-    sessionId: SessionId.make("test-session"),
-    branchId: BranchId.make("test-branch"),
-    agent: getBuiltinAgent("cowork")!,
-    allTools: [],
-    agentName: AgentName.make("cowork"),
-  },
-}
 
 const makeExt = (
   id: string,
@@ -84,7 +67,7 @@ describe("runtime slots", () => {
         agent: getBuiltinAgent("cowork")!,
       } satisfies SystemPromptInput)
       .pipe(
-        provideExtensionHookContext({ projection: stubProjectionCtx, host: stubHostCtx }),
+        Effect.provideService(CurrentExtensionHostContext, stubHostCtx),
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("base[builtin][project]"))),
       )
   })
@@ -109,7 +92,7 @@ describe("runtime slots", () => {
         agent: getBuiltinAgent("cowork")!,
       } satisfies SystemPromptInput)
       .pipe(
-        provideExtensionHookContext({ projection: stubProjectionCtx, host: stubHostCtx }),
+        Effect.provideService(CurrentExtensionHostContext, stubHostCtx),
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("base[builtin-hook]"))),
       )
   })
@@ -136,7 +119,7 @@ describe("runtime slots", () => {
           basePrompt: "base",
           agent: getBuiltinAgent("cowork")!,
         })
-        .pipe(provideExtensionHookContext({ projection: stubProjectionCtx, host: stubHostCtx }))
+        .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx))
 
       expect(result).toBe("readonly")
       expect(yield* Ref.get(sawProcessAuthority)).toBe(true)
@@ -165,7 +148,7 @@ describe("runtime slots", () => {
         agentName: AgentName.make("cowork"),
       })
       .pipe(
-        provideHookHostContext(stubHostCtx),
+        Effect.provideService(CurrentExtensionHostContext, stubHostCtx),
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("base-builtin-explicit"))),
       )
   })
@@ -206,7 +189,7 @@ describe("runtime slots", () => {
         agentName: AgentName.make("cowork"),
       } satisfies ToolCallInput)
       .pipe(
-        provideHookHostContext(stubHostCtx),
+        Effect.provideService(CurrentExtensionHostContext, stubHostCtx),
         Effect.tap((result) =>
           Effect.sync(() =>
             expect(result).toEqual({
@@ -261,7 +244,7 @@ describe("runtime slots", () => {
             interrupted: false,
             usage: { inputTokens: 0, outputTokens: 0 },
           } satisfies TurnAfterInput)
-          .pipe(provideHookHostContext(stubHostCtx)),
+          .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx)),
       )
       expect(Exit.isSuccess(exit)).toBe(true)
       expect(calls).toEqual(["first", "second", "third"])
@@ -293,7 +276,7 @@ describe("runtime slots", () => {
           interrupted: false,
           usage: { inputTokens: 0, outputTokens: 0 },
         } satisfies TurnAfterInput)
-        .pipe(provideHookHostContext(stubHostCtx))
+        .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx))
 
       expect(yield* Ref.get(sawProcessAuthority)).toBe(true)
     }))
@@ -329,7 +312,7 @@ describe("runtime slots", () => {
           usage: { inputTokens: 0, outputTokens: 0 },
         } satisfies TurnAfterInput)
         .pipe(
-          provideHookHostContext(hostCtx),
+          Effect.provideService(CurrentExtensionHostContext, hostCtx),
           provideCurrentCapabilityContext(Context.make(HookCounter, counter)),
         )
 
