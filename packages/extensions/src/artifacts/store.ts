@@ -1,5 +1,11 @@
 import { Clock, Context, Effect, Layer, Option, Crypto, Ref } from "effect"
-import { type BranchId, ArtifactId, type SessionId } from "@gent/core/extensions/api"
+import {
+  type BranchId,
+  ArtifactId,
+  type SessionId,
+  ExtensionContext,
+  type ExtensionServiceError,
+} from "@gent/core/extensions/api"
 import type { Artifact, ContentPatch, ReadQuery } from "../artifacts-protocol.js"
 
 interface ArtifactsState {
@@ -40,13 +46,17 @@ interface ArtifactsWriteService extends ArtifactsReadService {
     sessionId: SessionId,
     branchId: BranchId,
     input: ArtifactSaveInput,
-  ) => Effect.Effect<Artifact>
+  ) => Effect.Effect<Artifact, ExtensionServiceError, ExtensionContext>
   readonly update: (
     sessionId: SessionId,
     branchId: BranchId,
     input: ArtifactUpdateInput,
-  ) => Effect.Effect<Option.Option<Artifact>>
-  readonly clear: (sessionId: SessionId, branchId: BranchId, id: ArtifactId) => Effect.Effect<void>
+  ) => Effect.Effect<Option.Option<Artifact>, ExtensionServiceError, ExtensionContext>
+  readonly clear: (
+    sessionId: SessionId,
+    branchId: BranchId,
+    id: ArtifactId,
+  ) => Effect.Effect<void, ExtensionServiceError, ExtensionContext>
 }
 
 export class ArtifactsRead extends Context.Service<ArtifactsRead, ArtifactsReadService>()(
@@ -188,33 +198,38 @@ export const ArtifactsStoreLive: Layer.Layer<ArtifactsRead | ArtifactsWrite, nev
           Ref.get(ref).pipe(
             Effect.map((state) => listArtifacts(sessionItems(state, sessionId), branchId)),
           ),
-        save: (sessionId, branchId, input) =>
-          Effect.gen(function* () {
-            const now = yield* Clock.currentTimeMillis
-            const id = ArtifactId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie))
-            return yield* Ref.modify(ref, (state) => {
-              const result = saveArtifact(sessionItems(state, sessionId), branchId, input, now, id)
-              return [result.artifact, setSessionItems(state, sessionId, result.items)]
-            })
-          }),
-        update: (sessionId, branchId, input) =>
-          Effect.gen(function* () {
-            const now = yield* Clock.currentTimeMillis
-            return yield* Ref.modify(ref, (state) => {
-              const result = updateArtifact(sessionItems(state, sessionId), branchId, input, now)
-              return [result.artifact, setSessionItems(state, sessionId, result.items)]
-            })
-          }),
-        clear: (sessionId, branchId, id) =>
-          Ref.update(ref, (state) =>
-            setSessionItems(
-              state,
-              sessionId,
-              sessionItems(state, sessionId).filter(
-                (artifact) => artifact.id !== id || artifact.branchId !== branchId,
-              ),
-            ),
-          ),
+        save: Effect.fn("ArtifactsWrite.save")(function* (sessionId, branchId, input) {
+          const ctx = yield* ExtensionContext
+          const now = yield* Clock.currentTimeMillis
+          const id = ArtifactId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie))
+          const artifact = yield* Ref.modify(ref, (state) => {
+            const result = saveArtifact(sessionItems(state, sessionId), branchId, input, now, id)
+            return [result.artifact, setSessionItems(state, sessionId, result.items)]
+          })
+          yield* ctx.State.changed({ sessionId, branchId })
+          return artifact
+        }),
+        update: Effect.fn("ArtifactsWrite.update")(function* (sessionId, branchId, input) {
+          const ctx = yield* ExtensionContext
+          const now = yield* Clock.currentTimeMillis
+          const artifact = yield* Ref.modify(ref, (state) => {
+            const result = updateArtifact(sessionItems(state, sessionId), branchId, input, now)
+            return [result.artifact, setSessionItems(state, sessionId, result.items)]
+          })
+          if (Option.isSome(artifact)) yield* ctx.State.changed({ sessionId, branchId })
+          return artifact
+        }),
+        clear: Effect.fn("ArtifactsWrite.clear")(function* (sessionId, branchId, id) {
+          const ctx = yield* ExtensionContext
+          const changed = yield* Ref.modify(ref, (state) => {
+            const current = sessionItems(state, sessionId)
+            const next = current.filter(
+              (artifact) => artifact.id !== id || artifact.branchId !== branchId,
+            )
+            return [next.length !== current.length, setSessionItems(state, sessionId, next)]
+          })
+          if (changed) yield* ctx.State.changed({ sessionId, branchId })
+        }),
       } satisfies ArtifactsWriteService
       const read = {
         read: write.read,

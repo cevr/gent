@@ -6,10 +6,15 @@ import {
   ExtensionId,
   BranchId,
   request,
+  CapabilityError,
+  type ExtensionServiceError,
 } from "@gent/core/extensions/api"
 import { ArtifactsRead, ArtifactsWrite } from "./artifacts/store.js"
 
 export const ARTIFACTS_EXTENSION_ID = ExtensionId.make("@gent/artifacts")
+
+const artifactRequestError = (capabilityId: string) => (cause: ExtensionServiceError) =>
+  new CapabilityError({ extensionId: ARTIFACTS_EXTENSION_ID, capabilityId, reason: cause.message })
 
 // ── Artifact schema ──
 
@@ -82,11 +87,14 @@ export const ArtifactRpc = defineRequests(ARTIFACTS_EXTENSION_ID, {
       branchId: Schema.optional(BranchId),
     }),
     output: Artifact,
-    execute: Effect.fn("ArtifactRpc.Save")(function* (input) {
-      const ctx = yield* ExtensionContext
-      const artifacts = yield* ArtifactsWrite
-      return yield* artifacts.save(ctx.sessionId, ctx.branchId, input)
-    }),
+    execute: Effect.fn("ArtifactRpc.Save")(
+      function* (input) {
+        const ctx = yield* ExtensionContext
+        const artifacts = yield* ArtifactsWrite
+        return yield* artifacts.save(ctx.sessionId, ctx.branchId, input)
+      },
+      Effect.mapError(artifactRequestError("artifact.save")),
+    ),
   }),
   Read: request({
     id: "artifact.read",
@@ -108,21 +116,27 @@ export const ArtifactRpc = defineRequests(ARTIFACTS_EXTENSION_ID, {
       label: Schema.optional(Schema.String),
     }),
     output: Schema.NullOr(Artifact),
-    execute: Effect.fn("ArtifactRpc.Update")(function* (input) {
-      const ctx = yield* ExtensionContext
-      const artifacts = yield* ArtifactsWrite
-      return Option.getOrNull(yield* artifacts.update(ctx.sessionId, ctx.branchId, input))
-    }),
+    execute: Effect.fn("ArtifactRpc.Update")(
+      function* (input) {
+        const ctx = yield* ExtensionContext
+        const artifacts = yield* ArtifactsWrite
+        return Option.getOrNull(yield* artifacts.update(ctx.sessionId, ctx.branchId, input))
+      },
+      Effect.mapError(artifactRequestError("artifact.update")),
+    ),
   }),
   Clear: request({
     id: "artifact.clear",
     input: Schema.Struct({ id: ArtifactId }),
     output: Schema.Void,
-    execute: Effect.fn("ArtifactRpc.Clear")(function* ({ id }) {
-      const ctx = yield* ExtensionContext
-      const artifacts = yield* ArtifactsWrite
-      yield* artifacts.clear(ctx.sessionId, ctx.branchId, id)
-    }),
+    execute: Effect.fn("ArtifactRpc.Clear")(
+      function* ({ id }) {
+        const ctx = yield* ExtensionContext
+        const artifacts = yield* ArtifactsWrite
+        yield* artifacts.clear(ctx.sessionId, ctx.branchId, id)
+      },
+      Effect.mapError(artifactRequestError("artifact.clear")),
+    ),
   }),
   List: request({
     id: "artifact.list",

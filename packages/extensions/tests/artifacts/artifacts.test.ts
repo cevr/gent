@@ -1,13 +1,13 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Effect, Fiber, Schema, Stream } from "effect"
 import { ref, type CapabilityRef } from "@gent/core/extensions/api"
 import { ArtifactId, BranchId, type SessionId } from "@gent/core-internal/domain/ids"
-import { textStep } from "@gent/core-internal/debug/provider"
+import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { ArtifactsExtension } from "../../src/artifacts/index.js"
 import { ArtifactRpc } from "../../src/artifacts-protocol.js"
-import { e2ePreset } from "../helpers/test-preset.js"
+import { e2ePreset, shippedPreset } from "../helpers/test-preset.js"
 import type { GentClientRpcError } from "@gent/core-internal/server/rpcs"
 
 const forgedBranchId = BranchId.make("art-test-branch")
@@ -113,6 +113,43 @@ const withArtifactsClient = <A>(
   )
 
 describe("Artifacts extension", () => {
+  it.scopedLive(
+    "notifies clients when a cell saves, updates, and clears an artifact",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", {
+            code: 'var artifact = await tools.call("artifact_save", {label:"Test", sourceTool:"test", content:"before"}); await tools.call("artifact_update", {id:artifact.id, find:"before", replace:"after"}); await tools.call("artifact_clear", {id:artifact.id})',
+          }),
+          textStep("cleared"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          providerLayer,
+        })
+        const changes = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter(
+            ({ event }) =>
+              event._tag === "ExtensionStateChanged" && event.extensionId === "@gent/artifacts",
+          ),
+          Stream.take(3),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "Exercise artifact changes" })
+        expect(Array.from(yield* Fiber.join(changes))).toHaveLength(3)
+        const list = yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ListRef.extensionId,
+          capabilityId: ListRef.capabilityId,
+          input: {},
+        })
+        expect(list).toEqual([])
+      }).pipe(Effect.timeout("8 seconds")),
+    10_000,
+  )
+
   it.live("Save creates an artifact and returns it", () =>
     withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
