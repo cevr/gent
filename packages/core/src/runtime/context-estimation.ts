@@ -53,23 +53,3 @@ export const MODEL_CONTEXT_WINDOWS: ModelContextWindows = {
   "openai/gpt-5.6-sol": 1_050_000,
   "openai/gpt-5.6-terra": 1_050_000,
 }
-
-const DEFAULT_CONTEXT_WINDOW = 200_000
-
-export const getContextWindow = (modelId: string): number =>
-  MODEL_CONTEXT_WINDOWS[modelId] ?? DEFAULT_CONTEXT_WINDOW
-
-// Estimate context usage percentage including system prompt overhead
-// System prompt + tool definitions: ~4000 tokens fixed overhead
-
-const SYSTEM_OVERHEAD_TOKENS = 4_000
-
-export const estimateContextPercent = (
-  messages: ReadonlyArray<Message>,
-  modelId: string,
-): number => {
-  const messageTokens = estimateTokens(messages)
-  const totalTokens = messageTokens + SYSTEM_OVERHEAD_TOKENS
-  const contextWindow = getContextWindow(modelId)
-  return Math.round((totalTokens / contextWindow) * 100)
-}
