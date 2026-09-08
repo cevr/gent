@@ -95,3 +95,92 @@ export function formatToolInput(
 
   return summary
 }
+
+// ── RLM activity summary ──
+// The collapsed transcript group describes what the cell did, not that a tool ran.
+
+export type ActivityOutcome = "succeeded" | "failed" | "incomplete" | "running"
+
+export interface ActivityOperation {
+  readonly tool: string
+  readonly outcome: ActivityOutcome
+  /** Argument summary for live calls; empty for saved receipts. */
+  readonly detail: string
+}
+
+export interface ActivityCall {
+  readonly toolName: string
+  readonly status: "running" | "completed" | "error"
+  readonly operations: ReadonlyArray<ActivityOperation>
+}
+
+const plural = (count: number, singular: string, pluralForm = `${singular}s`) => {
+  if (count === 1) return `${count} ${singular}`
+  return `${count} ${pluralForm}`
+}
+
+const isChildOperation = (operation: ActivityOperation) => operation.tool === "delegate"
+
+/** Header for a group of calls. Cell-only turns count cells, ops, children, and failures. */
+export function formatActivityHeader(calls: ReadonlyArray<ActivityCall>): string {
+  if (calls.length === 0) return ""
+  if (calls.some((call) => call.toolName !== "cell")) {
+    const names = new Map<string, number>()
+    for (const call of calls) names.set(call.toolName, (names.get(call.toolName) ?? 0) + 1)
+    const counts = Array.from(names, ([name, count]) => `${count} ${name}`).join(" · ")
+    return `${plural(calls.length, "tool call")} · ${counts}`
+  }
+  const operations = calls.flatMap((call) => call.operations)
+  const children = operations.filter(isChildOperation).length
+  const failed =
+    operations.filter((operation) => operation.outcome === "failed").length +
+    calls.filter((call) => call.status === "error").length
+  const parts = [plural(calls.length, "cell")]
+  if (operations.length > 0) parts.push(plural(operations.length, "op"))
+  if (children > 0) parts.push(plural(children, "child", "children"))
+  if (failed > 0) parts.push(`${failed} failed`)
+  return parts.join(" · ")
+}
+
+const truncateLabel = (text: string, maxLength: number) => {
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`
+}
+
+/** One-line label for a cell row: its operations, else its error, else its result, else its code. */
+export function formatCellRowLabel(
+  call: ActivityCall,
+  fallback: { readonly code: string; readonly display: string; readonly error: string },
+  maxLength = 72,
+): string {
+  if (call.status === "error" && fallback.error.length > 0) {
+    return truncateLabel(fallback.error.split("\n")[0] ?? "", maxLength)
+  }
+  if (call.operations.length > 0) {
+    const labels: string[] = []
+    let previous = ""
+    let repeats = 0
+    const flush = () => {
+      if (previous.length === 0) return
+      if (repeats > 1) labels.push(`${previous} ×${repeats}`)
+      else labels.push(previous)
+    }
+    for (const operation of call.operations) {
+      let label = operation.tool
+      if (operation.detail.length > 0) label = `${operation.tool} ${operation.detail}`
+      if (operation.outcome === "failed") label = `✕ ${label}`
+      if (label === previous) {
+        repeats += 1
+        continue
+      }
+      flush()
+      previous = label
+      repeats = 1
+    }
+    flush()
+    return truncateLabel(labels.join(" · "), maxLength)
+  }
+  const display = fallback.display.split("\n").find((line) => line.trim().length > 0) ?? ""
+  if (display.length > 0) return truncateLabel(`→ ${display.trim()}`, maxLength)
+  return truncateLabel(fallback.code.split("\n")[0] ?? "", maxLength)
+}

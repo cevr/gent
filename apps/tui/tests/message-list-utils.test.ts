@@ -5,7 +5,10 @@ import {
   truncatePath,
   getSpinnerFrames,
   formatToolInput,
+  formatActivityHeader,
+  formatCellRowLabel,
   TOOL_SPINNERS,
+  type ActivityCall,
 } from "../src/components/message-list-utils.js"
 
 const absent = Option.getOrUndefined(Option.none())
@@ -197,5 +200,81 @@ describe("formatToolInput", () => {
 
   test("read supports file_path field", () => {
     expect(formatToolInput("read", { file_path: "/foo/bar.ts" })).toBe("/foo/bar.ts")
+  })
+})
+
+const op = (
+  tool: string,
+  detail = "",
+  outcome: ActivityCall["operations"][number]["outcome"] = "succeeded",
+) => ({
+  tool,
+  outcome,
+  detail,
+})
+const cell = (
+  operations: ActivityCall["operations"],
+  status: ActivityCall["status"] = "completed",
+): ActivityCall => ({ toolName: "cell", status, operations })
+
+describe("formatActivityHeader", () => {
+  test("a cell-only turn counts cells, ops, children, and failures instead of tool calls", () => {
+    expect(formatActivityHeader([cell([op("bash", "pwd"), op("read", "a.ts")])])).toBe(
+      "1 cell · 2 ops",
+    )
+    expect(
+      formatActivityHeader([
+        cell([op("delegate", "compute"), op("delegate", "verify")]),
+        cell([op("write", "b.ts", "failed")]),
+        cell([], "error"),
+      ]),
+    ).toBe("3 cells · 3 ops · 2 children · 2 failed")
+    expect(formatActivityHeader([cell([])])).toBe("1 cell")
+  })
+
+  test("a turn with direct tools keeps the tool call counts", () => {
+    expect(
+      formatActivityHeader([
+        { toolName: "read", status: "completed", operations: [] },
+        { toolName: "read", status: "completed", operations: [] },
+        cell([op("bash")]),
+      ]),
+    ).toBe("3 tool calls · 2 read · 1 cell")
+  })
+})
+
+describe("formatCellRowLabel", () => {
+  const fallback = { code: "const x = await tools.call('read', {})", display: "", error: "" }
+
+  test("names the operations a cell ran, collapsing repeats and marking failures", () => {
+    const label = formatCellRowLabel(
+      cell([
+        op("bash", "pwd"),
+        op("read", "a.ts"),
+        op("read", "a.ts"),
+        op("write", "b.ts", "failed"),
+      ]),
+      fallback,
+    )
+    expect(label).toBe("bash pwd · read a.ts ×2 · ✕ write b.ts")
+  })
+
+  test("a cell without operations shows its result, else its first code line", () => {
+    expect(formatCellRowLabel(cell([]), { ...fallback, display: "\n[ 1, 2 ]\nmore" })).toBe(
+      "→ [ 1, 2 ]",
+    )
+    expect(formatCellRowLabel(cell([]), fallback)).toBe("const x = await tools.call('read', {})")
+  })
+
+  test("a failed cell leads with its error and long labels are cut with an ellipsis", () => {
+    expect(
+      formatCellRowLabel(cell([op("bash")], "error"), {
+        ...fallback,
+        error: "TypeError: boom\n  at cell",
+      }),
+    ).toBe("TypeError: boom")
+    const long = formatCellRowLabel(cell([op("bash", "x".repeat(100))]), fallback, 20)
+    expect(long.length).toBe(20)
+    expect(long.endsWith("…")).toBe(true)
   })
 })

@@ -316,11 +316,9 @@ describe("FX transcript treatment", () => {
           "cell renderer",
         ),
       )
-      // The compact tree keeps inner effects countable.
-      expect(frame).toContain("1 tool call · 1 cell")
-      expect(frame).toContain(
-        "└ cell const note = await tools.call('read', {path: 'a.txt'}) · 2 ops · 1 failed",
-      )
+      // The compact tree says what the cell did: ops counted in the header, named in the row.
+      expect(frame).toContain("1 cell · 2 ops · 1 failed")
+      expect(frame).toContain("└ cell read · ✕ write")
       // The detail frame shows each receipt, the display value, and bindings.
       expect(frame).toContain("✓ read 12 lines")
       expect(frame).toContain("✕ write denied")

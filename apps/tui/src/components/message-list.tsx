@@ -13,30 +13,69 @@ import type { ImageInfo } from "../client"
 import type { ChildSessionEntry } from "../hooks/use-child-sessions"
 import { replaceMermaidBlocks } from "../utils/mermaid"
 import { decodeToolOutputOption, getString } from "../utils/parse-tool-output"
+import { toolArgSummary } from "../utils/format-tool"
+import {
+  type ActivityCall,
+  type ActivityOperation,
+  formatActivityHeader,
+  formatCellRowLabel,
+} from "./message-list-utils"
 export type { ToolCall }
 
-const CellOperationOutcomes = Schema.Struct({
+const CellOperationReceipts = Schema.Struct({
   operations: Schema.optional(
     Schema.Array(
-      Schema.Struct({ outcome: Schema.Literals(["succeeded", "failed", "incomplete"]) }),
+      Schema.Struct({
+        tool: Schema.String,
+        outcome: Schema.Literals(["succeeded", "failed", "incomplete"]),
+      }),
     ),
   ),
 })
 
-/** Outcomes of calls a cell admitted: live nested calls first, saved receipts on reload. */
-const cellOperationOutcomes = (call: ToolCall): ReadonlyArray<string> => {
+const CellFailure = Schema.Struct({
+  display: Schema.optional(Schema.String),
+  message: Schema.optional(Schema.String),
+})
+
+const liveOutcome = (status: ToolCall["status"]): ActivityOperation["outcome"] => {
+  if (status === "completed") return "succeeded"
+  if (status === "error") return "failed"
+  return "running"
+}
+
+/** Calls a cell admitted: live nested calls carry arguments; saved receipts carry tool and outcome. */
+const cellOperations = (call: ToolCall): ReadonlyArray<ActivityOperation> => {
   const live = Option.fromNullishOr(call.operations)
   if (Option.isSome(live) && live.value.length > 0) {
-    return live.value.map((operation) => {
-      if (operation.status === "completed") return "succeeded"
-      return operation.status
-    })
+    return live.value.map((operation) => ({
+      tool: operation.toolName,
+      outcome: liveOutcome(operation.status),
+      detail: toolArgSummary(operation.toolName, operation.input),
+    }))
   }
-  return Option.match(decodeToolOutputOption(CellOperationOutcomes, call.output), {
+  return Option.match(decodeToolOutputOption(CellOperationReceipts, call.output), {
     onNone: () => [],
-    onSome: (value) => (value.operations ?? []).map((operation) => operation.outcome),
+    onSome: (value) =>
+      (value.operations ?? []).map((operation) => ({
+        tool: operation.tool,
+        outcome: operation.outcome,
+        detail: "",
+      })),
   })
 }
+
+const toActivityCall = (call: ToolCall): ActivityCall => ({
+  toolName: call.toolName,
+  status: call.status,
+  operations: cellOperations(call),
+})
+
+const cellResultText = (call: ToolCall) =>
+  Option.match(decodeToolOutputOption(CellFailure, call.output), {
+    onNone: () => ({ display: "", error: "" }),
+    onSome: (value) => ({ display: value.display ?? "", error: value.message ?? "" }),
+  })
 
 export interface MessageMetadataInfo {
   customType?: string
@@ -352,15 +391,7 @@ function ToolCallGroup(props: {
     if (failed()) return theme.error
     return theme.textMuted
   }
-  const callLabel = () => {
-    if (props.calls.length === 1) return "call"
-    return "calls"
-  }
-  const counts = createMemo(() => {
-    const names = new Map<string, number>()
-    for (const call of props.calls) names.set(call.toolName, (names.get(call.toolName) ?? 0) + 1)
-    return Array.from(names, ([name, count]) => `${count} ${name}`).join(" · ")
-  })
+  const header = createMemo(() => formatActivityHeader(props.calls.map(toActivityCall)))
   const visibleCalls = () => {
     if (props.expanded || props.fullDetail) return props.calls
     return props.calls.filter((call) => call.status === "error")
@@ -370,7 +401,7 @@ function ToolCallGroup(props: {
       <box flexDirection="column">
         <Show when={!props.fullDetail}>
           <text style={{ fg: groupColor() }}>
-            {symbol()} {props.calls.length} tool {callLabel()} · {counts()}
+            {symbol()} {header()}
           </text>
         </Show>
         <Show when={visibleCalls().length > 0}>
@@ -389,18 +420,17 @@ function ToolCallGroup(props: {
                 if (call.status === "running") return " · running"
                 return ""
               }
-              // Cell-admitted operations stay visible in the compact tree.
-              const operations = () => {
-                const receipts = cellOperationOutcomes(call)
-                if (receipts.length === 0) return ""
-                const failed = receipts.filter((outcome) => outcome !== "succeeded").length
-                let text = ` · ${receipts.length} ops`
-                if (failed > 0) text = `${text} · ${failed} failed`
-                return text
-              }
+              // A cell row names what the cell did; other tools show their leading argument.
               const label = () => {
+                if (call.toolName === "cell") {
+                  const result = cellResultText(call)
+                  return formatCellRowLabel(toActivityCall(call), {
+                    code: getString(call.input, "code"),
+                    display: result.display,
+                    error: result.error,
+                  })
+                }
                 for (const key of [
-                  "code",
                   "path",
                   "url",
                   "command",
@@ -425,7 +455,6 @@ function ToolCallGroup(props: {
                   fallback={
                     <text style={{ fg: color() }}>
                       {connector()} {call.toolName} {label()}
-                      {operations()}
                       {status()}
                     </text>
                   }
