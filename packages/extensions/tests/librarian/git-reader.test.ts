@@ -5,6 +5,7 @@ import { ExtensionContext, ExtensionId } from "@gent/core/extensions/api"
 import { GitReader, GitReaderError } from "../../src/librarian/index.js"
 import { $ } from "bun"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures"
 
 const StubExtensionContext = Layer.succeed(
   ExtensionContext,
@@ -15,7 +16,7 @@ const StubExtensionContext = Layer.succeed(
 // ---------------------------------------------------------------------------
 const makeFixture = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
-  const fixtureDir = yield* fs.makeTempDirectoryScoped()
+  const fixtureDir = yield* makeTempDirectoryScoped("gent-git-reader-")
   yield* fs.makeDirectory(`${fixtureDir}/src/utils`, { recursive: true })
   yield* Effect.promise(() => $`git -C ${fixtureDir} init`.quiet())
   yield* Effect.promise(() => $`git -C ${fixtureDir} config user.email "test@test.com"`.quiet())
