@@ -20,6 +20,7 @@ import {
 } from "../client-facets.js"
 import { ClientTransport } from "../client-transport"
 import { ClientShell } from "../client-services"
+import { ChromePanel } from "../../components/chrome-panel"
 import { useTheme } from "../../theme/index"
 import { useTerminalDimensions } from "../../terminal-dimensions"
 import { useScopedKeyboard } from "../../keyboard/context"
@@ -53,16 +54,23 @@ export const makeSideQuestionPane = (
   cast: <A, E>(effect: Effect.Effect<A, E, never>) => void,
 ): SideQuestionPaneController => {
   const [state, setState] = createSignal<SideQuestionPaneState>(emptyPane)
+  // Each reset starts a new generation; a reply from an earlier one is discarded.
+  let generation = 0
   return {
     state,
-    reset: () => setState(emptyPane),
+    reset: () => {
+      generation += 1
+      setState(emptyPane)
+    },
     ask: (raw) => {
       const question = raw.trim()
+      const asked = generation
       if (question.length === 0 || Option.isSome(state().pending)) return
       setState((current) => ({ ...current, pending: Option.some(question), error: Option.none() }))
       cast(
         ask({ question, previous: state().turns }).pipe(
           Effect.map(({ answer }) => {
+            if (asked !== generation) return
             setState((current) => ({
               turns: [...current.turns, { question, answer }],
               pending: Option.none(),
@@ -71,6 +79,7 @@ export const makeSideQuestionPane = (
           }),
           Effect.catch((error) =>
             Effect.sync(() => {
+              if (asked !== generation) return
               setState((current) => ({
                 ...current,
                 pending: Option.none(),
@@ -108,30 +117,25 @@ export function SideQuestionPane(props: OverlayProps & { controller: SideQuestio
     props.controller.ask(question)
   }
 
+  const width = () => Math.min(dimensions().width - 4, 100)
+  const height = () => Math.max(8, dimensions().height - 4)
+  const left = () => Math.max(0, Math.floor((dimensions().width - width()) / 2))
+
   return (
     <Show when={props.open}>
-      <box
-        position="absolute"
-        top={0}
-        left={0}
-        width={dimensions().width}
-        height={dimensions().height}
-        backgroundColor={theme.background}
-        flexDirection="column"
+      <ChromePanel.Root
+        title="btw · side question"
+        width={width()}
+        height={height()}
+        left={left()}
+        top={2}
       >
-        <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-          <text>
-            <span style={{ fg: theme.primary, bold: true }}>
-              btw · side question (not added to the session) · esc closes
-            </span>
-          </text>
-        </box>
-        <scrollbox flexGrow={1} paddingLeft={1} paddingRight={1} stickyScroll={true}>
+        <ChromePanel.Body>
           <For each={state().turns}>
             {(turn) => (
-              <box flexDirection="column" marginTop={1}>
+              <box flexDirection="column" marginBottom={1}>
                 <text>
-                  <span style={{ fg: theme.text, bold: true }}>{turn.question}</span>
+                  <span style={{ fg: theme.primary, bold: true }}>{turn.question}</span>
                 </text>
                 <text style={{ fg: theme.text }}>{turn.answer}</text>
               </box>
@@ -139,9 +143,9 @@ export function SideQuestionPane(props: OverlayProps & { controller: SideQuestio
           </For>
           <Show when={Option.getOrUndefined(state().pending)}>
             {(question) => (
-              <box flexDirection="column" marginTop={1}>
+              <box flexDirection="column" marginBottom={1}>
                 <text>
-                  <span style={{ fg: theme.text, bold: true }}>{question()}</span>
+                  <span style={{ fg: theme.primary, bold: true }}>{question()}</span>
                 </text>
                 <text style={{ fg: theme.textMuted }}>thinking…</text>
               </box>
@@ -150,21 +154,24 @@ export function SideQuestionPane(props: OverlayProps & { controller: SideQuestio
           <Show when={Option.getOrUndefined(state().error)}>
             {(message) => <text style={{ fg: theme.error }}>{message()}</text>}
           </Show>
-        </scrollbox>
-        <box flexDirection="row" paddingLeft={1} paddingRight={1} flexShrink={0}>
-          <text style={{ fg: theme.textMuted }}>follow-up: </text>
-          <box flexGrow={1}>
-            <input
-              focused={props.open && Option.isNone(state().pending)}
-              value={draft()}
-              onInput={setDraft}
-              onSubmit={submit}
-              backgroundColor="transparent"
-              focusedBackgroundColor="transparent"
-            />
+        </ChromePanel.Body>
+        <ChromePanel.Section>
+          <box flexDirection="row">
+            <text style={{ fg: theme.textMuted }}>follow-up: </text>
+            <box flexGrow={1}>
+              <input
+                focused={props.open && Option.isNone(state().pending)}
+                value={draft()}
+                onInput={setDraft}
+                onSubmit={submit}
+                backgroundColor="transparent"
+                focusedBackgroundColor="transparent"
+              />
+            </box>
           </box>
-        </box>
-      </box>
+        </ChromePanel.Section>
+        <ChromePanel.Footer>not added to the session · enter ask · esc close</ChromePanel.Footer>
+      </ChromePanel.Root>
     </Show>
   )
 }

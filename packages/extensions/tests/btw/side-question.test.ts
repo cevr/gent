@@ -3,7 +3,7 @@
  * untouched. Follow-ups replay the earlier side turns inside the prompt.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, Exit, Option } from "effect"
+import { Cause, Effect, Exit, Option, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
 import { textStep } from "@gent/core-internal/debug/provider"
@@ -52,6 +52,9 @@ describe("side questions", () => {
             textStep("Noted."),
             {
               ...textStep("pelican"),
+              assertRequest: (request) => {
+                expect(request.reasoning).toBe("none")
+              },
               assertOptions: (options) => {
                 expect(options.tools.map((tool) => tool.name)).toEqual([])
                 const texts = promptTexts(options)
@@ -75,6 +78,13 @@ describe("side questions", () => {
             providerLayer,
             subagentRunner: "live",
           })
+          const parentEvents: Array<string> = []
+          yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.runForEach((envelope) =>
+              Effect.sync(() => parentEvents.push(envelope.event._tag)),
+            ),
+            Effect.forkScoped,
+          )
           yield* client.message.send({ sessionId, branchId, content: "The codeword is pelican" })
           yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
@@ -106,6 +116,8 @@ describe("side questions", () => {
 
           const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
           expect(snapshot.messages.length).toBe(2)
+          // A private run leaves no child-run provenance on the parent branch.
+          expect(parentEvents.filter((tag) => tag.startsWith("AgentRun"))).toEqual([])
           yield* controls.assertDone
         }).pipe(Effect.timeout("8 seconds")),
       ),

@@ -124,6 +124,9 @@ export const runEphemeralAgent = (params: {
 }) => {
   const { sessionId, branchId } = params
   const normalizedRunSpec = params.runSpec
+  // A private run leaves no trace on the parent: no spawn/completion events, no
+  // mirrored stream events, no saved output. Side questions rely on this.
+  const isPrivate = normalizedRunSpec?.visibility === "private"
   const mirroredChildEventTags = new Set<AgentEvent["_tag"]>([
     "StreamStarted",
     "StreamEnded",
@@ -224,7 +227,7 @@ export const runEphemeralAgent = (params: {
 
     const mirrorFiber = yield* Effect.forkChild(
       localEventStore.subscribe({ sessionId }).pipe(
-        Stream.filter((envelope) => mirroredChildEventTags.has(envelope.event._tag)),
+        Stream.filter((envelope) => !isPrivate && mirroredChildEventTags.has(envelope.event._tag)),
         Stream.runForEach(mirrorEnvelope),
         Effect.catchEager(() => Effect.void),
       ),
@@ -289,15 +292,17 @@ export const runEphemeralAgent = (params: {
 
     yield* WideEvent.set({ childSessionId: sessionId })
 
-    yield* params.durableRuntime.publishAgentRunSpawned({
-      parentSessionId: params.parentSessionId,
-      parentBranchId: params.parentBranchId,
-      toolCallId: params.toolCallId,
-      sessionId,
-      childBranchId: branchId,
-      agentName: params.agentName,
-      prompt: params.prompt,
-    })
+    if (!isPrivate) {
+      yield* params.durableRuntime.publishAgentRunSpawned({
+        parentSessionId: params.parentSessionId,
+        parentBranchId: params.parentBranchId,
+        toolCallId: params.toolCallId,
+        sessionId,
+        childBranchId: branchId,
+        agentName: params.agentName,
+        prompt: params.prompt,
+      })
+    }
 
     // Ephemeral child run is its own composition root — provide the per-run
     // layer (in-memory storage, auto-resolve approval, fresh SessionRuntime) and
@@ -325,26 +330,27 @@ export const runEphemeralAgent = (params: {
     }).pipe(Effect.scoped)
 
     // Save full output to disk (runs in parent context where FileSystem is available)
-    const savedPath = yield* params.metadataRuntime.saveAgentRunOutput({
-      text: success.text,
-      reasoning,
-      agentName: params.agentName,
-      sessionId,
-    })
-
-    let preview = success.text
-    if (success.text.length > 200) preview = success.text.slice(0, 200) + "…"
-
-    yield* params.durableRuntime.publishAgentRunSucceeded({
-      parentSessionId: params.parentSessionId,
-      parentBranchId: params.parentBranchId,
-      toolCallId: params.toolCallId,
-      sessionId,
-      agentName: params.agentName,
-      usage: success.usage,
-      preview,
-      savedPath: Option.getOrUndefined(savedPath),
-    })
+    let savedPath = Option.none<string>()
+    if (!isPrivate) {
+      savedPath = yield* params.metadataRuntime.saveAgentRunOutput({
+        text: success.text,
+        reasoning,
+        agentName: params.agentName,
+        sessionId,
+      })
+      let preview = success.text
+      if (success.text.length > 200) preview = success.text.slice(0, 200) + "…"
+      yield* params.durableRuntime.publishAgentRunSucceeded({
+        parentSessionId: params.parentSessionId,
+        parentBranchId: params.parentBranchId,
+        toolCallId: params.toolCallId,
+        sessionId,
+        agentName: params.agentName,
+        usage: success.usage,
+        preview,
+        savedPath: Option.getOrUndefined(savedPath),
+      })
+    }
 
     yield* WideEvent.set({
       usage: success.usage,
@@ -368,7 +374,10 @@ export const runEphemeralAgent = (params: {
         persistence: params.persistence,
         spanName: "AgentRunner.inProcess.ephemeral",
       },
-      params.durableRuntime.publishAgentRunFailed,
+      (failure) => {
+        if (isPrivate) return Effect.void
+        return params.durableRuntime.publishAgentRunFailed(failure)
+      },
     ),
     Effect.catchCause(handleUnexpectedFailure),
   )

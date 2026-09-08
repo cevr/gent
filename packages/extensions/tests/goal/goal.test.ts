@@ -110,6 +110,7 @@ describe("goals", () => {
             (message) => message.metadata?.customType === GOAL_CONTEXT_MESSAGE_TYPE,
           )
           expect(goalMessages.length).toBe(3)
+          expect(new Set(goalMessages.map((message) => message.id)).size).toBe(3)
           expect(
             goalMessages[2]?.parts.some(
               (part) => part.type === "text" && part.text.includes("reached its token budget"),
@@ -125,15 +126,20 @@ describe("goals", () => {
           }
           expect(yield* controls.callCount).toBe(3)
 
-          // A second goal is refused while one is pending; clear ends it.
+          // A second goal is refused while one is pending, and a spent budget needs a new one.
           const refused = yield* Effect.exit(command("Another objective"))
           expect(Exit.isFailure(refused)).toBe(true)
           if (Exit.isFailure(refused)) {
             expect(Cause.pretty(refused.cause)).toContain("already budget_limited")
           }
+          const resumed = yield* Effect.exit(command("resume"))
+          expect(Exit.isFailure(resumed)).toBe(true)
+          if (Exit.isFailure(resumed)) {
+            expect(Cause.pretty(resumed.cause)).toContain("budget is spent")
+          }
+          // Clear forgets the goal; status reports none afterwards.
           yield* command("clear")
-          const cleared = yield* readGoal()
-          expect(Option.map(cleared, (goal) => goal.status)).toEqual(Option.some("complete"))
+          expect(yield* readGoal()).toEqual(Option.none())
           yield* controls.assertDone
         }).pipe(Effect.timeout("12 seconds")),
       ),

@@ -81,6 +81,7 @@ export const normalizeRunSpec = (runSpec: RunSpec | undefined): RunSpec | undefi
   const normalized: { -readonly [K in keyof RunSpec]?: RunSpec[K] } = {}
   if (Predicate.isNotUndefined(runSpec.persistence)) normalized.persistence = runSpec.persistence
   if (Predicate.isNotUndefined(runSpec.history)) normalized.history = runSpec.history
+  if (Predicate.isNotUndefined(runSpec.visibility)) normalized.visibility = runSpec.visibility
   if (Predicate.isNotUndefined(normalizedOverrides)) normalized.overrides = normalizedOverrides
   const tags = overrideArray(runSpec.tags)
   if (Option.isSome(tags)) normalized.tags = tags.value

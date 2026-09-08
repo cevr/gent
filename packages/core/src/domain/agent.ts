@@ -166,10 +166,15 @@ export type AgentRunOverrides = typeof AgentRunOverridesSchema.Type
 export const AgentRunHistory = Schema.Literals(["none", "inherit"])
 export type AgentRunHistory = typeof AgentRunHistory.Type
 
+/** `private` keeps an ephemeral run out of the parent's event stream and output store. */
+export const AgentRunVisibility = Schema.Literals(["parent", "private"])
+export type AgentRunVisibility = typeof AgentRunVisibility.Type
+
 export const RunSpecSchema = Schema.Struct({
   persistence: Schema.optional(AgentPersistence),
   /** `inherit` copies the parent branch's messages into an ephemeral child before its prompt. */
   history: Schema.optional(AgentRunHistory),
+  visibility: Schema.optional(AgentRunVisibility),
   overrides: Schema.optional(AgentRunOverridesSchema),
   tags: Schema.optional(Schema.Array(Schema.String)),
   parentToolCallId: Schema.optional(ToolCallId),
@@ -182,6 +187,7 @@ export const makeRunSpec = (input: RunSpecInput = {}): RunSpec => {
   const spec: { -readonly [K in keyof RunSpec]: RunSpec[K] } = {}
   if (Predicate.isNotUndefined(input.persistence)) spec.persistence = input.persistence
   if (Predicate.isNotUndefined(input.history)) spec.history = input.history
+  if (Predicate.isNotUndefined(input.visibility)) spec.visibility = input.visibility
   if (Predicate.isNotUndefined(input.overrides)) spec.overrides = input.overrides
   if (Predicate.isNotUndefined(input.tags)) spec.tags = input.tags
   if (Predicate.isNotUndefined(input.parentToolCallId))

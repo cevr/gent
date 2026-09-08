@@ -79,10 +79,11 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
           runSpec: makeRunSpec({
             persistence: "ephemeral",
             history: "inherit",
+            visibility: "private",
             overrides: {
               allowedTools: [],
               deniedTools: ["cell"],
-              reasoningEffort: "low",
+              reasoningEffort: "none",
               systemPromptAddendum: SIDE_QUESTION_INSTRUCTION,
             },
           }),

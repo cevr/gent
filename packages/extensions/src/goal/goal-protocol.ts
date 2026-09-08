@@ -21,6 +21,8 @@ export const GoalState = Schema.Struct({
   tokensUsed: Schema.Int,
   timeUsedMs: Schema.Int,
   continuationsUsed: Schema.Int,
+  /** Set once the turn that completed the goal has been charged. */
+  finalized: Schema.optional(Schema.Boolean),
   createdAt: Schema.Int,
   updatedAt: Schema.Int,
 })
@@ -30,6 +32,10 @@ export const GoalSnapshot = Schema.Struct({
   goal: Schema.optional(GoalState),
 })
 export type GoalSnapshot = typeof GoalSnapshot.Type
+
+/** Follow-up source ids must differ per continuation: the runtime keys the message on them. */
+export const goalContinuationSource = (goal: GoalState) =>
+  `goal:${goal.goalId}:${goal.status}:${goal.continuationsUsed}`
 
 /** Remaining budget is absent for an unbounded goal. */
 export const remainingTokens = (goal: GoalState): Option.Option<number> =>

@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect"
+import { Effect, Option, Predicate, Schema } from "effect"
 import {
   CapabilityError,
   defineExtension,
@@ -11,6 +11,7 @@ import {
 import {
   GOAL_CONTEXT_MESSAGE_TYPE,
   GOAL_EXTENSION_ID,
+  goalContinuationSource,
   GoalState,
   isPendingGoal,
   MAXIMUM_GOAL_OBJECTIVE_CHARS,
@@ -59,12 +60,15 @@ const validateBudget = (value: Option.Option<number>) =>
     return value
   })
 
-/** Queues the next goal prompt as a user-role message and wakes the loop if it is idle. */
-const queueGoalMessage = (content: string) =>
+/**
+ * Queues the next goal prompt as a user-role message and wakes the loop if it is idle.
+ * The source id changes with every continuation; the runtime keys the message on it.
+ */
+const queueGoalMessage = (goal: GoalState, content: string) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     yield* ctx.Session.queueFollowUp({
-      sourceId: "goal",
+      sourceId: goalContinuationSource(goal),
       content,
       metadata: { customType: GOAL_CONTEXT_MESSAGE_TYPE, extensionId: GOAL_EXTENSION_ID },
       wake: true,
@@ -104,44 +108,69 @@ const createGoal = (input: CreateGoalInput) =>
           createdAt: time,
           updatedAt: time,
         }
-        return { goal: Option.some(created), result: created }
+        return { next: Option.some(created), result: created }
       }),
     )
     yield* ctx.State.changed({})
     return goal
   })
 
-const setStatus = (status: GoalState["status"], allowed: ReadonlyArray<GoalState["status"]>) =>
+interface StatusChange {
+  readonly status: GoalState["status"]
+  readonly allowed: ReadonlyArray<GoalState["status"]>
+  /** A fresh budget; required to leave `budget_limited`, since the old one is spent. */
+  readonly tokenBudget: Option.Option<number>
+}
+
+const setStatus = (change: StatusChange) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
+    const tokenBudget = yield* validateBudget(change.tokenBudget)
     const goal = yield* modifyGoal((current) =>
       Effect.gen(function* () {
         if (Option.isNone(current))
           return yield* new GoalError({ message: "No goal on this branch" })
-        if (!allowed.includes(current.value.status)) {
+        if (!change.allowed.includes(current.value.status)) {
           return yield* new GoalError({
-            message: `Cannot ${status} a goal that is ${current.value.status}`,
+            message: `Cannot ${change.status} a goal that is ${current.value.status}`,
           })
         }
-        const updated: GoalState = { ...current.value, status, updatedAt: yield* now }
-        return { goal: Option.some(updated), result: updated }
+        if (
+          change.status === "active" &&
+          current.value.status === "budget_limited" &&
+          Option.isNone(tokenBudget)
+        ) {
+          return yield* new GoalError({
+            message: "The budget is spent; resume with /goal resume --budget <tokens>",
+          })
+        }
+        const updated: GoalState = {
+          ...current.value,
+          status: change.status,
+          ...Option.match(tokenBudget, {
+            onNone: () => ({}),
+            onSome: (budget) => ({ tokenBudget: current.value.tokensUsed + budget }),
+          }),
+          updatedAt: yield* now,
+        }
+        return { next: Option.some(updated), result: updated }
       }),
     )
     yield* ctx.State.changed({})
     return goal
   })
 
-const completeGoal = setStatus("complete", ["active", "paused", "budget_limited"])
+const completeGoal = setStatus({
+  status: "complete",
+  allowed: ["active", "paused", "budget_limited"],
+  tokenBudget: Option.none(),
+})
 
+/** Clearing forgets the goal entirely; status reports no goal afterwards. */
 const clearGoal = Effect.gen(function* () {
   const ctx = yield* ExtensionContext
   const goal = yield* modifyGoal((current) =>
-    Effect.gen(function* () {
-      if (Option.isNone(current)) return { goal: Option.none<GoalState>(), result: current }
-      // A cleared goal keeps its usage but stops continuing; complete is the only terminal state.
-      const updated: GoalState = { ...current.value, status: "complete", updatedAt: yield* now }
-      return { goal: Option.some(updated), result: Option.some(updated) }
-    }),
+    Effect.succeed({ next: Option.none<GoalState>(), result: current }),
   )
   yield* ctx.State.changed({})
   return goal
@@ -155,34 +184,45 @@ const continueGoal = (input: TurnAfterInput) =>
     const ctx = yield* ExtensionContext
     const decision = yield* modifyGoal((current) =>
       Effect.gen(function* () {
-        if (Option.isNone(current) || current.value.status !== "active") {
-          return { goal: Option.none<GoalState>(), result: Option.none<GoalState>() }
+        if (Option.isNone(current)) return { next: current, result: Option.none<GoalState>() }
+        const goal = current.value
+        // The turn that completed the goal is charged once; nothing continues after it.
+        if (goal.status === "complete" && goal.finalized !== true) {
+          const finalized: GoalState = {
+            ...goal,
+            tokensUsed: goal.tokensUsed + input.usage.inputTokens + input.usage.outputTokens,
+            timeUsedMs: goal.timeUsedMs + input.durationMs,
+            finalized: true,
+            updatedAt: yield* now,
+          }
+          return { next: Option.some(finalized), result: Option.none<GoalState>() }
         }
+        if (goal.status !== "active") return { next: current, result: Option.none<GoalState>() }
         const charged: GoalState = {
-          ...current.value,
-          tokensUsed: current.value.tokensUsed + input.usage.inputTokens + input.usage.outputTokens,
-          timeUsedMs: current.value.timeUsedMs + input.durationMs,
+          ...goal,
+          tokensUsed: goal.tokensUsed + input.usage.inputTokens + input.usage.outputTokens,
+          timeUsedMs: goal.timeUsedMs + input.durationMs,
           updatedAt: yield* now,
         }
         if (Option.contains(remainingTokens(charged), 0)) {
           const limited: GoalState = { ...charged, status: "budget_limited" }
-          return { goal: Option.some(limited), result: Option.some(limited) }
+          return { next: Option.some(limited), result: Option.some(limited) }
         }
         const continued: GoalState = {
           ...charged,
           continuationsUsed: charged.continuationsUsed + 1,
         }
-        return { goal: Option.some(continued), result: Option.some(continued) }
+        return { next: Option.some(continued), result: Option.some(continued) }
       }),
     )
+    yield* ctx.State.changed({})
     if (Option.isNone(decision)) return
     const goal = decision.value
-    yield* ctx.State.changed({})
     if (goal.status === "budget_limited") {
-      yield* queueGoalMessage(budgetLimitPrompt(goal))
+      yield* queueGoalMessage(goal, budgetLimitPrompt(goal))
       return
     }
-    yield* queueGoalMessage(continuationPrompt(goal))
+    yield* queueGoalMessage(goal, continuationPrompt(goal))
   }).pipe(
     Effect.catchEager((error) =>
       Effect.logWarning("goal.continue.failed").pipe(Effect.annotateLogs({ error: String(error) })),
@@ -229,18 +269,28 @@ const GoalCommand = request({
       const ctx = yield* ExtensionContext
       const args = input.trim()
       const present = (content: string) => ctx.Interaction.present({ title: "Goal", content })
+      const resume = /^resume(?:\s+(.*))?$/s.exec(args)
+      if (Predicate.isNotNull(resume)) {
+        const parsed = parseBudget(Option.getOrElse(Option.fromUndefinedOr(resume[1]), () => ""))
+        const goal = yield* setStatus({
+          status: "active",
+          allowed: ["paused", "budget_limited"],
+          tokenBudget: parsed.budget,
+        })
+        yield* queueGoalMessage(goal, continuationPrompt(goal))
+        return yield* present(`Resumed.\n\n${formatGoalUsage(goal)}`)
+      }
       switch (args) {
         case "":
         case "status":
           return yield* present(formatGoalStatus(yield* readGoal()))
         case "pause": {
-          const goal = yield* setStatus("paused", ["active", "budget_limited"])
+          const goal = yield* setStatus({
+            status: "paused",
+            allowed: ["active", "budget_limited"],
+            tokenBudget: Option.none(),
+          })
           return yield* present(`Paused.\n\n${formatGoalUsage(goal)}`)
-        }
-        case "resume": {
-          const goal = yield* setStatus("active", ["paused", "budget_limited"])
-          yield* queueGoalMessage(continuationPrompt(goal))
-          return yield* present(`Resumed.\n\n${formatGoalUsage(goal)}`)
         }
         case "clear": {
           const goal = yield* clearGoal
@@ -255,7 +305,7 @@ const GoalCommand = request({
           const parsed = parseBudget(args)
           const goal = yield* createGoal({ objective: parsed.rest, tokenBudget: parsed.budget })
           // The first continuation starts the work at once when the loop is idle.
-          yield* queueGoalMessage(continuationPrompt(goal))
+          yield* queueGoalMessage(goal, continuationPrompt(goal))
         }
       }
     }).pipe(Effect.mapError(commandError)),

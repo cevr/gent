@@ -55,6 +55,24 @@ describe("side question pane", () => {
     }),
   )
 
+  it.live("a reply that lands after escape reset the pane is discarded", () =>
+    Effect.gen(function* () {
+      const queue = makeCastQueue()
+      const controller = makeSideQuestionPane(
+        ({ question }) => Effect.succeed({ answer: `late answer to ${question}` }),
+        queue.cast,
+      )
+      controller.ask("stale?")
+      controller.reset()
+      yield* queue.drain
+      expect(controller.state().turns.length).toBe(0)
+      expect(Option.isNone(controller.state().pending)).toBe(true)
+      controller.ask("fresh?")
+      yield* queue.drain
+      expect(controller.state().turns.map((turn) => turn.answer)).toEqual(["late answer to fresh?"])
+    }),
+  )
+
   it.live("a failed ask leaves the error visible and the input ready", () =>
     Effect.gen(function* () {
       const queue = makeCastQueue()
