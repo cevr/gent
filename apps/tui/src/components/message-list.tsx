@@ -43,6 +43,7 @@ const CellOperationReceipts = Schema.Struct({
 const CellFailure = Schema.Struct({
   display: Schema.optional(Schema.String),
   message: Schema.optional(Schema.String),
+  error: Schema.optional(Schema.String),
 })
 
 const BashOutput = Schema.Struct({
@@ -93,7 +94,10 @@ const toActivityCall = (call: ToolCall): ActivityCall => ({
 const cellResultText = (call: ToolCall) =>
   Option.match(decodeToolOutputOption(CellFailure, call.output), {
     onNone: () => ({ display: "", error: "" }),
-    onSome: (value) => ({ display: value.display ?? "", error: value.message ?? "" }),
+    onSome: (value) => ({
+      display: value.display ?? "",
+      error: value.message ?? value.error ?? "",
+    }),
   })
 
 /** What a row would show beneath itself: the cell display, the command output, or the raw result. */

@@ -26,8 +26,8 @@ const CellOutputSchema = Schema.Struct({
   display: Schema.optional(Schema.String),
   bindings: Schema.optional(Schema.Array(Schema.String)),
   truncated: Schema.optional(Schema.Boolean),
-  operations: Schema.optional(Schema.Array(OperationReceipt)),
   message: Schema.optional(Schema.String),
+  error: Schema.optional(Schema.String),
   phase: Schema.optional(Schema.String),
   reason: Schema.optional(Schema.String),
   output: Schema.optional(Schema.String),
@@ -69,10 +69,16 @@ export function CellToolRenderer(props: ToolRendererProps) {
         summary: call.summary ?? "",
       }))
     }
-    return Option.match(data(), {
-      onNone: () => [],
-      onSome: (value) => value.operations ?? [],
-    })
+    return Option.match(
+      decodeToolOutputOption(
+        Schema.Struct({ operations: Schema.optional(Schema.Array(OperationReceipt)) }),
+        props.toolCall.output,
+      ),
+      {
+        onNone: () => [],
+        onSome: (value) => value.operations ?? [],
+      },
+    )
   })
 
   const failure = createMemo(() =>
@@ -81,7 +87,7 @@ export function CellToolRenderer(props: ToolRendererProps) {
         (value) =>
           props.toolCall.status === "error" || Option.isSome(Option.fromNullishOr(value.message)),
       ),
-      Option.flatMap((value) => Option.fromNullishOr(value.message)),
+      Option.flatMap((value) => Option.fromNullishOr(value.message ?? value.error)),
     ),
   )
 

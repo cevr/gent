@@ -391,6 +391,55 @@ describe("FX transcript treatment", () => {
     }),
   )
 
+  it.live("shows worker recovery errors in collapsed, preview, and detail frames", () =>
+    Effect.gen(function* () {
+      const message: Message = {
+        ...cellMessage("call-recovered"),
+        toolCalls: [
+          {
+            id: "call-recovered",
+            toolName: "cell",
+            status: "error",
+            input: { code: "await tools.call('ask_user', {})" },
+            summary: absent,
+            output: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))({
+              error: "The cell worker state was lost. Its source was not replayed.",
+              stateLost: true,
+              operations: [
+                {
+                  _tag: "Completed",
+                  operationId: "op-1",
+                  result: {
+                    type: "tool-result",
+                    id: "inner-1",
+                    name: "ask_user",
+                    isFailure: false,
+                    providerExecuted: false,
+                    result: { answers: [["Continue"]] },
+                  },
+                },
+              ],
+            }),
+          },
+        ],
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <RegisteredToolMessageLists items={[message]} fullDetail />, {
+          width: 110,
+          height: 50,
+        }),
+      )
+      const frame = yield* Effect.promise(() =>
+        waitForRenderedFrame(
+          setup,
+          (next) => (next.match(/Its source was not replayed/g)?.length ?? 0) >= 3,
+          "cell recovery error",
+        ),
+      )
+      expect(frame.match(/Its source was not replayed/g)?.length).toBeGreaterThanOrEqual(3)
+    }),
+  )
+
   it.live("shows cell operation receipts in tree and detail frames", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
