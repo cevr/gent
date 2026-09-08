@@ -35,7 +35,7 @@ export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unk
   readonly interactive?: boolean
   readonly permissionRules?: ReadonlyArray<PermissionRule>
   readonly prompt?: PromptSection
-  // oxlint-disable-next-line effect/noUnknownParameters -- Runtime tool inputs are decoded by the owning schema at execution.
+  // oxlint-disable-next-line effect/noUnknownParameters -- The toolkit decodes wire inputs; the factory validates the decoded value.
   readonly effect: (input: unknown) => Effect.Effect<Output, Error, never>
 }
 
@@ -211,7 +211,7 @@ export const tool = <
     input: input.params,
     output: input.output,
     effect: (params) => {
-      const decoded = Schema.decodeUnknownSync(input.params)(params)
+      const decoded = Schema.decodeUnknownSync(Schema.toType(input.params))(params)
       // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The factory erases author service requirements; the runtime provides them at execution boundaries.
       return input.execute(decoded) as Effect.Effect<Schema.Schema.Type<Output>, Error, never>
     },

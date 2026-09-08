@@ -150,6 +150,40 @@ describe("Artifacts extension", () => {
     10_000,
   )
 
+  it.scopedLive(
+    "stores metadata decoded from cell tool inputs",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", {
+            code: `var artifact = await tools.call("artifact_save", {label:"Review", sourceTool:"review", content:"Finding", metadata:'{"severity":"high"}'}); await tools.call("artifact_update", {id:artifact.id, metadata:'{"severity":"low","reviewers":2}'})`,
+          }),
+          textStep("saved"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          providerLayer,
+        })
+        const completed = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "Save review metadata" })
+        yield* Fiber.join(completed)
+        const artifacts = yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ListRef.extensionId,
+          capabilityId: ListRef.capabilityId,
+          input: {},
+        })
+        expect(artifacts).toMatchObject([{ metadata: { severity: "low", reviewers: 2 } }])
+      }).pipe(Effect.timeout("8 seconds")),
+    10_000,
+  )
+
   it.live("Save creates an artifact and returns it", () =>
     withArtifactsClient(({ request, branchId }) =>
       Effect.gen(function* () {
