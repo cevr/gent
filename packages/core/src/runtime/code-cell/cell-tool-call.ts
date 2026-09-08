@@ -8,6 +8,10 @@ import { CellToolCallSuspended } from "./cell-kernel.js"
 import { CellEvaluationError, type CellResponse } from "./cell-protocol.js"
 
 const JsonText = Schema.fromJsonString(Schema.Json)
+// Tool results are Schema-encoded values. Optional fields left `undefined` are
+// legal there but are not JSON values. The cell pipe carries JSON text, so the
+// value is projected through the text codec before it crosses to the worker.
+const UnknownText = Schema.fromJsonString(Schema.Unknown)
 
 /** The caller owns the bound capability, operation receipt, and publication lease. */
 export const executeBoundCellTool = Effect.fn("CellToolCall.executeBound")(function* (params: {
@@ -56,7 +60,8 @@ export const executeBoundCellTool = Effect.fn("CellToolCall.executeBound")(funct
 export const cellToolResultValue = Effect.fn("CellToolCall.resultValue")(function* (
   result: Prompt.ToolResultPart,
 ) {
-  const value = yield* Schema.decodeUnknownEffect(Schema.Json)(result.result).pipe(
+  const value = yield* Schema.encodeEffect(UnknownText)(result.result).pipe(
+    Effect.flatMap(Schema.decodeEffect(JsonText)),
     Effect.mapError(
       (cause) =>
         new CellEvaluationError({

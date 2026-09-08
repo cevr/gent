@@ -23,6 +23,7 @@ import {
   cellToolResultValue,
 } from "@gent/core-internal/runtime/code-cell/cell-tool-call"
 import { CellResponse } from "@gent/core-internal/runtime/code-cell/cell-protocol"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   ExtensionRegistry,
   resolveExtensions,
@@ -163,4 +164,30 @@ it.scopedLive("preserves the pending request and host operation identity", () =>
       pending,
     })
   }),
+)
+
+it.effect(
+  "drops undefined optional fields from a tool result before it crosses the cell pipe",
+  () =>
+    Effect.gen(function* () {
+      // Schema-encoded results keep `undefined` for optional fields such as the
+      // delegate metadata session id of an ephemeral child. That is not JSON.
+      const Metadata = Schema.Struct({
+        sessionId: Schema.optional(Schema.String),
+        agentName: Schema.String,
+      })
+      const metadata = yield* Schema.encodeEffect(Metadata)({
+        sessionId: Option.getOrUndefined(Option.none<string>()),
+        agentName: "main",
+      })
+      const result = Prompt.toolResultPart({
+        id: toolCallId,
+        name: "delegate",
+        isFailure: false,
+        providerExecuted: false,
+        result: { output: "pong", metadata },
+      })
+      const value = yield* cellToolResultValue(result)
+      expect(value).toEqual({ output: "pong", metadata: { agentName: "main" } })
+    }),
 )
