@@ -1,6 +1,8 @@
 # Extension registration collapse
 
-Status: proposal (2026-09-08). Not scheduled.
+Status: partially implemented (verified 2026-09-08). Steps 1–4 and 7 are complete
+under the decisions below. Step 5 remains deferred. Step 6 was dropped.
+See `plans/extension-api-verification-2026-09-08.md`.
 
 Question from the user: after reading opencode `v2` and pi `harness-v2/j4`, should gent
 drastically simplify its plugin system while keeping Effect-native + actor model?
