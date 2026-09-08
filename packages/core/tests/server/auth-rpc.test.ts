@@ -146,22 +146,22 @@ describe("auth.listProviders", () => {
               configServiceLayer: configServiceLive,
             }),
           )
-          // Launch cwd has no override -> main (anthropic-modeled)
-          // requires anthropic. Proves the override is NOT in user config.
+          // Launch cwd has no override -> main (openai-modeled)
+          // requires openai. Proves the override is NOT in user config.
           const launchSession = yield* client.session.create({ cwd: launch })
           const launchList = yield* client.auth.listProviders({
             agentName: DEFAULT_AGENT_NAME,
             sessionId: launchSession.sessionId,
           })
-          expect(launchList.find((p) => p.provider === "anthropic")?.required).toBe(true)
-          // Session cwd has the project override -> anthropic is NOT
+          expect(launchList.find((p) => p.provider === "openai")?.required).toBe(true)
+          // Session cwd has the project override -> openai is NOT
           // required because the agent is externally routed.
           const overriddenSession = yield* client.session.create({ cwd: sessionCwd })
           const overriddenList = yield* client.auth.listProviders({
             agentName: DEFAULT_AGENT_NAME,
             sessionId: overriddenSession.sessionId,
           })
-          expect(overriddenList.find((p) => p.provider === "anthropic")?.required).toBe(false)
+          expect(overriddenList.find((p) => p.provider === "openai")?.required).toBe(false)
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
       ),
   )
@@ -181,7 +181,7 @@ describe("auth.listProviders", () => {
         // still works because driver.set writes to the in-memory user
         // ref that `get(undefined)` also reads.
         const list = yield* client.auth.listProviders({ agentName: DEFAULT_AGENT_NAME })
-        expect(list.find((p) => p.provider === "anthropic")?.required).toBe(false)
+        expect(list.find((p) => p.provider === "openai")?.required).toBe(false)
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )

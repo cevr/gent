@@ -47,6 +47,11 @@ export const MODEL_CONTEXT_WINDOWS: ModelContextWindows = {
   "anthropic/claude-opus-4-6": 1_000_000,
   "openai/gpt-5.4": 1_000_000,
   "openai/gpt-5.4-mini": 1_000_000,
+  "openai/gpt-5.5": 1_050_000,
+  "openai/gpt-5.6": 1_050_000,
+  "openai/gpt-5.6-luna": 1_050_000,
+  "openai/gpt-5.6-sol": 1_050_000,
+  "openai/gpt-5.6-terra": 1_050_000,
 }
 
 const DEFAULT_CONTEXT_WINDOW = 200_000

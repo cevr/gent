@@ -24,7 +24,7 @@ interface SessionCommandRegistryProps {
   readonly openAuth: () => void
 }
 
-const ReasoningLevelInput = Schema.Literals(["off", "low", "medium", "high", "xhigh"])
+const ReasoningLevelInput = Schema.Literals(["off", "low", "medium", "high", "xhigh", "max"])
 type ReasoningLevelInput = Schema.Schema.Type<typeof ReasoningLevelInput>
 const VALID_REASONING_LEVELS = [
   "off",
@@ -32,6 +32,7 @@ const VALID_REASONING_LEVELS = [
   "medium",
   "high",
   "xhigh",
+  "max",
 ] satisfies ReadonlyArray<ReasoningLevelInput>
 
 const parseReasoningLevel = Schema.decodeUnknownOption(ReasoningLevelInput)

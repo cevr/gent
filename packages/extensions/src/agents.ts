@@ -8,6 +8,7 @@ import { AgentDefinition, AgentName, defineExtension } from "@gent/core/extensio
 export const main = AgentDefinition.make({
   name: AgentName.make("main"),
   description: "General purpose agent that solves tasks with code in the cell",
+  reasoningEffort: "max",
 })
 
 export const CoreAgents = [main] satisfies ReadonlyArray<AgentDefinition>

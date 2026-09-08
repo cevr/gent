@@ -253,7 +253,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
         expect(fetchState2.captured.at(-1)!.headers["authorization"]).toBe("Bearer second-token")
       }),
   )
-  it.live("OAuth resolveModel rejects models outside OPENAI_OAUTH_ALLOWED_MODELS", () =>
+  it.live("OAuth resolveModel rejects models the Codex backend does not serve", () =>
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)

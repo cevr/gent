@@ -16,6 +16,7 @@ export const ReasoningEffort = Schema.Literals([
   "medium",
   "high",
   "xhigh",
+  "max",
 ])
 export type ReasoningEffort = typeof ReasoningEffort.Type
 
@@ -81,7 +82,7 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
 // Children spawned from a cell inherit the caller's agent and model.
 
 // Default model — used when an agent has no model set
-export const DEFAULT_MODEL_ID = ModelId.make("anthropic/claude-opus-4-6")
+export const DEFAULT_MODEL_ID = ModelId.make("openai/gpt-5.6-luna")
 
 /** Resolve model for an agent definition */
 export const resolveAgentModel = (agent: AgentDefinition): ModelId =>

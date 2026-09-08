@@ -60,6 +60,7 @@ const ANTHROPIC_EFFORT = new Map<string, "low" | "medium" | "high">([
   ["medium", "medium"],
   ["high", "high"],
   ["xhigh", "high"],
+  ["max", "high"],
 ])
 
 type AnthropicConfig = Required<Parameters<typeof AnthropicLanguageModel.layer>[0]>["config"]

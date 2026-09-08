@@ -12,7 +12,7 @@ import {
 import {
   allocateOpenAIAuthorization,
   allocateOpenAIDeviceAuthorization,
-  OPENAI_OAUTH_ALLOWED_MODELS,
+  isOpenAIOAuthModel,
   type OpenAIAuthorizationFlow,
 } from "./oauth.js"
 import {
@@ -161,7 +161,7 @@ export const buildOpenAIModelDriver = (
       // @effect/ai-openai instead of the chat-completions compat adapter.
       if (Option.isSome(auth) && auth.value.type === "oauth") {
         const config = buildOpenAiResponsesConfig(Option.fromNullishOr(hints))
-        if (!OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)) {
+        if (!isOpenAIOAuthModel(modelName)) {
           return yield* new ProviderAuthError({
             message: `Model "${modelName}" not available with ChatGPT OAuth`,
           })
@@ -205,7 +205,7 @@ export const buildOpenAIModelDriver = (
         if (model.provider !== "openai") return true
         const parts = model.id.split("/", 2)
         const modelName = Option.fromNullishOr(parts[1])
-        return Option.isSome(modelName) && OPENAI_OAUTH_ALLOWED_MODELS.has(modelName.value)
+        return Option.isSome(modelName) && isOpenAIOAuthModel(modelName.value)
       })
       .map((model) => {
         if (model.provider !== "openai") return model

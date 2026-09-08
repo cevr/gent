@@ -92,7 +92,15 @@ export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
   message: Schema.String,
 }) {}
 
-export const OPENAI_OAUTH_ALLOWED_MODELS = new Set(["gpt-5.4", "gpt-5.4-mini"])
+/**
+ * ChatGPT OAuth reaches the Codex backend, which serves the GPT-5 family.
+ * Chat aliases and pro tiers are API-only. The catalog itself comes from
+ * models.dev, so new GPT-5 releases need no list update here.
+ */
+export const isOpenAIOAuthModel = (modelName: string): boolean =>
+  modelName.startsWith("gpt-5") &&
+  !modelName.endsWith("-chat-latest") &&
+  !modelName.endsWith("-pro")
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const ISSUER = "https://auth.openai.com"
