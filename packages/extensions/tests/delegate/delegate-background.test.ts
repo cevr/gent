@@ -30,10 +30,10 @@ describe("DelegateTool background mode", () => {
       )
       // The handle returns now. The result arrives later as a message on the parent branch.
       expect(result).toEqual({
+        _tag: "running",
         requestId: RequestId.make("delegate-call"),
         sessionId: SessionId.make("child-session"),
         branchId: BranchId.make("child-branch"),
-        status: "running",
       })
       expect(started).toEqual([
         { requestId: RequestId.make("delegate-call"), prompt: "analyze the codebase" },

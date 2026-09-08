@@ -332,18 +332,18 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   `ExtensionContext.Agent` exposes these operations with host-owned parent IDs.
   Start requires a tool context and injects its tool-call ID. Requests can inspect,
   list, and cancel owned starts but cannot invent a tool identity to start work.
-  The builtin `ChildAgentExtension` supplies `agent-start`, `agent-child`, and
-  `agent-children` as ordinary tools. Cells use `tools.call`; the bridge keeps
-  permissions, bound generations, and operation receipts. Start derives its
-  request ID from the host tool-call ID. It accepts the existing RunSpec
-  overrides for model, reasoning, tool selection, and added instructions. The
-  host still fixes durable persistence and the parent/tool address. Control
-  returns pending or the original completed-turn flags, not task success.
-  Absent completion flags are omitted from the JSON result. `delegate` with
-  `background: true` is the same admission under the delegate tool-call ID.
-  For a recovered Unknown agent-start operation, its inner toolCallId is the
-  child requestId. The parent can inspect or cancel that start without rerunning
-  cell source or issuing another start.
+  The builtin `DelegateExtension` supplies one admission call, `delegate`, plus
+  `agent-child` and `agent-children` as ordinary tools. Cells use `tools.call`;
+  the bridge keeps permissions, bound generations, and operation receipts.
+  `delegate` returns a tagged result: `completed` with the foreground child's
+  output, or `running` with the handle of a `background: true` child admitted
+  under the delegate tool-call ID. It accepts the existing RunSpec overrides for
+  model, reasoning, tool selection, and added instructions. The host still fixes
+  durable persistence and the parent/tool address. Control returns pending or
+  the original completed-turn flags, not task success. Absent completion flags
+  are omitted from the JSON result. For a recovered Unknown delegate operation,
+  its inner toolCallId is the child requestId. The parent can inspect or cancel
+  that start without rerunning cell source or issuing another delegation.
   Parents read child output through the existing `read_session` tool using the
   returned session and branch IDs. Omitting its extraction goal avoids another
   model call. This reads the session tree, not an exact-turn result snapshot.
@@ -364,7 +364,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   Interaction recovery starts after handler registration. No second actor owner
   or scheduler is created. `SessionRuntime.Live` retains the combined test surface.
 - Default persistence is durable.
-- One shipped agent, `main`. A child spawned from a cell (`delegate`, `agent-start`) inherits the caller's agent and model; a run may narrow it with RunSpec overrides (model, tools, prompt addendum). Helper runs such as handoff distillation and `read_session` goal extraction pass `persistence: "ephemeral"` explicitly.
+- One shipped agent, `main`. A child spawned from a cell with `delegate` inherits the caller's agent and model; a run may narrow it with RunSpec overrides (model, tools, prompt addendum). Helper runs such as handoff distillation and `read_session` goal extraction pass `persistence: "ephemeral"` explicitly.
 - Durable runs persist a child session/branch and can be revisited with `read_session`.
 - Ephemeral runs still execute a full local `AgentLoop`, but against isolated in-memory storage; they return text/usage/tool-call metadata without polluting the session tree.
 - Child metadata reads only the requested branch. Stream totals remain unknown

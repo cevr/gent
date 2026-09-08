@@ -8,10 +8,8 @@ import {
   DEFAULT_AGENT_NAME,
   makeRunSpec,
 } from "@gent/core-internal/domain/agent"
-import {
-  StartChildAgent,
-  ControlChildAgent,
-} from "../../../../extensions/src/delegate/child-agent-tools.js"
+import { ControlChildAgent } from "../../../../extensions/src/delegate/child-agent-tools.js"
+import { DelegateTool } from "../../../../extensions/src/delegate/delegate-tool.js"
 import { makeDurableAgentRunRuntime } from "@gent/core-internal/runtime/agent/agent-runner.durable"
 import { CellToolOperationStorage } from "@gent/core-internal/storage/cell-tool-operation-storage"
 import { messageSingleText } from "@gent/core-internal/domain/message-part-projection"
@@ -58,7 +56,7 @@ const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
     Schema.Struct({
       operations: Schema.Array(
         Schema.TaggedStruct("Unknown", {
-          toolName: Schema.Literal("agent-start"),
+          toolName: Schema.Literal("delegate"),
           toolCallId: ToolCallId,
         }),
       ),
@@ -109,7 +107,7 @@ it.scopedLive(
             artifactIdentity: LoadedArtifactIdentity.make("cell-recovery-source"),
             contributions: {
               tools: [
-                StartChildAgent,
+                DelegateTool,
                 ControlChildAgent,
                 tool({
                   id: "approve",
@@ -226,7 +224,7 @@ it.scopedLive(
           if (state === "unknown-child") {
             const selected = yield* captureCurrentToolBinding({
               sessionId,
-              toolName: "agent-start",
+              toolName: "delegate",
               publication: profile.publication,
             })
             const identity = Option.flatMap(selected, (entry) =>
@@ -403,9 +401,9 @@ it.scopedLive(
           expect(yield* Ref.get(cellCalls)).toBe(1)
           expect(yield* Ref.get(selectedNames)).toEqual([
             "agent-child",
-            "agent-start",
             "approve",
             "cell",
+            "delegate",
             "sibling",
           ])
         } else expect(yield* Ref.get(cellCalls)).toBe(0)

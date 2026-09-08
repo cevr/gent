@@ -1,15 +1,10 @@
 import { Effect, Option, Predicate, Record, Schema } from "effect"
 import {
-  AgentRunError,
   BranchId,
   ChildAgentRegistryEntry,
   ExtensionContext,
   RequestId,
-  RunSpecSchema,
   SessionId,
-  defineExtension,
-  requireCurrentAgent,
-  makeRunSpec,
   tool,
 } from "@gent/core/extensions/api"
 
@@ -28,42 +23,10 @@ const ChildObservation = Schema.TaggedUnion({
   },
 })
 
-export const StartChildAgent = tool({
-  id: "agent-start",
-  description:
-    "Start one durable child that inherits this agent and model, and return its handle. The result never returns here: it arrives later as a message on this branch.",
-  promptGuidelines: [
-    "Keep the returned requestId. Use agent-child to inspect or cancel that start, and agent-children to list every start on this branch.",
-    "Do not poll for completion. When the child finishes, a message on this branch reports its requestId, session, outcome, and output preview.",
-    "A new call starts new work. Do not repeat a start to recover an unknown outcome.",
-    "For a recovered Unknown agent-start operation, use its toolCallId as the requestId for agent-child inspect or cancel.",
-  ],
-  params: Schema.Struct({
-    prompt: Schema.NonEmptyString,
-    overrides: RunSpecSchema.fields.overrides,
-  }),
-  output: ChildAgentHandle,
-  execute: Effect.fn("StartChildAgent.execute")(function* (params) {
-    const ctx = yield* ExtensionContext
-    if (Predicate.isUndefined(ctx.toolCallId)) {
-      return yield* new AgentRunError({ message: "Child start requires a host-owned tool call" })
-    }
-    const requestId = RequestId.make(ctx.toolCallId)
-    const agent = yield* requireCurrentAgent
-    const child = yield* ctx.Agent.start({
-      agent,
-      prompt: params.prompt,
-      requestId,
-      runSpec: makeRunSpec({ overrides: params.overrides }),
-    })
-    return { requestId, ...child }
-  }),
-})
-
 export const ControlChildAgent = tool({
   id: "agent-child",
   description:
-    "Inspect or cancel an owned child start. Pending is not proof that work is running; completed is a turn receipt, not task success.",
+    "Inspect or cancel a child started with delegate background: true. Pending is not proof that work is running; completed is a turn receipt, not task success.",
   promptGuidelines: [
     "Completion arrives as a message on this branch; inspect is for a point-in-time check, not a wait.",
     "After completion, use read_session with the returned sessionId and branchId to read the child output. Omit goal to avoid another model call.",
@@ -100,7 +63,7 @@ export const ControlChildAgent = tool({
 export const ListChildAgents = tool({
   id: "agent-children",
   description:
-    "List every child start owned by this branch from the host registry. The registry survives restarts.",
+    "List every background delegation owned by this branch from the host registry. The registry survives restarts.",
   promptGuidelines: [
     "Use this after a restart or compaction to recover child handles you no longer hold.",
   ],
@@ -119,10 +82,4 @@ export const ListChildAgents = tool({
     if (Option.isNone(wanted)) return children
     return children.filter((child) => child.completed === wanted.value)
   }),
-})
-
-/** Durable child admission and control for cells. Registered as a builtin. */
-export const ChildAgentExtension = defineExtension({
-  id: "@gent/child-agents",
-  tools: [StartChildAgent, ControlChildAgent, ListChildAgents],
 })

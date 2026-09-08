@@ -11,7 +11,6 @@ import { BuiltinArtifactIdentity } from "./artifact-identity.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ExecToolsExtension } from "./exec-tools/index.js"
 import { DelegateExtension } from "./delegate/delegate-tool.js"
-export { ChildAgentExtension } from "./delegate/child-agent-tools.js"
 import { AgentsExtension } from "./agents.js"
 import { AnthropicExtension } from "./anthropic/index.js"
 import { OpenAIExtension } from "./openai/index.js"
@@ -22,7 +21,6 @@ import { LibrarianExtension } from "./librarian/index.js"
 import { WorkflowsExtension } from "./workflows.js"
 import { HandoffExtension } from "./handoff.js"
 import { ArtifactsExtension } from "./artifacts/index.js"
-import { ChildAgentExtension } from "./delegate/child-agent-tools.js"
 import { ReadTool } from "./fs-tools/read.js"
 import { WriteTool } from "./fs-tools/write.js"
 import { EditTool } from "./fs-tools/edit.js"
@@ -111,7 +109,6 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner>
   FsToolsExtension,
   ExecToolsExtension,
   NetworkToolsExtension,
-  ChildAgentExtension,
   DelegateExtension,
   InteractionToolsExtension,
   SessionToolsExtension,

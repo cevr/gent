@@ -3,10 +3,8 @@ import { BunServices } from "@effect/platform-bun"
 import { Effect, Exit, Layer, Option, Predicate, Ref, Schema, Stream } from "effect"
 import { defineExtension, tool } from "@gent/core/extensions/api"
 import { AgentDefinition, AgentName, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
-import {
-  ChildAgentExtension,
-  ChildAgentHandle,
-} from "../../../../extensions/src/delegate/child-agent-tools.js"
+import { ChildAgentHandle } from "../../../../extensions/src/delegate/child-agent-tools.js"
+import { DelegateExtension } from "../../../../extensions/src/delegate/delegate-tool.js"
 import { ReadSessionTool } from "../../../../extensions/src/session-tools/read-session.js"
 import { LoadedArtifactIdentity, type LoadedExtension } from "@gent/core-internal/domain/extension"
 import { ExtensionId, RequestId } from "@gent/core-internal/domain/ids"
@@ -53,7 +51,7 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
         }> = [
           {
             send: true,
-            code: "const child = await tools.call('agent-start', {agent: 'child', prompt: 'Wait for cancellation'}); await tools.call('child-handle', {_tag: 'save', handle: child}); await tools.call('model-started', {call: 1}); true",
+            code: "const child = await tools.call('delegate', {todo: 'Wait for cancellation', background: true}); await tools.call('child-handle', {_tag: 'save', handle: child}); await tools.call('model-started', {call: 1}); true",
           },
           {
             send: true,
@@ -75,7 +73,7 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
           },
           {
             send: true,
-            code: "const finished = await tools.call('agent-start', {agent: 'child', prompt: 'Return the result', overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['read_session'], deniedTools: ['agent-start'], systemPromptAddendum: 'Report the verified result'}}); await tools.call('child-handle', {_tag: 'save', handle: finished}); await tools.call('model-started', {call: 12}); true",
+            code: "const finished = await tools.call('delegate', {todo: 'Return the result', background: true, overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['read_session'], deniedTools: ['delegate'], systemPromptAddendum: 'Report the verified result'}}); await tools.call('child-handle', {_tag: 'save', handle: finished}); await tools.call('model-started', {call: 12}); true",
           },
           {
             send: false,
@@ -108,7 +106,7 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
               .join("\n")
             expect(system).toContain("Report the verified result")
             expect(system).toContain("**read_session**")
-            expect(system).not.toContain("**agent-start**")
+            expect(system).not.toContain("**delegate**")
           },
         })
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(steps)
@@ -149,8 +147,8 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
               artifactIdentity: LoadedArtifactIdentity.make("cell-child-fixture-source"),
             },
             {
-              ...ChildAgentExtension,
-              artifactIdentity: LoadedArtifactIdentity.make("child-agent-source"),
+              ...DelegateExtension,
+              artifactIdentity: LoadedArtifactIdentity.make("delegate-source"),
             },
           ],
           subagentRunner: "live",

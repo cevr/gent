@@ -192,9 +192,7 @@ describe("formatToolInput", () => {
   })
 
   test("formats delegate with correct fields", () => {
-    expect(formatToolInput("delegate", { agent: "explore", todo: "find the bug" })).toBe(
-      "explore:find the bug",
-    )
+    expect(formatToolInput("delegate", { todo: "find the bug" })).toBe("find the bug")
   })
 
   test("read supports file_path field", () => {

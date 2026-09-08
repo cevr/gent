@@ -103,6 +103,7 @@ const createParentTurnMessages = (
       role: "tool",
       parts: [
         makeJsonResult(delegateToolCallId, "delegate", {
+          _tag: "completed",
           output: "Explorer finished.",
           metadata: {
             mode: "parallel",

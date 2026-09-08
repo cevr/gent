@@ -122,11 +122,7 @@ function summarizeScopedPattern(
 }
 
 function summarizeDelegate(args: Schema.JsonObject): string {
-  const agent = getStringArg(args, "agent")
-  const todo = getStringArg(args, "todo")
-  if (agent.length === 0) return ""
-  if (todo.length === 0) return agent
-  return `${agent}:${truncateText(todo, 40)}`
+  return truncateText(getStringArg(args, "todo"), 40)
 }
 
 type ToolArgFormatter = (args: Schema.JsonObject, options?: ToolArgSummaryOptions) => string

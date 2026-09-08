@@ -151,17 +151,15 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("repo", {})).toBe("")
   })
 
-  test("delegate: agent and todo", () => {
-    expect(toolArgSummary("delegate", { agent: "explore", todo: "find the bug" })).toBe(
-      "explore:find the bug",
-    )
-    expect(toolArgSummary("delegate", { agent: "explore" })).toBe("explore")
+  test("delegate: todo", () => {
+    expect(toolArgSummary("delegate", { todo: "find the bug" })).toBe("find the bug")
+    expect(toolArgSummary("delegate", {})).toBe("")
   })
 
   test("delegate: truncates long todo text", () => {
     const longTodo = "a".repeat(60)
-    const result = toolArgSummary("delegate", { agent: "explore", todo: longTodo })
-    expect(result).toBe(`explore:${"a".repeat(40)}…`)
+    const result = toolArgSummary("delegate", { todo: longTodo })
+    expect(result).toBe(`${"a".repeat(40)}…`)
   })
 
   test("search_sessions: query", () => {

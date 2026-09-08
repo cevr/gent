@@ -5,8 +5,8 @@ import type { ToolInput } from "../../utils/parse-tool-output"
 
 const decodeDelegateInput = Schema.decodeUnknownOption(
   Schema.Struct({
-    agent: Schema.optional(Schema.String),
     todo: Schema.optional(Schema.String),
+    background: Schema.optional(Schema.Boolean),
   }),
 )
 
@@ -16,8 +16,10 @@ export function SubagentToolRenderer(props: ToolRendererProps) {
   const delegateInput = () => parseDelegateInput(props.toolCall.input)
 
   const title = () => {
-    const agent = delegateInput().pipe(Option.flatMap((inp) => Option.fromNullishOr(inp.agent)))
-    if (Option.isSome(agent)) return `delegate → ${agent.value}`
+    const background = delegateInput().pipe(
+      Option.flatMap((inp) => Option.fromNullishOr(inp.background)),
+    )
+    if (Option.isSome(background) && background.value) return "delegate (background)"
     return "delegate"
   }
 
