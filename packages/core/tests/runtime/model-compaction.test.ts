@@ -578,4 +578,61 @@ describe("model context compaction", () => {
       Effect.timeout("10 seconds"),
     )
   })
+
+  it.live("a requested compaction summarizes older history with the given focus", () => {
+    const messages = [
+      textMessage("old-1", "user", "first question", 1),
+      textMessage("old-2", "assistant", "first answer about the loader", 2),
+      textMessage("latest", "user", "latest user turn", 3),
+    ]
+    let capturedSystem = Option.none<string>()
+    const providerLayer = LanguageModelLayers.testStream((options) => {
+      capturedSystem = Option.fromNullishOr(options.prompt.content[0]).pipe(
+        Option.filter((message) => message.role === "system"),
+        Option.map((message) => String(message.content)),
+      )
+      return Effect.succeed(
+        Stream.fromIterable([
+          textDeltaPart("focused summary"),
+          finishPart({ finishReason: "stop", usage: { inputTokens: 20, outputTokens: 4 } }),
+        ]),
+      )
+    })
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        yield* createTranscript(messages)
+        const model = yield* LanguageModel.LanguageModel
+        const result = yield* compactModelContext({
+          modelId,
+          sessionId,
+          branchId,
+          messages,
+          budget: budget(),
+          force: { instructions: "keep the loader decisions" },
+          summaryModel: Effect.succeed(model),
+        })
+        expect(result.compacted).toBe(true)
+        expect(Option.getOrElse(capturedSystem, () => "")).toContain("keep the loader decisions")
+        const projected = result.projection.messages.map((message) => String(message.id))
+        // The latest user unit survives; everything before it is one summary.
+        expect(projected.at(-1)).toBe("latest")
+        expect(projected).toHaveLength(2)
+        expect(projected[0]).toContain("model-compaction:")
+        const details = result.projection.messages[0]?.metadata?.details
+        expect(Schema.is(ModelCompactionDetails)(details)).toBe(true)
+        if (Schema.is(ModelCompactionDetails)(details)) {
+          expect([...details.sourceMessageIds]).toEqual([
+            MessageId.make("old-1"),
+            MessageId.make("old-2"),
+          ])
+        }
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
+      ),
+      Effect.timeout("10 seconds"),
+    )
+  })
 })

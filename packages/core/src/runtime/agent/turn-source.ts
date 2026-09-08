@@ -1,4 +1,4 @@
-import { Effect, Option, Predicate, Stream } from "effect"
+import { DateTime, Effect, Option, Predicate, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
@@ -33,7 +33,17 @@ import {
   ModelContextCapabilityError,
   ModelContextCapabilityFailure,
 } from "../model-context.js"
-import { compactModelContext, MODEL_COMPACTION_OUTPUT_TOKENS } from "../model-compaction.js"
+import {
+  compactModelContext,
+  latestCompactionRevision,
+  MODEL_COMPACTION_OUTPUT_TOKENS,
+} from "../model-compaction.js"
+import { type ContextDirective, ModelContextLedger } from "../model-context-ledger.js"
+import {
+  latestUserMessageId,
+  messagesInCurrentWindow,
+  windowMarkerMessage,
+} from "../model-context-window.js"
 import { ModelRegistry } from "../model-registry.js"
 import { DEFAULT_RETRY_CONFIG, retryProviderCall } from "../retry"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../wide-event-boundary"
@@ -90,6 +100,47 @@ export type ExternalToolPersistence = {
   readonly assistantMessageId: MessageId
   readonly toolResultMessageId: MessageId
 }
+
+interface CompactionRequest {
+  readonly instructions?: string
+}
+
+/** A new window persists its marker; a compaction request only shapes this projection. */
+const applyContextDirective = Effect.fn("TurnHelpers.applyContextDirective")(function* <
+  E,
+  R,
+>(params: {
+  readonly directive: Option.Option<ContextDirective>
+  readonly messages: ReadonlyArray<Message>
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly persist: (message: Message) => Effect.Effect<Message, E, R>
+}) {
+  if (Option.isNone(params.directive)) {
+    return { durableMessages: params.messages, force: Option.none<CompactionRequest>() }
+  }
+  if (params.directive.value._tag === "Compact") {
+    return {
+      durableMessages: params.messages,
+      force: Option.some<CompactionRequest>({
+        instructions: params.directive.value.instructions,
+      }),
+    }
+  }
+  const anchor = latestUserMessageId(params.messages)
+  if (Option.isNone(anchor)) {
+    return { durableMessages: params.messages, force: Option.none<CompactionRequest>() }
+  }
+  const marker = yield* params.persist(
+    windowMarkerMessage({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      keepFromMessageId: anchor.value,
+      createdAt: yield* DateTime.nowAsDate,
+    }),
+  )
+  return { durableMessages: [...params.messages, marker], force: Option.none<CompactionRequest>() }
+})
 
 export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
   messageId: MessageId
@@ -289,7 +340,8 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   const eventPublisher = yield* EventPublisher
   const messageStorage = yield* MessageStorage
   const storageTransaction = yield* makeStorageTransaction
-  const persistSummary = (message: Message) =>
+  // Summaries and window markers persist the same way: once, with a delivered event.
+  const persistDurableMessage = (message: Message) =>
     Effect.gen(function* () {
       const persisted = yield* storageTransaction(
         Effect.gen(function* () {
@@ -313,18 +365,48 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       if (Option.isSome(persisted.envelope)) yield* eventPublisher.deliver(persisted.envelope.value)
       return persisted.message
     })
-  const compacted = yield* compactModelContext({
-    modelId: contextModelId,
+  // The model can ask, from a cell, for a fresh window or a focused summary.
+  const ledger = yield* ModelContextLedger
+  const { durableMessages, force } = yield* applyContextDirective({
+    directive: yield* ledger.takeDirective,
+    messages: resolved.messages,
     sessionId: params.sessionId,
     branchId: params.branchId,
-    messages: resolved.messages,
-    budget,
-    hash: params.hash,
-    persistSummary,
-    summaryModel: resolveAdmittedModel({
-      ...modelRequest,
-      hints: { ...modelRequest.hints, maxTokens: MODEL_COMPACTION_OUTPUT_TOKENS },
+    persist: persistDurableMessage,
+  })
+  const windowed = messagesInCurrentWindow(durableMessages)
+  const compact = (forced: Option.Option<CompactionRequest>) =>
+    compactModelContext({
+      modelId: contextModelId,
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      messages: windowed,
+      budget,
+      hash: params.hash,
+      persistSummary: persistDurableMessage,
+      force: Option.getOrUndefined(forced),
+      summaryModel: resolveAdmittedModel({
+        ...modelRequest,
+        hints: { ...modelRequest.hints, maxTokens: MODEL_COMPACTION_OUTPUT_TOKENS },
+      }),
+    })
+  // A requested summary that cannot be produced must not cost the turn.
+  const compacted = yield* compact(force).pipe(
+    Effect.catchTag("ModelCompactionError", (error) => {
+      if (Option.isNone(force)) return Effect.fail(error)
+      return Effect.logWarning("Requested compaction failed; continuing without it")
+        .pipe(Effect.annotateLogs({ error: String(error) }))
+        .pipe(Effect.andThen(compact(Option.none())))
     }),
+  )
+  yield* ledger.recordProjection({
+    estimatedTokens: compacted.projection.estimatedTokens,
+    availableInputTokens: compacted.projection.availableInputTokens,
+    contextLimitTokens: contextLimit,
+    omittedMessages: compacted.projection.omittedMessageIds.length,
+    compactedRevision: Option.getOrUndefined(
+      latestCompactionRevision(compacted.projection.messages),
+    ),
   })
   yield* eventPublisher.publish(
     ModelContextProjected.make({

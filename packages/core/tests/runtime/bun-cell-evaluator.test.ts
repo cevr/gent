@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Deferred, Effect, Fiber, Ref } from "effect"
+import { Deferred, Effect, Fiber, Ref, type Schema } from "effect"
 import {
   makeBunCellEvaluator,
   CellHost,
@@ -153,6 +153,36 @@ describe("Bun cell evaluation", () => {
       const invalid = yield* kernel.evaluate("const = ;").pipe(Effect.flip)
       expect(invalid.phase).toBe("compile")
       expect((yield* kernel.evaluate("count")).display).toBe("1")
+    }),
+  )
+
+  it.scopedLive("the context namespace is host-served and never becomes a binding", () =>
+    Effect.gen(function* () {
+      const names = yield* Ref.make<ReadonlyArray<string>>([])
+      const kernel = yield* makeKernel({
+        call: (name, input) =>
+          Ref.update(names, (seen) => [...seen, name]).pipe(
+            Effect.as({ echoed: input, name } satisfies Schema.Json),
+          ),
+      })
+      const status = yield* kernel.evaluate("(await context.status()).name")
+      expect(status.display).toBe("context.status")
+      const read = yield* kernel.evaluate(
+        "const page = await context.read('m1', { offset: 2, limit: 5 }); `${page.echoed.id}:${page.echoed.offset}:${page.echoed.limit}`",
+      )
+      expect(read.display).toBe("m1:2:5")
+      const compact = yield* kernel.evaluate(
+        "await context.compact('keep paths'); (await context.newWindow()).name",
+      )
+      expect(compact.display).toBe("context.newWindow")
+      expect(yield* Ref.get(names)).toEqual([
+        "context.status",
+        "context.read",
+        "context.compact",
+        "context.newWindow",
+      ])
+      expect(read.bindings).toEqual(["page"])
+      expect(read.bindings).not.toContain("context")
     }),
   )
 })

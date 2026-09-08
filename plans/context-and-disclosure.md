@@ -92,4 +92,17 @@ counsel review.
   compaction card folds `model-compaction` messages. Deviation: rows carry no
   duration because `ToolCall` in the feed has no timing field; add it when the
   tool-result event carries `durationMs`.
-- S1, S2, S3 open.
+- S2 shipped 2026-09-08. The cell exposes `context.status()`, `context.read(id,
+{ offset, limit })`, `context.compact(instructions?)`, and `context.newWindow()`
+  as host calls under the `context.` prefix (`cell-context-host.ts`). A
+  branch-owned `ModelContextLedger` records each projection and hands one
+  pending directive to the next projection in `turn-source.ts`. A new window
+  persists a durable `context-window` user marker and the projection keeps the
+  marker plus the latest user unit. A requested compaction runs even when the
+  projection fits, with the instructions appended to the summary system prompt,
+  and degrades to the plain projection if it fails. `context.read` resolves a
+  message id, a tool result id in the transcript, or an inner cell operation id
+  (`findByToolCallId`). Deviation: no trailing `[id: …]` marker on bounded
+  results; cell receipts already carry inner call ids, and bash saves full
+  output to a file path it names in the result.
+- S1, S3 open.

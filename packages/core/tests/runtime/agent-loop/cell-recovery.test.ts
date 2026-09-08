@@ -19,6 +19,7 @@ import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/work
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import { makeAmbientExtensionHostContextProvider } from "@gent/core-internal/runtime/make-extension-host-context"
 import { makeCellToolHost } from "@gent/core-internal/runtime/code-cell/cell-tool-host"
+import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger"
 import { CellResponse } from "@gent/core-internal/runtime/code-cell/cell-protocol"
 import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage"
 import { LoadedArtifactIdentity, type LoadedExtension } from "@gent/core-internal/domain/extension"
@@ -278,6 +279,7 @@ it.scopedLive(
             if (Option.isNone(selected)) return yield* Effect.die("Missing approval binding")
             const suspended = yield* makeCellToolHost({
               cell,
+              ledger: yield* ModelContextLedger.make,
               toolBindings: new Map([["approve", selected.value]]),
               profile: {
                 turnPublication: profile.publication,

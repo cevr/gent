@@ -11,6 +11,7 @@ import { CellOperationHost } from "./cell-kernel.js"
 import { withCellOperationReceipts } from "./cell-operation-receipt.js"
 import { makeCellToolHost, requireCellHostBranch } from "./cell-tool-host.js"
 import { CurrentCellToolOperation } from "./current-cell-tool-operation.js"
+import { ModelContextLedger } from "../model-context-ledger.js"
 
 /** Execute the current recorded outer call, never a call address supplied by cell code. */
 export const dispatchCell = Effect.fn("CellExecution.dispatch")(function* () {
@@ -20,7 +21,8 @@ export const dispatchCell = Effect.fn("CellExecution.dispatch")(function* () {
     })
   }
   const execution = yield* Effect.serviceOption(CellExecution)
-  if (Option.isNone(execution)) {
+  const ledger = yield* Effect.serviceOption(ModelContextLedger)
+  if (Option.isNone(execution) || Option.isNone(ledger)) {
     return yield* new AgentLoopError({ message: "Cell execution requires a branch-owned runtime" })
   }
   const call = yield* Effect.serviceOption(CurrentToolCall)
@@ -39,6 +41,7 @@ export const dispatchCell = Effect.fn("CellExecution.dispatch")(function* () {
     toolBindings: call.value.toolBindings,
     catalog: yield* buildCellCatalog(call.value.toolBindings),
     profile: { ...current, turnPublication },
+    ledger: ledger.value,
   }
   yield* requireCellHostBranch(params)
   const result = yield* execution.value

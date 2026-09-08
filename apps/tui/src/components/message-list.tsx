@@ -172,6 +172,7 @@ const isMessageItem = Predicate.or(
 /** Harness-authored user messages collapse to one line unless full detail is on. */
 const collapsedUserLabel = (customType: string): Option.Option<string> => {
   if (customType === "goal-context") return Option.some("↻ goal continuation")
+  if (customType === "context-window") return Option.some("⇣ new context window")
   return Option.none()
 }
 

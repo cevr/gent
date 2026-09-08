@@ -28,6 +28,7 @@ import {
   type Path,
 } from "effect"
 import { CellExecution } from "../code-cell/cell-execution.js"
+import { ModelContextLedger } from "../model-context-ledger.js"
 import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
@@ -304,8 +305,12 @@ export const makeAgentLoopBehavior = (
 
     const loopScope = yield* Scope.make()
     const interruptedRef = yield* Ref.make(false)
+    // Branch-owned turn services: the cell kernel and the model context ledger.
     const cellContext = yield* Layer.build(
-      CellExecution.Branch({ sessionId, branchId, interruptedRef }),
+      Layer.merge(
+        CellExecution.Branch({ sessionId, branchId, interruptedRef }),
+        ModelContextLedger.Branch,
+      ),
     ).pipe(Scope.provide(loopScope))
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())

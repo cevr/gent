@@ -2,7 +2,13 @@ import { Context, Effect, Layer, Option, Predicate, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { canonicalJsonString } from "effect-encore"
-import { InteractionRequestId, ToolCallId } from "../domain/ids.js"
+import {
+  type BranchId,
+  InteractionRequestId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "../domain/ids.js"
 import {
   ApprovalDecisionSchema,
   type InteractionRequestRecord,
@@ -36,6 +42,12 @@ const Row = Schema.Struct({
   request_id: Schema.NullOr(InteractionRequestId),
 })
 const DecisionRow = Schema.Struct({ decision_json: Schema.NullOr(Schema.String) })
+const LocatedRow = Schema.Struct({
+  assistant_message_id: MessageId,
+  cell_tool_call_id: ToolCallId,
+  operation_id: CellToolOperationId,
+  session_id: SessionId,
+})
 const hasInteraction = Predicate.or(Predicate.isTagged("Waiting"), Predicate.isTagged("Resuming"))
 
 export interface CellToolOperationKey {
@@ -54,6 +66,11 @@ export interface CellToolOperationStorageService {
     StorageError
   >
   readonly get: (key: CellToolOperationKey) => Effect.Effect<CellToolOperation, StorageError>
+  /** Locate an inner operation by the call id its receipt carries, within one branch. */
+  readonly findByToolCallId: (params: {
+    readonly branchId: BranchId
+    readonly toolCallId: ToolCallId
+  }) => Effect.Effect<Option.Option<CellToolOperation>, StorageError>
   /** Recover all inner outcomes without relying on a live worker or phase. */
   readonly listForCell: (
     cell: OwnedToolCallAddress,
@@ -196,6 +213,32 @@ export class CellToolOperationStorage extends Context.Service<
       const get = Effect.fn("CellToolOperationStorage.get")((key: CellToolOperationKey) =>
         own(key).pipe(Effect.andThen(read(key)), sql.withTransaction, Effect.mapError(failure)),
       )
+      const findByToolCallId = Effect.fn("CellToolOperationStorage.findByToolCallId")(
+        function* (params: { readonly branchId: BranchId; readonly toolCallId: ToolCallId }) {
+          return yield* Effect.gen(function* () {
+            const rows = yield* sql<typeof LocatedRow.Type>`
+            SELECT o.assistant_message_id, o.cell_tool_call_id, o.operation_id, m.session_id
+            FROM cell_tool_operations o
+            JOIN messages m ON m.id = o.assistant_message_id
+            WHERE m.branch_id = ${params.branchId}
+              AND json_extract(o.record_json, '$.toolCallId') = ${params.toolCallId}
+            LIMIT 1
+          `
+            const located = Option.fromUndefinedOr(rows[0])
+            if (Option.isNone(located)) return Option.none<CellToolOperation>()
+            const row = yield* Schema.decodeEffect(LocatedRow)(located.value)
+            const cell = {
+              sessionId: row.session_id,
+              branchId: params.branchId,
+              assistantMessageId: row.assistant_message_id,
+              toolCallId: row.cell_tool_call_id,
+            }
+            // Ownership goes through the same workspace-scoped reader as every other access.
+            if (Option.isNone(yield* readOwnedCall(cell))) return Option.none<CellToolOperation>()
+            return Option.some(yield* read({ cell, operationId: row.operation_id }))
+          }).pipe(sql.withTransaction, Effect.mapError(failure))
+        },
+      )
       const listForCell = Effect.fn("CellToolOperationStorage.listForCell")(function* (
         cell: OwnedToolCallAddress,
       ) {
@@ -321,7 +364,15 @@ export class CellToolOperationStorage extends Context.Service<
           yield* write(key, completed)
         }).pipe(sql.withTransaction, Effect.mapError(failure))
       })
-      return CellToolOperationStorage.of({ admit, get, listForCell, suspend, resume, complete })
+      return CellToolOperationStorage.of({
+        admit,
+        get,
+        findByToolCallId,
+        listForCell,
+        suspend,
+        resume,
+        complete,
+      })
     }),
   )
 }

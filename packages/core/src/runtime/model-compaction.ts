@@ -218,7 +218,8 @@ const normalizedMessages = (
   return { messages: normalized }
 }
 
-const partToText = (part: Message["parts"][number]): string => {
+/** One durable message part as text; `context.read` and the summary prompt share it. */
+export const partToText = (part: Message["parts"][number]): string => {
   switch (part.type) {
     case "text":
       return part.text
@@ -292,9 +293,17 @@ const failureMessage = (
   return String(value)
 }
 
+const summarySystemPrompt = (instructions: Option.Option<string>): string =>
+  Option.match(instructions, {
+    onNone: () => SUMMARY_SYSTEM_PROMPT,
+    onSome: (text) =>
+      `${SUMMARY_SYSTEM_PROMPT}\nThe assistant asked the summary to focus on: ${text}`,
+  })
+
 const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
   readonly model: LanguageModel.Service
   readonly sourceMessages: ReadonlyArray<Message>
+  readonly instructions: Option.Option<string>
 }) {
   const input = Message.cases.regular.make({
     id: MessageId.make("model-compaction-input"),
@@ -309,7 +318,7 @@ const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
   yield* Effect.scoped(
     Stream.runForEach(
       params.model.streamText({
-        prompt: toPrompt([input], { systemPrompt: SUMMARY_SYSTEM_PROMPT }),
+        prompt: toPrompt([input], { systemPrompt: summarySystemPrompt(params.instructions) }),
       }),
       (part: Response.AnyPart) => {
         if (part.type === "finish") usage = responseUsage(part.usage)
@@ -362,12 +371,36 @@ const summaryBudget = (budget: ModelContextBudget): ModelContextBudget => {
   })
 }
 
+/** Newest summary revision in a projection, for status reporting. */
+export const latestCompactionRevision = (
+  messages: ReadonlyArray<Message>,
+): Option.Option<string> => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (Predicate.isUndefined(message) || !isSummaryMessage(message)) continue
+    const details = message.metadata?.details
+    if (isCompactionDetails(details)) return Option.some(details.sourceRevision)
+  }
+  return Option.none()
+}
+
+/** A forced compaction treats everything before the newest user message as omitted. */
+const forcedOmission = (normalized: NormalizedMessages): ReadonlySet<MessageId> => {
+  const lastUser = normalized.messages.findLastIndex((message) => message.role === "user")
+  if (lastUser <= 0) return new Set()
+  return new Set(
+    normalized.messages
+      .slice(0, lastUser)
+      .filter((message) => !isSummaryMessage(message))
+      .map((message) => message.id),
+  )
+}
+
 const selectSummarySource = (
   normalized: NormalizedMessages,
-  projection: ModelContextProjection,
+  omitted: ReadonlySet<MessageId>,
   budget: ModelContextBudget,
 ): Option.Option<ReadonlyArray<Message>> => {
-  const omitted = new Set(projection.omittedMessageIds)
   const omittedIndexes = normalized.messages.flatMap((message, index) => {
     if (omitted.has(message.id) && !isSummaryMessage(message)) return [index]
     return []
@@ -607,6 +640,8 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
     readonly budget: ModelContextBudget
     readonly hash?: RevisionHash
     readonly persistSummary?: SummaryPersister
+    /** Summarize even when the projection fits; the model asked for it from a cell. */
+    readonly force?: { readonly instructions?: string }
     readonly summaryModel: Effect.Effect<
       LanguageModel.Service,
       ProviderError | ProviderAuthError,
@@ -618,7 +653,8 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
     const normalized = normalizedMessages(params.messages, hash)
     const initial = projectModelContext(normalized.messages, params.budget)
     if (Result.isFailure(initial)) return yield* projectionFailure(params.modelId, initial.failure)
-    if (!initial.success.truncated) {
+    const forced = Option.fromUndefinedOr(params.force)
+    if (!initial.success.truncated && Option.isNone(forced)) {
       return ModelCompactionResult.make({
         messages: [...normalized.messages],
         projection: initial.success,
@@ -626,7 +662,11 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
       })
     }
 
-    const sourceOption = selectSummarySource(normalized, initial.success, params.budget)
+    const omitted = Option.match(forced, {
+      onNone: (): ReadonlySet<MessageId> => new Set(initial.success.omittedMessageIds),
+      onSome: () => forcedOmission(normalized),
+    })
+    const sourceOption = selectSummarySource(normalized, omitted, params.budget)
     if (Option.isNone(sourceOption)) {
       return ModelCompactionResult.make({
         messages: [...normalized.messages],
@@ -646,9 +686,13 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
         ),
       ),
       Effect.flatMap((model) =>
-        summarize({ model, sourceMessages }).pipe(
-          Effect.mapError((failure) => compactionFailure(params.modelId, failure)),
-        ),
+        summarize({
+          model,
+          sourceMessages,
+          instructions: Option.flatMap(forced, (value) =>
+            Option.fromUndefinedOr(value.instructions),
+          ),
+        }).pipe(Effect.mapError((failure) => compactionFailure(params.modelId, failure))),
       ),
     )
 

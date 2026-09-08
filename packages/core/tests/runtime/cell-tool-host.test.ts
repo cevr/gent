@@ -32,6 +32,7 @@ import {
 } from "@gent/core-internal/runtime/code-cell/cell-tool-host"
 import { ApprovalService } from "@gent/core-internal/runtime/approval-service"
 import { recoverCellExecution } from "@gent/core-internal/runtime/code-cell/cell-recovery"
+import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger"
 import { CellResponse } from "@gent/core-internal/runtime/code-cell/cell-protocol"
 import { SessionProfileCache } from "@gent/core-internal/runtime/session-profile"
 import { CellExecutionStorage } from "@gent/core-internal/storage/cell-execution-storage"
@@ -110,7 +111,7 @@ const currentHostParams = Effect.gen(function* () {
       return bindings
     }),
   )
-  return { cell, profile: turnProfile, toolBindings }
+  return { cell, profile: turnProfile, toolBindings, ledger: yield* ModelContextLedger.make }
 })
 
 it.scopedLive(

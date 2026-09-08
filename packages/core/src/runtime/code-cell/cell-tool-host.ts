@@ -14,11 +14,18 @@ import {
 import { CellOperationHost } from "./cell-kernel.js"
 import { type CellCatalog, CellEvaluationError } from "./cell-protocol.js"
 import { CurrentCellToolOperation } from "./current-cell-tool-operation.js"
+import { handleContextCall, isContextCall } from "./cell-context-host.js"
+import { ModelContextLedger } from "../model-context-ledger.js"
 import { executeBoundCellTool, cellToolResultValue } from "./cell-tool-call.js"
 
 interface CellToolHostParams {
   readonly cell: OwnedToolCallAddress
   readonly profile: LiveAgentLoopTurnProfile
+}
+
+interface CellContextHostParams {
+  /** The branch ledger the `context` namespace reads and schedules against. */
+  readonly ledger: typeof ModelContextLedger.Service
 }
 
 export const requireCellHostBranch = (params: CellToolHostParams) =>
@@ -73,10 +80,11 @@ export const resumeCellToolOperation = Effect.fn("CellToolHost.resume")(
 
 /** One outer cell's host. The existing publication owns every admitted call. */
 export const makeCellToolHost = (
-  params: CellToolHostParams & {
-    readonly toolBindings: ReadonlyMap<string, ResolvedToolCapability>
-    readonly catalog?: CellCatalog
-  },
+  params: CellToolHostParams &
+    CellContextHostParams & {
+      readonly toolBindings: ReadonlyMap<string, ResolvedToolCapability>
+      readonly catalog?: CellCatalog
+    },
 ): typeof CellOperationHost.Service =>
   CellOperationHost.of({
     catalog: params.catalog,
@@ -84,6 +92,15 @@ export const makeCellToolHost = (
       runAgentLoopTurnProfile(params.profile)(
         Effect.gen(function* () {
           yield* requireCellHostBranch(params)
+          // The context namespace never touches tool admission: reads are durable
+          // lookups and directives are idempotent until the next projection.
+          if (isContextCall(request.name)) {
+            return yield* handleContextCall({
+              branchId: params.cell.branchId,
+              name: request.name,
+              input: request.input,
+            }).pipe(Effect.provideService(ModelContextLedger, params.ledger))
+          }
           const storage = yield* CellToolOperationStorage
           const captured = Option.fromUndefinedOr(params.toolBindings.get(request.name))
           if (Option.isNone(captured))

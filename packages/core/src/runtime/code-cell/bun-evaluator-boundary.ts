@@ -152,8 +152,31 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
         ),
       ),
   }
-  const reserved = new Set(["tools", "console", "require"])
+  // The context namespace is host-served: every method is one host call under `context.`.
+  const contextCall = (operation: string, input: Schema.Json) =>
+    runPromise(
+      Schema.decodeEffect(Schema.Json)(input).pipe(
+        Effect.mapError((cause) => failure("execute", cause)),
+        Effect.flatMap((decoded) => host.call(`context.${operation}`, decoded)),
+      ),
+    )
+  const context = {
+    status: () => contextCall("status", {}),
+    read: (id: string, options: { offset?: number; limit?: number } = {}) =>
+      contextCall("read", { id: String(id), ...options }),
+    compact: (instructions?: string) => {
+      if (Predicate.isUndefined(instructions)) return contextCall("compact", {})
+      return contextCall("compact", { instructions: String(instructions) })
+    },
+    newWindow: () => contextCall("newWindow", {}),
+  }
+  const reserved = new Set(["tools", "context", "console", "require"])
   Object.defineProperty(globalThis, "tools", { value: proxy, writable: true, configurable: true })
+  Object.defineProperty(globalThis, "context", {
+    value: context,
+    writable: true,
+    configurable: true,
+  })
   if (!Predicate.isFunction(Reflect.get(globalThis, "require"))) {
     Object.defineProperty(globalThis, "require", {
       value: createRequire(`${environment.workingDirectory}/`),
