@@ -1,5 +1,6 @@
+import { Effect } from "effect"
 import { ExtensionId } from "../../domain/ids.js"
-import { defineExtension } from "../../extensions/api.js"
+import { defineExtension, ExtensionHost } from "../../extensions/api.js"
 import { CellTool } from "./cell-tool.js"
 
 export const CELL_EXTENSION_ID = ExtensionId.make("@gent/cell")
@@ -13,5 +14,8 @@ export const CELL_EXTENSION_ID = ExtensionId.make("@gent/cell")
  */
 export const CellExtension = defineExtension({
   id: CELL_EXTENSION_ID,
-  tools: [CellTool],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("tool", CellTool)
+  }),
 })

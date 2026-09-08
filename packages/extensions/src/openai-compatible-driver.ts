@@ -6,6 +6,7 @@ import {
   AuthMethod,
   ProviderAuthError,
   defineExtension,
+  ExtensionHost,
   type ModelDriverContribution,
   type ProviderHints,
   type ProviderResolution,
@@ -99,19 +100,20 @@ const makeApiKeyCompatExtension = (params: {
 }) =>
   defineExtension({
     id: params.extensionId,
-    modelDrivers: () =>
-      Effect.gen(function* () {
-        const envApiKey = yield* readOptionalEnv(params.envVarName)
-        return [
-          makeApiKeyCompatDriver({
-            id: params.driverId,
-            name: params.name,
-            envApiKey,
-            envVarName: params.envVarName,
-            apiUrl: Option.some(params.apiUrl),
-          }),
-        ]
-      }),
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      const envApiKey = yield* readOptionalEnv(params.envVarName)
+      yield* host.register(
+        "modelDriver",
+        makeApiKeyCompatDriver({
+          id: params.driverId,
+          name: params.name,
+          envApiKey,
+          envVarName: params.envVarName,
+          apiUrl: Option.some(params.apiUrl),
+        }),
+      )
+    }),
   })
 
 export const GoogleExtension = makeApiKeyCompatExtension({

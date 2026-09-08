@@ -76,6 +76,7 @@ import {
   defineResource,
   defineExtension,
   ExtensionContext,
+  ExtensionHost,
   request,
   tool,
 } from "@gent/core/extensions/api"
@@ -457,56 +458,61 @@ describe("AgentRunner", () => {
         const input = { agent, prompt: "Wait for the parent", requestId }
         const extension = defineExtension({
           id: "child-lifecycle",
-          agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME }), agent],
-          tools: [
-            tool({
-              id: "start-child",
-              description: "Start a durable child",
-              params: Schema.Struct({}),
-              output: Schema.Boolean,
-              execute: Effect.fn("test.startChild")(function* () {
-                const ctx = yield* ExtensionContext
-                const first = yield* ctx.Agent.start(input)
-                expect(yield* ctx.Agent.start(input)).toEqual(first)
-                yield* Ref.set(child, Option.some(first))
-                // Hold the parent until the gated child model starts, fixing provider order.
-                yield* controls.waitForCall(1)
-                return true
-              }),
-            }),
-          ],
-          requests: [
-            request({
-              id: "child-status",
-              input: Schema.Literals(["inspect", "cancel", "unowned-start", "list"]),
-              output: Schema.Boolean,
-              execute: Effect.fn("test.childStatus")(
-                function* (action) {
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("agent", new AgentDefinition({ name: DEFAULT_AGENT_NAME }), agent)
+            yield* host.register(
+              "tool",
+              tool({
+                id: "start-child",
+                description: "Start a durable child",
+                params: Schema.Struct({}),
+                output: Schema.Boolean,
+                execute: Effect.fn("test.startChild")(function* () {
                   const ctx = yield* ExtensionContext
-                  if (action === "unowned-start") {
-                    const error = yield* ctx.Agent.start(input).pipe(Effect.flip)
-                    return error.message === "Child start requires a host-owned tool call"
-                  }
-                  if (action === "inspect")
-                    return Option.isSome((yield* ctx.Agent.inspect({ requestId })).completion)
-                  if (action === "cancel") {
-                    yield* ctx.Agent.cancel({ requestId })
-                    return true
-                  }
-                  const children = yield* ctx.Agent.list()
-                  return children.length === 1 && children[0]?.requestId === requestId
-                },
-                Effect.mapError(
-                  (cause) =>
-                    new CapabilityError({
-                      extensionId: ExtensionId.make("child-lifecycle"),
-                      capabilityId: "child-status",
-                      reason: String(cause),
-                    }),
+                  const first = yield* ctx.Agent.start(input)
+                  expect(yield* ctx.Agent.start(input)).toEqual(first)
+                  yield* Ref.set(child, Option.some(first))
+                  // Hold the parent until the gated child model starts, fixing provider order.
+                  yield* controls.waitForCall(1)
+                  return true
+                }),
+              }),
+            )
+            yield* host.register(
+              "request",
+              request({
+                id: "child-status",
+                input: Schema.Literals(["inspect", "cancel", "unowned-start", "list"]),
+                output: Schema.Boolean,
+                execute: Effect.fn("test.childStatus")(
+                  function* (action) {
+                    const ctx = yield* ExtensionContext
+                    if (action === "unowned-start") {
+                      const error = yield* ctx.Agent.start(input).pipe(Effect.flip)
+                      return error.message === "Child start requires a host-owned tool call"
+                    }
+                    if (action === "inspect")
+                      return Option.isSome((yield* ctx.Agent.inspect({ requestId })).completion)
+                    if (action === "cancel") {
+                      yield* ctx.Agent.cancel({ requestId })
+                      return true
+                    }
+                    const children = yield* ctx.Agent.list()
+                    return children.length === 1 && children[0]?.requestId === requestId
+                  },
+                  Effect.mapError(
+                    (cause) =>
+                      new CapabilityError({
+                        extensionId: ExtensionId.make("child-lifecycle"),
+                        capabilityId: "child-status",
+                        reason: String(cause),
+                      }),
+                  ),
                 ),
-              ),
-            }),
-          ],
+              }),
+            )
+          }),
         })
         const { client, sessionId, branchId } = yield* createRpcHarness({
           providerLayer,

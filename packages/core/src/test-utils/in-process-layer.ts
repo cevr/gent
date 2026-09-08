@@ -7,7 +7,7 @@
 
 import type { LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
-import { Layer } from "effect"
+import { Effect, Layer } from "effect"
 import type { AgentDefinition } from "../domain/agent.js"
 import { Auth } from "../domain/auth.js"
 import { Permission } from "../domain/permission.js"
@@ -17,7 +17,7 @@ import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
-import { defineExtension } from "../extensions/api.js"
+import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { makeServerRootLayer } from "../server/server-root.js"
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
@@ -33,7 +33,10 @@ const buildLayer = (
 ) => {
   const testAgentsExtension = defineExtension({
     id: "test-agents",
-    agents: config.agents,
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register("agent", ...config.agents)
+    }),
   })
 
   return makeServerRootLayer({

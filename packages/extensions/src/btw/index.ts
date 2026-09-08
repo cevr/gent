@@ -15,6 +15,7 @@ import {
   defineRequests,
   defineResource,
   ExtensionContext,
+  ExtensionHost,
   makeRunSpec,
   request,
   requireCurrentAgent,
@@ -208,6 +209,9 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
 
 export const BtwExtension = defineExtension({
   id: BTW_EXTENSION_ID,
-  resources: [SideQuestionRunsResource],
-  requests: [BtwRpc.Ask, BtwRpc.Progress],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("resource", SideQuestionRunsResource)
+    yield* host.register("request", BtwRpc.Ask, BtwRpc.Progress)
+  }),
 })

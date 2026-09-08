@@ -69,10 +69,10 @@ describe("runtime slots", () => {
   test("systemPrompt composes explicit hook rewrites in scope order", () => {
     const extensions = [
       makeExt("builtin", "builtin", {
-        hooks: [hook.systemPrompt((input) => Effect.succeed(`${input.basePrompt}[builtin]`))],
+        hooks: [hook("systemPrompt", (input) => Effect.succeed(`${input.basePrompt}[builtin]`))],
       }),
       makeExt("project", "project", {
-        hooks: [hook.systemPrompt((input) => Effect.succeed(`${input.basePrompt}[project]`))],
+        hooks: [hook("systemPrompt", (input) => Effect.succeed(`${input.basePrompt}[project]`))],
       }),
     ]
 
@@ -92,10 +92,12 @@ describe("runtime slots", () => {
   test("systemPrompt isolates failing hook rewrites", () => {
     const extensions = [
       makeExt("builtin", "builtin", {
-        hooks: [hook.systemPrompt((input) => Effect.succeed(`${input.basePrompt}[builtin-hook]`))],
+        hooks: [
+          hook("systemPrompt", (input) => Effect.succeed(`${input.basePrompt}[builtin-hook]`)),
+        ],
       }),
       makeExt("project", "project", {
-        hooks: [hook.systemPrompt(() => Effect.fail(new BoomError({ reason: "bad prompt" })))],
+        hooks: [hook("systemPrompt", () => Effect.fail(new BoomError({ reason: "bad prompt" })))],
       }),
     ]
 
@@ -118,7 +120,7 @@ describe("runtime slots", () => {
       const slots = compileExtensionHooks([
         makeExt("readonly", "project", {
           hooks: [
-            hook.systemPrompt(() =>
+            hook("systemPrompt", () =>
               Effect.gen(function* () {
                 const ctx = yield* ExtensionContext
                 yield* Ref.set(sawProcessAuthority, "run" in ctx.Process)
@@ -143,10 +145,10 @@ describe("runtime slots", () => {
   test("toolResult applies explicit resource enrichments in scope order", () => {
     const extensions = [
       makeExt("builtin", "builtin", {
-        hooks: [hook.toolResult((input) => Effect.succeed(`${String(input.result)}-builtin`))],
+        hooks: [hook("toolResult", (input) => Effect.succeed(`${String(input.result)}-builtin`))],
       }),
       makeExt("explicit", "project", {
-        hooks: [hook.toolResult((input) => Effect.succeed(`${String(input.result)}-explicit`))],
+        hooks: [hook("toolResult", (input) => Effect.succeed(`${String(input.result)}-explicit`))],
       }),
     ]
 
@@ -172,8 +174,8 @@ describe("runtime slots", () => {
     const slots = compileExtensionHooks([
       makeExt("builtin", "builtin", {
         hooks: [
-          hook.toolCall(() => Effect.undefined),
-          hook.toolCall(() =>
+          hook("toolCall", () => Effect.undefined),
+          hook("toolCall", () =>
             Effect.succeed({
               _tag: "deny",
               message: "blocked by hook",
@@ -184,7 +186,7 @@ describe("runtime slots", () => {
       }),
       makeExt("project", "project", {
         hooks: [
-          hook.toolCall(() =>
+          hook("toolCall", () =>
             Effect.succeed({
               _tag: "deny",
               message: "project should not run",
@@ -222,7 +224,7 @@ describe("runtime slots", () => {
     const extensions = [
       makeExt("first", "builtin", {
         hooks: [
-          hook.turnAfter(() => {
+          hook("turnAfter", () => {
             calls.push("first")
             return Effect.fail(new BoomError({ reason: "first" }))
           }),
@@ -230,7 +232,7 @@ describe("runtime slots", () => {
       }),
       makeExt("second", "user", {
         hooks: [
-          hook.turnAfter(() => {
+          hook("turnAfter", () => {
             calls.push("second")
             return Effect.fail(new BoomError({ reason: "second" }))
           }),
@@ -238,7 +240,7 @@ describe("runtime slots", () => {
       }),
       makeExt("third", "project", {
         hooks: [
-          hook.turnAfter(() => {
+          hook("turnAfter", () => {
             calls.push("third")
             return Effect.fail(new BoomError({ reason: "third" }))
           }),
@@ -272,7 +274,7 @@ describe("runtime slots", () => {
       const slots = compileExtensionHooks([
         makeExt("readonly-lifecycle", "project", {
           hooks: [
-            hook.turnAfter(() =>
+            hook("turnAfter", () =>
               Effect.gen(function* () {
                 const ctx = yield* ExtensionContext
                 yield* Ref.set(sawProcessAuthority, "run" in ctx.Process)
@@ -306,7 +308,7 @@ describe("runtime slots", () => {
       const slots = compileExtensionHooks([
         makeExt("resource-backed", "builtin", {
           hooks: [
-            hook.turnAfter(() =>
+            hook("turnAfter", () =>
               Effect.gen(function* () {
                 const service = yield* HookCounter
                 yield* service.increment

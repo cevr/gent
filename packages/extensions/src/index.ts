@@ -3,12 +3,11 @@ import {
   type GentExtension,
   defineExtension,
   ExtensionContext,
+  ExtensionHost,
   ExtensionId,
-  hook,
   tool,
 } from "@gent/core/extensions/api"
 import { BuiltinArtifactIdentity } from "./artifact-identity.js"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ExecToolsExtension } from "./exec-tools/index.js"
 import { DelegateExtension } from "./delegate/delegate-tool.js"
 import { AgentsExtension } from "./agents.js"
@@ -66,32 +65,42 @@ const RenameSessionTool = tool({
 
 export const FsToolsExtension = defineExtension({
   id: "@gent/fs-tools",
-  tools: [ReadTool, WriteTool, EditTool, GlobTool, GrepTool],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("tool", ReadTool, WriteTool, EditTool, GlobTool, GrepTool)
+  }),
 })
 
 export const NetworkToolsExtension = defineExtension({
   id: "@gent/network-tools",
-  tools: [WebFetchTool, WebSearchTool],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("tool", WebFetchTool, WebSearchTool)
+  }),
 })
 
 export const SessionToolsExtension = defineExtension({
   id: "@gent/session-tools",
-  tools: [SearchSessionsTool, ReadSessionTool, RenameSessionTool],
-  hooks: [
-    hook.systemPrompt((input) => {
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("tool", SearchSessionsTool, ReadSessionTool, RenameSessionTool)
+    yield* host.on("systemPrompt", (input) => {
       if (input.interactive === false) {
         return Effect.succeed(input.basePrompt)
       }
       return Effect.succeed(input.basePrompt + NAMING_INSTRUCTION)
-    }),
-  ],
+    })
+  }),
 })
 
 export const INTERACTION_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/interaction-tools")
 
 export const InteractionToolsExtension = defineExtension({
   id: INTERACTION_TOOLS_EXTENSION_ID,
-  tools: [AskUserTool, PromptTool],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("tool", AskUserTool, PromptTool)
+  }),
 })
 
 export {
@@ -108,7 +117,7 @@ export {
   ArtifactsExtension,
 }
 
-export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner>> = [
+export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   HandoffExtension,
   GoalExtension,
   BtwExtension,

@@ -56,7 +56,7 @@ import {
   CapabilityError,
   defineExtension,
   ExtensionContext,
-  ExtensionSetupContext,
+  ExtensionHost,
   request,
   tool,
 } from "@gent/core/extensions/api"
@@ -69,6 +69,7 @@ import { ProcessRunnerLive } from "../../src/utils/run-process"
 import { WideEventLogger, type LogEvent } from "../../src/runtime/wide-event-boundary"
 import DynamicScratchpadExtension from "../../../../examples/extensions/dynamic-scratchpad.js"
 import { ExtensionProtocolError } from "../../src/server/errors"
+import { registerContributions } from "../../src/domain/extension-host.js"
 class ProfileToken extends Context.Service<
   ProfileToken,
   {
@@ -92,7 +93,7 @@ describe("extension command RPCs", () => {
   // Server-visible slash commands are slash-decorated requests.
   const TestCommandsExtension: GentExtension = {
     manifest: { id: ExtensionId.make("@test/commands") },
-    setup: Effect.succeed({
+    setup: registerContributions({
       requests: [
         request({
           id: "greet",
@@ -711,35 +712,35 @@ describe("extension command RPCs", () => {
       const ext: GentExtension = {
         manifest: { id: ExtensionId.make("@test/live-profile-service-request") },
         setup: Effect.gen(function* () {
-          const ctx = yield* ExtensionSetupContext
-          return {
-            resources: [
-              defineResource({
-                id: "test/extension-commands-rpc/live-profile-token",
-                tag: ProfileToken,
-                scope: "process",
-                layer: Layer.succeed(
-                  ProfileToken,
-                  ProfileToken.of({
-                    read: Effect.succeed(`live:${ctx.cwd}`),
-                  }),
-                ),
-              }),
-            ],
-            requests: [
-              request({
-                id: "read-live-profile-token",
-                extensionId: ExtensionId.make("@test/live-profile-service-request"),
-                input: Schema.String,
-                output: Schema.String,
-                execute: () =>
-                  Effect.gen(function* () {
-                    const token = yield* ProfileToken
-                    return yield* token.read
-                  }),
-              }),
-            ],
-          }
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            defineResource({
+              id: "test/extension-commands-rpc/live-profile-token",
+              tag: ProfileToken,
+              scope: "process",
+              layer: Layer.succeed(
+                ProfileToken,
+                ProfileToken.of({
+                  read: Effect.succeed(`live:${host.cwd}`),
+                }),
+              ),
+            }),
+          )
+          yield* host.register(
+            "request",
+            request({
+              id: "read-live-profile-token",
+              extensionId: ExtensionId.make("@test/live-profile-service-request"),
+              input: Schema.String,
+              output: Schema.String,
+              execute: () =>
+                Effect.gen(function* () {
+                  const token = yield* ProfileToken
+                  return yield* token.read
+                }),
+            }),
+          )
         }),
       }
       yield* Effect.scoped(
@@ -800,44 +801,44 @@ describe("extension command RPCs", () => {
       const ext: GentExtension = {
         manifest: { id: ExtensionId.make("@test/live-profile-drain") },
         setup: Effect.gen(function* () {
-          const ctx = yield* ExtensionSetupContext
-          return {
-            resources: [
-              defineResource({
-                id: "test/extension-commands-rpc/live-profile-drain-token",
-                tag: ProfileToken,
-                scope: "process",
-                layer: Layer.effect(
-                  ProfileToken,
-                  Effect.acquireRelease(
-                    Effect.succeed(
-                      ProfileToken.of({
-                        read: Effect.gen(function* () {
-                          yield* Deferred.succeed(readStarted, void 0)
-                          yield* Deferred.await(releaseRead)
-                          return `drained:${ctx.cwd}`
-                        }),
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            defineResource({
+              id: "test/extension-commands-rpc/live-profile-drain-token",
+              tag: ProfileToken,
+              scope: "process",
+              layer: Layer.effect(
+                ProfileToken,
+                Effect.acquireRelease(
+                  Effect.succeed(
+                    ProfileToken.of({
+                      read: Effect.gen(function* () {
+                        yield* Deferred.succeed(readStarted, void 0)
+                        yield* Deferred.await(releaseRead)
+                        return `drained:${host.cwd}`
                       }),
-                    ),
-                    () => Deferred.succeed(resourceStopped, void 0),
+                    }),
                   ),
+                  () => Deferred.succeed(resourceStopped, void 0),
                 ),
-              }),
-            ],
-            requests: [
-              request({
-                id: "read-live-profile-drain-token",
-                extensionId: ExtensionId.make("@test/live-profile-drain"),
-                input: Schema.String,
-                output: Schema.String,
-                execute: () =>
-                  Effect.gen(function* () {
-                    const token = yield* ProfileToken
-                    return yield* token.read
-                  }),
-              }),
-            ],
-          }
+              ),
+            }),
+          )
+          yield* host.register(
+            "request",
+            request({
+              id: "read-live-profile-drain-token",
+              extensionId: ExtensionId.make("@test/live-profile-drain"),
+              input: Schema.String,
+              output: Schema.String,
+              execute: () =>
+                Effect.gen(function* () {
+                  const token = yield* ProfileToken
+                  return yield* token.read
+                }),
+            }),
+          )
         }),
       }
 
@@ -947,11 +948,14 @@ describe("extension command RPCs", () => {
       const resourceStopped = yield* Deferred.make<void>()
       const agentExtension = defineExtension({
         id: "@test/live-profile-agents",
-        agents: e2ePreset.agents,
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("agent", ...e2ePreset.agents)
+        }),
       })
       const ext: GentExtension = {
         manifest: { id: ExtensionId.make("@test/live-profile-cancel") },
-        setup: Effect.succeed({
+        setup: registerContributions({
           resources: [
             defineResource({
               id: "test/extension-commands-rpc/live-profile-cancel-token",
@@ -1119,11 +1123,14 @@ describe("extension command RPCs", () => {
       const resourceStopped = yield* Deferred.make<void>()
       const agentExtension = defineExtension({
         id: "@test/live-profile-agents-interaction",
-        agents: e2ePreset.agents,
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("agent", ...e2ePreset.agents)
+        }),
       })
       const ext: GentExtension = {
         manifest: { id: ExtensionId.make("@test/live-profile-interaction") },
-        setup: Effect.succeed({
+        setup: registerContributions({
           resources: [
             defineResource({
               id: "test/extension-commands-rpc/live-profile-interaction-token",
@@ -1325,7 +1332,7 @@ describe("extension command RPCs", () => {
       const extensionId = ExtensionId.make("@test/read-context")
       const ext: GentExtension = {
         manifest: { id: extensionId },
-        setup: Effect.succeed({
+        setup: registerContributions({
           requests: [
             request({
               id: "inspect",
@@ -1457,7 +1464,7 @@ describe("extension command RPCs", () => {
       })
       const ext: GentExtension = {
         manifest: { id: extensionId },
-        setup: Effect.succeed({
+        setup: registerContributions({
           requests: [
             request({
               id: "install-dynamic",

@@ -9,6 +9,7 @@ import {
   CapabilityError,
   defineExtension,
   ExtensionContext,
+  ExtensionHost,
   ExtensionId,
   request,
 } from "@gent/core/extensions/api"
@@ -104,59 +105,64 @@ const command = (params: {
       ),
   })
 
+const WorkflowCommands = [
+  command({
+    id: "plan-command",
+    slash: {
+      trigger: "plan",
+      name: "Plan",
+      description: "Create an adversarial implementation plan",
+      category: "Workflow",
+      keybind: "ctrl+shift+p",
+    },
+    recipe: planRecipe,
+  }),
+  command({
+    id: "audit-command",
+    slash: {
+      trigger: "audit",
+      name: "Audit",
+      description: "Detect, audit, and report code issues",
+      category: "Workflow",
+    },
+    recipe: auditRecipe,
+  }),
+  command({
+    id: "review-command",
+    slash: {
+      trigger: "review",
+      name: "Review",
+      description: "Run adversarial dual-model code review",
+      category: "Tools",
+    },
+    recipe: reviewRecipe,
+  }),
+  command({
+    id: "counsel-command",
+    slash: {
+      trigger: "counsel",
+      name: "Counsel",
+      description: "Get a cross-vendor second opinion",
+      category: "Tools",
+    },
+    recipe: counselRecipe,
+  }),
+  command({
+    id: "research-command",
+    slash: {
+      trigger: "research",
+      name: "Research",
+      description: "Research external repositories",
+      category: "Tools",
+    },
+    recipe: researchRecipe,
+  }),
+]
+
 export const WorkflowsExtension = defineExtension({
   id: WORKFLOWS_EXTENSION_ID,
-  requests: [
-    command({
-      id: "plan-command",
-      slash: {
-        trigger: "plan",
-        name: "Plan",
-        description: "Create an adversarial implementation plan",
-        category: "Workflow",
-        keybind: "ctrl+shift+p",
-      },
-      recipe: planRecipe,
-    }),
-    command({
-      id: "audit-command",
-      slash: {
-        trigger: "audit",
-        name: "Audit",
-        description: "Detect, audit, and report code issues",
-        category: "Workflow",
-      },
-      recipe: auditRecipe,
-    }),
-    command({
-      id: "review-command",
-      slash: {
-        trigger: "review",
-        name: "Review",
-        description: "Run adversarial dual-model code review",
-        category: "Tools",
-      },
-      recipe: reviewRecipe,
-    }),
-    command({
-      id: "counsel-command",
-      slash: {
-        trigger: "counsel",
-        name: "Counsel",
-        description: "Get a cross-vendor second opinion",
-        category: "Tools",
-      },
-      recipe: counselRecipe,
-    }),
-    command({
-      id: "research-command",
-      slash: {
-        trigger: "research",
-        name: "Research",
-        description: "Research external repositories",
-        category: "Tools",
-      },
-      recipe: researchRecipe,
-    }),
-  ],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("request", ...WorkflowCommands)
+  }),
 })

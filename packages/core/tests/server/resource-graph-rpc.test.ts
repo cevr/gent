@@ -28,6 +28,7 @@ import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import {
   defineExtension,
   defineResource,
+  ExtensionHost,
   request,
   type GentExtension,
 } from "@gent/core/extensions/api"
@@ -66,34 +67,38 @@ const makeColdResourceExtension = (events: Array<string>): GentExtension => {
   return {
     ...defineExtension({
       id: coldResourceExtensionId,
-      requests: [ColdResourceProbeRequest],
-      resources: [
-        defineResource({
-          id: coldResourceId,
-          revision: coldResourceRevision,
-          tag: ColdResourceProbe,
-          scope: "process",
-          layer: Layer.effect(
-            ColdResourceProbe,
-            Effect.acquireRelease(
-              Effect.sync(() => {
-                const instance = ++nextInstance
-                events.push(`acquire:${instance}`)
-                return ColdResourceProbe.of({ instance })
-              }),
-              (probe) => Effect.sync(() => events.push(`release:${probe.instance}`)),
+      setup: Effect.gen(function* () {
+        const host = yield* ExtensionHost
+        yield* host.register("request", ColdResourceProbeRequest)
+        yield* host.register(
+          "resource",
+          defineResource({
+            id: coldResourceId,
+            revision: coldResourceRevision,
+            tag: ColdResourceProbe,
+            scope: "process",
+            layer: Layer.effect(
+              ColdResourceProbe,
+              Effect.acquireRelease(
+                Effect.sync(() => {
+                  const instance = ++nextInstance
+                  events.push(`acquire:${instance}`)
+                  return ColdResourceProbe.of({ instance })
+                }),
+                (probe) => Effect.sync(() => events.push(`release:${probe.instance}`)),
+              ),
             ),
-          ),
-          start: Effect.gen(function* () {
-            const probe = yield* ColdResourceProbe
-            events.push(`start:${probe.instance}`)
+            start: Effect.gen(function* () {
+              const probe = yield* ColdResourceProbe
+              events.push(`start:${probe.instance}`)
+            }),
+            stop: Effect.gen(function* () {
+              const probe = yield* ColdResourceProbe
+              events.push(`stop:${probe.instance}`)
+            }),
           }),
-          stop: Effect.gen(function* () {
-            const probe = yield* ColdResourceProbe
-            events.push(`stop:${probe.instance}`)
-          }),
-        }),
-      ],
+        )
+      }),
     }),
     artifactIdentity: coldResourceArtifact,
   }

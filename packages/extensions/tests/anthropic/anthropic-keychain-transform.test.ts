@@ -14,7 +14,7 @@ import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Fiber, Layer, Option, Predicate, Ref, Schema } from "effect"
 import { TestClock } from "effect/testing"
-import { testSetupCtx } from "@gent/core-internal/test-utils"
+import { testHostFacts } from "@gent/core-internal/test-utils"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import { buildKeychainTransformClient } from "../../src/anthropic/keychain-transform.js"
@@ -108,7 +108,7 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
 // and grabbing the service from context. The transform takes this
 // instance directly (closure-based, not yielded from R).
 const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServiceApi> => {
-  const host = testSetupCtx().host
+  const host = testHostFacts().host
   const platformLayer = Layer.succeed(
     AnthropicPlatform,
     AnthropicPlatform.of({

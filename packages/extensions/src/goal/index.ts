@@ -3,7 +3,7 @@ import {
   CapabilityError,
   defineExtension,
   ExtensionContext,
-  hook,
+  ExtensionHost,
   request,
   tool,
   type TurnAfterInput,
@@ -395,7 +395,10 @@ export const GoalTool = tool({
 
 export const GoalExtension = defineExtension({
   id: GOAL_EXTENSION_ID,
-  requests: [GoalCommand, GoalRpc.Get],
-  tools: [GoalTool],
-  hooks: [hook.turnAfter(continueGoal)],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("request", GoalCommand, GoalRpc.Get)
+    yield* host.register("tool", GoalTool)
+    yield* host.on("turnAfter", continueGoal)
+  }),
 })

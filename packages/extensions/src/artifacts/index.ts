@@ -11,6 +11,7 @@ import {
   defineExtension,
   defineResource,
   ExtensionContext,
+  ExtensionHost,
   tool,
 } from "@gent/core/extensions/api"
 import { ARTIFACTS_EXTENSION_ID, ArtifactRpc, ReadQuery } from "../artifacts-protocol.js"
@@ -180,19 +181,30 @@ const ArtifactClearTool = tool({
 
 export const ArtifactsExtension = defineExtension({
   id: ARTIFACTS_EXTENSION_ID,
-  resources: [
-    defineResource({
-      id: "@gent/artifacts/store",
-      scope: "process",
-      layer: ArtifactsStoreLive,
-    }),
-  ],
-  requests: [
-    ArtifactRpc.Save,
-    ArtifactRpc.Read,
-    ArtifactRpc.Update,
-    ArtifactRpc.Clear,
-    ArtifactRpc.List,
-  ],
-  tools: [ArtifactSaveTool, ArtifactReadTool, ArtifactUpdateTool, ArtifactClearTool],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "@gent/artifacts/store",
+        scope: "process",
+        layer: ArtifactsStoreLive,
+      }),
+    )
+    yield* host.register(
+      "request",
+      ArtifactRpc.Save,
+      ArtifactRpc.Read,
+      ArtifactRpc.Update,
+      ArtifactRpc.Clear,
+      ArtifactRpc.List,
+    )
+    yield* host.register(
+      "tool",
+      ArtifactSaveTool,
+      ArtifactReadTool,
+      ArtifactUpdateTool,
+      ArtifactClearTool,
+    )
+  }),
 })

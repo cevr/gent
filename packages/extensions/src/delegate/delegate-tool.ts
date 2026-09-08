@@ -6,6 +6,7 @@ import {
   ExtensionContext,
   AgentRunToolCallSchema,
   defineExtension,
+  ExtensionHost,
   getDurableAgentRunSessionId,
   makeRunSpec,
   RequestId,
@@ -139,5 +140,8 @@ export const DelegateTool = tool({
 /** Child admission and control for cells: one admission call plus inspect, cancel, and list. */
 export const DelegateExtension = defineExtension({
   id: "@gent/delegate",
-  tools: [DelegateTool, ControlChildAgent, ListChildAgents],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("tool", DelegateTool, ControlChildAgent, ListChildAgents)
+  }),
 })

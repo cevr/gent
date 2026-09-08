@@ -13,7 +13,7 @@ import {
 import {
   AuthMethod,
   defineExtension,
-  ExtensionSetupContext,
+  ExtensionHost,
   ProviderAuthError,
   type ModelDriverContribution,
   type ProviderAuthInfo,
@@ -273,27 +273,29 @@ export const buildAnthropicModelDriver = (
 
 export const AnthropicExtension = defineExtension({
   id: "@gent/provider-anthropic",
-  modelDrivers: () =>
-    Effect.gen(function* () {
-      const ctx = yield* ExtensionSetupContext
-      const env: AnthropicKeychainEnv = makeAnthropicKeychainEnv({
-        betaFlags: yield* readOptionalEnv("ANTHROPIC_BETA_FLAGS"),
-        cliVersion: yield* readOptionalEnv("ANTHROPIC_CLI_VERSION"),
-        entrypoint: yield* readOptionalEnv("CLAUDE_CODE_ENTRYPOINT"),
-        userAgent: yield* readOptionalEnv("ANTHROPIC_USER_AGENT"),
-      })
+  setup: Effect.gen(function* () {
+    const ctx = yield* ExtensionHost
+    const env: AnthropicKeychainEnv = makeAnthropicKeychainEnv({
+      betaFlags: yield* readOptionalEnv("ANTHROPIC_BETA_FLAGS"),
+      cliVersion: yield* readOptionalEnv("ANTHROPIC_CLI_VERSION"),
+      entrypoint: yield* readOptionalEnv("CLAUDE_CODE_ENTRYPOINT"),
+      userAgent: yield* readOptionalEnv("ANTHROPIC_USER_AGENT"),
+    })
 
-      const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
-      const platform = AnthropicPlatform.fromSetup(ctx, env)
+    const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
+    const platform = AnthropicPlatform.fromSetup(ctx, env)
 
-      // Cache cells are hoisted to extension-closure scope so they
-      // survive across `resolveModel` calls. Lifetime: one extension
-      // instance → one cell that lives until the runtime tears the
-      // extension down. Setup is Effectful, so cache cells are allocated
-      // through SynchronizedRef.make instead of an unsafe closure escape hatch.
-      const credentialCellRef = yield* SynchronizedRef.make(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+    // Cache cells are hoisted to extension-closure scope so they
+    // survive across `resolveModel` calls. Lifetime: one extension
+    // instance → one cell that lives until the runtime tears the
+    // extension down. Setup is Effectful, so cache cells are allocated
+    // through SynchronizedRef.make instead of an unsafe closure escape hatch.
+    const credentialCellRef = yield* SynchronizedRef.make(EMPTY_CREDENTIAL_CELL)
+    const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
 
-      return [buildAnthropicModelDriver(credentialCellRef, betaCellRef, envApiKey, platform)]
-    }),
+    yield* ctx.register(
+      "modelDriver",
+      buildAnthropicModelDriver(credentialCellRef, betaCellRef, envApiKey, platform),
+    )
+  }),
 })

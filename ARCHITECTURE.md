@@ -365,7 +365,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   or scheduler is created. `SessionRuntime.Live` retains the combined test surface.
 - Default persistence is durable.
 - One shipped agent, `main`. A child spawned from a cell with `delegate` inherits the caller's agent and model; a run may narrow it with RunSpec overrides (model, tools, prompt addendum). Helper runs such as handoff distillation and `read_session` goal extraction pass `persistence: "ephemeral"` explicitly. An ephemeral run may pass `history: "inherit"` to seed its private branch with a copy of the parent branch's messages; `/btw` uses this for tool-less side questions that never write back to the parent.
-- Persistent goals (`@gent/goal`) live in `~/.gent/goals/<branchId>.json`. After every uninterrupted turn while a goal is active, `hook.turnAfter` charges the turn's usage to the goal and queues a `goal-context` user message; a spent token budget flips the goal to `budget_limited` instead. Only the `goal` tool's `complete` action ends a goal. The TUI collapses `goal-context` rows to one line unless full detail is on.
+- Persistent goals (`@gent/goal`) live in `~/.gent/goals/<branchId>.json`. After every uninterrupted turn while a goal is active, the goal `turnAfter` hook charges the turn's usage to the goal and queues a `goal-context` user message; a spent token budget flips the goal to `budget_limited` instead. Only the `goal` tool's `complete` action ends a goal. The TUI collapses `goal-context` rows to one line unless full detail is on.
 - Durable runs persist a child session/branch and can be revisited with `read_session`.
 - Ephemeral runs still execute a full local `AgentLoop`, but against isolated in-memory storage; they return text/usage/tool-call metadata without polluting the session tree.
 - Child metadata reads only the requested branch. Stream totals remain unknown
@@ -800,18 +800,19 @@ privileged.
 must either live here as a stable authoring primitive or move behind a
 host-owned design. It should expose:
 
-- extension shape: `defineExtension`, `GentExtension`,
-  `ExtensionSetupContext`, `DefineExtensionInput`;
+- extension shape: `defineExtension`, `GentExtension`, `ExtensionHost`,
+  `registrationDomains`;
 - typed leaves: `tool`, `request`, `ref`;
 - scoped resources: `defineResource`, `defineStateResource`, `ResourceId`,
   `ResourceRevision`, and resource scope types;
-- turn hooks: the public hook input/output types needed to author `hooks`;
+- turn hooks: the public hook input/output types needed to author
+  `host.on(kind, handler)`;
 - agents and model ids: `defineAgent`, `AgentName`, `ModelId`, run-spec
   helpers needed for turn-scoped subagent dispatch;
 - stable ids and author-facing schemas: `ExtensionId`, `ArtifactId`,
   `ToolCallId`, `PermissionRule`, output/message projection
   helpers that are safe to serialize across the extension boundary;
-- host facts: `ExtensionSetupContext.host`, a small public view over
+- host facts: `ExtensionHost.host` and `ExtensionHost.Process`, a small public view over
   host-owned platform facts such as OS info, executable path, home directory,
   command candidates, and loopback port probes;
 - author-facing errors: capability, provider-auth, agent-run, and typed
@@ -843,21 +844,21 @@ Rules:
 - public snapshot schema is enforced at runtime — invalid snapshots are dropped, not passed through
 - declaration setup and validation failures exclude the affected extension;
   resource start failures reject the live graph publication
-- stateful side effects cross explicit typed slots (`hooks:`, resources, or
-  extension-owned services), not private host imports
+- stateful side effects cross explicit typed slots (`host.on` hooks, resources,
+  or extension-owned services), not private host imports
 
 For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Example extensions in [examples/extensions/](examples/extensions/).
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, resources?, scheduledJobs?, tools?, requests?, agents?, hooks?, modelDrivers?, externalDrivers? })`. Each typed bucket is either a literal array, a `() => array` function, or a `() => Effect<array>` factory. Setup-time host facts come from `yield* ExtensionSetupContext`; runtime host authority comes from `yield* ExtensionContext`. The bucket name IS the discriminator — TypeScript catches the wrong leaf in `tools` or `requests` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
+One authoring shape: `defineExtension({ id, setup })`. `setup` is an Effect that yields `ExtensionHost` (`packages/core/src/domain/extension-host.ts`) and calls `host.register(domain, ...values)` for leaves (`tool`, `request`, `resource`, `job`, `agent`, `modelDriver`, `externalDriver`) and `host.on(kind, handler)` for hooks. Setup-time host facts (`cwd`, `home`, `source`, `host`, `Process`) live on the same service; runtime host authority comes from `yield* ExtensionContext`. The domain string IS the discriminator — TypeScript checks the value type per domain at the call site. The loader (`runtime/extensions/loader.ts`) provides a collecting host, seals the registrations into `ExtensionContributions`, binds requests to the extension id, and runs `validateExtensionPackage` so malformed registrations fail activation instead of dispatch.
 
-There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
+There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the compiled record consumed by the registry, hook compiler, and resource graph; adding a new kind means adding a registration domain and a record field, not a new union arm. Extensions have no per-extension `Scope`: the live profile re-runs `setup` on refresh and the resource graph owns acquisition and release.
 
 - **Resource** — `defineResource({ id, revision?, requires?, required?, scope, layer?, start?, stop? })`. Long-lived state has a stable identity and explicit `scope`; `revision` records resource semantics, including configuration changes, and defaults to `"1"`; `requires` defaults to `[]`, and `required` defaults to `false`. Today only `"process"` is public, because it is the only lifecycle with a host owner. `cwd`, `session`, and `branch` lifetimes stay out of the author API until their runtime owners exist. Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
-- **Callable leaves** — `tool(...)` / `request(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Agent`, `Interaction`, `Process`, `Files`, `FileLock`, `State`); extension-private authority comes from extension-owned Effect service Tags. The `Files` / `FileLock` / `State` facets wrap the host-internal `FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so shipped and external extensions share the same surface. See `packages/core/src/domain/capability/{tool,request}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
-- **Hooks** — `hook.systemPrompt`, `hook.turnProjection`, `hook.turnAfter`, `hook.toolCall`, and `hook.toolResult` are the explicit runtime hooks. Hook handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. `turnAfter` carries the turn's token usage. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-hooks.ts`.
-- **Driver** — `modelDrivers` and `externalDrivers` are split buckets of `ModelDriverContribution` and `ExternalDriverContribution`. Model drivers provide LLM provider layers + auth; external drivers stream Effect AI response parts from process-owned executors. See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
+- **Callable leaves** — `tool(...)` / `request(...)` smart constructors registered under the `tool` and `request` domains. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Agent`, `Interaction`, `Process`, `Files`, `FileLock`, `State`); extension-private authority comes from extension-owned Effect service Tags. The `Files` / `FileLock` / `State` facets wrap the host-internal `FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so shipped and external extensions share the same surface. See `packages/core/src/domain/capability/{tool,request}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
+- **Hooks** — `host.on("systemPrompt" | "turnProjection" | "turnAfter" | "toolCall" | "toolResult", handler)` registers the explicit runtime hooks; each kind is typed by `ExtensionHookSignatures`. Hook handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. `turnAfter` carries the turn's token usage. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-hooks.ts`.
+- **Driver** — the `modelDriver` and `externalDriver` domains take `ModelDriverContribution` and `ExternalDriverContribution`. Model drivers provide LLM provider layers + auth; external drivers stream Effect AI response parts from process-owned executors. See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
 
 Other notes:
 

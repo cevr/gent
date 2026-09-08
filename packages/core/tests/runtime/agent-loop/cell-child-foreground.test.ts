@@ -2,7 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer, Predicate, Stream } from "effect"
 import { AgentDefinition, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
-import { defineExtension } from "@gent/core/extensions/api"
+import { ExtensionHost, defineExtension } from "@gent/core/extensions/api"
 import { DelegateExtension } from "../../../../extensions/src/delegate/delegate-tool.js"
 import { LoadedArtifactIdentity } from "@gent/core-internal/domain/extension"
 import { messageSingleText } from "@gent/core-internal/domain/message-part-projection"
@@ -36,8 +36,11 @@ describe.skipIf(process.platform !== "darwin")("foreground child cell", () => {
         ])
         const fixture = defineExtension({
           id: "cell-child-foreground-fixture",
-          agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
-          tools: [CellTool],
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("agent", new AgentDefinition({ name: DEFAULT_AGENT_NAME }))
+            yield* host.register("tool", CellTool)
+          }),
         })
         const { client, sessionId, branchId } = yield* createRpcHarness({
           providerLayer,

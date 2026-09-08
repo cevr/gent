@@ -11,10 +11,10 @@ import { Effect, Option } from "effect"
 import { SessionToolsExtension } from "../src/index.js"
 import { getBuiltinAgent } from "./helpers/builtin-agents.js"
 import type { SystemPromptInput } from "@gent/core/extensions/api"
-import { provideTestSetupContext } from "@gent/core-internal/test-utils"
+import { collectTestContributions } from "@gent/core-internal/test-utils"
 
 const getSystemPrompt = Effect.gen(function* () {
-  const contributions = yield* SessionToolsExtension.setup.pipe(provideTestSetupContext())
+  const contributions = yield* collectTestContributions(SessionToolsExtension.setup)
   const systemPrompt = Option.fromUndefinedOr(
     contributions.hooks?.find((slot) => slot.kind === "systemPrompt"),
   )

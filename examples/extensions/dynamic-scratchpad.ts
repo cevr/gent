@@ -15,6 +15,7 @@ import {
   defineRequests,
   defineStateResource,
   ExtensionContext,
+  ExtensionHost,
   ExtensionId,
   request,
   tool,
@@ -117,13 +118,17 @@ export const InstallScratchpadRequest = request({
 
 export default defineExtension({
   id: DYNAMIC_SCRATCHPAD_ID,
-  resources: [
-    defineStateResource({
-      id: "example/dynamic-scratchpad/state",
-      tag: ScratchpadStateResource,
-      scope: "process",
-      initial: { entries: [] },
-    }),
-  ],
-  requests: [InstallScratchpadRequest],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "resource",
+      defineStateResource({
+        id: "example/dynamic-scratchpad/state",
+        tag: ScratchpadStateResource,
+        scope: "process",
+        initial: { entries: [] },
+      }),
+    )
+    yield* host.register("request", InstallScratchpadRequest)
+  }),
 })

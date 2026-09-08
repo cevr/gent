@@ -8,7 +8,7 @@ import { Context, Effect } from "effect"
 import {
   defineExtension,
   defineStateResource,
-  hook,
+  ExtensionHost,
   type ExtensionState,
 } from "@gent/core/extensions/api"
 
@@ -18,27 +18,29 @@ class TurnCounterState extends Context.Service<TurnCounterState, ExtensionState<
 
 export default defineExtension({
   id: "turn-counter",
-  resources: [
-    defineStateResource({
-      id: "example/turn-counter/state",
-      tag: TurnCounterState,
-      scope: "process",
-      initial: 0,
-    }),
-  ],
-  hooks: [
-    hook.turnAfter(() =>
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "resource",
+      defineStateResource({
+        id: "example/turn-counter/state",
+        tag: TurnCounterState,
+        scope: "process",
+        initial: 0,
+      }),
+    )
+    yield* host.on("turnAfter", () =>
       Effect.gen(function* () {
         const state = yield* TurnCounterState
         yield* state.update((turns) => turns + 1)
       }),
-    ),
-    hook.systemPrompt((input) =>
+    )
+    yield* host.on("systemPrompt", (input) =>
       Effect.gen(function* () {
         const state = yield* TurnCounterState
         const turns = yield* state.get
         return `${input.basePrompt}\nThis is turn ${turns + 1}.`
       }),
-    ),
-  ],
+    )
+  }),
 })

@@ -1,9 +1,13 @@
 import { Effect, FileSystem, Option, Path, Predicate, Schema } from "effect"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import type { GentPlatform } from "../gent-platform.js"
-import type { ExtensionScope, GentExtension, LoadedExtension } from "../../domain/extension.js"
+import type {
+  ExtensionScope,
+  GentExtension,
+  LoadedExtension,
+  ExtensionSetupServices,
+} from "../../domain/extension.js"
 import { ExtensionLoadError } from "../../domain/extension.js"
-import { ExtensionSetupContext, publicSetupContext } from "../../domain/extension-setup-context.js"
+import { ExtensionHost, makeCollectingExtensionHost } from "../../domain/extension-host.js"
+import { bindRequestCapabilityExtension } from "../../domain/capability/request.js"
 import { ExtensionId } from "../../domain/ids.js"
 import type { ExtensionContributions } from "../../domain/contribution.js"
 import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js"
@@ -33,7 +37,6 @@ const collectCapabilityPrompts = (cs: ExtensionContributions): ReadonlyArray<Pro
     )
   })()
 
-type ExtensionSetupServices = FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform
 type LoadedUserExtension = GentExtension<ExtensionSetupServices>
 
 interface LoadSuccess {
@@ -273,27 +276,37 @@ export const setupExtension = Effect.fn("ExtensionLoader.setupExtension")(functi
   home: string,
 ) {
   const host = yield* makeExtensionHostPlatform
-  const publicCtx = publicSetupContext({
+  const manifest = discovered.extension.manifest
+  const collector = makeCollectingExtensionHost({
     cwd,
     source: discovered.sourcePath,
     home,
     host,
   })
   const setupEffect = discovered.extension.setup.pipe(
-    Effect.provideService(ExtensionSetupContext, publicCtx),
+    Effect.provideService(ExtensionHost, collector.service),
   )
-  const contributions: ExtensionContributions = yield* sealRuntimeLoadedEffect({
-    extensionId: discovered.extension.manifest.id,
+  yield* sealRuntimeLoadedEffect({
+    extensionId: manifest.id,
     effect: () => setupEffect,
     failureMessage: (cause) => `Extension setup failed: ${String(cause)}`,
     defectMessage: (cause) => `Extension setup defect: ${String(cause)}`,
   })
+  const collected = yield* collector.seal
+  // Requests carry their owning extension so RPC routing needs no lookup.
+  let contributions: ExtensionContributions = collected
+  if (!Predicate.isUndefined(collected.requests)) {
+    contributions = {
+      ...collected,
+      requests: collected.requests.map((request) =>
+        bindRequestCapabilityExtension(request, manifest.id),
+      ),
+    }
+  }
 
-  // Defensive re-run of cross-bucket validation. `defineExtension`-wrapped
-  // setups already run this; raw `{ manifest, setup }` objects (e.g. tests,
-  // hand-rolled extensions) bypass it. Running here closes the install
-  // boundary — malformed contributions fail activation, not mid-dispatch.
-  yield* validateExtensionPackage(discovered.extension.manifest, contributions)
+  // Cross-bucket validation closes the install boundary: malformed
+  // registrations fail activation, not mid-dispatch.
+  yield* validateExtensionPackage(manifest, contributions)
 
   let loaded: LoadedExtension = {
     manifest: discovered.extension.manifest,

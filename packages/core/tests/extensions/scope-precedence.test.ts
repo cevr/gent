@@ -216,7 +216,7 @@ describe("scope precedence", () => {
     test("systemPrompt rewrite order follows scope precedence", () => {
       const make = (id: string, scope: "builtin" | "user" | "project") =>
         ext(id, scope, {
-          hooks: [hook.systemPrompt((input) => Effect.succeed(`${input.basePrompt}[${scope}]`))],
+          hooks: [hook("systemPrompt", (input) => Effect.succeed(`${input.basePrompt}[${scope}]`))],
         })
 
       // Pass out of order to prove sorting, not insertion

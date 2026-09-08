@@ -1,63 +1,48 @@
 /**
  * Extension authoring API.
  *
- * Single entry point: `defineExtension({ id, resources?, tools?, requests?, ... })`.
- * The factory accepts typed sub-arrays (literal arrays OR `() => array` OR
- * `() => Effect<array>` per bucket), validates them, and produces a
- * `GentExtension` whose `setup()` returns `ExtensionContributions` buckets.
+ * Single entry point: `defineExtension({ id, setup })`. `setup` is an Effect
+ * that yields `ExtensionHost` and registers leaves with
+ * `host.register(domain, ...values)` and hooks with `host.on(kind, handler)`.
+ * The loader collects the registrations, validates them, and seals them into
+ * the extension's contributions.
  *
- * The bucket name IS the discrimination — TypeScript catches a command
- * placed in `tools` at the call site; runtime package-shape validation adds
- * field-local error messages for runtime-loaded (JS) extensions.
- *
- * Effect-native end-to-end: every contribution returns Effect. There are no
- * Promise edges in the contribution surface — gent is a library used inside
- * Effect programs.
+ * Effect-native end-to-end: setup, tools, requests, and hooks are Effects.
+ * There are no Promise edges — gent is a library used inside Effect programs.
  *
  * @example
  * ```ts
- * import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
+ * import { defineExtension, defineResource, ExtensionHost, tool } from "@gent/core/extensions/api"
  *
  * export default defineExtension({
  *   id: "my-ext",
- *   resources: [defineResource({ id: "my-ext/service", scope: "process", layer: MyService.Live })],
- *   tools: [tool(MyTool)],
+ *   setup: Effect.gen(function* () {
+ *     const host = yield* ExtensionHost
+ *     yield* host.register("resource", defineResource({ id: "my-ext/service", scope: "process", layer: MyService.Live }))
+ *     yield* host.register("tool", MyTool)
+ *     yield* host.on("turnAfter", (input) => Effect.log(input.durationMs))
+ *   }),
  * })
  * ```
  *
- * @example with setup facts + Effect
+ * @example with setup facts
  * ```ts
  * export default defineExtension({
  *   id: "my-ext",
- *   tools: () =>
- *     Effect.gen(function* () {
- *       const ctx = yield* ExtensionSetupContext
- *       const skills = yield* loadSkills(ctx.cwd)
- *       return [tool(SearchSkillsTool(skills))]
- *     }),
+ *   setup: Effect.gen(function* () {
+ *     const host = yield* ExtensionHost
+ *     const skills = yield* loadSkills(host.cwd)
+ *     yield* host.register("tool", SearchSkillsTool(skills))
+ *   }),
  * })
  * ```
  *
  * @module
  */
-import { Option, Predicate, Effect } from "effect"
+import type { Effect } from "effect"
 import { ExtensionId } from "../domain/ids.js"
-import { ExtensionLoadError } from "../domain/extension.js"
-import { sealRuntimeLoadedEffect } from "../domain/extension-load-boundary.js"
-import type { AnyExtensionHook, GentExtension, ExtensionManifest } from "../domain/extension.js"
-import type { ExtensionSetupContext } from "../domain/extension-setup-context.js"
-import type { ExtensionContributions } from "../domain/contribution.js"
-import type { AgentDefinition } from "../domain/agent.js"
-import type { RequestCapability } from "../domain/capability/request.js"
-import { bindRequestCapabilityExtension } from "../domain/capability/request.js"
-import type { ToolCapability } from "../domain/capability/tool.js"
-import {
-  validateExtensionPackage,
-  validateKnownExtensionInputBuckets,
-} from "../domain/extension-package-shape.js"
-import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
-import type { AnyResourceContribution } from "../domain/resource.js"
-import type { ScheduledJobContribution } from "../domain/scheduled-job.js"
+import type { ExtensionLoadError, GentExtension, ExtensionManifest } from "../domain/extension.js"
+import type { ExtensionHost } from "../domain/extension-host.js"
 
 // ── Re-exports for extension authors ──
 
@@ -199,186 +184,30 @@ export { isRecord, isRecordArray } from "../domain/guards.js"
 export { OutputBuffer, headTailChars, saveFullOutput } from "../domain/output-buffer.js"
 // ── Public API ──
 
-/**
- * Per-bucket spec accepted by `defineExtension`. Each bucket field can be:
- *   - a literal array (90% of cases — the extension contributes a constant set)
- *   - a `() => array` factory (when the bucket wants lazy construction)
- *   - a `() => Effect<array>` factory (when setup needs facts/services)
- *
- * Factful setup uses `yield* ExtensionSetupContext`; setup facts are provided
- * by `defineExtension` and do not leak into the loaded extension dependency
- * type.
- */
-type FieldSpec<A, R = never> =
-  | ReadonlyArray<A>
-  | (() => ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R>)
-
 export {
-  ExtensionSetupContext,
-  type PublicExtensionSetupContext,
-} from "../domain/extension-setup-context.js"
-
-type RemainingSetupRequirements<R> = Exclude<R, ExtensionSetupContext>
+  ExtensionHost,
+  registrationDomains,
+  type ExtensionHostService,
+  type RegistrationDomain,
+  type RegistrationValue,
+} from "../domain/extension-host.js"
 
 interface DefineExtensionInput<R = never> {
   readonly id: string
-  readonly resources?: FieldSpec<AnyResourceContribution, R>
-  readonly scheduledJobs?: FieldSpec<ScheduledJobContribution, R>
   /**
-   * LLM-callable tools authored via `tool({...})`. The bucket name is the
-   * dispatch surface: every entry must be a `ToolCapability` — `request({...})`
-   * outputs cannot be slotted here.
+   * Registers leaves and hooks through `yield* ExtensionHost`. Failures are
+   * `ExtensionLoadError`; the loader seals defects into the same error.
    */
-  readonly tools?: FieldSpec<ToolCapability, R>
-  /**
-   * Extension-to-extension RPC capabilities authored via `request({...})`.
-   * The bucket name is the dispatch surface: every entry must be a
-   * `RequestCapability` — `tool({...})` outputs cannot be slotted here.
-   * Slash commands are requests carrying a `slash:` presentation block.
-   */
-  readonly requests?: FieldSpec<RequestCapability, R>
-  readonly agents?: FieldSpec<AgentDefinition, R>
-  readonly hooks?: FieldSpec<AnyExtensionHook, R>
-  readonly modelDrivers?: FieldSpec<ModelDriverContribution, R>
-  readonly externalDrivers?: FieldSpec<ExternalDriverContribution, R>
+  readonly setup: Effect.Effect<void, ExtensionLoadError, R>
 }
 
 /**
- * Resolve a single bucket field — accepts literal array, sync factory, or
- * Effect-returning factory. Errors are annotated with the bucket name so
- * the failure message points at the field, not "setup failed" (codex
- *  finding 2).
+ * Define an extension: a stable id plus one `setup` Effect that registers
+ * through `ExtensionHost`.
  */
-const resolveField = <A, R>(
-  manifest: ExtensionManifest,
-  field: string,
-  spec?: FieldSpec<A, R>,
-): Effect.Effect<
-  ReadonlyArray<A>,
-  ExtensionLoadError,
-  RemainingSetupRequirements<R> | ExtensionSetupContext
-> => {
-  const resolved: Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R> = Effect.gen(function* () {
-    if (Predicate.isUndefined(spec)) return []
-    if (!Predicate.isFunction(spec)) return spec
-    const result: ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError, R> =
-      yield* Effect.try({
-        try: () => spec(),
-        catch: (cause) =>
-          new ExtensionLoadError({
-            extensionId: manifest.id,
-            message: `${field} factory threw: ${String(cause)}`,
-            cause,
-          }),
-      })
-    // Effect-typed factory: yield it AND seal its failure channel into
-    // ExtensionLoadError. Without this, an Effect-factory could escape its
-    // declared error channel (e.g. `Effect.fail("bad")` on `unknown` would
-    // be propagated raw — loader.ts only catches defects). The
-    // `ExtensionSetupContext` Tag stays in the R channel — the loader
-    // provides it at the outer setup boundary.
-    if (Effect.isEffect(result)) {
-      const sealed = sealRuntimeLoadedEffect<ReadonlyArray<A>, R>({
-        extensionId: manifest.id,
-        effect: () => result,
-        failureMessage: (cause) => `${field} factory failed: ${String(cause)}`,
-        defectMessage: (cause) => `${field} factory defect: ${String(cause)}`,
-      })
-      const value = yield* sealed
-      if (!Array.isArray(value)) {
-        return yield* new ExtensionLoadError({
-          extensionId: manifest.id,
-          message: `${field} factory must resolve to an array`,
-        })
-      }
-      return value
-    }
-    // Sync factory: validate shape — a JS extension returning a single item
-    // (`tools: () => myCap`) would otherwise silently become "no items"
-    // because `undefined > 0` is false in the bucket-include check.
-    if (!Array.isArray(result)) {
-      return yield* new ExtensionLoadError({
-        extensionId: manifest.id,
-        message: `${field} factory must return an array`,
-      })
-    }
-    return result
-  })
-  // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript-eslint/no-unsafe-type-assertion -- The extension membrane widens a dynamic factory's context to the loader-provided setup context.
-  return resolved as unknown as Effect.Effect<
-    ReadonlyArray<A>,
-    ExtensionLoadError,
-    RemainingSetupRequirements<R> | ExtensionSetupContext
-  >
-}
-
-/**
- * Define an extension as typed contribution buckets.
- *
- * Each bucket is optional and homogeneously typed. Buckets accept a literal
- * array (most common), a `() => array` factory, or a `() => Effect<array>`
- * factory. Errors during resolution are annotated with the bucket name.
- *
- * Cross-bucket validation runs after all buckets resolve.
- *
- * @example
- * ```ts
- * import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
- *
- * export const MyExt = defineExtension({
- *   id: "my-ext",
- *   resources: [defineResource({ id: "my-ext/service", scope: "process", layer: MyService.Live })],
- *   tools: [tool(MyTool)],
- * })
- * ```
- */
-export function defineExtension<R = never>(
+export const defineExtension = <R = ExtensionHost>(
   params: DefineExtensionInput<R>,
-): GentExtension<RemainingSetupRequirements<R>>
-export function defineExtension<R>(
-  params: DefineExtensionInput<R>,
-): GentExtension<RemainingSetupRequirements<R>> {
+): GentExtension<R> => {
   const manifest: ExtensionManifest = { id: ExtensionId.make(params.id) }
-  const extension = {
-    manifest,
-    setup: Effect.gen(function* () {
-      const inputMessage = validateKnownExtensionInputBuckets(params)
-      if (Option.isSome(inputMessage)) {
-        return yield* new ExtensionLoadError({
-          extensionId: manifest.id,
-          message: inputMessage.value,
-        })
-      }
-      const resources = yield* resolveField(manifest, "resources", params.resources)
-      const scheduledJobs = yield* resolveField(manifest, "scheduledJobs", params.scheduledJobs)
-      const tools = yield* resolveField(manifest, "tools", params.tools)
-      const requests = (yield* resolveField(manifest, "requests", params.requests)).map((cap) =>
-        bindRequestCapabilityExtension(cap, manifest.id),
-      )
-      const agents = yield* resolveField(manifest, "agents", params.agents)
-      const hooks = yield* resolveField(manifest, "hooks", params.hooks)
-      const modelDrivers = yield* resolveField(manifest, "modelDrivers", params.modelDrivers)
-      const externalDrivers = yield* resolveField(
-        manifest,
-        "externalDrivers",
-        params.externalDrivers,
-      )
-      type MutableContributions = {
-        -readonly [K in keyof ExtensionContributions]?: ExtensionContributions[K]
-      }
-      const toContributions = (value: MutableContributions): ExtensionContributions => value
-      const contribs: MutableContributions = {}
-      if (resources.length > 0) contribs.resources = resources
-      if (scheduledJobs.length > 0) contribs.scheduledJobs = scheduledJobs
-      if (tools.length > 0) contribs.tools = tools
-      if (requests.length > 0) contribs.requests = requests
-      if (agents.length > 0) contribs.agents = agents
-      if (hooks.length > 0) contribs.hooks = hooks
-      if (modelDrivers.length > 0) contribs.modelDrivers = modelDrivers
-      if (externalDrivers.length > 0) contribs.externalDrivers = externalDrivers
-      yield* validateExtensionPackage(manifest, contribs)
-      return toContributions(contribs)
-    }),
-  }
-  return extension
+  return { manifest, setup: params.setup }
 }

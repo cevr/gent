@@ -12,42 +12,19 @@
  * non-default `GENT_HOME`.
  */
 import { describe, expect, test } from "bun:test"
-import { Effect } from "effect"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
-import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension"
-import type { PublicExtensionSetupContext } from "@gent/core/extensions/api"
+import type { ExtensionHostService } from "@gent/core/extensions/api"
+import { testHostFacts } from "@gent/core-internal/test-utils"
 
-const makeCtxWithSplitHome = (gentHome: string, osHome: string): PublicExtensionSetupContext => ({
-  cwd: "/tmp",
-  source: "test",
-  home: gentHome,
-  host: {
-    osInfo: {
-      platform: "darwin",
-      arch: "arm64",
-      release: "test",
-      hostname: "test-host",
-      type: "Darwin",
-    },
-    execPath: "/usr/bin/node",
-    homeDirectory: osHome,
-    pathListSeparator: ":",
-  },
-  Process: {
-    parentEnv: {},
-    runProcess: (command) =>
-      Effect.fail(
-        new ExtensionHostProcessError({
-          command,
-          message: "test runProcess unavailable",
-        }),
-      ),
-    signalPid: () => Effect.void,
-    isPortFree: () => Effect.succeed(true),
-    isPidAlive: () => Effect.succeed(true),
-    commandCandidates: (command) => [command],
-  },
-})
+type SetupFacts = Pick<ExtensionHostService, "host" | "Process">
+
+const makeCtxWithSplitHome = (gentHome: string, osHome: string): SetupFacts => {
+  const facts = testHostFacts({ home: gentHome })
+  return {
+    host: { ...facts.host, homeDirectory: osHome },
+    Process: facts.host,
+  }
+}
 
 describe("AnthropicPlatform.fromSetup", () => {
   test("sources home from host.homeDirectory, not ctx.home", () => {

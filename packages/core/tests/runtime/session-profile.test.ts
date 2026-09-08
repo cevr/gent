@@ -14,7 +14,12 @@ import {
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
-import { defineExtension, defineResource, type GentExtension } from "@gent/core/extensions/api"
+import {
+  ExtensionHost,
+  defineExtension,
+  defineResource,
+  type GentExtension,
+} from "@gent/core/extensions/api"
 import {
   SessionProfileCache,
   SessionProfileUnavailableError,
@@ -244,23 +249,27 @@ describe("session profile resolution", () => {
       let releases = 0
       const resourceExtension = defineExtension({
         id: "@gent/test-session-profile/preview",
-        resources: [
-          defineResource({
-            id: "test/session-profile/preview",
-            revision: "preview/1",
-            scope: "process",
-            layer: Layer.effect(
-              SessionProfileResourceMarker,
-              Effect.acquireRelease(
-                Effect.sync(() => {
-                  acquisitions += 1
-                  return SessionProfileResourceMarker.of({ value: "preview" })
-                }),
-                () => Effect.sync(() => void (releases += 1)),
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            defineResource({
+              id: "test/session-profile/preview",
+              revision: "preview/1",
+              scope: "process",
+              layer: Layer.effect(
+                SessionProfileResourceMarker,
+                Effect.acquireRelease(
+                  Effect.sync(() => {
+                    acquisitions += 1
+                    return SessionProfileResourceMarker.of({ value: "preview" })
+                  }),
+                  () => Effect.sync(() => void (releases += 1)),
+                ),
               ),
-            ),
-          }),
-        ],
+            }),
+          )
+        }),
       })
 
       yield* Effect.scoped(
@@ -327,25 +336,30 @@ describe("session profile resolution", () => {
         let stops = 0
         const resourceExtension = defineExtension({
           id: "@gent/test-session-profile/resource-replacement",
-          resources: () => [
-            defineResource({
-              id: "test/session-profile/resource-replacement",
-              revision: resourceRevision,
-              scope: "process",
-              // This layer is rebuilt as a declaration value on every refresh.
-              // The host must use the resource revision, not Layer identity.
-              layer: Layer.succeed(
-                SessionProfileResourceMarker,
-                SessionProfileResourceMarker.of({ value: resourceRevision }),
-              ),
-              start: Effect.sync(() => {
-                starts += 1
+          // Setup re-runs on every refresh, so the declaration value is rebuilt each time.
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: "test/session-profile/resource-replacement",
+                revision: resourceRevision,
+                scope: "process",
+                // This layer is rebuilt as a declaration value on every refresh.
+                // The host must use the resource revision, not Layer identity.
+                layer: Layer.succeed(
+                  SessionProfileResourceMarker,
+                  SessionProfileResourceMarker.of({ value: resourceRevision }),
+                ),
+                start: Effect.sync(() => {
+                  starts += 1
+                }),
+                stop: Effect.sync(() => {
+                  stops += 1
+                }),
               }),
-              stop: Effect.sync(() => {
-                stops += 1
-              }),
-            }),
-          ],
+            )
+          }),
         })
 
         yield* Effect.scoped(
@@ -425,16 +439,20 @@ describe("session profile resolution", () => {
 
       const resourceExtension = defineExtension({
         id: "@gent/test-session-profile/drain-isolation",
-        resources: [
-          defineResource({
-            id: "test/session-profile/drain-isolation",
-            scope: "process",
-            layer: Layer.succeed(
-              SessionProfileResourceMarker,
-              SessionProfileResourceMarker.of({ value: "drain-isolation" }),
-            ),
-          }),
-        ],
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            defineResource({
+              id: "test/session-profile/drain-isolation",
+              scope: "process",
+              layer: Layer.succeed(
+                SessionProfileResourceMarker,
+                SessionProfileResourceMarker.of({ value: "drain-isolation" }),
+              ),
+            }),
+          )
+        }),
       })
 
       yield* Effect.scoped(
@@ -502,12 +520,10 @@ describe("session profile resolution", () => {
       const releaseStart = yield* Deferred.make<void>()
       const resourceExtension = defineExtension({
         id: "@gent/test-session-profile/interrupted-start",
-        resources: () =>
-          Effect.gen(function* () {
-            yield* Deferred.succeed(startEntered, void 0)
-            yield* Deferred.await(releaseStart)
-            return []
-          }),
+        setup: Effect.gen(function* () {
+          yield* Deferred.succeed(startEntered, void 0)
+          yield* Deferred.await(releaseStart)
+        }),
       })
 
       yield* Effect.ensuring(
@@ -559,7 +575,7 @@ describe("session profile resolution", () => {
         encodeJson({ permissions: [{ tool: "bash", action: "deny" }] }),
       )
       const replayableExtension = {
-        ...defineExtension({ id: "@gent/test-profile-artifact" }),
+        ...defineExtension({ id: "@gent/test-profile-artifact", setup: Effect.void }),
         artifactIdentity: LoadedArtifactIdentity.make("@gent/test-profile@artifact-1"),
       }
 

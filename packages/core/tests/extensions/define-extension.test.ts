@@ -1,10 +1,10 @@
 /**
  * defineExtension regression locks.
  *
- * Locks the contract that the public `defineExtension` bucket API returns
- * `ExtensionContributions` from `setup()` that the runtime registry consumes.
- * Each contribution kind round-trips, lifecycle effects compose in registration
- * order, and the result wires into `ExtensionRegistry`.
+ * Locks the contract that `defineExtension({ id, setup })` registers through
+ * `ExtensionHost` and seals into the `ExtensionContributions` record the
+ * runtime registry consumes. Each domain round-trips, lifecycle effects
+ * compose in registration order, and the result wires into `ExtensionRegistry`.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Layer, Option, Predicate, Schema } from "effect"
@@ -14,17 +14,14 @@ import { builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.j
 import {
   defineExtension,
   defineResource,
-  ExtensionSetupContext,
+  ExtensionHost,
   getToolId,
-  hook,
-  type PublicExtensionSetupContext,
-  ref,
   request,
   tool,
+  type ExtensionHostService,
   type GentExtension,
 } from "@gent/core/extensions/api"
-import type { LoadedExtension } from "../../src/domain/extension"
-import { publicSetupContext } from "../../src/domain/extension-setup-context"
+import { ExtensionLoadError, type LoadedExtension } from "../../src/domain/extension"
 import { validateExtensionPackage } from "../../src/domain/extension-package-shape"
 import { GentToolMetadataTag, getToolMetadata } from "@gent/core-internal/domain/capability/tool"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
@@ -33,7 +30,7 @@ import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { provideExtensionHookContext } from "../../src/runtime/extensions/extension-hook-context"
-import { testExtensionHostContext, testSetupCtx } from "@gent/core-internal/test-utils"
+import { collectTestContributions, testExtensionHostContext } from "@gent/core-internal/test-utils"
 import { DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 
 const stubHostCtx = testExtensionHostContext()
@@ -52,23 +49,35 @@ const stubProjectionCtx = {
   },
 }
 
-const setupOf = (ext: GentExtension<never>) => {
-  const raw = testSetupCtx()
-  return ext.setup.pipe(Effect.provideService(ExtensionSetupContext, publicSetupContext(raw)))
-}
+const setupOf = <R>(ext: GentExtension<R>) => collectTestContributions(ext.setup)
 
 describe("defineExtension", () => {
   const test = it.live.layer(BunServices.layer)
 
-  test("empty extension produces empty contribution buckets", () =>
+  test("empty setup produces an empty contributions record", () =>
     Effect.gen(function* () {
-      const ext = defineExtension({ id: "empty" })
+      const ext = defineExtension({ id: "empty", setup: Effect.void })
       const contributions = yield* setupOf(ext)
-      expect(contributions.tools ?? []).toEqual([])
-      expect(contributions.agents ?? []).toEqual([])
-      expect(contributions.modelDrivers ?? []).toEqual([])
-      expect(contributions.resources ?? []).toEqual([])
-      expect(contributions.externalDrivers ?? []).toEqual([])
+      expect(contributions).toEqual({})
+    }))
+
+  test("seal drops domains with no registrations", () =>
+    Effect.gen(function* () {
+      const ext = defineExtension({
+        id: "zero-values",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("tool")
+          yield* host.register("agent")
+          yield* host.register("resource")
+          yield* host.register("request")
+        }),
+      })
+      const contributions = yield* setupOf(ext)
+      expect(contributions.tools).toBeUndefined()
+      expect(contributions.agents).toBeUndefined()
+      expect(contributions.resources).toBeUndefined()
+      expect(contributions.requests).toBeUndefined()
       expect(contributions.hooks).toBeUndefined()
     }))
 
@@ -88,24 +97,26 @@ describe("defineExtension", () => {
       const myLayer = Layer.empty
       const ext = defineExtension({
         id: "all-kinds",
-        tools: [myTool],
-        agents: [builtinAgent],
-        hooks: [hook.systemPrompt((input) => Effect.succeed(`${input.basePrompt} [suffix]`))],
-        resources: [
-          // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
-          defineResource({
-            id: "test/define-extension/all-kinds/resource",
-            scope: "process",
-            layer: myLayer,
-          }) as never,
-        ],
-        scheduledJobs: [
-          {
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("tool", myTool)
+          yield* host.register("agent", builtinAgent)
+          yield* host.on("systemPrompt", (input) => Effect.succeed(`${input.basePrompt} [suffix]`))
+          yield* host.register(
+            "resource",
+            // oxlint-disable-next-line effect/noAs -- The registration intentionally erases a resource's private service and scope types.
+            defineResource({
+              id: "test/define-extension/all-kinds/resource",
+              scope: "process",
+              layer: myLayer,
+            }) as never,
+          )
+          yield* host.register("job", {
             id: "test-job",
             cron: "0 0 * * *",
             target: { agent: DEFAULT_AGENT_NAME, prompt: "hi" },
-          },
-        ],
+          })
+        }),
       })
       const contributions = yield* setupOf(ext)
       const modelCaps = contributions.tools ?? []
@@ -129,24 +140,31 @@ describe("defineExtension", () => {
       const append = (s: string) => Effect.sync(() => log.push(s))
       const ext = defineExtension({
         id: "lifecycle",
-        resources: [
-          // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
-          defineResource({
-            id: "test/define-extension/lifecycle/resource-1",
-            scope: "process",
-            layer: Layer.empty,
-            start: append("startup-1"),
-            stop: append("shutdown-1"),
-          }) as never,
-          // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
-          defineResource({
-            id: "test/define-extension/lifecycle/resource-2",
-            scope: "process",
-            layer: Layer.empty,
-            start: append("startup-2"),
-            stop: append("shutdown-2"),
-          }) as never,
-        ],
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            // oxlint-disable-next-line effect/noAs -- The registration intentionally erases a resource's private service and scope types.
+            defineResource({
+              id: "test/define-extension/lifecycle/resource-1",
+              scope: "process",
+              layer: Layer.empty,
+              start: append("startup-1"),
+              stop: append("shutdown-1"),
+            }) as never,
+          )
+          yield* host.register(
+            "resource",
+            // oxlint-disable-next-line effect/noAs -- The registration intentionally erases a resource's private service and scope types.
+            defineResource({
+              id: "test/define-extension/lifecycle/resource-2",
+              scope: "process",
+              layer: Layer.empty,
+              start: append("startup-2"),
+              stop: append("shutdown-2"),
+            }) as never,
+          )
+        }),
       })
       const contributions = yield* setupOf(ext)
       const loaded = {
@@ -162,74 +180,78 @@ describe("defineExtension", () => {
       expect(log).toEqual(["startup-1", "startup-2", "shutdown-2", "shutdown-1"])
     }))
 
-  test("Effect-returning bucket factory is awaited", () =>
+  test("register accumulates values per domain across calls", () =>
     Effect.gen(function* () {
+      const namedTool = (id: string) =>
+        tool({
+          id,
+          description: id,
+          params: Schema.Struct({}),
+          output: Schema.Void,
+          execute: () => Effect.void,
+        })
       const ext = defineExtension({
-        id: "effectful",
-        tools: () =>
-          Effect.gen(function* () {
-            yield* Effect.void
-            return [
-              tool({
-                id: "from-effect",
-                description: "from effect",
-                params: Schema.Struct({}),
-                output: Schema.Void,
-                execute: () => Effect.void,
-              }),
-            ]
-          }),
+        id: "accumulates",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("tool", namedTool("first"), namedTool("second"))
+          yield* host.register("agent", builtinAgent)
+          yield* host.register("tool", namedTool("third"))
+        }),
       })
       const contributions = yield* setupOf(ext)
-      const firstTool = (contributions.tools ?? [])[0]
-      expect(firstTool).toBeDefined()
-      if (Predicate.isUndefined(firstTool)) return
-      expect(String(getToolId(firstTool))).toBe("from-effect")
+      expect(contributions.tools?.map((entry) => String(getToolId(entry)))).toEqual([
+        "first",
+        "second",
+        "third",
+      ])
+      expect(contributions.agents?.map((agent) => agent.name)).toEqual([DEFAULT_AGENT_NAME])
     }))
 
-  test("setup context is provided to per-bucket factory", () =>
+  test("on records a hook slot with its kind", () =>
     Effect.gen(function* () {
-      let captured: Option.Option<PublicExtensionSetupContext> = Option.none()
       const ext = defineExtension({
-        id: "captures-ctx",
-        tools: () =>
-          Effect.gen(function* () {
-            captured = Option.some(yield* ExtensionSetupContext)
-            return []
-          }),
+        id: "hook-kinds",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("turnAfter", () => Effect.void)
+          yield* host.on("toolCall", () => Effect.void)
+          yield* host.on("systemPrompt", (input) => Effect.succeed(input.basePrompt))
+        }),
       })
-      yield* setupOf(ext)
+      const contributions = yield* setupOf(ext)
+      expect(contributions.hooks?.map((slot) => slot.kind)).toEqual([
+        "turnAfter",
+        "toolCall",
+        "systemPrompt",
+      ])
+    }))
+
+  test("setup sees cwd, home, and source from the host", () =>
+    Effect.gen(function* () {
+      let captured: Option.Option<ExtensionHostService> = Option.none()
+      const ext = defineExtension({
+        id: "captures-host",
+        setup: Effect.gen(function* () {
+          captured = Option.some(yield* ExtensionHost)
+        }),
+      })
+      yield* collectTestContributions(ext.setup, {
+        cwd: "/work/project",
+        home: "/work/home",
+        source: "/work/project/.gent/extensions/captures-host.ts",
+      })
       expect(Option.isSome(captured)).toBe(true)
       if (Option.isNone(captured)) return
-      expect(captured.value.cwd).toBeDefined()
-      expect(captured.value.home).toBeDefined()
+      expect(captured.value.cwd).toBe("/work/project")
+      expect(captured.value.home).toBe("/work/home")
+      expect(captured.value.source).toBe("/work/project/.gent/extensions/captures-host.ts")
       expect("spawner" in captured.value).toBe(false)
       expect("parentEnv" in captured.value.host).toBe(false)
       expect("signalPid" in captured.value.host).toBe(false)
       expect("runProcess" in captured.value.host).toBe(false)
       expect(captured.value.Process.parentEnv).toBeDefined()
       expect(captured.value.Process.runProcess).toBeDefined()
-    }))
-
-  test("requests derive their ref extension id from defineExtension", () =>
-    Effect.gen(function* () {
-      const capability = request({
-        id: "derived-request",
-        input: Schema.Struct({ value: Schema.String }),
-        output: Schema.String,
-        execute: (input) => Effect.succeed(input.value),
-      })
-      const capabilityRef = ref(capability)
-      expect(() => capabilityRef.extensionId).toThrow("not bound to an extension")
-
-      const ext = defineExtension({
-        id: "derived-extension",
-        requests: [capability],
-      })
-      yield* setupOf(ext)
-
-      expect(String(capabilityRef.extensionId)).toBe("derived-extension")
-      expect(String(capabilityRef.capabilityId)).toBe("derived-request")
     }))
 
   test("defineExtension result wires through ExtensionRegistry + explicit prompt slots", () =>
@@ -243,8 +265,11 @@ describe("defineExtension", () => {
       })
       const ext = defineExtension({
         id: "wired",
-        tools: [myTool],
-        hooks: [hook.systemPrompt((input) => Effect.succeed(`${input.basePrompt}!!`))],
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("tool", myTool)
+          yield* host.on("systemPrompt", (input) => Effect.succeed(`${input.basePrompt}!!`))
+        }),
       })
       const contributions = yield* setupOf(ext)
       const loaded = {
@@ -266,36 +291,41 @@ describe("defineExtension", () => {
       expect(result).toBe("yo!!")
     }))
 
-  test("bucket factory error becomes ExtensionLoadError", () =>
+  test("setup failure surfaces as ExtensionLoadError", () =>
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "boom",
-        tools: () =>
-          // oxlint-disable-next-line effect/noAs -- This invalid factory failure is a membrane-sealing fixture.
-          Effect.fail("nope" as never),
+        setup: Effect.fail(
+          new ExtensionLoadError({ extensionId: ExtensionId.make("boom"), message: "nope" }),
+        ),
       })
       const exit = yield* Effect.exit(setupOf(ext))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         const rendered = Cause.pretty(exit.cause)
         expect(rendered).toContain("ExtensionLoadError")
-        expect(rendered).toContain("tools factory failed: nope")
+        expect(rendered).toContain("nope")
       }
     }))
 
-  test("raw native Effect tools are rejected at defineExtension setup", () =>
+  test("raw native Effect tools are rejected at package validation", () =>
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "raw-native",
-        tools: [
-          // oxlint-disable-next-line effect/noAs -- This invalid native tool is deliberately injected to test rejection.
-          AiTool.dynamic("raw_tool", {
-            description: "native but missing Gent metadata",
-            parameters: Schema.Unknown,
-          }) as never,
-        ],
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "tool",
+            // oxlint-disable-next-line effect/noAs -- This invalid native tool is deliberately injected to test rejection.
+            AiTool.dynamic("raw_tool", {
+              description: "native but missing Gent metadata",
+              parameters: Schema.Unknown,
+            }) as never,
+          )
+        }),
       })
-      const exit = yield* Effect.exit(setupOf(ext))
+      const contributions = yield* setupOf(ext)
+      const exit = yield* Effect.exit(validateExtensionPackage(ext.manifest, contributions))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         const rendered = Cause.pretty(exit.cause)
@@ -306,7 +336,7 @@ describe("defineExtension", () => {
       }
     }))
 
-  test("metadata-spoofed native Effect tools are rejected at defineExtension setup", () =>
+  test("metadata-spoofed native Effect tools are rejected at package validation", () =>
     Effect.gen(function* () {
       const legit = tool({
         id: "legit",
@@ -317,15 +347,20 @@ describe("defineExtension", () => {
       })
       const ext = defineExtension({
         id: "metadata-spoof",
-        tools: [
-          // oxlint-disable-next-line effect/noAs -- This metadata-spoofed native tool is deliberately injected to test rejection.
-          AiTool.dynamic("spoofed_tool", {
-            description: "native with copied Gent metadata but no private brand",
-            parameters: Schema.Unknown,
-          }).annotate(GentToolMetadataTag, getToolMetadata(legit)) as never,
-        ],
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "tool",
+            // oxlint-disable-next-line effect/noAs -- This metadata-spoofed native tool is deliberately injected to test rejection.
+            AiTool.dynamic("spoofed_tool", {
+              description: "native with copied Gent metadata but no private brand",
+              parameters: Schema.Unknown,
+            }).annotate(GentToolMetadataTag, getToolMetadata(legit)) as never,
+          )
+        }),
       })
-      const exit = yield* Effect.exit(setupOf(ext))
+      const contributions = yield* setupOf(ext)
+      const exit = yield* Effect.exit(validateExtensionPackage(ext.manifest, contributions))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         const rendered = Cause.pretty(exit.cause)
@@ -347,20 +382,6 @@ describe("defineExtension", () => {
           } as never,
         ),
       )
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag === "Failure") {
-        const rendered = Cause.pretty(exit.cause)
-        expect(rendered).toContain("ExtensionLoadError")
-        expect(rendered).toContain("unknown contribution bucket")
-        expect(rendered).toContain("actors")
-      }
-    }))
-
-  test("unknown defineExtension buckets fail activation before normalization", () =>
-    Effect.gen(function* () {
-      // oxlint-disable-next-line effect/noAs -- This invalid bucket is a compile-contract rejection fixture.
-      const ext = defineExtension({ id: "unknown-bucket", actors: [] } as never)
-      const exit = yield* Effect.exit(setupOf(ext))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         const rendered = Cause.pretty(exit.cause)
@@ -431,19 +452,26 @@ describe("defineExtension", () => {
       })
       const toolExt = defineExtension({
         id: "helper-tool",
-        tools: [
-          tool({
-            id: "helper-tool-call",
-            description: "helper tool",
-            params: Schema.Struct({}),
-            output: Schema.String,
-            execute: () => Effect.succeed("ok"),
-          }),
-        ],
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "tool",
+            tool({
+              id: "helper-tool-call",
+              description: "helper tool",
+              params: Schema.Struct({}),
+              output: Schema.String,
+              execute: () => Effect.succeed("ok"),
+            }),
+          )
+        }),
       })
       const rpcExt = defineExtension({
         id: "helper-rpc",
-        requests: [readSnapshot],
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("request", readSnapshot)
+        }),
       })
       const toolContribs = yield* setupOf(toolExt)
       const requestContribs = yield* setupOf(rpcExt)

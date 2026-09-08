@@ -10,7 +10,6 @@
 
 import { Predicate, Effect, Layer, Option, Ref } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { BunServices } from "@effect/platform-bun"
 import {
   AgentRunnerService,
@@ -21,7 +20,7 @@ import {
   DEFAULT_AGENT_NAME,
 } from "../domain/agent.js"
 import { Auth } from "../domain/auth.js"
-import type { GentExtension, LoadedExtension } from "../domain/extension.js"
+import type { GentExtension, LoadedExtension, ExtensionSetupServices } from "../domain/extension.js"
 import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
 import type { EventPublisher } from "../domain/event-publisher.js"
 import { SessionId, type ExtensionId } from "../domain/ids.js"
@@ -33,7 +32,9 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
 import type { SessionProfileCache } from "../runtime/session-profile.js"
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
-import { defineExtension } from "../extensions/api.js"
+import { defineExtension, ExtensionHost } from "../extensions/api.js"
+import { makeCollectingExtensionHost, registerContributions } from "../domain/extension-host.js"
+import { testHostFacts } from "./index.js"
 import { makeServerRootLayer } from "../server/server-root.js"
 
 export interface E2ELayerConfig {
@@ -42,7 +43,7 @@ export interface E2ELayerConfig {
   /** Agents to register in the extension registry */
   readonly agents: ReadonlyArray<AgentDefinition>
   /** Extension inputs for setup */
-  readonly extensionInputs: ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>>
+  readonly extensionInputs: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /** Pre-loaded extensions to wire directly (bypasses setup). Mutually exclusive with extensionInputs. */
   readonly extensions?: ReadonlyArray<LoadedExtension>
   /** Use "live" for real child sessions. Default mocks blocking run only. */
@@ -113,35 +114,43 @@ const applyLayerOverride = (
 const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
   defineExtension({
     id: "test-agents",
-    agents,
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register("agent", ...agents)
+    }),
   })
 
-const fromLoadedExtension = (extension: LoadedExtension): GentExtension<never> => ({
+const fromLoadedExtension = (
+  extension: LoadedExtension,
+): GentExtension<ExtensionSetupServices> => ({
   manifest: extension.manifest,
   artifactIdentity: extension.artifactIdentity,
-  setup: Effect.succeed(extension.contributions),
+  setup: registerContributions(extension.contributions),
 })
 
 const wrapExtensionInput = (
-  extension: GentExtension<ChildProcessSpawner | GentPlatform>,
+  extension: GentExtension<ExtensionSetupServices>,
   layerOverrides: E2ELayerConfig["layerOverrides"],
-): GentExtension<ChildProcessSpawner | GentPlatform> => ({
+): GentExtension<ExtensionSetupServices> => ({
   manifest: extension.manifest,
   artifactIdentity: extension.artifactIdentity,
-  setup: extension.setup.pipe(
-    Effect.map((contributions) =>
+  setup: Effect.gen(function* () {
+    const collector = makeCollectingExtensionHost(testHostFacts())
+    yield* extension.setup.pipe(Effect.provideService(ExtensionHost, collector.service))
+    const contributions = yield* collector.seal
+    yield* registerContributions(
       applyLayerOverride(
         contributions,
         extension.manifest.id,
         Option.fromUndefinedOr(layerOverrides?.[extension.manifest.id]),
       ),
-    ),
-  ),
+    )
+  }),
 })
 
 const extensionInputsForConfig = (
   config: E2ELayerConfig,
-): ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>> => {
+): ReadonlyArray<GentExtension<ExtensionSetupServices>> => {
   if (Predicate.isUndefined(config.extensions)) {
     return config.extensionInputs.map((extension) =>
       wrapExtensionInput(extension, config.layerOverrides),

@@ -4,7 +4,7 @@ import { Effect, Layer, Schema, Stream } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import { DEFAULT_AGENT_NAME, ExternalDriverRef } from "@gent/core-internal/domain/agent"
 import { ExternalToolRunner, type TurnExecutor } from "@gent/core-internal/domain/driver"
-import { defineExtension } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionHost } from "@gent/core/extensions/api"
 import { messageSingleText } from "@gent/core-internal/domain/message-part-projection"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
@@ -62,7 +62,14 @@ describe.skipIf(process.platform !== "darwin")("external driver cell dispatch", 
         }
         const ext = defineExtension({
           id: "@test/external-cell",
-          externalDrivers: [{ id: "test-cell-runner", executor, invalidate: Effect.void }],
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("externalDriver", {
+              id: "test-cell-runner",
+              executor,
+              invalidate: Effect.void,
+            })
+          }),
         })
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("unused")])
         const { client, sessionId, branchId } = yield* createRpcHarness({

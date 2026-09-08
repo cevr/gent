@@ -23,6 +23,7 @@ import { MessageReceived, ToolCallSucceeded } from "@gent/core-internal/domain/e
 import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
 import {
   ExtensionContext,
+  ExtensionHost,
   defineExtension,
   defineResource,
   tool,
@@ -245,15 +246,19 @@ describe("tool binding replay", () => {
         const capability = makeTool()
         const declared = defineExtension({
           id: "@test/replay-extension",
-          tools: [capability],
-          resources: [
-            defineResource({
-              id: "test/replay-policy-resource",
-              tag: ReplayResource,
-              scope: "process",
-              layer: Layer.succeed(ReplayResource, ReplayResource.of({ value: "live" })),
-            }),
-          ],
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("tool", capability)
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: "test/replay-policy-resource",
+                tag: ReplayResource,
+                scope: "process",
+                layer: Layer.succeed(ReplayResource, ReplayResource.of({ value: "live" })),
+              }),
+            )
+          }),
         })
         let extension = declared
         if (scenario.durable) {
@@ -386,7 +391,13 @@ describe("tool binding replay", () => {
   it.scopedLive("resumes a process-local binding only inside its live generation", () =>
     Effect.gen(function* () {
       const capability = makeTool()
-      const extension = defineExtension({ id: "@test/replay-extension", tools: [capability] })
+      const extension = defineExtension({
+        id: "@test/replay-extension",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("tool", capability)
+        }),
+      })
       const layer = Layer.merge(
         createE2ELayer({
           agents: [],

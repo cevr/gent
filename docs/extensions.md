@@ -5,14 +5,16 @@
 Extensions add leaf capabilities to gent: tools for the LLM, typed RPCs between
 extensions, scoped resources, lifecycle hooks, agents, and LLM drivers.
 
-Single entry point: `defineExtension({ id, ...buckets })`. Each bucket is a
-typed array of values built with small factories. gent is a library used
-inside Effect programs — every contribution returns `Effect`, no Promise edges.
+Single entry point: `defineExtension({ id, setup })`. `setup` is an Effect
+that yields `ExtensionHost` and registers values built with small factories:
+`host.register(domain, ...values)` for leaves and `host.on(kind, handler)` for
+hooks. gent is a library used inside Effect programs — setup, tools, requests,
+and hooks return `Effect`, no Promise edges.
 
 ## Quick Start
 
 ```ts
-import { defineExtension, tool } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
 import { Effect, Schema } from "effect"
 
 const GreetTool = tool({
@@ -27,7 +29,10 @@ const GreetTool = tool({
 
 export default defineExtension({
   id: "greet-ext",
-  tools: [GreetTool],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("tool", GreetTool)
+  }),
 })
 ```
 
@@ -52,15 +57,19 @@ request reads the same extension-owned state.
 
 You need at most 7 concepts to write a complete extension:
 
-| #   | Concept           | What it is                                     |
-| --- | ----------------- | ---------------------------------------------- |
-| 1   | `defineExtension` | Extension factory — takes `id` + typed buckets |
-| 2   | `tool`            | LLM-callable tool (params + execute)           |
-| 3   | `request`         | Extension-to-extension typed RPC               |
-| 4   | `defineResource`  | Scoped service/lifecycle/schedule declaration  |
-| 5   | `hook`            | Turn/message/tool-result lifecycle hooks       |
-| 6   | `defineAgent`     | Spawnable subagent                             |
-| 7   | `PermissionRule`  | Allow/deny rule for tool patterns              |
+| #   | Concept           | What it is                                          |
+| --- | ----------------- | --------------------------------------------------- |
+| 1   | `defineExtension` | Extension factory — takes `id` + one `setup` Effect |
+| 2   | `ExtensionHost`   | Setup-time host: `register`, `on`, cwd/home facts   |
+| 3   | `tool`            | LLM-callable tool (params + execute)                |
+| 4   | `request`         | Extension-to-extension typed RPC                    |
+| 5   | `defineResource`  | Scoped service/lifecycle/schedule declaration       |
+| 6   | `defineAgent`     | Spawnable subagent                                  |
+| 7   | `PermissionRule`  | Allow/deny rule for tool patterns                   |
+
+Registration domains: `"tool"`, `"request"`, `"resource"`, `"job"`, `"agent"`,
+`"modelDriver"`, `"externalDriver"`. Hook kinds: `"systemPrompt"`,
+`"turnProjection"`, `"turnAfter"`, `"toolCall"`, `"toolResult"`.
 
 Extensions import authoring primitives from one path:
 `@gent/core/extensions/api`.
@@ -79,14 +88,14 @@ Public authoring surface:
 
 | Area            | Public exports                                                               |
 | --------------- | ---------------------------------------------------------------------------- |
-| Extension shape | `defineExtension`, `GentExtension`, `ExtensionSetupContext`                  |
+| Extension shape | `defineExtension`, `GentExtension`, `ExtensionHost`                          |
 | Capabilities    | `tool`, `request`, `ref`                                                     |
 | Resources       | `defineResource`, `defineStateResource`, `ResourceId`, `ResourceRevision`    |
-| Hooks           | `hook` factories and hook input/output types                                 |
+| Hooks           | `host.on(kind, handler)` and hook input/output types                         |
 | Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                      |
 | Stable ids      | `ExtensionId`, `ArtifactId`, `ToolCallId`, `ResourceId`, `ResourceRevision`  |
 | Policies/errors | `PermissionRule`, capability/provider-auth/agent-run author-facing errors    |
-| Host facts      | `ExtensionSetupContext.host`                                                 |
+| Host facts      | `ExtensionHost.host` and `ExtensionHost.Process`                             |
 | Serialization   | Message/output projection helpers safe to expose across extension boundaries |
 
 There is no builtin-internal surface. Shipped extensions are useful defaults,
@@ -123,9 +132,10 @@ yield that service directly. Do not add ctx parameters, private builtin APIs,
 capability labels, or read/write metadata when ordinary Effect service access
 already expresses the authority.
 
-`ExtensionSetupContext.host` is the only public host platform view. It exposes
-small, serializable facts and narrow host probes such as OS info, executable
-path, home directory, command-name candidates, and loopback port probing.
+`ExtensionHost.host` and `ExtensionHost.Process` are the only public host
+platform views at setup time. They expose small, serializable facts and narrow
+host probes such as OS info, executable path, home directory, command-name
+candidates, and loopback port probing.
 Extensions do not yield `GentPlatform`, import `runProcess`, or reach into
 `@gent/core/runtime/*`; process authority is available only through
 `yield* ExtensionContext` and its `Process` facade. When extensions need more
@@ -170,7 +180,7 @@ authority they need.
 ### tool — LLM-callable
 
 ```ts
-import { defineExtension, tool } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
 import { Effect, Schema } from "effect"
 
 const EchoTool = tool({
@@ -183,7 +193,10 @@ const EchoTool = tool({
 
 export default defineExtension({
   id: "echo-ext",
-  tools: [EchoTool],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("tool", EchoTool)
+  }),
 })
 ```
 
@@ -207,7 +220,7 @@ extension-owned service.
 ### request — extension-to-extension RPC
 
 ```ts
-import { defineExtension, request } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionHost, request } from "@gent/core/extensions/api"
 import { Effect, Schema } from "effect"
 
 const GetStatus = request({
@@ -226,52 +239,55 @@ const SetStatus = request({
 
 export default defineExtension({
   id: "status-ext",
-  requests: [GetStatus, SetStatus],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("request", GetStatus, SetStatus)
+  }),
 })
 ```
 
 Request handlers receive params only. Host authority comes from
 `yield* ExtensionContext`, and extension-owned services are ordinary Effect
 services; authors import the smallest service Tag they need rather than
-declaring capability labels. `request(...)` refs derive their `extensionId`
-from the enclosing `defineExtension({ id })`, so the extension id is written
-once. Client-only protocol modules that export refs before server setup can use
+declaring capability labels. The loader binds every registered request to the
+enclosing `defineExtension({ id })`, so the extension id is written once. Client-only protocol modules that export refs before server setup can use
 `defineRequests(extensionId, { ...requests })` to bind a whole request map with
 one id.
 
 ## Hooks (turn-time derivation)
 
-Use `hooks: [hook.turnProjection(...)]` for prompt shaping and tool-policy
+Use `host.on("turnProjection", ...)` for prompt shaping and tool-policy
 derivation. Hook handlers receive their event input only. Host authority follows
 the same authoring model as tools and requests: `yield* ExtensionContext` or the
 smallest extension-owned service Tag needed.
 
 ```ts
-import { defineExtension, ExtensionContext, hook } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionContext, ExtensionHost } from "@gent/core/extensions/api"
 import { Effect } from "effect"
 
 export default defineExtension({
   id: "status-ext",
-  hooks: [
-    hook.turnProjection(() =>
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.on("turnProjection", () =>
       Effect.succeed({
         promptSections: [{ id: "status", content: "ready", priority: 0 }],
         toolPolicy: { include: ["status"] },
       }),
-    ),
-    hook.turnAfter(() =>
+    )
+    yield* host.on("turnAfter", () =>
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
         yield* ctx.Session.queueFollowUp({ sourceId: "status-ext", content: "status updated" })
       }),
-    ),
-  ],
+    )
+  }),
 })
 ```
 
-Lifecycle extension points are hook values, not keyed middleware bags. Use
-`hook.systemPrompt`, `hook.turnProjection`, `hook.turnAfter`, `hook.toolCall`,
-or `hook.toolResult` inside `defineExtension({ hooks: [...] })`.
+Lifecycle extension points are typed hook kinds, not keyed middleware bags:
+`systemPrompt`, `turnProjection`, `turnAfter`, `toolCall`, and `toolResult`.
+Each `host.on` call is typed by the kind's input and output.
 
 ## Dynamic Capabilities
 
@@ -306,7 +322,7 @@ The revision records resource semantics, including configuration changes, and
 defaults to `"1"`. Extension-owned state should live in scoped
 services/resources; `defineStateResource(...)` is the low-ceremony state cell
 helper for that case. True actor protocols belong at their owning runtime
-boundary through Effect Entity/RPC, not in extension authoring buckets.
+boundary through Effect Entity/RPC, not in extension registrations.
 
 | Scope     | Lifetime        |
 | --------- | --------------- |
@@ -323,6 +339,7 @@ import {
   defineExtension,
   defineResource,
   defineStateResource,
+  ExtensionHost,
   type ExtensionState,
 } from "@gent/core/extensions/api"
 import { Context, Layer, Effect } from "effect"
@@ -342,32 +359,37 @@ class CounterState extends Context.Service<CounterState, ExtensionState<number>>
 
 export default defineExtension({
   id: "my-service-ext",
-  resources: [
-    defineResource({
-      id: "my-service-ext/service",
-      tag: MyService,
-      scope: "process",
-      layer: MyService.Live,
-    }),
-    defineStateResource({
-      id: "my-service-ext/counter-state",
-      tag: CounterState,
-      scope: "process",
-      initial: 0,
-    }),
-  ],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "my-service-ext/service",
+        tag: MyService,
+        scope: "process",
+        layer: MyService.Live,
+      }),
+      defineStateResource({
+        id: "my-service-ext/counter-state",
+        tag: CounterState,
+        scope: "process",
+        initial: 0,
+      }),
+    )
+  }),
 })
 ```
 
-Use `resources: () => Effect.gen(...)` only when setup needs public host facts.
-Inside that factory, `yield* ExtensionSetupContext` exposes facts such as
-`ctx.cwd` and `ctx.host.commandCandidates`; the resource itself should still
-expose the smallest service Tag it needs.
+Setup already runs as an Effect, so a resource that needs host facts reads
+them from the same `host` value (`host.cwd`, `host.home`,
+`host.host.commandCandidates`) before registering; the resource itself should
+still expose the smallest service Tag it needs.
 
 ## Agent
 
 ```ts
-import { defineExtension, defineAgent, ModelId } from "@gent/core/extensions/api"
+import { defineExtension, defineAgent, ExtensionHost, ModelId } from "@gent/core/extensions/api"
+import { Effect } from "effect"
 
 const helper = defineAgent({
   name: "helper",
@@ -378,7 +400,10 @@ const helper = defineAgent({
 
 export default defineExtension({
   id: "helper-ext",
-  agents: [helper],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("agent", helper)
+  }),
 })
 ```
 
@@ -451,12 +476,13 @@ Preview is not a sandbox or a general side-effect-free operation.
 ## Surface Invariants
 
 - Extension callables are `tool(...)` and `request(...)`.
-- Extension buckets are `tools` and `requests`; older `rpc`, `commands`, and
-  unpublished `actions` bucket names are not part of the authoring surface.
-- Prompt shaping and policy derivation live in `hook.turnProjection`.
+- Extensions register through `host.register(domain, ...values)` and
+  `host.on(kind, handler)`; there are no per-kind buckets on
+  `defineExtension`.
+- Prompt shaping and policy derivation live in `host.on("turnProjection", ...)`.
 - Long-lived state lives in `defineResource(...)` or `defineStateResource(...)`.
 - Generic middleware APIs are not part of extension authoring.
-- Bucket names are the discriminator; extension authors do not build flat `_kind` contribution unions.
+- The registration domain is the discriminator; extension authors do not build flat `_kind` contribution unions.
 - Builtins, user extensions, and project extensions use the same public API.
 - Builtins are the starting extension set, not privileged APIs or registry
   shortcuts.

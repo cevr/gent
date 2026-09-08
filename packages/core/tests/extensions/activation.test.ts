@@ -15,7 +15,14 @@ import {
   validateLoadedExtensions,
 } from "../../src/runtime/extensions/activation"
 import type { ExtensionContributions } from "@gent/core-internal/domain/contribution"
-import { defineExtension, defineResource, ResourceId, tool } from "@gent/core/extensions/api"
+import {
+  defineExtension,
+  defineResource,
+  ExtensionHost,
+  ResourceId,
+  tool,
+} from "@gent/core/extensions/api"
+import { registerContributions } from "../../src/domain/extension-host.js"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
 import { CronRuntime } from "../../src/runtime/extensions/resource-host/schedule-engine"
@@ -38,7 +45,7 @@ const makeBuiltin = (
   setup: Effect.Effect<ExtensionContributions, ExtensionLoadError>,
 ): GentExtension => ({
   manifest: { id: ExtensionId.make(id) },
-  setup,
+  setup: setup.pipe(Effect.flatMap(registerContributions)),
 })
 
 const makeLoaded = (id: string, contributions: ExtensionContributions): LoadedExtension => ({
@@ -527,36 +534,44 @@ describe("extension activation isolation", () => {
         let failStart = true
         const healthy = defineExtension({
           id: "healthy",
-          resources: [
-            // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
-            defineResource({
-              id: "test/healthy",
-              scope: "process",
-              layer: Layer.effectDiscard(
-                Effect.addFinalizer(() =>
-                  Effect.sync(() => {
-                    released++
-                  }),
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
+              defineResource({
+                id: "test/healthy",
+                scope: "process",
+                layer: Layer.effectDiscard(
+                  Effect.addFinalizer(() =>
+                    Effect.sync(() => {
+                      released++
+                    }),
+                  ),
                 ),
-              ),
-            }) as never,
-          ],
+              }) as never,
+            )
+          }),
         })
         const broken = defineExtension({
           id: "broken",
-          resources: [
-            // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
-            defineResource({
-              id: "test/broken",
-              requires: [ResourceId.make("test/healthy")],
-              scope: "process",
-              layer: Layer.empty,
-              start: Effect.suspend(() => {
-                if (failStart) return Effect.die("resource start boom")
-                return Effect.void
-              }),
-            }) as never,
-          ],
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
+              defineResource({
+                id: "test/broken",
+                requires: [ResourceId.make("test/healthy")],
+                scope: "process",
+                layer: Layer.empty,
+                start: Effect.suspend(() => {
+                  if (failStart) return Effect.die("resource start boom")
+                  return Effect.void
+                }),
+              }) as never,
+            )
+          }),
         })
         const context = yield* Layer.build(
           SessionProfileCache.Live({

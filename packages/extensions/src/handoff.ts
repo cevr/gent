@@ -5,7 +5,7 @@ import {
   defineResource,
   estimateContextPercent,
   ExtensionContext,
-  hook,
+  ExtensionHost,
   type Message,
   type TurnAfterInput,
   messagePartsTextLines,
@@ -134,15 +134,19 @@ const autoHandoffImpl = (input: TurnAfterInput) =>
 
 export const HandoffExtension = defineExtension({
   id: EXTENSION_ID,
-  requests: [HandoffCommand],
-  tools: [HandoffTool],
-  resources: [
-    defineResource({
-      id: "@gent/handoff/cooldown",
-      tag: HandoffCooldown,
-      scope: "process",
-      layer: HandoffCooldown.Live,
-    }),
-  ],
-  hooks: [hook.turnAfter(autoHandoffImpl)],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("request", HandoffCommand)
+    yield* host.register("tool", HandoffTool)
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "@gent/handoff/cooldown",
+        tag: HandoffCooldown,
+        scope: "process",
+        layer: HandoffCooldown.Live,
+      }),
+    )
+    yield* host.on("turnAfter", autoHandoffImpl)
+  }),
 })

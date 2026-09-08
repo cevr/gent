@@ -12,7 +12,7 @@ import { SkillsExtension } from "../../src/skills/index.js"
 import { SkillEntry, SkillsRpc } from "../../src/skills/protocol.js"
 import { Skill, Skills } from "../../src/skills/skills.js"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { provideTestSetupContext } from "@gent/core-internal/test-utils"
+import { collectTestContributions } from "@gent/core-internal/test-utils"
 import { e2ePreset } from "../helpers/test-preset"
 
 const testSkills = [
@@ -38,7 +38,7 @@ describe("SkillsExtension via RPC", () => {
   it.live("turn projection contributes loaded skills to the prompt", () =>
     narrowR(
       Effect.gen(function* () {
-        const contributions = yield* SkillsExtension.setup.pipe(provideTestSetupContext())
+        const contributions = yield* collectTestContributions(SkillsExtension.setup)
 
         const turnProjection = Option.fromUndefinedOr(
           contributions.hooks?.find((slot) => slot.kind === "turnProjection"),

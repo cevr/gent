@@ -111,3 +111,19 @@ Do not adopt: Promise surfaces, npm-installed plugins, opencode's many domains
 
 Each step is its own commit with counsel review. Estimated blast radius: ~40 files
 across core, extensions, and tui; split as above.
+
+## Status (2026-09-08)
+
+Steps 1 and 2 landed together with no compatibility layer: `defineExtension({ id, setup })`
+is the only authoring shape, `setup` yields `ExtensionHost` (`packages/core/src/domain/extension-host.ts`)
+and calls `register(domain, ...values)` / `on(kind, handler)`. The loader collects registrations
+into the unchanged `ExtensionContributions` record, binds requests to the extension id, and
+validates the package. The bucket normalizers (`FieldSpec`, `resolveField`,
+`validateKnownExtensionInputBuckets`) and `ExtensionSetupContext` are deleted.
+
+Decision: step 6 (per-extension `Scope`) is dropped. The live profile already re-runs `setup`
+on refresh and the resource graph owns acquisition and release; a second lifecycle owner would
+add a scope with nothing to close. Hot reload remains a profile refresh.
+
+Remaining: 3 (single membrane), 4 (facets once per branch actor), 5 (tool metadata off the
+brand), 7 (slash auto-derivation).

@@ -1,8 +1,8 @@
 import { Cause, Effect, Option, Predicate, Schema, type FileSystem, type Path } from "effect"
 import {
   SCOPE_PRECEDENCE,
+  type AnyExtensionHook,
   type ExtensionHook,
-  type ExtensionHookSlot,
   type LoadedExtension,
   type SystemPromptInput,
   type ToolCallInput,
@@ -202,7 +202,7 @@ const eraseHookEffect = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect
 
 const collectHookSlot = (
   ext: LoadedExtension,
-  slot: ExtensionHookSlot<never, never>,
+  slot: AnyExtensionHook,
   slots: {
     systemPrompt: RegisteredSystemPromptRewrite[]
     turnProjection: HookTurnProjectionSlot[]

@@ -3,7 +3,6 @@ import { SingleRunner } from "effect/unstable/cluster"
 import { FetchHttpClient } from "effect/unstable/http"
 import type { LanguageModel } from "effect/unstable/ai"
 import { ChildProcessSpawner as ProcessSpawner } from "effect/unstable/process"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { AgentRunnerService } from "../domain/agent.js"
 import type { AgentRunnerConfig } from "../runtime/agent/agent-runner.js"
 import { Auth, AuthGuard } from "../domain/auth.js"
@@ -16,7 +15,7 @@ import type { ResourceGraphStatusState } from "../domain/resource-graph-state.js
 import { FileLockService } from "../domain/file-lock.js"
 import type { Permission } from "../domain/permission.js"
 import { PromptPresenterLive } from "../runtime/prompt-presenter-live.js"
-import type { GentExtension } from "../domain/extension.js"
+import type { GentExtension, ExtensionSetupServices } from "../domain/extension.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { ModelResolver } from "../providers/model-resolver.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
@@ -115,7 +114,7 @@ export interface DependenciesConfig {
    *  Must be a fully-provided layer (no requirements, no errors). */
   languageModelLayerOverride?: Layer.Layer<LanguageModel.LanguageModel, never, never>
   /** Extensions to load. Composition roots pass this in. */
-  extensions: ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>>
+  extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /** Internal composition-root knobs used by tests to preset the production root. */
   overrides?: DependencyOverrides
 }

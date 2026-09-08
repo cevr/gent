@@ -4,7 +4,6 @@
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- The synchronous test host implements the platform path adapter.
 import * as nodePath from "node:path"
 import { Effect, FileSystem, Layer, Option } from "effect"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
   AgentRunnerService,
   AgentRunResult,
@@ -12,8 +11,7 @@ import {
   type AgentRunner,
   DEFAULT_AGENT_NAME,
 } from "../domain/agent.js"
-import type { GentExtension } from "../domain/extension.js"
-import type { GentPlatform } from "../runtime/gent-platform.js"
+import type { GentExtension, ExtensionSetupServices } from "../domain/extension.js"
 import type { ToolCapability } from "../domain/capability/tool.js"
 import {
   ExtensionContext,
@@ -33,14 +31,14 @@ import { testExtensionHostContext } from "./extension-host-context.js"
 import { Auth } from "../domain/auth.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
-import { defineExtension } from "../extensions/api.js"
+import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { createDependencies } from "../server/dependencies.js"
 
 export interface ToolTestLayerConfig {
   /** Agents to register */
   readonly agents: ReadonlyArray<AgentDefinition>
   /** Extensions to load */
-  readonly extensions?: ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>>
+  readonly extensions?: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /** Extra tools to register (authored via `tool({...})`). */
   readonly tools?: ReadonlyArray<ToolCapability>
   /** AgentRunner mock — default returns success with empty text */
@@ -63,7 +61,14 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) =>
     persistenceMode: "memory",
     languageModelLayerOverride: LanguageModelLayers.debug(),
     extensions: [
-      defineExtension({ id: "test-agents", agents: config.agents, tools: config.tools ?? [] }),
+      defineExtension({
+        id: "test-agents",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("agent", ...config.agents)
+          yield* host.register("tool", ...(config.tools ?? []))
+        }),
+      }),
       ...(config.extensions ?? []),
     ],
     overrides: {

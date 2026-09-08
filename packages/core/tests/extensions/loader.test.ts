@@ -1,9 +1,11 @@
 import { describe, it, expect } from "effect-bun-test"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { Cause, Effect, FileSystem, Layer, Path, Schema } from "effect"
+import * as AiTool from "effect/unstable/ai/Tool"
+import { defineExtension, ref, request } from "../../src/extensions/api.js"
 import { LoadedArtifactIdentity } from "../../src/domain/extension.js"
 import type { GentExtension } from "../../src/domain/extension.js"
-import { ExtensionSetupContext } from "../../src/domain/extension-setup-context.js"
+import { ExtensionHost } from "../../src/domain/extension-host.js"
 import { discoverExtensions, setupExtension } from "../../src/runtime/extensions/loader"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
@@ -66,7 +68,7 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.succeed({}) 
       const extension: GentExtension = {
         manifest: { id: ExtensionId.make("@gent/test-loader-artifact") },
         artifactIdentity,
-        setup: Effect.succeed({}),
+        setup: Effect.void,
       }
 
       const loaded = yield* setupExtension(
@@ -119,10 +121,11 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.succeed({}) 
       const extension: GentExtension = {
         manifest: { id: ExtensionId.make("@gent/test-public-setup") },
         setup: Effect.gen(function* () {
-          const ctx = yield* ExtensionSetupContext
+          const host = yield* ExtensionHost
           sawProcessAuthority.value =
-            "runProcess" in ctx.Process && "parentEnv" in ctx.Process && "signalPid" in ctx.Process
-          return {}
+            "runProcess" in host.Process &&
+            "parentEnv" in host.Process &&
+            "signalPid" in host.Process
         }),
       }
 
@@ -192,9 +195,9 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.succeed({}) 
     }).pipe(Effect.provide(fsLayer)),
   )
 
-  // Blocking advisory: raw hand-rolled `{ manifest, setup }` (no `defineExtension`)
-  // must yield the setup Tag to read context. There is no ctx-as-param escape.
-  it.live("raw hand-rolled setup yields ExtensionSetupContext Tag to read narrowed shape", () =>
+  // Raw hand-rolled `{ manifest, setup }` (no `defineExtension`) must yield
+  // the `ExtensionHost` Tag to read setup facts. There is no ctx-as-param escape.
+  it.live("setup sees cwd, home, and source from the host", () =>
     Effect.gen(function* () {
       const captured = yield* Effect.sync(() => ({
         cwd: "",
@@ -205,12 +208,12 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.succeed({}) 
       const extension: GentExtension = {
         manifest: { id: ExtensionId.make("@gent/test-raw-setup") },
         setup: Effect.gen(function* () {
-          const ctx = yield* ExtensionSetupContext
-          captured.cwd = ctx.cwd
-          captured.source = ctx.source
-          captured.home = ctx.home
-          captured.hasReadAuthority = "readFileString" in ctx.host || "writeFileString" in ctx.host
-          return {}
+          const host = yield* ExtensionHost
+          captured.cwd = host.cwd
+          captured.source = host.source
+          captured.home = host.home
+          captured.hasReadAuthority =
+            "readFileString" in host.host || "writeFileString" in host.host
         }),
       }
 
@@ -228,8 +231,81 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.succeed({}) 
       expect(captured.cwd).toBe("/tmp/project-cwd")
       expect(captured.source).toBe("/tmp/raw-setup.ts")
       expect(captured.home).toBe("/tmp/home-dir")
-      // Public ctx.host strips read/write authority; only narrowed facts remain
+      // Public host facts strip read/write authority; only narrowed facts remain
       expect(captured.hasReadAuthority).toBe(false)
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
+  it.live("loader binds registered requests to the extension id", () =>
+    Effect.gen(function* () {
+      const capability = request({
+        id: "bound-request",
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.String,
+        execute: (input) => Effect.succeed(input.value),
+      })
+      const capabilityRef = ref(capability)
+      expect(() => capabilityRef.extensionId).toThrow("not bound to an extension")
+
+      const extension = defineExtension({
+        id: "@gent/test-bound-requests",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("request", capability)
+        }),
+      })
+
+      const loaded = yield* setupExtension(
+        {
+          extension,
+          scope: "user",
+          sourcePath: "/tmp/test-bound-requests.ts",
+        },
+        "/tmp/project",
+        "/tmp/home",
+      )
+
+      expect(String(capabilityRef.extensionId)).toBe("@gent/test-bound-requests")
+      expect(String(capabilityRef.capabilityId)).toBe("bound-request")
+      expect(loaded.contributions.requests?.map((entry) => String(ref(entry).extensionId))).toEqual(
+        ["@gent/test-bound-requests"],
+      )
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
+  it.live("loader rejects raw native tools that lack Gent metadata", () =>
+    Effect.gen(function* () {
+      const extension = defineExtension({
+        id: "@gent/test-raw-native",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "tool",
+            // oxlint-disable-next-line effect/noAs -- This invalid native tool is deliberately injected to test rejection.
+            AiTool.dynamic("raw_tool", {
+              description: "native but missing Gent metadata",
+              parameters: Schema.Unknown,
+            }) as never,
+          )
+        }),
+      })
+
+      const exit = yield* Effect.exit(
+        setupExtension(
+          { extension, scope: "user", sourcePath: "/tmp/test-raw-native.ts" },
+          "/tmp/project",
+          "/tmp/home",
+        ),
+      )
+
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const rendered = Cause.pretty(exit.cause)
+        expect(rendered).toContain("ExtensionLoadError")
+        expect(rendered).toContain(
+          "tools[0]: tool must be created with `tool({...})` so Gent metadata is attached",
+        )
+      }
     }).pipe(Effect.provide(fsLayer)),
   )
 

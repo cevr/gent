@@ -1,5 +1,5 @@
 import { Effect, Option, Schema } from "effect"
-import { defineExtension, tool } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
 import { loadPrinciples, PRINCIPLE_NAMES } from "./data.js"
 
 export const PrinciplesParams = Schema.Struct({
@@ -61,5 +61,8 @@ export const PrinciplesTool = tool({
 
 export const PrinciplesExtension = defineExtension({
   id: "@gent/principles",
-  tools: [PrinciplesTool],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("tool", PrinciplesTool)
+  }),
 })

@@ -19,9 +19,8 @@ import {
   defineExtension,
   defineResource,
   ExtensionContext,
+  ExtensionHost,
   ExtensionId,
-  ExtensionSetupContext,
-  hook,
   makeRunSpec,
   request,
   SessionId,
@@ -320,38 +319,40 @@ describe("Effect-purity locks (compile-time)", () => {
   test("session follow-up authority is imported through ExtensionContext", () => {
     defineExtension({
       id: "queue-follow-up-compile-lock",
-      requests: [
-        request({
-          id: "queue-follow-up",
-          extensionId: ExtensionId.make("queue-follow-up-compile-lock"),
-          slash: { name: "Queue Follow Up", description: "ok" },
-          input: Schema.Struct({}),
-          output: Schema.Void,
-          execute: () =>
-            Effect.gen(function* () {
-              const ctx = yield* ExtensionContext
-              yield* ctx.Session.queueFollowUp({ sourceId: "lock", content: "x" })
-            }).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new CapabilityError({
-                    extensionId: ExtensionId.make("queue-follow-up-compile-lock"),
-                    capabilityId: "queue-follow-up",
-                    reason: cause.message,
-                  }),
+      setup: Effect.gen(function* () {
+        const host = yield* ExtensionHost
+        yield* host.register(
+          "request",
+          request({
+            id: "queue-follow-up",
+            extensionId: ExtensionId.make("queue-follow-up-compile-lock"),
+            slash: { name: "Queue Follow Up", description: "ok" },
+            input: Schema.Struct({}),
+            output: Schema.Void,
+            execute: () =>
+              Effect.gen(function* () {
+                const ctx = yield* ExtensionContext
+                yield* ctx.Session.queueFollowUp({ sourceId: "lock", content: "x" })
+              }).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new CapabilityError({
+                      extensionId: ExtensionId.make("queue-follow-up-compile-lock"),
+                      capabilityId: "queue-follow-up",
+                      reason: cause.message,
+                    }),
+                ),
               ),
-            ),
-        }),
-      ],
-      hooks: [
-        hook.turnAfter((_input: PublicExtensionApi.TurnAfterInput) =>
+          }),
+        )
+        yield* host.on("turnAfter", (_input: PublicExtensionApi.TurnAfterInput) =>
           Effect.gen(function* () {
             const ctx = yield* ExtensionContext
             void ctx.Session.listMessages
             void ctx.Session.queueFollowUp
           }),
-        ),
-      ],
+        )
+      }),
     })
 
     expect(true).toBe(true)
@@ -383,7 +384,8 @@ describe("Effect-purity locks (compile-time)", () => {
   test("reactions bucket is not part of the public extension input", () => {
     defineExtension({
       id: "deleted-reactions-bucket-lock",
-      // @ts-expect-error — lifecycle authoring uses hooks; reactions was deleted
+      setup: Effect.void,
+      // @ts-expect-error — lifecycle authoring uses host.on; reactions was deleted
       reactions: {},
     })
     expect(true).toBe(true)
@@ -434,10 +436,14 @@ describe("Effect-purity locks (compile-time)", () => {
   test("hook handlers receive event input only", () => {
     defineExtension({
       id: "hook-handler-params-lock",
-      hooks: [
-        // @ts-expect-error — host authority comes from ExtensionContext, not a ctx parameter
-        hook.turnAfter((_input: PublicExtensionApi.TurnAfterInput, _ctx: unknown) => Effect.void), // oxlint-disable-line effect/noUnknownParameters -- This invalid contract deliberately checks that a ctx parameter is rejected.
-      ],
+      setup: Effect.gen(function* () {
+        const host = yield* ExtensionHost
+        yield* host.on(
+          "turnAfter",
+          // @ts-expect-error — host authority comes from ExtensionContext, not a ctx parameter
+          (_input: PublicExtensionApi.TurnAfterInput, _ctx: unknown) => Effect.void, // oxlint-disable-line effect/noUnknownParameters -- This invalid contract deliberately checks that a ctx parameter is rejected.
+        )
+      }),
     })
     expect(true).toBe(true)
   })
@@ -589,35 +595,40 @@ describe("Effect-purity locks (compile-time)", () => {
   test("GentExtension.setup is an Effect value, not a thunk receiving ctx", () => {
     type SetupField = PublicExtensionApi.GentExtension["setup"]
     // Setup must be assignable from a value (an Effect), not from a `() => Effect`.
-    const okValue: SetupField = Effect.succeed({})
+    const okValue: SetupField = Effect.void
     void okValue
     // @ts-expect-error — `setup` is no longer a thunk; ctx-as-param escape was removed
-    const badThunk: SetupField = (_ctx: unknown) => Effect.succeed({}) // oxlint-disable-line effect/noUnknownParameters -- This invalid contract deliberately checks that setup is not a ctx thunk.
+    const badThunk: SetupField = (_ctx: unknown) => Effect.void // oxlint-disable-line effect/noUnknownParameters -- This invalid contract deliberately checks that setup is not a ctx thunk.
     void badThunk
     // @ts-expect-error — `setup` is no longer a thunk; zero-arg thunks are also rejected
-    const badZeroArg: SetupField = () => Effect.succeed({})
+    const badZeroArg: SetupField = () => Effect.void
     void badZeroArg
     expect(true).toBe(true)
   })
 
-  test("public setup context exposes host facts but not process authority", () => {
+  test("setup host exposes host facts on host.host and process authority on host.Process", () => {
     const setup = Effect.gen(function* () {
-      const ctx = yield* ExtensionSetupContext
-      const platform = ctx.host.osInfo.platform
-      const home = ctx.host.homeDirectory
-      // @ts-expect-error — public setup sees host facts, not parent process env
-      void ctx.host.parentEnv
-      // @ts-expect-error — public setup cannot signal host processes
-      ctx.host.signalPid(1, "SIGTERM")
-      // @ts-expect-error — public setup cannot spawn host processes
-      ctx.host.runProcess("git", ["status"])
-      // @ts-expect-error — commandCandidates moved to Process; host duplicate removed in C9.6
-      void ctx.host.commandCandidates
-      // @ts-expect-error — isPortFree moved to Process; host duplicate removed in C9.6
-      void ctx.host.isPortFree
-      // @ts-expect-error — isPidAlive moved to Process; host duplicate removed in C9.6
-      void ctx.host.isPidAlive
-      return `${platform}:${home.length}`
+      const host = yield* ExtensionHost
+      const platform = host.host.osInfo.platform
+      const home = host.host.homeDirectory
+      const cwd = host.cwd
+      const source = host.source
+      void host.Process.parentEnv
+      void host.Process.runProcess
+      void host.Process.commandCandidates
+      // @ts-expect-error — host facts do not carry the parent process env
+      void host.host.parentEnv
+      // @ts-expect-error — host facts cannot signal host processes
+      host.host.signalPid(1, "SIGTERM")
+      // @ts-expect-error — host facts cannot spawn host processes
+      host.host.runProcess("git", ["status"])
+      // @ts-expect-error — commandCandidates lives on Process, not host facts
+      void host.host.commandCandidates
+      // @ts-expect-error — isPortFree lives on Process, not host facts
+      void host.host.isPortFree
+      // @ts-expect-error — isPidAlive lives on Process, not host facts
+      void host.host.isPidAlive
+      return `${platform}:${home.length}:${cwd}:${source}`
     })
     void setup
     expect(true).toBe(true)
@@ -658,10 +669,11 @@ describe("Effect-purity locks (compile-time)", () => {
     const promiseString = Bun.file("/dev/null").text() // oxlint-disable-line effect/noGlobals -- This host call creates a Promise solely for the compile-time rejection lock.
     defineExtension({
       id: "bad-prompt-hook",
-      hooks: [
+      setup: Effect.gen(function* () {
+        const host = yield* ExtensionHost
         // @ts-expect-error — Promise handler must not be assignable to Effect-returning systemPrompt
-        hook.systemPrompt(() => promiseString),
-      ],
+        yield* host.on("systemPrompt", () => promiseString)
+      }),
     })
     expect(true).toBe(true)
   })
@@ -671,10 +683,11 @@ describe("Effect-purity locks (compile-time)", () => {
     const promiseVoid = Bun.sleep(0) // oxlint-disable-line effect/noGlobals -- This host call creates a Promise solely for the compile-time rejection lock.
     defineExtension({
       id: "purity-hook",
-      hooks: [
+      setup: Effect.gen(function* () {
+        const host = yield* ExtensionHost
         // @ts-expect-error — Promise handler must not be assignable to Effect-returning extension hook
-        hook.turnAfter(() => promiseVoid),
-      ],
+        yield* host.on("turnAfter", () => promiseVoid)
+      }),
     })
     defineResource({
       id: "test/extension-surface-locks/start-promise",
@@ -696,37 +709,38 @@ describe("Effect-purity locks (compile-time)", () => {
   test("valid Effect-based extension lowering still compiles", () => {
     const ext = defineExtension({
       id: "purity-positive",
-      tools: [
-        tool({
-          id: "noop",
-          description: "noop",
-          params: Schema.Struct({}),
-          output: Schema.String,
-          execute: () => Effect.succeed("ok"),
-        }),
-      ],
-      hooks: [
-        hook.systemPrompt((input) => Effect.succeed(`${input.basePrompt}suffix`)),
-        hook.turnAfter(() => Effect.void),
-      ],
-      resources: [
-        defineResource({
-          id: "test/extension-surface-locks/valid-resource",
-          scope: "process",
-          layer: Layer.succeed(ReadOnlyService, {
-            read: Effect.succeed(""),
-          } satisfies ReadOnlyApi),
-          start: Effect.void,
-          stop: Effect.void,
-        }),
-      ],
-      scheduledJobs: [
-        {
+      setup: Effect.gen(function* () {
+        const host = yield* ExtensionHost
+        yield* host.register(
+          "tool",
+          tool({
+            id: "noop",
+            description: "noop",
+            params: Schema.Struct({}),
+            output: Schema.String,
+            execute: () => Effect.succeed("ok"),
+          }),
+        )
+        yield* host.on("systemPrompt", (input) => Effect.succeed(`${input.basePrompt}suffix`))
+        yield* host.on("turnAfter", () => Effect.void)
+        yield* host.register(
+          "resource",
+          defineResource({
+            id: "test/extension-surface-locks/valid-resource",
+            scope: "process",
+            layer: Layer.succeed(ReadOnlyService, {
+              read: Effect.succeed(""),
+            } satisfies ReadOnlyApi),
+            start: Effect.void,
+            stop: Effect.void,
+          }),
+        )
+        yield* host.register("job", {
           id: "j",
           cron: "0 0 * * *",
           target: { agent: AgentName.make("cowork"), prompt: "hi" },
-        },
-      ],
+        })
+      }),
     })
 
     expect(String(ext.manifest.id)).toBe("purity-positive")

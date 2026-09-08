@@ -35,7 +35,7 @@ const ext = (
   scope,
   sourcePath: `/test/${id}`,
   contributions: {
-    hooks: [hook.systemPrompt((input) => Effect.succeed(`${input.basePrompt}${suffix}`))],
+    hooks: [hook("systemPrompt", (input) => Effect.succeed(`${input.basePrompt}${suffix}`))],
   },
 })
 

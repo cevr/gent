@@ -4,7 +4,7 @@
  * Place in ~/.gent/extensions/ or .gent/extensions/
  */
 import { Effect, Schema } from "effect"
-import { defineExtension, tool } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
 
 const HelloTool = tool({
   id: "hello",
@@ -17,5 +17,8 @@ const HelloTool = tool({
 
 export default defineExtension({
   id: "hello-tool",
-  tools: [HelloTool],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("tool", HelloTool)
+  }),
 })

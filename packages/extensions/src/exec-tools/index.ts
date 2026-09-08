@@ -7,7 +7,12 @@
  */
 
 import { Effect, Layer } from "effect"
-import { defineExtension, defineResource, ExtensionId } from "@gent/core/extensions/api"
+import {
+  defineExtension,
+  defineResource,
+  ExtensionHost,
+  ExtensionId,
+} from "@gent/core/extensions/api"
 import { BackgroundBashSupervisorLive, BashTool } from "./bash.js"
 import { BackgroundBashStorage } from "./bash-storage.js"
 
@@ -19,16 +24,20 @@ const BackgroundBashLayer = BackgroundBashSupervisorLive.pipe(
 
 export const ExecToolsExtension = defineExtension({
   id: EXEC_TOOLS_EXTENSION_ID,
-  tools: [BashTool],
-  resources: [
-    defineResource({
-      id: "@gent/exec-tools/background-bash",
-      scope: "process",
-      layer: BackgroundBashLayer,
-      start: Effect.gen(function* () {
-        const storage = yield* BackgroundBashStorage
-        yield* storage.reconcileInterrupted
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("tool", BashTool)
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "@gent/exec-tools/background-bash",
+        scope: "process",
+        layer: BackgroundBashLayer,
+        start: Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          yield* storage.reconcileInterrupted
+        }),
       }),
-    }),
-  ],
+    )
+  }),
 })

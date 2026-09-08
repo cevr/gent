@@ -5,7 +5,7 @@ import { HandoffTool } from "../src/handoff-tool.js"
 import { HandoffCooldown, HandoffExtension } from "../src/handoff.js"
 import { AgentRunResult, SessionId, type ExtensionContextService } from "@gent/core/extensions/api"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { runToolWithCtx, provideTestSetupContext } from "@gent/core-internal/test-utils"
+import { runToolWithCtx, collectTestContributions } from "@gent/core-internal/test-utils"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
@@ -94,7 +94,7 @@ describe("HandoffTool", () => {
 describe("HandoffCooldown", () => {
   it.live("suppress and turnCompleted preserve cooldown semantics", () =>
     Effect.gen(function* () {
-      const contributions = yield* HandoffExtension.setup.pipe(provideTestSetupContext())
+      const contributions = yield* collectTestContributions(HandoffExtension.setup)
       expect((contributions.resources ?? []).length).toBe(1)
 
       const program = Effect.gen(function* () {

@@ -6,7 +6,12 @@ import { messageSingleText } from "@gent/core-internal/domain/message-part-proje
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { AgentDefinition, AgentName, defineExtension } from "@gent/core/extensions/api"
+import {
+  AgentDefinition,
+  AgentName,
+  defineExtension,
+  ExtensionHost,
+} from "@gent/core/extensions/api"
 import {
   LanguageModelLayers,
   type SequenceStep,
@@ -205,13 +210,17 @@ describe.skipIf(process.platform !== "darwin")("shipped model surface", () => {
         // surface and `grep` is unreachable from inside it.
         const scopedAgent = defineExtension({
           id: "@test/scoped-agent",
-          agents: [
-            AgentDefinition.make({
-              name: AgentName.make("scoped"),
-              description: "reads only",
-              allowedTools: ["read"],
-            }),
-          ],
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "agent",
+              AgentDefinition.make({
+                name: AgentName.make("scoped"),
+                description: "reads only",
+                allowedTools: ["read"],
+              }),
+            )
+          }),
         })
         const code = [
           `let grep = 'reachable'`,

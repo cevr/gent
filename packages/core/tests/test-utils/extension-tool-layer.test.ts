@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Layer, Schema } from "effect"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
-import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
+import { ExtensionHost, defineExtension, defineResource, tool } from "@gent/core/extensions/api"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { createToolTestLayer } from "../../src/test-utils/extension-harness"
 
@@ -17,26 +17,30 @@ describe("extension tool test layer", () => {
       let started = 0
       const extension = defineExtension({
         id: "resource-instance",
-        resources: [
-          defineResource({
-            id: "test/resource-instance",
-            scope: "process",
-            tag: ResourceInstance,
-            layer: Layer.effect(
-              ResourceInstance,
-              Effect.acquireRelease(
-                Effect.sync(() => ({ id: ++acquired })),
-                () =>
-                  Effect.sync(() => {
-                    released++
-                  }),
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            defineResource({
+              id: "test/resource-instance",
+              scope: "process",
+              tag: ResourceInstance,
+              layer: Layer.effect(
+                ResourceInstance,
+                Effect.acquireRelease(
+                  Effect.sync(() => ({ id: ++acquired })),
+                  () =>
+                    Effect.sync(() => {
+                      released++
+                    }),
+                ),
               ),
-            ),
-            start: Effect.gen(function* () {
-              started = (yield* ResourceInstance).id
+              start: Effect.gen(function* () {
+                started = (yield* ResourceInstance).id
+              }),
             }),
-          }),
-        ],
+          )
+        }),
       })
       yield* Effect.gen(function* () {
         const instance = yield* ResourceInstance
@@ -71,15 +75,19 @@ describe("extension tool test layer", () => {
           extensions: ["ext-a", "ext-b"].map((id) =>
             defineExtension({
               id,
-              tools: [
-                tool({
-                  id: "conflict",
-                  description: id,
-                  params: Schema.Struct({}),
-                  output: Schema.Void,
-                  execute: () => Effect.void,
-                }),
-              ],
+              setup: Effect.gen(function* () {
+                const host = yield* ExtensionHost
+                yield* host.register(
+                  "tool",
+                  tool({
+                    id: "conflict",
+                    description: id,
+                    params: Schema.Struct({}),
+                    output: Schema.Void,
+                    execute: () => Effect.void,
+                  }),
+                )
+              }),
             }),
           ),
         }),

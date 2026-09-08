@@ -5,14 +5,13 @@ import SessionNotesExtension, {
   AddNoteTool,
 } from "../../../../examples/extensions/session-notes.js"
 import DynamicScratchpadExtension from "../../../../examples/extensions/dynamic-scratchpad.js"
-import { ExtensionSetupContext, getToolId, type GentExtension } from "@gent/core/extensions/api"
+import { getToolId, type GentExtension } from "@gent/core/extensions/api"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
-import { publicSetupContext } from "../../src/domain/extension-setup-context"
 import { getToolMetadata } from "@gent/core-internal/domain/capability/tool"
 import type { LoadedExtension } from "../../src/domain/extension"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
-import { testSetupCtx } from "@gent/core-internal/test-utils"
+import { collectTestContributions } from "@gent/core-internal/test-utils"
 
 const sessionNotesSourceUrl = new URL(
   "../../../../examples/extensions/session-notes.ts",
@@ -23,13 +22,8 @@ const dynamicScratchpadSourceUrl = new URL(
   import.meta.url,
 )
 
-const setupOf = (ext: GentExtension<never>) => {
-  const raw = testSetupCtx()
-  return ext.setup.pipe(Effect.provideService(ExtensionSetupContext, publicSetupContext(raw)))
-}
-
 const loadedFrom = (
-  ext: GentExtension<never>,
+  ext: GentExtension,
   contributions: LoadedExtension["contributions"],
 ): LoadedExtension => ({
   manifest: { id: ext.manifest.id },
@@ -41,7 +35,7 @@ const loadedFrom = (
 describe("extension authoring reference", () => {
   it.live("one-file public API example contributes tool, slash request, state, and hook", () =>
     Effect.gen(function* () {
-      const contributions = yield* setupOf(SessionNotesExtension)
+      const contributions = yield* collectTestContributions(SessionNotesExtension.setup)
       const loaded = loadedFrom(SessionNotesExtension, contributions)
       const resolved = resolveExtensions([loaded])
       const resourceLayer = buildResourceLayer([loaded], "process")

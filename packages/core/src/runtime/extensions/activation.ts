@@ -1,12 +1,11 @@
 import { Cause, Effect, Option, Predicate } from "effect"
-import type { FileSystem, Path } from "effect"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import type { GentPlatform } from "../gent-platform.js"
 import type {
   FailedExtension,
   FailedExtensionPhase,
   LoadedExtension,
   GentExtension,
+  ExtensionSetupServices,
+  ExtensionLoaderServices,
 } from "../../domain/extension.js"
 import {
   type ExtensionContributions,
@@ -21,8 +20,6 @@ const modelToolCount = (contribs: ExtensionContributions): number =>
   modelCapabilities(contribs).length
 import type { DiscoveredBuiltinExtension, DiscoveredExtension } from "./loader.js"
 import { setupExtension } from "./loader.js"
-
-type ExtensionSetupServices = FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform
 
 export interface ExtensionActivationResult {
   readonly active: ReadonlyArray<LoadedExtension>
@@ -55,7 +52,7 @@ export const setupBuiltinExtensions = (params: {
   readonly cwd: string
   readonly home: string
   readonly disabled: ReadonlySet<string>
-}): Effect.Effect<ExtensionActivationResult, never, ExtensionSetupServices> =>
+}): Effect.Effect<ExtensionActivationResult, never, ExtensionLoaderServices> =>
   Effect.gen(function* () {
     const active: LoadedExtension[] = []
     const failed: FailedExtension[] = []
@@ -112,7 +109,7 @@ export const setupDiscoveredExtensions = (params: {
   readonly cwd: string
   readonly home: string
   readonly disabled: ReadonlySet<string>
-}): Effect.Effect<ExtensionActivationResult, never, ExtensionSetupServices> =>
+}): Effect.Effect<ExtensionActivationResult, never, ExtensionLoaderServices> =>
   Effect.gen(function* () {
     const active: LoadedExtension[] = []
     const failed: FailedExtension[] = []

@@ -4,7 +4,13 @@ import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, FileSystem, Layer, Path, Schema as S } from "effect"
 import { BunFileSystem, BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
-import { AgentName, defineExtension, defineResource, hook, tool } from "@gent/core/extensions/api"
+import {
+  AgentName,
+  ExtensionHost,
+  defineExtension,
+  defineResource,
+  tool,
+} from "@gent/core/extensions/api"
 import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 import { ConfigService } from "../../src/runtime/config-service"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
@@ -55,7 +61,10 @@ const sectionTool = tool({
 
 const sectionExtension = defineExtension({
   id: "@gent/test-runtime-profile",
-  tools: [sectionTool],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("tool", sectionTool)
+  }),
 })
 
 // Dynamic prompt section: the hook Effect yields a service from the
@@ -95,24 +104,26 @@ const fakeProviderLive = Layer.succeed(FakeProvider, {
 
 const dynamicExtension = defineExtension({
   id: "@gent/test-runtime-profile-dynamic",
-  resources: [
-    defineResource({
-      id: "test/runtime-profile/fake-provider",
-      tag: FakeProvider,
-      scope: "process",
-      layer: fakeProviderLive,
-    }),
-  ],
-  hooks: [
-    hook.turnProjection(() =>
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "test/runtime-profile/fake-provider",
+        tag: FakeProvider,
+        scope: "process",
+        layer: fakeProviderLive,
+      }),
+    )
+    yield* host.on("turnProjection", () =>
       Effect.gen(function* () {
         const fp = yield* FakeProvider
         return {
           promptSections: [{ id: "rp-dynamic-section", priority: 60, content: fp.text() }],
         }
       }),
-    ),
-  ],
+    )
+  }),
 })
 
 describe("live Profile", () => {
@@ -129,56 +140,59 @@ describe("live Profile", () => {
 
         const resourceExtension = defineExtension({
           id: "@gent/test-runtime-profile/declaration-resource",
-          resources: [
-            // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
-            defineResource({
-              id: "test/runtime-profile/declaration-resource",
-              scope: "process",
-              layer: Layer.effect(
-                ScopedProbe,
-                Effect.acquireRelease(
-                  Effect.sync(() => {
-                    const instance = ++nextInstance
-                    events.push(["acquire", instance])
-                    return ScopedProbe.of({ instance })
-                  }),
-                  (probe) => Effect.sync(() => events.push(["release", probe.instance])),
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
+              defineResource({
+                id: "test/runtime-profile/declaration-resource",
+                scope: "process",
+                layer: Layer.effect(
+                  ScopedProbe,
+                  Effect.acquireRelease(
+                    Effect.sync(() => {
+                      const instance = ++nextInstance
+                      events.push(["acquire", instance])
+                      return ScopedProbe.of({ instance })
+                    }),
+                    (probe) => Effect.sync(() => events.push(["release", probe.instance])),
+                  ),
                 ),
-              ),
-              start: Effect.gen(function* () {
-                const probe = yield* ScopedProbe
-                events.push(["start", probe.instance])
-              }),
-              stop: Effect.gen(function* () {
-                const probe = yield* ScopedProbe
-                events.push(["stop", probe.instance])
-              }),
-            }) as never,
-          ],
-          scheduledJobs: [
-            {
+                start: Effect.gen(function* () {
+                  const probe = yield* ScopedProbe
+                  events.push(["start", probe.instance])
+                }),
+                stop: Effect.gen(function* () {
+                  const probe = yield* ScopedProbe
+                  events.push(["stop", probe.instance])
+                }),
+              }) as never,
+            )
+            yield* host.register("job", {
               id: "declaration-resource",
               cron: "0 21 * * 1-5",
               target: {
                 agent: AgentName.make("cowork"),
                 prompt: "Check declaration loading.",
               },
-            },
-          ],
-          tools: [
-            tool({
-              id: "rp-declaration-prompt",
-              description: "declaration prompt fixture",
-              params: S.Struct({}),
-              output: S.String,
-              prompt: {
-                id: "rp-declaration-prompt-section",
-                content: "loaded during declaration setup",
-                priority: 1,
-              },
-              execute: () => Effect.succeed("ok"),
-            }),
-          ],
+            })
+            yield* host.register(
+              "tool",
+              tool({
+                id: "rp-declaration-prompt",
+                description: "declaration prompt fixture",
+                params: S.Struct({}),
+                output: S.String,
+                prompt: {
+                  id: "rp-declaration-prompt-section",
+                  content: "loaded during declaration setup",
+                  priority: 1,
+                },
+                execute: () => Effect.succeed("ok"),
+              }),
+            )
+          }),
         })
         const validTool = tool({
           id: "rp-declaration-collision",
@@ -196,11 +210,17 @@ describe("live Profile", () => {
         })
         const validExtension = defineExtension({
           id: "@gent/test-runtime-profile/declaration-valid",
-          tools: [validTool],
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("tool", validTool)
+          }),
         })
         const invalidExtension = defineExtension({
           id: "@gent/test-runtime-profile/declaration-invalid",
-          tools: [invalidTool],
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("tool", invalidTool)
+          }),
         })
         const inputs = {
           cwd: home,
@@ -272,17 +292,21 @@ describe("live Profile", () => {
         let starts = 0
         const extension = defineExtension({
           id: "@gent/test-runtime-profile-start-once",
-          resources: [
-            // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
-            defineResource({
-              id: "test/runtime-profile/start-once",
-              scope: "process",
-              layer: Layer.empty,
-              start: Effect.sync(() => {
-                starts += 1
-              }),
-            }) as never,
-          ],
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
+              defineResource({
+                id: "test/runtime-profile/start-once",
+                scope: "process",
+                layer: Layer.empty,
+                start: Effect.sync(() => {
+                  starts += 1
+                }),
+              }) as never,
+            )
+          }),
         })
 
         yield* openProfile({
@@ -302,41 +326,43 @@ describe("live Profile", () => {
       const events: Array<readonly [string, number]> = []
       const extension = defineExtension({
         id: "@gent/test-runtime-profile-resource-identity",
-        resources: [
-          // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
-          defineResource({
-            id: "test/runtime-profile/resource-identity",
-            scope: "process",
-            layer: Layer.effect(
-              ScopedProbe,
-              Effect.acquireRelease(
-                Effect.sync(() => {
-                  const instance = ++nextInstance
-                  events.push(["acquire", instance])
-                  return ScopedProbe.of({ instance })
-                }),
-                (probe) => Effect.sync(() => events.push(["release", probe.instance])),
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
+            defineResource({
+              id: "test/runtime-profile/resource-identity",
+              scope: "process",
+              layer: Layer.effect(
+                ScopedProbe,
+                Effect.acquireRelease(
+                  Effect.sync(() => {
+                    const instance = ++nextInstance
+                    events.push(["acquire", instance])
+                    return ScopedProbe.of({ instance })
+                  }),
+                  (probe) => Effect.sync(() => events.push(["release", probe.instance])),
+                ),
               ),
-            ),
-            start: Effect.gen(function* () {
-              const probe = yield* ScopedProbe
-              events.push(["start", probe.instance])
-            }),
-            stop: Effect.gen(function* () {
-              const probe = yield* ScopedProbe
-              events.push(["stop", probe.instance])
-            }),
-          }) as never,
-          // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
-          defineResource({
-            id: "test/runtime-profile/resource-identity/pure",
-            tag: PureProbe,
-            scope: "process",
-            layer: Layer.succeed(PureProbe, { value: "pure" } satisfies PureProbeApi),
-          }) as never,
-        ],
-        hooks: [
-          hook.turnProjection(() =>
+              start: Effect.gen(function* () {
+                const probe = yield* ScopedProbe
+                events.push(["start", probe.instance])
+              }),
+              stop: Effect.gen(function* () {
+                const probe = yield* ScopedProbe
+                events.push(["stop", probe.instance])
+              }),
+            }) as never,
+            // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
+            defineResource({
+              id: "test/runtime-profile/resource-identity/pure",
+              tag: PureProbe,
+              scope: "process",
+              layer: Layer.succeed(PureProbe, { value: "pure" } satisfies PureProbeApi),
+            }) as never,
+          )
+          yield* host.on("turnProjection", () =>
             Effect.gen(function* () {
               const probe = yield* ScopedProbe
               const pureProbe = yield* PureProbe
@@ -345,8 +371,8 @@ describe("live Profile", () => {
                 promptSections: [{ id: "pure-probe", priority: 1, content: pureProbe.value }],
               }
             }),
-          ),
-        ],
+          )
+        }),
       })
 
       const exit = yield* Effect.exit(
@@ -413,32 +439,42 @@ describe("live Profile", () => {
         let starts = 0
         const activatedExtension = defineExtension({
           id: "@gent/test-runtime-profile-precedence/activated",
-          resources: [
-            // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
-            defineResource({
-              id: "test/runtime-profile/precedence/activated",
-              tag: PrecedenceProbe,
-              scope: "process",
-              layer: Layer.succeed(PrecedenceProbe, {
-                value: "activated",
-              } satisfies PrecedenceProbeApi),
-              start: Effect.sync(() => {
-                starts += 1
-              }),
-            }) as never,
-          ],
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
+              defineResource({
+                id: "test/runtime-profile/precedence/activated",
+                tag: PrecedenceProbe,
+                scope: "process",
+                layer: Layer.succeed(PrecedenceProbe, {
+                  value: "activated",
+                } satisfies PrecedenceProbeApi),
+                start: Effect.sync(() => {
+                  starts += 1
+                }),
+              }) as never,
+            )
+          }),
         })
         const pureExtension = defineExtension({
           id: "@gent/test-runtime-profile-precedence/pure",
-          resources: [
-            // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
-            defineResource({
-              id: "test/runtime-profile/precedence/pure",
-              tag: PrecedenceProbe,
-              scope: "process",
-              layer: Layer.succeed(PrecedenceProbe, { value: "pure" } satisfies PrecedenceProbeApi),
-            }) as never,
-          ],
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
+              defineResource({
+                id: "test/runtime-profile/precedence/pure",
+                tag: PrecedenceProbe,
+                scope: "process",
+                layer: Layer.succeed(PrecedenceProbe, {
+                  value: "pure",
+                } satisfies PrecedenceProbeApi),
+              }) as never,
+            )
+          }),
         })
 
         for (const { extensions, expected } of [

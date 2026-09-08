@@ -10,7 +10,6 @@ import { BunHttpServer, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
 import { Clock, Effect, Layer, Context, Match, Option, Schema } from "effect"
 import type { Scope } from "effect"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 // @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution
 import { resolve as pathResolve, join as pathJoin } from "node:path"
 
@@ -68,7 +67,7 @@ export type ProviderSpec = Schema.Schema.Type<typeof ProviderSpec>
 export interface GentServerOptions {
   readonly cwd: string
   /** Extension declarations for this server. Defaults to the builtins. */
-  readonly extensions?: ReadonlyArray<GentExtension<ChildProcessSpawner>>
+  readonly extensions?: ReadonlyArray<GentExtension>
   readonly state?: StateSpec
   readonly provider?: ProviderSpec
   readonly env?: Readonly<Record<string, string>>

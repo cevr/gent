@@ -13,6 +13,7 @@ import {
   Scope,
 } from "effect"
 import {
+  ExtensionHost,
   defineExtension,
   defineResource,
   request,
@@ -73,65 +74,72 @@ describe("live profile resource availability", () => {
 
       const providerExtension = defineExtension({
         id: providerId,
-        resources: [
-          defineResource({
-            id: providerResourceId,
-            tag: ProviderToken,
-            scope: "process",
-            layer: Layer.succeed(ProviderToken, ProviderToken.of({ value: "provider-ready" })),
-            start: Effect.sync(() => {
-              providerStarts += 1
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            defineResource({
+              id: providerResourceId,
+              tag: ProviderToken,
+              scope: "process",
+              layer: Layer.succeed(ProviderToken, ProviderToken.of({ value: "provider-ready" })),
+              start: Effect.sync(() => {
+                providerStarts += 1
+              }),
+              stop: Effect.sync(() => {
+                providerStops += 1
+              }),
             }),
-            stop: Effect.sync(() => {
-              providerStops += 1
-            }),
-          }),
-        ],
+          )
+        }),
       })
       const consumerExtension = defineExtension({
         id: consumerId,
-        resources: [
-          defineResource({
-            id: consumerResourceId,
-            requires: [providerResourceId],
-            tag: ConsumerToken,
-            scope: "process",
-            layer: Layer.effect(
-              ConsumerToken,
-              Effect.gen(function* () {
-                const provider = yield* ProviderToken
-                return ConsumerToken.of({
-                  read: Effect.succeed(`consumer:${provider.value}`),
-                })
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            defineResource({
+              id: consumerResourceId,
+              requires: [providerResourceId],
+              tag: ConsumerToken,
+              scope: "process",
+              layer: Layer.effect(
+                ConsumerToken,
+                Effect.gen(function* () {
+                  const provider = yield* ProviderToken
+                  return ConsumerToken.of({
+                    read: Effect.succeed(`consumer:${provider.value}`),
+                  })
+                }),
+              ),
+              start: Effect.sync(() => {
+                consumerStarts += 1
               }),
-            ),
-            start: Effect.sync(() => {
-              consumerStarts += 1
+              stop: Effect.sync(() => {
+                consumerStops += 1
+              }),
             }),
-            stop: Effect.sync(() => {
-              consumerStops += 1
-            }),
-          }),
-        ],
-        scheduledJobs: [
-          {
+          )
+          yield* host.register("job", {
             id: "availability-job",
             cron: "0 * * * *",
             target: { agent: AgentName.make("cowork"), prompt: "availability" },
-          },
-        ],
-        requests: [
-          request({
-            id: requestId,
-            input: Schema.String,
-            output: Schema.String,
-            execute: () =>
-              Effect.gen(function* () {
-                const consumer = yield* ConsumerToken
-                return yield* consumer.read
-              }),
-          }),
-        ],
+          })
+          yield* host.register(
+            "request",
+            request({
+              id: requestId,
+              input: Schema.String,
+              output: Schema.String,
+              execute: () =>
+                Effect.gen(function* () {
+                  const consumer = yield* ConsumerToken
+                  return yield* consumer.read
+                }),
+            }),
+          )
+        }),
       }) satisfies GentExtension
 
       const runtimeEnvironmentLive = RuntimeEnvironment.Live({

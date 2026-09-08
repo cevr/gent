@@ -126,7 +126,7 @@ describe("tool execution", () => {
               sourcePath: "policy",
               contributions: {
                 hooks: [
-                  hook.toolCall((input) => {
+                  hook("toolCall", (input) => {
                     if (
                       input.toolName === "dynamic_echo" &&
                       Predicate.isObjectOrArray(input.input) &&
@@ -490,7 +490,7 @@ describe("tool execution", () => {
               scope: "builtin",
               sourcePath: "test",
               contributions: {
-                hooks: [hook.toolResult(() => Effect.succeed({ ok: "bad" }))],
+                hooks: [hook("toolResult", () => Effect.succeed({ ok: "bad" }))],
               },
             },
           ]),

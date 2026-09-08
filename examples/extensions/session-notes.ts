@@ -11,7 +11,7 @@ import { Context, Effect, Schema } from "effect"
 import {
   defineExtension,
   defineStateResource,
-  hook,
+  ExtensionHost,
   request,
   tool,
   type ExtensionState,
@@ -71,18 +71,20 @@ export const SessionNotesSummary = request({
 
 export default defineExtension({
   id: "session-notes",
-  resources: [
-    defineStateResource({
-      id: "example/session-notes/state",
-      tag: SessionNotesState,
-      scope: "process",
-      initial: { notes: [] },
-    }),
-  ],
-  tools: [AddNoteTool],
-  requests: [SessionNotesSummary],
-  hooks: [
-    hook.turnProjection(() =>
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "resource",
+      defineStateResource({
+        id: "example/session-notes/state",
+        tag: SessionNotesState,
+        scope: "process",
+        initial: { notes: [] },
+      }),
+    )
+    yield* host.register("tool", AddNoteTool)
+    yield* host.register("request", SessionNotesSummary)
+    yield* host.on("turnProjection", () =>
       Effect.gen(function* () {
         const state = yield* SessionNotesState
         const snapshot = yield* state.get
@@ -98,6 +100,6 @@ export default defineExtension({
           toolPolicy: { include: ["session_note_add"] },
         }
       }),
-    ),
-  ],
+    )
+  }),
 })

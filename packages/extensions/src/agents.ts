@@ -1,4 +1,10 @@
-import { AgentDefinition, AgentName, defineExtension } from "@gent/core/extensions/api"
+import { Effect } from "effect"
+import {
+  AgentDefinition,
+  AgentName,
+  defineExtension,
+  ExtensionHost,
+} from "@gent/core/extensions/api"
 
 /**
  * The one shipped agent. Its prompt is the base system prompt; its model is
@@ -15,5 +21,8 @@ export const CoreAgents = [main] satisfies ReadonlyArray<AgentDefinition>
 
 export const AgentsExtension = defineExtension({
   id: "@gent/agents",
-  agents: [...CoreAgents],
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("agent", ...CoreAgents)
+  }),
 })

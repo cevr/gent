@@ -1,7 +1,7 @@
 import { Context, Option } from "effect"
-import type { PublicExtensionSetupContext } from "@gent/core/extensions/api"
+import type { ExtensionHostService } from "@gent/core/extensions/api"
 
-type ExtensionHostProcess = PublicExtensionSetupContext["Process"]
+type ExtensionHostProcess = ExtensionHostService["Process"]
 
 /**
  * Env vars for Anthropic keychain, read once at extension setup and
@@ -33,7 +33,7 @@ export const makeAnthropicKeychainEnv = (options: {
 export interface AnthropicPlatformApi {
   readonly platform: string
   readonly home: string
-  readonly parentEnv: PublicExtensionSetupContext["Process"]["parentEnv"]
+  readonly parentEnv: ExtensionHostProcess["parentEnv"]
   readonly runProcess: ExtensionHostProcess["runProcess"]
   readonly env: AnthropicKeychainEnv
 }
@@ -42,7 +42,7 @@ export class AnthropicPlatform extends Context.Service<AnthropicPlatform, Anthro
   "@gent/extensions/src/anthropic/platform-adapter/AnthropicPlatform",
 ) {
   /**
-   * Build from a `defineExtension` setup context. `home` is sourced from
+   * Build from the `ExtensionHost` seen during setup. `home` is sourced from
    * `host.homeDirectory` (the OS user home), not `ctx.home` (the Gent
    * configured home) — the Claude Code credential file lives at the OS
    * user's home regardless of a `GENT_HOME` override, and earlier
@@ -50,7 +50,7 @@ export class AnthropicPlatform extends Context.Service<AnthropicPlatform, Anthro
    * means future callers can't pick the wrong field.
    */
   static readonly fromSetup = (
-    ctx: PublicExtensionSetupContext,
+    ctx: Pick<ExtensionHostService, "host" | "Process">,
     env: AnthropicKeychainEnv,
   ): AnthropicPlatformApi =>
     AnthropicPlatform.of({

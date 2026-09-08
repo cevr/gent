@@ -120,8 +120,6 @@ const allowedContributionBuckets = new Set([
   "externalDrivers",
 ])
 
-const allowedExtensionInputKeys = new Set(["id", ...allowedContributionBuckets])
-
 const unknownBucketMessage = (key: string) =>
   `unknown contribution bucket "${key}"; supported buckets are ${Array.from(
     allowedContributionBuckets,
@@ -130,16 +128,6 @@ const unknownBucketMessage = (key: string) =>
 const validateKnownBuckets = (contribs: ExtensionContributions): Option.Option<string> => {
   for (const key of Object.keys(contribs)) {
     if (!allowedContributionBuckets.has(key)) {
-      return Option.some(unknownBucketMessage(key))
-    }
-  }
-  return Option.none()
-}
-
-// oxlint-disable-next-line effect/noObjectParameters -- Runtime extension inputs are validated by their own field-key contract.
-export const validateKnownExtensionInputBuckets = (params: object): Option.Option<string> => {
-  for (const key of Object.keys(params)) {
-    if (!allowedExtensionInputKeys.has(key)) {
       return Option.some(unknownBucketMessage(key))
     }
   }

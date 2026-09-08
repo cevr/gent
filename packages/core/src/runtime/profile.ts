@@ -1,7 +1,7 @@
 /** Profile declarations, catalog assembly, and isolated child resource wiring. */
 
 import { Context, DateTime, Effect, FileSystem, Layer, Path, Predicate } from "effect"
-import type { GentExtension } from "../domain/extension.js"
+import type { GentExtension, ExtensionSetupServices } from "../domain/extension.js"
 import type { ResourceGraphPublication } from "./extensions/resource-host/resource-graph-host.js"
 import { type PromptSection } from "../domain/prompt.js"
 import {
@@ -47,7 +47,7 @@ export interface RuntimeProfileInputs {
   readonly platform: string
   readonly shell?: string
   readonly osVersion?: string
-  readonly extensions: ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>>
+  readonly extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /** Fresh config supplied by an explicit refresh. */
   readonly config?: UserConfig
   readonly disabledExtensions?: ReadonlyArray<string>

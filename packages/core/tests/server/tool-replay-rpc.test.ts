@@ -27,6 +27,7 @@ import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/work
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import {
   ExtensionContext,
+  ExtensionHost,
   defineExtension,
   defineResource,
   tool,
@@ -55,42 +56,48 @@ const replayResourceId = "test/tool-replay-rpc/resource"
 const makeReplayExtension = (state: ReplayState): GentExtension => ({
   ...defineExtension({
     id: replayExtensionId,
-    resources: () => [
-      defineResource({
-        id: replayResourceId,
-        revision: state.resourceRevision,
-        tag: ReplayResource,
-        scope: "process",
-        layer: Layer.effect(
-          ReplayResource,
-          Effect.acquireRelease(
-            Effect.sync(() => {
-              state.resourceAcquisitions += 1
-              return ReplayResource.of({ revision: state.resourceRevision })
-            }),
-            () =>
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      // Resource revision is read at setup time so each profile rebuild sees the current one.
+      yield* host.register(
+        "resource",
+        defineResource({
+          id: replayResourceId,
+          revision: state.resourceRevision,
+          tag: ReplayResource,
+          scope: "process",
+          layer: Layer.effect(
+            ReplayResource,
+            Effect.acquireRelease(
               Effect.sync(() => {
-                state.resourceReleases += 1
+                state.resourceAcquisitions += 1
+                return ReplayResource.of({ revision: state.resourceRevision })
               }),
+              () =>
+                Effect.sync(() => {
+                  state.resourceReleases += 1
+                }),
+            ),
           ),
-        ),
-      }),
-    ],
-    tools: [
-      tool({
-        id: "replay-tool",
-        description: "Request approval before recording execution",
-        params: Schema.Struct({ text: Schema.String }),
-        output: Schema.String,
-        execute: Effect.fn("toolReplayRpc.replayTool")(function* (params) {
-          const ctx = yield* ExtensionContext
-          const decision = yield* ctx.Interaction.approve({ text: params.text })
-          state.toolExecutions += 1
-          if (decision.approved) return "executed"
-          return "declined"
         }),
-      }),
-    ],
+      )
+      yield* host.register(
+        "tool",
+        tool({
+          id: "replay-tool",
+          description: "Request approval before recording execution",
+          params: Schema.Struct({ text: Schema.String }),
+          output: Schema.String,
+          execute: Effect.fn("toolReplayRpc.replayTool")(function* (params) {
+            const ctx = yield* ExtensionContext
+            const decision = yield* ctx.Interaction.approve({ text: params.text })
+            state.toolExecutions += 1
+            if (decision.approved) return "executed"
+            return "declined"
+          }),
+        }),
+      )
+    }),
   }),
   artifactIdentity: LoadedArtifactIdentity.make("@test/tool-replay-rpc@artifact-1"),
 })
@@ -115,7 +122,10 @@ const runReplayScenario = (scenario: ReplayScenario) =>
     const replayExtension = makeReplayExtension(state)
     const agentsExtension = defineExtension({
       id: "@test/tool-replay-rpc-agents",
-      agents: e2ePreset.agents,
+      setup: Effect.gen(function* () {
+        const host = yield* ExtensionHost
+        yield* host.register("agent", ...e2ePreset.agents)
+      }),
     })
 
     const runtimeEnvironmentLive = RuntimeEnvironment.Live({

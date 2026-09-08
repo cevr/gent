@@ -1,13 +1,14 @@
-import type { Duration, Effect } from "effect"
+import type { Duration, Effect, FileSystem, Path } from "effect"
 import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import type { GentPlatform } from "../runtime/gent-platform.js"
 import type { AgentDefinition, AgentName, DriverSource } from "./agent"
 import type { ToolCapability } from "./capability/tool.js"
 import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids"
 import type { ExtensionContributions } from "./contribution.js"
 export type { ExtensionContributions } from "./contribution.js"
 import type { PromptSection } from "./prompt.js"
-import type { ExtensionSetupContext } from "./extension-setup-context.js"
+import type { ExtensionHost } from "./extension-host.js"
 
 // Extension Manifest — authored by extension author
 
@@ -195,56 +196,49 @@ export type ExtensionHook<Input, Output, E = never, R = never> = {
   readonly handler: (input: Input) => Effect.Effect<Output, E, R>
 }
 
-export type ExtensionHookSlot<E = never, R = never> =
-  | {
-      readonly kind: "systemPrompt"
-      readonly hook: ExtensionHook<SystemPromptInput, string, E, R>
-    }
-  | {
-      readonly kind: "turnProjection"
-      readonly hook: ExtensionHook<void, TurnProjection, E, R>
-    }
-  | {
-      readonly kind: "turnAfter"
-      readonly hook: ExtensionHook<TurnAfterInput, void, E, R>
-    }
-  | {
-      readonly kind: "toolCall"
-      readonly hook: ExtensionHook<ToolCallInput, ToolCallPreflightResult, E, R>
-    }
-  | {
-      readonly kind: "toolResult"
-      readonly hook: ExtensionHook<ToolResultInput, unknown, E, R>
-    }
-
-export type AnyExtensionHook = ExtensionHookSlot<never, never>
-
-const eraseHookSlot = <E, R>(slot: ExtensionHookSlot<E, R>): ExtensionHookSlot<never, never> =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- hook factories erase author E/R at the public bucket boundary; runtime reseals failures and provides extension services at invocation.
-  // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- Hook buckets intentionally erase author error and service types at the runtime membrane.
-  slot as ExtensionHookSlot<never, never>
-
-export const hook = {
-  systemPrompt: <E = never, R = never>(
-    handler: (input: SystemPromptInput) => Effect.Effect<string, E, R>,
-  ): AnyExtensionHook => eraseHookSlot({ kind: "systemPrompt", hook: { handler } }),
-  turnProjection: <E = never, R = never>(
-    handler: () => Effect.Effect<TurnProjection, E, R>,
-  ): AnyExtensionHook =>
-    eraseHookSlot({
-      kind: "turnProjection",
-      hook: { handler: () => handler() },
-    }),
-  turnAfter: <E = never, R = never>(
-    handler: (input: TurnAfterInput) => Effect.Effect<void, E, R>,
-  ): AnyExtensionHook => eraseHookSlot({ kind: "turnAfter", hook: { handler } }),
-  toolCall: <E = never, R = never>(
-    handler: (input: ToolCallInput) => Effect.Effect<ToolCallPreflightResult, E, R>,
-  ): AnyExtensionHook => eraseHookSlot({ kind: "toolCall", hook: { handler } }),
-  toolResult: <E = never, R = never>(
-    handler: (input: ToolResultInput) => Effect.Effect<unknown, E, R>,
-  ): AnyExtensionHook => eraseHookSlot({ kind: "toolResult", hook: { handler } }),
+/** Input and output of every runtime hook kind. `host.on(kind, handler)` is typed by this map. */
+export interface ExtensionHookSignatures {
+  readonly systemPrompt: { readonly input: SystemPromptInput; readonly output: string }
+  readonly turnProjection: { readonly input: void; readonly output: TurnProjection }
+  readonly turnAfter: { readonly input: TurnAfterInput; readonly output: void }
+  readonly toolCall: { readonly input: ToolCallInput; readonly output: ToolCallPreflightResult }
+  readonly toolResult: { readonly input: ToolResultInput; readonly output: unknown }
 }
+
+export type ExtensionHookKind = keyof ExtensionHookSignatures
+
+export type ExtensionHookHandler<K extends ExtensionHookKind, E = never, R = never> = (
+  input: ExtensionHookSignatures[K]["input"],
+) => Effect.Effect<ExtensionHookSignatures[K]["output"], E, R>
+
+export type ExtensionHookSlot<
+  K extends ExtensionHookKind = ExtensionHookKind,
+  E = never,
+  R = never,
+> = K extends ExtensionHookKind
+  ? {
+      readonly kind: K
+      readonly hook: ExtensionHook<
+        ExtensionHookSignatures[K]["input"],
+        ExtensionHookSignatures[K]["output"],
+        E,
+        R
+      >
+    }
+  : never
+
+export type AnyExtensionHook = ExtensionHookSlot<ExtensionHookKind, never, never>
+
+/**
+ * Builds one hook slot. Author E/R are erased here: the runtime reseals
+ * failures and provides extension services at every invocation.
+ */
+export const hook = <K extends ExtensionHookKind, E = never, R = never>(
+  kind: K,
+  handler: ExtensionHookHandler<K, E, R>,
+): AnyExtensionHook =>
+  // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- Hook slots intentionally erase author error and service types at the runtime membrane.
+  ({ kind, hook: { handler } }) as AnyExtensionHook
 
 export interface ExtensionTurnContext extends RunContext {
   readonly agent: AgentDefinition
@@ -358,28 +352,24 @@ export interface ExtensionHostPlatform extends ExtensionHostFacts {
   ) => Effect.Effect<ExtensionHostProcessResult, ExtensionHostProcessError>
 }
 
-export interface GentExtension<R = ChildProcessSpawner> {
+/** Platform services the loader itself runs against. */
+export type ExtensionLoaderServices =
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner
+  | GentPlatform
+
+/** Services available to every `setup` Effect: the loader platform plus the registration host. */
+export type ExtensionSetupServices = ExtensionLoaderServices | ExtensionHost
+
+export interface GentExtension<R = ExtensionSetupServices> {
   readonly manifest: ExtensionManifest
   /** Stable package/build identity. Missing means durable replay is unsupported. */
   readonly artifactIdentity?: LoadedArtifactIdentity
   /**
-   * Effect that resolves to the typed `ExtensionContributions` buckets for
-   * this extension. The runtime stores the resolved contributions on
-   * `LoadedExtension.contributions`; consumers read each bucket as a typed
-   * array. There is no flat `Contribution[]` and no core `_kind`
-   * discriminator.
-   *
-   * Setup-time facts are imported via `yield* ExtensionSetupContext` — the
-   * loader provides the service around this Effect. There is no ctx
-   * parameter; threading the platform through arguments is forbidden by
-   * the no-context-params rule.
+   * Registers the extension's leaves and hooks through `yield* ExtensionHost`.
+   * The loader provides the host, collects the registrations, validates them,
+   * and stores the sealed record on `LoadedExtension.contributions`.
    */
-  readonly setup: Effect.Effect<
-    ExtensionContributions,
-    ExtensionLoadError,
-    R | ExtensionSetupContext
-  >
+  readonly setup: Effect.Effect<void, ExtensionLoadError, R>
 }
-
-// Legacy keyed middleware primitives are gone. Prompt/context shaping,
-// turn/message hooks, and tool-result enrichment live on hooks.

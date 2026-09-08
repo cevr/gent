@@ -42,7 +42,7 @@ class BoomError extends Data.TaggedError(
 }> {}
 
 const turnAfterHooks = (handler: () => Effect.Effect<void, BoomError>) => [
-  hook.turnAfter((_input: TurnAfterInput) => handler()),
+  hook("turnAfter", (_input: TurnAfterInput) => handler()),
 ]
 
 describe("runtime hooks", () => {

@@ -22,7 +22,7 @@ import {
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { GentPlatform } from "./gent-platform.js"
-import type { LoadedExtension, GentExtension } from "../domain/extension.js"
+import type { LoadedExtension, GentExtension, ExtensionSetupServices } from "../domain/extension.js"
 import { type PermissionService } from "../domain/permission.js"
 import type { PromptSection } from "../domain/prompt.js"
 import {
@@ -107,7 +107,7 @@ export interface SessionProfileCacheConfig {
   readonly disabledExtensions?: ReadonlyArray<string>
   readonly scheduledJobCommand?: ScheduledJobCommand
   readonly scheduledJobEnv?: Readonly<Record<string, string>>
-  readonly extensions: ReadonlyArray<GentExtension<ChildProcessSpawner | GentPlatform>>
+  readonly extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
 }
 
 export interface SessionProfileCacheService {

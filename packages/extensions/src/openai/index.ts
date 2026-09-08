@@ -1,6 +1,7 @@
 import { Duration, Effect, Fiber, Layer, Option, Schema, SynchronizedRef } from "effect"
 import {
   defineExtension,
+  ExtensionHost,
   AuthMethod,
   Model,
   ProviderAuthError,
@@ -299,20 +300,23 @@ export const buildOpenAIModelDriver = (
 
 export const OpenAIExtension = defineExtension({
   id: "@gent/provider-openai",
-  modelDrivers: () =>
-    Effect.gen(function* () {
-      // Credential cache cell hoisted to extension-closure scope so it
-      // survives across `resolveModel` calls. One extension instance →
-      // one cell that lives until the runtime tears the extension down.
-      // Setup is Effectful, so the cache cell is allocated through
-      // SynchronizedRef.make instead of an unsafe closure escape hatch.
-      const credentialCellRef = yield* SynchronizedRef.make(EMPTY_CREDENTIAL_CELL)
-      // Pending OAuth callbacks keyed by authorizationId. Entries
-      // self-clear on a 5-min TTL so abandoned auth attempts don't leak.
-      const pendingCallbacks = new Map<string, PendingCallbackEntry>()
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    // Credential cache cell hoisted to extension-closure scope so it
+    // survives across `resolveModel` calls. One extension instance →
+    // one cell that lives until the runtime tears the extension down.
+    // Setup is Effectful, so the cache cell is allocated through
+    // SynchronizedRef.make instead of an unsafe closure escape hatch.
+    const credentialCellRef = yield* SynchronizedRef.make(EMPTY_CREDENTIAL_CELL)
+    // Pending OAuth callbacks keyed by authorizationId. Entries
+    // self-clear on a 5-min TTL so abandoned auth attempts don't leak.
+    const pendingCallbacks = new Map<string, PendingCallbackEntry>()
 
-      const envApiKey = yield* readOptionalEnv("OPENAI_API_KEY")
+    const envApiKey = yield* readOptionalEnv("OPENAI_API_KEY")
 
-      return [buildOpenAIModelDriver(credentialCellRef, pendingCallbacks, envApiKey)]
-    }),
+    yield* host.register(
+      "modelDriver",
+      buildOpenAIModelDriver(credentialCellRef, pendingCallbacks, envApiKey),
+    )
+  }),
 })

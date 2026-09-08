@@ -2,7 +2,7 @@
  * Explicit turn-projection hook regression locks.
  *
  * Locks the explicit turn-projection contract:
- *  - `hook.turnProjection()` contributes prompt sections + tool policy
+ *  - `hook("turnProjection", handler)` contributes prompt sections + tool policy
  *  - failures/defects are isolated so later extensions still run
  */
 import { describe, it, expect } from "effect-bun-test"
@@ -10,6 +10,7 @@ import { Effect } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type {
+  ExtensionHookHandler,
   ExtensionTurnContext,
   LoadedExtension,
   ProjectionTurnContext,
@@ -48,16 +49,16 @@ const hookCtx = {
 
 const compile = (extensions: ReadonlyArray<LoadedExtension>) => compileExtensionHooks(extensions)
 
-const hookExt = (
+const hookExt = <E, R>(
   id: string,
   scope: "builtin" | "user" | "project",
-  contribution: Parameters<typeof hook.turnProjection>[0],
+  contribution: ExtensionHookHandler<"turnProjection", E, R>,
 ): LoadedExtension => ({
   manifest: { id: ExtensionId.make(id) },
   scope,
   sourcePath: `/test/${id}`,
   contributions: {
-    hooks: [hook.turnProjection(contribution)],
+    hooks: [hook("turnProjection", contribution)],
   },
 })
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Exit, Layer, Option, Predicate, Ref, Schema, Stream } from "effect"
-import { defineExtension, tool } from "@gent/core/extensions/api"
+import { ExtensionHost, defineExtension, tool } from "@gent/core/extensions/api"
 import { AgentDefinition, AgentName, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 import { ChildAgentHandle } from "../../../../extensions/src/delegate/child-agent-tools.js"
 import { DelegateExtension } from "../../../../extensions/src/delegate/delegate-tool.js"
@@ -112,31 +112,36 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(steps)
         const fixture = defineExtension({
           id: "cell-child-fixture",
-          agents: [
-            new AgentDefinition({ name: DEFAULT_AGENT_NAME }),
-            new AgentDefinition({ name: AgentName.make("child") }),
-          ],
-          tools: [
-            CellTool,
-            ReadSessionTool,
-            tool({
-              id: "model-started",
-              description: "Wait for the model boundary",
-              params: Schema.Struct({ call: Schema.Int }),
-              output: Schema.Boolean,
-              execute: (input) => controls.waitForCall(input.call).pipe(Effect.as(true)),
-            }),
-            tool({
-              id: "child-handle",
-              description: "Save or read the test child handle outside the kernel",
-              params: Schema.TaggedUnion({ save: { handle: ChildAgentHandle }, get: {} }),
-              output: ChildAgentHandle,
-              execute: Effect.fn("test.childHandle")(function* (input) {
-                if (input._tag === "save") yield* Ref.set(handle, Option.some(input.handle))
-                return yield* Effect.fromOption(yield* Ref.get(handle))
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "agent",
+              new AgentDefinition({ name: DEFAULT_AGENT_NAME }),
+              new AgentDefinition({ name: AgentName.make("child") }),
+            )
+            yield* host.register(
+              "tool",
+              CellTool,
+              ReadSessionTool,
+              tool({
+                id: "model-started",
+                description: "Wait for the model boundary",
+                params: Schema.Struct({ call: Schema.Int }),
+                output: Schema.Boolean,
+                execute: (input) => controls.waitForCall(input.call).pipe(Effect.as(true)),
               }),
-            }),
-          ],
+              tool({
+                id: "child-handle",
+                description: "Save or read the test child handle outside the kernel",
+                params: Schema.TaggedUnion({ save: { handle: ChildAgentHandle }, get: {} }),
+                output: ChildAgentHandle,
+                execute: Effect.fn("test.childHandle")(function* (input) {
+                  if (input._tag === "save") yield* Ref.set(handle, Option.some(input.handle))
+                  return yield* Effect.fromOption(yield* Ref.get(handle))
+                }),
+              }),
+            )
+          }),
         })
         const { client, sessionId, branchId } = yield* createRpcHarness({
           providerLayer,

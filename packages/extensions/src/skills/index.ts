@@ -7,12 +7,7 @@
  */
 
 import { Effect } from "effect"
-import {
-  defineExtension,
-  defineResource,
-  ExtensionSetupContext,
-  hook,
-} from "@gent/core/extensions/api"
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api"
 import { formatSkillsForPrompt, Skills } from "./skills.js"
 import { SkillsTool } from "./skills-tool.js"
 import { SearchSkillsTool } from "./search-skills.js"
@@ -22,20 +17,18 @@ import { SkillsRpc } from "./protocol.js"
 
 export const SkillsExtension = defineExtension({
   id: "@gent/skills",
-  resources: () =>
-    Effect.gen(function* () {
-      const ctx = yield* ExtensionSetupContext
-      return [
-        defineResource({
-          id: "@gent/skills/service",
-          tag: Skills,
-          scope: "process",
-          layer: Skills.Live({ cwd: ctx.cwd, home: ctx.home }),
-        }),
-      ]
-    }),
-  hooks: [
-    hook.turnProjection(() =>
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "@gent/skills/service",
+        tag: Skills,
+        scope: "process",
+        layer: Skills.Live({ cwd: host.cwd, home: host.home }),
+      }),
+    )
+    yield* host.on("turnProjection", () =>
       Effect.gen(function* () {
         const service = yield* Skills
         const skills = yield* service.list
@@ -43,8 +36,8 @@ export const SkillsExtension = defineExtension({
           promptSections: [{ id: "skills", priority: 80, content: formatSkillsForPrompt(skills) }],
         }
       }),
-    ),
-  ],
-  requests: [SkillsRpc.ListSkills, SkillsRpc.GetSkillContent],
-  tools: [SkillsTool, SearchSkillsTool],
+    )
+    yield* host.register("request", SkillsRpc.ListSkills, SkillsRpc.GetSkillContent)
+    yield* host.register("tool", SkillsTool, SearchSkillsTool)
+  }),
 })

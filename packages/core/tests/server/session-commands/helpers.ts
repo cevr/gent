@@ -359,7 +359,7 @@ export const parentToolCallProbeExtension: LoadedExtension = {
   sourcePath: "test",
   contributions: {
     hooks: [
-      hook.turnProjection(() =>
+      hook("turnProjection", () =>
         Effect.gen(function* () {
           const ctx = yield* ExtensionContext
           let promptSections: ReadonlyArray<{
