@@ -261,7 +261,7 @@ export function Session(props: SessionProps) {
 
         <MessagePicker
           open={controller.uiState().overlay._tag === "fork"}
-          messages={controller.messages()}
+          messages={controller.forkMessages()}
           onSelect={controller.onForkSelect}
           onClose={controller.closeOverlay}
         />

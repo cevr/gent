@@ -24,6 +24,7 @@ function TestComposer(props: {
     client,
     items: () => [],
     messages: () => [],
+    forkMessages: () => [],
     queueState: () => ({ steering: [], followUp: [] }),
     interactionState,
     saveDraft: () => {},

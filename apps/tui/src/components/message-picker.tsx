@@ -4,7 +4,8 @@ import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
-import type { Message } from "./message-list"
+import type { Message } from "@gent/core-internal/domain/message"
+import { extractImages, extractText } from "@gent/sdk"
 import { MessageId } from "@gent/core-internal/domain/ids.js"
 import { truncate } from "../utils/format-tool"
 import { useScopedKeyboard } from "../keyboard/context"
@@ -26,10 +27,11 @@ const buildItems = (messages: readonly Message[]): PickerItem[] =>
   messages.map((m) => {
     let rolePrefix = "A"
     if (m.role === "user") rolePrefix = "U"
-    let labelContent = m.content.replace(/\s+/g, " ")
-    if (labelContent.length === 0 && m.images.length > 0) {
+    let labelContent = extractText(m.parts).replace(/\s+/g, " ")
+    const images = extractImages(m.parts)
+    if (labelContent.length === 0 && images.length > 0) {
       let imageCount = ""
-      if (m.images.length > 1) imageCount = ` x${m.images.length}`
+      if (images.length > 1) imageCount = ` x${images.length}`
       labelContent = `[Image${imageCount}]`
     }
     return {

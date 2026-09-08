@@ -1,4 +1,5 @@
 import { Match, Schema } from "effect"
+import { Message } from "@gent/core-internal/domain/message"
 import {
   Session as SessionSchema,
   SessionTreeNode,
@@ -26,7 +27,7 @@ export type SessionOverlayState =
       readonly tree: DomainSessionTreeNode
       readonly sessions: readonly DomainSession[]
     }
-  | { readonly _tag: "fork" }
+  | { readonly _tag: "fork"; readonly messages: readonly Message[] }
   | { readonly _tag: "mermaid" }
   | { readonly _tag: "auth"; readonly enforceAuth: boolean }
   | { readonly _tag: "permissions" }
@@ -66,7 +67,7 @@ export const SessionUiEvent = Schema.TaggedUnion({
     tree: SessionTreeNode,
     sessions: Schema.Array(SessionSchema),
   },
-  OpenFork: {},
+  OpenFork: { messages: Schema.Array(Message) },
   OpenMermaid: {},
   OpenAuth: { enforceAuth: Schema.Boolean },
   OpenPermissions: {},
@@ -135,10 +136,10 @@ export function transitionSessionUi(
         },
         effects: [],
       }),
-      OpenFork: (): SessionUiTransitionResult => ({
+      OpenFork: (event): SessionUiTransitionResult => ({
         state: {
           ...state,
-          overlay: { _tag: "fork" },
+          overlay: { _tag: "fork", messages: event.messages },
         },
         effects: [],
       }),

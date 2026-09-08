@@ -4,6 +4,7 @@ import { DateTime, Effect, Fiber, Option, Random, Schedule } from "effect"
 import { useEnv } from "../env/context"
 import { shutdownLog } from "../utils/client-logger"
 import { useRequiredContext } from "../utils/solid-context"
+import type { Message as DurableMessage } from "@gent/core-internal/domain/message"
 import type { ActiveInteraction } from "@gent/core-internal/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids.js"
 import type { Message, SessionItem } from "../components/message-list"
@@ -67,6 +68,7 @@ export interface SessionController {
   client: ClientContextValue
   items: () => SessionItem[]
   messages: () => Message[]
+  forkMessages: () => readonly DurableMessage[]
   queueState: () => QueueState
   composerState: () => ComposerState
   interactionState: () => ComposerInteractionState
@@ -470,11 +472,23 @@ export function createSessionController(props: {
   }
 
   const openForkPicker = () => {
-    if (feed.messages().length === 0) {
-      client.setError("No messages to fork")
-      return
-    }
-    dispatchSessionUi(SessionUiEvent.cases.OpenFork.make({}))
+    const sessionId = props.sessionId
+    const branchId = props.branchId
+    cast(
+      client.client.message.list({ branchId }).pipe(
+        Effect.tap((messages) =>
+          Effect.sync(() => {
+            if (props.sessionId !== sessionId || props.branchId !== branchId) return
+            if (messages.length === 0) {
+              client.setError("No messages to fork")
+              return
+            }
+            dispatchSessionUi(SessionUiEvent.cases.OpenFork.make({ messages }))
+          }),
+        ),
+        Effect.catchEager((error) => Effect.sync(() => client.setError(formatError(error)))),
+      ),
+    )
   }
 
   createSessionCommandRegistry({
@@ -706,6 +720,11 @@ export function createSessionController(props: {
     client,
     items,
     messages: feed.messages,
+    forkMessages: () => {
+      const overlay = uiState().overlay
+      if (overlay._tag !== "fork") return []
+      return overlay.messages
+    },
     queueState,
     composerState,
     interactionState,
