@@ -30,8 +30,9 @@ The main TUI scope waits for client-provider disposal before process exit.
 - On exit, the pane returned to its shell. Herdr removed the `gent` identity.
 - The first question attempt had invalid model tool input. A later exact-input
   attempt completed. Its cell row still showed a failure mark although the
-  nested tool returned the answer. This is outside the state-reporting path
-  and needs review in the requested full feature check.
+  nested tool returned the answer. The full feature check confirmed that
+  recovery stops the outer cell without source replay. The UI hid the cause.
+  The display fix now shows it. See the full feature receipt below.
 
 ## Herdr compatibility limit
 
@@ -52,6 +53,7 @@ need Gent support in Herdr. The plugin does not use another agent's identity.
 - `/Users/cvr/Developer/personal/gent/apps/tui/src/main.tsx`
 - `/Users/cvr/Developer/personal/gent/apps/tui/tests/herdr.test.ts`
 - `/Users/cvr/Developer/personal/gent/apps/tui/tests/herdr-test-server-boundary.ts`
+- `/Users/cvr/Developer/personal/gent/plans/gent-feature-e2e-2026-09-08.md`
 - `/Users/cvr/.cache/repo/primeintellect-ai/prime-agent/packages/coding-agent/src/core/extensions/builtin/herdr-agent-state.ts`
 - `/Users/cvr/.cache/repo/herdrdev/herdr/src/agent_resume.rs`
 - `/tmp/gent-herdr-gate.log`
