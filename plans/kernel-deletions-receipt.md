@@ -34,11 +34,36 @@ Source files:
 - `/Users/cvr/Developer/personal/gent/apps/tui/tests/use-session-feed.test.tsx`
 - `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`
 
+## Principles as a skill
+
+Removed the dedicated principles extension, tool, and TypeScript text registry. The 27 principle texts now live in Markdown reference files under one ordinary `principles` skill. A mechanical extraction check compared all 27 runtime strings byte-for-byte before removal.
+
+The skill installer publishes a content-addressed directory of real files. This supports compiled binaries and separate cell workers. The existing discovery service reads the bundle after user global sources. Local-first and explicit-global selection remain. The read-only skill list now uses a plain captured value instead of a mutable Ref.
+
+The focused tests passed: 30 tests, including concurrent installation, complete file reads, local/global selection, and real-service RPC discovery. The live compiled TUI found the skill and read its index plus one reference with `Bun.file`. It returned `PRINCIPLES-FILES-GREEN` and reached idle.
+
+Evidence:
+
+- `/tmp/gent-principles-tests.log`
+- `/tmp/gent-principles-gate.log`
+- `/tmp/gent-principles-herdr.txt`
+
+Source files:
+
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/bundled/principles/SKILL.md`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/bundled-sources.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/bundled-skills.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/markdown.d.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/skills.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/index.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/tests/skills/bundled-skills.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/tests/skills/skills-rpc.test.ts`
+- `/Users/cvr/Developer/personal/gent/.gitignore`
+
 ## Remaining work
 
-1. Consolidate bundled principles into skills.
-2. Replace the repository extension and es-git with documented CLI execution.
-3. Replace artifact state and UI with saved files and kernel working values.
-4. Remove model-facing skill search/load wrappers. Preserve discovery, scope, and TUI insertion.
+1. Replace the repository extension and es-git with documented CLI execution.
+2. Replace artifact state and UI with saved files and kernel working values.
+3. Remove model-facing skill search/load wrappers. Preserve discovery, scope, and TUI insertion.
 
 Run the full gate and live Herdr checks for each logical commit. Complete review and the final goal audit before integration.

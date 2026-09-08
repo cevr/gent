@@ -1,5 +1,7 @@
-import type { PlatformError } from "effect"
-import { Context, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
+import type { Crypto, PlatformError } from "effect"
+import { Context, Effect, Layer, Option, Schema, FileSystem, Path } from "effect"
+
+import { installBundledSkills } from "./bundled-skills.js"
 
 // Skill Schema
 
@@ -37,15 +39,17 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
     cwd: string
     home: string
     ignored?: ReadonlyArray<string>
-  }): Layer.Layer<Skills, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> =>
+  }): Layer.Layer<
+    Skills,
+    PlatformError.PlatformError,
+    FileSystem.FileSystem | Path.Path | Crypto.Crypto
+  > =>
     Layer.effect(
       Skills,
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
         const ignored = Option.fromNullishOr(options.ignored)
-
-        const skillsRef = yield* Ref.make<Skill[]>([])
 
         const loadSkillsFromDir = (
           dir: string,
@@ -120,7 +124,10 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
 
         const loadAllSkills = Effect.gen(function* () {
           // ── Global sources ──
-          const globalDirs = SKILL_DIRS.map((d) => path.join(options.home, d))
+          const globalDirs = [
+            ...SKILL_DIRS.map((d) => path.join(options.home, d)),
+            yield* installBundledSkills(options.home),
+          ]
 
           const globalSkills: Skill[] = []
           const globalSeen = new Set<string>()
@@ -168,12 +175,11 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
         })
 
         // Initial load
-        yield* Ref.set(skillsRef, yield* loadAllSkills)
+        const skills = yield* loadAllSkills
 
         return Skills.of({
-          list: Ref.get(skillsRef),
-          get: (name, level) =>
-            Ref.get(skillsRef).pipe(Effect.map((skills) => resolveSkillName(skills, name, level))),
+          list: Effect.succeed(skills),
+          get: (name, level) => Effect.succeed(resolveSkillName(skills, name, level)),
         })
       }),
     )

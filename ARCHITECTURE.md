@@ -1041,3 +1041,7 @@ Request-ID correlation: TUI generates `crypto.randomUUID()` at `sendMessage`/`cr
 - No process-purity dogma. Same-process direct transport is fine.
 
 This doc describes the architecture we want to keep, not the migration history we already paid for.
+
+## Bundled guidance
+
+Principles ship as an ordinary `principles` skill with Markdown reference files. The skills resource materializes the embedded bundle in a content-addressed directory under `~/.cache/gent/skills/`. It publishes the complete directory by rename, so concurrent profiles do not expose partial files. The separate cell process reads real paths. User global skills override bundled defaults; project skills retain local-first selection. There is no separate principles tool or principle-content registry.

@@ -6,6 +6,7 @@ bin/
 *.js
 *.js.map
 *.d.ts
+!packages/extensions/src/skills/markdown.d.ts
 *.d.ts.map
 .gent/data.db
 .gent/plans/

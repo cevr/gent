@@ -1,9 +1,10 @@
+import { BunServices } from "@effect/platform-bun"
 /**
  * Skills RPC acceptance test — exercises SkillsExtension through the full
  * request(...) path with per-request scopes, matching production behavior.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Option, Schema } from "effect"
+import { Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
 import { ref } from "@gent/core/extensions/api"
 import { textStep } from "@gent/core-internal/debug/provider"
@@ -35,6 +36,43 @@ const testSkills = [
 const skillsLayerOverride = { "@gent/skills": () => Skills.Test(testSkills) }
 
 describe("SkillsExtension via RPC", () => {
+  it.scopedLive(
+    "bundled principles are discoverable through RPC and readable as files",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-principles-rpc-" })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensionInputs: [SkillsExtension],
+          layerOverrides: {
+            "@gent/skills": () =>
+              Skills.Live({ home, cwd: home }).pipe(Layer.provide(BunServices.layer), Layer.orDie),
+          },
+        })
+        const raw = yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ref(SkillsRpc.GetSkillContent).extensionId,
+          capabilityId: ref(SkillsRpc.GetSkillContent).capabilityId,
+          input: { name: "principles" },
+        })
+        const skill = yield* Schema.decodeUnknownEffect(SkillEntry)(raw)
+        expect(skill.name).toBe("principles")
+        expect(yield* fs.readFileString(skill.filePath)).toContain(
+          "references/redesign-from-first-principles.md",
+        )
+        expect(
+          yield* fs.readFileString(
+            path.join(path.dirname(skill.filePath), "references/redesign-from-first-principles.md"),
+          ),
+        ).toContain("# Redesign From First Principles")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
   it.live("turn projection contributes loaded skills to the prompt", () =>
     narrowR(
       Effect.gen(function* () {
