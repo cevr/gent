@@ -98,7 +98,7 @@ describe("Delegate Tool", () => {
     )
   })
 
-  it.live("foreground single delegates with ephemeral persistence", () => {
+  it.live("foreground delegation runs a durable child so its cell and resources work", () => {
     let capturedRunSpec = Option.none<{ persistence?: string }>()
     const ctx = makeCtx({
       agentRun: (params) => {
@@ -121,7 +121,7 @@ describe("Delegate Tool", () => {
             Option.flatMap(capturedRunSpec, (runSpec) =>
               Option.fromUndefinedOr(runSpec.persistence),
             ),
-          ).toEqual(Option.some("ephemeral"))
+          ).toEqual(Option.some("durable"))
         }),
       ),
     )

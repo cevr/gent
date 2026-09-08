@@ -1,4 +1,16 @@
-import { Cause, DateTime, Duration, Effect, Fiber, Layer, Option, Ref, Scope, Stream } from "effect"
+import {
+  Cause,
+  Context,
+  DateTime,
+  Duration,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Scope,
+  Stream,
+} from "effect"
 import {
   AgentRunError,
   AgentRunResult,
@@ -285,13 +297,21 @@ export const runEphemeralAgent = (params: {
     // `makeEphemeralAgentRootLayer()` wraps the merged layer in `Layer.fresh` so the
     // child gets its own memo map; otherwise the parent runtime's memo could
     // alias child-owned in-memory storage.
-    // Build the ephemeral layer into a fresh scope, then provide its context
-    // to childRun. Equivalent to Effect.provide(ephemeralLayer) + scoped, but
-    // built explicitly so layer lifetime stays visible at the call site.
+    // Build the ephemeral layer into a fresh scope, then run childRun under
+    // that context alone. The child is its own composition root: the caller's
+    // fiber context carries per-operation services of the parent turn (the
+    // current cell operation, the parent's entity address), and merging it in
+    // would make the child's cell refuse to run as a nested outer cell.
     const { success, reasoning } = yield* Effect.gen(function* () {
       const scope = yield* Scope.Scope
-      const ephemeralContext = yield* Layer.buildWithScope(ephemeralLayer, scope)
-      return yield* childRun.pipe(Effect.provideContext(ephemeralContext))
+      // The layer build captures the fiber context for actor handler builds,
+      // so it runs under an empty context as well.
+      const ephemeralContext = yield* Layer.buildWithScope(ephemeralLayer, scope).pipe(
+        Effect.updateContext((_: Context.Context<never>) => Context.empty()),
+      )
+      return yield* childRun.pipe(
+        Effect.updateContext((_: Context.Context<never>) => ephemeralContext),
+      )
     }).pipe(Effect.scoped)
 
     // Save full output to disk (runs in parent context where FileSystem is available)

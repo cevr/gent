@@ -94,12 +94,14 @@ export const DelegateTool = tool({
       return DelegateResult.cases.running.make({ requestId, ...child })
     }
 
-    // Foreground mode: blocking subagent dispatch
+    // Foreground mode: a durable child in this runtime, awaited here. Durable
+    // keeps the child on the session profile, so its cell and resources work;
+    // the ephemeral root is for tool-less helper runs only.
     const result = yield* ctx.Agent.run({
       agent,
       prompt: params.todo,
       runSpec: makeRunSpec({
-        persistence: "ephemeral",
+        persistence: "durable",
         parentToolCallId: ctx.toolCallId,
         overrides: params.overrides,
       }),
