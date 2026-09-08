@@ -65,7 +65,7 @@ export type AgentLoopQueue = {
   readonly takeNextQueuedTurn: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   readonly clearInFlightTurn: (
     messageId: QueuedTurnItem["message"]["id"],
-  ) => Effect.Effect<void, AgentLoopError>
+  ) => Effect.Effect<boolean, AgentLoopError>
   readonly appendSteering: (item: QueuedTurnItem) => Effect.Effect<LoopState, AgentLoopError>
   /**
    * Remove the steering items a running turn can deliver at its next step
@@ -334,7 +334,7 @@ export const makeAgentLoopQueue = (
         commitQueueTransaction("cleared in-flight turn", (s) => {
           const queue = clearInFlightQueuedTurn(s.queue, messageId)
           return {
-            value: void 0,
+            value: queue !== s.queue,
             next: { ...s, queue },
             persist: queue !== s.queue,
           }

@@ -131,7 +131,7 @@ export type AgentLoopTurnExecutionContext = {
   readonly interruptedRef: Ref.Ref<boolean>
   readonly clearInFlightTurn: (
     messageId: QueuedTurnItem["message"]["id"],
-  ) => Effect.Effect<void, AgentLoopError>
+  ) => Effect.Effect<boolean, AgentLoopError>
   readonly takeSteeringForStep: Effect.Effect<ReadonlyArray<QueuedTurnItem>, AgentLoopError>
 }
 

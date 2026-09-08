@@ -27,11 +27,32 @@ export type AgentLoopWorkerContext<E = never, R = never> = {
   readonly currentLoopState: Effect.Effect<LoopState>
   readonly saveCheckpoint: (next: LoopState) => Effect.Effect<void, AgentLoopError>
   readonly takeNextQueuedTurn: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
+  /** True when the message was the in-flight admission. */
+  readonly clearInFlightTurn: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
+  readonly admissionGateRef: Ref.Ref<AdmissionGate>
   readonly recordTurnFailure: (cause: Cause.Cause<unknown>) => Effect.Effect<void>
   readonly publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
   readonly runTurn: (state: RunningState) => Effect.Effect<TurnOutcome, AgentLoopError | E, R>
   readonly switchAgentOnState: (state: LoopState, next: AgentNameType) => Effect.Effect<LoopState>
 }
+
+/**
+ * Settles the race between a worker starting an admitted turn and a caller
+ * withdrawing it. `started` names the turn the worker claimed; `withdrawn`
+ * names an admission the worker must skip. One `Ref.modify` decides each side.
+ */
+export interface AdmissionGate {
+  readonly started: Option.Option<MessageId>
+  readonly withdrawn: Option.Option<MessageId>
+}
+
+export const emptyAdmissionGate: AdmissionGate = {
+  started: Option.none(),
+  withdrawn: Option.none(),
+}
+
+const names = (id: Option.Option<MessageId>, messageId: MessageId) =>
+  Option.isSome(id) && id.value === messageId
 
 export const interruptActiveStream = Effect.fn("AgentLoop.interruptActiveStream")(function* (
   activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>,
@@ -123,10 +144,24 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       )
     })
 
+  /** Claims the admission for this worker; false when it was withdrawn before the claim. */
+  const claimAdmission = (messageId: MessageId): Effect.Effect<boolean> =>
+    Ref.modify(scope.admissionGateRef, (gate): [boolean, AdmissionGate] => {
+      if (names(gate.withdrawn, messageId)) return [false, { ...gate, withdrawn: Option.none() }]
+      return [true, { ...gate, started: Option.some(messageId) }]
+    })
+
+  const releaseAdmission = Ref.update(scope.admissionGateRef, (gate): AdmissionGate => ({
+    ...gate,
+    started: Option.none(),
+  }))
+
   const runTurnWorker = (startState: RunningState) =>
-    scope
-      .runTurn(startState)
-      .pipe(
+    Effect.gen(function* () {
+      // A withdrawn admission (see `withdrawAdmittedTurn`) leaves its entry in
+      // the worker queue; the gate decides whether this entry still runs.
+      if (!(yield* claimAdmission(startState.message.id))) return
+      yield* scope.runTurn(startState).pipe(
         Effect.annotateLogs({ sessionId: scope.sessionId, branchId: scope.branchId }),
         Effect.withSpan("AgentLoop.turn"),
         withWideEvent(
@@ -148,8 +183,47 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
             .pipe(Effect.andThen(publishPhaseFailure(cause)), Effect.ignore),
         ),
         Effect.ignore,
+        Effect.ensuring(releaseAdmission),
       )
-      .pipe(scope.sideMutationSemaphore.withPermits(1))
+    }).pipe(scope.sideMutationSemaphore.withPermits(1))
+
+  /**
+   * Drops a turn that was admitted as the next run but has not started.
+   * Callers usually hold the side-mutation permit already (extension requests
+   * and hooks), so this takes none; the admission gate and the in-flight
+   * marker together prove the turn is only queued. The next queued item (if
+   * any) takes its place.
+   */
+  const withdrawAdmittedTurn = Effect.fn("AgentLoop.withdrawAdmittedTurn")((messageId: MessageId) =>
+    Effect.gen(function* () {
+      const state = yield* scope.currentLoopState
+      if (state._tag !== "Running" || state.message.id !== messageId) return false
+      const won = yield* Ref.modify(scope.admissionGateRef, (gate): [boolean, AdmissionGate] => {
+        if (names(gate.started, messageId)) return [false, gate]
+        return [true, { ...gate, withdrawn: Option.some(messageId) }]
+      })
+      if (!won) return false
+      // A resumed interaction turn is Running without an in-flight marker: it already started.
+      if (!(yield* scope.clearInFlightTurn(messageId))) {
+        yield* Ref.update(scope.admissionGateRef, (gate) => ({ ...gate, withdrawn: Option.none() }))
+        return false
+      }
+      const nextItem = yield* scope.takeNextQueuedTurn
+      if (Option.isSome(nextItem)) {
+        const startedAtMs = yield* Clock.currentTimeMillis
+        const nextRunning = buildRunningState(
+          { currentAgent: state.currentAgent },
+          nextItem.value,
+          { startedAtMs },
+        )
+        yield* scope.saveCheckpoint(nextRunning)
+        yield* enqueueTurnWorker(nextRunning)
+        return true
+      }
+      yield* scope.saveCheckpoint(buildIdleState({ currentAgent: state.currentAgent }))
+      return true
+    }),
+  )
 
   const turnWorkerLoop = TxQueue.take(scope.turnWorkerQueue).pipe(
     Effect.flatMap(runTurnWorker),
@@ -251,6 +325,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     interrupt,
     switchAgent,
     respondInteraction,
+    withdrawAdmittedTurn,
     withSideMutation: <A, E, R2>(effect: Effect.Effect<A, E, R2>): Effect.Effect<A, E, R2> =>
       effect.pipe(scope.sideMutationSemaphore.withPermits(1)),
   }

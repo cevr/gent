@@ -307,7 +307,7 @@ export interface AgentRunner {
     cwd: string
     /** Per-run dispatch config. `persistence`, `overrides`, `tags`, `parentToolCallId`. */
     runSpec?: RunSpec
-    /** Sees every child event as it happens, private runs included. Ephemeral runs only. */
+    /** Sees child events in order as they happen, private runs included. Best effort: the run result can return before trailing events are observed, so read the answer from the result. Ephemeral runs only. */
     observe?: (event: AgentEvent) => EffectNs.Effect<void>
   }) => EffectNs.Effect<AgentRunResult, AgentRunError>
 }

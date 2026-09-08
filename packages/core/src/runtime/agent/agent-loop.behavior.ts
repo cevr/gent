@@ -85,7 +85,7 @@ import { emptyTurnMetrics, type ActiveStreamHandle } from "./turn-response.js"
 import { makeAgentLoopQueue } from "./agent-loop.queue.js"
 import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
 import type { ProcessLocalToolReplay } from "./process-local-tool-replay.js"
-import { makeAgentLoopWorker } from "./agent-loop.worker.js"
+import { emptyAdmissionGate, makeAgentLoopWorker } from "./agent-loop.worker.js"
 import {
   captureAgentLoopRuntimeContext,
   provideAgentLoopRuntimeContext,
@@ -417,6 +417,8 @@ export const makeAgentLoopBehavior = (
       currentLoopState,
       saveCheckpoint,
       takeNextQueuedTurn: takeNextQueuedTurnCommitted,
+      clearInFlightTurn,
+      admissionGateRef: yield* Ref.make(emptyAdmissionGate),
       recordTurnFailure,
       publishEvent,
       runTurn: (state) => runTurn(state).pipe(Effect.provideContext(cellContext)),
@@ -459,7 +461,13 @@ export const makeAgentLoopBehavior = (
       takeNextQueuedTurn: takeNextQueuedTurnCommitted,
       appendSteering,
       drainQueue,
-      removeFollowUp,
+      removeFollowUp: (messageId) =>
+        removeFollowUp(messageId).pipe(
+          Effect.flatMap((removed) => {
+            if (removed) return Effect.succeed(true)
+            return worker.withdrawAdmittedTurn(messageId)
+          }),
+        ),
       resolveTurnProfile,
       persistState: persistRuntimeState,
       refreshRuntimeState,

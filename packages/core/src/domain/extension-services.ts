@@ -131,7 +131,7 @@ export interface ExtensionAgentService extends Pick<
     readonly prompt: string
     readonly cwd?: string
     readonly runSpec?: RunSpec
-    /** Sees every child event as it happens, private runs included. Ephemeral runs only. */
+    /** Sees child events in order as they happen, private runs included. Best effort: the run result can return before trailing events are observed, so read the answer from the result. Ephemeral runs only. */
     readonly observe?: (event: AgentEvent) => Effect.Effect<void>
   }) => Effect.Effect<AgentRunResult, AgentRunError | ExtensionServiceError>
 }
