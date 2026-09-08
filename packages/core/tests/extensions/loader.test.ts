@@ -42,7 +42,7 @@ describe("setupExtension", () => {
         `import { writeFileSync } from "node:fs";
 import { Effect } from "effect";
 writeFileSync(${encodeJson(marker)}, "ran");
-export default { manifest: { id: "trusted-project" }, setup: Effect.succeed({}) };`,
+export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
       )
       const grant = encodeJson({ trustedProjects: [projectRoot] })
       yield* fs.writeFileString(path.join(projectDir, "../config.json"), grant)
@@ -159,7 +159,7 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.succeed({}) 
       const extensionPath = path.join(packageDir, "extension.ts")
       yield* fs.writeFileString(
         extensionPath,
-        'import { Effect } from "effect"\nexport default { manifest: { id: "@gent/test-pinned-v1" }, setup: Effect.succeed({}) }\n',
+        'import { Effect } from "effect"\nexport default { manifest: { id: "@gent/test-pinned-v1" }, setup: Effect.void }\n',
       )
 
       const first = yield* discoverExtensions({
@@ -173,7 +173,7 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.succeed({}) 
       // The loader must not attach a new identity to the old export.
       yield* fs.writeFileString(
         extensionPath,
-        'import { Effect } from "effect"\nexport default { manifest: { id: "@gent/test-pinned-v2" }, setup: Effect.succeed({}) }\n',
+        'import { Effect } from "effect"\nexport default { manifest: { id: "@gent/test-pinned-v2" }, setup: Effect.void }\n',
       )
       const second = yield* discoverExtensions({
         userDir: packageDir,
@@ -355,6 +355,30 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.succeed({}) 
         const entry = result.skipped.find((s) => s.path === target)
         expect(entry).toBeDefined()
         expect(entry?.error).toContain("No GentExtension found")
+      }
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
+  it.live("a setup that returns the old contribution object is rejected", () =>
+    Effect.gen(function* () {
+      // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions -- This old-contract setup is a boundary rejection fixture.
+      const oldSetup = Effect.succeed({ tools: [] }) as unknown as GentExtension["setup"]
+      const extension: GentExtension = {
+        manifest: { id: ExtensionId.make("@gent/test-old-contract") },
+        setup: oldSetup,
+      }
+      const exit = yield* Effect.exit(
+        setupExtension(
+          { extension, scope: "user", sourcePath: "/tmp/test-old-contract.ts" },
+          "/tmp/project",
+          "/tmp/home",
+        ),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const rendered = Cause.pretty(exit.cause)
+        expect(rendered).toContain("ExtensionLoadError")
+        expect(rendered).toContain("setup must return void")
       }
     }).pipe(Effect.provide(fsLayer)),
   )

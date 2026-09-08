@@ -357,6 +357,22 @@ describe("defineExtension", () => {
       }
     }))
 
+  test("an old bucket key on defineExtension fails setup with a migration message", () =>
+    Effect.gen(function* () {
+      const extension = defineExtension<never>(
+        // oxlint-disable-next-line effect/noAs -- This old-contract input is a runtime rejection fixture.
+        { id: "old-buckets", setup: Effect.void, tools: [] } as never,
+      )
+      const exit = yield* Effect.exit(extension.setup)
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const rendered = Cause.pretty(exit.cause)
+        expect(rendered).toContain("ExtensionLoadError")
+        expect(rendered).toContain('unknown defineExtension key "tools"')
+        expect(rendered).toContain("ExtensionHost")
+      }
+    }))
+
   test("unknown runtime-loaded contribution buckets fail activation", () =>
     Effect.gen(function* () {
       const exit = yield* Effect.exit(

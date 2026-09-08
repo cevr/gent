@@ -39,9 +39,13 @@
  *
  * @module
  */
-import type { Effect } from "effect"
+import { Effect } from "effect"
 import { ExtensionId } from "../domain/ids.js"
-import type { ExtensionLoadError, GentExtension, ExtensionManifest } from "../domain/extension.js"
+import {
+  ExtensionLoadError,
+  type GentExtension,
+  type ExtensionManifest,
+} from "../domain/extension.js"
 import type { ExtensionHost } from "../domain/extension-host.js"
 
 // ── Re-exports for extension authors ──
@@ -209,5 +213,21 @@ export const defineExtension = <R = ExtensionHost>(
   params: DefineExtensionInput<R>,
 ): GentExtension<R> => {
   const manifest: ExtensionManifest = { id: ExtensionId.make(params.id) }
+  // JavaScript callers get no type check; an old bucket key must fail loudly
+  // instead of being dropped.
+  const unknownKeys = Object.keys(params).filter((key) => !DEFINE_EXTENSION_KEYS.has(key))
+  if (unknownKeys.length > 0) {
+    return {
+      manifest,
+      setup: Effect.fail(
+        new ExtensionLoadError({
+          extensionId: manifest.id,
+          message: `unknown defineExtension key "${unknownKeys[0]}"; contributions are registered inside setup with \`yield* ExtensionHost\``,
+        }),
+      ),
+    }
+  }
   return { manifest, setup: params.setup }
 }
+
+const DEFINE_EXTENSION_KEYS = new Set(["id", "setup"])

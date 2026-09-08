@@ -286,12 +286,21 @@ export const setupExtension = Effect.fn("ExtensionLoader.setupExtension")(functi
   const setupEffect = discovered.extension.setup.pipe(
     Effect.provideService(ExtensionHost, collector.service),
   )
-  yield* sealRuntimeLoadedEffect({
+  const setupResult: unknown = yield* sealRuntimeLoadedEffect({
     extensionId: manifest.id,
     effect: () => setupEffect,
     failureMessage: (cause) => `Extension setup failed: ${String(cause)}`,
     defectMessage: (cause) => `Extension setup defect: ${String(cause)}`,
   })
+  // A setup that returns a value is the old contribution-object contract. Loading
+  // it as an empty extension would silently drop everything it meant to add.
+  if (!Predicate.isUndefined(setupResult)) {
+    return yield* new ExtensionLoadError({
+      extensionId: manifest.id,
+      message:
+        "Extension setup must return void; register tools, hooks, and other contributions through `yield* ExtensionHost` instead of returning them",
+    })
+  }
   const collected = yield* collector.seal
   // Requests carry their owning extension so RPC routing needs no lookup.
   let contributions: ExtensionContributions = collected

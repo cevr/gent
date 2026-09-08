@@ -198,8 +198,11 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     Effect.gen(function* () {
       const state = yield* scope.currentLoopState
       if (state._tag !== "Running" || state.message.id !== messageId) return false
+      // The gate is the only serialization point: a second concurrent withdrawal
+      // of the same admission loses here, so it can never clear the marker that
+      // keeps the worker from running the turn.
       const won = yield* Ref.modify(scope.admissionGateRef, (gate): [boolean, AdmissionGate] => {
-        if (names(gate.started, messageId)) return [false, gate]
+        if (names(gate.started, messageId) || names(gate.withdrawn, messageId)) return [false, gate]
         return [true, { ...gate, withdrawn: Option.some(messageId) }]
       })
       if (!won) return false

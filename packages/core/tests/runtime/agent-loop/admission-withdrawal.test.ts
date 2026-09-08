@@ -169,4 +169,43 @@ describe("admitted turn withdrawal", () => {
       yield* Fiber.interrupt(loop)
     }),
   )
+
+  it.effect("two concurrent withdrawals of one admission remove it exactly once", () =>
+    Effect.gen(function* () {
+      const first = queuedItem("first")
+      const initial = admitted(first, [])
+      const harness = yield* makeHarness(initial)
+      yield* TxQueue.offer(harness.turnWorkerQueue, initial.state)
+      const results = yield* Effect.all(
+        [
+          harness.worker.withdrawAdmittedTurn(first.message.id),
+          harness.worker.withdrawAdmittedTurn(first.message.id),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(results.filter((removed) => removed)).toHaveLength(1)
+      expect((yield* Ref.get(harness.stateRef))._tag).toBe("Idle")
+      // The losing call must not clear the marker the worker checks.
+      expect(Option.getOrUndefined((yield* Ref.get(harness.gateRef)).withdrawn)).toBe(
+        first.message.id,
+      )
+      const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+      yield* waitForEmptyWorkerQueue(harness.turnWorkerQueue)
+      expect(yield* Ref.get(harness.ranTurns)).toEqual([])
+      yield* Fiber.interrupt(loop)
+    }),
+  )
+
+  it.effect("a promoted follow-up can be withdrawn in turn", () =>
+    Effect.gen(function* () {
+      const first = queuedItem("first")
+      const second = queuedItem("second")
+      const harness = yield* makeHarness(admitted(first, [second]))
+      expect(yield* harness.worker.withdrawAdmittedTurn(first.message.id)).toBe(true)
+      expect(yield* harness.worker.withdrawAdmittedTurn(first.message.id)).toBe(false)
+      expect(yield* harness.worker.withdrawAdmittedTurn(second.message.id)).toBe(true)
+      expect((yield* Ref.get(harness.stateRef))._tag).toBe("Idle")
+      expect((yield* Ref.get(harness.queueRef)).followUp).toHaveLength(0)
+    }),
+  )
 })
