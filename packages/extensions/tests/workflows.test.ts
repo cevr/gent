@@ -10,6 +10,29 @@ import { WORKFLOWS_EXTENSION_ID } from "../src/workflows.js"
 import { e2ePreset } from "./helpers/test-preset"
 
 describe("WorkflowsExtension via RPC", () => {
+  it.scopedLive("keeps repeated commands as distinct requests", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer,
+      })
+      for (const input of ["first task", "second task"]) {
+        yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: WORKFLOWS_EXTENSION_ID,
+          capabilityId: "plan-command",
+          input,
+        })
+      }
+      const { followUp } = yield* client.queue.get({ sessionId, branchId })
+      expect(followUp).toHaveLength(2)
+      expect(followUp[0]?.content).toContain("first task")
+      expect(followUp[1]?.content).toContain("second task")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.live(
     "slash commands are listed and /plan queues a recipe over host tools",
     () =>

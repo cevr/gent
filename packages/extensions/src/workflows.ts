@@ -79,7 +79,7 @@ const command = (params: {
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
         yield* ctx.Session.queueFollowUp({
-          sourceId: params.id,
+          sourceId: `${params.id}:${yield* ctx.Process.randomId}`,
           content: params.recipe(input.trim()),
         })
       }).pipe(
