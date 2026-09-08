@@ -70,7 +70,6 @@ describe("interaction.respondInteraction", () => {
                 extensions: [InteractionProbeExtension],
                 durableApproval: true,
                 storagePath: dbPath,
-                extraLayers: [Layer.succeed(CurrentWorkspaceId, currentTestWorkspaceId())],
               }),
             )
             const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
@@ -120,7 +119,6 @@ describe("interaction.respondInteraction", () => {
                 extensions: [InteractionProbeExtension],
                 durableApproval: true,
                 storagePath: dbPath,
-                extraLayers: [Layer.succeed(CurrentWorkspaceId, currentTestWorkspaceId())],
               }),
             )
             const rehydrated = Array.from(
@@ -201,7 +199,6 @@ describe("interaction.respondInteraction", () => {
                 extensions: [InteractionProbeExtension],
                 durableApproval: true,
                 storagePath: dbPath,
-                extraLayers: [Layer.succeed(CurrentWorkspaceId, currentTestWorkspaceId())],
               }),
             )
             const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
@@ -261,7 +258,6 @@ describe("interaction.respondInteraction", () => {
                 extensions: [InteractionProbeExtension],
                 durableApproval: true,
                 storagePath: dbPath,
-                extraLayers: [Layer.succeed(CurrentWorkspaceId, currentTestWorkspaceId())],
               }),
             )
 

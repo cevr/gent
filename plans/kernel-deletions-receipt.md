@@ -199,6 +199,39 @@ Source files:
 - `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/compile-tool-policy.test.ts`
 - `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`
 
+## Approval recovery across workspaces
+
+A live process-crash check found a startup defect. The pending approval remained in SQLite and the TUI replayed its form, but responding failed with `InteractionRequestMismatchError`. Startup had scanned only the default workspace. The TUI uses a workspace id derived from its directory. The prior restart tests injected that workspace into startup and hid the failure.
+
+Startup now enumerates workspace ids that own pending approvals. It restores each workspace under its own scope. Normal interaction reads and writes retain their existing workspace filter. Removed the startup workspace override from the restart tests. The pending-approval test failed before the fix and passed after it. The stored-decision restart test also passes without that override. The full gate passed.
+
+Live Herdr crashed the fixed Gent process while a fresh confirmation was pending, reopened the same session, and selected No. The server accepted the response, SQLite marked the request resolved, the cell reported state loss without source replay, and Luna reached idle. The original saved plan content and modification time remained unchanged during the first crash check.
+
+Evidence:
+
+- `/tmp/gent-recovery-before-crash.txt`
+- `/tmp/gent-recovery-restored-approval.txt`
+- `/tmp/gent-recovery-file-baseline.json`
+- `/tmp/gent/logs/046a399a-20260908234041-server.log`
+- `/tmp/gent-approval-workspace-before.log`
+- `/tmp/gent-approval-workspace-after.log`
+- `/tmp/gent-approval-workspace-gate.log`
+- `/tmp/gent-approval-fixed-before-crash.txt`
+- `/tmp/gent-approval-fixed-restored.txt`
+- `/tmp/gent-approval-fixed-completed.txt`
+- `/tmp/gent/logs/046a399a-20260908234820-server.log`
+- `/tmp/gent-deletions-host-contracts.log` (eight tests, 154 assertions)
+
+Source files:
+
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/dependencies.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/storage/interaction-storage.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/interaction-commands.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/code-cell/cell-recovery.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/interaction-commands.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/approval-service.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/interaction-request.ts`
+
 ## Remaining work
 
 1. Verify saved-file recovery and branch isolation in the final acceptance run.

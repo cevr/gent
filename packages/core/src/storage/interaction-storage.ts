@@ -7,7 +7,7 @@ import {
 import { SessionId, BranchId } from "../domain/ids.js"
 import type { InteractionRequestId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
-import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
+import { CurrentWorkspaceId, WorkspaceId } from "../server/workspace-rpc.js"
 import { toSqlNull } from "./sqlite/rows.js"
 
 const InteractionRequestRow = Schema.Struct({
@@ -69,6 +69,8 @@ const decodeRow = Schema.decodeUnknownEffect(RowToRecord)
 const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
 
 export interface InteractionStorageService {
+  /** Startup recovery enumerates owners, then reads each workspace under its own scope. */
+  readonly listPendingWorkspaces: Effect.Effect<ReadonlyArray<WorkspaceId>, StorageError>
   readonly persist: (
     record: InteractionRequestRecord,
   ) => Effect.Effect<InteractionRequestRecord, StorageError>
@@ -78,8 +80,8 @@ export interface InteractionStorageService {
     decisionJson: string,
   ) => Effect.Effect<void, StorageError>
   /** List pending interactions. Pass `scope` to narrow to a specific session+branch
-   *  (used by the projection for per-session UI). Omit `scope` for a global scan
-   *  (used by server startup for rehydration). */
+   *  (used by the projection for per-session UI). Omit `scope` to scan the current workspace
+   *  (startup recovery supplies each persisted workspace id). */
   readonly listPending: (scope?: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
@@ -100,6 +102,18 @@ export class InteractionStorage extends Context.Service<
       const sql = yield* SqlClient.SqlClient
 
       return InteractionStorage.of({
+        listPendingWorkspaces: Effect.gen(function* () {
+          const rows = yield* sql<{ readonly workspace_id: string }>`
+              SELECT DISTINCT s.workspace_id
+              FROM interaction_requests ir
+              JOIN sessions s ON s.id = ir.session_id
+              WHERE ir.status = 'pending'
+              ORDER BY s.workspace_id
+            `
+          return yield* Schema.decodeEffect(Schema.Array(WorkspaceId))(
+            rows.map((row) => row.workspace_id),
+          )
+        }).pipe(Effect.mapError(mapError("Failed to list pending interaction workspaces"))),
         persist: Effect.fn("InteractionStorage.persist")(
           function* (record) {
             const workspaceId = yield* CurrentWorkspaceId

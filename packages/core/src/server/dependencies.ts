@@ -598,42 +598,47 @@ export const createDependencies = (config: DependenciesConfig) => {
       const approvalService = yield* ApprovalService
       const sessionRuntime = yield* SessionRuntime
 
-      const pending = yield* interactionStore.listPending()
-      if (pending.length === 0) return
+      const workspaces = yield* interactionStore.listPendingWorkspaces
+      for (const workspaceId of workspaces) {
+        yield* Effect.gen(function* () {
+          const pending = yield* interactionStore.listPending()
+          if (pending.length === 0) return
 
-      let recovered = 0
-      for (const record of pending) {
-        const params = yield* decodeInteractionParams(record.paramsJson).pipe(Effect.option)
-        if (Option.isNone(params)) continue
-        let decision = Option.none<ApprovalDecision>()
-        if (!Predicate.isUndefined(record.decisionJson)) {
-          decision = yield* decodeInteractionDecision(record.decisionJson).pipe(Effect.option)
-        }
-        yield* approvalService
-          .rehydrate(
-            record.requestId,
-            params.value,
-            {
-              sessionId: record.sessionId,
-              branchId: record.branchId,
-            },
-            Option.getOrUndefined(decision),
-          )
-          .pipe(Effect.catchEager(() => Effect.void))
-        if (Option.isSome(decision)) {
-          yield* sessionRuntime
-            .respondInteraction({
-              sessionId: record.sessionId,
-              branchId: record.branchId,
-              requestId: record.requestId,
-            })
-            .pipe(Effect.catchEager(() => Effect.void))
-        }
-        recovered++
-      }
+          let recovered = 0
+          for (const record of pending) {
+            const params = yield* decodeInteractionParams(record.paramsJson).pipe(Effect.option)
+            if (Option.isNone(params)) continue
+            let decision = Option.none<ApprovalDecision>()
+            if (!Predicate.isUndefined(record.decisionJson)) {
+              decision = yield* decodeInteractionDecision(record.decisionJson).pipe(Effect.option)
+            }
+            yield* approvalService
+              .rehydrate(
+                record.requestId,
+                params.value,
+                {
+                  sessionId: record.sessionId,
+                  branchId: record.branchId,
+                },
+                Option.getOrUndefined(decision),
+              )
+              .pipe(Effect.catchEager(() => Effect.void))
+            if (Option.isSome(decision)) {
+              yield* sessionRuntime
+                .respondInteraction({
+                  sessionId: record.sessionId,
+                  branchId: record.branchId,
+                  requestId: record.requestId,
+                })
+                .pipe(Effect.catchEager(() => Effect.void))
+            }
+            recovered++
+          }
 
-      if (recovered > 0) {
-        yield* Effect.log(`Recovered ${recovered} pending interaction request(s)`)
+          if (recovered > 0) {
+            yield* Effect.log(`Recovered ${recovered} pending interaction request(s)`)
+          }
+        }).pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
       }
     }),
   )
