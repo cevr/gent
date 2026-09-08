@@ -958,6 +958,7 @@ export const buildAgentLoopActorHandlers = (config: {
                     availableInputTokens: event.availableInputTokens,
                     contextLimitTokens: event.contextLimitTokens,
                     omittedMessages: event.omittedMessages,
+                    compactedRevision: event.compactedRevision,
                     compactions,
                   })
                   break

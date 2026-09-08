@@ -60,7 +60,7 @@ non-blocking transcript notice. Keep `/handoff` as an explicit user action.
   full. `ctrl+o` cycles; `esc` returns to collapsed. `ctrl+shift+o` stays.
 - Compaction card: `Compacted N messages into M tokens` collapsed, full
   summary expanded, driven by the `model-compaction` custom message.
-- Status line reads the projection: `ctx 42% · 3 omitted · compacted r2`.
+- Status line reads the projection: `ctx 42% · 3 omitted · compacted r1a2b3c4d`.
   Requires exposing `ModelContextProjection` metrics on the session snapshot.
 
 ### S5. `/btw` and `/goal` (shipped 2026-09-08)
@@ -95,8 +95,9 @@ counsel review.
 - S2 shipped 2026-09-08. The cell exposes `context.status()`, `context.read(id,
 { offset, limit })`, `context.compact(instructions?)`, and `context.newWindow()`
   as host calls under the `context.` prefix (`cell-context-host.ts`). A
-  branch-owned `ModelContextLedger` records each projection and hands one
-  pending directive to the next projection in `turn-source.ts`. A new window
+  branch-owned `ModelContextLedger` records each projection. `turn-source.ts`
+  keeps a pending directive until its projection succeeds. The first step of
+  a new turn discards any directive left by an interrupted turn. A new window
   persists a durable `context-window` user marker and the projection keeps the
   marker plus the latest user unit. A requested compaction runs even when the
   projection fits, with the instructions appended to the summary system prompt,
@@ -118,3 +119,19 @@ counsel review.
   the `handoff` tool; the cooldown resource, the automatic `turnAfter` handoff,
   and the `estimateContextPercent` extension helper are gone. Context pressure
   is visible on the status line and the model acts on it through `context.*`.
+
+### Deferred counsel follow-up (2026-09-08)
+
+- Summary input selection now counts the focus instructions and the retained
+  binding note. The full estimated input stays within the model input budget
+  and the 16,384-token summary input cap. If the note leaves no room for source
+  history, no summary request is sent. The existing projection remains usable.
+- RPC tests run real cells that schedule `context.newWindow()` or
+  `context.compact()`. Each test interrupts the cell before the next projection.
+  The next user turn retains older context and creates no window or summary.
+- The status line now shows the actual summary revision, such as
+  `compacted r1a2b3c4d`. The projection event carries this optional value to the
+  snapshot. Reusing a summary keeps its revision. A summary-free window clears
+  it. The cumulative compaction count remains a separate metric.
+- The live Luna transcript and keyboard checks remain pending. These tests use
+  a controlled language model with real runtime, storage, cells, and RPC.

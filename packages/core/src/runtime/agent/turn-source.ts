@@ -447,14 +447,15 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
         )
     }),
   )
+  const compactedRevision = Option.getOrUndefined(
+    latestCompactionRevision(compacted.projection.messages),
+  )
   yield* ledger.recordProjection({
     estimatedTokens: compacted.projection.estimatedTokens,
     availableInputTokens: compacted.projection.availableInputTokens,
     contextLimitTokens: contextLimit,
     omittedMessages: compacted.projection.omittedMessageIds.length,
-    compactedRevision: Option.getOrUndefined(
-      latestCompactionRevision(compacted.projection.messages),
-    ),
+    compactedRevision,
   })
   // Acknowledged only after the projection it shaped succeeded, so a failed
   // projection retries it and a successful one applies it exactly once.
@@ -467,6 +468,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       availableInputTokens: compacted.projection.availableInputTokens,
       contextLimitTokens: contextLimit,
       omittedMessages: compacted.projection.omittedMessageIds.length,
+      compactedRevision,
       compacted: compacted.compacted,
     }),
   )

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Deferred, Effect, Layer, Schema, Stream } from "effect"
+import { Deferred, Effect, Layer, Option, Schema, Stream } from "effect"
 import { AgentDefinition, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 import { ExtensionHost, defineExtension, tool } from "@gent/core/extensions/api"
 import { LoadedArtifactIdentity } from "@gent/core-internal/domain/extension"
@@ -8,6 +8,7 @@ import { RequestId } from "@gent/core-internal/domain/ids"
 import { SteerCommand } from "@gent/core-internal/domain/steer"
 import type { Message } from "@gent/core-internal/domain/message"
 import { CellTool } from "@gent/core-internal/runtime/code-cell/cell-tool"
+import { ModelCompactionDetails } from "@gent/core-internal/runtime/model-compaction"
 import { CONTEXT_WINDOW_MESSAGE_TYPE } from "@gent/core-internal/runtime/model-context-window"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
@@ -27,12 +28,17 @@ const windowMarkers = (items: ReadonlyArray<Message>) =>
 
 describe.skipIf(process.platform !== "darwin")("model context directives from a cell", () => {
   it.scopedLive(
-    "context.newWindow() from a cell leaves one durable marker that later turns keep",
+    "a reused summary keeps its revision until a new context window clears it",
     () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
         const artifact = yield* buildCellExecutable
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          textStep("history reply"),
+          toolCallStep("cell", { code: "await context.compact()" }),
+          textStep("summary of older history"),
+          textStep("after compaction"),
+          textStep("summary reused"),
           toolCallStep("cell", { code: "await context.newWindow(); 'windowed'" }),
           textStep("after window"),
           textStep("second turn"),
@@ -64,6 +70,32 @@ describe.skipIf(process.platform !== "darwin")("model context directives from a 
             ),
           ],
         })
+        yield* client.message.send({ sessionId, branchId, content: "older history" })
+        yield* waitFor(client.message.list({ branchId }), hasReply("history reply"))
+        yield* client.message.send({ sessionId, branchId, content: "compact older history" })
+        const compacted = yield* waitFor(
+          client.message.list({ branchId }),
+          hasReply("after compaction"),
+        )
+        const details = Option.getOrThrow(
+          Option.fromUndefinedOr(
+            compacted.find((message) => message.metadata?.customType === "model-compaction")
+              ?.metadata?.details,
+          ),
+        )
+        const summary = yield* Schema.decodeUnknownEffect(ModelCompactionDetails)(details)
+        const afterCompaction = yield* client.session.getSnapshot({ sessionId, branchId })
+        expect(afterCompaction.metrics.context).toMatchObject({
+          compactedRevision: summary.sourceRevision,
+          compactions: 1,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "reuse the summary" })
+        yield* waitFor(client.message.list({ branchId }), hasReply("summary reused"))
+        const reused = yield* client.session.getSnapshot({ sessionId, branchId })
+        expect(reused.metrics.context).toMatchObject({
+          compactedRevision: summary.sourceRevision,
+          compactions: 1,
+        })
         yield* client.message.send({ sessionId, branchId, content: "open a new window" })
         const afterFirst = yield* waitFor(
           client.message.list({ branchId }),
@@ -73,7 +105,7 @@ describe.skipIf(process.platform !== "darwin")("model context directives from a 
         expect(markers).toHaveLength(1)
         // The marker anchors on the user message that started this turn.
         const anchor = afterFirst.find(
-          (message) => message.role === "user" && message.id !== markers[0]?.id,
+          (message) => message.role === "user" && hasReply("open a new window")([message]),
         )
         expect(markers[0]?.metadata?.details).toMatchObject({ keepFromMessageId: anchor?.id })
 
@@ -83,6 +115,13 @@ describe.skipIf(process.platform !== "darwin")("model context directives from a 
           hasReply("second turn"),
         )
         expect(windowMarkers(afterSecond)).toHaveLength(1)
+        const windowed = yield* client.session.getSnapshot({ sessionId, branchId })
+        expect(windowed.metrics.context?.compactedRevision).toBeUndefined()
+        expect(windowed.metrics.context?.compactions).toBe(1)
+        expect(
+          afterSecond.some((message) => message.metadata?.customType === "model-compaction"),
+        ).toBe(true)
+        yield* controls.assertDone
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
     20000,
   )

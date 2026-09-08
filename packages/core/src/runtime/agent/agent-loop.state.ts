@@ -380,7 +380,9 @@ export const ModelContextMetrics = Schema.Struct({
   availableInputTokens: Schema.Natural,
   contextLimitTokens: Schema.Natural,
   omittedMessages: Schema.Natural,
-  /** Turns on this branch that compacted history so far. */
+  /** Newest summary in the current projection; absent after a summary-free window. */
+  compactedRevision: Schema.optional(Schema.NonEmptyString),
+  /** Projections on this branch that compacted history so far. */
   compactions: Schema.Natural,
 })
 export type ModelContextMetrics = typeof ModelContextMetrics.Type

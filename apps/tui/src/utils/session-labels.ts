@@ -17,7 +17,7 @@ const pressureColor = (pct: number, theme: ThemeColors): RGBA => {
   return theme.textMuted
 }
 
-/** `ctx 42% · 3 omitted · compacted ×2`: percent of the model's input budget, then what the projection dropped. */
+/** `ctx 42% · 3 omitted · compacted r1a2b3c4d`: percent of the model's input budget, then what the projection dropped. */
 const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): BorderLabelItem => {
   const pct = Math.min(
     100,
@@ -25,7 +25,8 @@ const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): Bord
   )
   const parts = [`ctx ${pct}%`]
   if (context.omittedMessages > 0) parts.push(`${context.omittedMessages} omitted`)
-  if (context.compactions > 0) parts.push(`compacted ×${context.compactions}`)
+  const revision = Option.fromUndefinedOr(context.compactedRevision)
+  if (Option.isSome(revision)) parts.push(`compacted r${revision.value}`)
   return { text: parts.join(" · "), color: pressureColor(pct, theme) }
 }
 

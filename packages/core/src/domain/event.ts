@@ -118,6 +118,7 @@ export const AgentEvent = Schema.TaggedUnion({
     availableInputTokens: Schema.Natural,
     contextLimitTokens: Schema.Natural,
     omittedMessages: Schema.Natural,
+    compactedRevision: Schema.optional(Schema.NonEmptyString),
     compacted: Schema.Boolean,
   },
   ToolCallStarted: {

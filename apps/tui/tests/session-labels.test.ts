@@ -50,10 +50,11 @@ describe("buildTopRightLabels", () => {
         contextLimitTokens: 200_000,
         omittedMessages: 3,
         compactions: 2,
+        compactedRevision: "1a2b3c4d",
       },
     })
     expect(labels.length).toBe(1)
-    expect(labels[0]!.text).toBe("ctx 42% · 3 omitted · compacted ×2")
+    expect(labels[0]!.text).toBe("ctx 42% · 3 omitted · compacted r1a2b3c4d")
     expect(labels[0]!.color).toBe(theme.textMuted)
   })
 
@@ -69,6 +70,19 @@ describe("buildTopRightLabels", () => {
     })
     expect(labels[0]!.text).toBe("ctx 90%")
     expect(labels[0]!.color).toBe(theme.error)
+  })
+
+  test("a summary-free projection does not label the old compaction count as a revision", () => {
+    const labels = buildTopRightLabels(absent, 0, absent, theme, {
+      context: {
+        estimatedTokens: 1000,
+        availableInputTokens: 190000,
+        contextLimitTokens: 200000,
+        omittedMessages: 0,
+        compactions: 2,
+      },
+    })
+    expect(labels[0]?.text).toBe("ctx 1%")
   })
 
   test("full layout: context + thinking", () => {
