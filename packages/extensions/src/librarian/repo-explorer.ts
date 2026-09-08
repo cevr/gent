@@ -363,8 +363,21 @@ const fetchRepoAction = (
   parsed: ParsedSpec,
 ) =>
   Effect.gen(function* () {
+    if (parsed.type === "pypi" || parsed.type === "crates") {
+      return yield* new RepoExplorerError({
+        message: `Fetching ${parsed.type} packages is not supported.`,
+        spec: params.spec,
+      })
+    }
     yield* ctx.Files.makeDirectory(ctx.Files.dirname(cachePath), { recursive: true }).pipe(
-      Effect.ignore,
+      Effect.mapError(
+        (cause) =>
+          new RepoExplorerError({
+            message: `Failed to create cache directory: ${cause.message}`,
+            spec: params.spec,
+            cause,
+          }),
+      ),
     )
 
     if (parsed.type === "github") {
@@ -408,7 +421,7 @@ const fetchRepoAction = (
       )
       let versionSuffix = ""
       if (Predicate.isNotUndefined(parsed.version)) versionSuffix = `@${parsed.version}`
-      yield* ctx.Process.run("npm", [
+      const packed = yield* ctx.Process.run("npm", [
         "pack",
         `${parsed.name}${versionSuffix}`,
         "--pack-destination",
@@ -423,6 +436,12 @@ const fetchRepoAction = (
             }),
         ),
       )
+      if (packed.exitCode !== 0) {
+        return yield* new RepoExplorerError({
+          message: `Failed to fetch npm (exit ${packed.exitCode}): ${packed.stderr.trim()}`,
+          spec: params.spec,
+        })
+      }
       const tarballs = yield* ctx.Files.readDirectory(cachePath).pipe(
         Effect.mapError(
           (e) =>
@@ -434,22 +453,32 @@ const fetchRepoAction = (
         ),
       )
       const tarball = tarballs.find((f) => f.endsWith(".tgz"))
-      if (Predicate.isNotUndefined(tarball)) {
-        yield* ctx.Process.run("tar", [
-          "-xzf",
-          ctx.Files.join(cachePath, tarball),
-          "-C",
-          cachePath,
-        ]).pipe(
-          Effect.mapError(
-            (e) =>
-              new RepoExplorerError({
-                message: `Failed to extract npm tarball: ${e.message}`,
-                spec: params.spec,
-                cause: e,
-              }),
-          ),
-        )
+      if (Predicate.isUndefined(tarball)) {
+        return yield* new RepoExplorerError({
+          message: "npm pack produced no archive.",
+          spec: params.spec,
+        })
+      }
+      const extracted = yield* ctx.Process.run("tar", [
+        "-xzf",
+        ctx.Files.join(cachePath, tarball),
+        "-C",
+        cachePath,
+      ]).pipe(
+        Effect.mapError(
+          (e) =>
+            new RepoExplorerError({
+              message: `Failed to extract npm tarball: ${e.message}`,
+              spec: params.spec,
+              cause: e,
+            }),
+        ),
+      )
+      if (extracted.exitCode !== 0) {
+        return yield* new RepoExplorerError({
+          message: `Failed to extract npm tarball (exit ${extracted.exitCode}): ${extracted.stderr.trim()}`,
+          spec: params.spec,
+        })
       }
     }
     return { path: cachePath, message: "Fetched successfully" }
@@ -460,7 +489,7 @@ const fetchRepoAction = (
 export const RepoTool = tool({
   id: "repo",
   description:
-    "Explore external repositories. Fetch GitHub repos, npm/pypi/crates packages. Search code, list files, read content.",
+    "Explore external repositories. Fetch GitHub repositories and npm packages. Search cached code. List files and read content from Git repositories. PyPI and Crates downloads are not supported.",
   params: RepoExplorerParams,
   output: RepoExplorerResult,
   execute: Effect.fn("RepoExplorerTool.execute")(function* (
