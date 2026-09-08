@@ -83,6 +83,10 @@ export const ModelCompactionFailure = Schema.TaggedUnion({
 })
 export type ModelCompactionFailure = typeof ModelCompactionFailure.Type
 
+/** A summary the model could not produce is recoverable; a moved source or a conflicting summary is not. */
+export const isRecoverableCompactionFailure = (failure: ModelCompactionFailure): boolean =>
+  failure._tag !== "SourceChanged" && failure._tag !== "SummaryConflict"
+
 export class ModelCompactionError extends Schema.TaggedError<ModelCompactionError>()(
   "ModelCompactionError",
   {
@@ -320,12 +324,21 @@ const collectSourcePaths = Effect.fn("ModelCompaction.collectSourcePaths")(funct
     for (const part of message.parts) {
       if (part.type !== "tool-call") continue
       if (part.name === "cell") {
-        const inner = yield* operations.listForCell({
-          sessionId: message.sessionId,
-          branchId: message.branchId,
-          assistantMessageId: message.id,
-          toolCallId: ToolCallId.make(part.id),
-        })
+        // A cell that failed before it ran has no receipt; it touched nothing.
+        const inner = yield* operations
+          .listForCell({
+            sessionId: message.sessionId,
+            branchId: message.branchId,
+            assistantMessageId: message.id,
+            toolCallId: ToolCallId.make(part.id),
+          })
+          .pipe(
+            Effect.catchTag("StorageError", (error) =>
+              Effect.logDebug("Compaction skipped a cell without receipts")
+                .pipe(Effect.annotateLogs({ error: String(error) }))
+                .pipe(Effect.as([])),
+            ),
+          )
         for (const { operation } of inner) {
           record(
             Option.flatMap(decodePathParams(operation.input), (params) =>

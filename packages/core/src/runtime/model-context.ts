@@ -3,6 +3,7 @@ import type { ToolCapability } from "../domain/capability/tool.js"
 import { Message, MessageRole } from "../domain/message.js"
 import { MessageId, ToolCallId } from "../domain/ids.js"
 import { estimateTokens } from "./context-estimation.js"
+import { CONTEXT_WINDOW_MESSAGE_TYPE } from "./model-context-window.js"
 
 /** Output budget used by the native model request and its context projection. */
 export const MODEL_OUTPUT_RESERVE_TOKENS = 4_096
@@ -426,6 +427,11 @@ const latestUserUnit = (units: ReadonlyArray<ProjectionUnit>): Option.Option<num
   return latest
 }
 
+/** The new-window notice is pinned: it must survive however tight the projection gets. */
+const isWindowMarkerUnit = (unit: ProjectionUnit): boolean =>
+  unit.messages.length === 1 &&
+  unit.messages[0]?.metadata?.customType === CONTEXT_WINDOW_MESSAGE_TYPE
+
 const reserveTotal = (budget: ModelContextBudget): number =>
   budget.reservedSystemTokens + budget.reservedToolTokens + budget.reservedOutputTokens
 
@@ -453,15 +459,23 @@ const selectWithLatestUser = (
   latestUserIndex: number,
   availableInputTokens: number,
 ): Result.Result<SelectedUnits, ModelContextError> => {
+  const pinned = units.slice(0, latestUserIndex).filter(isWindowMarkerUnit)
   const tail = units.slice(latestUserIndex)
-  const tailTokens = tail.reduce((total, unit) => total + unit.estimatedTokens, 0)
-  if (tailTokens > availableInputTokens) return budgetExceeded(tail, availableInputTokens)
+  const tailTokens = [...pinned, ...tail].reduce((total, unit) => total + unit.estimatedTokens, 0)
+  if (tailTokens > availableInputTokens) {
+    return budgetExceeded([...pinned, ...tail], availableInputTokens)
+  }
 
   let selectedStart = latestUserIndex
   let selectedTokens = tailTokens
   for (let index = latestUserIndex - 1; index >= 0; index -= 1) {
     const unit = Option.fromNullishOr(units[index])
     if (Option.isNone(unit)) continue
+    // Already counted with the tail; it stays in view either way.
+    if (isWindowMarkerUnit(unit.value)) {
+      selectedStart = index
+      continue
+    }
     if (selectedTokens + unit.value.estimatedTokens > availableInputTokens) break
     selectedStart = index
     selectedTokens += unit.value.estimatedTokens
@@ -520,9 +534,13 @@ const projectUnits = (
   const selected = selectUnits(units, latestUser, availableInputTokens)
   if (Result.isFailure(selected)) return Result.fail(selected.failure)
 
-  const selectedUnits = units.slice(selected.success.start)
+  const earlier = units.slice(0, selected.success.start)
+  const selectedUnits = [
+    ...earlier.filter(isWindowMarkerUnit),
+    ...units.slice(selected.success.start),
+  ]
   const selectedMessages = selectedUnits.flatMap((unit) => unit.messages)
-  const omittedMessageIds = messageIds(units.slice(0, selected.success.start))
+  const omittedMessageIds = messageIds(earlier.filter((unit) => !isWindowMarkerUnit(unit)))
   return Result.succeed(
     ModelContextProjection.make({
       messages: [...selectedMessages],

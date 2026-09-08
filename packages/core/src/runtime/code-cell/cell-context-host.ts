@@ -12,8 +12,7 @@ export const CONTEXT_CALL_PREFIX = "context."
 
 export const isContextCall = (name: string): boolean => name.startsWith(CONTEXT_CALL_PREFIX)
 
-const DEFAULT_READ_LINES = 200
-const MAXIMUM_READ_LINES = 2000
+const DEFAULT_READ_CHARS = 20_000
 const MAXIMUM_READ_CHARS = 100_000
 
 const ReadInput = Schema.Struct({
@@ -63,32 +62,23 @@ const locateText = Effect.fn("CellContextHost.locate")(function* (branchId: Bran
 
 export interface ReadPage {
   readonly text: string
-  readonly totalLines: number
+  readonly totalChars: number
   readonly offset: number
   readonly nextOffset: number
   readonly done: boolean
-  readonly truncated: boolean
 }
 
-/** A page of lines; the reply names how to continue. */
-export const pageLines = (text: string, offset: number, limit: number): ReadPage => {
-  const lines = text.split("\n")
-  const start = Math.min(offset, lines.length)
-  const boundedLimit = Math.max(1, Math.min(limit, MAXIMUM_READ_LINES))
-  let page = lines.slice(start, start + boundedLimit).join("\n")
-  let truncated = false
-  if (page.length > MAXIMUM_READ_CHARS) {
-    page = page.slice(0, MAXIMUM_READ_CHARS)
-    truncated = true
-  }
-  const end = Math.min(lines.length, start + boundedLimit)
+/** A page of characters; every byte of a stored result is reachable by continuing from `nextOffset`. */
+export const pageText = (text: string, offset: number, limit: number): ReadPage => {
+  const start = Math.min(offset, text.length)
+  const boundedLimit = Math.max(1, Math.min(limit, MAXIMUM_READ_CHARS))
+  const end = Math.min(text.length, start + boundedLimit)
   return {
-    text: page,
-    totalLines: lines.length,
+    text: text.slice(start, end),
+    totalChars: text.length,
     offset: start,
     nextOffset: end,
-    done: end >= lines.length,
-    truncated,
+    done: end >= text.length,
   }
 }
 
@@ -129,10 +119,10 @@ export const handleContextCall = Effect.fn("CellContextHost.call")(function* (pa
       )
       if (Option.isNone(located))
         return yield* failure(`No stored message or result has id ${input.id}`)
-      const page = pageLines(
+      const page = pageText(
         located.value.text,
         input.offset ?? 0,
-        input.limit ?? DEFAULT_READ_LINES,
+        input.limit ?? DEFAULT_READ_CHARS,
       )
       const reply: Schema.Json = { id: input.id, kind: located.value.kind, ...page }
       return reply

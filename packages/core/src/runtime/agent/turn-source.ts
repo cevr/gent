@@ -37,6 +37,7 @@ import {
 } from "../model-context.js"
 import {
   compactModelContext,
+  isRecoverableCompactionFailure,
   latestCompactionRevision,
   MODEL_COMPACTION_OUTPUT_TOKENS,
   type ModelCompactionError,
@@ -372,8 +373,12 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     })
   // The model can ask, from a cell, for a fresh window or a focused summary.
   const ledger = yield* ModelContextLedger
+  // A directive belongs to the turn whose cell scheduled it: the first
+  // projection of a new turn drops whatever an earlier turn left behind.
+  if (params.step <= 1) yield* ledger.discardDirective
+  const directive = yield* ledger.pendingDirective
   const { durableMessages, force } = yield* applyContextDirective({
-    directive: yield* ledger.takeDirective,
+    directive,
     messages: resolved.messages,
     sessionId: params.sessionId,
     branchId: params.branchId,
@@ -407,6 +412,9 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   // truncated projection with a visible notice.
   const degraded = (error: ModelCompactionError) =>
     Effect.gen(function* () {
+      // Integrity failures (the source moved, a conflicting summary) still stop
+      // the turn; only a summary the model could not produce degrades.
+      if (!isRecoverableCompactionFailure(error.failure)) return yield* error
       const projection = projectModelContext(windowed, budget)
       if (Result.isFailure(projection)) {
         return yield* new ModelContextProjectionError({
@@ -448,6 +456,9 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       latestCompactionRevision(compacted.projection.messages),
     ),
   })
+  // Acknowledged only after the projection it shaped succeeded, so a failed
+  // projection retries it and a successful one applies it exactly once.
+  if (Option.isSome(directive)) yield* ledger.acknowledgeDirective(directive.value)
   yield* eventPublisher.publish(
     ModelContextProjected.make({
       sessionId: params.sessionId,

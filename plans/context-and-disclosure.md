@@ -1,6 +1,6 @@
 # Context, compaction, and progressive disclosure
 
-Status: proposal. Research: `docs/research/2026-09-08-context-compaction-and-disclosure-prior-art.md`.
+Status: shipped 2026-09-08 (deviations under Status below). Research: `docs/research/2026-09-08-context-compaction-and-disclosure-prior-art.md`.
 
 ## Position
 

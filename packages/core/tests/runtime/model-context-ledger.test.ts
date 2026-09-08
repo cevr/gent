@@ -26,15 +26,36 @@ describe("model context ledger", () => {
     }),
   )
 
-  it.effect("the newest directive wins and is handed out exactly once", () =>
+  it.effect(
+    "the newest directive wins and stays pending until its projection acknowledges it",
+    () =>
+      Effect.gen(function* () {
+        const ledger = yield* ModelContextLedger.make
+        expect(Option.isNone(yield* ledger.pendingDirective)).toBe(true)
+        yield* ledger.schedule(ContextDirective.cases.Compact.make({ instructions: "keep paths" }))
+        const newWindow = ContextDirective.cases.NewWindow.make({})
+        yield* ledger.schedule(newWindow)
+        const pending = yield* ledger.pendingDirective
+        expect(Option.map(pending, (directive) => directive._tag)).toEqual(Option.some("NewWindow"))
+        // A failed projection leaves the directive for the retry.
+        expect(Option.isSome(yield* ledger.pendingDirective)).toBe(true)
+        yield* ledger.acknowledgeDirective(newWindow)
+        expect(Option.isNone(yield* ledger.pendingDirective)).toBe(true)
+      }),
+  )
+
+  it.effect("acknowledging a replaced directive keeps the newer one", () =>
     Effect.gen(function* () {
       const ledger = yield* ModelContextLedger.make
-      expect(Option.isNone(yield* ledger.takeDirective)).toBe(true)
-      yield* ledger.schedule(ContextDirective.cases.Compact.make({ instructions: "keep paths" }))
+      const stale = ContextDirective.cases.Compact.make({})
+      yield* ledger.schedule(stale)
       yield* ledger.schedule(ContextDirective.cases.NewWindow.make({}))
-      const taken = yield* ledger.takeDirective
-      expect(Option.map(taken, (directive) => directive._tag)).toEqual(Option.some("NewWindow"))
-      expect(Option.isNone(yield* ledger.takeDirective)).toBe(true)
+      yield* ledger.acknowledgeDirective(stale)
+      expect(Option.map(yield* ledger.pendingDirective, (d) => d._tag)).toEqual(
+        Option.some("NewWindow"),
+      )
+      yield* ledger.discardDirective
+      expect(Option.isNone(yield* ledger.pendingDirective)).toBe(true)
     }),
   )
 })

@@ -7,7 +7,7 @@ import { ensureStorageParents } from "@gent/core-internal/test-utils"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { handleContextCall, pageLines } from "../../src/runtime/code-cell/cell-context-host"
+import { handleContextCall, pageText } from "../../src/runtime/code-cell/cell-context-host"
 import { ModelContextLedger } from "../../src/runtime/model-context-ledger"
 
 const sessionId = SessionId.make("context-host-session")
@@ -17,7 +17,7 @@ const decodeReply = Schema.decodeUnknownSync(
     id: Schema.optional(Schema.String),
     kind: Schema.optional(Schema.String),
     text: Schema.optional(Schema.String),
-    totalLines: Schema.optional(Schema.Finite),
+    totalChars: Schema.optional(Schema.Finite),
     nextOffset: Schema.optional(Schema.Finite),
     done: Schema.optional(Schema.Boolean),
     projected: Schema.optional(Schema.Boolean),
@@ -95,13 +95,13 @@ describe("cell context host", () => {
         yield* handleContextCall({
           branchId,
           name: "context.read",
-          input: { id: "m-long", offset: 25, limit: 3 },
+          input: { id: "m-long", offset: 7, limit: 13 },
         }),
       )
       expect(page.kind).toBe("message")
-      expect(page.text).toBe("line 26\nline 27\nline 28")
-      expect(page.totalLines).toBe(30)
-      expect(page.nextOffset).toBe(28)
+      expect(page.text).toBe("line 2\nline 3")
+      expect(page.totalChars).toBeGreaterThan(200)
+      expect(page.nextOffset).toBe(20)
       expect(page.done).toBe(false)
       const result = decodeReply(
         yield* handleContextCall({ branchId, name: "context.read", input: { id: "call-1" } }),
@@ -128,11 +128,11 @@ describe("cell context host", () => {
         }),
       )
       expect(compact.scheduled).toBe("compact")
-      const directive = Option.getOrThrow(yield* ledger.takeDirective)
+      const directive = Option.getOrThrow(yield* ledger.pendingDirective)
       expect(directive._tag).toBe("Compact")
       if (directive._tag === "Compact") expect(directive.instructions).toBe("keep file paths")
       yield* handleContextCall({ branchId, name: "context.newWindow", input: {} })
-      expect(Option.map(yield* ledger.takeDirective, (d) => d._tag)).toEqual(
+      expect(Option.map(yield* ledger.pendingDirective, (d) => d._tag)).toEqual(
         Option.some("NewWindow"),
       )
       const unknown = yield* handleContextCall({
@@ -146,16 +146,25 @@ describe("cell context host", () => {
 
   it.effect("a page clamps its window to the text and reports completion", () =>
     Effect.sync(() => {
-      const page = pageLines("a\nb\nc", 2, 10)
-      expect(page).toEqual({
-        text: "c",
-        totalLines: 3,
-        offset: 2,
-        nextOffset: 3,
-        done: true,
-        truncated: false,
-      })
-      expect(pageLines("a\nb", 5, 1).text).toBe("")
+      const page = pageText("abcdef", 2, 10)
+      expect(page).toEqual({ text: "cdef", totalChars: 6, offset: 2, nextOffset: 6, done: true })
+      expect(pageText("ab", 5, 1).text).toBe("")
+    }),
+  )
+
+  it.effect("a large single-line result is read in full by continuing from nextOffset", () =>
+    Effect.sync(() => {
+      const text = "x".repeat(250_000)
+      let offset = 0
+      const pages: Array<string> = []
+      for (let guard = 0; guard < 10; guard += 1) {
+        const page = pageText(text, offset, 100_000)
+        pages.push(page.text)
+        offset = page.nextOffset
+        if (page.done) break
+      }
+      expect(pages.map((page) => page.length)).toEqual([100_000, 100_000, 50_000])
+      expect(pages.join("")).toBe(text)
     }),
   )
 })

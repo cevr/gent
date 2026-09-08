@@ -23,8 +23,12 @@ export interface ModelContextLedgerService {
   readonly recordProjection: (status: ModelContextStatus) => Effect.Effect<void>
   /** A later directive replaces an earlier one; only the newest is honored. */
   readonly schedule: (directive: ContextDirective) => Effect.Effect<void>
-  /** Hands the pending directive to the projection exactly once. */
-  readonly takeDirective: Effect.Effect<Option.Option<ContextDirective>>
+  /** The directive waiting for the next projection; it stays until acknowledged or discarded. */
+  readonly pendingDirective: Effect.Effect<Option.Option<ContextDirective>>
+  /** Clears the directive once its projection succeeded; a newer directive survives. */
+  readonly acknowledgeDirective: (directive: ContextDirective) => Effect.Effect<void>
+  /** Drops whatever is pending; a new turn starts without the last turn's request. */
+  readonly discardDirective: Effect.Effect<void>
 }
 
 /** One branch's view of its model context: the last projection and any pending directive. */
@@ -39,7 +43,12 @@ export class ModelContextLedger extends Context.Service<
       status: Ref.get(statusRef),
       recordProjection: (status) => Ref.set(statusRef, Option.some(status)),
       schedule: (directive) => Ref.set(directiveRef, Option.some(directive)),
-      takeDirective: Ref.getAndSet(directiveRef, Option.none()),
+      pendingDirective: Ref.get(directiveRef),
+      acknowledgeDirective: (directive) =>
+        Ref.update(directiveRef, (current) =>
+          Option.filter(current, (value) => value !== directive),
+        ),
+      discardDirective: Ref.set(directiveRef, Option.none()),
     })
   })
 

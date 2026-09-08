@@ -17,9 +17,11 @@ import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
   compactModelContext,
+  isRecoverableCompactionFailure,
   MODEL_COMPACTION_OUTPUT_TOKENS,
   ModelCompactionDetails,
   ModelCompactionError,
+  ModelCompactionFailure,
 } from "../../src/runtime/model-compaction"
 import { ModelContextBudget, ModelContextProjectionError } from "../../src/runtime/model-context"
 
@@ -758,4 +760,99 @@ describe("model context compaction", () => {
       )
     },
   )
+
+  it.effect("only a summary the model could not produce is recoverable", () =>
+    Effect.sync(() => {
+      const recoverable = [
+        ModelCompactionFailure.cases.SummaryGenerationFailed.make({ message: "down" }),
+        ModelCompactionFailure.cases.SummaryEmpty.make({}),
+        ModelCompactionFailure.cases.SummaryOversize.make({ estimatedTokens: 9, maxTokens: 1 }),
+        ModelCompactionFailure.cases.SummaryDidNotFit.make({ messageIds: [] }),
+      ]
+      const integrity = [
+        ModelCompactionFailure.cases.SourceChanged.make({
+          expectedRevision: "r1",
+          actualRevision: "r2",
+        }),
+        ModelCompactionFailure.cases.SummaryConflict.make({ messageId: MessageId.make("s1") }),
+      ]
+      expect(recoverable.map(isRecoverableCompactionFailure)).toEqual([true, true, true, true])
+      expect(integrity.map(isRecoverableCompactionFailure)).toEqual([false, false])
+    }),
+  )
+
+  it.live("a failed cell without an execution receipt does not block compaction", () => {
+    const cellCallId = ToolCallId.make("cell-without-receipt")
+    const messages = [
+      textMessage("ask", "user", "run a cell", 1),
+      Message.cases.regular.make({
+        id: MessageId.make("assistant-cell"),
+        sessionId,
+        branchId,
+        role: "assistant",
+        parts: [
+          Prompt.toolCallPart({
+            id: cellCallId,
+            name: "cell",
+            params: { code: "throw new Error('before run')" },
+            providerExecuted: false,
+          }),
+        ],
+        createdAt: dateFromMillis(1_002),
+      }),
+      Message.cases.regular.make({
+        id: MessageId.make("tool-cell"),
+        sessionId,
+        branchId,
+        role: "tool",
+        parts: [
+          Prompt.toolResultPart({
+            id: cellCallId,
+            name: "cell",
+            isFailure: true,
+            providerExecuted: false,
+            result: { error: "before run" },
+          }),
+        ],
+        createdAt: dateFromMillis(1_003),
+      }),
+      textMessage("latest", "user", "next", 10),
+    ]
+    const providerLayer = LanguageModelLayers.testStream(() =>
+      Effect.succeed(
+        Stream.fromIterable([
+          textDeltaPart("summary"),
+          finishPart({ finishReason: "stop", usage: { inputTokens: 20, outputTokens: 4 } }),
+        ]),
+      ),
+    )
+    return Effect.scoped(
+      Effect.gen(function* () {
+        yield* createTranscript(messages)
+        const model = yield* LanguageModel.LanguageModel
+        const result = yield* compactModelContext({
+          modelId,
+          sessionId,
+          branchId,
+          messages,
+          budget: budget(),
+          force: {},
+          summaryModel: Effect.succeed(model),
+        })
+        expect(result.compacted).toBe(true)
+        const details = result.projection.messages.findLast(
+          (message) => message.metadata?.customType === "model-compaction",
+        )?.metadata?.details
+        expect(Schema.is(ModelCompactionDetails)(details)).toBe(true)
+        if (Schema.is(ModelCompactionDetails)(details)) {
+          expect(details.paths).toEqual({ read: [], modified: [] })
+        }
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
+      ),
+      Effect.timeout("10 seconds"),
+    )
+  })
 })
