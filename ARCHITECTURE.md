@@ -999,7 +999,7 @@ The TUI renders interactions from the typed event feed (`InteractionPresented` e
 
 State: `{ items: Artifact[] }`. Upsert by `sourceTool + branchId` (last-writer-wins). Artifacts are branch-aware — prompt projection filters to current branch. Agent-facing tools: `artifact_save`, `artifact_read`, `artifact_update`, `artifact_clear`.
 
-Workflow commands (`/plan`, `/review`, `/audit`, `/counsel`, `/research`) live in `@gent/workflows` as prompt recipes: each queues a follow-up that composes `delegate`, `artifact_save`, `prompt`, and `repo` from one cell. There is no orchestration code for them; the model runs the recipe and saves the result with the matching `sourceTool`.
+Workflow commands (`/plan`, `/review`, `/audit`, `/counsel`, `/research`) live in `@gent/workflows` as outcome prompts. They retain no workflow state and impose no fixed child count. The model uses cell bindings and files for working data, and delegates independent work when useful. Final plans, reviews, and audits still use the artifact extension. A plan saves its result and ends that cell before it requests approval in a separate cell, so the last good namespace precedes suspension. Review and audit prompts require read-only work; this instruction is not a sandbox boundary.
 
 ### Test Utilities
 

@@ -51,10 +51,54 @@ describe("WorkflowsExtension via RPC", () => {
           expect(queue.followUp).toHaveLength(1)
           const content = queue.followUp[0]?.content ?? ""
           expect(content).toContain("implement caching")
-          expect(content).toContain("Promise.all")
           expect(content).toContain("artifact_save (sourceTool 'plan'")
+          expect(content).toContain("Obtain approval before code changes")
+          expect(content).toContain("separate cell")
         }).pipe(Effect.timeout("15 seconds")),
       ),
     20_000,
+  )
+
+  it.scopedLive(
+    "routes each workflow and keeps saved-plan lookup separate from planning",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+        })
+        for (const capabilityId of [
+          "review-command",
+          "audit-command",
+          "counsel-command",
+          "research-command",
+          "plan-command",
+        ]) {
+          let input = "  inspect the fixture  "
+          if (capabilityId === "plan-command") input = "   "
+          yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId: WORKFLOWS_EXTENSION_ID,
+            capabilityId,
+            input,
+          })
+        }
+        const { followUp } = yield* client.queue.get({ sessionId, branchId })
+        expect(followUp).toHaveLength(5)
+        const [review, audit, counsel, research, savedPlan] = followUp.map((item) => item.content)
+        expect(review).toContain("Review: inspect the fixture\n")
+        expect(review).toContain("Do not edit files")
+        expect(audit).toContain("Audit: inspect the fixture\n")
+        expect(audit).toContain("Do not edit files")
+        expect(counsel).toContain("second opinion on inspect the fixture:")
+        expect(counsel).toContain("different model")
+        expect(research).toContain("Research: inspect the fixture\n")
+        expect(research).toContain("citations")
+        expect(savedPlan).toContain("artifact_read")
+        expect(savedPlan).not.toContain("artifact_save")
+      }).pipe(Effect.timeout("8 seconds")),
+    10_000,
   )
 })

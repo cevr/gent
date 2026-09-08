@@ -1,6 +1,6 @@
 /**
  * Workflow commands as recipes. Each slash command queues a prompt that
- * composes existing host tools (delegate, artifacts, prompt) from a cell.
+ * uses the kernel and host tools without a fixed child-agent sequence.
  * No orchestration code lives here; the model runs the recipe.
  */
 
@@ -16,60 +16,46 @@ import {
 
 export const WORKFLOWS_EXTENSION_ID = ExtensionId.make("@gent/workflows")
 
-const trimmed = (input: string) => input.trim()
-
 const planRecipe = (input: string) => {
-  if (trimmed(input).length === 0) {
+  if (input.length === 0) {
     return "Use artifact_read with sourceTool 'plan' to show the current plan. If no plan exists, say so."
   }
   return [
-    `Create an adversarial implementation plan for: ${trimmed(input)}`,
-    "Recipe, run from one cell:",
-    "1. Delegate two independent plans with Promise.all. Give the second child a different model with overrides.modelId when one is available.",
-    "2. Delegate a cross-review of each plan to a fresh child, passing the plan text in the prompt.",
-    "3. Delegate a synthesis with both plans and both reviews. One cohesive plan, batched by commit.",
-    "4. Save it with artifact_save (sourceTool 'plan', label 'Plan: <topic>').",
-    "5. Present it with the prompt tool for approval before any code changes.",
+    `Plan: ${input}`,
+    "Inspect the relevant sources. Produce a scoped implementation plan with commit steps, risks, and verification. Do not implement it yet.",
+    "Use independent child work only when it adds value. Keep intermediate results in cell bindings or files.",
+    "Save the final plan with artifact_save (sourceTool 'plan', label 'Plan: <topic>'). End that cell before requesting approval with prompt in a separate cell. Obtain approval before code changes.",
   ].join("\n")
 }
 
-const reviewRecipe = (input: string) => {
-  let scope = "the most recent changes (git diff)"
-  if (trimmed(input).length > 0) scope = trimmed(input)
-  return [
-    `Run an adversarial code review of ${scope}.`,
-    "Recipe, run from one cell:",
-    "1. Delegate two independent read-only reviews with Promise.all (overrides.allowedTools: read, grep, glob). Ask for a JSON array of comments (file, line, severity, type, text, fix).",
-    "2. Delegate a critique of each review to a fresh child.",
-    "3. Synthesize one comment list and a severity summary (critical, high, medium, low).",
-    "4. Save it with artifact_save (sourceTool 'review'). Report the comments; do not apply fixes unless asked.",
+const reviewRecipe = (input: string) =>
+  [
+    `Review: ${input || "the most recent changes (git diff)"}`,
+    "Read the relevant sources. Report actionable findings with file, line, severity, explanation, and a proposed fix. State when no findings remain. Do not edit files.",
+    "Use an independent child review when it adds value. Keep intermediate results in cell bindings or files.",
+    "Save the final report with artifact_save (sourceTool 'review') and show the findings.",
   ].join("\n")
-}
 
-const auditRecipe = (input: string) => {
-  let scope = "the current changes (git diff --name-only)"
-  if (trimmed(input).length > 0) scope = trimmed(input)
-  return [
-    `Audit ${scope}.`,
-    "Recipe, run from one cell:",
-    "1. Delegate concern detection: up to 5 concern categories for these paths.",
-    "2. For each concern, delegate two independent audits with Promise.all. Every finding must cite file and line.",
-    "3. Delegate a synthesis: findings with file, description, severity (critical, warning, suggestion).",
-    "4. Save it with artifact_save (sourceTool 'audit') and present the findings with the prompt tool.",
+const auditRecipe = (input: string) =>
+  [
+    `Audit: ${input || "the current changes (git diff --name-only)"}`,
+    "Inspect the relevant sources for material concerns. Report findings with file, line, severity, and evidence. Do not edit files.",
+    "Delegate independent concerns only when it adds value. Keep intermediate results in cell bindings or files.",
+    "Save the final report with artifact_save (sourceTool 'audit') and show the findings. Use prompt mode 'present' if a separate notice helps; it requires no approval.",
   ].join("\n")
-}
 
-const counselRecipe = (input: string) => {
-  let question = "the current approach"
-  if (trimmed(input).length > 0) question = trimmed(input)
-  return `Get a second opinion on ${question}: delegate to a child with overrides.modelId set to a different model when one is available, and a self-contained prompt that states the approach, the alternatives, and the tradeoffs. Report the opinion verbatim, then your response to it.`
-}
+const counselRecipe = (input: string) =>
+  `Get a second opinion on ${input || "the current approach"}: delegate a self-contained question with the approach, alternatives, and tradeoffs. Use a different model with overrides.modelId when one is available. Report the opinion verbatim, then your response.`
 
 const researchRecipe = (input: string) => {
-  if (trimmed(input).length === 0) {
-    return "Research an external repository: ask me which repo (owner/repo, owner/repo@tag, or npm:package) and what question to answer, then use the repo tool to fetch it and delegate the reading to a child."
+  if (input.length === 0) {
+    return "Ask which repository and question to research."
   }
-  return `Research: ${trimmed(input)}. Use the repo tool to fetch each repository, delegate one focused read-only reading per repository with Promise.all (at most 5), then synthesize a comparative answer with citations to files.`
+  return [
+    `Research: ${input}`,
+    "Use primary sources. Use repo to fetch external repository sources when needed. Delegate independent reading only when it adds value. Keep intermediate results in cell bindings or files.",
+    "Answer with citations to the sources you read. Separate observed behavior from inference and state any gaps.",
+  ].join("\n")
 }
 
 const command = (params: {
@@ -92,7 +78,10 @@ const command = (params: {
     execute: (input: string) =>
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
-        yield* ctx.Session.queueFollowUp({ sourceId: params.id, content: params.recipe(input) })
+        yield* ctx.Session.queueFollowUp({
+          sourceId: params.id,
+          content: params.recipe(input.trim()),
+        })
       }).pipe(
         Effect.mapError(
           (cause) =>
@@ -111,7 +100,7 @@ const WorkflowCommands = [
     slash: {
       trigger: "plan",
       name: "Plan",
-      description: "Create an adversarial implementation plan",
+      description: "Create an implementation plan",
       category: "Workflow",
       keybind: "ctrl+shift+p",
     },
@@ -132,7 +121,7 @@ const WorkflowCommands = [
     slash: {
       trigger: "review",
       name: "Review",
-      description: "Run adversarial dual-model code review",
+      description: "Review code and report findings",
       category: "Tools",
     },
     recipe: reviewRecipe,
@@ -142,7 +131,7 @@ const WorkflowCommands = [
     slash: {
       trigger: "counsel",
       name: "Counsel",
-      description: "Get a cross-vendor second opinion",
+      description: "Get an independent second opinion",
       category: "Tools",
     },
     recipe: counselRecipe,
