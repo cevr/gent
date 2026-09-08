@@ -26,6 +26,17 @@ const write = tool({
   output: Schema.Boolean,
   execute: () => Effect.succeed(true),
 })
+const delegate = tool({
+  id: "delegate",
+  description: "Delegate a todo to a child.",
+  params: Schema.Struct({
+    todo: Schema.String,
+    description: Schema.optionalKey(Schema.String),
+    background: Schema.optional(Schema.Boolean),
+  }),
+  output: Schema.String,
+  execute: () => Effect.succeed(""),
+})
 const agent = new AgentDefinition({ name: DEFAULT_AGENT_NAME })
 
 describe("turn prompt sections", () => {
@@ -35,11 +46,21 @@ describe("turn prompt sections", () => {
       const catalog = sections.find((section) => section.id === "cell-catalog")
       expect(catalog?.content).toContain("## Host Tools")
       expect(catalog?.content).toContain(
-        "- **read**: Read a file\n- **write**: Write a file to disk.",
+        "- **read**(path): Read a file\n- **write**(path, content): Write a file to disk.",
       )
       expect(catalog?.content).not.toContain("- **cell**")
       // The narrowed surface keeps the model tool list to the cell alone.
       expect(sections.find((section) => section.id === "tool-list")).toBeUndefined()
+    }),
+  )
+
+  it.effect("marks optional input keys so the model does not guess the input shape", () =>
+    Effect.sync(() => {
+      const sections = buildTurnPromptSections([], agent, [cell], [], [cell, delegate])
+      const catalog = sections.find((section) => section.id === "cell-catalog")
+      expect(catalog?.content).toContain(
+        "- **delegate**(todo, description?, background?): Delegate a todo to a child.",
+      )
     }),
   )
 

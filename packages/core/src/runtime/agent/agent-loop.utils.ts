@@ -23,6 +23,24 @@ const isReasoningEffort = Schema.is(ReasoningEffort)
  * (e.g. codemode replacing `tool-list` / `tool-guidelines`) before final
  * compilation.
  */
+/**
+ * Input keys of a host tool as `(todo, description?, background?)`. The model
+ * reads only the catalog line before its first call, so the keys travel with
+ * it; `tools.describe(name)` still owns the full schema.
+ */
+const describeInputKeys = (tool: ToolCapability): string => {
+  const ast = tool.parametersSchema.ast
+  if (ast._tag !== "Objects") return ""
+  const keys = ast.propertySignatures.map((signature) => {
+    const optional = Option.fromUndefinedOr(signature.type.context).pipe(
+      Option.exists((context) => context.isOptional),
+    )
+    if (optional) return `${String(signature.name)}?`
+    return String(signature.name)
+  })
+  return `(${keys.join(", ")})`
+}
+
 export const buildTurnPromptSections = (
   baseSections: ReadonlyArray<PromptSection>,
   agent: AgentDefinition,
@@ -69,7 +87,10 @@ export const buildTurnPromptSections = (
     .map((tool) => ({ id: getToolId(tool), metadata: getToolMetadata(tool), tool }))
     .filter((entry) => entry.id !== "cell")
     .sort((left, right) => left.id.localeCompare(right.id))
-    .map((entry) => `- **${entry.id}**: ${entry.metadata.promptSnippet ?? entry.tool.description}`)
+    .map(
+      (entry) =>
+        `- **${entry.id}**${describeInputKeys(entry.tool)}: ${entry.metadata.promptSnippet ?? entry.tool.description}`,
+    )
   if (hostEntries.length > 0) {
     sections.push({
       id: "cell-catalog",
