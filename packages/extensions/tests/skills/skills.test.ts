@@ -11,7 +11,7 @@ const makeSkill = (name: string, level: "local" | "global", description = `${nam
   new Skill({
     name,
     description,
-    filePath: `/test/${name}.md`,
+    filePath: `/test/${level}/${name}.md`,
     content: `Content for ${name}`,
     level,
   })
@@ -90,7 +90,9 @@ describe("formatSkillsForPrompt", () => {
   test("includes usage instructions", () => {
     const skills = [makeSkill("bun", "local")]
     const result = formatSkillsForPrompt(skills)
-    expect(result).toContain("`skills` tool")
+    expect(result).toContain("read tool")
+    expect(result).toContain('File: "/test/local/bun.md"')
+    expect(result).toContain("$bun:local")
     expect(result).toContain("$skill:local")
   })
 })

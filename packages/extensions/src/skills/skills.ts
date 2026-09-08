@@ -296,7 +296,12 @@ export const formatSkillsForPrompt = (skills: ReadonlyArray<Skill>): string => {
   const localSkills = skills.filter((s) => s.level === "local")
 
   const formatList = (list: ReadonlyArray<Skill>): string =>
-    list.map((s) => `- **${s.name}**: ${s.description}`).join("\n")
+    list
+      .map(
+        (s) =>
+          `- **${s.name}** ($${s.name}:${s.level}): ${s.description}\n  File: ${Schema.encodeSync(Schema.fromJsonString(Schema.String))(s.filePath)}`,
+      )
+      .join("\n")
 
   const sections: string[] = []
 
@@ -310,7 +315,7 @@ export const formatSkillsForPrompt = (skills: ReadonlyArray<Skill>): string => {
   return `<available_skills>
 ${sections.join("\n\n")}
 
-Use the \`skills\` tool to load skill content. Use \`search_skills\` to find skills by context.
-When you see \`$skill-name\`, load it with the skills tool. Use \`$skill:local\` or \`$skill:global\` to specify level.
+Read a listed file with the read tool or from a cell when its name or description matches the task. Paths are on the session server. Resolve relative references from that file’s directory.
+When you see \`$skill-name\`, read the local skill first, or the global skill if no local skill exists. Use \`$skill:local\` or \`$skill:global\` to select that level explicitly. Report missing skills or files; do not silently substitute a different scope.
 </available_skills>`
 }

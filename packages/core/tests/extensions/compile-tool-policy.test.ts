@@ -38,7 +38,7 @@ describe("compileToolPolicy", () => {
     makeTool("ask_user"),
     makeTool("webfetch"),
     makeTool("websearch"),
-    makeTool("search_skills"),
+    makeTool("lookup"),
   ]
 
   const emptyCtx = { sessionId: SessionId.make("s"), branchId: BranchId.make("b") }
@@ -78,7 +78,7 @@ describe("compileToolPolicy", () => {
   test("extension projection include adds tools when they are allowed", () => {
     const agent = AgentDefinition.make({
       name: AgentName.make("cowork"),
-      allowedTools: ["read", "grep", "glob", "search_skills"],
+      allowedTools: ["read", "grep", "glob", "lookup"],
     })
     const projections = [{ toolPolicy: { include: ["bash"] } }]
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, projections)

@@ -171,9 +171,38 @@ Source files:
 - `/Users/cvr/Developer/personal/gent/docs/extensions.md`
 - `/Users/cvr/Developer/personal/gent/apps/tui/AGENTS.md`
 
+## Skill wrapper removal
+
+Removed the model-facing `skills` and `search_skills` tools and the dedicated skill-call renderer. Skill discovery still loads the same local, global, and bundled sources. The model prompt now lists server file paths with scope selectors and relative-reference rules. Existing typed RPCs and TUI insertion remain.
+
+The full gate passed. Live Herdr selected the local principles skill through `$princ` completion and inserted `$principles`. The model read the local file and returned its marker. Tool search returned neither removed wrapper. An explicit `$principles:global` request read the bundled skill and its reference file. The model first guessed an absent conventional path, then used the installed cache path and reached idle. The complete e2e suite also passed.
+
+Evidence:
+
+- `/tmp/gent-skill-wrapper-removal-gate.log`
+- `/tmp/gent-skill-wrapper-autocomplete.txt`
+- `/tmp/gent-skill-wrapper-insertion.txt`
+- `/tmp/gent-skill-wrapper-local.txt`
+- `/tmp/gent-skill-wrapper-global.txt`
+- `/tmp/gent-kernel-deletions-e2e.log`
+
+Source files:
+
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/index.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/skills.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/protocol.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/tests/skills/skills.test.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/index.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/components/tool-renderers/index.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/utils/format-tool.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/compile-tool-policy.test.ts`
+- `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`
+
 ## Remaining work
 
 1. Verify saved-file recovery and branch isolation in the final acceptance run.
-2. Remove model-facing skill search/load wrappers. Preserve discovery, scope, and TUI insertion.
+2. Complete the source review and requirement audit.
+3. After this goal, research a smaller fully extensible core. Examine removal of core-internal, fewer files and concepts, and extensions over the actor-owned core loop.
 
 Run the full gate and live Herdr checks for each logical commit. Complete review and the final goal audit before integration.

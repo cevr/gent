@@ -31,8 +31,8 @@
  *   id: "my-ext",
  *   setup: Effect.gen(function* () {
  *     const host = yield* ExtensionHost
- *     const skills = yield* loadSkills(host.cwd)
- *     yield* host.register("tool", SearchSkillsTool(skills))
+ *     const settings = yield* loadSettings(host.cwd)
+ *     yield* host.register("tool", ProjectTool(settings))
  *   }),
  * })
  * ```

@@ -10,7 +10,6 @@ export { WebfetchToolRenderer } from "./webfetch"
 export { SubagentToolRenderer } from "./subagent"
 export { SearchSessionsToolRenderer } from "./search-sessions"
 export { ReadSessionToolRenderer } from "./read-session"
-export { SkillsToolRenderer } from "./skills"
 import type { ToolRenderer } from "./types"
 import {
   BashHeadlessToolRenderer,
@@ -34,7 +33,6 @@ import { WebfetchToolRenderer } from "./webfetch"
 import { SubagentToolRenderer } from "./subagent"
 import { SearchSessionsToolRenderer } from "./search-sessions"
 import { ReadSessionToolRenderer } from "./read-session"
-import { SkillsToolRenderer } from "./skills"
 
 /** Builtin tool renderers consumed by the `@gent/tools` client extension. */
 export const BUILTIN_TOOL_RENDERERS: ReadonlyArray<BuiltinToolRendererEntry> = [
@@ -55,5 +53,4 @@ export const BUILTIN_TOOL_RENDERERS: ReadonlyArray<BuiltinToolRendererEntry> = [
     toolNames: ["read_session"],
     component: ReadSessionToolRenderer,
   },
-  { toolNames: ["skills"], component: SkillsToolRenderer },
 ]

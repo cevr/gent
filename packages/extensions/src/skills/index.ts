@@ -2,15 +2,13 @@
  * @gent/skills extension — exposes user/project skills (`.md` files
  * under `~/.claude/skills/` and `<cwd>/.claude/skills/`) to agents.
  *
- * The Skills service is process-scoped. Tools, request RPCs, and the
+ * The Skills service is process-scoped. Request RPCs and the
  * turn projection read it directly; no actor mirror is needed.
  */
 
 import { Effect } from "effect"
 import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api"
 import { formatSkillsForPrompt, Skills } from "./skills.js"
-import { SkillsTool } from "./skills-tool.js"
-import { SearchSkillsTool } from "./search-skills.js"
 import { SkillsRpc } from "./protocol.js"
 
 // ── Extension ──
@@ -38,6 +36,5 @@ export const SkillsExtension = defineExtension({
       }),
     )
     yield* host.register("request", SkillsRpc.ListSkills, SkillsRpc.GetSkillContent)
-    yield* host.register("tool", SkillsTool, SearchSkillsTool)
   }),
 })

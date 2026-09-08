@@ -150,12 +150,6 @@ const toolArgFormatters = {
   glob: (args, options) => summarizeScopedPattern(args, options),
   webfetch: (args) => getStringArg(args, "url"),
   delegate: summarizeDelegate,
-  skills: (args) => {
-    const names = args["names"]
-    if (names === "all") return "all"
-    if (Array.isArray(names)) return names.join(", ")
-    return ""
-  },
   search_sessions: (args) => truncateText(getStringArg(args, "query"), 50),
   read_session: (args) => truncateText(getStringArg(args, "goal"), 50),
   handoff: (args) => truncateText(getStringArg(args, "reason"), 50),
