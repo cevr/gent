@@ -247,6 +247,11 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
   // message instead of a generic "<op> failed" wrapper.
   const inner = cause.reasons.find(Cause.isFailReason)?.error
   if (Schema.is(SessionRuntimeError)(inner)) return inner
+  // The loop already names the concrete failure (an extension refusal, a
+  // missing capability); the user needs that text, not the operation name.
+  if (Schema.is(AgentLoopError)(inner)) {
+    return new SessionRuntimeError({ message: `${message}: ${inner.message}`, cause })
+  }
   return new SessionRuntimeError({ message, cause })
 }
 

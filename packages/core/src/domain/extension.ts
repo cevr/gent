@@ -155,6 +155,8 @@ export interface TurnAfterInput {
   readonly durationMs: number
   readonly agentName: AgentName
   readonly interrupted: boolean
+  /** Provider-reported tokens summed over every model call of the turn. */
+  readonly usage: { readonly inputTokens: number; readonly outputTokens: number }
 }
 
 export interface ToolResultInput {

@@ -34,9 +34,10 @@ import {
 } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import type { BranchId, SessionId, ToolCallId } from "../../domain/ids.js"
-import { Branch, Session } from "../../domain/message.js"
+import { Branch, type Message, Session } from "../../domain/message.js"
 import { BranchStorage } from "../../storage/branch-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
+import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"
 import type { ExtensionRegistryService } from "../extensions/registry.js"
 import { SessionRuntime } from "../session-runtime.js"
@@ -112,6 +113,8 @@ export const runEphemeralAgent = (params: {
   agentName: AgentName
   prompt: string
   runSpec?: RunSpec
+  /** Parent branch history copied into the child before its prompt; empty for a fresh start. */
+  seedMessages: ReadonlyArray<Message>
   persistence: AgentPersistence
   parentBaseEventStore: EventStoreService
   notifyMirroredEventObservers: (event: AgentEvent) => Effect.Effect<void>
@@ -163,6 +166,7 @@ export const runEphemeralAgent = (params: {
     const localSessionStorage = yield* SessionStorage
     const localBranchStorage = yield* BranchStorage
     const localEventStorage = yield* EventStorage
+    const localMessageStorage = yield* MessageStorage
     const localEventStore = yield* EventStore
     const localEventPublisher = yield* EventPublisher
     const sessionRuntime = yield* SessionRuntime
@@ -184,6 +188,12 @@ export const runEphemeralAgent = (params: {
         sessionId,
         createdAt: now,
       }),
+    )
+    // The child's storage is its own, so the parent's message ids stay valid here.
+    yield* Effect.forEach(
+      params.seedMessages,
+      (message) => localMessageStorage.createMessage({ ...message, sessionId, branchId }),
+      { discard: true },
     )
 
     const mirrorEnvelope = (envelope: EventEnvelope) =>

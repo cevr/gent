@@ -645,6 +645,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       yield* eventPublisher.deliver(envelope)
 
       yield* Effect.logDebug("finalize.turn-after.start")
+      const metrics = yield* Ref.get(scope.turnMetricsRef)
       yield* extensionRegistry.extensionHooks
         .emitTurnAfter({
           sessionId: scope.sessionId,
@@ -652,6 +653,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           durationMs: Number(turnDurationMs),
           agentName: params.currentAgent,
           interrupted: params.turnInterrupted,
+          usage: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
         })
         .pipe(provideHookHostContext(hostCtx))
       yield* Effect.logDebug("finalize.turn-after.done")
@@ -663,7 +665,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }),
       )
 
-      const metrics = yield* Ref.get(scope.turnMetricsRef)
       const wideEventFields = {
         actor: metrics.agent,
         model: metrics.model,

@@ -287,6 +287,74 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
     }),
   )
 describe("helper run spec propagation", () => {
+  it.scopedLive("an ephemeral child with inherited history sees the parent branch messages", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        {
+          ...textStep("pelican"),
+          assertOptions: (options) => {
+            const texts = [...Prompt.make(options.prompt).content].flatMap((message) => {
+              if (message.role === "system") return []
+              return message.content
+                .filter((part): part is Prompt.TextPart => part.type === "text")
+                .map((part) => part.text)
+            })
+            expect(texts.some((text) => text.includes("The codeword is pelican"))).toBe(true)
+            expect(texts.some((text) => text.includes("Noted."))).toBe(true)
+            expect(texts[texts.length - 1]).toContain("What is the codeword?")
+          },
+        },
+      ])
+      const layer = makeLiveAgentRunnerLayer(providerLayer)
+      yield* Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const messages = yield* MessageStorage
+        const runner = yield* AgentRunnerService
+        const now = dateFromMillis(1_767_225_600_000)
+        const sessionId = SessionId.make("parent-history")
+        const branchId = BranchId.make("parent-history-branch")
+        yield* sessions.createSession(
+          new Session({ id: sessionId, name: "Parent", createdAt: now, updatedAt: now }),
+        )
+        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+        yield* messages.createMessage(
+          Message.cases.regular.make({
+            id: MessageId.make("parent-history:user:1"),
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: "The codeword is pelican" })],
+            createdAt: now,
+          }),
+        )
+        yield* messages.createMessage(
+          Message.cases.regular.make({
+            id: MessageId.make("parent-history:assistant:1"),
+            sessionId,
+            branchId,
+            role: "assistant",
+            parts: [Prompt.textPart({ text: "Noted." })],
+            createdAt: dateFromMillis(1_767_225_601_000),
+          }),
+        )
+        const result = yield* runner.run({
+          agent: builtinAgent,
+          prompt: "What is the codeword?",
+          parentSessionId: sessionId,
+          parentBranchId: branchId,
+          cwd: process.cwd(),
+          runSpec: makeRunSpec({ persistence: "ephemeral", history: "inherit" }),
+        })
+        expect(result._tag).toBe("success")
+        if (result._tag === "success") expect(result.text).toContain("pelican")
+        // The parent branch keeps its two messages; the child never writes there.
+        expect((yield* messages.listMessages(branchId)).length).toBe(2)
+        yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
   it.scopedLive("durable helper-agent runSpec reaches the provider through AgentRunner", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([

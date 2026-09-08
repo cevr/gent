@@ -162,8 +162,14 @@ export const AgentRunOverridesSchema = Schema.Struct({
 })
 export type AgentRunOverrides = typeof AgentRunOverridesSchema.Type
 
+/** Whether an ephemeral run starts from the caller's branch history or from nothing. */
+export const AgentRunHistory = Schema.Literals(["none", "inherit"])
+export type AgentRunHistory = typeof AgentRunHistory.Type
+
 export const RunSpecSchema = Schema.Struct({
   persistence: Schema.optional(AgentPersistence),
+  /** `inherit` copies the parent branch's messages into an ephemeral child before its prompt. */
+  history: Schema.optional(AgentRunHistory),
   overrides: Schema.optional(AgentRunOverridesSchema),
   tags: Schema.optional(Schema.Array(Schema.String)),
   parentToolCallId: Schema.optional(ToolCallId),
@@ -175,6 +181,7 @@ export interface RunSpecInput extends RunSpec {}
 export const makeRunSpec = (input: RunSpecInput = {}): RunSpec => {
   const spec: { -readonly [K in keyof RunSpec]: RunSpec[K] } = {}
   if (Predicate.isNotUndefined(input.persistence)) spec.persistence = input.persistence
+  if (Predicate.isNotUndefined(input.history)) spec.history = input.history
   if (Predicate.isNotUndefined(input.overrides)) spec.overrides = input.overrides
   if (Predicate.isNotUndefined(input.tags)) spec.tags = input.tags
   if (Predicate.isNotUndefined(input.parentToolCallId))

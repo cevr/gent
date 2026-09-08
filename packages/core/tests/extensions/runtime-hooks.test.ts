@@ -21,6 +21,7 @@ const stubEvent: TurnAfterInput = {
   durationMs: 100,
   agentName: AgentName.make("cowork"),
   interrupted: false,
+  usage: { inputTokens: 0, outputTokens: 0 },
 }
 
 const ext = (

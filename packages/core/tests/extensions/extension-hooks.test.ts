@@ -257,6 +257,7 @@ describe("runtime slots", () => {
             durationMs: 10,
             agentName: AgentName.make("cowork"),
             interrupted: false,
+            usage: { inputTokens: 0, outputTokens: 0 },
           } satisfies TurnAfterInput)
           .pipe(provideHookHostContext(stubHostCtx)),
       )
@@ -288,6 +289,7 @@ describe("runtime slots", () => {
           durationMs: 10,
           agentName: AgentName.make("cowork"),
           interrupted: false,
+          usage: { inputTokens: 0, outputTokens: 0 },
         } satisfies TurnAfterInput)
         .pipe(provideHookHostContext(stubHostCtx))
 
@@ -322,6 +324,7 @@ describe("runtime slots", () => {
           durationMs: 10,
           agentName: AgentName.make("cowork"),
           interrupted: false,
+          usage: { inputTokens: 0, outputTokens: 0 },
         } satisfies TurnAfterInput)
         .pipe(
           provideHookHostContext(hostCtx),

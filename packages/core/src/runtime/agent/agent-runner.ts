@@ -24,10 +24,11 @@ import {
   type AgentName,
 } from "../../domain/agent.js"
 import { SessionId, BranchId } from "../../domain/ids.js"
+import type { Message } from "../../domain/message.js"
 import type { BranchStorage } from "../../storage/branch-storage.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
 import type { SessionOperationStorage } from "../../storage/session-operation-storage.js"
-import type { MessageStorage } from "../../storage/message-storage.js"
+import { MessageStorage } from "../../storage/message-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import type { RelationshipStorage } from "../../storage/relationship-storage.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
@@ -81,6 +82,7 @@ export const InProcessRunner = (
     AgentRunnerService,
     Effect.gen(function* () {
       const baseEventStore = yield* EventStore
+      const parentMessageStorage = yield* MessageStorage
       const eventPublisher = yield* EventPublisher
       const sessionRuntime = yield* SessionRuntime
       const eventStorage = yield* EventStorage
@@ -199,7 +201,17 @@ export const InProcessRunner = (
           if (persistence === "ephemeral") {
             const sessionId = SessionId.make(yield* platform.randomId)
             const branchId = BranchId.make(yield* platform.randomId)
+            // An inheriting child starts from the caller's branch as it stands now.
+            let seedMessages: ReadonlyArray<Message> = []
+            if (normalizedRunSpec?.history === "inherit") {
+              seedMessages = yield* parentMessageStorage
+                .listMessages(params.parentBranchId)
+                .pipe(
+                  Effect.mapError((cause) => new AgentRunError({ message: cause.message, cause })),
+                )
+            }
             return yield* runEphemeralAgent({
+              seedMessages,
               runnerConfig,
               durableRuntime,
               metadataRuntime,
