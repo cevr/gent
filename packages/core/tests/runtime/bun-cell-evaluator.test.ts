@@ -111,6 +111,16 @@ describe("Bun cell evaluation", () => {
     }),
   )
 
+  it.scopedLive("an undefined result shows only what the cell logged", () =>
+    Effect.gen(function* () {
+      const kernel = yield* makeKernel({ call: () => Effect.succeed(0) })
+      expect((yield* kernel.evaluate("console.log('only this')")).display).toBe("only this")
+      expect((yield* kernel.evaluate("undefined")).display).toBe("")
+      expect((yield* kernel.evaluate("null")).display).toBe("null")
+      expect((yield* kernel.evaluate("'undefined'")).display).toBe("undefined")
+    }).pipe(Effect.timeout("2 seconds")),
+  )
+
   it.scopedLive("limits captured output and rejects oversized source before execution", () =>
     Effect.gen(function* () {
       const kernel = yield* makeKernel({ call: () => Effect.succeed(0) })

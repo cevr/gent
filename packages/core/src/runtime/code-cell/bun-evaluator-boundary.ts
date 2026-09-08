@@ -206,7 +206,9 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
         catch: (cause) => failure("execute", cause),
       })
     }).pipe(captureConsole)
-    if (Predicate.hasProperty(result, "value")) {
+    // An undefined result shows nothing, as IPython shows nothing for None; the
+    // console output the cell wrote is then the whole display.
+    if (Predicate.hasProperty(result, "value") && Predicate.isNotUndefined(result.value)) {
       yield* Effect.try({
         try: () => append(display(result.value)),
         catch: (cause) => failure("execute", cause),
