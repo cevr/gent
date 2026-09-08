@@ -1,7 +1,24 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Clock, Deferred, Effect, Exit, Layer, Option, Path, Scope } from "effect"
+import {
+  Clock,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Scope,
+  Schema,
+  Stream,
+} from "effect"
+import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
+import { shippedPreset } from "../helpers/test-preset.js"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { BackgroundBashSupervisorLive, BashTool } from "../../src/exec-tools/bash.js"
+import { BackgroundBashSupervisorLive, BashParams, BashTool } from "../../src/exec-tools/bash.js"
 import {
   BackgroundBashStorage,
   BackgroundBashStorageError,
@@ -62,6 +79,68 @@ const withProcessTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.timeout("4 seconds"))
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
+
+describe("background shell through a cell", () => {
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "delivers the completion notice to the parent session",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-background-notice-" })
+        for (const afterTurn of [false, true]) {
+          const release = `${directory}/release`
+          let command = "printf CELL-BACKGROUND-COMPLETE"
+          if (afterTurn) command = `while ! test -f ${release}; do sleep 0.02; done; ${command}`
+          const input = yield* Schema.encodeEffect(Schema.fromJsonString(BashParams))({
+            command,
+            run_in_background: true,
+          })
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("cell", {
+              code: `await tools.call("bash", ${input})`,
+            }),
+            textStep("started"),
+            textStep("received completion"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...shippedPreset,
+            providerLayer,
+            durableApproval: true,
+          })
+          const notice = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter(
+              ({ event }) =>
+                event._tag === "MessageReceived" &&
+                event.message.parts.some(
+                  (part) =>
+                    part.type === "text" &&
+                    part.text.includes("Background command completed (exit code 0)"),
+                ),
+            ),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          const completed = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkScoped,
+          )
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "Run the background shell test",
+          })
+          yield* Fiber.join(completed)
+          yield* fs.writeFileString(release, "go")
+          expect(Array.from(yield* Fiber.join(notice))).toHaveLength(1)
+          yield* fs.remove(release)
+        }
+      }).pipe(Effect.timeout("8 seconds")),
+    10_000,
+  )
+})
 
 const stubCtx = testToolContext({
   sessionId: SessionId.make("test-session"),

@@ -21,6 +21,7 @@ import type {
 import { FileIndex, type IndexedFile } from "./file-index.js"
 import { FileLockService } from "./file-lock.js"
 import { ExtensionStatePublisher } from "./event-publisher.js"
+import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 import type { ApprovalDecision, ApprovalRequest } from "./interaction-request.js"
 import { InteractionPendingError } from "./interaction-request.js"
 import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids.js"
@@ -283,22 +284,21 @@ export const extensionServicesFromHostContext = (
   },
 ): Effect.Effect<Context.Context<ExtensionContext>, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
+    const workspaceId = yield* CurrentWorkspaceId
+    const sessionEffect = <A, E, R>(operation: string, effect: Effect.Effect<A, E, R>) =>
+      mapError("ExtensionSession", operation, effect).pipe(
+        Effect.provideService(CurrentWorkspaceId, workspaceId),
+      )
     const Session: ExtensionSessionService = {
-      listMessages: (branchId) =>
-        mapError("ExtensionSession", "listMessages", ctx.session.listMessages(branchId)),
-      getSession: (sessionId) =>
-        mapError("ExtensionSession", "getSession", ctx.session.getSession(sessionId)),
-      getDetail: (sessionId) =>
-        mapError("ExtensionSession", "getDetail", ctx.session.getDetail(sessionId)),
-      renameCurrent: (name) =>
-        mapError("ExtensionSession", "renameCurrent", ctx.session.renameCurrent(name)),
-      search: (query, options) =>
-        mapError("ExtensionSession", "search", ctx.session.search(query, options)),
-      queueFollowUp: (params) =>
-        mapError("ExtensionSession", "queueFollowUp", ctx.session.queueFollowUp(params)),
+      listMessages: (branchId) => sessionEffect("listMessages", ctx.session.listMessages(branchId)),
+      getSession: (sessionId) => sessionEffect("getSession", ctx.session.getSession(sessionId)),
+      getDetail: (sessionId) => sessionEffect("getDetail", ctx.session.getDetail(sessionId)),
+      renameCurrent: (name) => sessionEffect("renameCurrent", ctx.session.renameCurrent(name)),
+      search: (query, options) => sessionEffect("search", ctx.session.search(query, options)),
+      queueFollowUp: (params) => sessionEffect("queueFollowUp", ctx.session.queueFollowUp(params)),
       dequeueFollowUp: (params) =>
-        mapError("ExtensionSession", "dequeueFollowUp", ctx.session.dequeueFollowUp(params)),
-      listBranches: mapError("ExtensionSession", "listBranches", ctx.session.listBranches()),
+        sessionEffect("dequeueFollowUp", ctx.session.dequeueFollowUp(params)),
+      listBranches: sessionEffect("listBranches", ctx.session.listBranches()),
     }
     const Agent: ExtensionAgentService = {
       listAgents: mapError("ExtensionAgent", "listAgents", ctx.agent.listAgents()),

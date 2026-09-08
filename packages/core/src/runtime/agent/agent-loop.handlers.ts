@@ -156,6 +156,7 @@ export const buildAgentLoopActorHandlers = (config: {
   readonly baseSections: ReadonlyArray<PromptSection>
 }) =>
   Effect.gen(function* () {
+    const actorScope = yield* Effect.scope
     const sideMutationSemaphore = yield* Semaphore.make(1)
     // Set by admissions that run under the side-mutation permit. The wake runs
     // after the permit is released, so admission never starts a turn re-entrantly.
@@ -420,7 +421,12 @@ export const buildAgentLoopActorHandlers = (config: {
       yield* handle.reserveStartOrQueueFollowUp(item, { queueOnly: true })
       const shouldWake =
         input.wake === true || (yield* hasIncompleteUserTurn) || (yield* hasPriorMessageHistory)
-      if (shouldWake) yield* Ref.set(wakeRequested, true)
+      if (shouldWake) {
+        yield* Ref.set(wakeRequested, true)
+        // A retained facade can enqueue after its original turn has ended.
+        // The actor owns this wake; an active mutation releases its permit first.
+        yield* drainWake(handle).pipe(provideActorWorkspace, Effect.forkIn(actorScope))
+      }
     })
 
     const enqueueMessage = Effect.fn("AgentLoopActor.enqueueMessage")(function* (
