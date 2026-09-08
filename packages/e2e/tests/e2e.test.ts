@@ -23,7 +23,6 @@ const ENTER = "\r"
 const ESC = "\x1b"
 const CTRL_C = "\x03"
 const UP = "\x1b[A"
-const DOWN = "\x1b[B"
 const ESC_KEY_DECODE_MS = 650
 
 const raceWithTimeout = <A>(
@@ -97,7 +96,7 @@ describe("E2E: Auth", () => {
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(spawnNoAuth)
         yield* ptyWaitFor(ctx, "API Keys", { timeout: 10_000 })
-        yield* ptyWaitFor(ctx, "Claude Code", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "ChatGPT Pro/Plus", { timeout: 10_000 })
         yield* waitForOutput(ctx, "Manually enter API key", 10_000)
         expect(ctx.output).toContain("API Keys")
       }),
@@ -110,8 +109,8 @@ describe("E2E: Auth", () => {
       Effect.gen(function* () {
         const ctx = yield* acquireTestContext(spawnNoAuth)
         yield* ptyWaitFor(ctx, "API Keys", { timeout: 10_000 })
-        yield* shortPause(750)
-        ctx.pty.write(DOWN)
+        yield* ptyWaitFor(ctx, "Manually enter API key", { timeout: 10_000 })
+        ctx.pty.write(UP)
         yield* shortPause(200)
         ctx.pty.write(ENTER)
         yield* ptyWaitFor(ctx, "(type key)", { timeout: 5_000 })
