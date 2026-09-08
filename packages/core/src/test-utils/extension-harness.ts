@@ -43,7 +43,7 @@ export interface ToolTestLayerConfig {
   readonly tools?: ReadonlyArray<ToolCapability>
   /** AgentRunner mock — default returns success with empty text */
   readonly subagentRunner?: Pick<AgentRunner, "run">
-  /** Extra layers to merge (e.g., GitReader.Test) */
+  /** Extra layers to merge (e.g., additional service overrides) */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
 

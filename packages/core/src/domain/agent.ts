@@ -63,8 +63,7 @@ export const DEFAULT_AGENT_NAME = AgentName.make("main")
  * defaults, and driver routing. Per-run concerns (persistence/retention,
  * overrides, parent-tool linkage, tags) live on `RunSpec`.
  *
- * Built-in prompts moved to their owning extensions (`@gent/agents`,
- * `@gent/librarian`).
+ * Built-in prompts moved to their owning extensions.
  */
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")({
   name: AgentName,

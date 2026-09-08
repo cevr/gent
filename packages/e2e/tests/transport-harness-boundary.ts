@@ -16,7 +16,6 @@ import type {
   ResourceGraphRecoveryError,
 } from "@gent/core-internal/runtime/extensions/resource-host/resource-graph-command.js"
 import { AllBuiltinAgents } from "../../extensions/tests/helpers/builtin-agents.js"
-import { GitReader } from "../../extensions/src/librarian/index.js"
 import { Gent, type GentClientBundle } from "@gent/sdk"
 export { waitFor } from "@gent/core-internal/test-utils/fixtures"
 
@@ -31,7 +30,6 @@ export const toTestFailure = (cause: unknown) => {
 
 const defaultConfig: InProcessLayerConfig = {
   agents: AllBuiltinAgents,
-  extraLayers: [GitReader.Test],
 }
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
 type HarnessLayerError =

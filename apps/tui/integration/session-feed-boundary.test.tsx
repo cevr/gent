@@ -11,14 +11,13 @@ import {
 } from "../tests/render-harness-boundary"
 import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core-internal/test-utils/in-process-layer.js"
 import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
-import { GitReader } from "../../../packages/extensions/src/librarian/index.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { Gent } from "@gent/sdk"
 import { waitForFrame, makeSessionState, repoRoot } from "./helpers"
 const absentReasoningLevel = Option.getOrUndefined(Option.none())
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
-  _baseLocalLayerWithProvider(p, { agents: AllBuiltinAgents, extraLayers: [GitReader.Test] })
+  _baseLocalLayerWithProvider(p, { agents: AllBuiltinAgents })
 describe("session feed boundary", () => {
   it.live(
     "projects streaming state and assistant output",

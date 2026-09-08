@@ -15,7 +15,6 @@ import { AnthropicExtension } from "./anthropic/index.js"
 import { OpenAIExtension } from "./openai/index.js"
 import { GoogleExtension, MistralExtension } from "./openai-compatible-driver.js"
 import { SkillsExtension } from "./skills/index.js"
-import { LibrarianExtension } from "./librarian/index.js"
 import { WorkflowsExtension } from "./workflows.js"
 import { HandoffExtension } from "./handoff.js"
 import { GoalExtension } from "./goal/index.js"
@@ -107,7 +106,6 @@ export {
   DelegateExtension,
   AgentsExtension,
   SkillsExtension,
-  LibrarianExtension,
   WorkflowsExtension,
   HandoffExtension,
   GoalExtension,
@@ -128,7 +126,6 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   AgentsExtension,
   WorkflowsExtension,
   SkillsExtension,
-  LibrarianExtension,
   AnthropicExtension,
   OpenAIExtension,
   GoogleExtension,

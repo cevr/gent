@@ -866,12 +866,12 @@ describe("platform duplication guards", () => {
   test("flags direct bun package imports in core/extensions sources", () => {
     expect(
       findPlatformDuplicationViolations(
-        "packages/extensions/src/librarian/repo-explorer.ts",
+        "packages/extensions/src/skills/skills.ts",
         'import { $ } from "bun"',
       ),
     ).toEqual([
       {
-        file: "packages/extensions/src/librarian/repo-explorer.ts",
+        file: "packages/extensions/src/skills/skills.ts",
         line: 1,
         message:
           "Direct `bun` package imports are adapter-only; use ExtensionContext.Process or Effect platform services",

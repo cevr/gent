@@ -29,7 +29,10 @@ import testThroughPublicInterfaces from "./bundled/principles/references/test-th
 import useThePlatform from "./bundled/principles/references/use-the-platform.md" with { type: "text" }
 import principlesSkill from "./bundled/principles/SKILL.md" with { type: "text" }
 
+import repositories from "./bundled/repositories/SKILL.md" with { type: "text" }
+
 export const bundledSkillFiles: ReadonlyArray<readonly [string, string]> = [
+  ["repositories/SKILL.md", repositories],
   ["principles/SKILL.md", principlesSkill],
   ["principles/references/acknowledge-before-processing.md", acknowledgeBeforeProcessing],
   ["principles/references/boundary-discipline.md", boundaryDiscipline],

@@ -21,7 +21,6 @@
     "@gent/core": "workspace:*",
     "@gent/core-internal": "workspace:*",
     "@types/turndown": "^5.0.6",
-    "es-git": "^0.7.0",
     "linkedom": "^0.18.13",
     "picomatch": "catalog:",
     "turndown": "^7.2.4"

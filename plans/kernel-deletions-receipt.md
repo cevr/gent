@@ -60,10 +60,44 @@ Source files:
 - `/Users/cvr/Developer/personal/gent/packages/extensions/tests/skills/skills-rpc.test.ts`
 - `/Users/cvr/Developer/personal/gent/.gitignore`
 
+## Native repository commands
+
+Removed the repository extension, GitReader service, repo tool, native es-git dependency, and obsolete formatter. Removed tests that only exercised the deleted service. Removed GitReader test overrides from the remaining runtime and TUI tests. The platform guard still checks the same forbidden import against a current source path.
+
+The bundled repositories skill documents executable checks, existing credential use, cache ownership, exact revision reads, npm archive inspection, and error codes. Research prompts now refer to this skill and supervised native commands.
+
+The full gate passed. Live Herdr checks cloned a local two-version fixture without checkout, resolved v1, listed and read its file, and returned commit `3e1be432bd1095772732f3ef6e731ce5e86ad419` with `REPO-PIN-ONE`. The source remained clean at `REPO-PIN-TWO`. No matches returned 1; an invalid revision returned 128. A second live turn packed and extracted is-number@7.0.0 without installation and read cevr/gent metadata with existing gh authentication. Both turns reached idle.
+
+Evidence:
+
+- `/tmp/gent-repository-remove.log`
+- `/tmp/gent-repository-gate.log`
+- `/tmp/gent-repository-herdr-git.txt`
+- `/tmp/gent-repository-herdr-package.txt`
+- `/tmp/gent-repository-fixture-check.txt`
+
+Source files:
+
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/bundled/repositories/SKILL.md`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/skills/bundled-sources.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/workflows.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/index.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/package.json`
+- `/Users/cvr/Developer/personal/gent/bun.lock`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/utils/format-tool.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/tests/format-tool.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/tests/helpers/test-preset.ts`
+- `/Users/cvr/Developer/personal/gent/packages/e2e/tests/transport-harness-boundary.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/integration/app-bootstrap.test.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/integration/session-lifecycle.test.tsx`
+- `/Users/cvr/Developer/personal/gent/apps/tui/integration/session-feed-boundary.test.tsx`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/agent.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/test-utils/extension-harness.ts`
+- `/Users/cvr/Developer/personal/gent/packages/tooling/tests/platform-duplication-guards.test.ts`
+
 ## Remaining work
 
-1. Replace the repository extension and es-git with documented CLI execution.
-2. Replace artifact state and UI with saved files and kernel working values.
-3. Remove model-facing skill search/load wrappers. Preserve discovery, scope, and TUI insertion.
+1. Replace artifact state and UI with saved files and kernel working values.
+2. Remove model-facing skill search/load wrappers. Preserve discovery, scope, and TUI insertion.
 
 Run the full gate and live Herdr checks for each logical commit. Complete review and the final goal audit before integration.

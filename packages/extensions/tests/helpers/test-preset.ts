@@ -5,7 +5,6 @@
 import { BuiltinExtensions } from "@gent/extensions"
 import { CellExtension } from "@gent/core-internal/runtime/code-cell/cell-extension"
 import { AllBuiltinAgents } from "./builtin-agents.js"
-import { GitReader } from "../../src/librarian/index.js"
 import type { E2ELayerConfig } from "@gent/core-internal/test-utils/e2e-layer"
 import type { ToolTestLayerConfig } from "@gent/core-internal/test-utils/extension-harness"
 
@@ -26,5 +25,4 @@ export const e2ePreset = {
 
 export const toolPreset = {
   agents: AllBuiltinAgents,
-  extraLayers: [GitReader.Test],
 } satisfies Pick<ToolTestLayerConfig, "agents" | "extraLayers">

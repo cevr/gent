@@ -141,7 +141,6 @@
         "@gent/core": "workspace:*",
         "@gent/core-internal": "workspace:*",
         "@types/turndown": "^5.0.6",
-        "es-git": "^0.7.0",
         "linkedom": "^0.18.13",
         "picomatch": "catalog:",
         "turndown": "^7.2.4",
@@ -658,28 +657,6 @@
     "entities": ["entities@7.0.1", "", {}, "sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA=="],
 
     "es-errors": ["es-errors@1.3.0", "", {}, "sha512-Zf5H2Kxt2xjTvbJvP2ZWLEICxA6j+hAmMzIlypy4xcBg1vKVnx89Wy0GbS+kf5cwCVFFzdCFh2XSCFNULS6csw=="],
-
-    "es-git": ["es-git@0.7.0", "", { "optionalDependencies": { "es-git-android-arm-eabi": "0.7.0", "es-git-android-arm64": "0.7.0", "es-git-darwin-arm64": "0.7.0", "es-git-darwin-x64": "0.7.0", "es-git-linux-arm64-gnu": "0.7.0", "es-git-linux-arm64-musl": "0.7.0", "es-git-linux-x64-gnu": "0.7.0", "es-git-linux-x64-musl": "0.7.0", "es-git-win32-arm64-msvc": "0.7.0", "es-git-win32-x64-msvc": "0.7.0" } }, "sha512-jAoLAkfNt6hHDuXYjiB6fcs5XPrBq4crEoQNlIYDeXkY+EmkEB20EBSRg/ynnzbF6us06GgC1p7nTU2s79lcMw=="],
-
-    "es-git-android-arm-eabi": ["es-git-android-arm-eabi@0.7.0", "", { "os": "android", "cpu": "arm" }, "sha512-D3CX7rsUPtERdo3mFgUgsKb9VHJdIY0+aC/YkFy8Bj3t2KZ40q5bUjmw/rSKct3rXc6qk+uopMUnCLDaC2Lwkw=="],
-
-    "es-git-android-arm64": ["es-git-android-arm64@0.7.0", "", { "os": "android", "cpu": "arm64" }, "sha512-lu5cNsOzPWYSHu817Gf0pai9qO7JuFjtca1lSSPYNj1chWbYGnR/aW+lsG6EUNdFupKxV4wR+LXtL/S+/44XjA=="],
-
-    "es-git-darwin-arm64": ["es-git-darwin-arm64@0.7.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-rxdCTIXZGijanSTjRymuJUfPNAPD5XSJ+6dYhvJ76UsPMMgY/NIfdWhX6JkxhxMw+2FNQXOJao0Pv0Ezez5McQ=="],
-
-    "es-git-darwin-x64": ["es-git-darwin-x64@0.7.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-NAL+eQU1BXe3zcsGg/fNniIZDkN9lE00NHdMZ+davv08rIMIr7MoUISla0Hhu9jDGRlXoazwZ+U0joO8NUhalA=="],
-
-    "es-git-linux-arm64-gnu": ["es-git-linux-arm64-gnu@0.7.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-k/V83qm/wwa3PIBwhaF/uzUjmIpDWVotYKXxYSVuM5z/8+LF/7aOmDZtvmmKI/ZygjkBeFyDfWo2c/Drhq8GjA=="],
-
-    "es-git-linux-arm64-musl": ["es-git-linux-arm64-musl@0.7.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-+Pub90emhmy00iS14GEC0T09mzI9QIVWUnAfHeFSQbi+UrWH0d90flk93oG002KkOQOuUGOuARED1jUxE3HQrw=="],
-
-    "es-git-linux-x64-gnu": ["es-git-linux-x64-gnu@0.7.0", "", { "os": "linux", "cpu": "x64" }, "sha512-gU/K5w+wYaghxMXGIrDGRqNMpl3i6zOjlXm8rqYh91PmuHipcAIYeVBqpQmtvEBMMXTYqOhIN6uqmOGLeOekDQ=="],
-
-    "es-git-linux-x64-musl": ["es-git-linux-x64-musl@0.7.0", "", { "os": "linux", "cpu": "x64" }, "sha512-lYGoF5dPGPZkXvOOtVETQzODeN2CrTKC/KCSFJVN3CxFjis4oA4mkw4RS9DHWKbgyzC5B44y2xgbPcr/0EaGdA=="],
-
-    "es-git-win32-arm64-msvc": ["es-git-win32-arm64-msvc@0.7.0", "", { "os": "win32", "cpu": "arm64" }, "sha512-e2KK1EPiDzFdT4zQmR2bkVl/Bu9+5MmP+x03T6GHfSXmBcdBn2VNl4ydChSwjvrGGNB6HrQRrJdbpx1ihNfSqg=="],
-
-    "es-git-win32-x64-msvc": ["es-git-win32-x64-msvc@0.7.0", "", { "os": "win32", "cpu": "x64" }, "sha512-es4WKMEVoZAm6NlxSXZj829aFemksFpHU9BuBuQWJE2BqPt4QEEDprM4MyggYH6x47uyYEaJtZgSn59+zWIaLg=="],
 
     "escalade": ["escalade@3.2.0", "", {}, "sha512-WUj2qlxaQtO4g6Pq5c29GTcWGDyd8itL8zTlipgECz3JesAiiOKotd8JU6otB3PACgG6xkJUyVhboMS+bje/jA=="],
 

@@ -149,12 +149,6 @@ const toolArgFormatters = {
   grep: (args, options) => summarizeScopedPattern(args, options, "/", "/"),
   glob: (args, options) => summarizeScopedPattern(args, options),
   webfetch: (args) => getStringArg(args, "url"),
-  repo: (args) => {
-    const spec = getStringArg(args, "spec")
-    const action = getStringArg(args, "action")
-    if (spec.length === 0) return action
-    return `${action} ${spec}`.trim()
-  },
   delegate: summarizeDelegate,
   skills: (args) => {
     const names = args["names"]

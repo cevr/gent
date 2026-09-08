@@ -10,12 +10,11 @@ import type { ClientContextValue } from "../src/client/context"
 import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness-boundary"
 import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core-internal/test-utils/in-process-layer.js"
 import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
-import { GitReader } from "../../../packages/extensions/src/librarian/index.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import { Gent } from "@gent/sdk"
 import { waitForFrame, repoRoot } from "./helpers"
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
-  _baseLocalLayerWithProvider(p, { agents: AllBuiltinAgents, extraLayers: [GitReader.Test] })
+  _baseLocalLayerWithProvider(p, { agents: AllBuiltinAgents })
 function StateProbe(props: {
   readonly onReady: (ctx: { client: ClientContextValue; router: RouterContextValue }) => void
 }) {

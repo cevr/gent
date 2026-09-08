@@ -143,14 +143,6 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("webfetch", {})).toBe("")
   })
 
-  test("repo: action + spec", () => {
-    expect(toolArgSummary("repo", { action: "fetch", spec: "effect-ts/effect" })).toBe(
-      "fetch effect-ts/effect",
-    )
-    expect(toolArgSummary("repo", { action: "path" })).toBe("path")
-    expect(toolArgSummary("repo", {})).toBe("")
-  })
-
   test("delegate: todo", () => {
     expect(toolArgSummary("delegate", { todo: "find the bug" })).toBe("find the bug")
     expect(toolArgSummary("delegate", {})).toBe("")

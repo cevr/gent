@@ -53,7 +53,7 @@ const researchRecipe = (input: string) => {
   }
   return [
     `Research: ${input}`,
-    "Use primary sources. Use repo to fetch external repository sources when needed. Delegate independent reading only when it adds value. Keep intermediate results in cell bindings or files.",
+    "Use primary sources. Read the repositories skill when external source code is needed. Use native Git or package commands through bash and record exact revisions. Delegate independent reading only when it adds value. Keep intermediate results in cell bindings or files.",
     "Answer with citations to the sources you read. Separate observed behavior from inference and state any gaps.",
   ].join("\n")
 }
