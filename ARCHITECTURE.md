@@ -9,7 +9,7 @@ The resource evolution plan is in [`docs/malleability.md`](docs/malleability.md)
 `gent` is organized around five nouns:
 
 - `Server` — process-wide services only: storage, auth stores, platform, transport wiring, connection tracking.
-- `Profile` — cwd-scoped policy and extension graph: permissions, drivers, reactions, resources, capability leaves.
+- `Profile` — cwd-scoped policy and extension graph: permissions, drivers, hooks, resources, capability leaves.
 - `SessionRuntime` — the single public session engine: inbox, queue, checkpoint, watch state, turn orchestration.
 - `Tool` / `Request` — independent callable leaves for model tools and typed extension RPC. Requests with a `slash:` block also surface as human slash commands.
 - `Resource` — long-lived services, schedules, lifecycle, and extension-owned state.
@@ -805,8 +805,7 @@ host-owned design. It should expose:
 - typed leaves: `tool`, `request`, `ref`;
 - scoped resources: `defineResource`, `defineStateResource`, `ResourceId`,
   `ResourceRevision`, and resource scope types;
-- turn hooks: the public reaction input/output types needed to author
-  `reactions`;
+- turn hooks: the public hook input/output types needed to author `hooks`;
 - agents and model ids: `defineAgent`, `AgentName`, `ModelId`, run-spec
   helpers needed for turn-scoped subagent dispatch;
 - stable ids and author-facing schemas: `ExtensionId`, `ArtifactId`,
@@ -844,20 +843,20 @@ Rules:
 - public snapshot schema is enforced at runtime — invalid snapshots are dropped, not passed through
 - declaration setup and validation failures exclude the affected extension;
   resource start failures reject the live graph publication
-- stateful side effects cross explicit typed slots (`reactions:`, resources, or
+- stateful side effects cross explicit typed slots (`hooks:`, resources, or
   extension-owned services), not private host imports
 
 For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Example extensions in [examples/extensions/](examples/extensions/).
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, resources?, tools?, requests?, agents?, reactions?, modelDrivers?, externalDrivers? })`. Each typed bucket is either a literal array, a `() => array` function, or a `() => Effect<array>` factory. Setup-time host facts come from `yield* ExtensionSetupContext`; runtime host authority comes from `yield* ExtensionContext`. The bucket name IS the discriminator — TypeScript catches the wrong leaf in `tools` or `requests` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
+One authoring shape: `defineExtension({ id, resources?, scheduledJobs?, tools?, requests?, agents?, hooks?, modelDrivers?, externalDrivers? })`. Each typed bucket is either a literal array, a `() => array` function, or a `() => Effect<array>` factory. Setup-time host facts come from `yield* ExtensionSetupContext`; runtime host authority comes from `yield* ExtensionContext`. The bucket name IS the discriminator — TypeScript catches the wrong leaf in `tools` or `requests` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
 - **Resource** — `defineResource({ id, revision?, requires?, required?, scope, layer?, start?, stop? })`. Long-lived state has a stable identity and explicit `scope`; `revision` records resource semantics, including configuration changes, and defaults to `"1"`; `requires` defaults to `[]`, and `required` defaults to `false`. Today only `"process"` is public, because it is the only lifecycle with a host owner. `cwd`, `session`, and `branch` lifetimes stay out of the author API until their runtime owners exist. Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
 - **Callable leaves** — `tool(...)` / `request(...)` smart constructors lowering into typed buckets. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Agent`, `Interaction`, `Process`, `Files`, `FileLock`, `State`); extension-private authority comes from extension-owned Effect service Tags. The `Files` / `FileLock` / `State` facets wrap the host-internal `FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so shipped and external extensions share the same surface. See `packages/core/src/domain/capability/{tool,request}.ts`; `runtime/extensions/registry.ts` compiles the model, RPC, and slash registries.
-- **Reactions** — `reactions.turnProjection`, `systemPrompt`, `turnBefore`, `turnAfter`, `messageOutput`, and `toolResult` are the explicit runtime hooks. Reaction handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-reactions.ts`.
+- **Hooks** — `hook.systemPrompt`, `hook.turnProjection`, `hook.turnAfter`, `hook.toolCall`, and `hook.toolResult` are the explicit runtime hooks. Hook handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. `turnAfter` carries the turn's token usage. See `packages/core/src/domain/extension.ts` and `runtime/extensions/extension-hooks.ts`.
 - **Driver** — `modelDrivers` and `externalDrivers` are split buckets of `ModelDriverContribution` and `ExternalDriverContribution`. Model drivers provide LLM provider layers + auth; external drivers stream Effect AI response parts from process-owned executors. See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
 
 Other notes:
@@ -870,7 +869,7 @@ Other notes:
   provider suspends affected extensions through the resource plan.
   Scheduler failures remain extension health diagnostics. The graph host
   owns resource stop order and scoped cleanup.
-- Prompt shaping, input normalization, permission policy, and turn reactions are explicit runtime slots compiled from extension reactions and typed leaves, not generic middleware buckets.
+- Prompt shaping, input normalization, permission policy, and turn hooks are explicit runtime slots compiled from extension hooks and typed leaves, not generic middleware buckets.
 - Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`.
 - `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send.
 
