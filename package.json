@@ -71,6 +71,7 @@
     "@ff-labs/fff-bun": "0.10.6"
   },
   "patchedDependencies": {
-    "@opentui/core@0.5.10": "patches/@opentui%2Fcore@0.5.10.patch"
+    "@opentui/core@0.5.10": "patches/@opentui%2Fcore@0.5.10.patch",
+    "effect-encore@0.29.1": "patches/effect-encore@0.29.1.patch"
   }
 }
