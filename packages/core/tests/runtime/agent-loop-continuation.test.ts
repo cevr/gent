@@ -157,6 +157,14 @@ describe("continuation", () => {
         ).toBe(false)
         const messages = yield* messageStorage.listMessages(contBranchId)
         expect(messages.filter((message) => message._tag === "interjection")).toHaveLength(1)
+        // The interjection sorts after the tool result it waited for, never between
+        // the call and its result.
+        const resultIndex = messages.findIndex((message) =>
+          message.parts.some((part) => part.type === "tool-result"),
+        )
+        const interjectionIndex = messages.findIndex((message) => message._tag === "interjection")
+        expect(resultIndex).toBeGreaterThanOrEqual(0)
+        expect(interjectionIndex).toBeGreaterThan(resultIndex)
         yield* controls.assertDone
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))

@@ -857,7 +857,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const deliverSteeringAtStepBoundary = Effect.fn("AgentLoop.deliverSteering")(function* () {
       const items = yield* scope.takeSteeringForStep
       for (const item of items) {
-        yield* persistMessageReceived({ message: item.message })
+        // The message joins the transcript now. Its admission time could sort it
+        // between a tool call and its result, which the projection rejects.
+        yield* persistMessageReceived({
+          message: { ...item.message, createdAt: yield* DateTime.nowAsDate },
+        })
       }
     })
 
