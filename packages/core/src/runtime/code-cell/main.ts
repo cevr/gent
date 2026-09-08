@@ -1,10 +1,11 @@
 /* oxlint-disable effect/noGlobals, gent/no-bun-outside-adapter -- The worker entry owns its process descriptors through Bun. */
 import { BunRuntime } from "@effect/platform-bun"
-import { Effect, Layer, Semaphore, Stream } from "effect"
+import { Effect, Layer, Predicate, Semaphore, Stream } from "effect"
 import { CellWorkerEnvironment } from "./bun-evaluator-boundary.js"
 import { cellRequestFd, cellResponseFd } from "./cell-process.js"
 import {
   CellProtocolError,
+  cellOutputBoundary,
   decodeCellRequest,
   encodeCellResponse,
   makeCellFrameReader,
@@ -22,6 +23,15 @@ const DescriptorTransport = Layer.effect(
       onError: ioError,
     })
     const responses = Bun.file(cellResponseFd)
+    // The callback fires once the stream handed the marker to the OS, so everything the
+    // cell wrote to the same stream before it is already in the pipe.
+    const writeMarker = (stream: NodeJS.WriteStream, marker: string) =>
+      Effect.callback<void, CellProtocolError>((resume) => {
+        stream.write(marker, (error) => {
+          if (Predicate.isNotNullish(error)) resume(Effect.fail(ioError(error)))
+          else resume(Effect.void)
+        })
+      })
     const writeAll = (bytes: Uint8Array) =>
       Effect.tryPromise({
         try: () => Bun.write(responses, bytes),
@@ -35,6 +45,13 @@ const DescriptorTransport = Layer.effect(
           Stream.flatMap(Stream.fromIterable),
           Stream.mapEffect(decodeCellRequest),
           Stream.concat(Stream.fromEffect(reader.end).pipe(Stream.drain)),
+        )
+      }),
+      endCellOutput: Effect.fn("CellWorkerTransport.endCellOutput")((cellId) => {
+        const marker = cellOutputBoundary(cellId)
+        return Effect.all(
+          [writeMarker(process.stdout, marker), writeMarker(process.stderr, marker)],
+          { concurrency: "unbounded", discard: true },
         )
       }),
       send: Effect.fn("CellWorkerTransport.send")((response) =>

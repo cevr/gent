@@ -1,4 +1,4 @@
-import { Deferred, Effect, FileSystem, Queue, Schema, Stream } from "effect"
+import { Deferred, Effect, FileSystem, Option, Queue, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import {
   type CellRequest,
@@ -6,6 +6,7 @@ import {
   decodeCellResponse,
   encodeCellRequest,
   makeCellFrameReader,
+  makeCellOutputScanner,
   maximumCellDisplayLength,
 } from "./cell-protocol.js"
 
@@ -19,6 +20,30 @@ export class CellProcessError extends Schema.TaggedError<CellProcessError>()("Ce
 export const cellResponseFd = 3
 /** Host-to-worker frames travel on this descriptor. */
 export const cellRequestFd = 4
+
+/** Keeps the first `limit` characters and counts the rest. */
+const makeOutputBuffer = (limit: number) => {
+  let text = ""
+  let omitted = 0
+  const read = () => {
+    if (omitted === 0) return text
+    return `${text}\n... [${omitted} characters omitted] ...`
+  }
+  return {
+    append: (chunk: string) => {
+      const room = Math.max(0, limit - text.length)
+      text += chunk.slice(0, room)
+      omitted += Math.max(0, chunk.length - room)
+    },
+    read,
+    take: () => {
+      const result = read()
+      text = ""
+      omitted = 0
+      return result
+    },
+  }
+}
 
 /** The caller owns an immutable trusted worker artifact and the returned process scope.
  * The worker runs with the host's working directory, environment, and OS permissions,
@@ -54,9 +79,8 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     forceKillAfter: "1 second",
   }).pipe(Effect.mapError(launchError))
 
-  const diagnosticBytes = new Uint8Array(8192)
-  let diagnosticLength = 0
-  const diagnostics = () => new TextDecoder().decode(diagnosticBytes.subarray(0, diagnosticLength))
+  const diagnosticsBuffer = makeOutputBuffer(8192)
+  const diagnostics = () => diagnosticsBuffer.read()
   const ioError = (cause: unknown) =>
     new CellProcessError({ phase: "io", message: String(cause), diagnostics: diagnostics() })
   const failure = yield* Deferred.make<never, CellProcessError>()
@@ -91,35 +115,95 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     Effect.catchCause((cause) => Deferred.failCause(failure, cause)),
     Effect.forkScoped,
   )
-  // Worker stdout and stderr carry cell output, never protocol frames. The kernel takes
-  // what arrived while a cell ran and returns it with that cell; a bounded prefix also
-  // serves as diagnostics when the worker fails.
-  const outputDecoder = new TextDecoder()
-  let capturedOutput = ""
-  let omittedOutput = 0
-  const takeOutput = Effect.sync(() => {
-    let text = capturedOutput
-    if (omittedOutput > 0) text = `${text}\n... [${omittedOutput} characters omitted] ...`
-    capturedOutput = ""
-    omittedOutput = 0
-    return text
-  })
-  yield* Stream.merge(handle.stderr, handle.stdout).pipe(
-    Stream.runForEach((chunk) =>
-      Effect.sync(() => {
-        const retained = chunk.subarray(0, diagnosticBytes.length - diagnosticLength)
-        diagnosticBytes.set(retained, diagnosticLength)
-        diagnosticLength += retained.length
-        const text = outputDecoder.decode(chunk, { stream: true })
-        const room = maximumCellDisplayLength - capturedOutput.length
-        capturedOutput += text.slice(0, Math.max(0, room))
-        omittedOutput += Math.max(0, text.length - room)
-      }),
-    ),
+  // Worker stdout and stderr carry cell output, never protocol frames. The worker ends
+  // each cell with a boundary marker on both streams before its result frame, so the
+  // text before both markers belongs to that cell and later text to the next one.
+  const cellOutput = makeOutputBuffer(maximumCellDisplayLength)
+  const laterOutput = makeOutputBuffer(maximumCellDisplayLength)
+  const endedStreams = new Set<string>()
+  let boundaryCell = Option.none<string>()
+  let finished = Option.none<{ readonly cellId: string; readonly text: string }>()
+  let waiter = Option.none<{
+    readonly cellId: string
+    readonly deferred: Deferred.Deferred<string, CellProcessError>
+  }>()
+  const settle = (cellId: string) =>
+    Effect.suspend(() => {
+      const text = cellOutput.take()
+      cellOutput.append(laterOutput.take())
+      endedStreams.clear()
+      boundaryCell = Option.none()
+      if (Option.isSome(waiter) && waiter.value.cellId === cellId) {
+        return Deferred.succeed(waiter.value.deferred, text)
+      }
+      finished = Option.some({ cellId, text })
+      return Effect.void
+    })
+  const readOutput = (name: string, bytes: Stream.Stream<Uint8Array, unknown>) => {
+    const decoder = new TextDecoder()
+    const scanner = makeCellOutputScanner()
+    return bytes.pipe(
+      Stream.mapEffect((chunk) =>
+        Effect.forEach(
+          scanner.push(decoder.decode(chunk, { stream: true })),
+          (segment) =>
+            Effect.gen(function* () {
+              diagnosticsBuffer.append(segment.text)
+              if (endedStreams.has(name)) laterOutput.append(segment.text)
+              else cellOutput.append(segment.text)
+              if (Option.isNone(segment.boundary)) return
+              const cellId = segment.boundary.value
+              if (endedStreams.has(name) || Option.exists(boundaryCell, (id) => id !== cellId)) {
+                return yield* ioError("Unexpected cell output boundary")
+              }
+              endedStreams.add(name)
+              boundaryCell = Option.some(cellId)
+              if (endedStreams.size === 2) yield* settle(cellId)
+            }),
+          { discard: true },
+        ),
+      ),
+    )
+  }
+  yield* Stream.merge(
+    readOutput("stdout", handle.stdout),
+    readOutput("stderr", handle.stderr),
+  ).pipe(
+    Stream.runDrain,
     Effect.mapError(ioError),
     Effect.catchCause((cause) => Deferred.failCause(failure, cause)),
+    Effect.ensuring(
+      Effect.suspend(() =>
+        Option.match(waiter, {
+          onNone: () => Effect.void,
+          onSome: (active) => Deferred.fail(active.deferred, closedError()),
+        }),
+      ),
+    ),
     Effect.forkScoped,
   )
+  const takeOutput = Effect.fn("CellProcess.takeOutput")(function* (cellId: string) {
+    if (Option.isSome(finished)) {
+      const ready = finished.value
+      finished = Option.none()
+      if (ready.cellId !== cellId) return yield* ioError("Unexpected cell output boundary")
+      return ready.text
+    }
+    const deferred = yield* Deferred.make<string, CellProcessError>()
+    waiter = Option.some({ cellId, deferred })
+    return yield* Deferred.await(deferred).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          waiter = Option.none()
+        }),
+      ),
+    )
+  })
+  const discardOutput = Effect.sync(() => {
+    cellOutput.take()
+    laterOutput.take()
+    finished = Option.none()
+  })
 
   const responses = Stream.suspend(() => {
     const reader = makeCellFrameReader()
@@ -196,8 +280,10 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     pid: handle.pid,
     responses: Stream.fromQueue(incoming),
     diagnostics: Effect.sync(diagnostics),
-    /** Output received since the previous take. Empty once taken. */
+    /** Output the worker wrote during the cell, once both streams passed its boundary. */
     takeOutput,
+    /** Drops output nobody claimed, such as late writes from a process a cell spawned. */
+    discardOutput,
     isRunning: handle.isRunning.pipe(Effect.mapError(ioError)),
     exitCode: handle.exitCode.pipe(Effect.mapError(ioError)),
     send: Effect.fn("CellProcess.send")(function* (request: CellRequest) {

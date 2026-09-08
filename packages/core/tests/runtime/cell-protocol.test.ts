@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import {
   CellRequest,
   CellResponse,
@@ -9,6 +9,8 @@ import {
   encodeCellResponse,
   makeCellFrameReader,
   maximumCellFrameBytes,
+  cellOutputBoundary,
+  makeCellOutputScanner,
 } from "@gent/core-internal/runtime/code-cell/cell-protocol"
 
 describe("cell process protocol", () => {
@@ -70,6 +72,36 @@ describe("cell process protocol", () => {
       })
       const error = yield* encodeCellResponse(response).pipe(Effect.flip)
       expect(error.message).toContain("byte limit")
+    }),
+  )
+
+  it.live(
+    "cell output boundaries close the text before them even when a chunk splits the marker",
+    () =>
+      Effect.sync(() => {
+        const scanner = makeCellOutputScanner()
+        const marker = cellOutputBoundary("cell-1")
+        const first = scanner.push(`before ${marker.slice(0, 5)}`)
+        expect(first).toEqual([{ text: "before ", boundary: Option.none() }])
+        const second = scanner.push(`${marker.slice(5)}after`)
+        expect(second).toEqual([
+          { text: "", boundary: Option.some("cell-1") },
+          { text: "after", boundary: Option.none() },
+        ])
+      }),
+  )
+
+  it.live("stray record separators in cell output stay text", () =>
+    Effect.sync(() => {
+      const scanner = makeCellOutputScanner()
+      expect(scanner.push("a\u001eb\u001ec")).toEqual([
+        { text: "a\u001eb", boundary: Option.none() },
+      ])
+      expect(scanner.push(`${cellOutputBoundary("x")}`)).toEqual([
+        { text: "\u001ec", boundary: Option.some("x") },
+      ])
+      const long = `\u001e${"z".repeat(400)}`
+      expect(scanner.push(long)).toEqual([{ text: long, boundary: Option.none() }])
     }),
   )
 })

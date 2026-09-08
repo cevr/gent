@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { CellSnapshot, SnapshotBinding, SnapshotOmission } from "./cell-snapshot.js"
 
 export const maximumCellSourceLength = 256 * 1024
@@ -150,5 +150,61 @@ export const makeCellFrameReader = () => {
       if (length === 0) return Effect.void
       return Effect.fail(new CellProtocolError({ message: "Cell pipe closed during a frame" }))
     }),
+  }
+}
+
+const boundaryDelimiter = "\u001e"
+const boundaryPrefix = "gent-cell-end "
+const maximumBoundaryLength = boundaryDelimiter.length * 2 + boundaryPrefix.length + 128
+
+/** The worker writes this to stdout and stderr after a cell, before its result frame. */
+export const cellOutputBoundary = (cellId: string) =>
+  `${boundaryDelimiter}${boundaryPrefix}${cellId}${boundaryDelimiter}`
+
+/** Cell text in arrival order; a boundary closes the text that came before it. */
+export interface CellOutputSegment {
+  readonly text: string
+  readonly boundary: Option.Option<string>
+}
+
+/** Splits one output stream into text and boundaries, whatever the chunk splits are. */
+export const makeCellOutputScanner = () => {
+  let pending = ""
+  return {
+    push: (chunk: string): ReadonlyArray<CellOutputSegment> => {
+      let input = pending + chunk
+      pending = ""
+      const segments: CellOutputSegment[] = []
+      let text = ""
+      while (input.length > 0) {
+        const start = input.indexOf(boundaryDelimiter)
+        if (start === -1) {
+          text += input
+          break
+        }
+        text += input.slice(0, start)
+        const end = input.indexOf(boundaryDelimiter, start + 1)
+        if (end === -1) {
+          if (input.length - start > maximumBoundaryLength) {
+            text += boundaryDelimiter
+            input = input.slice(start + 1)
+            continue
+          }
+          pending = input.slice(start)
+          break
+        }
+        const candidate = input.slice(start + 1, end)
+        if (candidate.startsWith(boundaryPrefix)) {
+          segments.push({ text, boundary: Option.some(candidate.slice(boundaryPrefix.length)) })
+          text = ""
+          input = input.slice(end + 1)
+        } else {
+          text += input.slice(start, end)
+          input = input.slice(end)
+        }
+      }
+      if (text.length > 0) segments.push({ text, boundary: Option.none() })
+      return segments
+    },
   }
 }

@@ -59,6 +59,12 @@ describe.skipIf(process.platform !== "darwin")("cell worker process", () => {
           )
           .pipe(Effect.provideService(CellOperationHost, host))
         expect(streamed.display).toBe("via stdout\nvia stderr\nfrom child\nvalue")
+        // A large write right before the result still lands in full: the worker marks the
+        // end of the cell on both streams, and the host waits for both marks.
+        const large = yield* kernel
+          .evaluate("process.stdout.write('y'.repeat(40000)); 'tail'")
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(large.display).toBe(`${"y".repeat(40000)}\ntail`)
         const quiet = yield* kernel
           .evaluate("'nothing streamed'")
           .pipe(Effect.provideService(CellOperationHost, host))
@@ -372,7 +378,9 @@ describe.skipIf(process.platform !== "darwin")("cell worker process", () => {
             if (noisy._tag !== "Evaluated")
               return yield* new CellProtocolError({ message: "Expected evaluation" })
             expect(noisy.result.display).toBe("captured\n43")
+            expect(yield* child.takeOutput("two")).toBe("not a frame\nalso not a frame\n")
             expect(yield* child.diagnostics).toContain("not a frame")
+            expect(yield* child.diagnostics).not.toContain("gent-cell-end")
             expect(yield* child.isRunning).toBe(true)
             yield* platform.signal(child.pid, 0)
             return child.pid

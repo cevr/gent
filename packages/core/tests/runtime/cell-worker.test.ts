@@ -18,6 +18,7 @@ const makeHarness = Effect.gen(function* () {
     Effect.provideService(CellWorkerTransport, {
       requests: Stream.fromQueue(requests),
       send: (response) => Queue.offer(responses, response).pipe(Effect.asVoid),
+      endCellOutput: () => Effect.void,
     }),
     Effect.provideService(CellWorkerEnvironment, { workingDirectory: process.cwd() }),
     Effect.forkScoped,

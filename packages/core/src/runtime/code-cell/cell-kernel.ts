@@ -267,7 +267,7 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
           Effect.forkScoped,
         )
         // Output that arrived before this cell belongs to no one; drop it.
-        yield* child.takeOutput
+        yield* child.discardOutput
         yield* child
           .send(
             CellRequest.cases.Evaluate.make({
@@ -279,10 +279,12 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
           .pipe(Effect.mapError(processError))
         if (Option.isSome(catalog)) workerCatalogHash = Option.some(catalog.value.hash)
         const frame = yield* Deferred.await(result).pipe(Effect.raceFirst(watchdog))
-        // The worker writes output before its result frame, but the two pipes are read by
-        // separate fibers. One event-loop turn lets output already in the pipe land first.
-        yield* Effect.sleep("1 millis")
-        return { frame, output: yield* child.takeOutput }
+        // The worker marks the end of the cell on both output streams before the frame;
+        // the take resolves once both marks arrived, so the output is complete and ordered.
+        return {
+          frame,
+          output: yield* child.takeOutput(cellId).pipe(Effect.mapError(processError)),
+        }
       }),
     ).pipe(Effect.onError(() => discard().pipe(Effect.orDie)))
     // Prime-style result text: process output first, then the cell's own display.
