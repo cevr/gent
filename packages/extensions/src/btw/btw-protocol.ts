@@ -18,7 +18,26 @@ export const SideQuestionInput = Schema.Struct({
 })
 export type SideQuestionInput = typeof SideQuestionInput.Type
 
+/**
+ * The side question most recently started on this branch. `text` grows while
+ * the child streams; `done` flips once `answer` or `error` is final.
+ */
+export const SideQuestionRun = Schema.Struct({
+  question: Schema.String,
+  text: Schema.String,
+  done: Schema.Boolean,
+  answer: Schema.optional(Schema.String),
+  error: Schema.optional(Schema.String),
+})
+export type SideQuestionRun = typeof SideQuestionRun.Type
+
+export const SideQuestionProgress = Schema.Struct({
+  run: Schema.optional(SideQuestionRun),
+})
+export type SideQuestionProgress = typeof SideQuestionProgress.Type
+
+/** Asking returns at once; the answer arrives through `btw.progress` on state pulses. */
 export const SideQuestionOutput = Schema.Struct({
-  answer: Schema.String,
+  started: Schema.Boolean,
 })
 export type SideQuestionOutput = typeof SideQuestionOutput.Type

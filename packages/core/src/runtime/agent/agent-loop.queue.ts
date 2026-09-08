@@ -24,6 +24,7 @@ import {
   drainVisibleQueueItems,
   projectRuntimeState,
   queueSnapshotFromQueueState,
+  removeQueuedFollowUp,
   takeNextQueuedTurn,
   type AgentLoopState,
   type LoopQueueState,
@@ -73,6 +74,10 @@ export type AgentLoopQueue = {
    */
   readonly takeSteeringForStep: Effect.Effect<ReadonlyArray<QueuedTurnItem>, AgentLoopError>
   readonly drainQueue: Effect.Effect<QueueSnapshot, AgentLoopError>
+  /** True when a queued follow-up was removed; false when it was absent or already in flight. */
+  readonly removeFollowUp: (
+    messageId: QueuedTurnItem["message"]["id"],
+  ) => Effect.Effect<boolean, AgentLoopError>
   readonly saveCheckpoint: (next: LoopState) => Effect.Effect<void, AgentLoopError>
 }
 
@@ -364,6 +369,18 @@ export const makeAgentLoopQueue = (
       persist: true,
     })).pipe(Effect.withSpan("AgentLoop.drainQueue"))
 
+    const removeFollowUp = Effect.fn("AgentLoop.removeFollowUp")(
+      (messageId: QueuedTurnItem["message"]["id"]) =>
+        commitQueueTransaction("removed queued follow-up", (s) => {
+          const queue = removeQueuedFollowUp(s.queue, messageId)
+          return {
+            value: queue !== s.queue,
+            next: { ...s, queue },
+            persist: queue !== s.queue,
+          }
+        }),
+    )
+
     const saveCheckpoint = (next: LoopState): Effect.Effect<void, AgentLoopError> =>
       persistRuntimeState(next).pipe(
         Effect.catchEager((error) =>
@@ -392,6 +409,7 @@ export const makeAgentLoopQueue = (
       appendSteering,
       takeSteeringForStep,
       drainQueue,
+      removeFollowUp,
       saveCheckpoint,
     }
   })

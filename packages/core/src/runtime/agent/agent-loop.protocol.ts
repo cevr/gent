@@ -8,6 +8,7 @@ import {
   BranchId,
   ExtensionId,
   InteractionRequestId,
+  MessageId,
   SessionId,
   ToolCallId,
   ToolName,
@@ -15,6 +16,17 @@ import {
 import { SteerCommand } from "../../domain/steer.js"
 import { WorkspaceId } from "../../server/workspace-rpc.js"
 import { entityIdOf } from "./agent-loop.entity-id.js"
+
+/** Follow-up admission is idempotent by source: the message id is the durable key. */
+export const followUpMessageIdForSource = (input: {
+  readonly workspaceId: string
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly sourceId: string
+}) =>
+  MessageId.make(
+    `follow-up:${input.workspaceId}:${input.sessionId}:${input.branchId}:${input.sourceId}`,
+  )
 import {
   AgentLoopError,
   SessionRuntimeMetrics,
@@ -65,6 +77,14 @@ const DrainQueueFields = {
   sessionId: SessionId,
   branchId: BranchId,
   commandId: ActorCommandId,
+}
+
+const RemoveFollowUpFields = {
+  ...WorkspaceFields,
+  sessionId: SessionId,
+  branchId: BranchId,
+  commandId: ActorCommandId,
+  messageId: MessageId,
 }
 
 const GetQueueFields = {
@@ -175,6 +195,13 @@ export type DrainQueueInput = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
+}
+export type RemoveFollowUpInput = {
+  readonly workspaceId: WorkspaceId
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly commandId: ActorCommandId
+  readonly messageId: MessageId
 }
 export type GetQueueInput = {
   readonly workspaceId: WorkspaceId
@@ -318,6 +345,17 @@ export const AgentLoop = Actor.fromEntity(
       error: AgentLoopError,
       persisted: true,
       id: (p: DrainQueueInput) => ({
+        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
+        primaryKey: p.commandId,
+      }),
+    },
+    // Removing one queued follow-up mutates the queue too; same actor route.
+    RemoveFollowUp: {
+      payload: RemoveFollowUpFields,
+      success: Schema.Boolean,
+      error: AgentLoopError,
+      persisted: true,
+      id: (p: RemoveFollowUpInput) => ({
         entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
         primaryKey: p.commandId,
       }),

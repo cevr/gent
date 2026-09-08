@@ -39,6 +39,11 @@ export interface ExtensionSessionControlService {
     readonly metadata?: MessageMetadata
     readonly wake?: boolean
   }) => Effect.Effect<void, Error>
+  readonly dequeueFollowUp: (input: {
+    readonly sourceId: string
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+  }) => Effect.Effect<boolean, Error>
 }
 
 export interface MakeExtensionHostContextDeps {
@@ -260,6 +265,7 @@ export const HostSessionControlRef = Context.Reference<ExtensionSessionControlSe
   {
     defaultValue: () => ({
       queueFollowUp: unavailable("SessionControl"),
+      dequeueFollowUp: unavailable("SessionControl"),
     }),
   },
 )
@@ -498,6 +504,7 @@ const makeExtensionHostContext = (
           parentBranchId: runInfo.branchId,
           cwd: params.cwd ?? runInfo.sessionCwd ?? deps.platform.cwd,
           runSpec: params.runSpec,
+          observe: params.observe,
         }),
     },
 
@@ -545,6 +552,15 @@ const makeExtensionHostContext = (
             wake: params.wake,
           })
           .pipe(Effect.mapError(toHostError("session.queueFollowUp"))),
+
+      dequeueFollowUp: (params) =>
+        deps.sessionControl
+          .dequeueFollowUp({
+            sourceId: params.sourceId,
+            sessionId: runInfo.sessionId,
+            branchId: params.branchId ?? runInfo.branchId,
+          })
+          .pipe(Effect.mapError(toHostError("session.dequeueFollowUp"))),
 
       listBranches: () =>
         deps.branchStorage

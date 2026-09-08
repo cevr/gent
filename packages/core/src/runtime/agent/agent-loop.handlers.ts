@@ -133,7 +133,9 @@ import {
   type InvokeToolInput,
   type MessageType,
   type RecordToolResultInput,
+  type RemoveFollowUpInput,
   type RequestExtensionInput,
+  followUpMessageIdForSource,
   type QueueFollowUpInput,
   type RespondInteractionInput,
   type SteerCommandType,
@@ -358,6 +360,8 @@ export const buildAgentLoopActorHandlers = (config: {
     // Taking it as a parameter eliminates the implicit two-step contract
     // that previously bypassed `ensureStarted` for non-reentrant callers.
     type FollowUpInput = {
+      /** Keys the message id so repeated admissions and later removal target one item. */
+      readonly sourceId?: string
       readonly message?: MessageType
       readonly content?: string
       readonly metadata?: MessageMetadata
@@ -370,10 +374,20 @@ export const buildAgentLoopActorHandlers = (config: {
     const buildFollowUpItem = Effect.fn("AgentLoopActor.buildFollowUpItem")(function* (
       input: FollowUpInput,
     ) {
+      const platformRandomId = yield* platform.randomId
       const message =
         input.message ??
         Message.cases.regular.make({
-          id: MessageId.make(yield* platform.randomId),
+          id: Option.match(Option.fromUndefinedOr(input.sourceId), {
+            onNone: () => MessageId.make(platformRandomId),
+            onSome: (sourceId) =>
+              followUpMessageIdForSource({
+                workspaceId: brandedWorkspaceId,
+                sessionId,
+                branchId,
+                sourceId,
+              }),
+          }),
           sessionId,
           branchId,
           role: "user",
@@ -494,6 +508,14 @@ export const buildAgentLoopActorHandlers = (config: {
       ).pipe(
         Effect.provideService(AgentLoopFollowUp, {
           enqueue: (input) => reentrantHandle.pipe(Effect.flatMap((h) => admitFollowUp(h, input))),
+          dequeue: (input) =>
+            reentrantHandle.pipe(
+              Effect.flatMap((h) =>
+                h.removeFollowUp(
+                  followUpMessageIdForSource({ workspaceId: brandedWorkspaceId, ...input }),
+                ),
+              ),
+            ),
         }),
       )
       yield* Ref.set(handleRef, Option.some(handle))
@@ -877,6 +899,15 @@ export const buildAgentLoopActorHandlers = (config: {
             yield* markWrite
             const handle = yield* ensureStarted
             return yield* handle.drainQueue
+          }).pipe(provideActorWorkspace),
+      ),
+      RemoveFollowUp: Effect.fn("AgentLoop.RemoveFollowUp")(
+        ({ operation }: HandlerRequest<RemoveFollowUpInput>) =>
+          Effect.gen(function* () {
+            yield* ensureTarget(operation)
+            yield* markWrite
+            const handle = yield* ensureStarted
+            return yield* handle.removeFollowUp(operation.messageId)
           }).pipe(provideActorWorkspace),
       ),
       GetQueue: Effect.fn("AgentLoop.GetQueue")(({ operation }: HandlerRequest<GetQueueInput>) =>

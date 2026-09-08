@@ -8,7 +8,7 @@ import type {
   RunSpec,
 } from "./agent"
 import type { ExtensionHostPlatform } from "./extension"
-import type { EventStoreError } from "./event"
+import type { AgentEvent, EventStoreError } from "./event"
 import { BranchId, SessionId, type ExtensionId } from "./ids"
 import type {
   ApprovalDecision,
@@ -81,6 +81,8 @@ export declare namespace ExtensionHostContext {
       prompt: string
       cwd?: string
       runSpec?: RunSpec
+      /** Sees every child event as it happens, private runs included. Ephemeral runs only. */
+      observe?: (event: AgentEvent) => Effect.Effect<void>
     }) => Effect.Effect<AgentRunResult, AgentRunError>
   }
 
@@ -129,6 +131,12 @@ export declare namespace ExtensionHostContext {
       /** Start a turn even when the branch has no prior history. */
       readonly wake?: boolean
     }) => Effect.Effect<void, ExtensionHostError>
+
+    /** Removes a queued follow-up by source. False when absent or already running. */
+    readonly dequeueFollowUp: (params: {
+      readonly sourceId: string
+      readonly branchId?: BranchId
+    }) => Effect.Effect<boolean, ExtensionHostError>
 
     readonly listBranches: () => Effect.Effect<ReadonlyArray<Branch>, ExtensionHostError>
   }

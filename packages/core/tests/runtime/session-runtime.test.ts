@@ -372,6 +372,14 @@ describe("SessionRuntime", () => {
               content: "direct follow-up",
             }),
           ])
+          // The source id also names the item for removal; a second removal finds nothing.
+          expect(
+            yield* sessionRuntime.dequeueFollowUp({ ...target, sourceId: "direct-follow-up" }),
+          ).toBe(true)
+          expect((yield* sessionRuntime.getQueuedMessages(target)).followUp).toEqual([])
+          expect(
+            yield* sessionRuntime.dequeueFollowUp({ ...target, sourceId: "direct-follow-up" }),
+          ).toBe(false)
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )

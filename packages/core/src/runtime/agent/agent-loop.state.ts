@@ -176,6 +176,16 @@ export const drainVisibleQueueItems = (queue: LoopQueueState): LoopQueueState =>
   inFlight: queue.inFlight,
 })
 
+/** Drops one queued follow-up. An in-flight item is already a turn and stays. */
+export const removeQueuedFollowUp = (
+  queue: LoopQueueState,
+  messageId: QueuedTurnItem["message"]["id"],
+): LoopQueueState => {
+  const followUp = queue.followUp.filter((item) => item.message.id !== messageId)
+  if (followUp.length === queue.followUp.length) return queue
+  return { ...queue, followUp }
+}
+
 export const appendSteeringItem = (queue: LoopQueueState, item: QueuedTurnItem): LoopQueueState => {
   const inFlight = Option.fromUndefinedOr(queue.inFlight)
   if (

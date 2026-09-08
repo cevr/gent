@@ -31,6 +31,7 @@ const defaultSession = (): ExtensionHostContext.SessionFacet => ({
   renameCurrent: () => die("session.renameCurrent"),
   search: () => die("session.search"),
   queueFollowUp: () => die("session.queueFollowUp"),
+  dequeueFollowUp: () => die("session.dequeueFollowUp"),
   listBranches: () => die("session.listBranches"),
 })
 

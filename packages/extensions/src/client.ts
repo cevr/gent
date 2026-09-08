@@ -28,6 +28,9 @@ export {
   SideTurn,
   SideQuestionInput,
   SideQuestionOutput,
+  SideQuestionProgress,
+  SideQuestionRun,
+  type SideQuestionRun as SideQuestionRunType,
   type SideTurn as SideTurnType,
 } from "./btw/btw-protocol.js"
 export { BtwRpc } from "./btw/index.js"

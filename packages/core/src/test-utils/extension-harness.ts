@@ -126,6 +126,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     renameCurrent: dieStub("session.renameCurrent"),
     search: dieStub("session.search"),
     queueFollowUp: dieStub("session.queueFollowUp"),
+    dequeueFollowUp: dieStub("session.dequeueFollowUp"),
     listBranches: dieStub("session.listBranches"),
   }
   const Agent: ExtensionContextService["Agent"] = {
@@ -143,6 +144,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     renameCurrent: dieStub("session.renameCurrent"),
     search: dieStub("session.search"),
     queueFollowUp: dieStub("session.queueFollowUp"),
+    dequeueFollowUp: dieStub("session.dequeueFollowUp"),
     listBranches: dieEffect("session.listBranches"),
   }
   const interaction = {
@@ -230,6 +232,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
       filesFs("readDirectory", (fs) => fs.readDirectory(path, options)),
     makeDirectory: (path, options) =>
       filesFs("makeDirectory", (fs) => fs.makeDirectory(path, options)),
+    rename: (from, to) => filesFs("rename", (fs) => fs.rename(from, to)),
     resolve: (...paths) => nodePath.resolve(...paths),
     join: (...paths) => nodePath.join(...paths),
     dirname: (path) => nodePath.dirname(path),

@@ -38,8 +38,10 @@ export const writeGoal = Effect.fn("GoalStore.write")(function* (goal: Option.Op
   const ctx = yield* ExtensionContext
   const { directory, file } = yield* goalPath
   yield* ctx.Files.makeDirectory(directory, { recursive: true })
+  // A sibling file plus rename keeps a reader from ever seeing a half-written snapshot.
+  const staging = `${file}.${yield* ctx.Process.randomId}.tmp`
   yield* ctx.Files.write(
-    file,
+    staging,
     encode(
       Option.match(goal, {
         onNone: (): GoalSnapshot => ({}),
@@ -47,6 +49,7 @@ export const writeGoal = Effect.fn("GoalStore.write")(function* (goal: Option.Op
       }),
     ),
   )
+  yield* ctx.Files.rename(staging, file)
 })
 
 /** Serializes read-modify-write cycles on one branch's goal across concurrent hooks. */

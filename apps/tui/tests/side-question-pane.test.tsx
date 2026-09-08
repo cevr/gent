@@ -18,15 +18,13 @@ const makeCastQueue = () => {
   }
 }
 
+const acceptAsk = () => Effect.void
+
 describe("side question pane", () => {
-  it.live("shows the pending question, then the answer, and keeps earlier turns", () =>
+  it.live("shows the pending question, streamed text, then the answer, and keeps turns", () =>
     Effect.gen(function* () {
       const queue = makeCastQueue()
-      const controller = makeSideQuestionPane(
-        ({ question, previous }) =>
-          Effect.succeed({ answer: `answer to ${question} after ${previous.length}` }),
-        queue.cast,
-      )
+      const controller = makeSideQuestionPane(acceptAsk, queue.cast)
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => (
           <SideQuestionPane open={true} onClose={() => {}} controller={controller} />
@@ -34,19 +32,24 @@ describe("side question pane", () => {
       )
       expect(renderFrame(setup)).toContain("side question")
       controller.ask("why?")
-      expect(Option.isSome(controller.state().pending)).toBe(true)
       yield* queue.drain
+      expect(Option.isSome(controller.state().pending)).toBe(true)
       yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("answer to why? after 0"),
-          "first answer",
-        ),
+        waitForRenderedFrame(setup, (frame) => frame.includes("thinking"), "thinking"),
+      )
+      controller.sync({ question: "why?", text: "because", done: false })
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("because"), "streamed text"),
+      )
+      controller.sync({ question: "why?", text: "because so", done: true, answer: "because so" })
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("because so"), "first answer"),
       )
       controller.ask("and?")
       yield* queue.drain
+      controller.sync({ question: "and?", text: "", done: true, answer: "then that" })
       yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("after 1"), "second answer"),
+        waitForRenderedFrame(setup, (frame) => frame.includes("then that"), "second answer"),
       )
       const frame = renderFrame(setup)
       expect(frame).toContain("why?")
@@ -55,25 +58,27 @@ describe("side question pane", () => {
     }),
   )
 
-  it.live("a reply that lands after escape reset the pane is discarded", () =>
+  it.live("a run that lands after escape reset the pane is discarded", () =>
     Effect.gen(function* () {
       const queue = makeCastQueue()
-      const controller = makeSideQuestionPane(
-        ({ question }) => Effect.succeed({ answer: `late answer to ${question}` }),
-        queue.cast,
-      )
+      const controller = makeSideQuestionPane(acceptAsk, queue.cast)
       controller.ask("stale?")
       controller.reset()
       yield* queue.drain
+      controller.sync({ question: "stale?", text: "", done: true, answer: "late" })
       expect(controller.state().turns.length).toBe(0)
       expect(Option.isNone(controller.state().pending)).toBe(true)
       controller.ask("fresh?")
       yield* queue.drain
-      expect(controller.state().turns.map((turn) => turn.answer)).toEqual(["late answer to fresh?"])
+      // A run for another question belongs to an earlier pane and is ignored.
+      controller.sync({ question: "stale?", text: "", done: true, answer: "late" })
+      expect(controller.state().turns.length).toBe(0)
+      controller.sync({ question: "fresh?", text: "", done: true, answer: "now" })
+      expect(controller.state().turns.map((turn) => turn.answer)).toEqual(["now"])
     }),
   )
 
-  it.live("a failed ask leaves the error visible and the input ready", () =>
+  it.live("a refused ask leaves the error visible and the input ready", () =>
     Effect.gen(function* () {
       const queue = makeCastQueue()
       const controller = makeSideQuestionPane(
@@ -92,6 +97,18 @@ describe("side question pane", () => {
       )
       expect(Option.isNone(controller.state().pending)).toBe(true)
       expect(controller.state().turns.length).toBe(0)
+    }),
+  )
+
+  it.live("a run that ends in an error shows the error", () =>
+    Effect.gen(function* () {
+      const queue = makeCastQueue()
+      const controller = makeSideQuestionPane(acceptAsk, queue.cast)
+      controller.ask("why?")
+      yield* queue.drain
+      controller.sync({ question: "why?", text: "", done: true, error: "child failed" })
+      expect(controller.state().error).toEqual(Option.some("child failed"))
+      expect(Option.isNone(controller.state().pending)).toBe(true)
     }),
   )
 })

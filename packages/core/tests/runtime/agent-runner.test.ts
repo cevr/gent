@@ -267,6 +267,7 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
             )
           }),
         queueFollowUp: () => Effect.void,
+        dequeueFollowUp: () => Effect.succeed(false),
         requestExtension: () => Effect.void,
         drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
         getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
@@ -301,6 +302,8 @@ describe("helper run spec propagation", () => {
             })
             expect(texts.some((text) => text.includes("The codeword is pelican"))).toBe(true)
             expect(texts.some((text) => text.includes("Noted."))).toBe(true)
+            // Hidden rows are outside the parent's own model view, so the child skips them too.
+            expect(texts.some((text) => text.includes("hidden bookkeeping"))).toBe(false)
             expect(texts[texts.length - 1]).toContain("What is the codeword?")
           },
         },
@@ -338,6 +341,18 @@ describe("helper run spec propagation", () => {
             createdAt: dateFromMillis(1_767_225_601_000),
           }),
         )
+        yield* messages.createMessage(
+          Message.cases.regular.make({
+            id: MessageId.make("parent-history:hidden:1"),
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: "hidden bookkeeping" })],
+            createdAt: dateFromMillis(1_767_225_602_000),
+            metadata: { hidden: true },
+          }),
+        )
+        const observed = yield* Ref.make<ReadonlyArray<string>>([])
         const result = yield* runner.run({
           agent: builtinAgent,
           prompt: "What is the codeword?",
@@ -345,11 +360,17 @@ describe("helper run spec propagation", () => {
           parentBranchId: branchId,
           cwd: process.cwd(),
           runSpec: makeRunSpec({ persistence: "ephemeral", history: "inherit" }),
+          observe: (event) => {
+            if (event._tag !== "StreamChunk") return Effect.void
+            return Ref.update(observed, (chunks) => [...chunks, event.chunk])
+          },
         })
         expect(result._tag).toBe("success")
         if (result._tag === "success") expect(result.text).toContain("pelican")
-        // The parent branch keeps its two messages; the child never writes there.
-        expect((yield* messages.listMessages(branchId)).length).toBe(2)
+        // The observer saw the child's stream as it happened.
+        expect((yield* Ref.get(observed)).join("")).toContain("pelican")
+        // The parent branch keeps its three messages; the child never writes there.
+        expect((yield* messages.listMessages(branchId)).length).toBe(3)
         yield* controls.assertDone
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))

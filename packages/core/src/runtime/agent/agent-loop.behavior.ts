@@ -134,6 +134,7 @@ export type AgentLoopBehavior = {
   takeNextQueuedTurn: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   appendSteering: (item: QueuedTurnItem) => Effect.Effect<LoopState, AgentLoopError>
   drainQueue: Effect.Effect<QueueSnapshot, AgentLoopError>
+  removeFollowUp: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
   resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile>
   persistState: (state: LoopState) => Effect.Effect<void, AgentLoopError>
   refreshRuntimeState: Effect.Effect<void, AgentLoopError>
@@ -169,6 +170,7 @@ export const causeToAgentLoopError = (cause: Cause.Cause<unknown>) => {
  * via mutual recursion with `Message` as the authoritative payload.
  */
 export type EnqueueFollowUp = (input: {
+  sourceId: string
   sessionId: SessionId
   branchId: BranchId
   content: string
@@ -176,8 +178,16 @@ export type EnqueueFollowUp = (input: {
   wake?: boolean
 }) => Effect.Effect<void, AgentLoopError | StorageError>
 
+/** Removes a queued follow-up by its source; false when absent or already running. */
+export type DequeueFollowUp = (input: {
+  sessionId: SessionId
+  branchId: BranchId
+  sourceId: string
+}) => Effect.Effect<boolean, AgentLoopError>
+
 export interface AgentLoopFollowUpService {
   readonly enqueue: EnqueueFollowUp
+  readonly dequeue: DequeueFollowUp
 }
 
 export class AgentLoopFollowUp extends Context.Service<
@@ -258,6 +268,8 @@ export const makeAgentLoopBehavior = (
         sessionControl: {
           queueFollowUp: (input): Effect.Effect<void, AgentLoopError | StorageError> =>
             followUp.enqueue(input),
+          dequeueFollowUp: (input): Effect.Effect<boolean, AgentLoopError> =>
+            followUp.dequeue(input),
         },
       },
     })
@@ -351,6 +363,7 @@ export const makeAgentLoopBehavior = (
       appendSteering,
       takeSteeringForStep,
       drainQueue,
+      removeFollowUp,
       saveCheckpoint,
     } = queue
 
@@ -446,6 +459,7 @@ export const makeAgentLoopBehavior = (
       takeNextQueuedTurn: takeNextQueuedTurnCommitted,
       appendSteering,
       drainQueue,
+      removeFollowUp,
       resolveTurnProfile,
       persistState: persistRuntimeState,
       refreshRuntimeState,

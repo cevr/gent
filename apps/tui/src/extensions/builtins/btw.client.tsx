@@ -2,15 +2,21 @@
 /**
  * `/btw` side-question pane.
  *
- * `/btw <question>` (alias `/side`) opens a full-screen pane, asks the
- * server's `BtwRpc.Ask` with the exchange so far, and streams nothing to the
- * branch. Follow-ups type into the pane's input; `esc` closes and forgets the
- * exchange. State lives in module signals owned by this client extension.
+ * `/btw <question>` (alias `/side`) opens a pane above the composer and starts
+ * the server's `BtwRpc.Ask` with the exchange so far. The ask returns at once;
+ * streamed text and the final answer arrive through `BtwRpc.Progress` on each
+ * state pulse from the btw extension. Follow-ups type into the pane's input;
+ * `esc` closes and forgets the exchange.
  */
 import { Effect, Option } from "effect"
 import { createSignal, For, Show } from "solid-js"
 import { ref } from "@gent/core/extensions/api"
-import { BTW_EXTENSION_ID, BtwRpc, type SideTurnType } from "@gent/extensions/client.js"
+import {
+  BTW_EXTENSION_ID,
+  BtwRpc,
+  type SideQuestionRunType,
+  type SideTurnType,
+} from "@gent/extensions/client.js"
 import {
   clientContributions,
   clientCommandContribution,
@@ -19,7 +25,7 @@ import {
   type OverlayProps,
 } from "../client-facets.js"
 import { ClientTransport } from "../client-transport"
-import { ClientShell } from "../client-services"
+import { ClientLifecycle, ClientShell } from "../client-services"
 import { ChromePanel } from "../../components/chrome-panel"
 import { useTheme } from "../../theme/index"
 import { useTerminalDimensions } from "../../terminal-dimensions"
@@ -30,18 +36,23 @@ export const BTW_OVERLAY_ID = "btw"
 export interface SideQuestionPaneState {
   readonly turns: ReadonlyArray<SideTurnType>
   readonly pending: Option.Option<string>
+  /** Answer text streamed so far for the pending question. */
+  readonly partial: string
   readonly error: Option.Option<string>
 }
 
 const emptyPane: SideQuestionPaneState = {
   turns: [],
   pending: Option.none(),
+  partial: "",
   error: Option.none(),
 }
 
 export interface SideQuestionPaneController {
   readonly state: () => SideQuestionPaneState
   readonly ask: (question: string) => void
+  /** Applies the server's view of the run: streamed text, the answer, or an error. */
+  readonly sync: (run: SideQuestionRunType) => void
   readonly reset: () => void
 }
 
@@ -50,11 +61,11 @@ export const makeSideQuestionPane = (
   ask: (input: {
     question: string
     previous: ReadonlyArray<SideTurnType>
-  }) => Effect.Effect<{ readonly answer: string }, { readonly message: string }, never>,
+  }) => Effect.Effect<void, { readonly message: string }, never>,
   cast: <A, E>(effect: Effect.Effect<A, E, never>) => void,
 ): SideQuestionPaneController => {
   const [state, setState] = createSignal<SideQuestionPaneState>(emptyPane)
-  // Each reset starts a new generation; a reply from an earlier one is discarded.
+  // Each reset starts a new generation; a failure from an earlier one is discarded.
   let generation = 0
   return {
     state,
@@ -62,27 +73,43 @@ export const makeSideQuestionPane = (
       generation += 1
       setState(emptyPane)
     },
+    // A run for another question belongs to an earlier pane and is ignored.
+    sync: (run) => {
+      setState((current) => {
+        if (!Option.contains(current.pending, run.question)) return current
+        if (!run.done) return { ...current, partial: run.text }
+        const error = Option.fromUndefinedOr(run.error)
+        if (Option.isSome(error)) {
+          return { ...current, pending: Option.none(), partial: "", error }
+        }
+        const answer = Option.getOrElse(Option.fromUndefinedOr(run.answer), () => run.text)
+        return {
+          turns: [...current.turns, { question: run.question, answer }],
+          pending: Option.none(),
+          partial: "",
+          error: Option.none(),
+        }
+      })
+    },
     ask: (raw) => {
       const question = raw.trim()
       const asked = generation
       if (question.length === 0 || Option.isSome(state().pending)) return
-      setState((current) => ({ ...current, pending: Option.some(question), error: Option.none() }))
+      setState((current) => ({
+        ...current,
+        pending: Option.some(question),
+        partial: "",
+        error: Option.none(),
+      }))
       cast(
         ask({ question, previous: state().turns }).pipe(
-          Effect.map(({ answer }) => {
-            if (asked !== generation) return
-            setState((current) => ({
-              turns: [...current.turns, { question, answer }],
-              pending: Option.none(),
-              error: Option.none(),
-            }))
-          }),
           Effect.catch((error) =>
             Effect.sync(() => {
               if (asked !== generation) return
               setState((current) => ({
                 ...current,
                 pending: Option.none(),
+                partial: "",
                 error: Option.some(error.message),
               }))
             }),
@@ -147,7 +174,12 @@ export function SideQuestionPane(props: OverlayProps & { controller: SideQuestio
                 <text>
                   <span style={{ fg: theme.primary, bold: true }}>{question()}</span>
                 </text>
-                <text style={{ fg: theme.textMuted }}>thinking…</text>
+                <Show
+                  when={state().partial.length > 0}
+                  fallback={<text style={{ fg: theme.textMuted }}>thinking…</text>}
+                >
+                  <text style={{ fg: theme.text }}>{state().partial}</text>
+                </Show>
               </box>
             )}
           </Show>
@@ -180,12 +212,29 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
   setup: Effect.gen(function* () {
     const transport = yield* ClientTransport
     const shell = yield* ClientShell
+    const lifecycle = yield* ClientLifecycle
     const controller = makeSideQuestionPane(
       (input) =>
-        transport
-          .request(ref(BtwRpc.Ask), input)
-          .pipe(Effect.mapError((error) => ({ message: String(error) }))),
+        transport.request(ref(BtwRpc.Ask), input).pipe(
+          Effect.asVoid,
+          Effect.mapError((error) => ({ message: String(error) })),
+        ),
       shell.cast,
+    )
+    // Each pulse from the btw extension means the run changed; read it and apply it.
+    lifecycle.addCleanup(
+      transport.onExtensionStateChanged((pulse) => {
+        if (pulse.extensionId !== BTW_EXTENSION_ID) return
+        if (Option.isNone(controller.state().pending)) return
+        shell.cast(
+          transport.request(ref(BtwRpc.Progress), {}).pipe(
+            Effect.map((progress) => {
+              Option.map(Option.fromUndefinedOr(progress.run), controller.sync)
+            }),
+            Effect.ignore,
+          ),
+        )
+      }),
     )
     return clientContributions(
       clientCommandContribution({

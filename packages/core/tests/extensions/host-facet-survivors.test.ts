@@ -106,6 +106,7 @@ const baseDeps = (overrides: {
   },
   sessionControl: {
     queueFollowUp: die("queueFollowUp"),
+    dequeueFollowUp: die("dequeueFollowUp"),
   },
 })
 

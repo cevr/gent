@@ -11,7 +11,7 @@ import {
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent.js"
 import { DEFAULT_AGENT_NAME, DEFAULT_MODEL_ID } from "./agent.js"
 import { estimateContextPercent as pureEstimateContextPercent } from "../runtime/context-estimation.js"
-import type { EventStoreError } from "./event.js"
+import type { AgentEvent, EventStoreError } from "./event.js"
 import { hasMessage } from "./guards.js"
 import type {
   ExtensionHostRunProcessOptions,
@@ -106,6 +106,11 @@ export interface ExtensionSessionService {
     readonly branchId?: BranchId
     readonly wake?: boolean
   }) => Effect.Effect<void, ExtensionServiceError>
+  /** Removes a queued follow-up by source. False when absent or already running. */
+  readonly dequeueFollowUp: (params: {
+    readonly sourceId: string
+    readonly branchId?: BranchId
+  }) => Effect.Effect<boolean, ExtensionServiceError>
   readonly listBranches: Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
 }
 
@@ -126,6 +131,8 @@ export interface ExtensionAgentService extends Pick<
     readonly prompt: string
     readonly cwd?: string
     readonly runSpec?: RunSpec
+    /** Sees every child event as it happens, private runs included. Ephemeral runs only. */
+    readonly observe?: (event: AgentEvent) => Effect.Effect<void>
   }) => Effect.Effect<AgentRunResult, AgentRunError | ExtensionServiceError>
 }
 
@@ -215,6 +222,8 @@ export interface ExtensionFilesService {
     path: string,
     options?: { readonly recursive?: boolean; readonly mode?: number },
   ) => Effect.Effect<void, ExtensionServiceError>
+  /** Atomic replace on one file system: write a sibling, then rename over the target. */
+  readonly rename: (from: string, to: string) => Effect.Effect<void, ExtensionServiceError>
   readonly resolve: (...paths: ReadonlyArray<string>) => string
   readonly join: (...paths: ReadonlyArray<string>) => string
   readonly dirname: (path: string) => string
@@ -288,6 +297,8 @@ export const extensionServicesFromHostContext = (
         mapError("ExtensionSession", "search", ctx.session.search(query, options)),
       queueFollowUp: (params) =>
         mapError("ExtensionSession", "queueFollowUp", ctx.session.queueFollowUp(params)),
+      dequeueFollowUp: (params) =>
+        mapError("ExtensionSession", "dequeueFollowUp", ctx.session.dequeueFollowUp(params)),
       listBranches: mapError("ExtensionSession", "listBranches", ctx.session.listBranches()),
     }
     const Agent: ExtensionAgentService = {
@@ -369,6 +380,7 @@ export const extensionServicesFromHostContext = (
         mapError("ExtensionFiles", "readDirectory", fs.readDirectory(path, options)),
       makeDirectory: (path, options) =>
         mapError("ExtensionFiles", "makeDirectory", fs.makeDirectory(path, options)),
+      rename: (from, to) => mapError("ExtensionFiles", "rename", fs.rename(from, to)),
       resolve: (...paths) => pathSvc.resolve(...paths),
       join: (...paths) => pathSvc.join(...paths),
       dirname: (path) => pathSvc.dirname(path),

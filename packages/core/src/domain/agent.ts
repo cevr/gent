@@ -1,7 +1,7 @@
 import { Context, Option, Predicate, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
 import { branded, BranchId, RequestId, SessionId, ToolCallId } from "./ids.js"
-import type { TurnCompleted } from "./event.js"
+import type { AgentEvent, TurnCompleted } from "./event.js"
 import { ModelId } from "./model"
 
 // Agent definitions
@@ -307,6 +307,8 @@ export interface AgentRunner {
     cwd: string
     /** Per-run dispatch config. `persistence`, `overrides`, `tags`, `parentToolCallId`. */
     runSpec?: RunSpec
+    /** Sees every child event as it happens, private runs included. Ephemeral runs only. */
+    observe?: (event: AgentEvent) => EffectNs.Effect<void>
   }) => EffectNs.Effect<AgentRunResult, AgentRunError>
 }
 

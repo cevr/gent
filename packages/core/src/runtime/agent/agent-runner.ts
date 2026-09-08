@@ -201,17 +201,20 @@ export const InProcessRunner = (
           if (persistence === "ephemeral") {
             const sessionId = SessionId.make(yield* platform.randomId)
             const branchId = BranchId.make(yield* platform.randomId)
-            // An inheriting child starts from the caller's branch as it stands now.
+            // An inheriting child starts from what the caller's model sees now:
+            // hidden rows stay out, as they do in the parent's own turn.
             let seedMessages: ReadonlyArray<Message> = []
             if (normalizedRunSpec?.history === "inherit") {
-              seedMessages = yield* parentMessageStorage
-                .listMessages(params.parentBranchId)
-                .pipe(
-                  Effect.mapError((cause) => new AgentRunError({ message: cause.message, cause })),
-                )
+              seedMessages = yield* parentMessageStorage.listMessages(params.parentBranchId).pipe(
+                Effect.map((messages) =>
+                  messages.filter((message) => message.metadata?.hidden !== true),
+                ),
+                Effect.mapError((cause) => new AgentRunError({ message: cause.message, cause })),
+              )
             }
             return yield* runEphemeralAgent({
               seedMessages,
+              observe: params.observe,
               runnerConfig,
               durableRuntime,
               metadataRuntime,

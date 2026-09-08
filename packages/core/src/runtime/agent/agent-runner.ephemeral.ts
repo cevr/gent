@@ -115,6 +115,8 @@ export const runEphemeralAgent = (params: {
   runSpec?: RunSpec
   /** Parent branch history copied into the child before its prompt; empty for a fresh start. */
   seedMessages: ReadonlyArray<Message>
+  /** Sees every child event, private or not. Failures here never fail the run. */
+  observe?: (event: AgentEvent) => Effect.Effect<void>
   persistence: AgentPersistence
   parentBaseEventStore: EventStoreService
   notifyMirroredEventObservers: (event: AgentEvent) => Effect.Effect<void>
@@ -225,8 +227,15 @@ export const runEphemeralAgent = (params: {
         }),
       )
 
+    const observe = Option.fromUndefinedOr(params.observe)
     const mirrorFiber = yield* Effect.forkChild(
       localEventStore.subscribe({ sessionId }).pipe(
+        Stream.tap((envelope) =>
+          Option.match(observe, {
+            onNone: () => Effect.void,
+            onSome: (notify) => notify(envelope.event).pipe(Effect.catchEager(() => Effect.void)),
+          }),
+        ),
         Stream.filter((envelope) => !isPrivate && mirroredChildEventTags.has(envelope.event._tag)),
         Stream.runForEach(mirrorEnvelope),
         Effect.catchEager(() => Effect.void),

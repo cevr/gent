@@ -75,6 +75,13 @@ const queueGoalMessage = (goal: GoalState, content: string) =>
     })
   })
 
+/** Pulls the continuation queued for this goal state, if the loop has not started it yet. */
+const dequeueGoalMessage = (goal: GoalState) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    return yield* ctx.Session.dequeueFollowUp({ sourceId: goalContinuationSource(goal) })
+  })
+
 interface CreateGoalInput {
   readonly objective: string
   readonly tokenBudget: Option.Option<number>
@@ -122,6 +129,7 @@ interface StatusChange {
   readonly tokenBudget: Option.Option<number>
 }
 
+/** Pause, complete, and clear also pull the pending continuation before it starts a turn. */
 const setStatus = (change: StatusChange) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
@@ -144,9 +152,14 @@ const setStatus = (change: StatusChange) =>
             message: "The budget is spent; resume with /goal resume --budget <tokens>",
           })
         }
+        if (change.status !== "active") yield* dequeueGoalMessage(current.value)
+        // A resume is a continuation: the counter keeps its queued message id unique.
+        let continuationsUsed = current.value.continuationsUsed
+        if (change.status === "active") continuationsUsed += 1
         const updated: GoalState = {
           ...current.value,
           status: change.status,
+          continuationsUsed,
           ...Option.match(tokenBudget, {
             onNone: () => ({}),
             onSome: (budget) => ({ tokenBudget: current.value.tokensUsed + budget }),
@@ -170,7 +183,10 @@ const completeGoal = setStatus({
 const clearGoal = Effect.gen(function* () {
   const ctx = yield* ExtensionContext
   const goal = yield* modifyGoal((current) =>
-    Effect.succeed({ next: Option.none<GoalState>(), result: current }),
+    Effect.gen(function* () {
+      if (Option.isSome(current)) yield* dequeueGoalMessage(current.value)
+      return { next: Option.none<GoalState>(), result: current }
+    }),
   )
   yield* ctx.State.changed({})
   return goal
@@ -346,7 +362,7 @@ const toolResult = (goal: Option.Option<GoalState>, report?: string) =>
     }),
   })
 
-const GoalTool = tool({
+export const GoalTool = tool({
   id: "goal",
   description:
     "Read, create, or complete the persistent goal of this branch. The harness keeps prompting an active goal after every turn until complete is called.",

@@ -40,6 +40,7 @@ import type { SessionStorage } from "../storage/session-storage.js"
 import type { SessionOperationStorage } from "../storage/session-operation-storage.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
 import { entityIdOf, parseEntityId } from "./agent/agent-loop.entity-id.js"
+import { followUpMessageIdForSource } from "./agent/agent-loop.protocol.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
 import type { ExtensionRegistry } from "./extensions/registry.js"
 import type { DriverRegistry } from "./extensions/driver-registry.js"
@@ -158,6 +159,13 @@ export const QueueFollowUpPayload = Schema.Struct({
 })
 export type QueueFollowUpPayload = typeof QueueFollowUpPayload.Type
 
+export const DequeueFollowUpPayload = Schema.Struct({
+  sourceId: FollowUpSourceIdSchema,
+  sessionId: SessionId,
+  branchId: BranchId,
+})
+export type DequeueFollowUpPayload = typeof DequeueFollowUpPayload.Type
+
 export const ExtensionRequestPayload = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
@@ -220,6 +228,10 @@ export interface SessionRuntimeService {
   ) => Effect.Effect<void, SessionRuntimeError>
   readonly runPrompt: (input: RunPromptPayload) => Effect.Effect<void, AgentRunError>
   readonly queueFollowUp: (input: QueueFollowUpPayload) => Effect.Effect<void, SessionRuntimeError>
+  /** True when the follow-up left the queue; false when it was absent or already running. */
+  readonly dequeueFollowUp: (
+    input: DequeueFollowUpPayload,
+  ) => Effect.Effect<boolean, SessionRuntimeError>
   readonly requestExtension: (
     input: ExtensionRequestPayload,
   ) => Effect.Effect<unknown, SessionRuntimeError>
@@ -256,16 +268,7 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
 }
 
 const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.make(commandId)
-/** Follow-up admission is idempotent by source: the message id is the durable key. */
-export const followUpMessageIdForSource = (input: {
-  readonly workspaceId: string
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly sourceId: string
-}) =>
-  MessageId.make(
-    `follow-up:${input.workspaceId}:${input.sessionId}:${input.branchId}:${input.sourceId}`,
-  )
+export { followUpMessageIdForSource }
 const commandIdForRequestId = (requestId: string) => ActorCommandId.make(`message:${requestId}`)
 
 const wrapStreamSessionRuntimeError = (
@@ -569,6 +572,26 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       requireSessionBranch(input).pipe(
         Effect.flatMap(() => queueFollowUpThroughActor(input)),
         Effect.catchCause((cause) => Effect.fail(wrapError("queueFollowUp failed", cause))),
+      ),
+
+    dequeueFollowUp: (input) =>
+      requireSessionBranch(input).pipe(
+        Effect.flatMap(() =>
+          Effect.gen(function* () {
+            const workspaceId = yield* CurrentWorkspaceId
+            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
+            return yield* ref.execute(
+              AgentLoopActor.RemoveFollowUp.make({
+                workspaceId,
+                sessionId: input.sessionId,
+                branchId: input.branchId,
+                commandId: ActorCommandId.make(yield* platform.randomId),
+                messageId: followUpMessageIdForSource({ workspaceId, ...input }),
+              }),
+            )
+          }),
+        ),
+        Effect.catchCause((cause) => Effect.fail(wrapError("dequeueFollowUp failed", cause))),
       ),
 
     requestExtension: (input) =>
