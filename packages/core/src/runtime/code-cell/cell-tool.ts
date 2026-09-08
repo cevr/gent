@@ -13,6 +13,9 @@ export const CellTool = tool({
   promptGuidelines: [
     "Top-level variables stay bound in later cells on this branch. The host saves them after each cell and restores them after a worker restart; a result then carries restored (names) and omitted (functions, class instances, cycles, oversized values).",
     "Call host tools with await tools.call(name, input). Run independent calls concurrently with Promise.all; chain dependent calls with sequential awaits.",
+    "The cell is a Bun runtime in the working directory: Bun (Bun.file, Bun.$, Bun.spawn), fetch, process (cwd, env), node builtins through await import('node:fs/promises') or require('node:path'), and packages resolved from the working directory. Use it directly to read, search, parse, and transform data. Use tools.call for host tools that own permissions, durable records, and child agents.",
+    "console output during the cell returns with its result. Writes to process.stdout do not.",
+    "The value of the last expression is the cell result. Top-level await works; a top-level return does not.",
     "The host tools selected for this turn are listed in the Host Tools section. tools.search(query, offset) returns matching names and descriptions, 20 per page with a nextOffset. tools.describe(name) returns the input schema and guidelines. Both are local and synchronous; they do not grant permission to execute.",
     "Set reset: true to discard retained values and the saved namespace before running new code.",
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",

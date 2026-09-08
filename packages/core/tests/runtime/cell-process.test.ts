@@ -3,10 +3,10 @@ import { BunServices } from "@effect/platform-bun"
 import { Deferred, Effect, Fiber, FileSystem, Layer, Path, Queue, Stream } from "effect"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
-import { openMacosCellProcess } from "@gent/core-internal/runtime/code-cell/cell-process"
+import { openCellProcess } from "@gent/core-internal/runtime/code-cell/cell-process"
 import {
   CellOperationHost,
-  openMacosCellKernel,
+  openCellKernel,
 } from "@gent/core-internal/runtime/code-cell/cell-kernel"
 import {
   CellProtocolError,
@@ -17,13 +17,13 @@ import { buildCellExecutable, buildCellWorker as buildWorker } from "./cell-work
 
 const platformLayer = Layer.merge(BunServices.layer, BunGentPlatformLive)
 
-describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
+describe.skipIf(process.platform !== "darwin")("cell worker process", () => {
   it.scopedLive(
-    "runs a compiled worker with retained values and no external Bun runtime",
+    "runs a compiled worker with retained values, the Bun runtime, and the host environment",
     () =>
       Effect.gen(function* () {
         const artifact = yield* buildCellExecutable
-        const kernel = yield* openMacosCellKernel(artifact)
+        const kernel = yield* openCellKernel(artifact)
         const host = CellOperationHost.of({ call: () => Effect.succeed(21) })
         expect(
           (yield* kernel
@@ -41,13 +41,17 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
         expect(executable.display).toBe(yield* fs.realPath(artifact.binaryPath))
         expect(
           (yield* kernel
-            .evaluate("tools.call.constructor('return Object.keys(process.env).length')()")
+            .evaluate(
+              "Object.keys(process.env).length > 0 && process.cwd() === tools.call.constructor('return process.cwd()')()",
+            )
             .pipe(Effect.provideService(CellOperationHost, host))).display,
-        ).toBe("0")
-        const deniedRead = yield* kernel
-          .evaluate("await tools.call.constructor('return Bun.file(\"/etc/passwd\").text()')()")
-          .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
-        expect(deniedRead._tag).toBe("CellEvaluationError")
+        ).toBe("true")
+        const runtime = yield* kernel
+          .evaluate(
+            "const hosts = await Bun.file('/etc/hosts').text(); const fsm = await import('node:fs/promises'); [hosts.length > 0, typeof fsm.readdir, typeof require('node:path').join, (await Bun.$`printf ok`.text())]",
+          )
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(runtime.display).toBe("[ true, 'function', 'function', 'ok' ]")
         yield* kernel.reset
         expect(
           (yield* kernel
@@ -64,7 +68,7 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
     () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
-        const kernel = yield* openMacosCellKernel(yield* buildWorker)
+        const kernel = yield* openCellKernel(yield* buildWorker)
         const started = yield* Deferred.make<number>()
         const stopped = yield* Deferred.make<boolean>()
         const host = CellOperationHost.of({
@@ -94,7 +98,7 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
     () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
-        const kernel = yield* openMacosCellKernel(yield* buildWorker)
+        const kernel = yield* openCellKernel(yield* buildWorker)
         const started = yield* Deferred.make<number>()
         const stopped = yield* Deferred.make<boolean>()
         const host = CellOperationHost.of({
@@ -130,7 +134,7 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
     "retains values after cell errors, uses the current host, and resets explicitly",
     () =>
       Effect.gen(function* () {
-        const kernel = yield* openMacosCellKernel(yield* buildWorker)
+        const kernel = yield* openCellKernel(yield* buildWorker)
         const firstHost = CellOperationHost.of({ call: () => Effect.succeed(20) })
         const nextHost = CellOperationHost.of({ call: () => Effect.succeed(22) })
         const first = yield* kernel
@@ -164,7 +168,7 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
     () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
-        const kernel = yield* openMacosCellKernel({
+        const kernel = yield* openCellKernel({
           ...(yield* buildWorker),
           evaluationTimeoutMs: 1000,
           maximumReplacements: 1,
@@ -218,7 +222,7 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
     "pauses the deadline while a host operation is pending",
     () =>
       Effect.gen(function* () {
-        const kernel = yield* openMacosCellKernel({
+        const kernel = yield* openCellKernel({
           ...(yield* buildWorker),
           evaluationTimeoutMs: 400,
           maximumReplacements: 1,
@@ -248,7 +252,7 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
     "ships the catalog once per hash and again to a replacement worker",
     () =>
       Effect.gen(function* () {
-        const kernel = yield* openMacosCellKernel({
+        const kernel = yield* openCellKernel({
           ...(yield* buildWorker),
           evaluationTimeoutMs: 1000,
           maximumReplacements: 1,
@@ -294,7 +298,7 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const launch = yield* buildWorker
-        const kernel = yield* openMacosCellKernel({ ...launch, maximumReplacements: 1 })
+        const kernel = yield* openCellKernel({ ...launch, maximumReplacements: 1 })
         const host = CellOperationHost.of({ call: () => Effect.succeed(true) })
         const crash = yield* kernel
           .evaluate("tools.call.constructor('process.exit(7)')()")
@@ -310,14 +314,14 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
   )
 
   it.scopedLive(
-    "exchanges real frames without inherited credentials and stops at scope exit",
+    "exchanges real frames beside cell writes to stdout and stops at scope exit",
     () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
         const launch = yield* buildWorker
         const pid = yield* Effect.scoped(
           Effect.gen(function* () {
-            const child = yield* openMacosCellProcess(launch)
+            const child = yield* openCellProcess(launch)
             const responses = yield* Queue.make<CellResponse>({ capacity: 8 })
             yield* child.responses.pipe(
               Stream.runForEach((response) => Queue.offer(responses, response)),
@@ -345,16 +349,19 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
             if (result._tag !== "Evaluated")
               return yield* new CellProtocolError({ message: "Expected evaluation" })
             expect(result.result.display).toBe("42")
+            // Frames travel on dedicated descriptors, so stdout writes from the cell never reach the reader.
             yield* child.send(
               CellRequest.cases.Evaluate.make({
                 cellId: "two",
-                source: "tools.call.constructor('return Object.keys(process.env).length')()",
+                source:
+                  "process.stdout.write('not a frame\\n'); console.log('captured'); await Bun.write(Bun.stdout, 'also not a frame\\n'); n + 2",
               }),
             )
-            const environment = yield* Queue.take(responses)
-            if (environment._tag !== "Evaluated")
+            const noisy = yield* Queue.take(responses)
+            if (noisy._tag !== "Evaluated")
               return yield* new CellProtocolError({ message: "Expected evaluation" })
-            expect(environment.result.display).toBe("0")
+            expect(noisy.result.display).toBe("captured\n43")
+            expect(yield* child.diagnostics).toContain("not a frame")
             expect(yield* child.isRunning).toBe(true)
             yield* platform.signal(child.pid, 0)
             return child.pid
@@ -370,7 +377,7 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
     () =>
       Effect.gen(function* () {
         const launch = yield* buildWorker
-        const child = yield* openMacosCellProcess(launch)
+        const child = yield* openCellProcess(launch)
         yield* child.stop
         expect(yield* child.isRunning).toBe(false)
         const error = yield* child
@@ -386,7 +393,7 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
     () =>
       Effect.gen(function* () {
         const launch = yield* buildWorker
-        const child = yield* openMacosCellProcess(launch)
+        const child = yield* openCellProcess(launch)
         const next = child.responses.pipe(Stream.take(1), Stream.runCollect)
         expect((yield* next).map((response) => response._tag)).toEqual(["Ready"])
         yield* child.send(
@@ -416,7 +423,7 @@ describe.skipIf(process.platform !== "darwin")("isolated cell process", () => {
         const directory = yield* fs.makeTempDirectoryScoped()
         const workerPath = path.join(directory, "stalled.js")
         yield* fs.writeFileString(workerPath, "console.error(process.pid); while (true) {}")
-        const error = yield* openMacosCellProcess({
+        const error = yield* openCellProcess({
           binaryPath,
           workerPath,
           readinessTimeoutMs: 1000,

@@ -1,7 +1,7 @@
-/* oxlint-disable effect/noGlobals, effect/noNodeBuiltinImport -- Bun compilation and VM evaluation belong to this worker-only adapter. */
+/* oxlint-disable effect/noGlobals, effect/noNodeBuiltinImport -- Bun compilation and realm evaluation belong to this worker-only adapter. */
 import { Context, Effect, Predicate, Schema, Semaphore } from "effect"
+import { createRequire } from "node:module"
 import { inspect } from "node:util"
-import { createContext, runInContext } from "node:vm"
 
 import {
   catalogPageSize,
@@ -15,6 +15,15 @@ import {
 } from "./cell-protocol.js"
 import { encodeSnapshot, type SnapshotBinding, snapshotReviverSource } from "./cell-snapshot.js"
 
+/** Facts about the worker process, supplied by its entry. */
+export class CellWorkerEnvironment extends Context.Service<
+  CellWorkerEnvironment,
+  {
+    /** Base for `require` resolution; the host launched the worker here. */
+    readonly workingDirectory: string
+  }
+>()("@gent/core/src/runtime/code-cell/bun-evaluator-boundary/CellWorkerEnvironment") {}
+
 /** The worker transport supplies this proxy. It never supplies Gent host services. */
 export class CellHost extends Context.Service<
   CellHost,
@@ -26,18 +35,26 @@ export class CellHost extends Context.Service<
   }
 >()("@gent/core/src/runtime/code-cell/bun-evaluator-boundary/CellHost") {}
 
-/** Only run model source inside an isolated worker. node:vm is not a sandbox.
+/** Only run model source inside a dedicated worker process. Cells evaluate in the
+ * worker's own realm, so the full Bun runtime, `require`, and dynamic `import` are
+ * available and the process is the isolation unit: one evaluator per process.
  * The process owner enforces wall time, memory, cancellation, and host authority.
  * On interruption it must discard the worker; this adapter cannot stop an await.
  */
 const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
+/** Indirect eval runs the compiled cell at global scope; replMode declares bindings as global vars. */
+// oxlint-disable-next-line no-eval -- Evaluating model source in the worker realm is this adapter's purpose.
+const evaluateInRealm: (compiled: string) => unknown = globalThis.eval
+
 export const makeBunCellEvaluator = Effect.gen(function* () {
   const host = yield* CellHost
+  const environment = yield* CellWorkerEnvironment
   const runPromise = Effect.runPromiseWith(yield* Effect.context<CellHost>())
   const permit = yield* Semaphore.make(1)
+  // The node target keeps `require(...)` calls intact; the bun target rewrites them to import.meta.
   // oxlint-disable-next-line gent/no-bun-outside-adapter -- This worker boundary owns the unmatched Bun transpiler API.
-  const transpiler = new Bun.Transpiler({ loader: "ts", target: "bun", replMode: true })
+  const transpiler = new Bun.Transpiler({ loader: "ts", target: "node", replMode: true })
   // Display keeps a head and a bounded tail so the end of output (usually the error) survives.
   const tailLength = maximumCellDisplayLength - maximumCellDisplayHeadLength
   let head = ""
@@ -80,7 +97,16 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   const write = (...values: ReadonlyArray<unknown>) => {
     append(values.map(display).join(" "))
   }
-  const console = { log: write, info: write, warn: write, error: write, debug: write }
+  // The cell console keeps every host console method; output methods write to the display.
+  const hostConsole = globalThis.console
+  const console: typeof hostConsole = {
+    ...hostConsole,
+    log: write,
+    info: write,
+    warn: write,
+    error: write,
+    debug: write,
+  }
   const failure = (phase: CellEvaluationError["phase"], cause: unknown) =>
     new CellEvaluationError({
       phase,
@@ -126,11 +152,36 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
         ),
       ),
   }
-  const freshContext = () => createContext({ tools: proxy, console })
-  let context = freshContext()
-  const reserved = new Set(["tools", "console"])
-  const namespace = () => new Map(Object.entries(context).filter(([key]) => !reserved.has(key)))
+  const reserved = new Set(["tools", "console", "require"])
+  Object.defineProperty(globalThis, "tools", { value: proxy, writable: true, configurable: true })
+  if (!Predicate.isFunction(Reflect.get(globalThis, "require"))) {
+    Object.defineProperty(globalThis, "require", {
+      value: createRequire(`${environment.workingDirectory}/`),
+      writable: true,
+      configurable: true,
+    })
+  }
+  // Bindings are the globals a cell adds after this evaluator starts. Eval-declared vars are configurable, so reset can delete them.
+  const baseline = new Set(Object.getOwnPropertyNames(globalThis))
+  const namespace = () => {
+    const bindings = new Map<string, unknown>()
+    for (const key of Object.getOwnPropertyNames(globalThis)) {
+      if (!baseline.has(key) && !reserved.has(key)) bindings.set(key, Reflect.get(globalThis, key))
+    }
+    return bindings
+  }
   const bindingNames = () => [...namespace().keys()].sort().slice(0, maximumCellBindings)
+  const installConsole = (value: typeof hostConsole) =>
+    Effect.sync(() => {
+      Object.defineProperty(globalThis, "console", { value, writable: true, configurable: true })
+    })
+  // Only console output taken during the cell returns with it. Later writes go to the process streams.
+  const captureConsole = <A, E>(effect: Effect.Effect<A, E>) =>
+    Effect.acquireUseRelease(
+      installConsole(console),
+      () => effect,
+      () => installConsole(hostConsole),
+    )
 
   const evaluate = Effect.fn("BunCellEvaluator.evaluate")(function* (source: string) {
     head = ""
@@ -144,17 +195,17 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       try: () => transpiler.transformSync(source),
       catch: (cause) => failure("compile", cause),
     })
-    let result = yield* Effect.try({
-      try: (): unknown => runInContext(compiled, context),
-      catch: (cause) => failure("execute", cause),
-    })
-    if (Predicate.isPromiseLike(result)) {
-      const pending = result
-      result = yield* Effect.tryPromise({
-        try: () => pending,
+    const result = yield* Effect.gen(function* () {
+      const started = yield* Effect.try({
+        try: (): unknown => evaluateInRealm(compiled),
         catch: (cause) => failure("execute", cause),
       })
-    }
+      if (!Predicate.isPromiseLike(started)) return started
+      return yield* Effect.tryPromise({
+        try: () => started,
+        catch: (cause) => failure("execute", cause),
+      })
+    }).pipe(captureConsole)
     if (Predicate.hasProperty(result, "value")) {
       yield* Effect.try({
         try: () => append(display(result.value)),
@@ -173,16 +224,16 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   /** Encode the namespace in this realm; the codec names every value it cannot carry. */
   const snapshot = Effect.sync(() => encodeSnapshot(namespace()))
 
-  /** Revive inside the context so restored values use the context's intrinsics. */
+  /** Revive in the realm so restored values use its intrinsics. */
   const restore = (bindings: ReadonlyArray<SnapshotBinding>) =>
     Effect.try({
       try: () => {
-        const revive: unknown = runInContext(snapshotReviverSource, context)
+        const revive = evaluateInRealm(snapshotReviverSource)
         if (!Predicate.isFunction(revive)) return []
         const names: string[] = []
         for (const binding of bindings) {
-          if (reserved.has(binding.name)) continue
-          Object.defineProperty(context, binding.name, {
+          if (reserved.has(binding.name) || baseline.has(binding.name)) continue
+          Object.defineProperty(globalThis, binding.name, {
             value: revive(encodeJsonText(binding.value)),
             writable: true,
             enumerable: true,
@@ -205,7 +256,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     reset: Semaphore.withPermit(
       permit,
       Effect.sync(() => {
-        context = freshContext()
+        for (const name of namespace().keys()) Reflect.deleteProperty(globalThis, name)
       }),
     ),
   }

@@ -467,7 +467,13 @@ builtins. Test presets that exercise host tools directly omit it. `cell-kernel.t
 evaluation deadlines, host-call dispatch, and worker disposal. Each evaluation
 receives its host service from the caller's Effect context. Worker faults lose
 working state; ordinary cell errors preserve it. No cell is automatically replayed.
-`cell-process.ts` owns the sandboxed macOS process and bounded pipes. This is not
+`cell-process.ts` owns the worker process and its bounded pipes. The worker runs
+with the host's working directory, environment, and OS permissions, the same
+authority the bash tool grants, so cells use the full Bun runtime, `require`,
+and dynamic `import` directly. Protocol frames travel on dedicated descriptors
+(3 worker to host, 4 host to worker); the worker keeps stdout and stderr for cell
+output, which the host retains only as diagnostics. Cells evaluate in the worker's
+own realm, so the process is the isolation unit. This is not
 a second agent engine or persistence owner. After a fault, only explicit reset
 can replace the worker. Each kernel permits three replacement attempts by
 default, including failed starts. Close cancels active work and waits for its
@@ -478,7 +484,7 @@ Turbo builds that declared dependency before the TUI copies the worker into
 `bin/gent-cell` beside `bin/gent`. Core owns the worker build; the TUI only
 packages it. The worker embeds Bun and needs no external Bun executable. Its
 compile options disable automatic dotenv, bunfig, tsconfig, and package.json
-loading. The existing sandbox launcher can use this artifact as both its runtime
+loading. The process launcher uses this artifact as both its runtime
 and worker path. Turbo caches core's `dist` output and both TUI binaries. The
 TUI task hashes its build script. Run the root build for dependency ordering.
 This is a packaged worker, not a daemon or a new session owner.

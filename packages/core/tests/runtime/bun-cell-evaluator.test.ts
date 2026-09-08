@@ -3,22 +3,32 @@ import { Deferred, Effect, Fiber, Ref } from "effect"
 import {
   makeBunCellEvaluator,
   CellHost,
+  CellWorkerEnvironment,
 } from "@gent/core-internal/runtime/code-cell/bun-evaluator-boundary"
 import {
   maximumCellDisplayLength,
   maximumCellSourceLength,
 } from "@gent/core-internal/runtime/code-cell/cell-protocol"
 
+/** Cells share the test process realm, so each test clears its bindings at scope exit. */
+const makeKernel = (host: typeof CellHost.Service) =>
+  Effect.gen(function* () {
+    const kernel = yield* makeBunCellEvaluator.pipe(
+      Effect.provideService(CellHost, host),
+      Effect.provideService(CellWorkerEnvironment, { workingDirectory: process.cwd() }),
+    )
+    yield* Effect.addFinalizer(() => kernel.reset)
+    return kernel
+  })
+
 describe("Bun cell evaluation", () => {
   it.scopedLive("accepts a host reply while a cell awaits it", () =>
     Effect.gen(function* () {
       const called = yield* Deferred.make<boolean>()
       const reply = yield* Deferred.make<number>()
-      const kernel = yield* makeBunCellEvaluator.pipe(
-        Effect.provideService(CellHost, {
-          call: () => Deferred.succeed(called, true).pipe(Effect.andThen(Deferred.await(reply))),
-        }),
-      )
+      const kernel = yield* makeKernel({
+        call: () => Deferred.succeed(called, true).pipe(Effect.andThen(Deferred.await(reply))),
+      })
       const cell = yield* kernel
         .evaluate("(await tools.call('read', {})) + 1")
         .pipe(Effect.forkScoped)
@@ -28,14 +38,12 @@ describe("Bun cell evaluation", () => {
     }).pipe(Effect.timeout("2 seconds")),
   )
 
-  it.live("searches and describes the shipped catalog locally without a host call", () =>
+  it.scopedLive("searches and describes the shipped catalog locally without a host call", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0)
-      const kernel = yield* makeBunCellEvaluator.pipe(
-        Effect.provideService(CellHost, {
-          call: () => Ref.update(calls, (count) => count + 1).pipe(Effect.as(0)),
-        }),
-      )
+      const kernel = yield* makeKernel({
+        call: () => Ref.update(calls, (count) => count + 1).pipe(Effect.as(0)),
+      })
       yield* kernel.setCatalog([
         {
           name: "read",
@@ -63,14 +71,12 @@ describe("Bun cell evaluation", () => {
     }),
   )
 
-  it.live("rejects non-data host arguments before dispatch", () =>
+  it.scopedLive("rejects non-data host arguments before dispatch", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0)
-      const kernel = yield* makeBunCellEvaluator.pipe(
-        Effect.provideService(CellHost, {
-          call: () => Ref.update(calls, (count) => count + 1).pipe(Effect.as(0)),
-        }),
-      )
+      const kernel = yield* makeKernel({
+        call: () => Ref.update(calls, (count) => count + 1).pipe(Effect.as(0)),
+      })
       const error = yield* kernel
         .evaluate("await tools.call('read', { callback: () => 1 })")
         .pipe(Effect.flip)
@@ -79,11 +85,9 @@ describe("Bun cell evaluation", () => {
     }),
   )
 
-  it.live("keeps working values across cells and clears them on reset", () =>
+  it.scopedLive("keeps working values across cells and clears them on reset", () =>
     Effect.gen(function* () {
-      const kernel = yield* makeBunCellEvaluator.pipe(
-        Effect.provideService(CellHost, { call: () => Effect.succeed(7) }),
-      )
+      const kernel = yield* makeKernel({ call: () => Effect.succeed(7) })
       yield* kernel.evaluate("const values: number[] = [1, 2, 3]")
       const result = yield* kernel.evaluate("values.push(await tools.call('count', {})); values")
       expect(result.display).toBe("[ 1, 2, 3, 7 ]")
@@ -93,24 +97,23 @@ describe("Bun cell evaluation", () => {
     }),
   )
 
-  it.live("keeps independent contexts for independent owners", () =>
+  it.scopedLive("runs cells in the worker realm with Bun, require, and dynamic import", () =>
     Effect.gen(function* () {
-      const makeKernel = makeBunCellEvaluator.pipe(
-        Effect.provideService(CellHost, { call: () => Effect.succeed(0) }),
+      const kernel = yield* makeKernel({ call: () => Effect.succeed(0) })
+      const result = yield* kernel.evaluate(
+        "const fsm = await import('node:fs/promises'); [typeof Bun.file, typeof fetch, typeof fsm.readdir, typeof require('node:path').join, process.cwd().length > 0]",
       )
-      const first = yield* makeKernel
-      const second = yield* makeKernel
-      yield* first.evaluate("const onlyHere = 42")
-      expect((yield* second.evaluate("typeof onlyHere")).display).toBe("undefined")
-      expect((yield* first.evaluate("onlyHere")).display).toBe("42")
+      expect(result.display).toBe("[ 'function', 'function', 'function', 'function', true ]")
+      expect(result.bindings).toEqual(["fsm"])
+      yield* kernel.reset
+      expect((yield* kernel.evaluate("typeof fsm")).display).toBe("undefined")
+      expect(Object.hasOwn(globalThis, "fsm")).toBe(false)
     }),
   )
 
-  it.live("limits captured output and rejects oversized source before execution", () =>
+  it.scopedLive("limits captured output and rejects oversized source before execution", () =>
     Effect.gen(function* () {
-      const kernel = yield* makeBunCellEvaluator.pipe(
-        Effect.provideService(CellHost, { call: () => Effect.succeed(0) }),
-      )
+      const kernel = yield* makeKernel({ call: () => Effect.succeed(0) })
       const result = yield* kernel.evaluate(
         "console.log('x'.repeat(100000)); console.log('the end'); 'done'",
       )
@@ -127,11 +130,9 @@ describe("Bun cell evaluation", () => {
     }),
   )
 
-  it.live("reports a cell failure without replaying or clearing earlier work", () =>
+  it.scopedLive("reports a cell failure without replaying or clearing earlier work", () =>
     Effect.gen(function* () {
-      const kernel = yield* makeBunCellEvaluator.pipe(
-        Effect.provideService(CellHost, { call: () => Effect.succeed(0) }),
-      )
+      const kernel = yield* makeKernel({ call: () => Effect.succeed(0) })
       yield* kernel.evaluate("let count = 0")
       const error = yield* kernel
         .evaluate("count++; console.log('before failure'); throw new Error('failed')")

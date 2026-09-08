@@ -1,6 +1,5 @@
-import { Deferred, Effect, FileSystem, Path, Queue, Schema, Stream } from "effect"
+import { Deferred, Effect, FileSystem, Queue, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
-import { makeMacosCellSandboxProfile } from "./cell-sandbox.js"
 import {
   type CellRequest,
   type CellResponse,
@@ -15,16 +14,22 @@ export class CellProcessError extends Schema.TaggedError<CellProcessError>()("Ce
   diagnostics: Schema.String,
 }) {}
 
+/** Worker-to-host frames travel on this descriptor; the worker owns stdout for cell output. */
+export const cellResponseFd = 3
+/** Host-to-worker frames travel on this descriptor. */
+export const cellRequestFd = 4
+
 /** The caller owns an immutable trusted worker artifact and the returned process scope.
- * No unsandboxed fallback exists. Linux needs its own launch policy.
+ * The worker runs with the host's working directory, environment, and OS permissions,
+ * the same authority the bash tool already grants. Protocol frames use dedicated
+ * descriptors so cell code that writes to stdout cannot corrupt them.
  */
-export const openMacosCellProcess = Effect.fn("CellProcess.openMacos")(function* (input: {
+export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
   readonly binaryPath: string
   readonly workerPath: string
   readonly readinessTimeoutMs?: number
 }) {
   const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
   const launchError = (cause: unknown) =>
     new CellProcessError({ phase: "launch", message: String(cause), diagnostics: "" })
   const readinessTimeoutMs = input.readinessTimeoutMs ?? 5000
@@ -37,22 +42,16 @@ export const openMacosCellProcess = Effect.fn("CellProcess.openMacos")(function*
     const info = yield* fs.stat(file).pipe(Effect.mapError(launchError))
     if (info.type !== "File") return yield* launchError("Cell launch requires regular files")
   }
-  const profile = yield* makeMacosCellSandboxProfile({ binaryPath, workerPath }).pipe(
-    Effect.mapError(launchError),
-  )
-  const handle = yield* ChildProcess.make(
-    "/usr/bin/sandbox-exec",
-    ["-p", profile, binaryPath, workerPath],
-    {
-      cwd: path.dirname(workerPath),
-      env: {},
-      extendEnv: false,
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-      forceKillAfter: "1 second",
+  const handle = yield* ChildProcess.make(binaryPath, [workerPath], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    additionalFds: {
+      [`fd${cellResponseFd}`]: { type: "output" },
+      [`fd${cellRequestFd}`]: { type: "input" },
     },
-  ).pipe(Effect.mapError(launchError))
+    forceKillAfter: "1 second",
+  }).pipe(Effect.mapError(launchError))
 
   const diagnosticBytes = new Uint8Array(8192)
   let diagnosticLength = 0
@@ -86,12 +85,13 @@ export const openMacosCellProcess = Effect.fn("CellProcess.openMacos")(function*
   )
 
   yield* Stream.fromQueue(outbound).pipe(
-    Stream.run(handle.stdin),
+    Stream.run(handle.getInputFd(cellRequestFd)),
     Effect.mapError(ioError),
     Effect.catchCause((cause) => Deferred.failCause(failure, cause)),
     Effect.forkScoped,
   )
-  yield* handle.stderr.pipe(
+  // Stray cell writes to stdout join stderr as diagnostics; neither carries protocol frames.
+  yield* Stream.merge(handle.stderr, handle.stdout).pipe(
     Stream.runForEach((chunk) =>
       Effect.sync(() => {
         const retained = chunk.subarray(0, diagnosticBytes.length - diagnosticLength)
@@ -106,7 +106,7 @@ export const openMacosCellProcess = Effect.fn("CellProcess.openMacos")(function*
 
   const responses = Stream.suspend(() => {
     const reader = makeCellFrameReader()
-    return handle.stdout.pipe(
+    return handle.getOutputFd(cellResponseFd).pipe(
       Stream.mapEffect(reader.push),
       Stream.flatMap(Stream.fromIterable),
       Stream.mapEffect(decodeCellResponse),

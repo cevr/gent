@@ -22,7 +22,7 @@ import {
   CellKernelError,
   type CellOperationHost,
   type CellToolCallSuspended,
-  openMacosCellKernel,
+  openCellKernel,
 } from "./cell-kernel.js"
 import { CellProcessError } from "./cell-process.js"
 import {
@@ -48,7 +48,7 @@ const isPassThrough = Predicate.or(
   Predicate.isTagged("CellToolCallSuspended"),
   Predicate.isTagged("StorageError"),
 )
-type Kernel = Effect.Success<ReturnType<typeof openMacosCellKernel>>
+type Kernel = Effect.Success<ReturnType<typeof openCellKernel>>
 
 export interface CellExecutionService {
   readonly run: (call: {
@@ -82,7 +82,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
     )
 
   static Live = (
-    input: Parameters<typeof openMacosCellKernel>[0] & {
+    input: Parameters<typeof openCellKernel>[0] & {
       readonly sessionId: SessionId
       readonly branchId: BranchId
       readonly interruptedRef?: Ref.Ref<boolean>
@@ -149,7 +149,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           startupAttempts++
           return yield* Effect.uninterruptibleMask((restore) =>
             restore(
-              openMacosCellKernel({ ...input, maximumReplacements: remainingReplacements }).pipe(
+              openCellKernel({ ...input, maximumReplacements: remainingReplacements }).pipe(
                 Effect.provideContext(platform),
                 Scope.provide(scope),
               ),

@@ -3,6 +3,7 @@ import { Effect, Schema } from "effect"
 import { AgentDefinition, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 import { tool } from "@gent/core-internal/domain/capability/tool"
 import { buildTurnPromptSections } from "@gent/core-internal/runtime/agent/agent-loop.utils"
+import { CellTool } from "@gent/core-internal/runtime/code-cell/cell-tool"
 
 const cell = tool({
   id: "cell",
@@ -40,6 +41,19 @@ const delegate = tool({
 const agent = new AgentDefinition({ name: DEFAULT_AGENT_NAME })
 
 describe("turn prompt sections", () => {
+  it.effect("tells the model what the cell runtime exposes so it does not guess at imports", () =>
+    Effect.sync(() => {
+      const sections = buildTurnPromptSections([], agent, [CellTool], [], [CellTool, read])
+      const guidelines = sections.find((section) => section.id === "tool-guidelines")
+      expect(guidelines?.content).toContain(
+        "- The cell is a Bun runtime in the working directory: Bun (Bun.file, Bun.$, Bun.spawn), fetch, process (cwd, env), node builtins through await import('node:fs/promises') or require('node:path'), and packages resolved from the working directory.",
+      )
+      expect(guidelines?.content).toContain(
+        "- console output during the cell returns with its result.",
+      )
+    }),
+  )
+
   it.effect("lists host tools callable inside the cell as one instruction section", () =>
     Effect.sync(() => {
       const sections = buildTurnPromptSections([], agent, [cell], [], [write, cell, read])

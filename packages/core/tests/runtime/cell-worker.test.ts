@@ -4,6 +4,7 @@ import {
   CellWorkerTransport,
   runCellWorker,
 } from "@gent/core-internal/runtime/code-cell/cell-worker"
+import { CellWorkerEnvironment } from "@gent/core-internal/runtime/code-cell/bun-evaluator-boundary"
 import {
   CellProtocolError,
   CellRequest,
@@ -18,6 +19,7 @@ const makeHarness = Effect.gen(function* () {
       requests: Stream.fromQueue(requests),
       send: (response) => Queue.offer(responses, response).pipe(Effect.asVoid),
     }),
+    Effect.provideService(CellWorkerEnvironment, { workingDirectory: process.cwd() }),
     Effect.forkScoped,
   )
   expect((yield* Queue.take(responses))._tag).toBe("Ready")

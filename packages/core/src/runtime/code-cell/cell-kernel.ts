@@ -15,7 +15,7 @@ import {
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { ToolCallId } from "../../domain/ids.js"
-import { CellProcessError, openMacosCellProcess } from "./cell-process.js"
+import { CellProcessError, openCellProcess } from "./cell-process.js"
 import {
   type CellCatalog,
   CellEvaluationError,
@@ -67,7 +67,7 @@ export class CellKernelError extends Schema.TaggedError<CellKernelError>()("Cell
 const KernelStatus = Schema.Literals(["ready", "lost", "closed"])
 
 /** One worker at a time. Only explicit reset can replace a failed worker. */
-export const openMacosCellKernel = Effect.fn("CellKernel.openMacos")(function* (input: {
+export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
   readonly binaryPath: string
   readonly workerPath: string
   readonly readinessTimeoutMs?: number
@@ -107,7 +107,7 @@ export const openMacosCellKernel = Effect.fn("CellKernel.openMacos")(function* (
         const scope = yield* Scope.fork(ownerScope)
         const dispose = Scope.close(scope, Exit.void)
         const process = yield* restore(
-          openMacosCellProcess(input).pipe(
+          openCellProcess(input).pipe(
             Effect.provideService(FileSystem.FileSystem, fs),
             Effect.provideService(Path.Path, path),
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),

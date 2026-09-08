@@ -1,24 +1,10 @@
-import {
-  Context,
-  Deferred,
-  Effect,
-  Layer,
-  Option,
-  Predicate,
-  type Schema,
-  Semaphore,
-  Stdio,
-  Stream,
-} from "effect"
+import { Context, Deferred, Effect, Option, Predicate, type Schema, Stream } from "effect"
 import { CellHost, makeBunCellEvaluator } from "./bun-evaluator-boundary.js"
 import {
   CellEvaluationError,
   CellProtocolError,
   type CellRequest,
   CellResponse,
-  decodeCellRequest,
-  encodeCellResponse,
-  makeCellFrameReader,
   maximumPendingCellCalls,
   maximumCallsPerCell,
 } from "./cell-protocol.js"
@@ -29,41 +15,7 @@ export class CellWorkerTransport extends Context.Service<
     readonly requests: Stream.Stream<CellRequest, CellProtocolError>
     readonly send: (response: CellResponse) => Effect.Effect<void, CellProtocolError>
   }
->()("@gent/core/src/runtime/code-cell/cell-worker/CellWorkerTransport") {
-  static Live = Layer.effect(
-    CellWorkerTransport,
-    Effect.gen(function* () {
-      const stdio = yield* Stdio.Stdio
-      const outputPermit = yield* Semaphore.make(1)
-      const ioError = (cause: unknown) => new CellProtocolError({ message: String(cause) })
-      return CellWorkerTransport.of({
-        requests: Stream.suspend(() => {
-          const reader = makeCellFrameReader()
-          return stdio.stdin.pipe(
-            Stream.mapError(ioError),
-            Stream.mapEffect(reader.push),
-            Stream.flatMap(Stream.fromIterable),
-            Stream.mapEffect(decodeCellRequest),
-            Stream.concat(Stream.fromEffect(reader.end).pipe(Stream.drain)),
-          )
-        }),
-        send: Effect.fn("CellWorkerTransport.send")((response) =>
-          Semaphore.withPermit(
-            outputPermit,
-            encodeCellResponse(response).pipe(
-              Effect.flatMap((bytes) =>
-                Stream.succeed(bytes).pipe(
-                  Stream.run(stdio.stdout({ endOnDone: false })),
-                  Effect.mapError(ioError),
-                ),
-              ),
-            ),
-          ),
-        ),
-      })
-    }),
-  )
-}
+>()("@gent/core/src/runtime/code-cell/cell-worker/CellWorkerTransport") {}
 
 const isHostReply = Predicate.or(
   Predicate.isTagged("HostSucceeded"),
@@ -108,6 +60,9 @@ export const runCellWorker = Effect.scoped(
         }),
       }),
     )
+
+    // Leaving the realm clean matters when several workers share one test process.
+    yield* Effect.addFinalizer(() => kernel.reset)
 
     const receive = Effect.fn("CellWorker.receive")(function* (request: CellRequest) {
       if (isHostReply(request)) {

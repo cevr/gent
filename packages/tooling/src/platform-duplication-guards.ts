@@ -264,7 +264,9 @@ const protectedHostFactFile = (file: string): boolean =>
   (file.startsWith("packages/core/src/") || file.startsWith("packages/extensions/src/")) &&
   !file.includes("/test-utils/") &&
   file !== "packages/core/src/runtime/gent-platform-bun.ts" &&
-  file !== "packages/core/src/runtime/gent-platform.ts"
+  file !== "packages/core/src/runtime/gent-platform.ts" &&
+  // The cell worker entry is a process entrypoint; it reads its own working directory once.
+  file !== "packages/core/src/runtime/code-cell/main.ts"
 
 const bannedServerRootConsumerPatterns: ReadonlyArray<BannedPattern> = [
   {
