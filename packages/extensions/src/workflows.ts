@@ -16,32 +16,33 @@ import {
 
 export const WORKFLOWS_EXTENSION_ID = ExtensionId.make("@gent/workflows")
 
-const planRecipe = (input: string) => {
+const planRecipe = (input: string, outputPath: string) => {
   if (input.length === 0) {
-    return "Use artifact_read with sourceTool 'plan' to show the current plan. If no plan exists, say so."
+    return `Read the saved plan at ${outputPath} and show it. This path is on the session server. If it is missing or unreadable, report that fact. Do not create a replacement or infer a plan from another branch. Do not depend on kernel bindings.`
   }
   return [
     `Plan: ${input}`,
     "Inspect the relevant sources. Produce a scoped implementation plan with commit steps, risks, and verification. Do not implement it yet.",
     "Use independent child work only when it adds value. Keep intermediate results in cell bindings or files.",
-    "Save the final plan with artifact_save (sourceTool 'plan', label 'Plan: <topic>'). End that cell before requesting approval with prompt in a separate cell. Obtain approval before code changes.",
+    `Save the final plan at ${outputPath} with the write tool and atomic: true. This canonical path is on the session server. Confirm the write succeeded and show the path. If the user requests another destination, export a separate copy after the canonical save; an export failure must not undo it.`,
+    "End the save cell before requesting approval with prompt in a separate cell. Read the saved plan for approval. Obtain approval before code changes. If the worker is lost, inspect the saved file or write receipt; do not repeat a write or child run merely to recover context.",
   ].join("\n")
 }
 
-const reviewRecipe = (input: string) =>
+const reviewRecipe = (input: string, outputPath: string) =>
   [
     `Review: ${input || "the most recent changes (git diff)"}`,
-    "Read the relevant sources. Report actionable findings with file, line, severity, explanation, and a proposed fix. State when no findings remain. Do not edit files.",
+    "Read the relevant sources. Report actionable findings with file, line, severity, explanation, and a proposed fix. State when no findings remain. Do not edit source files.",
     "Use an independent child review when it adds value. Keep intermediate results in cell bindings or files.",
-    "Save the final report with artifact_save (sourceTool 'review') and show the findings.",
+    `Write only the final report to ${outputPath} with the write tool and atomic: true. Confirm the save succeeded, then show the findings and server file path.`,
   ].join("\n")
 
-const auditRecipe = (input: string) =>
+const auditRecipe = (input: string, outputPath: string) =>
   [
     `Audit: ${input || "the current changes (git diff --name-only)"}`,
-    "Inspect the relevant sources for material concerns. Report findings with file, line, severity, and evidence. Do not edit files.",
+    "Inspect the relevant sources for material concerns. Report findings with file, line, severity, and evidence. Do not edit source files.",
     "Delegate independent concerns only when it adds value. Keep intermediate results in cell bindings or files.",
-    "Save the final report with artifact_save (sourceTool 'audit') and show the findings. Use prompt mode 'present' if a separate notice helps; it requires no approval.",
+    `Write only the final report to ${outputPath} with the write tool and atomic: true. Confirm the save succeeded, then show the findings and server file path. Use prompt mode 'present' if a separate notice helps; it requires no approval.`,
   ].join("\n")
 
 const counselRecipe = (input: string) =>
@@ -67,7 +68,7 @@ const command = (params: {
     readonly category: string
     readonly keybind?: string
   }
-  readonly recipe: (input: string) => string
+  readonly recipe: (input: string, outputPath: string) => string
 }) =>
   request({
     id: params.id,
@@ -78,9 +79,20 @@ const command = (params: {
     execute: (input: string) =>
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
+        const outputPath = ctx.Files.resolve(
+          ctx.cwd,
+          ".gent",
+          "results",
+          encodeURIComponent(ctx.sessionId),
+          encodeURIComponent(ctx.branchId),
+          `${params.slash.trigger}.md`,
+        )
+        const quotedPath = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(
+          outputPath,
+        )
         yield* ctx.Session.queueFollowUp({
           sourceId: `${params.id}:${yield* ctx.Process.randomId}`,
-          content: params.recipe(input.trim()),
+          content: params.recipe(input.trim(), quotedPath),
         })
       }).pipe(
         Effect.mapError(

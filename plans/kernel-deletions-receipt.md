@@ -119,6 +119,30 @@ Source files:
 - `/Users/cvr/Developer/personal/gent/packages/extensions/tests/fs-tools/write.test.ts`
 - `/Users/cvr/Developer/personal/gent/packages/extensions/tests/fs-tools/fs-tools-model-turn.test.ts`
 
+## Workflow saved files
+
+Workflow recipes now save branch-local results under `.gent/results/<session>/<branch>/<kind>.md` in the server working directory. The existing write tool performs atomic replacement. Explicit exports follow the canonical save. Empty `/plan` reads that file without kernel bindings. Review and audit may save reports but must leave source files unchanged.
+
+The full gate passed. The RPC test checks canonical save, export, and a later empty-plan read through real file tools. The first test draft sent two 410 KB direct tool inputs and reached the model context limit after both writes succeeded. The workflow test uses a smaller document. The separate atomic-write tests cover large results without expanding the model transcript.
+
+Live Herdr saved the plan, exported an identical copy, read the canonical result, and presented approval in a later cell. The test selected No. No source changes occurred. The live model first tried absent files and emitted one invalid cell; it recovered before saving. The initial parallel missing-file read closed the cell worker pipe. Final recovery checks must review this failure path. A second isolated session reported its own saved plan missing and did not adopt the previous session file. The original plan and export remained unchanged after process exit. This is not a persistent-session restart test; `--isolate` uses in-memory session storage.
+
+Evidence:
+
+- `/tmp/gent-saved-workflows-gate.log`
+- `/tmp/gent-saved-workflows-events-detail.log`
+- `/tmp/gent-saved-workflows-approval.txt`
+- `/tmp/gent-saved-workflows-declined.txt`
+- `/tmp/gent-saved-workflows-empty-new-session.txt`
+- `/tmp/gent-saved-workflows-files.txt`
+
+Source files:
+
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/workflows.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/tests/workflows.test.ts`
+- `/Users/cvr/Developer/personal/gent/.gitignore`
+- `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`
+
 ## Remaining work
 
 1. Replace artifact state and UI with saved files and kernel working values.
