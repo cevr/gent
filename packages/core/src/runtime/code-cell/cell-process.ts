@@ -6,6 +6,7 @@ import {
   decodeCellResponse,
   encodeCellRequest,
   makeCellFrameReader,
+  maximumCellDisplayLength,
 } from "./cell-protocol.js"
 
 export class CellProcessError extends Schema.TaggedError<CellProcessError>()("CellProcessError", {
@@ -90,13 +91,29 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     Effect.catchCause((cause) => Deferred.failCause(failure, cause)),
     Effect.forkScoped,
   )
-  // Stray cell writes to stdout join stderr as diagnostics; neither carries protocol frames.
+  // Worker stdout and stderr carry cell output, never protocol frames. The kernel takes
+  // what arrived while a cell ran and returns it with that cell; a bounded prefix also
+  // serves as diagnostics when the worker fails.
+  const outputDecoder = new TextDecoder()
+  let capturedOutput = ""
+  let omittedOutput = 0
+  const takeOutput = Effect.sync(() => {
+    let text = capturedOutput
+    if (omittedOutput > 0) text = `${text}\n... [${omittedOutput} characters omitted] ...`
+    capturedOutput = ""
+    omittedOutput = 0
+    return text
+  })
   yield* Stream.merge(handle.stderr, handle.stdout).pipe(
     Stream.runForEach((chunk) =>
       Effect.sync(() => {
         const retained = chunk.subarray(0, diagnosticBytes.length - diagnosticLength)
         diagnosticBytes.set(retained, diagnosticLength)
         diagnosticLength += retained.length
+        const text = outputDecoder.decode(chunk, { stream: true })
+        const room = maximumCellDisplayLength - capturedOutput.length
+        capturedOutput += text.slice(0, Math.max(0, room))
+        omittedOutput += Math.max(0, text.length - room)
       }),
     ),
     Effect.mapError(ioError),
@@ -179,6 +196,8 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     pid: handle.pid,
     responses: Stream.fromQueue(incoming),
     diagnostics: Effect.sync(diagnostics),
+    /** Output received since the previous take. Empty once taken. */
+    takeOutput,
     isRunning: handle.isRunning.pipe(Effect.mapError(ioError)),
     exitCode: handle.exitCode.pipe(Effect.mapError(ioError)),
     send: Effect.fn("CellProcess.send")(function* (request: CellRequest) {

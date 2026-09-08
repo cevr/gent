@@ -472,7 +472,9 @@ with the host's working directory, environment, and OS permissions, the same
 authority the bash tool grants, so cells use the full Bun runtime, `require`,
 and dynamic `import` directly. Protocol frames travel on dedicated descriptors
 (3 worker to host, 4 host to worker); the worker keeps stdout and stderr for cell
-output, which the host retains only as diagnostics. Cells evaluate in the worker's
+output. The host attributes output received while a cell runs to that cell and
+returns it ahead of the cell's display, as Prime Agent's kernel does; a bounded
+prefix also serves as diagnostics when the worker fails. Cells evaluate in the worker's
 own realm, so the process is the isolation unit. This is not
 a second agent engine or persistence owner. After a fault, only explicit reset
 can replace the worker. Each kernel permits three replacement attempts by

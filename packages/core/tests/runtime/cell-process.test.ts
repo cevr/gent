@@ -52,6 +52,17 @@ describe.skipIf(process.platform !== "darwin")("cell worker process", () => {
           )
           .pipe(Effect.provideService(CellOperationHost, host))
         expect(runtime.display).toBe("[ true, 'function', 'function', 'ok' ]")
+        // Process output written during the cell returns ahead of its display, Prime style.
+        const streamed = yield* kernel
+          .evaluate(
+            "process.stdout.write('via stdout\\n'); process.stderr.write('via stderr\\n'); Bun.spawnSync(['echo', 'from child'], { stdout: 'inherit' }); 'value'",
+          )
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(streamed.display).toBe("via stdout\nvia stderr\nfrom child\nvalue")
+        const quiet = yield* kernel
+          .evaluate("'nothing streamed'")
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(quiet.display).toBe("nothing streamed")
         yield* kernel.reset
         expect(
           (yield* kernel

@@ -266,6 +266,8 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
           Effect.catchCause((cause) => Deferred.failCause(result, cause)),
           Effect.forkScoped,
         )
+        // Output that arrived before this cell belongs to no one; drop it.
+        yield* child.takeOutput
         yield* child
           .send(
             CellRequest.cases.Evaluate.make({
@@ -276,11 +278,24 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
           )
           .pipe(Effect.mapError(processError))
         if (Option.isSome(catalog)) workerCatalogHash = Option.some(catalog.value.hash)
-        return yield* Deferred.await(result).pipe(Effect.raceFirst(watchdog))
+        const frame = yield* Deferred.await(result).pipe(Effect.raceFirst(watchdog))
+        // The worker writes output before its result frame, but the two pipes are read by
+        // separate fibers. One event-loop turn lets output already in the pipe land first.
+        yield* Effect.sleep("1 millis")
+        return { frame, output: yield* child.takeOutput }
       }),
     ).pipe(Effect.onError(() => discard().pipe(Effect.orDie)))
-    if (response._tag === "Failed") return yield* response.error
-    return response.result
+    // Prime-style result text: process output first, then the cell's own display.
+    const withOutput = (display: string) =>
+      [response.output.trimEnd(), display].filter((text) => text.length > 0).join("\n")
+    if (response.frame._tag === "Failed") {
+      return yield* new CellEvaluationError({
+        phase: response.frame.error.phase,
+        message: response.frame.error.message,
+        output: withOutput(response.frame.error.output),
+      })
+    }
+    return { ...response.frame.result, display: withOutput(response.frame.result.display) }
   })
 
   const reset = Effect.fn("CellKernel.reset")(function* () {
