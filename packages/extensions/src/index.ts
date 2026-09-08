@@ -20,6 +20,8 @@ import { SkillsExtension } from "./skills/index.js"
 import { LibrarianExtension } from "./librarian/index.js"
 import { WorkflowsExtension } from "./workflows.js"
 import { HandoffExtension } from "./handoff.js"
+import { GoalExtension } from "./goal/index.js"
+import { BtwExtension } from "./btw/index.js"
 import { ArtifactsExtension } from "./artifacts/index.js"
 import { ReadTool } from "./fs-tools/read.js"
 import { WriteTool } from "./fs-tools/write.js"
@@ -101,11 +103,15 @@ export {
   LibrarianExtension,
   WorkflowsExtension,
   HandoffExtension,
+  GoalExtension,
+  BtwExtension,
   ArtifactsExtension,
 }
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner>> = [
   HandoffExtension,
+  GoalExtension,
+  BtwExtension,
   FsToolsExtension,
   ExecToolsExtension,
   NetworkToolsExtension,

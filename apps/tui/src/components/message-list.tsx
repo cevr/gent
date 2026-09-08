@@ -126,13 +126,26 @@ const isMessageItem = Predicate.or(
   Predicate.isTagged("interjection-message"),
 )
 
+/** Harness-authored user messages collapse to one line unless full detail is on. */
+const collapsedUserLabel = (customType: string): Option.Option<string> => {
+  if (customType === "goal-context") return Option.some("↻ goal continuation")
+  return Option.none()
+}
+
 function UserMessage(props: {
   content: string
   images: ImageInfo[]
   interjection: boolean
   pendingMode?: "queued" | "steer"
+  customType?: string
+  fullDetail: boolean
 }) {
   const { theme } = useTheme()
+  const collapsedLabel = () =>
+    Option.fromUndefinedOr(props.customType).pipe(
+      Option.flatMap(collapsedUserLabel),
+      Option.filter(() => !props.fullDetail),
+    )
   const textColor = () => {
     if (props.interjection) return theme.warning
     return theme.text
@@ -151,44 +164,60 @@ function UserMessage(props: {
 
   return (
     <Show when={hasContent()}>
-      <box marginTop={1} flexDirection="row" alignItems="flex-start">
-        <text width={1} flexShrink={0} style={{ fg: railColor() }}>
-          {Array.from({ length: contentHeight() }, () => "┃").join("\n")}
-        </text>
-        <box
-          flexGrow={1}
-          paddingLeft={1}
-          paddingRight={1}
-          flexDirection="column"
-          onSizeChange={function () {
-            setContentHeight(this.height)
-          }}
-        >
-          <Show when={props.images.length > 0}>
-            <For each={props.images}>
-              {(img) => (
-                <text style={{ fg: theme.info }}>
-                  [Image: {img.mediaType.replace("image/", "")}]
-                </text>
-              )}
-            </For>
-          </Show>
-          <Show when={props.content.length > 0}>
-            <box flexDirection="column">
-              <Show when={label()}>
-                {(value) => (
-                  <text>
-                    <span style={{ fg: labelColor(), bold: true }}>[{value()}]</span>
-                  </text>
-                )}
+      <Show
+        when={Option.getOrUndefined(collapsedLabel())}
+        fallback={
+          <box marginTop={1} flexDirection="row" alignItems="flex-start">
+            <text width={1} flexShrink={0} style={{ fg: railColor() }}>
+              {Array.from({ length: contentHeight() }, () => "┃").join("\n")}
+            </text>
+            <box
+              flexGrow={1}
+              paddingLeft={1}
+              paddingRight={1}
+              flexDirection="column"
+              onSizeChange={function () {
+                setContentHeight(this.height)
+              }}
+            >
+              <Show when={props.images.length > 0}>
+                <For each={props.images}>
+                  {(img) => (
+                    <text style={{ fg: theme.info }}>
+                      [Image: {img.mediaType.replace("image/", "")}]
+                    </text>
+                  )}
+                </For>
               </Show>
-              <text style={{ fg: textColor() }}>
-                <span style={{ bold: true }}>{props.content}</span>
-              </text>
+              <Show when={props.content.length > 0}>
+                <box flexDirection="column">
+                  <Show when={label()}>
+                    {(value) => (
+                      <text>
+                        <span style={{ fg: labelColor(), bold: true }}>[{value()}]</span>
+                      </text>
+                    )}
+                  </Show>
+                  <text style={{ fg: textColor() }}>
+                    <span style={{ bold: true }}>{props.content}</span>
+                  </text>
+                </box>
+              </Show>
             </box>
-          </Show>
-        </box>
-      </box>
+          </box>
+        }
+      >
+        {(label) => (
+          <box marginTop={1} flexDirection="row">
+            <text width={1} flexShrink={0} style={{ fg: theme.textMuted }}>
+              ┃
+            </text>
+            <text paddingLeft={1} style={{ fg: theme.textMuted }}>
+              {label()}
+            </text>
+          </box>
+        )}
+      </Show>
     </Show>
   )
 }
@@ -575,6 +604,8 @@ export function MessageList(props: MessageListProps) {
                   images={item.images}
                   interjection={item._tag === "interjection-message"}
                   pendingMode={item.pendingMode}
+                  customType={item.metadata?.customType}
+                  fullDetail={props.fullDetail === true}
                 />
               </Show>
             )

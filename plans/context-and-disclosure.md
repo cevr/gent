@@ -63,7 +63,7 @@ non-blocking transcript notice. Keep `/handoff` as an explicit user action.
 - Status line reads the projection: `ctx 42% · 3 omitted · compacted r2`.
   Requires exposing `ModelContextProjection` metrics on the session snapshot.
 
-### S5. `/btw` and `/goal`
+### S5. `/btw` and `/goal` (shipped 2026-09-08)
 
 - `/btw <question>`: side agent on a clone of the current projection, tools
   off, thinking off, streamed into a side pane; follow-ups replay earlier side

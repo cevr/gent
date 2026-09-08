@@ -4,8 +4,10 @@ import { Effect } from "effect"
 import { ref } from "@gent/core/extensions/api"
 import { SkillsRpc } from "@gent/extensions/client.js"
 import builtinArtifacts from "./artifacts.client"
+import builtinBtw from "./btw.client"
 import builtinDriver from "./driver.client"
 import builtinFiles from "./files.client"
+import builtinGoal from "./goal.client"
 import { builtinInteractions, builtinTools } from "./tool-renderers.client"
 import {
   defineClientExtension,
@@ -66,9 +68,11 @@ const builtinSkills = defineClientExtension("@gent/skills-ui", {
 // one place when `loader-boundary.ts` runs `runtime.runPromise(...)`.
 export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinArtifacts,
+  builtinBtw,
   builtinConnection,
   builtinDriver,
   builtinFiles,
+  builtinGoal,
   builtinHandoff,
   builtinInteractions,
   builtinSkills,

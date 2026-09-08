@@ -167,6 +167,46 @@ describe("FX transcript treatment", () => {
     }),
   )
 
+  it.live("goal continuations collapse to one line until full detail is on", () =>
+    Effect.gen(function* () {
+      const goalMessage: Message = {
+        ...userMessage(
+          "regular-message",
+          "goal-1",
+          "Continue working toward the active goal.",
+          "queued",
+        ),
+        pendingMode: absent,
+        metadata: { customType: "goal-context", extensionId: "@gent/goal" },
+      }
+      const collapsed = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <MessageList
+            items={[goalMessage]}
+            toolsExpanded={false}
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
+        )),
+      )
+      const collapsedFrame = renderFrame(collapsed)
+      expect(collapsedFrame).toContain("goal continuation")
+      expect(collapsedFrame).not.toContain("Continue working")
+      const expanded = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <MessageList
+            items={[goalMessage]}
+            toolsExpanded={false}
+            fullDetail={true}
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
+        )),
+      )
+      expect(renderFrame(expanded)).toContain("Continue working")
+    }),
+  )
+
   it.live("keeps multiline user text visible in a narrow transcript", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [

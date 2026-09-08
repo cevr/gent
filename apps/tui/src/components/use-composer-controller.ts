@@ -549,7 +549,10 @@ export function useComposerController(): ComposerController {
     autocomplete,
     mode: effectiveMode,
     inputFocused: () =>
-      !command.paletteOpen() && sc.promptSearchOpen() !== true && effectiveMode() !== "interaction",
+      !command.paletteOpen() &&
+      sc.promptSearchOpen() !== true &&
+      effectiveMode() !== "interaction" &&
+      sc.uiState().overlay._tag === "none",
     attachTextarea: (renderable) => {
       inputRef = Option.fromNullishOr(renderable)
       if (Option.isSome(inputRef)) {
