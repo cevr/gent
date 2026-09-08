@@ -554,6 +554,29 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
       expect(parsed["input"]).toEqual([{ role: "user", content: "hi" }])
     }),
   )
+  it.live("drops sampling limits the Codex backend rejects", () =>
+    Effect.gen(function* () {
+      const state = okResponse()
+      const wrapped = yield* Effect.promise(() => buildWrapped(state))
+      yield* Effect.promise(() =>
+        runOk(
+          wrapped.post("https://api.openai.com/v1/responses", {
+            body: jsonBody({
+              model: "gpt-5.6-luna",
+              max_output_tokens: 4096,
+              temperature: 0.2,
+              reasoning: { effort: "max" },
+              input: [{ role: "user", content: "hi" }],
+            }),
+          }),
+        ),
+      )
+      const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
+      expect(parsed["max_output_tokens"]).toBeUndefined()
+      expect(parsed["temperature"]).toBeUndefined()
+      expect(parsed["reasoning"]).toEqual({ effort: "max" })
+    }),
+  )
   it.live(
     "rewrites JSON body: lifts system/developer items into top-level instructions, sets store=false",
     () =>

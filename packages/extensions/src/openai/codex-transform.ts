@@ -236,6 +236,10 @@ const rewriteCodexBody = (
   const { instructions, input } = split.value
   const next = { ...parsed.value }
   delete next["messages"]
+  // The Codex backend rejects sampling limits ("Unsupported parameter:
+  // max_output_tokens"); reasoning models there also take no temperature.
+  delete next["max_output_tokens"]
+  delete next["temperature"]
   next["instructions"] = CODEX_DEFAULT_INSTRUCTIONS
   if (instructions.length > 0) next["instructions"] = instructions.join("\n\n")
   next["input"] = input
