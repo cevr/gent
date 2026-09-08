@@ -170,7 +170,6 @@
     },
   },
   "patchedDependencies": {
-    "effect-encore@0.29.1": "patches/effect-encore@0.29.1.patch",
     "@opentui/core@0.5.10": "patches/@opentui%2Fcore@0.5.10.patch",
   },
   "overrides": {
@@ -191,7 +190,7 @@
     "@types/picomatch": "^4.0.3",
     "effect": "4.0.0-rc.112",
     "effect-bun-test": "0.3.0",
-    "effect-encore": "^0.29.1",
+    "effect-encore": "^0.29.2",
     "effect-machine": "0.25.4",
     "effect-wide-event": "0.3.0",
     "msgpackr": "^2.1.0",
@@ -644,7 +643,7 @@
 
     "effect-bun-test": ["effect-bun-test@0.3.0", "", { "peerDependencies": { "bun": "*", "effect": ">=3.19.0" } }, "sha512-P2xZ4HBZg4bFw2ePY4E5UB6EZ2d1L/HO13+KdoprTYFuc8B1uTpdn7V4UU6qyYiYsqTY9DZ1TFB94Ekx2YLA4g=="],
 
-    "effect-encore": ["effect-encore@0.29.1", "", { "peerDependencies": { "effect": ">=4.0.0-rc.112 <5" } }, "sha512-QBrch5d8/0M0l5WCsuu+oTyc+3d4vfnNM7c3LbgjlDkFB2MOIuj9EHBXE2gdu8AjAmCQ/lB4GtAVREdxTXNC2Q=="],
+    "effect-encore": ["effect-encore@0.29.2", "", { "peerDependencies": { "effect": ">=4.0.0-rc.112 <5" } }, "sha512-Ug21/oLEcmbV2J9PyhYP1pQSxACd5HhvYyORIATX2HG3iRu75loGp03T07vfEtVXQB7m+PvOKkqCy4Na6lWPjg=="],
 
     "effect-machine": ["effect-machine@0.25.4", "", { "peerDependencies": { "effect": ">=4.0.0-rc.112 <5" } }, "sha512-bzOhbhLMxeRzNkUEvvTA5XKjVXLnaUCee8k2RuBeOawYhvx5gGyyoI0DZt0YtZrHDCRLVoA2VIlQ9UipowFX4w=="],
 
