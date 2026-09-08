@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { ExtensionContext, makeRunSpec, requireCurrentAgent, tool } from "@gent/core/extensions/api"
+import { ExtensionContext, tool } from "@gent/core/extensions/api"
 
 // Handoff Tool Error
 
@@ -33,9 +33,6 @@ export const HandoffResult = Schema.Struct({
 
 // Handoff Tool
 
-const SUMMARIZE_ADDENDUM =
-  "Summarize the given text. Focus on decisions, open questions, and current state. Do not run tools."
-
 export const HandoffTool = tool({
   id: "handoff",
   description:
@@ -49,23 +46,7 @@ export const HandoffTool = tool({
   output: HandoffResult,
   execute: Effect.fn("HandoffTool.execute")(function* (params: typeof HandoffParams.Type) {
     const ctx = yield* ExtensionContext
-    // A child of the current agent distills the context when it is large.
-    let summary = params.context
-    if (params.context.length > 2000) {
-      const agent = yield* requireCurrentAgent
-      const summarizeResult = yield* ctx.Agent.run({
-        agent,
-        prompt: `Distill this context for a handoff to a new session. Preserve: current task, key decisions, relevant files, open questions, state to carry over. Be concise.\n\n${params.context}`,
-        runSpec: makeRunSpec({
-          persistence: "ephemeral",
-          parentToolCallId: ctx.toolCallId,
-          overrides: { systemPromptAddendum: SUMMARIZE_ADDENDUM, allowedTools: [] },
-        }),
-      })
-      if (summarizeResult._tag === "success") {
-        summary = summarizeResult.text
-      }
-    }
+    const summary = params.context
 
     const interaction = ctx.Interaction
     const decision = yield* interaction.approve({

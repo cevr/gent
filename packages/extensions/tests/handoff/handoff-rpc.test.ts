@@ -1,25 +1,8 @@
-/**
- * Handoff tool RPC acceptance test — exercises the `handoff` tool through a
- * real agent turn (LLM emits the tool call, runtime dispatches it inside the
- * per-request scope, conditionally fans out one summarizer subagent run when
- * context is large, and yields ctx.Interaction.approve which auto-approves
- * via the ApprovalService Test default). The existing `handoff.test.ts`
- * calls the executor directly via `runToolWithCtx`, which bypasses the
- * scope boundary production uses.
- *
- * Uses >2000-char context to trip the summarizer branch so the subagent
- * fan-out + Interaction.approve combination both ride through the
- * per-request scope edge.
- *
- * Maps W37 S6 C15 (audit L5-P1-3).
- */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Fiber, Stream } from "effect"
+import { Effect, Fiber, Schema, Stream } from "effect"
 import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { AgentRunResult, SessionId } from "@gent/core/extensions/api"
-import type { AgentName } from "@gent/core/extensions/api"
 import { e2ePreset } from "../helpers/test-preset"
 import { isToolResultFor } from "../helpers/tool-event.js"
 
@@ -27,7 +10,7 @@ const largeContext = `Current task: migrate the actor mailbox to bounded queues.
 
 describe("HandoffExtension via model turn", () => {
   it.live(
-    "handoff tool routes summarizer subagent + approval through per-request scope",
+    "approval preserves the full supplied handoff without a second model run",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -38,21 +21,9 @@ describe("HandoffExtension via model turn", () => {
             }),
             textStep("handed-off"),
           ])
-          const subagentRunner = {
-            run: (params: { prompt: string; agent: { name: AgentName } }) =>
-              Effect.succeed(
-                AgentRunResult.cases.success.make({
-                  text: `Distilled: actor mailbox migration to bounded queues`,
-                  sessionId: SessionId.make("summarizer-child-session"),
-                  agentName: params.agent.name,
-                  persistence: "ephemeral",
-                }),
-              ),
-          }
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            subagentRunner,
           })
 
           const toolEventFiber = yield* client.session
@@ -75,7 +46,9 @@ describe("HandoffExtension via model turn", () => {
           expect(succeeded).toBeDefined()
           if (succeeded?.event._tag === "ToolCallSucceeded") {
             expect(succeeded.event.output).toContain('"handoff": true')
-            expect(succeeded.event.output).toContain("actor mailbox migration")
+            expect(succeeded.event.output).toContain(
+              yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(largeContext),
+            )
             expect(succeeded.event.output).toContain('"reason": "context window filling up"')
           }
         }).pipe(Effect.timeout("12 seconds")),

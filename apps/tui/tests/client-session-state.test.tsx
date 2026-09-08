@@ -69,6 +69,52 @@ const waitForAgentError = (
     }),
   )
 describe("ClientProvider session lifecycle", () => {
+  it.live("runtime idle clears finishing activity only for the current branch", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      const sessionId = SessionId.make("session-runtime-idle")
+      const branchId = BranchId.make("branch-runtime-idle")
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          initialSession: {
+            id: sessionId,
+            activeBranchId: branchId,
+            name: "Runtime",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClient(ctx)
+      client.applySessionSnapshot({
+        sessionId,
+        branchId,
+        messages: [],
+        lastEventId: 42,
+        reasoningLevel: absent,
+        runtime: { _tag: "Running", agent: AgentName.make("main"), queue: emptyQueueSnapshot() },
+        metrics: {
+          turns: 1,
+          tokens: 0,
+          toolCalls: 0,
+          retries: 0,
+          durationMs: 0,
+          costUsd: 0,
+          lastInputTokens: 0,
+        },
+      })
+      expect(client.isStreaming()).toBe(true)
+      const runtime = {
+        _tag: "Idle",
+        agent: AgentName.make("main"),
+        queue: emptyQueueSnapshot(),
+      } satisfies Parameters<ClientContextValue["applySessionRuntime"]>[0]["runtime"]
+      client.applySessionRuntime({ sessionId, branchId: BranchId.make("old-branch"), runtime })
+      expect(client.isStreaming()).toBe(true)
+      client.applySessionRuntime({ sessionId, branchId, runtime })
+      expect(client.isStreaming()).toBe(false)
+    }),
+  )
   it.live("model list failures surface as agent errors", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()

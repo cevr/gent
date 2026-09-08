@@ -163,6 +163,7 @@ describe("useSessionFeed", () => {
           log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
           setConnectionIssue: () => {},
           waitForTransportReady: Effect.void,
+          applySessionRuntime: () => {},
           applySessionSnapshot: () => {
             snapshotCount += 1
             setActive(makeSession(sessionId, branchId))
@@ -307,6 +308,7 @@ describe("useSessionFeed", () => {
           },
           setConnectionIssue: () => {},
           waitForTransportReady: Effect.void,
+          applySessionRuntime: () => {},
           applySessionSnapshot: () => {},
           applySessionEvent: () => {
             appliedEvents += 1
@@ -456,6 +458,7 @@ describe("useSessionFeed", () => {
           log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
           setConnectionIssue: () => {},
           waitForTransportReady: Effect.void,
+          applySessionRuntime: () => {},
           applySessionSnapshot: () => {},
           applySessionEvent: () => {},
           applyBufferedSessionEvent: () => {},
@@ -548,6 +551,7 @@ describe("useSessionFeed", () => {
           log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
           setConnectionIssue: () => {},
           waitForTransportReady: Effect.void,
+          applySessionRuntime: () => {},
           applySessionSnapshot: () => {},
           applySessionEvent: (envelope) => {
             if (envelope.id === liveEvent.id)
@@ -631,6 +635,7 @@ describe("useSessionFeed", () => {
           log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
           setConnectionIssue: () => {},
           waitForTransportReady: Effect.void,
+          applySessionRuntime: () => {},
           applySessionSnapshot: () => {},
           applySessionEvent: () => {},
           applyBufferedSessionEvent: () => {},
@@ -718,6 +723,7 @@ describe("useSessionFeed", () => {
           log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
           setConnectionIssue: () => {},
           waitForTransportReady: Effect.void,
+          applySessionRuntime: () => {},
           applySessionSnapshot: () => {},
           applySessionEvent: () => {},
           applyBufferedSessionEvent: () => {},
@@ -810,6 +816,7 @@ describe("useSessionFeed", () => {
           log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
           setConnectionIssue: () => {},
           waitForTransportReady: Effect.void,
+          applySessionRuntime: () => {},
           applySessionSnapshot: () => {},
           applySessionEvent: () => {},
           applyBufferedSessionEvent: () => {},

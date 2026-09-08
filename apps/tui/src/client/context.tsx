@@ -157,6 +157,7 @@ export interface ClientTransportValue {
   ) => () => void
   /** Subscribe to every event for the active session/branch. */
   onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
+  applySessionRuntime: (input: Pick<SessionSnapshot, "sessionId" | "branchId" | "runtime">) => void
   applySessionSnapshot: (snapshot: SessionSnapshot) => void
   applySessionEvent: (envelope: EventEnvelope) => void
   applyBufferedSessionEvent: (envelope: EventEnvelope) => void
@@ -524,6 +525,20 @@ export function ClientProvider(props: ClientProviderProps) {
     ),
   )
 
+  const applySessionRuntime: ClientTransportValue["applySessionRuntime"] = (input) => {
+    const current = sessionOption()
+    if (Option.isNone(current)) return
+    if (current.value.sessionId !== input.sessionId || current.value.branchId !== input.branchId)
+      return
+    if (input.runtime._tag === "Idle") {
+      if (agentStore.status._tag === "streaming") {
+        setAgentStore({ status: AgentStatus.cases["idle"].make({}) })
+      }
+    } else {
+      setAgentStore({ status: AgentStatus.cases["streaming"].make({}) })
+    }
+  }
+
   const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
     const currentSession = sessionOption()
     if (Option.isSome(currentSession)) {
@@ -682,6 +697,7 @@ export function ClientProvider(props: ClientProviderProps) {
     setConnectionIssue,
     onExtensionStateChanged: eventHub.onExtensionStateChanged,
     onSessionEvent: eventHub.onSessionEvent,
+    applySessionRuntime,
     applySessionSnapshot,
     applySessionEvent,
     applyBufferedSessionEvent,

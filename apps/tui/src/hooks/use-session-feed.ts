@@ -104,6 +104,7 @@ type SessionFeedClient = Pick<ClientSessionValue, "session"> &
     | "log"
     | "setConnectionIssue"
     | "waitForTransportReady"
+    | "applySessionRuntime"
     | "applySessionSnapshot"
     | "applySessionEvent"
     | "applyBufferedSessionEvent"
@@ -609,6 +610,11 @@ export function useSessionFeed(
                         if (Option.isNone(currentKey) || currentKey.value !== key) return
                         client.setConnectionIssue(Option.getOrNull(Option.none()))
                         if (next._tag === "Idle") resolveRetryingEvents(setStore)
+                        client.applySessionRuntime({
+                          sessionId: session,
+                          branchId: branch,
+                          runtime: next,
+                        })
                         callbacks.onQueueSnapshot(next.queue)
                       }),
                     ),
