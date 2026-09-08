@@ -16,7 +16,7 @@ import { BunServices } from "@effect/platform-bun"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { Auth, AuthError, AuthMethod } from "@gent/core-internal/domain/auth"
-import { AgentName, ExternalDriverRef } from "@gent/core-internal/domain/agent"
+import { DEFAULT_AGENT_NAME, ExternalDriverRef } from "@gent/core-internal/domain/agent"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
 import { ConfigService } from "../../src/runtime/config-service.js"
@@ -123,12 +123,12 @@ describe("auth.listProviders", () => {
           const sessionCwd = yield* fs.makeTempDirectoryScoped()
           const home = yield* fs.makeTempDirectoryScoped()
           // Seed the session cwd's project config with a driver override
-          // for `cowork`. Any external driver id marks the agent as
+          // for `main`. Any external driver id marks the agent as
           // externally routed, so no model provider is required.
           yield* fs.makeDirectory(path.join(sessionCwd, ".gent"), { recursive: true })
           yield* fs.writeFileString(
             path.join(sessionCwd, ".gent", "config.json"),
-            '{"driverOverrides":{"cowork":{"_tag":"external","id":"acp-claude-code"}}}',
+            '{"driverOverrides":{"main":{"_tag":"external","id":"acp-claude-code"}}}',
           )
           const runtimeEnvironmentLive = RuntimeEnvironment.Live({
             cwd: launch,
@@ -146,11 +146,11 @@ describe("auth.listProviders", () => {
               configServiceLayer: configServiceLive,
             }),
           )
-          // Launch cwd has no override -> cowork (anthropic-modeled)
+          // Launch cwd has no override -> main (anthropic-modeled)
           // requires anthropic. Proves the override is NOT in user config.
           const launchSession = yield* client.session.create({ cwd: launch })
           const launchList = yield* client.auth.listProviders({
-            agentName: AgentName.make("cowork"),
+            agentName: DEFAULT_AGENT_NAME,
             sessionId: launchSession.sessionId,
           })
           expect(launchList.find((p) => p.provider === "anthropic")?.required).toBe(true)
@@ -158,7 +158,7 @@ describe("auth.listProviders", () => {
           // required because the agent is externally routed.
           const overriddenSession = yield* client.session.create({ cwd: sessionCwd })
           const overriddenList = yield* client.auth.listProviders({
-            agentName: AgentName.make("cowork"),
+            agentName: DEFAULT_AGENT_NAME,
             sessionId: overriddenSession.sessionId,
           })
           expect(overriddenList.find((p) => p.provider === "anthropic")?.required).toBe(false)
@@ -174,13 +174,13 @@ describe("auth.listProviders", () => {
         const externalDriver = drivers.find((d) => d._tag === "external")
         if (Predicate.isUndefined(externalDriver)) return
         yield* client.driver.set({
-          agentName: AgentName.make("cowork"),
+          agentName: DEFAULT_AGENT_NAME,
           driver: ExternalDriverRef.make({ id: externalDriver.id }),
         })
         // No sessionId → launch cwd path. Under ConfigService.Test this
         // still works because driver.set writes to the in-memory user
         // ref that `get(undefined)` also reads.
-        const list = yield* client.auth.listProviders({ agentName: AgentName.make("cowork") })
+        const list = yield* client.auth.listProviders({ agentName: DEFAULT_AGENT_NAME })
         expect(list.find((p) => p.provider === "anthropic")?.required).toBe(false)
       }).pipe(Effect.timeout("4 seconds")),
     ),
@@ -194,7 +194,7 @@ describe("auth.listProviders", () => {
         yield* client.session.delete({ sessionId: session.sessionId })
         const exit = yield* Effect.exit(
           client.auth.listProviders({
-            agentName: AgentName.make("cowork"),
+            agentName: DEFAULT_AGENT_NAME,
             sessionId: session.sessionId,
           }),
         )

@@ -13,12 +13,12 @@ import type { LanguageModel } from "effect/unstable/ai"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { BunServices } from "@effect/platform-bun"
 import {
-  AgentName,
   AgentRunnerService,
   AgentRunResult,
   DEFAULT_MODEL_ID,
   type AgentDefinition,
   type AgentRunner,
+  DEFAULT_AGENT_NAME,
 } from "../domain/agent.js"
 import { Auth } from "../domain/auth.js"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
@@ -75,7 +75,7 @@ const defaultSubagentRunner: Pick<AgentRunner, "run"> = {
       AgentRunResult.cases.success.make({
         text: "",
         sessionId: SessionId.make("test-subagent-session"),
-        agentName: AgentName.make("cowork"),
+        agentName: DEFAULT_AGENT_NAME,
       }),
     ),
 }

@@ -19,15 +19,16 @@ describe("system prompt composition", () => {
     date: "2026-01-01",
   }
 
-  test("includes identity with harness mention", () => {
+  test("includes identity as a general purpose agent that uses code", () => {
     const result = buildSystemPrompt(base)
-    expect(result).toContain("operating inside gent, an agent harness")
+    expect(result).toContain("You are Gent, a general purpose agent that uses code to solve tasks.")
   })
 
-  test("includes character section", () => {
+  test("includes work section with cell and delegation guidance", () => {
     const result = buildSystemPrompt(base)
-    expect(result).toContain("# Character")
-    expect(result).toContain("Finish what you start")
+    expect(result).toContain("# Work")
+    expect(result).toContain("The cell is your persistent control environment.")
+    expect(result).toContain("A child inherits your agent and model")
   })
 
   test("includes environment section", () => {
@@ -96,14 +97,16 @@ describe("base prompt sections", () => {
     date: "2026-01-01",
   }
 
-  test("produces identity, character, tools, and environment sections", () => {
+  test("produces identity, work, communication, boundaries, and environment sections", () => {
     const sections = buildBasePromptSections(base)
-    expect(sections.length).toBeGreaterThanOrEqual(6)
     const ids = sections.map((s) => s.id)
-    expect(ids).toContain("identity")
-    expect(ids).toContain("character")
-    expect(ids).toContain("tools")
-    expect(ids).toContain("environment")
+    expect(ids).toEqual(["identity", "work", "communication", "boundaries", "environment"])
+  })
+
+  test("appends project-instructions section when custom instructions are present", () => {
+    const sections = buildBasePromptSections({ ...base, customInstructions: "Use Bun." })
+    const ids = sections.map((s) => s.id)
+    expect(ids.at(-1)).toBe("project-instructions")
   })
 
   test("lower priority sections appear first in compiled output", () => {
@@ -251,44 +254,9 @@ describe("turn prompt composition", () => {
     expect(result).not.toContain("Prefer")
   })
 
-  test("synthesizes delegation targets when delegate is in tool set", () => {
+  test("never renders a delegation roster: children inherit the current agent", () => {
     const tools = [makeTool("delegate", { description: "Delegate work" })]
-    const targets = [
-      AgentDefinition.make({
-        name: AgentName.make("explore"),
-        description: "Fast codebase search",
-      }),
-      AgentDefinition.make({ name: AgentName.make("explore-2"), description: "Code review" }),
-      AgentDefinition.make({ name: AgentName.make("no-desc") }), // no description — should be excluded
-    ]
-    // oxlint-disable-next-line effect/noNullish -- Exercise the existing absent-value boundary contract.
-    const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
-    expect(result).toContain("## Delegation Targets")
-    expect(result).toContain("**explore**: Fast codebase search")
-    expect(result).toContain("**explore-2**: Code review")
-    expect(result).not.toContain("no-desc")
-  })
-
-  test("excludes current agent from delegation targets", () => {
-    const self = AgentDefinition.make({ name: AgentName.make("test-agent"), description: "Self" })
-    const tools = [makeTool("delegate", { description: "Delegate" })]
-    const targets = [
-      self,
-      AgentDefinition.make({ name: AgentName.make("other"), description: "Other agent" }),
-    ]
-    // oxlint-disable-next-line effect/noNullish -- Exercise the existing absent-value boundary contract.
-    const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
-    expect(result).toContain("**other**: Other agent")
-    expect(result).not.toContain("**test-agent**")
-  })
-
-  test("omits delegation targets when delegate not in tool set", () => {
-    const tools = [makeTool("read", { description: "Read" })]
-    const targets = [
-      AgentDefinition.make({ name: AgentName.make("explore"), description: "Search" }),
-    ]
-    // oxlint-disable-next-line effect/noNullish -- Exercise the existing absent-value boundary contract.
-    const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
+    const result = buildTurnPrompt(baseSections, agent, tools)
     expect(result).not.toContain("## Delegation Targets")
   })
 })

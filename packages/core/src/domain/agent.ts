@@ -1,4 +1,4 @@
-import { Context, Effect, Predicate, Schema, type Option } from "effect"
+import { Context, Option, Predicate, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
 import { branded, BranchId, RequestId, SessionId, ToolCallId } from "./ids.js"
 import type { TurnCompleted } from "./event.js"
@@ -52,7 +52,7 @@ export const ExternalDriverRef = DriverRef.cases.external
 export type ExternalDriverRef = typeof DriverRef.cases.external.Type
 
 /** Default agent name — used when no agent is explicitly specified. */
-export const DEFAULT_AGENT_NAME = AgentName.make("cowork")
+export const DEFAULT_AGENT_NAME = AgentName.make("main")
 
 /**
  * AgentDefinition — agent identity + defaults.
@@ -77,54 +77,23 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   driver: Schema.optional(DriverRef),
 }) {}
 
-// Built-in agents and their prompts live in their owning extensions:
-// - @gent/agents (extensions/agents.ts): cowork, deepwork, explore, architect, reviewer, summarizer, title
-// - @gent/librarian (extensions/librarian/index.ts): librarian
+// The one shipped agent (`main`) lives in @gent/agents (extensions/agents.ts).
+// Children spawned from a cell inherit the caller's agent and model.
 
 // Default model — used when an agent has no model set
-export const DEFAULT_MODEL_ID = ModelId.make("openai/gpt-5.4-mini")
+export const DEFAULT_MODEL_ID = ModelId.make("anthropic/claude-opus-4-6")
 
 /** Resolve model for an agent definition */
 export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
   agent.model ?? DEFAULT_MODEL_ID
 
-// ── Dual-model pair resolution ──
-//
-// Resolves the primary + reviewer model pair used by the auth-guard
-// required-provider check. Algorithm: name-based (`cowork` + `deepwork`) first, then positional
-// fallback to the first two modeled agents, then single-agent self-pair, then
-// fail.
-
-export class NoModeledAgentsError extends Schema.TaggedError<NoModeledAgentsError>()(
-  "NoModeledAgentsError",
-  {
-    message: Schema.String,
-  },
-) {}
-
-export const resolveDualModelPair = (
+/** Model of the default agent, when it is registered. */
+export const resolveDefaultAgentModel = (
   agents: ReadonlyArray<AgentDefinition>,
-): Effect.Effect<readonly [ModelId, ModelId], NoModeledAgentsError> =>
-  Effect.gen(function* () {
-    // 1. Name-based: cowork + deepwork (the standard dual-model pair)
-    const cowork = agents.find((a) => a.name === "cowork")
-    const deepwork = agents.find((a) => a.name === "deepwork")
-    if (Predicate.isNotUndefined(cowork) && Predicate.isNotUndefined(deepwork)) {
-      return [resolveAgentModel(cowork), resolveAgentModel(deepwork)]
-    }
-    // 2. Position-based fallback: first two modeled agents
-    const [first, second] = agents.filter((agent) => Predicate.isNotUndefined(agent.model))
-    if (Predicate.isNotUndefined(first) && Predicate.isNotUndefined(second)) {
-      return [resolveAgentModel(first), resolveAgentModel(second)]
-    }
-    if (Predicate.isNotUndefined(first)) {
-      return [resolveAgentModel(first), resolveAgentModel(first)]
-    }
-    return yield* new NoModeledAgentsError({
-      message:
-        "No modeled agents registered — dual-model workflows require at least one agent with a model",
-    })
-  })
+): Option.Option<ModelId> =>
+  Option.fromUndefinedOr(agents.find((agent) => agent.name === DEFAULT_AGENT_NAME)).pipe(
+    Option.map(resolveAgentModel),
+  )
 
 // ── Runtime driver routing ──
 

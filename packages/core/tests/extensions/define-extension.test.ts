@@ -10,7 +10,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Layer, Option, Predicate, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import { BunServices } from "@effect/platform-bun"
-import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
+import { builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import {
   defineExtension,
   defineResource,
@@ -34,7 +34,7 @@ import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { provideExtensionHookContext } from "../../src/runtime/extensions/extension-hook-context"
 import { testExtensionHostContext, testSetupCtx } from "@gent/core-internal/test-utils"
-import { AgentName } from "@gent/core-internal/domain/agent"
+import { DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 
 const stubHostCtx = testExtensionHostContext()
 
@@ -46,9 +46,9 @@ const stubProjectionCtx = {
   turn: {
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
-    agent: getBuiltinAgent("cowork")!,
+    agent: builtinAgent,
     allTools: [],
-    agentName: AgentName.make("cowork"),
+    agentName: DEFAULT_AGENT_NAME,
   },
 }
 
@@ -89,7 +89,7 @@ describe("defineExtension", () => {
       const ext = defineExtension({
         id: "all-kinds",
         tools: [myTool],
-        agents: [getBuiltinAgent("cowork")!],
+        agents: [builtinAgent],
         hooks: [hook.systemPrompt((input) => Effect.succeed(`${input.basePrompt} [suffix]`))],
         resources: [
           // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
@@ -103,7 +103,7 @@ describe("defineExtension", () => {
           {
             id: "test-job",
             cron: "0 0 * * *",
-            target: { agent: AgentName.make("cowork"), prompt: "hi" },
+            target: { agent: DEFAULT_AGENT_NAME, prompt: "hi" },
           },
         ],
       })
@@ -116,7 +116,7 @@ describe("defineExtension", () => {
       expect(String(getToolId(firstModelCap))).toBe("echo")
       expect(modelCapMetadata?.permissionRules?.[0]?.tool).toBe("echo")
       expect(modelCapMetadata?.prompt?.id).toBe("rules")
-      expect((contributions.agents ?? [])[0]?.name).toBe(AgentName.make("cowork"))
+      expect((contributions.agents ?? [])[0]?.name).toBe(DEFAULT_AGENT_NAME)
       expect(contributions.hooks?.[0]?.kind).toBe("systemPrompt")
       const resources = contributions.resources ?? []
       expect(resources).toHaveLength(1)
@@ -261,7 +261,7 @@ describe("defineExtension", () => {
 
       const compiled = compileExtensionHooks([loaded])
       const result = yield* compiled
-        .resolveSystemPrompt({ basePrompt: "yo", agent: getBuiltinAgent("cowork")! })
+        .resolveSystemPrompt({ basePrompt: "yo", agent: builtinAgent })
         .pipe(provideExtensionHookContext({ projection: stubProjectionCtx, host: stubHostCtx }))
       expect(result).toBe("yo!!")
     }))

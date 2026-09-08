@@ -18,7 +18,7 @@ import { narrowR } from "../../helpers/effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
 import type { PeekResult } from "effect-encore"
-import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
+import { AgentDefinition, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
 import type { QueueSnapshot } from "@gent/core-internal/domain/queue"
 import {
@@ -71,8 +71,8 @@ import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
 
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
-  const cowork = AgentDefinition.make({
-    name: AgentName.make("cowork"),
+  const mainAgent = AgentDefinition.make({
+    name: DEFAULT_AGENT_NAME,
     model: ModelId.make("test/default"),
   })
   return resolveExtensions([
@@ -81,7 +81,7 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
       scope: "builtin",
       sourcePath: "test",
       contributions: {
-        agents: [cowork],
+        agents: [mainAgent],
         tools,
       } satisfies ExtensionContributions,
     },
@@ -526,7 +526,7 @@ describe("agent-loop actor commands", () => {
           ])
           expect(state).toEqual({
             _tag: "Idle",
-            agent: AgentName.make("cowork"),
+            agent: DEFAULT_AGENT_NAME,
             queue: { followUp: [], steering: [] },
           })
           expect(eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(1)

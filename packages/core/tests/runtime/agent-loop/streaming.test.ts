@@ -32,12 +32,12 @@ import { EventStorage } from "@gent/core-internal/storage/event-storage"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { SequenceRecorder } from "@gent/core-internal/test-utils"
 import { emptyQueueSnapshot } from "@gent/core-internal/domain/queue"
-import { AgentName } from "@gent/core-internal/domain/agent"
 import { BranchId, MessageId, RequestId, SessionId } from "@gent/core-internal/domain/ids"
 import { assistantMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
 import {
   makeAgentLoopService,
   makeExtRegistry,
+  helperAgent,
   makeLayer,
   makeLayerWithEventPublisher,
   makeLayerWithEvents,
@@ -564,7 +564,7 @@ describe("streaming", () => {
             branchId: BranchId.make("b1"),
             requestId: "req-interject-priority",
             message: "steer now",
-            agent: AgentName.make("deepwork"),
+            agent: helperAgent.name,
           })
           // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(gate, void 0)

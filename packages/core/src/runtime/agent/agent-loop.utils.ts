@@ -18,7 +18,7 @@ const isReasoningEffort = Schema.is(ReasoningEffort)
 
 /**
  * Build the per-turn prompt sections (base + agent addendum + tool list +
- * tool guidelines + delegation targets + extension extras). Returns the
+ * tool guidelines + cell catalog + extension extras). Returns the
  * unsorted section list so prompt slots can rewrite specific sections
  * (e.g. codemode replacing `tool-list` / `tool-guidelines`) before final
  * compilation.
@@ -28,7 +28,6 @@ export const buildTurnPromptSections = (
   agent: AgentDefinition,
   tools: ReadonlyArray<ToolCapability>,
   extraSections?: ReadonlyArray<PromptSection>,
-  delegationTargets?: ReadonlyArray<AgentDefinition>,
   cellHostTools: ReadonlyArray<ToolCapability> = [],
 ): ReadonlyArray<PromptSection> => {
   const sections: PromptSection[] = [...baseSections]
@@ -103,28 +102,6 @@ export const buildTurnPromptSections = (
     })
   }
 
-  // Delegation targets — synthesized from registered agents when delegate is available
-  // Internal agents are hidden — only user-facing agents appear as delegation targets
-  const INTERNAL_AGENTS = new Set(["reviewer", "architect", "summarizer", "title", "librarian"])
-  const hasDelegate = toolsWithMetadata.some((tool) => tool.id === "delegate")
-  if (hasDelegate && !Predicate.isUndefined(delegationTargets) && delegationTargets.length > 0) {
-    const targets = delegationTargets
-      .filter(
-        (a) =>
-          a.name !== agent.name &&
-          !Predicate.isUndefined(a.description) &&
-          !INTERNAL_AGENTS.has(a.name),
-      )
-      .map((a) => `- **${a.name}**: ${a.description}`)
-    if (targets.length > 0) {
-      sections.push({
-        id: "delegation-targets",
-        content: `## Delegation Targets\n\nAgents available via the \`delegate\` tool:\n\n${targets.join("\n")}`,
-        priority: 46,
-      })
-    }
-  }
-
   // Extension-contributed sections
   if (!Predicate.isUndefined(extraSections)) {
     for (const s of extraSections) {
@@ -145,11 +122,7 @@ export const buildTurnPrompt = (
   agent: AgentDefinition,
   tools: ReadonlyArray<ToolCapability>,
   extraSections?: ReadonlyArray<PromptSection>,
-  delegationTargets?: ReadonlyArray<AgentDefinition>,
-): string =>
-  compileSystemPrompt(
-    buildTurnPromptSections(baseSections, agent, tools, extraSections, delegationTargets),
-  )
+): string => compileSystemPrompt(buildTurnPromptSections(baseSections, agent, tools, extraSections))
 
 export const resolveReasoning = (
   agent: AgentDefinition,

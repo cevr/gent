@@ -318,13 +318,11 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   // that need to swap or strip a section by id, e.g. codemode replacing
   // `tool-list` / `tool-guidelines` rather than appending a contradicting
   // surface).
-  const allAgents = [...resolvedExtensions.agents.values()]
   const sections = buildTurnPromptSections(
     params.baseSections,
     effectiveAgent,
     tools,
     extensionSections,
-    allAgents,
     cellHostTools,
   )
   const turnPrompt = compileSystemPrompt(sections)

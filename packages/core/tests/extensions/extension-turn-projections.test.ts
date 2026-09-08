@@ -6,9 +6,9 @@
  *  - failures/defects are isolated so later extensions still run
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Option } from "effect"
+import { Effect } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
+import { builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type {
   ExtensionTurnContext,
   LoadedExtension,
@@ -24,7 +24,7 @@ import { testExtensionHostContext } from "@gent/core-internal/test-utils"
 const turnCtx: ExtensionTurnContext = {
   sessionId: SessionId.make("s"),
   branchId: BranchId.make("b"),
-  agent: Option.getOrThrow(Option.fromUndefinedOr(getBuiltinAgent("cowork"))),
+  agent: builtinAgent,
   allTools: [],
   interactive: true,
 }

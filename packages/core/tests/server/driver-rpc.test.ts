@@ -10,7 +10,12 @@ import { describe, it, expect } from "effect-bun-test"
 import { Predicate, Effect } from "effect"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core-internal/domain/agent"
+import {
+  AgentName,
+  DEFAULT_AGENT_NAME,
+  ExternalDriverRef,
+  ModelDriverRef,
+} from "@gent/core-internal/domain/agent"
 import { DriverListResult } from "@gent/core-internal/server/transport-contract"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
@@ -29,7 +34,7 @@ describe("ExtensionRpcs", () => {
         // (and friends); the registered list should be non-empty even when no
         // overrides are set.
         expect(before.drivers.length).toBeGreaterThan(0)
-        expect(before.agents.map((agent) => agent.name)).toContain(AgentName.make("cowork"))
+        expect(before.agents.map((agent) => agent.name)).toContain(DEFAULT_AGENT_NAME)
         expect(before.overrides).toEqual({})
       }).pipe(Effect.timeout("4 seconds")),
     ),
@@ -46,11 +51,11 @@ describe("ExtensionRpcs", () => {
           return yield* Effect.die(new Error("no model driver registered in test layer"))
         }
         yield* client.driver.set({
-          agentName: AgentName.make("cowork"),
+          agentName: DEFAULT_AGENT_NAME,
           driver: ModelDriverRef.make({ id: someModel.id }),
         })
         const after = yield* client.driver.list()
-        expect(after.overrides[AgentName.make("cowork")]?._tag).toBe("model")
+        expect(after.overrides[DEFAULT_AGENT_NAME]?._tag).toBe("model")
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -62,7 +67,7 @@ describe("ExtensionRpcs", () => {
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const result = yield* client.driver
           .set({
-            agentName: AgentName.make("cowork"),
+            agentName: DEFAULT_AGENT_NAME,
             driver: ExternalDriverRef.make({ id: "definitely-not-registered" }),
           })
           .pipe(Effect.flip)
@@ -82,10 +87,10 @@ describe("ExtensionRpcs", () => {
           return yield* Effect.die(new Error("no model driver registered in test layer"))
         }
         yield* client.driver.set({
-          agentName: AgentName.make("cowork"),
+          agentName: DEFAULT_AGENT_NAME,
           driver: ModelDriverRef.make({ id: someModel.id }),
         })
-        yield* client.driver.clear({ agentName: AgentName.make("cowork") })
+        yield* client.driver.clear({ agentName: DEFAULT_AGENT_NAME })
         const after = yield* client.driver.list()
         expect(after.overrides).toEqual({})
       }).pipe(Effect.timeout("4 seconds")),

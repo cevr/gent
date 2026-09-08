@@ -31,7 +31,7 @@ const agent = new AgentDefinition({ name: DEFAULT_AGENT_NAME })
 describe("turn prompt sections", () => {
   it.effect("lists host tools callable inside the cell as one instruction section", () =>
     Effect.sync(() => {
-      const sections = buildTurnPromptSections([], agent, [cell], [], [], [write, cell, read])
+      const sections = buildTurnPromptSections([], agent, [cell], [], [write, cell, read])
       const catalog = sections.find((section) => section.id === "cell-catalog")
       expect(catalog?.content).toContain("## Host Tools")
       expect(catalog?.content).toContain(
@@ -45,7 +45,7 @@ describe("turn prompt sections", () => {
 
   it.effect("adds no catalog section when the model surface was not narrowed to the cell", () =>
     Effect.sync(() => {
-      const sections = buildTurnPromptSections([], agent, [read, write], [], [])
+      const sections = buildTurnPromptSections([], agent, [read, write], [])
       expect(sections.find((section) => section.id === "cell-catalog")).toBeUndefined()
     }),
   )

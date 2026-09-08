@@ -5,7 +5,7 @@ import { toolCallStep, textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
 import { ensureStorageParents } from "@gent/core-internal/test-utils"
-import { AgentName } from "@gent/core-internal/domain/agent"
+import { DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
@@ -43,7 +43,7 @@ describe("exec-tools background runtime", () => {
         yield* runtime.runPrompt({
           sessionId,
           branchId,
-          agentName: AgentName.make("cowork"),
+          agentName: DEFAULT_AGENT_NAME,
           prompt: "start background command",
         })
         yield* sessions.deleteSession(sessionId)

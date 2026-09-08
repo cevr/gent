@@ -18,7 +18,7 @@
  * is unreadable by this module. Users re-authenticate on next launch.
  */
 
-import { Predicate, Context, Effect, Exit, Layer, Option, Schema } from "effect"
+import { Predicate, Context, Effect, Layer, Option, Schema } from "effect"
 import type { FileSystem, Path } from "effect"
 import { KeyValueStore } from "effect/unstable/persistence"
 import { ProviderId, parseModelProvider, type ModelId } from "./model.js"
@@ -27,7 +27,7 @@ import {
   DriverRef,
   resolveAgentDriver,
   resolveAgentModel,
-  resolveDualModelPair,
+  resolveDefaultAgentModel,
 } from "./agent.js"
 import { SessionId } from "./ids.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
@@ -249,7 +249,7 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
    *
    * Composes auth info (`Auth.get`) with registry-derived metadata
    * (`DriverRegistry.listModels`) and per-session routing
-   * (`resolveDualModelPair` + resolved extension agents) to compute
+   * (`resolveDefaultAgentModel` + resolved extension agents) to compute
    * which providers are required *and* present. External-routed
    * agents (driver._tag === "external") own their own auth, so model
    * auth is short-circuited for them.
@@ -265,17 +265,11 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
         const registeredProviders = yield* driverRegistry.listModels
         const registeredIds = new Set(registeredProviders.map((p) => p.id))
 
-        const requiredProviders = Effect.fn("AuthGuard.requiredProviders")(function* (
-          query: AuthProviderQuery = {},
-        ) {
+        const requiredProviders = (query: AuthProviderQuery = {}): ProviderId[] => {
           const agents = [...extensionRegistry.getResolved().agents.values()]
-          const modelPairExit = yield* Effect.exit(resolveDualModelPair(agents))
           const providers: ProviderId[] = []
           const seen = new Set<string>()
-          const modelIds: ModelId[] = Exit.match(modelPairExit, {
-            onFailure: () => [],
-            onSuccess: (value) => [...value],
-          })
+          const modelIds: ModelId[] = Option.toArray(resolveDefaultAgentModel(agents))
 
           if (!Predicate.isUndefined(query.agentName)) {
             const selectedAgent = agents.find((agent) => agent.name === query.agentName)
@@ -303,12 +297,12 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
           }
 
           return providers
-        })
+        }
 
         const listProviders = Effect.fn("AuthGuard.listProviders")(function* (
           query: AuthProviderQuery = {},
         ) {
-          const requiredSet = new Set(yield* requiredProviders(query))
+          const requiredSet = new Set(requiredProviders(query))
           const providers: AuthProviderInfo[] = []
 
           for (const provider of registeredProviders) {
@@ -339,7 +333,7 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
         })
 
         return AuthGuard.of({
-          requiredProviders,
+          requiredProviders: (query) => Effect.sync(() => requiredProviders(query)),
           listProviders,
           missingRequiredProviders,
         })

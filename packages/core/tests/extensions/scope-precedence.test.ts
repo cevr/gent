@@ -12,7 +12,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
+import { builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
 
@@ -26,7 +26,7 @@ import {
   testExtensionHostContext,
   testToolContext,
 } from "@gent/core-internal/test-utils"
-import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
+import { AgentDefinition, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 import { isToolCapability } from "@gent/core-internal/domain/capability/tool"
 
 const stubCtx = testExtensionHostContext()
@@ -39,9 +39,9 @@ const stubProjectionCtx = {
   turn: {
     sessionId: SessionId.make("test-session"),
     branchId: BranchId.make("test-branch"),
-    agent: getBuiltinAgent("cowork")!,
+    agent: builtinAgent,
     allTools: [],
-    agentName: AgentName.make("cowork"),
+    agentName: DEFAULT_AGENT_NAME,
   },
 }
 
@@ -91,9 +91,8 @@ describe("scope precedence", () => {
     })
 
     test("agent with same name: project shadows builtin", () => {
-      const builtinAgent = getBuiltinAgent("cowork")!
       const projectAgent = AgentDefinition.make({
-        ...getBuiltinAgent("cowork")!,
+        name: builtinAgent.name,
         description: "shadowed",
       })
 
@@ -101,7 +100,9 @@ describe("scope precedence", () => {
         ext("a", "builtin", { agents: [builtinAgent] }),
         ext("b", "project", { agents: [projectAgent] }),
       ])
-      return Effect.sync(() => expect(resolved.agents.get("cowork")?.description).toBe("shadowed"))
+      return Effect.sync(() =>
+        expect(resolved.agents.get(builtinAgent.name)?.description).toBe("shadowed"),
+      )
     })
 
     test("prompt section by id: project tool prompt shadows builtin", () => {
@@ -225,14 +226,10 @@ describe("scope precedence", () => {
         make("u", "user"),
       ])
 
-      return compiled
-        .resolveSystemPrompt({ basePrompt: "x", agent: getBuiltinAgent("cowork")! })
-        .pipe(
-          provideExtensionHookContext({ projection: stubProjectionCtx, host: stubCtx }),
-          Effect.tap((result) =>
-            Effect.sync(() => expect(result).toBe("x[builtin][user][project]")),
-          ),
-        )
+      return compiled.resolveSystemPrompt({ basePrompt: "x", agent: builtinAgent }).pipe(
+        provideExtensionHookContext({ projection: stubProjectionCtx, host: stubCtx }),
+        Effect.tap((result) => Effect.sync(() => expect(result).toBe("x[builtin][user][project]"))),
+      )
     })
   })
 })

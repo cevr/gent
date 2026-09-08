@@ -15,7 +15,12 @@ import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensio
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core-internal/domain/driver"
-import { AgentDefinition, AgentName, ExternalDriverRef } from "@gent/core-internal/domain/agent"
+import {
+  AgentDefinition,
+  AgentName,
+  DEFAULT_AGENT_NAME,
+  ExternalDriverRef,
+} from "@gent/core-internal/domain/agent"
 import { Effect, Layer, Schema } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
@@ -37,12 +42,8 @@ const testProviders: ModelDriverContribution[] = [
 
 const testAgents = [
   AgentDefinition.make({
-    name: AgentName.make("cowork"),
+    name: DEFAULT_AGENT_NAME,
     model: ModelId.make("anthropic/claude-opus-4-6"),
-  }),
-  AgentDefinition.make({
-    name: AgentName.make("deepwork"),
-    model: ModelId.make("openai/gpt-5.4"),
   }),
 ]
 
@@ -98,34 +99,26 @@ describe("AuthGuard", () => {
     registryLayer: Layer.Layer<ExtensionRegistry | DriverRegistry>,
   ) => AuthGuard.Live.pipe(Layer.provide(Auth.Test(seed)), Layer.provide(registryLayer))
 
-  it.live("requiredProviders include cowork + deepwork providers", () => {
+  it.live("requiredProviders is exactly the provider of the main agent's model", () => {
     const layer = guardLayerWithSeed({}, testRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
       const result = yield* guard.requiredProviders()
-      expect(result).toContain(ProviderId.make("anthropic"))
-      expect(result).toContain(ProviderId.make("openai"))
+      expect(result).toEqual([ProviderId.make("anthropic")])
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("missingRequiredProviders returns missing when no keys", () => {
+  it.live("missingRequiredProviders returns the main agent's provider when no keys", () => {
     const layer = guardLayerWithSeed({}, testRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
       const result = yield* guard.missingRequiredProviders()
-      expect(result).toContain(ProviderId.make("anthropic"))
-      expect(result).toContain(ProviderId.make("openai"))
+      expect(result).toEqual([ProviderId.make("anthropic")])
     }).pipe(Effect.provide(layer))
   })
 
   it.live("missingRequiredProviders clears when keys are present", () => {
-    const layer = guardLayerWithSeed(
-      {
-        openai: apiInfo("sk-openai"),
-        anthropic: apiInfo("sk-anthropic"),
-      },
-      testRegistryLayer,
-    )
+    const layer = guardLayerWithSeed({ anthropic: apiInfo("sk-anthropic") }, testRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
       const result = yield* guard.missingRequiredProviders()
@@ -145,28 +138,23 @@ describe("AuthGuard", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live(
-    "helper-only modeled agents do not widen required providers beyond the runtime pair",
-    () => {
-      const layer = guardLayerWithSeed({}, helperAgentRegistryLayer)
-      return Effect.gen(function* () {
-        const guard = yield* AuthGuard
-        const result = yield* guard.requiredProviders()
-        expect(result).toContain(ProviderId.make("anthropic"))
-        expect(result).toContain(ProviderId.make("openai"))
-        expect(result).not.toContain(ProviderId.make("google"))
-      }).pipe(Effect.provide(layer))
-    },
-  )
+  it.live("unselected helper agents do not widen required providers beyond main", () => {
+    const layer = guardLayerWithSeed({}, helperAgentRegistryLayer)
+    return Effect.gen(function* () {
+      const guard = yield* AuthGuard
+      const result = yield* guard.requiredProviders()
+      expect(result).toEqual([ProviderId.make("anthropic")])
+    }).pipe(Effect.provide(layer))
+  })
 
-  it.live("selected agent widens required providers to match the actual runtime agent", () => {
+  it.live("selected agent with a different provider widens required providers", () => {
     const layer = guardLayerWithSeed({}, helperAgentRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
       const result = yield* guard.requiredProviders({ agentName: AgentName.make("helper:google") })
       expect(result).toContain(ProviderId.make("anthropic"))
-      expect(result).toContain(ProviderId.make("openai"))
       expect(result).toContain(ProviderId.make("google"))
+      expect(result).not.toContain(ProviderId.make("openai"))
     }).pipe(Effect.provide(layer))
   })
 
@@ -174,13 +162,13 @@ describe("AuthGuard", () => {
     const layer = guardLayerWithSeed({}, testRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
-      // cowork is an anthropic-modeled agent, but config-routes through
+      // main is an anthropic-modeled agent, but config-routes through
       // an external driver (e.g. Claude Code SDK). The external driver
       // owns its own auth, so model providers should not be required.
       const result = yield* guard.requiredProviders({
-        agentName: AgentName.make("cowork"),
+        agentName: DEFAULT_AGENT_NAME,
         driverOverrides: {
-          [AgentName.make("cowork")]: ExternalDriverRef.make({ id: "acp-claude-code" }),
+          [DEFAULT_AGENT_NAME]: ExternalDriverRef.make({ id: "acp-claude-code" }),
         },
       })
       expect(result).toEqual([])
@@ -209,10 +197,10 @@ describe("ListAuthProvidersPayload schema", () => {
 
   bunTest("accepts agentName + sessionId together", () => {
     const query = decode({
-      agentName: AgentName.make("cowork"),
+      agentName: DEFAULT_AGENT_NAME,
       sessionId: SessionId.make("019d-test-session-id"),
     })
-    expect(query.agentName).toBe(AgentName.make("cowork"))
+    expect(query.agentName).toBe(DEFAULT_AGENT_NAME)
     expect(query.sessionId).toBe(SessionId.make("019d-test-session-id"))
   })
 
@@ -229,7 +217,7 @@ describe("ListAuthProvidersPayload schema", () => {
     // This test documents intent: callers shouldn't include driverOverrides.
     const query = decode({
       sessionId: SessionId.make("019d-test-session-id"),
-      driverOverrides: { [AgentName.make("cowork")]: { _tag: "external", id: "evil" } },
+      driverOverrides: { [DEFAULT_AGENT_NAME]: { _tag: "external", id: "evil" } },
     })
     expect(query.sessionId).toBe(SessionId.make("019d-test-session-id"))
     // The decoded type intentionally has no `driverOverrides` field.

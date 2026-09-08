@@ -24,7 +24,7 @@ import {
   type EventEnvelope,
 } from "@gent/core-internal/domain/event"
 import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
-import { AgentName } from "@gent/core-internal/domain/agent"
+import { DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
 import { Permission, PermissionRule } from "@gent/core-internal/domain/permission"
 import { tool } from "@gent/core/extensions/api"
@@ -61,7 +61,7 @@ const runAgentMessage = (message: Message) =>
     yield* sessionRuntime.runPrompt({
       sessionId: message.sessionId,
       branchId: message.branchId,
-      agentName: AgentName.make("cowork"),
+      agentName: DEFAULT_AGENT_NAME,
       prompt: text,
     })
   })

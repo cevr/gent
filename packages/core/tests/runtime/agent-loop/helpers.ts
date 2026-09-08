@@ -35,6 +35,7 @@ import {
 } from "@gent/core-internal/test-utils/language-model"
 import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
 import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
+import { ModelId } from "@gent/core-internal/domain/model"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents.js"
 import { type AnyResourceContribution, type ToolCapability } from "@gent/core/extensions/api"
 import { Permission } from "@gent/core-internal/domain/permission"
@@ -64,6 +65,12 @@ import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 // Shared helpers
 // ============================================================================
 
+/** A second registered agent for tests that switch or override the current agent. */
+export const helperAgent = AgentDefinition.make({
+  name: AgentName.make("helper"),
+  model: ModelId.make("openai/gpt-5.4-mini"),
+})
+
 export const makeExtRegistry = (
   tools: ReadonlyArray<ToolCapability> = [],
   resources: AnyResourceContribution[] = [],
@@ -74,7 +81,7 @@ export const makeExtRegistry = (
       scope: "builtin",
       sourcePath: "test",
       contributions: {
-        agents: AllBuiltinAgents,
+        agents: [...AllBuiltinAgents, helperAgent],
         tools,
         resources,
       },

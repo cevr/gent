@@ -42,10 +42,7 @@ import {
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   makeRunSpec,
 } from "@gent/core-internal/domain/agent"
-import {
-  AllBuiltinAgents,
-  getBuiltinAgent,
-} from "../../../extensions/tests/helpers/builtin-agents.js"
+import { AllBuiltinAgents, builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import {
   BranchId,
   ExtensionId,
@@ -240,7 +237,7 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
     Effect.gen(function* () {
       const runtimeState = yield* SubscriptionRef.make<SessionRuntimeState>(
         SessionRuntimeStateSchema.cases.Idle.make({
-          agent: AgentName.make("cowork"),
+          agent: DEFAULT_AGENT_NAME,
           queue: emptyQueueSnapshot(),
         }),
       )
@@ -326,7 +323,7 @@ describe("helper run spec propagation", () => {
           }),
         )
         const result = yield* runner.run({
-          agent: getBuiltinAgent("explore")!,
+          agent: builtinAgent,
           prompt: "check forwarding",
           parentSessionId: SessionId.make("parent-runspec"),
           parentBranchId: BranchId.make("parent-runspec-branch"),
@@ -506,7 +503,7 @@ describe("AgentRunner", () => {
             new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
           )
           const input = {
-            agent: yield* Effect.fromOption(Option.fromUndefinedOr(getBuiltinAgent("explore"))),
+            agent: builtinAgent,
             prompt: "Run independently",
             cwd: "/tmp",
             parentSessionId,
@@ -638,7 +635,7 @@ describe("AgentRunner", () => {
           // The parent branch has no history: the completion must wake it by itself.
           const requestId = RequestId.make("deliver-child")
           const child = yield* runner.start({
-            agent: yield* Effect.fromOption(Option.fromUndefinedOr(getBuiltinAgent("explore"))),
+            agent: builtinAgent,
             prompt: "Say hi",
             cwd: "/tmp",
             parentSessionId,
@@ -716,7 +713,7 @@ describe("AgentRunner", () => {
             parentBranchId,
           }
           const child = yield* runner.start({
-            agent: yield* Effect.fromOption(Option.fromUndefinedOr(getBuiltinAgent("explore"))),
+            agent: builtinAgent,
             prompt: "Wait for cancellation",
             cwd: "/tmp",
             parentSessionId,
@@ -777,7 +774,7 @@ describe("AgentRunner", () => {
         new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
       )
       const input = {
-        agent: { name: AgentName.make("explore") },
+        agent: { name: DEFAULT_AGENT_NAME },
         prompt: "Admitted child",
         cwd: "/tmp",
         parentSessionId,
@@ -835,7 +832,7 @@ describe("AgentRunner", () => {
           const toolCallId = ToolCallId.make("limited-start-tool")
           const runSpec = makeRunSpec({ persistence: "durable", parentToolCallId: toolCallId })
           const base = {
-            agent: { name: AgentName.make("explore") },
+            agent: { name: DEFAULT_AGENT_NAME },
             prompt: "bounded child",
             cwd: "/tmp",
             parentSessionId,
@@ -925,7 +922,7 @@ describe("AgentRunner", () => {
         ).toEqual(Option.none())
         const toolCallId = ToolCallId.make("model-limit-tool")
         const input = {
-          agent: { name: AgentName.make("explore") },
+          agent: { name: DEFAULT_AGENT_NAME },
           prompt: "Bound model calls",
           cwd: "/tmp",
           parentSessionId,
@@ -1043,8 +1040,7 @@ describe("AgentRunner", () => {
 
   it.scopedLive("does not create a durable child for a missing parent", () =>
     Effect.gen(function* () {
-      const agent = getBuiltinAgent("explore")
-      if (Predicate.isUndefined(agent)) return yield* Effect.die("Missing agent fixture")
+      const agent = builtinAgent
       const runner = yield* AgentRunnerService
       const parentSessionId = SessionId.make("missing-parent")
       const result = yield* runner.run({
@@ -1108,7 +1104,7 @@ describe("AgentRunner", () => {
         yield* sessions.createSession(session)
         yield* branches.createBranch(branch)
         yield* runner.run({
-          agent: getBuiltinAgent("explore")!,
+          agent: builtinAgent,
           prompt: "scan repo",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -1208,7 +1204,7 @@ describe("AgentRunner", () => {
         yield* sessions.createSession(session)
         yield* branches.createBranch(branch)
         const result = yield* runner.run({
-          agent: getBuiltinAgent("explore")!,
+          agent: builtinAgent,
           prompt: "spawn rollback",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -1265,7 +1261,7 @@ describe("AgentRunner", () => {
         yield* sessions.createSession(session)
         yield* branches.createBranch(branch)
         const result = yield* runner.run({
-          agent: getBuiltinAgent("explore")!,
+          agent: builtinAgent,
           prompt: "fail test",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -1317,7 +1313,7 @@ describe("AgentRunner", () => {
         yield* sessions.createSession(session)
         yield* branches.createBranch(branch)
         return yield* runner.run({
-          agent: getBuiltinAgent("explore")!,
+          agent: builtinAgent,
           prompt: "timeout test",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -1375,7 +1371,7 @@ describe("AgentRunner", () => {
         yield* sessions.createSession(session)
         yield* branches.createBranch(branch)
         const runResult = yield* runner.run({
-          agent: getBuiltinAgent("explore")!,
+          agent: builtinAgent,
           prompt: "scan repo",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -1442,7 +1438,7 @@ describe("AgentRunner", () => {
         yield* sessions.createSession(session)
         yield* branches.createBranch(branch)
         const runResult = yield* runner.run({
-          agent: getBuiltinAgent("explore")!,
+          agent: builtinAgent,
           prompt: "run helper with one tool",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -1503,7 +1499,7 @@ describe("AgentRunner", () => {
         yield* sessions.createSession(session)
         yield* branches.createBranch(branch)
         const runResult = yield* runner.run({
-          agent: getBuiltinAgent("explore")!,
+          agent: builtinAgent,
           prompt: "persist this child",
           parentSessionId: session.id,
           parentBranchId: branch.id,
@@ -1581,7 +1577,7 @@ describe("AgentRunner", () => {
           }),
         )
         return yield* runner.run({
-          agent: getBuiltinAgent("explore")!,
+          agent: builtinAgent,
           prompt: "analyze",
           parentSessionId: SessionId.make("parent-reasoning"),
           parentBranchId: BranchId.make("branch-reasoning"),
@@ -1658,7 +1654,7 @@ describe("AgentRunner", () => {
           }),
         )
         return yield* runner.run({
-          agent: getBuiltinAgent("explore")!,
+          agent: builtinAgent,
           prompt: "analyze",
           parentSessionId: SessionId.make("parent-mixed"),
           parentBranchId: BranchId.make("branch-mixed"),
@@ -1735,7 +1731,7 @@ describe("AgentRunner", () => {
           }),
         )
         return yield* runner.run({
-          agent: getBuiltinAgent("explore")!,
+          agent: builtinAgent,
           prompt: "save test",
           parentSessionId: SessionId.make("parent-save"),
           parentBranchId: BranchId.make("branch-save"),
@@ -1750,7 +1746,7 @@ describe("AgentRunner", () => {
         expect(savedPath).toBeDefined()
         if (Predicate.isUndefined(savedPath)) return
         expect(savedPath).toContain("/tmp/gent/outputs/")
-        expect(savedPath).toContain("explore_")
+        expect(savedPath).toContain(`${DEFAULT_AGENT_NAME}_`)
         expect(savedPath).toEndWith(".md")
         // Verify file contents
         // oxlint-disable-next-line effect/noGlobals -- This test verifies the durable output file contents.
@@ -1811,7 +1807,7 @@ describe("agent runner metadata", () => {
         const result = yield* loadAgentRunSuccessData({
           sessionId,
           branchId,
-          agentName: AgentName.make("explore"),
+          agentName: DEFAULT_AGENT_NAME,
           persistence: "durable",
         })
         expect(result.success.usage).toEqual(sample.expected)
@@ -1897,7 +1893,7 @@ describe("agent runner metadata", () => {
       const result = yield* loadAgentRunSuccessData({
         branchId,
         sessionId,
-        agentName: AgentName.make("explore"),
+        agentName: DEFAULT_AGENT_NAME,
         persistence: "ephemeral",
       })
       expect(result.success.toolCalls).toEqual([
@@ -2124,7 +2120,7 @@ describe("ephemeral service propagation", () => {
         const runner = yield* AgentRunnerService
         yield* setupParentSession(SessionId.make("parent-svc-prop"))
         const result = yield* runner.run({
-          agent: getBuiltinAgent("explore")!,
+          agent: builtinAgent,
           prompt: "test service propagation",
           parentSessionId: SessionId.make("parent-svc-prop"),
           parentBranchId: BranchId.make("parent-svc-prop-branch"),
@@ -2197,7 +2193,7 @@ describe("ephemeral service propagation", () => {
         const runner = yield* AgentRunnerService
         yield* setupParentSession(SessionId.make("parent-approve"))
         const result = yield* runner.run({
-          agent: getBuiltinAgent("explore")!,
+          agent: builtinAgent,
           prompt: "test auto-approve",
           parentSessionId: SessionId.make("parent-approve"),
           parentBranchId: BranchId.make("parent-approve-branch"),
@@ -2293,7 +2289,7 @@ describe("ephemeral service propagation", () => {
         const runner = yield* AgentRunnerService
         yield* setupParentSession(SessionId.make("parent-resource-probe"))
         const result = yield* runner.run({
-          agent: getBuiltinAgent("explore")!,
+          agent: builtinAgent,
           prompt: "test resource service",
           parentSessionId: SessionId.make("parent-resource-probe"),
           parentBranchId: BranchId.make("parent-resource-probe-branch"),

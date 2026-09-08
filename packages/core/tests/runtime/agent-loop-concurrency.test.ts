@@ -2,7 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Schema } from "effect"
 import { finishPart, toolCallPart } from "@gent/core-internal/test-utils/language-model"
 import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
-import { AgentName } from "@gent/core-internal/domain/agent"
+import { DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 import { tool } from "@gent/core/extensions/api"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage"
@@ -73,7 +73,7 @@ describe("concurrency", () => {
         yield* loop.runOnce({
           sessionId: session.id,
           branchId: branch.id,
-          agentName: AgentName.make("cowork"),
+          agentName: DEFAULT_AGENT_NAME,
           prompt: "run serial tools",
         })
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.

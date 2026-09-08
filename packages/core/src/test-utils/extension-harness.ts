@@ -6,11 +6,11 @@ import * as nodePath from "node:path"
 import { Effect, FileSystem, Layer, Option } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
-  AgentName,
   AgentRunnerService,
   AgentRunResult,
   type AgentDefinition,
   type AgentRunner,
+  DEFAULT_AGENT_NAME,
 } from "../domain/agent.js"
 import type { GentExtension } from "../domain/extension.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
@@ -86,7 +86,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) =>
                 AgentRunResult.cases.success.make({
                   text: "",
                   sessionId: SessionId.make("test-subagent-session"),
-                  agentName: AgentName.make("cowork"),
+                  agentName: DEFAULT_AGENT_NAME,
                 }),
               ),
           }),

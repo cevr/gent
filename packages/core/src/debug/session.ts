@@ -228,17 +228,17 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
       makeToolCall({
         id: asToolCallId("dbg-delegate"),
         name: "delegate",
-        params: { todos: [{ agent: "explore", todo: "Inspect the TUI tool chrome" }] },
+        params: { todos: [{ todo: "Inspect the TUI tool chrome" }] },
       }),
       makeToolCall({
         id: asToolCallId("dbg-explore"),
         name: "delegate",
-        params: { agent: "explore", todo: "Where is the double-border coming from?" },
+        params: { todo: "Where is the double-border coming from?" },
       }),
       makeToolCall({
         id: asToolCallId("dbg-review"),
         name: "delegate",
-        params: { agent: "explore", todo: "Sanity-check the debug session bootstrap." },
+        params: { todo: "Sanity-check the debug session bootstrap." },
       }),
       makeToolCall({
         id: asToolCallId("dbg-search-sessions"),

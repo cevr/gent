@@ -9,7 +9,7 @@ import {
   type PlatformError,
 } from "effect"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent.js"
-import { DEFAULT_MODEL_ID } from "./agent.js"
+import { DEFAULT_AGENT_NAME, DEFAULT_MODEL_ID } from "./agent.js"
 import { estimateContextPercent as pureEstimateContextPercent } from "../runtime/context-estimation.js"
 import type { EventStoreError } from "./event.js"
 import { hasMessage } from "./guards.js"
@@ -530,6 +530,21 @@ export const provideExtensionServices = <A, E, R>(
   Effect.flatMap(extensionServicesFromHostContext(ctx), (services) =>
     effect.pipe(Effect.provideContext(services)),
   )
+
+/**
+ * The agent running the current turn. Children spawned from a cell inherit
+ * it, so delegation never needs a roster of named agents.
+ */
+export const requireCurrentAgent: Effect.Effect<
+  AgentDefinition,
+  ExtensionServiceError,
+  ExtensionContext
+> = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  return yield* requireAgent(
+    Option.getOrElse(Option.fromUndefinedOr(ctx.agentName), () => DEFAULT_AGENT_NAME),
+  )
+})
 
 export const requireAgent = (
   name: AgentName,

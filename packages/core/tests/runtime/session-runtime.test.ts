@@ -17,7 +17,7 @@ import {
 import { narrowR } from "../helpers/effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
-import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
+import { AgentDefinition, AgentName, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
 import type { QueueSnapshot } from "@gent/core-internal/domain/queue"
 import { textStep } from "@gent/core-internal/debug/provider"
@@ -64,8 +64,8 @@ import { SessionStorage } from "@gent/core-internal/storage/session-storage"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
-  const cowork = AgentDefinition.make({
-    name: AgentName.make("cowork"),
+  const mainAgent = AgentDefinition.make({
+    name: DEFAULT_AGENT_NAME,
     model: ModelId.make("test/default"),
   })
   const reflect = AgentDefinition.make({
@@ -74,9 +74,9 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   })
   let contributions: ExtensionContributions
   if (tools.length > 0) {
-    contributions = { agents: [cowork, reflect], tools }
+    contributions = { agents: [mainAgent, reflect], tools }
   } else {
-    contributions = { agents: [cowork, reflect] }
+    contributions = { agents: [mainAgent, reflect] }
   }
   return resolveExtensions([
     {
@@ -464,7 +464,7 @@ describe("SessionRuntime", () => {
             expect(stateOption._tag).toBe("Some")
             if (stateOption._tag === "Some") {
               expect(stateOption.value._tag).toBe("Idle")
-              expect(stateOption.value.agent).toBe(AgentName.make("cowork"))
+              expect(stateOption.value.agent).toBe(DEFAULT_AGENT_NAME)
             }
             const calls = yield* recorder.getCalls
             expect(eventTags(calls)).not.toContain("AgentSwitched")

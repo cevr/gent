@@ -3,7 +3,7 @@ import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
 import { Effect, Layer, Schema } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
-import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
+import { AgentDefinition, AgentName, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 import { ExtensionId } from "@gent/core-internal/domain/ids"
 import { ModelId } from "@gent/core-internal/domain/model"
 import type { CallRecord } from "@gent/core-internal/test-utils"
@@ -31,8 +31,8 @@ import { RecordingEventStore, SequenceRecorder } from "@gent/core-internal/test-
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
 const makeTestExtensions = () => {
-  const cowork = AgentDefinition.make({
-    name: AgentName.make("cowork"),
+  const mainAgent = AgentDefinition.make({
+    name: DEFAULT_AGENT_NAME,
     model: ModelId.make("test/default"),
   })
   const reflect = AgentDefinition.make({
@@ -44,7 +44,7 @@ const makeTestExtensions = () => {
       manifest: { id: ExtensionId.make("agents") },
       scope: "builtin",
       sourcePath: "test",
-      contributions: { agents: [cowork, reflect] } satisfies ExtensionContributions,
+      contributions: { agents: [mainAgent, reflect] } satisfies ExtensionContributions,
     },
   ])
 }

@@ -364,7 +364,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   Interaction recovery starts after handler registration. No second actor owner
   or scheduler is created. `SessionRuntime.Live` retains the combined test surface.
 - Default persistence is durable.
-- Read-only helper agents (`explore`, `librarian`, `architect`, `reviewer`, `summarizer`, `title`) default to ephemeral.
+- One shipped agent, `main`. A child spawned from a cell (`delegate`, `agent-start`) inherits the caller's agent and model; a run may narrow it with RunSpec overrides (model, tools, prompt addendum). Helper runs such as handoff distillation and `read_session` goal extraction pass `persistence: "ephemeral"` explicitly.
 - Durable runs persist a child session/branch and can be revisited with `read_session`.
 - Ephemeral runs still execute a full local `AgentLoop`, but against isolated in-memory storage; they return text/usage/tool-call metadata without polluting the session tree.
 - Child metadata reads only the requested branch. Stream totals remain unknown
