@@ -265,6 +265,27 @@ export function createSessionController(props: {
     () => dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({})),
   )
 
+  ext.setActivityProvider(() => {
+    const session = Option.fromNullishOr(client.session())
+    const sessionId = Option.getOrUndefined(Option.map(session, (value) => value.sessionId))
+    const connection = Option.fromNullishOr(client.connectionState())
+    if (
+      client.isLoading() ||
+      client.isReconnecting() ||
+      (Option.isSome(connection) && connection.value._tag === "disconnected")
+    )
+      return { sessionId, state: "unknown" }
+    if (
+      isBlockingAuthGate(authGateState()) ||
+      composerState()._tag === "interaction" ||
+      client.isError()
+    ) {
+      return { sessionId, state: "blocked" }
+    }
+    if (client.isStreaming()) return { sessionId, state: "working" }
+    return { sessionId, state: "idle" }
+  })
+
   // Wire composer state for extensions — mirrors use-composer-controller's focus logic
   ext.setComposerStateProvider(() => {
     const is = interactionState()

@@ -5,6 +5,7 @@
  * discovery, override precedence, disabled gating, invalid-file tolerance,
  * overlay state, autocomplete visibility, and startup with an active session.
  */
+import { makeClientActivityLayer } from "../src/extensions/client-activity"
 import { it, describe, expect, test } from "effect-bun-test"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous filesystem fixture setup is a test boundary.
@@ -56,6 +57,7 @@ const castTestShellEffect = <A, E>(effect: Effect.Effect<A, E, never>): void => 
 const testRuntime = ManagedRuntime.make(
   Layer.mergeAll(
     BunFileSystem.layer,
+    makeClientActivityLayer(),
     BunServices.layer,
     makeClientWorkspaceLayer({ cwd: "/tmp/test-cwd", home: "/tmp/test-home" }),
     makeClientShellLayer({

@@ -7,6 +7,7 @@ import builtinArtifacts from "./artifacts.client"
 import builtinBtw from "./btw.client"
 import builtinDriver from "./driver.client"
 import builtinFiles from "./files.client"
+import builtinHerdr from "./herdr.client"
 import builtinGoal from "./goal.client"
 import { builtinInteractions, builtinTools } from "./tool-renderers.client"
 import {
@@ -74,6 +75,7 @@ export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinFiles,
   builtinGoal,
   builtinHandoff,
+  builtinHerdr,
   builtinInteractions,
   builtinSkills,
   builtinTools,

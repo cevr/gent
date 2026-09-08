@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { makeClientActivityLayer } from "./extensions/client-activity"
 import { Command, Flag, Argument } from "effect/unstable/cli"
 import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
@@ -17,6 +18,7 @@ import {
   Option,
   Runtime,
   Schema,
+  Scope,
   Tracer,
 } from "effect"
 import { makeClientTraceLogger } from "./utils/client-trace-logger"
@@ -183,6 +185,7 @@ const runHeadlessTurn = (
   const clientRuntime: ClientRuntime = ManagedRuntime.make(
     Layer.mergeAll(
       BunFileSystem.layer,
+      makeClientActivityLayer(),
       BunServices.layer,
       makeClientTransportLayer({
         client: bundle.client,
@@ -454,6 +457,7 @@ const main = Command.make(
         },
       }
 
+      const uiScope = yield* Scope.Scope
       const renderer = yield* Effect.promise(() =>
         createCliRenderer({
           exitOnCtrlC: false,
@@ -476,7 +480,7 @@ const main = Command.make(
                     initialSession={bootstrap.initialSession}
                     initialAgent={initialAgent}
                   >
-                    <ExtensionUIProvider>
+                    <ExtensionUIProvider scope={uiScope}>
                       <RouterProvider initialRoute={bootstrap.initialRoute}>
                         <TerminalDimensionsProvider>
                           <ComposerDraftsProvider>

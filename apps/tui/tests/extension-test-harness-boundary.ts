@@ -1,3 +1,4 @@
+import { makeClientActivityLayer } from "../src/extensions/client-activity"
 import { Deferred, Effect, Layer, ManagedRuntime, Option } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import type { EventEnvelope } from "@gent/core-internal/domain/event"
@@ -77,6 +78,7 @@ export const makeClientExtensionRuntime = (
   ManagedRuntime.make(
     Layer.mergeAll(
       BunFileSystem.layer,
+      makeClientActivityLayer(() => ({ state: "idle" })),
       BunServices.layer,
       makeClientWorkspaceLayer({ cwd: "/tmp/test-cwd", home: "/tmp/test-home" }),
       makeClientShellLayer({

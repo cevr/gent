@@ -20,7 +20,7 @@ import {
   type Accessor,
   type JSX,
 } from "solid-js"
-import { Effect, Layer, ManagedRuntime, Option } from "effect"
+import { Effect, Layer, ManagedRuntime, Option, Scope } from "effect"
 import { useRequiredContext } from "../utils/solid-context"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
@@ -53,7 +53,10 @@ import {
   useClientTransportState,
 } from "../client/context"
 
+import { makeClientActivityLayer, type ClientActivitySnapshot } from "./client-activity"
+
 export interface ExtensionUIContextValue {
+  readonly setActivityProvider: (provider: () => ClientActivitySnapshot) => void
   readonly renderers: Accessor<Map<string, ToolRenderer>>
   readonly headlessRenderers: Accessor<Map<string, HeadlessToolRenderer>>
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
@@ -111,12 +114,16 @@ const toError = (cause: unknown): Error => {
 
 const ExtensionUIContext = createContext<ExtensionUIContextValue>()
 
-export function ExtensionUIProvider(props: { children: JSX.Element }) {
+export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scope.Scope }) {
   const workspace = useWorkspace()
   const transport = useClientTransport()
   const session = useClientSession()
   const actions = useClientActions()
   const transportState = useClientTransportState()
+
+  const [activityProvider, setActivityProvider] = createSignal<() => ClientActivitySnapshot>(
+    () => ({ state: "unknown" }),
+  )
 
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
   const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<Command>>([])
@@ -170,6 +177,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   const clientRuntime: ClientRuntime = ManagedRuntime.make(
     Layer.mergeAll(
       BunFileSystem.layer,
+      makeClientActivityLayer(() => activityProvider()()),
       BunServices.layer,
       makeClientTransportLayer({
         client: transport.client,
@@ -215,6 +223,15 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
       makeClientLifecycleLayer({ addCleanup }),
     ),
   )
+
+  if (props.scope) {
+    Effect.runSync(
+      Scope.addFinalizer(
+        props.scope,
+        Effect.promise(() => clientRuntime.dispose()),
+      ),
+    )
+  }
 
   // Run widget-registered cleanups (Solid root disposers, pulse
   // unsubscribes) FIRST, then dispose the per-provider runtime so layer
@@ -331,6 +348,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         setDynamicAutocomplete,
         setOverlayDispatch,
         setComposerStateProvider,
+        setActivityProvider: (provider) => setActivityProvider(() => provider),
         sessionId: () =>
           Option.getOrUndefined(
             Option.map(Option.fromNullishOr(session.session()), (value) => value.sessionId),

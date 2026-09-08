@@ -30,6 +30,7 @@ import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { HeadlessToolRenderer } from "../headless-tool-renderers"
 import type { JSX } from "@opentui/solid"
 import type { RGBA } from "@opentui/core"
+import type { ClientActivity } from "./client-activity"
 import type { ClientTransport } from "./client-transport"
 import type {
   ClientComposer,
@@ -76,6 +77,7 @@ export type ClientRuntimeServices =
   | ClientDriver
   | ClientComposer
   | ClientLifecycle
+  | ClientActivity
 
 export type ClientRuntime = ManagedRuntime.ManagedRuntime<ClientRuntimeServices, never>
 

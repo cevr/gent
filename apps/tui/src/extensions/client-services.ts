@@ -13,7 +13,7 @@
  */
 
 import { createEffect, createRoot, createSignal } from "solid-js"
-import { Context, Effect, Layer, Option } from "effect"
+import { Context, Effect, Layer, Option, Scope } from "effect"
 import type { AgentName, DriverRef } from "@gent/core/extensions/api"
 import type { OverlayId, ComposerState } from "./client-facets.js"
 import type { ClientTransportDefinition } from "./client-transport"
@@ -96,6 +96,10 @@ export const makeClientComposerLayer = (
 // ── ClientLifecycle ──────────────────────────────────────────────────────
 
 export interface ClientLifecycleDefinition {
+  /** Allocate resources in the client provider lifetime, not the setup request. */
+  readonly scoped: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, Exclude<R, Scope.Scope>>
   /**
    * Register a cleanup callback to run when the surrounding
    * `ExtensionUIProvider` unmounts (i.e. when the per-provider runtime is
@@ -114,8 +118,15 @@ export class ClientLifecycle extends Context.Service<ClientLifecycle, ClientLife
 ) {}
 
 export const makeClientLifecycleLayer = (
-  payload: ClientLifecycleDefinition,
-): Layer.Layer<ClientLifecycle> => Layer.succeed(ClientLifecycle, payload)
+  payload: Pick<ClientLifecycleDefinition, "addCleanup">,
+): Layer.Layer<ClientLifecycle> =>
+  Layer.effect(
+    ClientLifecycle,
+    Effect.gen(function* () {
+      const scope = yield* Scope.Scope
+      return ClientLifecycle.of({ ...payload, scoped: (effect) => Scope.provide(scope)(effect) })
+    }),
+  )
 
 // ── Session Resource ─────────────────────────────────────────────────────
 
