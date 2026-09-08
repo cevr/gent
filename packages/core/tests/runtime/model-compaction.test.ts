@@ -635,4 +635,127 @@ describe("model context compaction", () => {
       Effect.timeout("10 seconds"),
     )
   })
+
+  it.live(
+    "a summary records the paths the model read and modified and carries them forward",
+    () => {
+      const toolGroup = (ordinal: number, calls: ReadonlyArray<[string, string, string]>) => [
+        Message.cases.regular.make({
+          id: MessageId.make(`assistant-${ordinal}`),
+          sessionId,
+          branchId,
+          role: "assistant",
+          parts: calls.map(([id, name, path]) =>
+            Prompt.toolCallPart({
+              id: ToolCallId.make(id),
+              name,
+              params: { path },
+              providerExecuted: false,
+            }),
+          ),
+          createdAt: dateFromMillis(1_000 + ordinal),
+        }),
+        Message.cases.regular.make({
+          id: MessageId.make(`tool-${ordinal}`),
+          sessionId,
+          branchId,
+          role: "tool",
+          parts: calls.map(([id, name]) =>
+            Prompt.toolResultPart({
+              id: ToolCallId.make(id),
+              name,
+              isFailure: false,
+              providerExecuted: false,
+              result: { ok: true },
+            }),
+          ),
+          createdAt: dateFromMillis(1_001 + ordinal),
+        }),
+      ]
+      const firstRound = [
+        textMessage("ask-1", "user", "look at a and write b", 1),
+        ...toolGroup(2, [
+          ["call-read-a", "read", "/repo/a.ts"],
+          ["call-write-b", "write", "/repo/b.ts"],
+        ]),
+        textMessage("latest-1", "user", "next", 10),
+      ]
+      let capturedPrompt = Option.none<Prompt.Prompt>()
+      const providerLayer = LanguageModelLayers.testStream((options) => {
+        capturedPrompt = Option.some(Prompt.make(options.prompt))
+        return Effect.succeed(
+          Stream.fromIterable([
+            textDeltaPart("summary"),
+            finishPart({ finishReason: "stop", usage: { inputTokens: 20, outputTokens: 4 } }),
+          ]),
+        )
+      })
+      const detailsOf = (result: {
+        readonly projection: { readonly messages: ReadonlyArray<Message> }
+      }) => {
+        const details = result.projection.messages.findLast(
+          (message) => message.metadata?.customType === "model-compaction",
+        )?.metadata?.details
+        if (!Schema.is(ModelCompactionDetails)(details))
+          return Option.none<ModelCompactionDetails>()
+        return Option.some(details)
+      }
+
+      return Effect.scoped(
+        Effect.gen(function* () {
+          yield* createTranscript(firstRound)
+          const model = yield* LanguageModel.LanguageModel
+          const first = yield* compactModelContext({
+            modelId,
+            sessionId,
+            branchId,
+            messages: firstRound,
+            budget: budget(),
+            force: {},
+            cellBindings: ["files", "plan"],
+            summaryModel: Effect.succeed(model),
+          })
+          expect(first.compacted).toBe(true)
+          const prompt = Option.map(capturedPrompt, promptText).pipe(Option.getOrElse(() => ""))
+          expect(prompt).toContain("Cell namespace bindings retained on this branch: files, plan")
+          const firstDetails = Option.getOrThrow(detailsOf(first))
+          expect(firstDetails.paths).toEqual({ read: ["/repo/a.ts"], modified: ["/repo/b.ts"] })
+          const summaryText = first.projection.messages
+            .filter((message) => message.metadata?.customType === "model-compaction")
+            .flatMap((message) => message.parts)
+            .filter((part): part is Prompt.TextPart => part.type === "text")
+            .map((part) => part.text)
+            .join("")
+          expect(summaryText).toContain("Files read: /repo/a.ts")
+          expect(summaryText).toContain("Files modified: /repo/b.ts")
+
+          const secondRound = [
+            ...toolGroup(20, [["call-edit-c", "edit", "/repo/c.ts"]]),
+            textMessage("latest-2", "user", "again", 30),
+          ]
+          yield* createTranscript(secondRound)
+          const storage = yield* MessageStorage
+          const durable = yield* storage.listMessages(branchId)
+          const second = yield* compactModelContext({
+            modelId,
+            sessionId,
+            branchId,
+            messages: durable,
+            budget: budget(),
+            force: {},
+            summaryModel: Effect.succeed(model),
+          })
+          expect(second.compacted).toBe(true)
+          const secondDetails = Option.getOrThrow(detailsOf(second))
+          expect(secondDetails.paths?.read).toEqual(["/repo/a.ts"])
+          expect(secondDetails.paths?.modified).toEqual(["/repo/b.ts", "/repo/c.ts"])
+        }),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
+        ),
+        Effect.timeout("10 seconds"),
+      )
+    },
+  )
 })

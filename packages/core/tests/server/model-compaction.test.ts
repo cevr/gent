@@ -113,7 +113,7 @@ describe("model compaction RPC boundary", () => {
   )
 
   it.scopedLive(
-    "settles a summary failure visibly and preserves a recoverable native turn",
+    "a summary failure degrades to the truncated projection and keeps the turn",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -177,41 +177,50 @@ describe("model compaction RPC boundary", () => {
             )
           }
 
-          const failed = yield* Effect.exit(
-            client.message.send({
-              sessionId,
-              branchId,
-              content: `rpc-failure-current ${"z".repeat(100_000)}`,
-              requestId: RequestId.make("rpc-failure-current"),
-            }),
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: `rpc-failure-current ${"z".repeat(100_000)}`,
+            requestId: RequestId.make("rpc-failure-current"),
+          })
+          const degradedSnapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (snapshot) =>
+              snapshot.runtime._tag === "Idle" &&
+              snapshot.messages.some((message) =>
+                message.parts.some(
+                  (part) => part.type === "text" && part.text.includes("native response"),
+                ),
+              ),
+            15_000,
+            "degraded turn settles with a native response",
           )
-          expect(failed._tag).toBe("Failure")
           expect(summaryCalls).toBe(1)
           const errorEvent = yield* Fiber.join(errorEventFiber)
           expect(Option.isSome(errorEvent)).toBe(true)
-          if (Option.isNone(errorEvent)) return yield* Effect.die("summary error event missing")
+          if (Option.isNone(errorEvent)) return yield* Effect.die("degrade notice missing")
           if (errorEvent.value.event._tag !== "ErrorOccurred") {
             return yield* Effect.die("unexpected event in error stream")
           }
-          expect(errorEvent.value.event.error).toContain("ModelCompactionError")
-          const failedSnapshot = yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (snapshot) => snapshot.runtime._tag === "Idle",
-            15_000,
-            "runtime idle after summary failure",
-          )
+          expect(errorEvent.value.event.error).toContain("Context compaction failed")
+          expect(errorEvent.value.event.error).toContain("older messages omitted")
           expect(
-            failedSnapshot.messages
+            degradedSnapshot.messages
               .filter((message) => message.metadata?.customType === "model-compaction")
               .map((message) => message.id),
           ).toEqual([])
           expect(
-            failedSnapshot.messages.some((message) =>
+            degradedSnapshot.messages.some((message) =>
               message.parts.some(
                 (part) => part.type === "text" && part.text.includes("rpc-failure-current"),
               ),
             ),
           ).toBe(true)
+          const degradedMetrics = Option.fromUndefinedOr(degradedSnapshot.metrics.context)
+          expect(Option.isSome(degradedMetrics)).toBe(true)
+          expect(Option.map(degradedMetrics, (context) => context.omittedMessages > 0)).toEqual(
+            Option.some(true),
+          )
 
           failSummary = false
           yield* client.message.send({
@@ -224,22 +233,18 @@ describe("model compaction RPC boundary", () => {
             client.session.getSnapshot({ sessionId, branchId }),
             (snapshot) =>
               snapshot.runtime._tag === "Idle" &&
-              snapshot.messages.some((message) =>
-                message.parts.some(
-                  (part) => part.type === "text" && part.text.includes("native response"),
-                ),
+              snapshot.messages.some(
+                (message) => message.metadata?.customType === "model-compaction",
               ),
             15_000,
-            "runtime recovers after summary failure",
+            "the next turn summarizes once the summary model recovers",
           )
           expect(summaryCalls).toBeGreaterThanOrEqual(2)
           expect(
-            recovered.messages.some((message) =>
-              message.parts.some(
-                (part) => part.type === "text" && part.text.includes("native response"),
-              ),
+            recovered.messages.filter(
+              (message) => message.metadata?.customType === "model-compaction",
             ),
-          ).toBe(true)
+          ).toHaveLength(1)
         }).pipe(Effect.timeout("60 seconds")),
       ),
     70_000,

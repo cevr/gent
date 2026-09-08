@@ -1,4 +1,4 @@
-import { DateTime, Effect, Option, Predicate, Stream } from "effect"
+import { DateTime, Effect, Option, Predicate, Result, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
@@ -32,12 +32,17 @@ import {
   ModelContextBudget,
   ModelContextCapabilityError,
   ModelContextCapabilityFailure,
+  ModelContextProjectionError,
+  projectModelContext,
 } from "../model-context.js"
 import {
   compactModelContext,
   latestCompactionRevision,
   MODEL_COMPACTION_OUTPUT_TOKENS,
+  type ModelCompactionError,
+  ModelCompactionResult,
 } from "../model-compaction.js"
+import { CellNamespaceStorage } from "../../storage/cell-namespace-storage.js"
 import { type ContextDirective, ModelContextLedger } from "../model-context-ledger.js"
 import {
   latestUserMessageId,
@@ -375,6 +380,12 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     persist: persistDurableMessage,
   })
   const windowed = messagesInCurrentWindow(durableMessages)
+  // The summary names the cell bindings that survive compaction.
+  const namespaces = yield* CellNamespaceStorage
+  const cellBindings = Option.match(
+    yield* namespaces.get({ sessionId: params.sessionId, branchId: params.branchId }),
+    { onNone: () => [], onSome: (snapshot) => snapshot.bindings.map((binding) => binding.name) },
+  )
   const compact = (forced: Option.Option<CompactionRequest>) =>
     compactModelContext({
       modelId: contextModelId,
@@ -384,19 +395,48 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       budget,
       hash: params.hash,
       persistSummary: persistDurableMessage,
+      cellBindings,
       force: Option.getOrUndefined(forced),
       summaryModel: resolveAdmittedModel({
         ...modelRequest,
         hints: { ...modelRequest.hints, maxTokens: MODEL_COMPACTION_OUTPUT_TOKENS },
       }),
     })
-  // A requested summary that cannot be produced must not cost the turn.
+  // A summary that cannot be produced must not cost the turn: a requested one
+  // falls back to the automatic path, and that falls back to the plain
+  // truncated projection with a visible notice.
+  const degraded = (error: ModelCompactionError) =>
+    Effect.gen(function* () {
+      const projection = projectModelContext(windowed, budget)
+      if (Result.isFailure(projection)) {
+        return yield* new ModelContextProjectionError({
+          modelId: contextModelId,
+          failure: projection.failure,
+        })
+      }
+      yield* eventPublisher.publish(
+        ErrorOccurred.make({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          error: `Context compaction failed (${error.failure._tag}); continuing with ${projection.success.omittedMessageIds.length} older messages omitted`,
+        }),
+      )
+      return ModelCompactionResult.make({
+        messages: [...windowed],
+        projection: projection.success,
+        compacted: false,
+      })
+    })
   const compacted = yield* compact(force).pipe(
     Effect.catchTag("ModelCompactionError", (error) => {
-      if (Option.isNone(force)) return Effect.fail(error)
+      if (Option.isNone(force)) return degraded(error)
       return Effect.logWarning("Requested compaction failed; continuing without it")
         .pipe(Effect.annotateLogs({ error: String(error) }))
-        .pipe(Effect.andThen(compact(Option.none())))
+        .pipe(
+          Effect.andThen(
+            compact(Option.none()).pipe(Effect.catchTag("ModelCompactionError", degraded)),
+          ),
+        )
     }),
   )
   yield* ledger.recordProjection({
