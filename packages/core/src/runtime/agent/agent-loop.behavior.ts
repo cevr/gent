@@ -27,6 +27,7 @@ import {
   type FileSystem,
   type Path,
 } from "effect"
+import { Entity, Sharding } from "effect/unstable/cluster"
 import { CellExecution } from "../code-cell/cell-execution.js"
 import { ModelContextLedger } from "../model-context-ledger.js"
 import type { SqlClient } from "effect/unstable/sql"
@@ -214,6 +215,7 @@ export const makeAgentLoopBehavior = (
 ): Effect.Effect<
   AgentLoopBehavior,
   never,
+  | Entity.CurrentAddress
   | SessionStorage
   | MessageStorage
   | AgentLoopQueueStorage
@@ -249,6 +251,19 @@ export const makeAgentLoopBehavior = (
     const followUp = yield* AgentLoopFollowUp
     const host = yield* makeExtensionHostPlatform
     const runtimeContext = yield* captureAgentLoopRuntimeContext
+    const entityContext = yield* Effect.context<Entity.CurrentAddress>()
+    const sharding = yield* Effect.serviceOption(Sharding.Sharding)
+    // The local test actor has no cluster or idle reaper. Production actors
+    // hold the cluster entity while their detached turn worker is active.
+    const keepAlive = (enabled: boolean) =>
+      Option.match(sharding, {
+        onNone: () => Effect.void,
+        onSome: (service) =>
+          Entity.keepAlive(enabled).pipe(
+            Effect.provideService(Sharding.Sharding, service),
+            Effect.provideContext(entityContext),
+          ),
+      })
 
     const publishEvent = (event: AgentEvent) =>
       eventPublisher.publish(event).pipe(
@@ -426,7 +441,12 @@ export const makeAgentLoopBehavior = (
       admissionGateRef: yield* Ref.make(emptyAdmissionGate),
       recordTurnFailure,
       publishEvent,
-      runTurn: (state) => runTurn(state).pipe(Effect.provideContext(cellContext)),
+      runTurn: (state) =>
+        Effect.acquireUseRelease(
+          keepAlive(true),
+          () => runTurn(state).pipe(Effect.provideContext(cellContext)),
+          () => keepAlive(false),
+        ),
       switchAgentOnState,
     })
 

@@ -190,6 +190,9 @@ Shape:
   `AgentLoop` service facade; `session-runtime.ts` talks to
   `agent-loop.actor.ts` directly. The actor entity id includes
   `(workspaceId, sessionId, branchId)`.
+- The turn worker holds the cluster entity keep-alive while a turn runs.
+  The mailbox request can return before the model finishes. The worker releases
+  keep-alive on completion, failure, or interruption so idle entities can expire.
 - Runtime commands resolve an existing `(sessionId, branchId)` target before loop dispatch.
 - `AgentRunner` is the helper-agent boundary. Durable runs create persisted child sessions; ephemeral runs use isolated in-memory storage and only publish parent-side `AgentRun*` receipts.
 - Durable child admission uses one shared ancestry check. Missing or incomplete
