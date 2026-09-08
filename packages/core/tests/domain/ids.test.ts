@@ -12,7 +12,6 @@ import { Schema } from "effect"
 import {
   ActorCommandId,
   ActorId,
-  ArtifactId,
   BranchId,
   CommandId,
   ExtensionId,
@@ -41,11 +40,10 @@ describe("branded ids — roundtrip", () => {
     expect(String(Schema.decodeSync(RpcId)("todo.list"))).toBe("todo.list")
   })
 
-  test("BranchId, MessageId, ActorCommandId, ArtifactId all roundtrip", () => {
+  test("BranchId, MessageId, ActorCommandId all roundtrip", () => {
     expect(String(Schema.decodeSync(BranchId)("b-1"))).toBe("b-1")
     expect(String(Schema.decodeSync(MessageId)("m-1"))).toBe("m-1")
     expect(String(Schema.decodeSync(ActorCommandId)("a-1"))).toBe("a-1")
-    expect(String(Schema.decodeSync(ArtifactId)("art-1"))).toBe("art-1")
   })
 
   test("ActorId, InteractionRequestId, ExtensionId all roundtrip", () => {

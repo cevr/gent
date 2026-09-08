@@ -19,7 +19,6 @@ import { WorkflowsExtension } from "./workflows.js"
 import { HandoffExtension } from "./handoff.js"
 import { GoalExtension } from "./goal/index.js"
 import { BtwExtension } from "./btw/index.js"
-import { ArtifactsExtension } from "./artifacts/index.js"
 import { ReadTool } from "./fs-tools/read.js"
 import { WriteTool } from "./fs-tools/write.js"
 import { EditTool } from "./fs-tools/edit.js"
@@ -110,7 +109,6 @@ export {
   HandoffExtension,
   GoalExtension,
   BtwExtension,
-  ArtifactsExtension,
 }
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
@@ -130,7 +128,6 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   OpenAIExtension,
   GoogleExtension,
   MistralExtension,
-  ArtifactsExtension,
 ].map((extension) => {
   if (Option.isNone(BuiltinArtifactIdentity)) return extension
   return {

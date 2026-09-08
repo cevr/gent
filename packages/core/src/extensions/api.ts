@@ -111,7 +111,6 @@ export {
   ToolCallId,
   RequestId,
   ExtensionId,
-  ArtifactId,
 } from "../domain/ids.js"
 export { Model, ModelId } from "../domain/model.js"
 export { AuthMethod, AuthOauth } from "../domain/auth.js"

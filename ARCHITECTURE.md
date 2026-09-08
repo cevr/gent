@@ -812,7 +812,7 @@ host-owned design. It should expose:
   `host.on(kind, handler)`;
 - agents and model ids: `defineAgent`, `AgentName`, `ModelId`, run-spec
   helpers needed for turn-scoped subagent dispatch;
-- stable ids and author-facing schemas: `ExtensionId`, `ArtifactId`,
+- stable ids and author-facing schemas: `ExtensionId`,
   `ToolCallId`, `PermissionRule`, output/message projection
   helpers that are safe to serialize across the extension boundary;
 - host facts: `ExtensionHost.host` and `ExtensionHost.Process`, a small public view over
@@ -887,7 +887,7 @@ Other notes:
 - Each follows `ExtensionClientModule` contract — same pipeline as user/project extensions
 - Loader (`apps/tui/src/extensions/loader-boundary.ts`) accepts `disabled` list to filter extensions by id before `setup` runs
 - One `setup` shape: Effect-typed `Effect<ClientContribution[], E, R>`. Setups yield from the per-provider `clientRuntime`, which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientLifecycle`. There is no imperative `ctx` argument, no sync `(ctx) => Array` arm, and no package wrapper around paired server/client modules. Shared server/client artifacts use `defineExtension({ client })`; TUI-only artifacts use `.client.{ts,tsx}` modules.
-- Widgets are transport-only: subscribe to `ClientTransport.onSessionEvent` for event-backed invalidation or `ClientTransport.onExtensionStateChanged` for explicit extension-state notifications, then call typed extension RPC via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins/artifacts.client.ts` for the canonical pattern.
+- Widgets are transport-only: subscribe to `ClientTransport.onSessionEvent` for event-backed invalidation or `ClientTransport.onExtensionStateChanged` for explicit extension-state notifications, then call typed extension RPC via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins/goal.client.ts` for the canonical pattern.
 - `ClientLifecycle.addCleanup` registers Solid `createRoot(dispose)` disposers and event unsubscribes; the provider's `onCleanup` reaps them on unmount, so widget setups leave no detached roots behind.
 - `ClientLifecycle.scoped` allocates Effect resources in the client-provider lifetime. The main TUI scope awaits provider disposal before process exit.
 - `ClientActivity` exposes a reactive view of the active UI session and its working, blocked, idle, or unavailable state. Headless clients do not provide an activity accessor.
@@ -907,7 +907,7 @@ or ask/reply infrastructure inside extension authoring.
 **Event-backed client invalidation**:
 
 - Server event publishing appends and broadcasts committed `AgentEvent`s only; it does not synthesize extension invalidation events from registry metadata.
-- TUI widgets that derive state from events subscribe with `ClientTransport.onSessionEvent` and refetch their typed extension RPC when relevant event tags arrive. `@gent/artifacts` is the canonical event-backed widget.
+- TUI widgets that derive state from events subscribe with `ClientTransport.onSessionEvent` and refetch their typed extension RPC when relevant event tags arrive. `@gent/goal` is an event-backed widget.
 - `ExtensionStateChanged` remains available as an explicit, payload-free notification event for extensions that choose to publish it directly.
 
 **Ephemeral runtime builder**:
@@ -993,11 +993,9 @@ One test file per source file. No god tests. Names match source owners.
 
 The TUI renders interactions from the typed event feed (`InteractionPresented` etc.) routed by `metadata.type`. Pending interaction storage remains the durable source of truth for crash-safe resume.
 
-## Artifacts Extension
+## Workflow Results
 
-`@gent/artifacts` — generic artifact store exposed through typed public extension RPC. In-process tools yield artifact services directly; client/UI callers use `client.extension.request(...)`.
-
-State: `{ items: Artifact[] }`. Upsert by `sourceTool + branchId` (last-writer-wins). Artifacts are branch-aware — prompt projection filters to current branch. Agent-facing tools: `artifact_save`, `artifact_read`, `artifact_update`, `artifact_clear`.
+Working values live in the kernel. Durable results are ordinary files. There is no separate result store, result RPC, or count badge. File links refer to the current content, not an immutable revision. A branch fork does not copy a saved plan; adoption requires an explicit file copy.
 
 Workflow commands (`/plan`, `/review`, `/audit`, `/counsel`, `/research`) live in `@gent/workflows` as outcome prompts. They retain no workflow state and impose no fixed child count. The model uses cell bindings and files for working data, and delegates independent work when useful. Final plans, reviews, and audits use atomic writes to `.gent/results/<session>/<branch>/<kind>.md` in the server working directory. Explicit exports are separate files. Empty `/plan` reads that branch-local file without kernel bindings; it does not infer a plan from another branch. A plan saves its result and ends that cell before it requests approval in a separate cell, so the last good namespace precedes suspension. Review and audit prompts allow saving their reports but prohibit source edits; this instruction is not a sandbox boundary.
 

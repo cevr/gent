@@ -93,7 +93,7 @@ Public authoring surface:
 | Resources       | `defineResource`, `defineStateResource`, `ResourceId`, `ResourceRevision`    |
 | Hooks           | `host.on(kind, handler)` and hook input/output types                         |
 | Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                      |
-| Stable ids      | `ExtensionId`, `ArtifactId`, `ToolCallId`, `ResourceId`, `ResourceRevision`  |
+| Stable ids      | `ExtensionId`, `ToolCallId`, `ResourceId`, `ResourceRevision`                |
 | Policies/errors | `PermissionRule`, capability/provider-auth/agent-run author-facing errors    |
 | Host facts      | `ExtensionHost.host` and `ExtensionHost.Process`                             |
 | Serialization   | Message/output projection helpers safe to expose across extension boundaries |

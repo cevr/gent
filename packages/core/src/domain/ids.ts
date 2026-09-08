@@ -33,9 +33,6 @@ export type RpcId = typeof RpcId.Type
 export const ActorCommandId = Schema.String.pipe(branded("ActorCommandId"))
 export type ActorCommandId = typeof ActorCommandId.Type
 
-export const ArtifactId = Schema.String.pipe(branded("ArtifactId"))
-export type ArtifactId = typeof ArtifactId.Type
-
 export const ActorId = Schema.String.pipe(branded("ActorId"))
 export type ActorId = typeof ActorId.Type
 

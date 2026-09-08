@@ -143,9 +143,37 @@ Source files:
 - `/Users/cvr/Developer/personal/gent/.gitignore`
 - `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`
 
+## Artifact store removal
+
+Removed the artifact Ref store, four model tools, five request RPCs, client schemas, count widget, and unused ArtifactId. Removed tests that only exercised those deleted surfaces. Kept build artifact identity and host recovery contracts unchanged. Updated extension API and TUI documentation.
+
+The full gate passed. Live Herdr ran `/review` and `/audit`, saved both reports, showed their server file paths, and left `discount.ts` unchanged. `tools.search("artifact_")` returned an empty catalog page. No artifact count appeared. The full transcript exposed a model syntax error: the failed report template used double backslashes before backticks. The model corrected its source and saved the report. No parser change was needed.
+
+Evidence:
+
+- `/tmp/gent-artifact-removal-gate.log`
+- `/tmp/gent-artifact-removal-review.txt`
+- `/tmp/gent-artifact-removal-audit.txt`
+- `/tmp/gent-artifact-removal-idle.txt`
+- `/tmp/gent-artifact-removal-transcript.txt`
+- `/tmp/gent-artifact-removal-files.txt`
+
+Source files:
+
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/index.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/client.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/artifact-identity.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/ids.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/index.ts`
+- `/Users/cvr/Developer/personal/gent/apps/tui/tests/extension-lifecycle.test.ts`
+- `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md`
+- `/Users/cvr/Developer/personal/gent/docs/extensions.md`
+- `/Users/cvr/Developer/personal/gent/apps/tui/AGENTS.md`
+
 ## Remaining work
 
-1. Replace artifact state and UI with saved files and kernel working values.
+1. Verify saved-file recovery and branch isolation in the final acceptance run.
 2. Remove model-facing skill search/load wrappers. Preserve discovery, scope, and TUI insertion.
 
 Run the full gate and live Herdr checks for each logical commit. Complete review and the final goal audit before integration.

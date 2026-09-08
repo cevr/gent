@@ -1,14 +1,4 @@
 export {
-  Artifact,
-  ArtifactEntry,
-  ArtifactRpc,
-  ArtifactStatus,
-  ARTIFACTS_EXTENSION_ID,
-  type Artifact as ArtifactType,
-  type ArtifactEntry as ArtifactEntryType,
-  type ArtifactStatus as ArtifactStatusType,
-} from "./artifacts-protocol.js"
-export {
   SKILLS_EXTENSION_ID,
   SkillEntry,
   SkillsRpc,

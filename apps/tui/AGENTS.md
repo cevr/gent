@@ -154,7 +154,6 @@ Builtins are individual `.client.{ts,tsx}` files in `src/extensions/builtins/`:
 | File                                 | Extension ID                              | What                                  |
 | ------------------------------------ | ----------------------------------------- | ------------------------------------- |
 | `builtins/tool-renderers.client.tsx` | `@gent/tools` / `@gent/interaction-tools` | Tool renderers, interaction renderers |
-| `builtins/artifacts.client.ts`       | `@gent/artifacts`                         | Artifact count border label           |
 | `builtins/connection.client.ts`      | `@gent/connection`                        | Connection status widget              |
 | `builtins/handoff.client.ts`         | `@gent/handoff`                           | Handoff interaction renderer          |
 | `builtins/skills.client.ts`          | `@gent/skills-ui`                         | `$` autocomplete: skills popup        |
@@ -167,7 +166,7 @@ Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → 
 - User/project extensions discovered via filesystem scan (`discovery.ts`, Effect-typed)
 - `loader-boundary.ts` accepts `disabled` list — skips `setup` for disabled extensions
 - One setup shape: Effect-typed `Effect<Array, E, R>`. Setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientLifecycle`
-- **Transport-only widgets**: there is no in-process snapshot cache. Widgets subscribe to typed session events or `ClientTransport.onExtensionStateChanged` for invalidation pulses and call `client.extension.request(...)` via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so stale data from the prior session can never render. Read accessors like `liveModel()` gate on `(sid, bid)` match against the live session. `auto.client.ts`, `artifacts.client.ts`, and `tool-renderers.client.tsx` are the canonical examples.
+- **Transport-only widgets**: there is no in-process snapshot cache. Widgets subscribe to typed session events or `ClientTransport.onExtensionStateChanged` for invalidation pulses and call `client.extension.request(...)` via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so stale data from the prior session can never render. Read accessors like `liveModel()` gate on `(sid, bid)` match against the live session. `goal.client.ts` and `tool-renderers.client.tsx` are the canonical examples.
 - **Lifecycle**: register Solid `createRoot(dispose)` disposers AND pulse unsubscribes via `ClientLifecycle.addCleanup`. The provider's `onCleanup` runs them in order on unmount, so widget setups leave no detached roots behind.
 - Widgets are zero-prop components that self-source from `useClient()` or `useExtensionUI()`
 - `useExtensionUI()` provides `sessionId()`, `branchId()`, `clientRuntime`

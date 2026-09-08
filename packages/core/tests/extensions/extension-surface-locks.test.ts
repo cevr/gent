@@ -574,7 +574,6 @@ describe("Effect-purity locks (compile-time)", () => {
     // @ts-expect-error — capability access enforcement is runtime lowering, not author API
     type _BadRequireCapabilityWrite = typeof PublicExtensionApi.requireCapabilityWrite
     type _AllowedOutputBuffer = typeof PublicExtensionApi.OutputBuffer
-    type _AllowedArtifactId = typeof PublicExtensionApi.ArtifactId
 
     expect(true).toBe(true)
   })
