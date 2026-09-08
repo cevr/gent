@@ -268,8 +268,10 @@ const formatConversation = (messages: ReadonlyArray<Message>): string =>
 
 const estimateTextTokens = (text: string): number => Math.ceil(text.length / 4)
 
-const summaryPromptText = (messages: ReadonlyArray<Message>): string =>
-  `${SUMMARY_USER_PREFIX}${formatConversation(messages)}`
+const summaryPromptText = (
+  messages: ReadonlyArray<Message>,
+  cellBindings: ReadonlyArray<string>,
+): string => `${SUMMARY_USER_PREFIX}${formatConversation(messages)}${bindingsNote(cellBindings)}`
 
 /** The cell keeps its namespace across turns; the summary must say what those names hold. */
 const bindingsNote = (bindings: ReadonlyArray<string>): string => {
@@ -439,7 +441,7 @@ const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
     role: "user",
     parts: [
       Prompt.textPart({
-        text: `${summaryPromptText(params.sourceMessages)}${bindingsNote(params.cellBindings)}`,
+        text: summaryPromptText(params.sourceMessages, params.cellBindings),
       }),
     ],
     createdAt: yield* DateTime.nowAsDate,
@@ -488,11 +490,14 @@ const projectionFailure = (modelId: ModelId, failure: ModelContextError) =>
 const compactionFailure = (modelId: ModelId, failure: ModelCompactionFailure) =>
   new ModelCompactionError({ modelId, failure })
 
-const summaryBudget = (budget: ModelContextBudget): ModelContextBudget => {
-  const reservedSystemTokens = estimateTextTokens(SUMMARY_SYSTEM_PROMPT)
+const summaryBudget = (
+  budget: ModelContextBudget,
+  instructions: Option.Option<string>,
+): ModelContextBudget => {
+  const reservedSystemTokens = estimateTextTokens(summarySystemPrompt(instructions))
   const contextLimitTokens = Math.min(
     budget.contextLimitTokens,
-    MODEL_COMPACTION_INPUT_TOKENS + reservedSystemTokens + MODEL_COMPACTION_OUTPUT_TOKENS,
+    MODEL_COMPACTION_INPUT_TOKENS + MODEL_COMPACTION_OUTPUT_TOKENS,
   )
   return ModelContextBudget.make({
     contextLimitTokens,
@@ -531,6 +536,8 @@ const selectSummarySource = (
   normalized: NormalizedMessages,
   omitted: ReadonlySet<MessageId>,
   budget: ModelContextBudget,
+  instructions: Option.Option<string>,
+  cellBindings: ReadonlyArray<string>,
 ): Option.Option<ReadonlyArray<Message>> => {
   const omittedIndexes = normalized.messages.flatMap((message, index) => {
     if (omitted.has(message.id) && !isSummaryMessage(message)) return [index]
@@ -553,12 +560,14 @@ const selectSummarySource = (
     .filter((message) => omitted.has(message.id) && !isSummaryMessage(message))
   if (sourceCandidate.length === 0) return Option.none()
 
-  const boundedBudget = summaryBudget(budget)
+  const boundedBudget = summaryBudget(budget, instructions)
   for (let start = 0; start < sourceCandidate.length; start += 1) {
     const candidate = sourceCandidate.slice(start)
     const projected = projectModelContext(candidate, boundedBudget)
     if (Result.isFailure(projected) || projected.success.messages.length === 0) continue
-    const promptTokens = estimateTextTokens(summaryPromptText(projected.success.messages))
+    const promptTokens = estimateTextTokens(
+      summaryPromptText(projected.success.messages, cellBindings),
+    )
     if (promptTokens > projected.success.availableInputTokens) continue
     return Option.some(projected.success.messages)
   }
@@ -799,7 +808,17 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
       onNone: (): ReadonlySet<MessageId> => new Set(initial.success.omittedMessageIds),
       onSome: () => forcedOmission(normalized),
     })
-    const sourceOption = selectSummarySource(normalized, omitted, params.budget)
+    const instructions = Option.flatMap(forced, (value) =>
+      Option.fromUndefinedOr(value.instructions),
+    )
+    const cellBindings = params.cellBindings ?? []
+    const sourceOption = selectSummarySource(
+      normalized,
+      omitted,
+      params.budget,
+      instructions,
+      cellBindings,
+    )
     if (Option.isNone(sourceOption)) {
       return ModelCompactionResult.make({
         messages: [...normalized.messages],
@@ -822,10 +841,8 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
         summarize({
           model,
           sourceMessages,
-          instructions: Option.flatMap(forced, (value) =>
-            Option.fromUndefinedOr(value.instructions),
-          ),
-          cellBindings: params.cellBindings ?? [],
+          instructions,
+          cellBindings,
         }).pipe(Effect.mapError((failure) => compactionFailure(params.modelId, failure))),
       ),
     )

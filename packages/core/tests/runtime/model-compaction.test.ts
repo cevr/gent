@@ -581,6 +581,90 @@ describe("model context compaction", () => {
     )
   })
 
+  for (const scenario of [
+    {
+      name: "focus instructions",
+      instructions: "i".repeat(2000),
+      bindings: [],
+      limit: 1600,
+      compacted: true,
+    },
+    {
+      name: "retained bindings",
+      instructions: "",
+      bindings: ["b".repeat(1800)],
+      limit: 1600,
+      compacted: true,
+    },
+    {
+      name: "focus and bindings together",
+      instructions: "i".repeat(2000),
+      bindings: ["b".repeat(1800)],
+      limit: 2200,
+      compacted: true,
+    },
+    {
+      name: "bindings that leave no source budget",
+      instructions: "",
+      bindings: ["b".repeat(6000)],
+      limit: 1600,
+      compacted: false,
+    },
+  ]) {
+    it.scopedLive(`bounds the full summary request with ${scenario.name}`, () => {
+      const messages = [
+        textMessage("old-1", "assistant", "a".repeat(1800), 1),
+        textMessage("old-2", "assistant", "b".repeat(1800), 2),
+        textMessage("latest", "user", "continue", 3),
+      ]
+      const requests: Prompt.Prompt[] = []
+      const providerLayer = LanguageModelLayers.testStream((options) => {
+        requests.push(Prompt.make(options.prompt))
+        return Effect.succeed(
+          Stream.fromIterable([
+            textDeltaPart("bounded summary"),
+            finishPart({ finishReason: "stop" }),
+          ]),
+        )
+      })
+      return Effect.gen(function* () {
+        yield* createTranscript(messages)
+        const model = yield* LanguageModel.LanguageModel
+        const result = yield* compactModelContext({
+          modelId,
+          sessionId,
+          branchId,
+          messages,
+          budget: budget(scenario.limit),
+          force: { instructions: scenario.instructions },
+          cellBindings: scenario.bindings,
+          summaryModel: Effect.succeed(model),
+        })
+        expect(result.compacted).toBe(scenario.compacted)
+        if (!scenario.compacted) {
+          expect(requests).toHaveLength(0)
+          expect(result.messages).toEqual(messages)
+          return
+        }
+        expect(requests).toHaveLength(1)
+        const request = Option.getOrThrow(Option.fromUndefinedOr(requests[0]))
+        const text = promptText(request)
+        expect(Math.ceil(text.length / 4) + MODEL_COMPACTION_OUTPUT_TOKENS).toBeLessThanOrEqual(
+          scenario.limit,
+        )
+        expect(text).not.toContain("a".repeat(1800))
+        expect(text).toContain("b".repeat(1800))
+        if (scenario.instructions.length > 0) expect(text).toContain(scenario.instructions)
+        for (const binding of scenario.bindings) expect(text).toContain(binding)
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
+        ),
+        Effect.timeout("10 seconds"),
+      )
+    })
+  }
+
   it.live("a requested compaction summarizes older history with the given focus", () => {
     const messages = [
       textMessage("old-1", "user", "first question", 1),
