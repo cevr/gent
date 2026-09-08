@@ -436,7 +436,7 @@ describe("FX transcript treatment", () => {
           "cell recovery error",
         ),
       )
-      expect(frame.match(/Its source was not replayed/g)?.length).toBeGreaterThanOrEqual(3)
+      expect(frame.match(/Its source was not replayed/g)?.length).toBe(3)
     }),
   )
 

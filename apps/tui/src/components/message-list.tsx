@@ -479,7 +479,7 @@ function ToolCallGroup(props: {
   const preview = createMemo(() => {
     if (props.fullDetail || props.disclosure !== "preview") return previewOutput("")
     return Option.fromNullishOr(props.calls.at(-1)).pipe(
-      Option.filter((last) => last.status !== "running"),
+      Option.filter((last) => last.status === "completed"),
       Option.map((last) => previewOutput(rowOutputText(last), PREVIEW_LINES)),
       Option.getOrElse(() => previewOutput("")),
     )
