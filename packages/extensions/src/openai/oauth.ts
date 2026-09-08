@@ -93,12 +93,12 @@ export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
 }) {}
 
 /**
- * ChatGPT OAuth reaches the Codex backend, which serves the GPT-5 family.
+ * ChatGPT OAuth reaches the Codex backend for GPT-5 models and GPT-6 Astra.
  * Chat aliases and pro tiers are API-only. The catalog itself comes from
  * models.dev, so new GPT-5 releases need no list update here.
  */
 export const isOpenAIOAuthModel = (modelName: string): boolean =>
-  modelName.startsWith("gpt-5") &&
+  (modelName.startsWith("gpt-5") || modelName === "gpt-6-astra") &&
   !modelName.endsWith("-chat-latest") &&
   !modelName.endsWith("-pro")
 
