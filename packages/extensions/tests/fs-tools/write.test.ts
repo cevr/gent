@@ -27,6 +27,56 @@ const ToolLayer = Layer.merge(
 describe("WriteTool", () => {
   const writeTest = it.scopedLive.layer(ToolLayer)
 
+  writeTest("atomic replacement writes complete content and leaves no temporary file", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const path = `${dir}/result.md`
+      yield* fs.writeFileString(path, "previous result")
+      const content = "complete result\n".repeat(100_000)
+      const result = yield* runToolWithCtx(WriteTool, { path, content, atomic: true }, ctx)
+      expect(result.bytesWritten).toBe(content.length)
+      expect(yield* fs.readFileString(path)).toBe(content)
+      expect(yield* fs.readDirectory(dir)).toEqual(["result.md"])
+    }),
+  )
+
+  writeTest("failed atomic rename preserves the destination and removes the temporary file", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const destination = `${dir}/saved`
+      yield* fs.makeDirectory(destination)
+      yield* fs.writeFileString(`${destination}/previous.md`, "previous result")
+      const result = yield* runToolWithCtx(
+        WriteTool,
+        { path: destination, content: "new result", atomic: true },
+        ctx,
+      ).pipe(Effect.result)
+      expect(result._tag).toBe("Failure")
+      expect(yield* fs.readFileString(`${destination}/previous.md`)).toBe("previous result")
+      expect(yield* fs.readDirectory(dir)).toEqual(["saved"])
+    }),
+  )
+
+  writeTest("atomic replacement replaces a symlink while normal writes follow it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const target = `${dir}/target.md`
+      const link = `${dir}/link.md`
+      yield* fs.writeFileString(target, "original")
+      yield* fs.symlink(target, link)
+      yield* runToolWithCtx(WriteTool, { path: link, content: "normal write" }, ctx)
+      expect(yield* fs.readFileString(target)).toBe("normal write")
+      yield* runToolWithCtx(WriteTool, { path: link, content: "atomic result", atomic: true }, ctx)
+      expect(yield* fs.readFileString(target)).toBe("normal write")
+      expect(yield* fs.readFileString(link)).toBe("atomic result")
+      expect((yield* fs.stat(link)).type).toBe("File")
+      expect((yield* fs.readDirectory(dir)).sort()).toEqual(["link.md", "target.md"])
+    }),
+  )
+
   writeTest("writes content to a new file", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

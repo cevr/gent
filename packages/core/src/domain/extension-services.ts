@@ -19,6 +19,7 @@ import type {
   ExtensionTurnContext,
 } from "./extension.js"
 import { FileIndex, type IndexedFile } from "./file-index.js"
+import { makeFileWriter } from "./file-writer.js"
 import { FileLockService } from "./file-lock.js"
 import { ExtensionStatePublisher } from "./event-publisher.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
@@ -211,7 +212,11 @@ export interface ExtensionFilesService {
     readonly waitForScanMs?: number
   }) => Effect.Effect<ReadonlyArray<IndexedFile>, ExtensionServiceError>
   readonly read: (path: string) => Effect.Effect<string, ExtensionServiceError>
-  readonly write: (path: string, content: string) => Effect.Effect<void, ExtensionServiceError>
+  readonly write: (
+    path: string,
+    content: string,
+    options?: { readonly atomic?: boolean },
+  ) => Effect.Effect<void, ExtensionServiceError>
   readonly exists: (path: string) => Effect.Effect<boolean, ExtensionServiceError>
   readonly stat: (path: string) => Effect.Effect<ExtensionFileStat, ExtensionServiceError>
   readonly readDirectory: (
@@ -357,11 +362,12 @@ export const extensionServicesFromHostContext = (
         mapError("ExtensionFiles", "listFiles", fileIndex.listFiles(params)),
     })
 
+    const writeFile = makeFileWriter(fs, pathSvc.dirname)
     const Files: ExtensionFilesService = {
       listFiles,
       read: (path) => mapError("ExtensionFiles", "read", fs.readFileString(path)),
-      write: (path, content) =>
-        mapError("ExtensionFiles", "write", fs.writeFileString(path, content)),
+      write: (path, content, options) =>
+        mapError("ExtensionFiles", "write", writeFile(path, content, options)),
       exists: (path) => mapError("ExtensionFiles", "exists", fs.exists(path)),
       stat: (path) =>
         mapError(

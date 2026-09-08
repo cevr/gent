@@ -79,18 +79,19 @@ describe("FsToolsExtension via model turn", () => {
   )
 
   modelTurnTest(
-    "write tool call routes through ctx.Files.write end-to-end",
+    "atomic write replaces a saved result through the real RPC tool path",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
           const path = yield* Path.Path
           const cwd = yield* fs.makeTempDirectoryScoped()
-          const filePath = path.join(cwd, "nested", "out.txt")
+          const filePath = path.join(cwd, "out.txt")
+          yield* fs.writeFileString(filePath, "previous result")
           const content = "produced via real ExtensionFilesService"
 
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("write", { path: filePath, content }),
+            toolCallStep("write", { path: filePath, content, atomic: true }),
           ])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,

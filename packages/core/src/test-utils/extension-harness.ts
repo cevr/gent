@@ -1,3 +1,4 @@
+import { makeFileWriter } from "../domain/file-writer.js"
 /** Test helpers for extension tool execution. */
 
 // @effect-diagnostics nodeBuiltinImport:off — test stub needs sync path ops; ExtensionFilesService captures Path.Path at runtime construction
@@ -221,7 +222,8 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
         }),
       ),
     read: (path) => filesFs("read", (fs) => fs.readFileString(path)),
-    write: (path, content) => filesFs("write", (fs) => fs.writeFileString(path, content)),
+    write: (path, content, options) =>
+      filesFs("write", (fs) => makeFileWriter(fs, nodePath.dirname)(path, content, options)),
     exists: (path) => filesFs("exists", (fs) => fs.exists(path)),
     stat: (path) =>
       filesFs("stat", (fs) =>

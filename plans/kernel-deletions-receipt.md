@@ -95,6 +95,30 @@ Source files:
 - `/Users/cvr/Developer/personal/gent/packages/core/src/test-utils/extension-harness.ts`
 - `/Users/cvr/Developer/personal/gent/packages/tooling/tests/platform-duplication-guards.test.ts`
 
+## Atomic saved-result writes
+
+Added `atomic: true` to the existing write tool and file facade. The production facade and tool test harness use one file-writer implementation. The existing path lock still owns serialization. Default writes retain their prior behavior. Atomic replacement replaces a symlink itself, preserves its target, and creates a new inode with temporary-file permissions.
+
+Eight focused tests passed. They cover complete replacement above the kernel snapshot limit, failed rename, temporary cleanup, symlinks, normal writes, and RPC execution. The full gate passed. Live Herdr replaced one result, observed the expected directory-target rename failure, read the preserved old file, checked cleanup, and reached idle.
+
+A real subprocess test used the production file writer. It stopped the process after the temporary path appeared and before rename, then sent SIGKILL. The destination still contained the previous complete result. A hard kill can leave a staging directory. No power-loss guarantee is claimed.
+
+Evidence:
+
+- `/tmp/gent-atomic-tests.log`
+- `/tmp/gent-atomic-gate.log`
+- `/tmp/gent-atomic-herdr.txt`
+- `/tmp/gent-atomic-process-crash.txt`
+
+Source files:
+
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/file-writer.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-services.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/test-utils/extension-harness.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/fs-tools/write.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/tests/fs-tools/write.test.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/tests/fs-tools/fs-tools-model-turn.test.ts`
+
 ## Remaining work
 
 1. Replace artifact state and UI with saved files and kernel working values.
