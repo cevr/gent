@@ -139,6 +139,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     renderer.footerHeight = props.footerHeight
     renderer.screenMode = "split-footer"
     renderer.externalOutputMode = "capture-stdout"
+    // Native history scrolls in the terminal. Mouse tracking would swallow the wheel.
+    renderer.useMouse = false
     // A new transcript must not inherit the previous screen's cursor origin.
     renderer.resetSplitFooterForReplay()
     setReady(true)
@@ -149,6 +151,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     if (renderer.isDestroyed) return
     renderer.externalOutputMode = "passthrough"
     renderer.screenMode = "alternate-screen"
+    renderer.useMouse = true
   })
 
   createEffect(() => {
@@ -171,6 +174,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       setNativeOutputReady(false)
       renderer.externalOutputMode = "passthrough"
       renderer.screenMode = "alternate-screen"
+      // The expanded transcript owns scrolling, so the wheel must reach the scrollbox.
+      renderer.useMouse = true
       return
     }
     const returning = renderer.screenMode === "alternate-screen"
@@ -180,6 +185,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     )
     renderer.screenMode = "split-footer"
     renderer.externalOutputMode = "capture-stdout"
+    renderer.useMouse = false
     if ((returning || replayPending()) && !settlingNative) {
       settlingNative = true
       renderer.once("frame", finishNativeReturn)
