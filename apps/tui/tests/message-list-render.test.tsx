@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option, Schema } from "effect"
-import { Show } from "solid-js"
+import { Show, createSignal } from "solid-js"
+import type { DisclosureLevel } from "../src/routes/session-ui-state"
 import { MessageList, type Message, type SessionItem } from "../src/components/message-list"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/components/tool-frame"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
@@ -85,7 +86,7 @@ const registeredFailureMessage = (id: string): Message => ({
   ],
 })
 
-const cellMessage = (id: string): Message => ({
+const cellMessage = (id: string, display = "hello from a.txt"): Message => ({
   _tag: "regular-message",
   id: "assistant-cell",
   role: "assistant",
@@ -101,7 +102,7 @@ const cellMessage = (id: string): Message => ({
       input: { code: "const note = await tools.call('read', {path: 'a.txt'})\nnote.content" },
       summary: absent,
       output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
-        display: "hello from a.txt",
+        display,
         bindings: ["note"],
         truncated: false,
         operations: [
@@ -439,6 +440,76 @@ describe("FX transcript treatment", () => {
       expect(frame).toContain("row 20")
       expect(frame).not.toContain("row 21")
       expect(frame).toContain("… +5 lines (ctrl+o)")
+    }),
+  )
+
+  it.live("keeps the cell row across disclosure changes and renders transcript output once", () =>
+    Effect.gen(function* () {
+      const [disclosure, setDisclosure] = createSignal<DisclosureLevel>("preview")
+      const [fullDetail, setFullDetail] = createSignal(false)
+      const output = Array.from(
+        { length: 25 },
+        (_, index) => `CELL-OUTPUT-${String(index + 1).padStart(3, "0")}`,
+      ).join("\n")
+      const items = [cellMessage("call-stable", output)]
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => {
+            const extensionUI = useExtensionUI()
+            return (
+              <Show when={!extensionUI.loading()}>
+                <MessageList
+                  items={items}
+                  disclosure={disclosure()}
+                  fullDetail={fullDetail()}
+                  syntaxStyle={syntaxStyle}
+                  streaming={false}
+                />
+              </Show>
+            )
+          },
+          { width: 110, height: 55 },
+        ),
+      )
+      const preview = yield* Effect.promise(() =>
+        waitForRenderedFrame(
+          setup,
+          (frame) => frame.includes("… +5 lines (ctrl+o)"),
+          "cell preview",
+        ),
+      )
+      const row = Option.getOrThrow(
+        Option.fromUndefinedOr(preview.split("\n").find((line) => line.includes("└ cell"))),
+      ).trim()
+      expect(row).toContain("↑2 ↓25")
+      yield* Effect.sync(() => setDisclosure("full"))
+      const full = yield* Effect.promise(() =>
+        waitForRenderedFrame(
+          setup,
+          (frame) => frame.includes("CELL-OUTPUT-025") && frame.includes("note.content"),
+          "full cell output",
+        ),
+      )
+      expect(full.split("\n").some((line) => line.trim() === row)).toBe(true)
+      expect(full.match(/#call-stable/g)).toHaveLength(1)
+      expect(full).not.toContain("… +5 lines")
+      yield* Effect.sync(() => {
+        setDisclosure("preview")
+        setFullDetail(true)
+      })
+      const transcript = yield* Effect.promise(() =>
+        waitForRenderedFrame(
+          setup,
+          (frame) => frame.includes("CELL-OUTPUT-025") && !frame.includes("1 cell ·"),
+          "full transcript from preview",
+        ),
+      )
+      expect(transcript.split("\n").some((line) => line.trim() === row)).toBe(true)
+      expect(transcript).not.toContain("… +5 lines")
+      for (let line = 1; line <= 25; line++) {
+        const text = `CELL-OUTPUT-${String(line).padStart(3, "0")}`
+        expect(transcript.split("\n").filter((value) => value.trim() === text)).toHaveLength(1)
+      }
     }),
   )
 

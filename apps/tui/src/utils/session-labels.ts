@@ -26,7 +26,7 @@ const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): Bord
   const parts = [`ctx ${pct}%`]
   if (context.omittedMessages > 0) parts.push(`${context.omittedMessages} omitted`)
   const revision = Option.fromUndefinedOr(context.compactedRevision)
-  if (Option.isSome(revision)) parts.push(`compacted r${revision.value}`)
+  if (Option.isSome(revision)) parts.push(`compacted r${revision.value.slice(0, 8)}`)
   return { text: parts.join(" · "), color: pressureColor(pct, theme) }
 }
 

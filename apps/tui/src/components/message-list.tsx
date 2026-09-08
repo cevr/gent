@@ -4,7 +4,7 @@ import type { SyntaxStyle } from "@opentui/core"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 import type { ToolCall } from "./tool-renderers/index"
-import { formatToolCallIdentity, ToolCallIdentityProvider } from "./tool-frame"
+import { formatToolCallIdentity, ToolCallIdentityProvider, ToolFrameBody } from "./tool-frame"
 import { GenericToolRenderer } from "./tool-renderers/generic"
 import { useExtensionUI } from "../extensions/context"
 import { SessionEventIndicator } from "./session-event-indicator"
@@ -473,7 +473,7 @@ function ToolCallGroup(props: {
   }
   // Preview shows the head of the last finished call's output beneath the rows.
   const preview = createMemo(() => {
-    if (props.disclosure !== "preview") return previewOutput("")
+    if (props.fullDetail || props.disclosure !== "preview") return previewOutput("")
     return Option.fromNullishOr(props.calls.at(-1)).pipe(
       Option.filter((last) => last.status !== "running"),
       Option.map((last) => previewOutput(rowOutputText(last), PREVIEW_LINES)),
@@ -540,13 +540,30 @@ function ToolCallGroup(props: {
               }
               return (
                 <Show
-                  when={rowsOpen() || call.status === "error"}
+                  when={call.status === "error"}
                   fallback={
-                    <text style={{ fg: color() }}>
-                      {connector()} {call.toolName} {label()}
-                      {counts()}
-                      {status()}
-                    </text>
+                    <box flexDirection="column">
+                      <box flexDirection="row">
+                        <text flexGrow={1} flexShrink={1} style={{ fg: color() }}>
+                          {connector()} {call.toolName} {label()}
+                          {counts()}
+                          {status()}
+                        </text>
+                        <text flexShrink={0} wrapMode="none" style={{ fg: theme.textMuted }}>
+                          {" "}
+                          #{formatToolCallIdentity(call.id)}
+                        </text>
+                      </box>
+                      <Show when={rowsOpen()}>
+                        <ToolFrameBody>
+                          <SingleToolCall
+                            toolCall={call}
+                            expanded={true}
+                            getChildSessions={props.getChildSessions}
+                          />
+                        </ToolFrameBody>
+                      </Show>
+                    </box>
                   }
                 >
                   <SingleToolCall

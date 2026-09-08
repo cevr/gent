@@ -129,9 +129,12 @@ counsel review.
 - RPC tests run real cells that schedule `context.newWindow()` or
   `context.compact()`. Each test interrupts the cell before the next projection.
   The next user turn retains older context and creates no window or summary.
-- The status line now shows the actual summary revision, such as
+- The status line now shows the first eight characters of the summary revision, such as
   `compacted r1a2b3c4d`. The projection event carries this optional value to the
   snapshot. Reusing a summary keeps its revision. A summary-free window clears
   it. The cumulative compaction count remains a separate metric.
-- The live Luna transcript and keyboard checks remain pending. These tests use
-  a controlled language model with real runtime, storage, cells, and RPC.
+- The live Luna checks passed through Herdr. Three Ctrl+O presses completed
+  the disclosure cycle. The cell row stayed the same in preview and full.
+  Opening the transcript from preview showed full output once. The narrow
+  status line showed the short revision. A new window added its marker and
+  cleared the revision. See `plans/disclosure-fixes-receipt-2026-09-08.md`.

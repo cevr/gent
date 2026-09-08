@@ -72,6 +72,21 @@ describe("buildTopRightLabels", () => {
     expect(labels[0]!.color).toBe(theme.error)
   })
 
+  test("shows a short revision without changing the full snapshot value", () => {
+    const revision = "59c5b2477afb478332e5b1fde56be33c10aa27dc9a50aa680c8a6fbe1e164328"
+    const context = {
+      estimatedTokens: 489,
+      availableInputTokens: 1036883,
+      contextLimitTokens: 1050000,
+      omittedMessages: 0,
+      compactions: 1,
+      compactedRevision: revision,
+    }
+    const labels = buildTopRightLabels(absent, 0, absent, theme, { context })
+    expect(labels[0]?.text).toBe("ctx 0% · compacted r59c5b247")
+    expect(context.compactedRevision).toBe(revision)
+  })
+
   test("a summary-free projection does not label the old compaction count as a revision", () => {
     const labels = buildTopRightLabels(absent, 0, absent, theme, {
       context: {

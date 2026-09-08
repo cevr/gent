@@ -19,6 +19,15 @@ export function ToolCallIdentityProvider(props: ToolCallIdentityProviderProps) {
   )
 }
 
+const ToolFrameBodyContext = createContext(false)
+
+/** The transcript row owns the header; registered renderers supply its body. */
+export function ToolFrameBody(props: { children: JSX.Element }) {
+  return (
+    <ToolFrameBodyContext.Provider value={true}>{props.children}</ToolFrameBodyContext.Provider>
+  )
+}
+
 export interface ToolFrameProps {
   /** Tool display name */
   title: string
@@ -55,6 +64,7 @@ export function formatToolCallIdentity(identity: string): string {
 export function ToolFrame(props: ToolFrameProps) {
   const { theme } = useTheme()
   const callIdentity = useContext(ToolCallIdentityContext)
+  const bodyOnly = useContext(ToolFrameBodyContext)
   const [localExpanded, setLocalExpanded] = createSignal(props.expanded)
 
   createEffect(() => {
@@ -87,36 +97,38 @@ export function ToolFrame(props: ToolFrameProps) {
 
   return (
     <box flexDirection="column" marginBottom={1}>
-      <box flexDirection="row" onMouseDown={() => setLocalExpanded((prev) => !prev)}>
-        <text flexGrow={1} flexShrink={1}>
-          <span style={{ fg: statusColor() }}>{statusIcon()} </span>
-          <Show when={props.status === "error"}>
-            <span style={{ fg: theme.error }}>failed </span>
-          </Show>
-          <span style={{ fg: theme.text, bold: true }}>{props.title}</span>
-          <Show when={props.subtitle}>
-            <Show
-              when={props.subtitleHref}
-              fallback={<span style={{ fg: theme.textMuted }}> {props.subtitle}</span>}
-            >
-              {(href) => (
-                <a href={href()}>
-                  <span style={{ fg: theme.textMuted }}> {props.subtitle}</span>
-                </a>
-              )}
+      <Show when={!bodyOnly}>
+        <box flexDirection="row" onMouseDown={() => setLocalExpanded((prev) => !prev)}>
+          <text flexGrow={1} flexShrink={1}>
+            <span style={{ fg: statusColor() }}>{statusIcon()} </span>
+            <Show when={props.status === "error"}>
+              <span style={{ fg: theme.error }}>failed </span>
             </Show>
-          </Show>
-        </text>
-        <text flexShrink={0} wrapMode="none">
-          <Show when={callIdentityLabel()}>
-            {(identity) => <span style={{ fg: theme.textMuted }}> {identity()}</span>}
-          </Show>
-          <Show when={footer()}>
-            <span style={{ fg: theme.textMuted }}> {footer()}</span>
-          </Show>
-          <span style={{ fg: theme.textMuted }}> {expandIndicator()}</span>
-        </text>
-      </box>
+            <span style={{ fg: theme.text, bold: true }}>{props.title}</span>
+            <Show when={props.subtitle}>
+              <Show
+                when={props.subtitleHref}
+                fallback={<span style={{ fg: theme.textMuted }}> {props.subtitle}</span>}
+              >
+                {(href) => (
+                  <a href={href()}>
+                    <span style={{ fg: theme.textMuted }}> {props.subtitle}</span>
+                  </a>
+                )}
+              </Show>
+            </Show>
+          </text>
+          <text flexShrink={0} wrapMode="none">
+            <Show when={callIdentityLabel()}>
+              {(identity) => <span style={{ fg: theme.textMuted }}> {identity()}</span>}
+            </Show>
+            <Show when={footer()}>
+              <span style={{ fg: theme.textMuted }}> {footer()}</span>
+            </Show>
+            <span style={{ fg: theme.textMuted }}> {expandIndicator()}</span>
+          </text>
+        </box>
+      </Show>
 
       <Show
         when={localExpanded()}
