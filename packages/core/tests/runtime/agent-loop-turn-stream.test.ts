@@ -96,7 +96,11 @@ describe("turn stream parity", () => {
         ),
       )
       expect(modelDraft).toEqual(externalDraft)
-      expect((yield* Ref.get(modelEventsRef)).map((event) => event._tag)).toEqual([...expectedTags])
+      // Only a model turn projects context; the lifecycle around it must still match.
+      const modelTags = (yield* Ref.get(modelEventsRef))
+        .map((event) => event._tag)
+        .filter((tag): tag is AgentEvent["_tag"] => tag !== "ModelContextProjected")
+      expect(modelTags).toEqual([...expectedTags])
       expect((yield* Ref.get(externalEventsRef)).map((event) => event._tag)).toEqual([
         ...expectedTags,
       ])

@@ -136,4 +136,11 @@ Step 4 resolved by step 3: the host context is already built once per run by
 `ExtensionHostContextProvider.forRun` and read through one tag; the facets are thin closures over
 it. A separate per-branch facet cache would duplicate the run record for no measured gain.
 
-Remaining: 5 (tool metadata off the brand), 7 (slash auto-derivation).
+Step 7 is already satisfied: the TUI derives a command for every server `SlashCommandInfo`
+(`apps/tui/src/extensions/context.tsx`, `listSlashCommands`). The three client commands that remain
+(`/driver`, `/loop`, `/btw`) do client-only work (driver client RPC, composing a message, opening an
+overlay), so none is a pure forwarder to delete.
+
+Remaining: 5 (tool metadata off the brand, fold `domain/dynamic-extension-registry.ts`). Deferred
+behind the context plan; the registry already decodes the brand once at compile time, so the gain is
+structural, not behavioral.

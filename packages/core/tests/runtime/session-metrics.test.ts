@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
-import { Effect, type Layer } from "effect"
+import { Effect, type Layer, Option } from "effect"
 import { narrowR } from "../helpers/effect"
 import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
@@ -112,6 +112,38 @@ describe("SessionRuntime metrics", () => {
       expect(result.metrics.costUsd).toBeCloseTo(expected, 10)
       expect(result.metrics.lastModelId).toBe(ModelId.make("test/priced"))
       expect(result.metrics.lastInputTokens).toBeGreaterThan(0)
+    }),
+  )
+  it.live("a completed turn reports what the model saw as context metrics", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("reply")])
+      const result = yield* narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* SessionRuntime
+          const events = yield* EventStorage
+          const { sessionId, branchId } = yield* createSessionBranch()
+          yield* runtime.runPrompt({
+            sessionId,
+            branchId,
+            agentName: AgentName.make("cowork"),
+            prompt: "one",
+          })
+          const envelopes = yield* events.listEvents({ sessionId, branchId })
+          const projected = envelopes
+            .map((e) => e.event)
+            .filter((e) => e._tag === "ModelContextProjected")
+          const metrics = yield* runtime.getMetrics({ sessionId, branchId })
+          return { projected, metrics }
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
+      )
+      expect(result.projected).toHaveLength(1)
+      const context = Option.getOrThrow(Option.fromUndefinedOr(result.metrics.context))
+      expect(context.contextLimitTokens).toBe(TEST_MODEL_CONTEXT_LIMIT_TOKENS)
+      expect(context.estimatedTokens).toBeGreaterThan(0)
+      expect(context.availableInputTokens).toBeLessThan(TEST_MODEL_CONTEXT_LIMIT_TOKENS)
+      expect(context.omittedMessages).toBe(0)
+      expect(context.compactions).toBe(0)
     }),
   )
   it.live("metrics.costUsd does not drift when pricing changes after emission", () =>

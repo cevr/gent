@@ -32,7 +32,7 @@ function TestComposer(props: {
     promptEntries: () => [],
     promptSearchState: PromptSearchState.closed,
     promptSearchOpen: () => props.suspended ?? false,
-    toolsExpanded: () => false,
+    disclosure: () => "collapsed",
     treeOverlay: () => Option.getOrNull(Option.none()),
     activity: () => ({ phase: "idle", turn: 0 }),
     phaseLabel: () => "idle",

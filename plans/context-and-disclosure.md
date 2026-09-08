@@ -79,3 +79,17 @@ non-blocking transcript notice. Keep `/handoff` as an explicit user action.
 S5 first (requested). Then S4 status line and invariant rows, S2 `status` and
 `read`, S1, S2 `compact` and `newWindow`, S3. Each spine ships with tests and a
 counsel review.
+
+## Status
+
+- S5 shipped 2026-09-08 (`e701b067`, `ce06e85b`, `45a88249`).
+- S4 shipped 2026-09-08. `ModelContextProjected` event and `ModelContextMetrics`
+  on the session snapshot feed the status line
+  (`apps/tui/src/utils/session-labels.ts`). Disclosure levels live in
+  `apps/tui/src/routes/session-ui-state.ts`: `ctrl+o` cycles
+  collapsed → preview → full, `esc` collapses, `ctrl+shift+o` opens the
+  transcript view. Cell rows show `↑code ↓display`, bash rows `↓N`; the
+  compaction card folds `model-compaction` messages. Deviation: rows carry no
+  duration because `ToolCall` in the feed has no timing field; add it when the
+  tool-result event carries `durationMs`.
+- S1, S2, S3 open.

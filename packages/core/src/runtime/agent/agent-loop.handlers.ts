@@ -87,6 +87,7 @@ import {
   projectRuntimeState,
   queueRequestsWake,
   type QueuedTurnItem,
+  type ModelContextMetrics,
 } from "./agent-loop.state.js"
 import {
   AgentLoopFollowUp,
@@ -942,11 +943,23 @@ export const buildAgentLoopActorHandlers = (config: {
             let costUsd = 0
             let lastInputTokens = 0
             let lastModelId = Option.none<ModelId>()
+            let compactions = 0
+            let context = Option.none<ModelContextMetrics>()
             for (const { event } of envelopes) {
               switch (event._tag) {
                 case "TurnCompleted":
                   turns++
                   durationMs += event.durationMs
+                  break
+                case "ModelContextProjected":
+                  if (event.compacted) compactions++
+                  context = Option.some({
+                    estimatedTokens: event.estimatedTokens,
+                    availableInputTokens: event.availableInputTokens,
+                    contextLimitTokens: event.contextLimitTokens,
+                    omittedMessages: event.omittedMessages,
+                    compactions,
+                  })
                   break
                 case "StreamEnded":
                   if (!Predicate.isUndefined(event.usage)) {
@@ -979,6 +992,7 @@ export const buildAgentLoopActorHandlers = (config: {
             }
             if (Option.isSome(lastModelId))
               Object.assign(metrics, { lastModelId: lastModelId.value })
+            if (Option.isSome(context)) Object.assign(metrics, { context: context.value })
             return metrics
           }).pipe(provideActorWorkspace),
       ),

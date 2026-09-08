@@ -11,6 +11,7 @@ import {
 import { createStore } from "solid-js/store"
 import type { Context } from "effect"
 import { Effect, Option, Predicate, Schema } from "effect"
+import type { ModelContextMetrics } from "@gent/core-internal/runtime/agent/agent-loop.state"
 import {
   AgentName as AgentNameSchema,
   type AgentDefinition,
@@ -216,6 +217,8 @@ export interface ClientAgentValue {
   // eslint-disable-next-line effect/noNullish -- UI agent accessors expose null outside the error state.
   error: () => string | null
   latestInputTokens: () => number
+  /** The last turn's model-context projection, absent until a turn has run. */
+  contextMetrics: () => Option.Option<ModelContextMetrics>
   // eslint-disable-next-line effect/noNullish -- model metadata is absent until the model registry loads.
   modelInfo: () => Model | undefined
 
@@ -419,6 +422,9 @@ export function ClientProvider(props: ClientProviderProps) {
     lastModelId: Option.none(),
   })
   const [latestInputTokens, setLatestInputTokens] = createSignal(0)
+  const [contextMetrics, setContextMetrics] = createSignal<Option.Option<ModelContextMetrics>>(
+    Option.none(),
+  )
   const [connectionState, setConnectionState] = createSignal<Option.Option<ConnectionState>>(
     Option.fromNullishOr(runtime.lifecycle.getState()),
   )
@@ -558,6 +564,7 @@ export function ClientProvider(props: ClientProviderProps) {
       lastModelId: Option.fromNullishOr(snapshot.metrics.lastModelId),
     })
     setLatestInputTokens(snapshot.metrics.lastInputTokens)
+    setContextMetrics(Option.fromUndefinedOr(snapshot.metrics.context))
   }
 
   const refreshSessionMetrics = (): void => {
@@ -573,6 +580,7 @@ export function ClientProvider(props: ClientProviderProps) {
               lastModelId: Option.fromNullishOr(snapshot.metrics.lastModelId),
             })
             setLatestInputTokens(snapshot.metrics.lastInputTokens)
+            setContextMetrics(Option.fromUndefinedOr(snapshot.metrics.context))
           }),
         ),
         Effect.catchEager(() => Effect.void),
@@ -949,6 +957,7 @@ export function ClientProvider(props: ClientProviderProps) {
       return Option.getOrNull(Option.none<string>())
     },
     latestInputTokens,
+    contextMetrics,
     modelInfo: () =>
       Option.getOrUndefined(
         resolveModelInfo(

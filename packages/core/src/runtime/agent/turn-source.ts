@@ -6,6 +6,7 @@ import { ExternalToolRunner, type ProviderAuthError, type TurnError } from "../.
 import {
   ErrorOccurred,
   MessageReceived,
+  ModelContextProjected,
   ProviderRetrying,
   type EventEnvelope,
 } from "../../domain/event.js"
@@ -325,6 +326,17 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       hints: { ...modelRequest.hints, maxTokens: MODEL_COMPACTION_OUTPUT_TOKENS },
     }),
   })
+  yield* eventPublisher.publish(
+    ModelContextProjected.make({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      estimatedTokens: compacted.projection.estimatedTokens,
+      availableInputTokens: compacted.projection.availableInputTokens,
+      contextLimitTokens: contextLimit,
+      omittedMessages: compacted.projection.omittedMessageIds.length,
+      compacted: compacted.compacted,
+    }),
+  )
   const prompt = toPrompt(compacted.projection.messages, { systemPrompt: resolved.systemPrompt })
   const toolkit = convertTools([...resolved.tools])
   modelRequest = {

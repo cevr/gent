@@ -150,7 +150,7 @@ describe("TUI renderer surfaces", () => {
         renderWithProviders(() => (
           <MessageList
             items={items}
-            toolsExpanded={false}
+            disclosure="collapsed"
             syntaxStyle={syntaxStyle}
             streaming={false}
           />

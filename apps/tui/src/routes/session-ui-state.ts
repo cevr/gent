@@ -33,8 +33,16 @@ export type SessionOverlayState =
   | { readonly _tag: "extension"; readonly overlayId: string }
   | PromptSearchOverlayState
 
+/** How much of each tool group the inline transcript shows. `ctrl+o` cycles; `esc` collapses. */
+export type DisclosureLevel = "collapsed" | "preview" | "full"
+
+const DISCLOSURE_CYCLE: readonly DisclosureLevel[] = ["collapsed", "preview", "full"]
+
+export const nextDisclosure = (level: DisclosureLevel): DisclosureLevel =>
+  DISCLOSURE_CYCLE[(DISCLOSURE_CYCLE.indexOf(level) + 1) % DISCLOSURE_CYCLE.length] ?? "collapsed"
+
 export interface SessionUiState {
-  readonly toolsExpanded: boolean
+  readonly disclosure: DisclosureLevel
   readonly transcriptExpanded: boolean
   readonly displayRevision: number
   readonly overlay: SessionOverlayState
@@ -42,7 +50,7 @@ export interface SessionUiState {
 
 export const SessionUiState = {
   initial: (): SessionUiState => ({
-    toolsExpanded: true,
+    disclosure: "collapsed",
     transcriptExpanded: false,
     displayRevision: 0,
     overlay: { _tag: "none" },
@@ -50,7 +58,8 @@ export const SessionUiState = {
 }
 
 export const SessionUiEvent = Schema.TaggedUnion({
-  ToggleTools: {},
+  CycleDisclosure: {},
+  CollapseDisclosure: {},
   ToggleTranscript: {},
   ClearDisplay: {},
   OpenTree: {
@@ -107,11 +116,12 @@ export function transitionSessionUi(
         state: { ...state, transcriptExpanded: !state.transcriptExpanded },
         effects: [],
       }),
-      ToggleTools: (): SessionUiTransitionResult => ({
-        state: {
-          ...state,
-          toolsExpanded: !state.toolsExpanded,
-        },
+      CycleDisclosure: (): SessionUiTransitionResult => ({
+        state: { ...state, disclosure: nextDisclosure(state.disclosure) },
+        effects: [],
+      }),
+      CollapseDisclosure: (): SessionUiTransitionResult => ({
+        state: { ...state, disclosure: "collapsed" },
         effects: [],
       }),
       OpenTree: (event): SessionUiTransitionResult => ({

@@ -19,8 +19,15 @@ import {
   type ActivityOperation,
   formatActivityHeader,
   formatCellRowLabel,
+  formatCompactionLabel,
+  formatPreviewFooter,
+  formatRowCounts,
+  previewOutput,
 } from "./message-list-utils"
+import { formatGenericToolText } from "./tool-renderers/generic-format"
+import type { DisclosureLevel } from "../routes/session-ui-state"
 export type { ToolCall }
+export type { DisclosureLevel }
 
 const CellOperationReceipts = Schema.Struct({
   operations: Schema.optional(
@@ -37,6 +44,18 @@ const CellFailure = Schema.Struct({
   display: Schema.optional(Schema.String),
   message: Schema.optional(Schema.String),
 })
+
+const BashOutput = Schema.Struct({
+  stdout: Schema.String,
+  stderr: Schema.optional(Schema.String),
+})
+
+const CompactionDetails = Schema.Struct({
+  sourceMessageIds: Schema.Array(Schema.String),
+})
+
+const COMPACTION_MESSAGE_TYPE = "model-compaction"
+const PREVIEW_LINES = 20
 
 const liveOutcome = (status: ToolCall["status"]): ActivityOperation["outcome"] => {
   if (status === "completed") return "succeeded"
@@ -76,6 +95,30 @@ const cellResultText = (call: ToolCall) =>
     onNone: () => ({ display: "", error: "" }),
     onSome: (value) => ({ display: value.display ?? "", error: value.message ?? "" }),
   })
+
+/** What a row would show beneath itself: the cell display, the command output, or the raw result. */
+const rowOutputText = (call: ToolCall): string => {
+  if (call.toolName === "cell") {
+    const result = cellResultText(call)
+    if (result.error.length > 0) return result.error
+    return result.display
+  }
+  if (call.toolName === "bash") {
+    return Option.match(decodeToolOutputOption(BashOutput, call.output), {
+      onNone: () => formatGenericToolText(call.output) ?? "",
+      onSome: (value) => [value.stdout, value.stderr ?? ""].filter((t) => t.length > 0).join("\n"),
+    })
+  }
+  return formatGenericToolText(call.output) ?? ""
+}
+
+const rowCounts = (call: ToolCall): string => {
+  if (call.status === "running") return ""
+  return formatRowCounts(call.toolName, {
+    input: getString(call.input, "code"),
+    output: rowOutputText(call),
+  })
+}
 
 export interface MessageMetadataInfo {
   customType?: string
@@ -229,7 +272,7 @@ function AssistantMessage(props: {
   // eslint-disable-next-line effect/noNullish -- snapshot messages preserve absent tool-call data.
   toolCalls: ToolCall[] | undefined
   segments?: AssistantSegment[]
-  expanded: boolean
+  disclosure: DisclosureLevel
   fullDetail: boolean
   syntaxStyle: () => SyntaxStyle
   streaming: boolean
@@ -282,7 +325,7 @@ function AssistantMessage(props: {
             reasoning={props.reasoning}
             images={props.images}
             toolCalls={props.toolCalls}
-            expanded={props.expanded}
+            disclosure={props.disclosure}
             fullDetail={props.fullDetail}
             syntaxStyle={props.syntaxStyle}
             streaming={props.streaming}
@@ -312,7 +355,7 @@ function AssistantMessage(props: {
                 "tool-call": () => (
                   <ToolCallGroup
                     calls={calls}
-                    expanded={props.expanded}
+                    disclosure={props.disclosure}
                     fullDetail={props.fullDetail}
                     getChildSessions={props.getChildSessions}
                   />
@@ -347,7 +390,7 @@ function AssistantMessageLegacy(props: {
   images: ImageInfo[]
   // eslint-disable-next-line effect/noNullish -- snapshot messages preserve absent tool-call data.
   toolCalls: ToolCall[] | undefined
-  expanded: boolean
+  disclosure: DisclosureLevel
   fullDetail: boolean
   syntaxStyle: () => SyntaxStyle
   streaming: boolean
@@ -384,7 +427,7 @@ function AssistantMessageLegacy(props: {
         <box flexDirection="column" marginBottom={contentMargin()}>
           <ToolCallGroup
             calls={props.toolCalls ?? []}
-            expanded={props.expanded}
+            disclosure={props.disclosure}
             fullDetail={props.fullDetail}
             getChildSessions={props.getChildSessions}
           />
@@ -404,7 +447,7 @@ function AssistantMessageLegacy(props: {
 
 function ToolCallGroup(props: {
   calls: ToolCall[]
-  expanded: boolean
+  disclosure: DisclosureLevel
   fullDetail: boolean
   getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
 }) {
@@ -421,10 +464,21 @@ function ToolCallGroup(props: {
     return theme.textMuted
   }
   const header = createMemo(() => formatActivityHeader(props.calls.map(toActivityCall)))
+  // The transcript view and the full level both open every row; collapsed keeps only failures.
+  const rowsOpen = () => props.fullDetail || props.disclosure === "full"
   const visibleCalls = () => {
-    if (props.expanded || props.fullDetail) return props.calls
+    if (rowsOpen() || props.disclosure === "preview") return props.calls
     return props.calls.filter((call) => call.status === "error")
   }
+  // Preview shows the head of the last finished call's output beneath the rows.
+  const preview = createMemo(() => {
+    if (props.disclosure !== "preview") return previewOutput("")
+    return Option.fromNullishOr(props.calls.at(-1)).pipe(
+      Option.filter((last) => last.status !== "running"),
+      Option.map((last) => previewOutput(rowOutputText(last), PREVIEW_LINES)),
+      Option.getOrElse(() => previewOutput("")),
+    )
+  })
   return (
     <Show when={props.calls.length > 0}>
       <box flexDirection="column">
@@ -478,25 +532,45 @@ function ToolCallGroup(props: {
                 if (summary.startsWith("{") || summary.startsWith("[")) return ""
                 return summary.split("\n")[0]
               }
+              const counts = () => {
+                const text = rowCounts(call)
+                if (text.length === 0) return ""
+                return ` · ${text}`
+              }
               return (
                 <Show
-                  when={props.fullDetail || call.status === "error"}
+                  when={rowsOpen() || call.status === "error"}
                   fallback={
                     <text style={{ fg: color() }}>
                       {connector()} {call.toolName} {label()}
+                      {counts()}
                       {status()}
                     </text>
                   }
                 >
                   <SingleToolCall
                     toolCall={call}
-                    expanded={props.fullDetail}
+                    expanded={rowsOpen()}
                     getChildSessions={props.getChildSessions}
                   />
                 </Show>
               )
             }}
           </For>
+        </Show>
+        <Show when={preview().lines.length > 0}>
+          <box flexDirection="column" paddingLeft={2}>
+            <For each={preview().lines}>
+              {(line) => <text style={{ fg: theme.textMuted }}>{line}</text>}
+            </For>
+            <Show when={preview().hidden > 0}>
+              <text>
+                <span style={{ fg: theme.textMuted, dim: true }}>
+                  {formatPreviewFooter(preview().hidden)}
+                </span>
+              </text>
+            </Show>
+          </box>
         </Show>
       </box>
     </Show>
@@ -557,9 +631,31 @@ function SingleToolCall(props: {
   )
 }
 
+/** A compaction record folds to one line until the full level or the transcript view opens. */
+function CompactionCard(props: { content: string; details: unknown; open: boolean }) {
+  const { theme } = useTheme()
+  const sourceCount = () =>
+    Schema.decodeUnknownOption(CompactionDetails)(props.details).pipe(
+      Option.map((value) => value.sourceMessageIds.length),
+      Option.getOrElse(() => 0),
+    )
+  return (
+    <box marginTop={1} paddingLeft={2} flexDirection="column">
+      <text style={{ fg: theme.textMuted }}>
+        {formatCompactionLabel(sourceCount(), props.content.length)}
+      </text>
+      <Show when={props.open}>
+        <text>
+          <span style={{ fg: theme.textMuted, dim: true }}>{props.content}</span>
+        </text>
+      </Show>
+    </box>
+  )
+}
+
 interface MessageListProps {
   items: SessionItem[]
-  toolsExpanded: boolean
+  disclosure: DisclosureLevel
   fullDetail?: boolean
   syntaxStyle: () => SyntaxStyle
   streaming: boolean
@@ -580,6 +676,15 @@ export function MessageList(props: MessageListProps) {
             if (!isMessageItem(item)) {
               return <SessionEventIndicator event={item} />
             }
+            if (item.metadata?.customType === COMPACTION_MESSAGE_TYPE) {
+              return (
+                <CompactionCard
+                  content={item.content}
+                  details={item.metadata.details}
+                  open={props.fullDetail === true || props.disclosure === "full"}
+                />
+              )
+            }
             return (
               <Show
                 when={item.role === "user"}
@@ -590,7 +695,7 @@ export function MessageList(props: MessageListProps) {
                     images={item.images}
                     toolCalls={item.toolCalls}
                     segments={item.segments}
-                    expanded={props.toolsExpanded}
+                    disclosure={props.disclosure}
                     fullDetail={props.fullDetail === true}
                     syntaxStyle={props.syntaxStyle}
                     streaming={props.streaming && index() === props.items.length - 1}

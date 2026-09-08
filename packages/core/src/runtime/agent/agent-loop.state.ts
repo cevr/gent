@@ -374,6 +374,17 @@ export const SessionRuntimeStateSchema = Schema.TaggedUnion({
 })
 export type SessionRuntimeState = Schema.Schema.Type<typeof SessionRuntimeStateSchema>
 
+/** The latest model-context projection for the branch, folded from `ModelContextProjected`. */
+export const ModelContextMetrics = Schema.Struct({
+  estimatedTokens: Schema.Natural,
+  availableInputTokens: Schema.Natural,
+  contextLimitTokens: Schema.Natural,
+  omittedMessages: Schema.Natural,
+  /** Turns on this branch that compacted history so far. */
+  compactions: Schema.Natural,
+})
+export type ModelContextMetrics = typeof ModelContextMetrics.Type
+
 export const SessionRuntimeMetrics = Schema.Struct({
   turns: Schema.Finite,
   tokens: Schema.Finite,
@@ -388,6 +399,7 @@ export const SessionRuntimeMetrics = Schema.Struct({
   /** Input-tokens reported by the most recent `StreamEnded` (for "how close
    * to the context window are we right now" — sums don't answer that). */
   lastInputTokens: Schema.Finite,
+  context: Schema.optional(ModelContextMetrics),
   /** Model id reported by the most recent `StreamEnded` (drives the model
    * name label in the TUI). `undefined` until the first stream ends. */
   lastModelId: Schema.optional(ModelId),

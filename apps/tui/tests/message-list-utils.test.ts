@@ -7,6 +7,10 @@ import {
   formatToolInput,
   formatActivityHeader,
   formatCellRowLabel,
+  formatCompactionLabel,
+  formatPreviewFooter,
+  formatRowCounts,
+  previewOutput,
   TOOL_SPINNERS,
   type ActivityCall,
 } from "../src/components/message-list-utils.js"
@@ -276,5 +280,28 @@ describe("formatCellRowLabel", () => {
     const long = formatCellRowLabel(cell([op("bash", "x".repeat(100))]), fallback, 20)
     expect(long.length).toBe(20)
     expect(long.endsWith("…")).toBe(true)
+  })
+})
+
+describe("progressive disclosure helpers", () => {
+  test("cell rows count code in and display out; bash rows count output only", () => {
+    expect(formatRowCounts("cell", { input: "a\nb\nc", output: "x\ny" })).toBe("↑3 ↓2")
+    expect(formatRowCounts("bash", { input: "ls", output: "" })).toBe("↓0")
+    expect(formatRowCounts("read", { input: "", output: "x" })).toBe("")
+  })
+
+  test("a preview keeps the head and names the hidden remainder", () => {
+    const text = Array.from({ length: 25 }, (_, i) => `line ${i + 1}`).join("\n")
+    const preview = previewOutput(text, 20)
+    expect(preview.lines).toHaveLength(20)
+    expect(preview.lines[0]).toBe("line 1")
+    expect(preview.hidden).toBe(5)
+    expect(formatPreviewFooter(preview.hidden)).toBe("… +5 lines (ctrl+o)")
+    expect(previewOutput("   \n", 20)).toEqual({ lines: [], hidden: 0 })
+  })
+
+  test("a compaction label reports replaced messages and the summary token estimate", () => {
+    expect(formatCompactionLabel(12, 400)).toBe("⇣ Compacted 12 messages into ~100 tokens")
+    expect(formatCompactionLabel(1, 1)).toBe("⇣ Compacted 1 message into ~1 tokens")
   })
 })

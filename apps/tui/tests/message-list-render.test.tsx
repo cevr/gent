@@ -113,21 +113,65 @@ const cellMessage = (id: string): Message => ({
   ],
 })
 
+const bashMessage = (id: string, lines: number): Message => ({
+  _tag: "regular-message",
+  id: "assistant-bash",
+  role: "assistant",
+  content: "",
+  reasoning: "",
+  images: [],
+  createdAt: 0,
+  toolCalls: [
+    {
+      id,
+      toolName: "bash",
+      status: "completed",
+      input: { command: "seq 25" },
+      summary: absent,
+      output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
+        stdout: Array.from({ length: lines }, (_, i) => `row ${i + 1}`).join("\n"),
+        stderr: "",
+        exitCode: 0,
+      }),
+    },
+  ],
+})
+
+const compactionMessage = (): Message => ({
+  _tag: "regular-message",
+  id: "model-compaction:b1:r2",
+  role: "assistant",
+  content: "Historical context summary: the user renamed the loader.",
+  reasoning: "",
+  images: [],
+  createdAt: 0,
+  toolCalls: absent,
+  metadata: {
+    customType: "model-compaction",
+    details: { sourceMessageIds: ["m1", "m2", "m3"], sourceRevision: "r1" },
+  },
+})
+
 function RegisteredToolMessageLists(props: { items: SessionItem[]; fullDetail?: boolean }) {
   const extensionUI = useExtensionUI()
   return (
     <Show when={!extensionUI.loading()} fallback={<text>loading renderers</text>}>
       <MessageList
         items={props.items}
-        toolsExpanded={false}
+        disclosure="collapsed"
         syntaxStyle={syntaxStyle}
         streaming={false}
       />
-      <MessageList items={props.items} toolsExpanded syntaxStyle={syntaxStyle} streaming={false} />
+      <MessageList
+        items={props.items}
+        disclosure="preview"
+        syntaxStyle={syntaxStyle}
+        streaming={false}
+      />
       <Show when={props.fullDetail}>
         <MessageList
           items={props.items}
-          toolsExpanded
+          disclosure="preview"
           fullDetail
           syntaxStyle={syntaxStyle}
           streaming={false}
@@ -150,7 +194,7 @@ describe("FX transcript treatment", () => {
         renderWithProviders(() => (
           <MessageList
             items={items}
-            toolsExpanded={false}
+            disclosure="collapsed"
             syntaxStyle={syntaxStyle}
             streaming={false}
           />
@@ -183,7 +227,7 @@ describe("FX transcript treatment", () => {
         renderWithProviders(() => (
           <MessageList
             items={[goalMessage]}
-            toolsExpanded={false}
+            disclosure="collapsed"
             syntaxStyle={syntaxStyle}
             streaming={false}
           />
@@ -196,7 +240,7 @@ describe("FX transcript treatment", () => {
         renderWithProviders(() => (
           <MessageList
             items={[goalMessage]}
-            toolsExpanded={false}
+            disclosure="collapsed"
             fullDetail={true}
             syntaxStyle={syntaxStyle}
             streaming={false}
@@ -222,7 +266,7 @@ describe("FX transcript treatment", () => {
           () => (
             <MessageList
               items={items}
-              toolsExpanded={false}
+              disclosure="collapsed"
               syntaxStyle={syntaxStyle}
               streaming={false}
             />
@@ -253,7 +297,7 @@ describe("FX transcript treatment", () => {
         renderWithProviders(() => (
           <MessageList
             items={items}
-            toolsExpanded={false}
+            disclosure="collapsed"
             syntaxStyle={syntaxStyle}
             streaming={false}
           />
@@ -303,11 +347,16 @@ describe("FX transcript treatment", () => {
           <>
             <MessageList
               items={items}
-              toolsExpanded={false}
+              disclosure="collapsed"
               syntaxStyle={syntaxStyle}
               streaming={false}
             />
-            <MessageList items={items} toolsExpanded syntaxStyle={syntaxStyle} streaming={false} />
+            <MessageList
+              items={items}
+              disclosure="preview"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
           </>
         )),
       )
@@ -365,6 +414,84 @@ describe("FX transcript treatment", () => {
       expect(frame).toContain("hello from a.txt")
       expect(frame).toContain("note.content")
       expect(frame).toContain("bindings: note")
+    }),
+  )
+
+  it.live("preview shows the head of the last output and names the rest", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [bashMessage("call-bash-7", 25)]
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={items}
+              disclosure="preview"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 80, height: 40 },
+        ),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("└ bash seq 25 · ↓25")
+      expect(frame).toContain("row 1")
+      expect(frame).toContain("row 20")
+      expect(frame).not.toContain("row 21")
+      expect(frame).toContain("… +5 lines (ctrl+o)")
+    }),
+  )
+
+  it.live("collapsed keeps the group header and hides finished rows and output", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [bashMessage("call-bash-8", 25)]
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={items}
+              disclosure="collapsed"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 80, height: 20 },
+        ),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("1 tool call · 1 bash")
+      expect(frame).not.toContain("└ bash")
+      expect(frame).not.toContain("row 1")
+    }),
+  )
+
+  it.live("a compaction record folds to one line until the full level opens it", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [compactionMessage()]
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <MessageList
+                items={items}
+                disclosure="collapsed"
+                syntaxStyle={syntaxStyle}
+                streaming={false}
+              />
+              <MessageList
+                items={items}
+                disclosure="full"
+                syntaxStyle={syntaxStyle}
+                streaming={false}
+              />
+            </>
+          ),
+          { width: 100, height: 20 },
+        ),
+      )
+      const frame = renderFrame(setup)
+      expect(frame.match(/⇣ Compacted 3 messages into ~14 tokens/g)?.length).toBe(2)
+      expect(frame.match(/renamed the loader/g)?.length).toBe(1)
     }),
   )
 })

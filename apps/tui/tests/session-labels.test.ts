@@ -42,6 +42,35 @@ describe("buildTopRightLabels", () => {
     expect(labels[0]!.color).toBe(theme.error)
   })
 
+  test("a projection replaces the usage estimate with what the model saw", () => {
+    const labels = buildTopRightLabels(absent, 50_000, 200_000, theme, {
+      context: {
+        estimatedTokens: 84_000,
+        availableInputTokens: 190_000,
+        contextLimitTokens: 200_000,
+        omittedMessages: 3,
+        compactions: 2,
+      },
+    })
+    expect(labels.length).toBe(1)
+    expect(labels[0]!.text).toBe("ctx 42% · 3 omitted · compacted ×2")
+    expect(labels[0]!.color).toBe(theme.textMuted)
+  })
+
+  test("a projection with nothing dropped shows only the percent", () => {
+    const labels = buildTopRightLabels(absent, 0, absent, theme, {
+      context: {
+        estimatedTokens: 180_000,
+        availableInputTokens: 190_000,
+        contextLimitTokens: 200_000,
+        omittedMessages: 0,
+        compactions: 0,
+      },
+    })
+    expect(labels[0]!.text).toBe("ctx 90%")
+    expect(labels[0]!.color).toBe(theme.error)
+  })
+
   test("full layout: context + thinking", () => {
     const labels = buildTopRightLabels("high", 10_000, 200_000, theme)
     expect(labels.length).toBe(2)

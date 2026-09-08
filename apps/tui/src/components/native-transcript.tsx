@@ -18,6 +18,7 @@ import { Effect, Option, Schema } from "effect"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useScopedKeyboard } from "../keyboard/context"
 import type { SessionItem } from "./message-list"
+import type { DisclosureLevel } from "../routes/session-ui-state"
 import { captureTranscriptDisplay, projectTranscriptDisplay } from "./transcript-display"
 
 interface NativeTranscriptProps {
@@ -25,7 +26,7 @@ interface NativeTranscriptProps {
   streaming: boolean
   footerHeight: number
   expanded: boolean
-  toolsExpanded: boolean
+  disclosure: DisclosureLevel
   displayRevision: number
   overlayOpen: boolean
   renderItems: (items: SessionItem[], streaming: boolean) => JSX.Element
@@ -55,7 +56,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   let settlingNative = false
   const [replayPending, setReplayPending] = createSignal(false)
   let measuredDimensions = dimensions()
-  let measuredToolsExpanded = props.toolsExpanded
+  let measuredDisclosure = props.disclosure
   const finishNativeReturn = () => {
     settlingNative = false
     if (props.expanded || props.overlayOpen) return
@@ -156,15 +157,15 @@ export function NativeTranscript(props: NativeTranscriptProps) {
 
   createEffect(() => {
     const next = dimensions()
-    const toolsExpanded = props.toolsExpanded
+    const disclosure = props.disclosure
     if (
       next.width === measuredDimensions.width &&
       next.height === measuredDimensions.height &&
-      toolsExpanded === measuredToolsExpanded
+      disclosure === measuredDisclosure
     )
       return
     measuredDimensions = next
-    measuredToolsExpanded = toolsExpanded
+    measuredDisclosure = disclosure
     untrack(requestReplay)
   })
 

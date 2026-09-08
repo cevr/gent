@@ -16,7 +16,7 @@ describe("native transcript mouse tracking", () => {
             streaming={false}
             footerHeight={3}
             expanded={expanded()}
-            toolsExpanded={false}
+            disclosure="collapsed"
             displayRevision={0}
             overlayOpen={false}
             renderItems={() => <box />}

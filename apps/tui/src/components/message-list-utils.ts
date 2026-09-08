@@ -184,3 +184,43 @@ export function formatCellRowLabel(
   if (display.length > 0) return truncateLabel(`→ ${display.trim()}`, maxLength)
   return truncateLabel(fallback.code.split("\n")[0] ?? "", maxLength)
 }
+
+// ── Progressive disclosure ──
+// Row labels stay the same at every level; levels only add output beneath them.
+
+const lineCount = (text: string) => {
+  if (text.length === 0) return 0
+  return text.split("\n").length
+}
+
+/** Line counts for a row: cells show code in and display out, bash shows output only. */
+export function formatRowCounts(
+  toolName: string,
+  counts: { readonly input: string; readonly output: string },
+): string {
+  const out = lineCount(counts.output)
+  if (toolName === "cell") return `↑${lineCount(counts.input)} ↓${out}`
+  if (toolName === "bash") return `↓${out}`
+  return ""
+}
+
+export interface OutputPreview {
+  readonly lines: readonly string[]
+  readonly hidden: number
+}
+
+/** The head of an output; the footer names the rest and the key that reveals it. */
+export function previewOutput(text: string, maxLines = 20): OutputPreview {
+  const trimmed = text.replace(/\s+$/, "")
+  if (trimmed.length === 0) return { lines: [], hidden: 0 }
+  const lines = trimmed.split("\n")
+  return { lines: lines.slice(0, maxLines), hidden: Math.max(0, lines.length - maxLines) }
+}
+
+export const formatPreviewFooter = (hidden: number) => `… +${plural(hidden, "line")} (ctrl+o)`
+
+/** One line for a compaction record: what it replaced and roughly what it costs now. */
+export function formatCompactionLabel(sourceMessages: number, summaryChars: number): string {
+  const tokens = Math.ceil(summaryChars / 4)
+  return `⇣ Compacted ${plural(sourceMessages, "message")} into ~${tokens} tokens`
+}

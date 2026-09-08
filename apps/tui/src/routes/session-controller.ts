@@ -37,6 +37,7 @@ import { useExtensionUI } from "../extensions/context"
 import { useChildSessions } from "../hooks/use-child-sessions"
 import { useSessionFeed } from "../hooks/use-session-feed"
 import {
+  type DisclosureLevel,
   getPromptSearchState,
   SessionUiEvent,
   SessionUiState,
@@ -74,7 +75,7 @@ export interface SessionController {
   promptEntries: () => readonly string[]
   promptSearchState: () => ReturnType<typeof getPromptSearchState>
   promptSearchOpen: () => boolean
-  toolsExpanded: () => boolean
+  disclosure: () => DisclosureLevel
   treeOverlay: () => ReturnType<typeof getTreeOverlay>
   activity: () =>
     | { phase: "idle"; turn: number }
@@ -578,10 +579,11 @@ export function createSessionController(props: {
       return true
     }
     if (event.name !== "o") return false
+    // ctrl+o walks collapsed → preview → full inline; ctrl+shift+o opens the full transcript.
     if (event.shift === true) {
-      dispatchSessionUi(SessionUiEvent.cases.ToggleTools.make({}))
-    } else {
       dispatchSessionUi(SessionUiEvent.cases.ToggleTranscript.make({}))
+    } else {
+      dispatchSessionUi(SessionUiEvent.cases.CycleDisclosure.make({}))
     }
     return true
   }
@@ -647,6 +649,11 @@ export function createSessionController(props: {
         quitChain.reset()
         return true
       }
+      if (uiState().disclosure !== "collapsed") {
+        dispatchSessionUi(SessionUiEvent.cases.CollapseDisclosure.make({}))
+        quitChain.reset()
+        return true
+      }
 
       if (client.isStreaming()) {
         client.steer(SteerCommandInput.cases.Cancel.make({}))
@@ -686,7 +693,7 @@ export function createSessionController(props: {
     promptEntries: history.entries,
     promptSearchState: () => getPromptSearchState(uiState()),
     promptSearchOpen: promptSearch.isOpen,
-    toolsExpanded: () => uiState().toolsExpanded,
+    disclosure: () => uiState().disclosure,
     treeOverlay: () => getTreeOverlay(uiState().overlay),
     activity,
     phaseLabel,

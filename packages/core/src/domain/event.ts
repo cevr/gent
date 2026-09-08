@@ -110,6 +110,16 @@ export const AgentEvent = Schema.TaggedUnion({
     // Absent in historical receipts; absence does not prove model success.
     streamFailed: Schema.optional(Schema.Boolean),
   },
+  /** What the model saw this turn after projection and compaction. */
+  ModelContextProjected: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    estimatedTokens: Schema.Natural,
+    availableInputTokens: Schema.Natural,
+    contextLimitTokens: Schema.Natural,
+    omittedMessages: Schema.Natural,
+    compacted: Schema.Boolean,
+  },
   ToolCallStarted: {
     sessionId: SessionId,
     branchId: BranchId,
@@ -307,6 +317,8 @@ export const StreamEnded = AgentEvent.cases.StreamEnded
 export type StreamEnded = typeof AgentEvent.cases.StreamEnded.Type
 export const TurnCompleted = AgentEvent.cases.TurnCompleted
 export type TurnCompleted = typeof AgentEvent.cases.TurnCompleted.Type
+export const ModelContextProjected = AgentEvent.cases.ModelContextProjected
+export type ModelContextProjected = typeof AgentEvent.cases.ModelContextProjected.Type
 export const ToolCallStarted = AgentEvent.cases.ToolCallStarted
 export type ToolCallStarted = typeof AgentEvent.cases.ToolCallStarted.Type
 export const ToolCallSucceeded = AgentEvent.cases.ToolCallSucceeded
@@ -448,6 +460,7 @@ const matchEventSessionId = AgentEvent.match({
   StreamChunk: (e) => e.sessionId,
   StreamEnded: (e) => e.sessionId,
   TurnCompleted: (e) => e.sessionId,
+  ModelContextProjected: (e) => e.sessionId,
   ToolCallStarted: (e) => e.sessionId,
   ToolCallSucceeded: (e) => e.sessionId,
   ToolCallFailed: (e) => e.sessionId,
@@ -480,6 +493,7 @@ const matchEventBranchId = AgentEvent.match({
   StreamChunk: (e) => e.branchId,
   StreamEnded: (e) => e.branchId,
   TurnCompleted: (e) => e.branchId,
+  ModelContextProjected: (e) => e.branchId,
   ToolCallStarted: (e) => e.branchId,
   ToolCallSucceeded: (e) => e.branchId,
   ToolCallFailed: (e) => e.branchId,

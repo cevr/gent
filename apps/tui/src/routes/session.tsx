@@ -124,7 +124,7 @@ export function Session(props: SessionProps) {
         client.latestInputTokens(),
         client.modelInfo()?.contextLength,
         theme,
-        { debugMode: props.debugMode },
+        { debugMode: props.debugMode, context: Option.getOrUndefined(client.contextMetrics()) },
       ),
     )
   }
@@ -181,13 +181,13 @@ export function Session(props: SessionProps) {
           streaming={controller.activity().phase !== "idle"}
           footerHeight={footerHeight()}
           expanded={controller.uiState().transcriptExpanded}
-          toolsExpanded={controller.toolsExpanded()}
+          disclosure={controller.disclosure()}
           displayRevision={controller.uiState().displayRevision}
           overlayOpen={command.paletteOpen() || controller.uiState().overlay._tag !== "none"}
           renderItems={(items, streaming) => (
             <MessageList
               items={items}
-              toolsExpanded={controller.toolsExpanded()}
+              disclosure={controller.disclosure()}
               fullDetail={controller.uiState().transcriptExpanded}
               syntaxStyle={syntaxStyle}
               streaming={streaming}
