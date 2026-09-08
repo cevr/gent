@@ -271,11 +271,12 @@ const createErrorEvent = (error: string, createdAt: number, seq: number): Sessio
 type MessageWithMetadata = {
   readonly metadata?: {
     readonly customType?: string
+    readonly hidden?: boolean
   }
 }
 
-const isCompactionMessage = (message: MessageWithMetadata): boolean =>
-  message.metadata?.customType === "model-compaction"
+const isStandaloneMessage = (message: MessageWithMetadata): boolean =>
+  message.metadata?.customType === "model-compaction" || message.metadata?.hidden === true
 
 const appendSessionEvent = (setStore: SetStoreFunction<SessionFeedStore>, event: SessionEvent) => {
   setStore(
@@ -298,7 +299,7 @@ const ensureAssistantMessage = (
       if (
         Option.isSome(lastMessage) &&
         lastMessage.value.role === "assistant" &&
-        !isCompactionMessage(lastMessage.value)
+        !isStandaloneMessage(lastMessage.value)
       ) {
         const assistant = lastMessage.value
         assistant.content += content
@@ -328,7 +329,9 @@ const updateLatestToolCall = (
 ) => {
   setStore(
     produce((draft) => {
-      const last = Option.fromNullishOr(draft.messages[draft.messages.length - 1])
+      const last = Option.fromNullishOr(
+        draft.messages.findLast((message) => !isStandaloneMessage(message)),
+      )
       if (Option.isNone(last) || last.value.role !== "assistant") return
       updater(last.value)
     }),
@@ -704,7 +707,7 @@ export function useSessionFeed(
     const event = envelope.event
 
     if (event._tag === "MessageReceived") {
-      if (isCompactionMessage(event.message)) {
+      if (isStandaloneMessage(event.message)) {
         upsertReceivedMessage(setStore, projectMessage(event.message, []))
       }
       return
@@ -785,7 +788,7 @@ export function useSessionFeed(
 
       switch (event._tag) {
         case "MessageReceived":
-          if (event.message.role === "user" || isCompactionMessage(event.message)) {
+          if (event.message.role === "user" || isStandaloneMessage(event.message)) {
             upsertReceivedMessage(setStore, projectMessage(event.message, []))
           }
           break

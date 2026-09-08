@@ -686,13 +686,10 @@ interface MessageListProps {
 
 export function MessageList(props: MessageListProps) {
   const dimensions = useTerminalDimensions()
-  const visibleItems = createMemo(() =>
-    props.items.filter((item) => !isMessageItem(item) || item.metadata?.hidden !== true),
-  )
 
   return (
     <box flexDirection="column">
-      <For each={visibleItems()}>
+      <For each={props.items}>
         {(item, index) =>
           (() => {
             if (!isMessageItem(item)) {

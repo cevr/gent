@@ -93,7 +93,7 @@ interface EphemeralRuntimeOverrides {
     never
   >
   readonly approval: Layer.Layer<ApprovalService, never, never>
-  readonly promptPresenter: Layer.Layer<PromptPresenter, never, never>
+  readonly promptPresenter: Layer.Layer<PromptPresenter, StorageError, never>
   readonly toolRunner: Layer.Layer<ToolRunner, never, never>
   readonly sessionGovernance: Layer.Layer<AgentLoopSessionGovernance, never, never>
   readonly sessionRuntime: Layer.Layer<SessionRuntime, EphemeralOverrideError, never>
@@ -197,15 +197,6 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
     )
     const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
     const approvalLayer = ApprovalService.LiveAutoResolve
-    const promptPresenterLayer = Layer.provide(
-      PromptPresenterLive,
-      Layer.mergeAll(
-        approvalLayer,
-        parentRuntimeEnvironmentLayer,
-        parentFileSystemLayer,
-        parentPathLayer,
-      ),
-    )
 
     // Ephemeral child sessions are synthetic. Persist local events so the child
     // loop can complete, but do not run local extension reduction on those ids;
@@ -226,6 +217,18 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
         )
       }),
     ).pipe(Layer.provide(eventStoreLayer))
+    const promptPresenterLayer = Layer.provide(
+      PromptPresenterLive,
+      Layer.mergeAll(
+        approvalLayer,
+        storageLayer,
+        eventPublisherLayer,
+        parentGentPlatformLayer,
+        parentRuntimeEnvironmentLayer,
+        parentFileSystemLayer,
+        parentPathLayer,
+      ),
+    )
     const toolRunnerLayer = Layer.provideMerge(
       ToolRunner.Live,
       Layer.mergeAll(approvalLayer, extensionLayers, parentRuntimeEnvironmentLayer),

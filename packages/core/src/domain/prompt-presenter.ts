@@ -18,7 +18,7 @@ export interface PromptPresenterService {
     branchId: BranchId
     content: string
     title?: string
-  }) => Effect.Effect<void, EventStoreError | InteractionPendingError>
+  }) => Effect.Effect<void, EventStoreError>
 
   readonly confirm: (params: {
     sessionId: SessionId

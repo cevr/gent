@@ -18,10 +18,55 @@ import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environm
 import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { e2ePreset } from "../helpers/test-preset"
+import { e2ePreset, shippedPreset } from "../helpers/test-preset"
 import { isToolResultFor } from "../helpers/tool-event.js"
 
 describe("InteractionToolsExtension via model turn", () => {
+  it.scopedLive(
+    "presents durable information without suspending the cell for an answer",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", {
+            code: 'await tools.call("prompt", {mode:"present", title:"Notice", content:"INFORMATION-SHOWN"}); console.log("CELL-CONTINUED")',
+          }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          providerLayer,
+          durableApproval: true,
+        })
+        const events = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.takeUntil(({ event }) => event._tag === "TurnCompleted"),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "Present the notice" })
+        const received = Array.from(yield* Fiber.join(events)).map(({ event }) => event)
+        expect(received.some((event) => event._tag === "InteractionPresented")).toBe(false)
+        expect(
+          received.some(
+            (event) =>
+              event._tag === "ToolCallSucceeded" &&
+              event.toolName === "cell" &&
+              event.output?.includes("CELL-CONTINUED"),
+          ),
+        ).toBe(true)
+        expect(
+          received.some(
+            (event) =>
+              event._tag === "MessageReceived" &&
+              event.message.metadata?.hidden === true &&
+              event.message.parts.some(
+                (part) => part.type === "text" && part.text.includes("INFORMATION-SHOWN"),
+              ),
+          ),
+        ).toBe(true)
+      }).pipe(Effect.timeout("8 seconds")),
+    10_000,
+  )
+
   it.scopedLive.layer(BunFileSystem.layer)(
     "review saves edited reply content through RPC, including an empty document",
     () =>

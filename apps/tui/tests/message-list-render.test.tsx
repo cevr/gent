@@ -183,6 +183,28 @@ function RegisteredToolMessageLists(props: { items: SessionItem[]; fullDetail?: 
 }
 
 describe("FX transcript treatment", () => {
+  it.live("shows information excluded from model context in the transcript", () =>
+    Effect.gen(function* () {
+      const message: Message = {
+        ...compactionMessage(),
+        id: "presented-information",
+        content: "INFORMATION-SHOWN",
+        metadata: { customType: "prompt-present", hidden: true },
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <MessageList
+            items={[message]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
+        )),
+      )
+      expect(renderFrame(setup)).toContain("INFORMATION-SHOWN")
+    }),
+  )
+
   it.live("renders user rails, images, and pending labels at normal width", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [

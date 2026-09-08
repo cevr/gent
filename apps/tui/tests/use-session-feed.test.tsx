@@ -673,6 +673,93 @@ describe("useSessionFeed", () => {
     }),
   )
 
+  it.live("shows a live notice separately from later model output", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-compaction-live")
+      const branchId = BranchId.make("branch-feed-compaction-live")
+      const messageEnvelope = makeEnvelope(
+        1,
+        AgentEvent.cases.MessageReceived.make({
+          message: {
+            ...makeCompactionMessage(sessionId, branchId),
+            metadata: { customType: "prompt-present", hidden: true },
+          },
+        }),
+      )
+      const streamStartedEnvelope = makeEnvelope(
+        2,
+        AgentEvent.cases.StreamStarted.make({ sessionId, branchId }),
+      )
+      const streamChunkEnvelope = makeEnvelope(
+        3,
+        AgentEvent.cases.StreamChunk.make({
+          sessionId,
+          branchId,
+          chunk: "native response",
+        }),
+      )
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = {
+          session: active,
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () =>
+                Stream.concat(
+                  Stream.make(messageEnvelope, streamStartedEnvelope, streamChunkEnvelope),
+                  Stream.never,
+                ),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+          setConnectionIssue: () => {},
+          waitForTransportReady: Effect.void,
+          applySessionSnapshot: () => {},
+          applySessionEvent: () => {},
+          applyBufferedSessionEvent: () => {},
+        } satisfies FeedClient
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            client.runtime.cast,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+
+      yield* waitFor(
+        () =>
+          Option.isSome(feed) &&
+          feed.value.messages().some((message) => message.content.includes("native response")),
+      )
+      if (Option.isNone(feed)) return yield* Effect.die("feed did not initialize")
+      expect(feed.value.messages()).toHaveLength(2)
+      const summary = feed.value
+        .messages()
+        .find((message) => message.metadata?.customType === "prompt-present")
+      const response = feed.value
+        .messages()
+        .find((message) => message.content.includes("native response"))
+      expect(summary?.content).toBe("Historical context summary: stored summary")
+      expect(response?.id).toBeDefined()
+      expect(response?.id).not.toBe(summary?.id)
+      expect(response?.content).toBe("native response")
+      dispose()
+    }),
+  )
+
   it.live("reconstructs retry history and completion state during reload", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-feed-compaction-reload")

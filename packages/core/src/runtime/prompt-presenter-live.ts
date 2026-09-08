@@ -1,4 +1,13 @@
-import { Effect, Layer, FileSystem, Option, Path } from "effect"
+import { DateTime, Effect, Layer, FileSystem, Option, Path } from "effect"
+import type { SqlClient } from "effect/unstable/sql"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import { EventPublisher } from "../domain/event-publisher.js"
+import { EventStoreError, MessageReceived } from "../domain/event.js"
+import { MessageId } from "../domain/ids.js"
+import { Message } from "../domain/message.js"
+import { MessageStorage } from "../storage/message-storage.js"
+import { makeStorageTransaction } from "../storage/sqlite-storage.js"
+import { GentPlatform } from "./gent-platform.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { ApprovalService } from "./approval-service.js"
 import { RuntimeEnvironment } from "./runtime-environment.js"
@@ -21,7 +30,14 @@ const defaultPromptPath = (cwd: string, title: Option.Option<string>, fileNameSe
 export const PromptPresenterLive: Layer.Layer<
   PromptPresenter,
   never,
-  ApprovalService | FileSystem.FileSystem | Path.Path | RuntimeEnvironment
+  | ApprovalService
+  | FileSystem.FileSystem
+  | Path.Path
+  | RuntimeEnvironment
+  | MessageStorage
+  | EventPublisher
+  | SqlClient.SqlClient
+  | GentPlatform
 > = Layer.effect(
   PromptPresenter,
   Effect.gen(function* () {
@@ -29,16 +45,37 @@ export const PromptPresenterLive: Layer.Layer<
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const platform = yield* RuntimeEnvironment
+    const gentPlatform = yield* GentPlatform
+    const messages = yield* MessageStorage
+    const publisher = yield* EventPublisher
+    const transaction = yield* makeStorageTransaction
 
     return PromptPresenter.of({
       present: Effect.fn("PromptPresenter.present")(function* (params) {
-        yield* approvalService.present(
-          {
-            text: params.content,
-            metadata: { type: "prompt", mode: "present", title: params.title },
-          },
-          { sessionId: params.sessionId, branchId: params.branchId },
+        const text = Option.match(Option.fromUndefinedOr(params.title), {
+          onNone: () => params.content,
+          onSome: (title) => `# ${title}\n\n${params.content}`,
+        })
+        const message = Message.cases.regular.make({
+          id: MessageId.make(yield* gentPlatform.randomId),
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          role: "assistant",
+          parts: [Prompt.textPart({ text })],
+          createdAt: yield* DateTime.nowAsDate,
+          metadata: { customType: "prompt-present", hidden: true },
+        })
+        const envelope = yield* transaction(
+          Effect.gen(function* () {
+            yield* messages.createMessage(message)
+            return yield* publisher.append(MessageReceived.make({ message }))
+          }),
+        ).pipe(
+          Effect.mapError(
+            (cause) => new EventStoreError({ message: "Failed to present information", cause }),
+          ),
         )
+        yield* publisher.deliver(envelope)
       }),
 
       confirm: Effect.fn("PromptPresenter.confirm")(function* (params) {
