@@ -57,6 +57,8 @@ const CorrelationId = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLen
 export const CellRequest = Schema.TaggedUnion({
   Evaluate: {
     cellId: CorrelationId,
+    /** Unpredictable per-evaluation token the worker echoes in its output boundary. */
+    outputToken: CorrelationId,
     source: Schema.String.check(Schema.isMaxLength(maximumCellSourceLength)),
     /** Present only when the host catalog changed since the worker last received one. */
     catalog: Schema.optional(CellCatalog),
@@ -155,11 +157,13 @@ export const makeCellFrameReader = () => {
 
 const boundaryDelimiter = "\u001e"
 const boundaryPrefix = "gent-cell-end "
-const maximumBoundaryLength = boundaryDelimiter.length * 2 + boundaryPrefix.length + 128
+const maximumBoundaryTokenLength = 128
+const maximumBoundaryLength =
+  boundaryDelimiter.length * 2 + boundaryPrefix.length + maximumBoundaryTokenLength
 
 /** The worker writes this to stdout and stderr after a cell, before its result frame. */
-export const cellOutputBoundary = (cellId: string) =>
-  `${boundaryDelimiter}${boundaryPrefix}${cellId}${boundaryDelimiter}`
+export const cellOutputBoundary = (token: string) =>
+  `${boundaryDelimiter}${boundaryPrefix}${token}${boundaryDelimiter}`
 
 /** Cell text in arrival order; a boundary closes the text that came before it. */
 export interface CellOutputSegment {
@@ -167,8 +171,12 @@ export interface CellOutputSegment {
   readonly boundary: Option.Option<string>
 }
 
-/** Splits one output stream into text and boundaries, whatever the chunk splits are. */
-export const makeCellOutputScanner = () => {
+/**
+ * Splits one output stream into text and boundaries, whatever the chunk splits are.
+ * Only a well-formed boundary carrying the expected token counts; anything else,
+ * including a boundary for another token, stays text.
+ */
+export const makeCellOutputScanner = (expected: () => Option.Option<string>) => {
   let pending = ""
   return {
     push: (chunk: string): ReadonlyArray<CellOutputSegment> => {
@@ -194,8 +202,13 @@ export const makeCellOutputScanner = () => {
           break
         }
         const candidate = input.slice(start + 1, end)
-        if (candidate.startsWith(boundaryPrefix)) {
-          segments.push({ text, boundary: Option.some(candidate.slice(boundaryPrefix.length)) })
+        const token = candidate.slice(boundaryPrefix.length)
+        const wellFormed =
+          candidate.startsWith(boundaryPrefix) &&
+          token.length > 0 &&
+          token.length <= maximumBoundaryTokenLength
+        if (wellFormed && Option.contains(expected(), token)) {
+          segments.push({ text, boundary: Option.some(token) })
           text = ""
           input = input.slice(end + 1)
         } else {
@@ -205,6 +218,12 @@ export const makeCellOutputScanner = () => {
       }
       if (text.length > 0) segments.push({ text, boundary: Option.none() })
       return segments
+    },
+    /** Text held back as a possible boundary when the stream closes. */
+    end: (): string => {
+      const rest = pending
+      pending = ""
+      return rest
     },
   }
 }

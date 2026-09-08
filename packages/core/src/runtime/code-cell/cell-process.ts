@@ -7,6 +7,7 @@ import {
   encodeCellRequest,
   makeCellFrameReader,
   makeCellOutputScanner,
+  type CellOutputSegment,
   maximumCellDisplayLength,
 } from "./cell-protocol.js"
 
@@ -115,56 +116,71 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     Effect.catchCause((cause) => Deferred.failCause(failure, cause)),
     Effect.forkScoped,
   )
-  // Worker stdout and stderr carry cell output, never protocol frames. The worker ends
-  // each cell with a boundary marker on both streams before its result frame, so the
-  // text before both markers belongs to that cell and later text to the next one.
+  // Worker stdout and stderr carry cell output, never protocol frames. Each Evaluate
+  // carries an unpredictable token; the worker ends the cell with a boundary carrying
+  // that token on both streams before its result frame. Text before both boundaries
+  // belongs to the cell. Text after them is dropped when the next Evaluate is sent,
+  // and text after that belongs to the next cell.
   const cellOutput = makeOutputBuffer(maximumCellDisplayLength)
-  const laterOutput = makeOutputBuffer(maximumCellDisplayLength)
   const endedStreams = new Set<string>()
-  let boundaryCell = Option.none<string>()
-  let finished = Option.none<{ readonly cellId: string; readonly text: string }>()
+  let expectedToken = Option.none<string>()
+  let finished = Option.none<{ readonly token: string; readonly text: string }>()
+  let outputClosed = false
   let waiter = Option.none<{
-    readonly cellId: string
+    readonly token: string
     readonly deferred: Deferred.Deferred<string, CellProcessError>
   }>()
-  const settle = (cellId: string) =>
+  const beginCell = (token: string) => {
+    cellOutput.take()
+    endedStreams.clear()
+    expectedToken = Option.some(token)
+    finished = Option.none()
+  }
+  const settle = (token: string) =>
     Effect.suspend(() => {
       const text = cellOutput.take()
-      cellOutput.append(laterOutput.take())
       endedStreams.clear()
-      boundaryCell = Option.none()
-      if (Option.isSome(waiter) && waiter.value.cellId === cellId) {
+      expectedToken = Option.none()
+      if (Option.isSome(waiter) && waiter.value.token === token) {
         return Deferred.succeed(waiter.value.deferred, text)
       }
-      finished = Option.some({ cellId, text })
+      finished = Option.some({ token, text })
       return Effect.void
     })
   const readOutput = (name: string, bytes: Stream.Stream<Uint8Array, unknown>) => {
     const decoder = new TextDecoder()
-    const scanner = makeCellOutputScanner()
+    const scanner = makeCellOutputScanner(() => {
+      if (endedStreams.has(name)) return Option.none()
+      return expectedToken
+    })
+    const consume = (segment: CellOutputSegment) =>
+      Effect.gen(function* () {
+        diagnosticsBuffer.append(segment.text)
+        cellOutput.append(segment.text)
+        if (Option.isNone(segment.boundary)) return
+        endedStreams.add(name)
+        if (endedStreams.size === 2) yield* settle(segment.boundary.value)
+      })
     return bytes.pipe(
       Stream.mapEffect((chunk) =>
-        Effect.forEach(
-          scanner.push(decoder.decode(chunk, { stream: true })),
-          (segment) =>
-            Effect.gen(function* () {
-              diagnosticsBuffer.append(segment.text)
-              if (endedStreams.has(name)) laterOutput.append(segment.text)
-              else cellOutput.append(segment.text)
-              if (Option.isNone(segment.boundary)) return
-              const cellId = segment.boundary.value
-              if (endedStreams.has(name) || Option.exists(boundaryCell, (id) => id !== cellId)) {
-                return yield* ioError("Unexpected cell output boundary")
-              }
-              endedStreams.add(name)
-              boundaryCell = Option.some(cellId)
-              if (endedStreams.size === 2) yield* settle(cellId)
-            }),
-          { discard: true },
+        Effect.forEach(scanner.push(decoder.decode(chunk, { stream: true })), consume, {
+          discard: true,
+        }),
+      ),
+      Stream.concat(
+        Stream.fromEffect(
+          Effect.suspend(() => consume({ text: scanner.end(), boundary: Option.none() })),
         ),
       ),
     )
   }
+  const closeOutput = Effect.suspend(() => {
+    outputClosed = true
+    return Option.match(waiter, {
+      onNone: () => Effect.void,
+      onSome: (active) => Deferred.fail(active.deferred, closedError()),
+    })
+  })
   yield* Stream.merge(
     readOutput("stdout", handle.stdout),
     readOutput("stderr", handle.stderr),
@@ -172,37 +188,28 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     Stream.runDrain,
     Effect.mapError(ioError),
     Effect.catchCause((cause) => Deferred.failCause(failure, cause)),
-    Effect.ensuring(
-      Effect.suspend(() =>
-        Option.match(waiter, {
-          onNone: () => Effect.void,
-          onSome: (active) => Deferred.fail(active.deferred, closedError()),
-        }),
-      ),
-    ),
+    Effect.ensuring(closeOutput),
     Effect.forkScoped,
   )
-  const takeOutput = Effect.fn("CellProcess.takeOutput")(function* (cellId: string) {
+  const takeOutput = Effect.fn("CellProcess.takeOutput")(function* (token: string) {
     if (Option.isSome(finished)) {
       const ready = finished.value
       finished = Option.none()
-      if (ready.cellId !== cellId) return yield* ioError("Unexpected cell output boundary")
+      if (ready.token !== token) return yield* ioError("Unexpected cell output boundary")
       return ready.text
     }
+    if (outputClosed) return yield* closedError()
     const deferred = yield* Deferred.make<string, CellProcessError>()
-    waiter = Option.some({ cellId, deferred })
+    waiter = Option.some({ token, deferred })
+    // The process failure is terminal for every waiter, present or future.
     return yield* Deferred.await(deferred).pipe(
+      Effect.raceFirst(Deferred.await(failure)),
       Effect.ensuring(
         Effect.sync(() => {
           waiter = Option.none()
         }),
       ),
     )
-  })
-  const discardOutput = Effect.sync(() => {
-    cellOutput.take()
-    laterOutput.take()
-    finished = Option.none()
   })
 
   const responses = Stream.suspend(() => {
@@ -282,12 +289,12 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     diagnostics: Effect.sync(diagnostics),
     /** Output the worker wrote during the cell, once both streams passed its boundary. */
     takeOutput,
-    /** Drops output nobody claimed, such as late writes from a process a cell spawned. */
-    discardOutput,
     isRunning: handle.isRunning.pipe(Effect.mapError(ioError)),
     exitCode: handle.exitCode.pipe(Effect.mapError(ioError)),
     send: Effect.fn("CellProcess.send")(function* (request: CellRequest) {
       if (yield* Deferred.isDone(failure)) return yield* Deferred.await(failure)
+      // Output nobody claimed, such as late writes from a process a cell spawned, is dropped here.
+      if (request._tag === "Evaluate") beginCell(request.outputToken)
       const bytes = yield* encodeCellRequest(request).pipe(Effect.mapError(ioError))
       const accepted = yield* Queue.offer(outbound, bytes).pipe(
         Effect.raceFirst(Deferred.await(failure)),

@@ -38,6 +38,7 @@ describe("cell worker", () => {
       yield* worker.send(
         CellRequest.cases.Evaluate.make({
           cellId: "one",
+          outputToken: "one-token",
           source: "const count = await tools.call('count', {}); count",
         }),
       )
@@ -57,7 +58,13 @@ describe("cell worker", () => {
       if (completed._tag !== "Evaluated")
         return yield* new CellProtocolError({ message: "Expected result" })
       expect(completed.result.display).toBe("42")
-      yield* worker.send(CellRequest.cases.Evaluate.make({ cellId: "two", source: "count + 1" }))
+      yield* worker.send(
+        CellRequest.cases.Evaluate.make({
+          cellId: "two",
+          outputToken: "two-token",
+          source: "count + 1",
+        }),
+      )
       const next = yield* worker.next
       if (next._tag !== "Evaluated")
         return yield* new CellProtocolError({ message: "Expected result" })
@@ -65,7 +72,11 @@ describe("cell worker", () => {
       yield* worker.send(CellRequest.cases.Reset.make({ requestId: "reset" }))
       expect((yield* worker.next)._tag).toBe("Reset")
       yield* worker.send(
-        CellRequest.cases.Evaluate.make({ cellId: "three", source: "typeof count" }),
+        CellRequest.cases.Evaluate.make({
+          cellId: "three",
+          outputToken: "three-token",
+          source: "typeof count",
+        }),
       )
       const cleared = yield* worker.next
       if (cleared._tag !== "Evaluated")
@@ -80,6 +91,7 @@ describe("cell worker", () => {
       yield* worker.send(
         CellRequest.cases.Evaluate.make({
           cellId: "one",
+          outputToken: "one-token",
           source: "tools.describe('read').description",
           catalog: {
             hash: "a",
@@ -92,7 +104,11 @@ describe("cell worker", () => {
         return yield* new CellProtocolError({ message: "Expected result" })
       expect(first.result.display).toBe("Read a file")
       yield* worker.send(
-        CellRequest.cases.Evaluate.make({ cellId: "two", source: "tools.search('').total" }),
+        CellRequest.cases.Evaluate.make({
+          cellId: "two",
+          outputToken: "two-token",
+          source: "tools.search('').total",
+        }),
       )
       const second = yield* worker.next
       if (second._tag !== "Evaluated")
@@ -101,6 +117,7 @@ describe("cell worker", () => {
       yield* worker.send(
         CellRequest.cases.Evaluate.make({
           cellId: "three",
+          outputToken: "three-token",
           source: "tools.search('').tools.map((t) => t.name).join(',')",
           catalog: {
             hash: "b",
@@ -119,10 +136,16 @@ describe("cell worker", () => {
     Effect.gen(function* () {
       const worker = yield* makeHarness
       yield* worker.send(
-        CellRequest.cases.Evaluate.make({ cellId: "one", source: "await tools.call('wait', {})" }),
+        CellRequest.cases.Evaluate.make({
+          cellId: "one",
+          outputToken: "one-token",
+          source: "await tools.call('wait', {})",
+        }),
       )
       expect((yield* worker.next)._tag).toBe("HostCall")
-      yield* worker.send(CellRequest.cases.Evaluate.make({ cellId: "two", source: "42" }))
+      yield* worker.send(
+        CellRequest.cases.Evaluate.make({ cellId: "two", outputToken: "two-token", source: "42" }),
+      )
       const error = yield* Fiber.join(worker.fiber).pipe(Effect.flip)
       expect(error.message).toContain("already active")
     }).pipe(Effect.timeout("3 seconds")),
@@ -145,6 +168,7 @@ describe("cell worker", () => {
       yield* worker.send(
         CellRequest.cases.Evaluate.make({
           cellId: "one",
+          outputToken: "one-token",
           source: "await tools.call('denied', {})",
         }),
       )
@@ -162,7 +186,9 @@ describe("cell worker", () => {
       if (result._tag !== "Failed")
         return yield* new CellProtocolError({ message: "Expected failure" })
       expect(result.error.message).toContain("Permission denied")
-      yield* worker.send(CellRequest.cases.Evaluate.make({ cellId: "two", source: "42" }))
+      yield* worker.send(
+        CellRequest.cases.Evaluate.make({ cellId: "two", outputToken: "two-token", source: "42" }),
+      )
       expect((yield* worker.next)._tag).toBe("Evaluated")
     }).pipe(Effect.timeout("3 seconds")),
   )
@@ -171,7 +197,11 @@ describe("cell worker", () => {
     Effect.gen(function* () {
       const worker = yield* makeHarness
       yield* worker.send(
-        CellRequest.cases.Evaluate.make({ cellId: "one", source: "await tools.call('wait', {})" }),
+        CellRequest.cases.Evaluate.make({
+          cellId: "one",
+          outputToken: "one-token",
+          source: "await tools.call('wait', {})",
+        }),
       )
       expect((yield* worker.next)._tag).toBe("HostCall")
       yield* worker.send(CellRequest.cases.Reset.make({ requestId: "reset" }))
@@ -187,6 +217,7 @@ describe("cell worker", () => {
       yield* worker.send(
         CellRequest.cases.Evaluate.make({
           cellId: "one",
+          outputToken: "one-token",
           source: "await Promise.all(Array.from({ length: 33 }, () => tools.call('wait', {})))",
         }),
       )

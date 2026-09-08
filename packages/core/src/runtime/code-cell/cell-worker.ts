@@ -15,7 +15,7 @@ export class CellWorkerTransport extends Context.Service<
     readonly requests: Stream.Stream<CellRequest, CellProtocolError>
     readonly send: (response: CellResponse) => Effect.Effect<void, CellProtocolError>
     /** Marks the end of a cell on the process output streams before its result frame. */
-    readonly endCellOutput: (cellId: string) => Effect.Effect<void, CellProtocolError>
+    readonly endCellOutput: (outputToken: string) => Effect.Effect<void, CellProtocolError>
   }
 >()("@gent/core/src/runtime/code-cell/cell-worker/CellWorkerTransport") {}
 
@@ -113,7 +113,7 @@ export const runCellWorker = Effect.scoped(
           onSuccess: (result) =>
             CellResponse.cases.Evaluated.make({ cellId: request.cellId, result }),
         }),
-        Effect.tap(() => transport.endCellOutput(request.cellId)),
+        Effect.tap(() => transport.endCellOutput(request.outputToken)),
         Effect.flatMap((response) => {
           if (pending.size > 0) {
             return Effect.fail(

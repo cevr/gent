@@ -473,10 +473,14 @@ with the host's working directory, environment, and OS permissions, the same
 authority the bash tool grants, so cells use the full Bun runtime, `require`,
 and dynamic `import` directly. Protocol frames travel on dedicated descriptors
 (3 worker to host, 4 host to worker); the worker keeps stdout and stderr for cell
-output. After each cell the worker writes an end-of-cell marker to both streams
-and only then sends the result frame; the host returns the cell once both marks
-arrived, so the text before them belongs to that cell in full and later writes
-(such as a lingering child process) roll into the next cell. The output returns
+output. Each Evaluate carries an unpredictable output token; after the cell the
+worker writes an end-of-cell marker carrying that token to both streams and only
+then sends the result frame. The host returns the cell once both marks arrived,
+so the text before them belongs to that cell in full. A marker with any other
+token is ordinary text. Each stream is complete and ordered on its own; stdout
+and stderr are not ordered against each other. Writes after the marks (such as a
+lingering child process) are dropped when the next Evaluate is sent, and writes
+after that belong to the next cell. The output returns
 ahead of the cell's display, as Prime Agent's kernel does; a bounded prefix also
 serves as diagnostics when the worker fails. Cells evaluate in the worker's
 own realm, so the process is the isolation unit. This is not

@@ -7,6 +7,7 @@ import {
   FileSystem,
   Option,
   Path,
+  Random,
   Schema,
   Scope,
   Semaphore,
@@ -266,12 +267,16 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
           Effect.catchCause((cause) => Deferred.failCause(result, cause)),
           Effect.forkScoped,
         )
-        // Output that arrived before this cell belongs to no one; drop it.
-        yield* child.discardOutput
+        const outputToken = (yield* Effect.forEach([0, 1, 2, 3], () =>
+          Random.nextIntBetween(0, 0x1_0000_0000),
+        ))
+          .map((part) => part.toString(16).padStart(8, "0"))
+          .join("")
         yield* child
           .send(
             CellRequest.cases.Evaluate.make({
               cellId,
+              outputToken,
               source,
               catalog: Option.getOrUndefined(catalog),
             }),
@@ -283,7 +288,7 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
         // the take resolves once both marks arrived, so the output is complete and ordered.
         return {
           frame,
-          output: yield* child.takeOutput(cellId).pipe(Effect.mapError(processError)),
+          output: yield* child.takeOutput(outputToken).pipe(Effect.mapError(processError)),
         }
       }),
     ).pipe(Effect.onError(() => discard().pipe(Effect.orDie)))

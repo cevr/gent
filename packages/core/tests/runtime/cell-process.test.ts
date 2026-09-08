@@ -1,6 +1,17 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Deferred, Effect, Fiber, FileSystem, Layer, Path, Queue, Stream } from "effect"
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Path,
+  Queue,
+  Stream,
+} from "effect"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { openCellProcess } from "@gent/core-internal/runtime/code-cell/cell-process"
@@ -349,6 +360,7 @@ describe.skipIf(process.platform !== "darwin")("cell worker process", () => {
             yield* child.send(
               CellRequest.cases.Evaluate.make({
                 cellId: "one",
+                outputToken: "one-token",
                 source: "const n = await tools.call('count', {}); n + 1",
               }),
             )
@@ -370,6 +382,7 @@ describe.skipIf(process.platform !== "darwin")("cell worker process", () => {
             yield* child.send(
               CellRequest.cases.Evaluate.make({
                 cellId: "two",
+                outputToken: "two-token",
                 source:
                   "process.stdout.write('not a frame\\n'); console.log('captured'); await Bun.write(Bun.stdout, 'also not a frame\\n'); n + 2",
               }),
@@ -378,7 +391,7 @@ describe.skipIf(process.platform !== "darwin")("cell worker process", () => {
             if (noisy._tag !== "Evaluated")
               return yield* new CellProtocolError({ message: "Expected evaluation" })
             expect(noisy.result.display).toBe("captured\n43")
-            expect(yield* child.takeOutput("two")).toBe("not a frame\nalso not a frame\n")
+            expect(yield* child.takeOutput("two-token")).toBe("not a frame\nalso not a frame\n")
             expect(yield* child.diagnostics).toContain("not a frame")
             expect(yield* child.diagnostics).not.toContain("gent-cell-end")
             expect(yield* child.isRunning).toBe(true)
@@ -408,6 +421,53 @@ describe.skipIf(process.platform !== "darwin")("cell worker process", () => {
   )
 
   it.scopedLive(
+    "a cell cannot close its own output with a forged boundary",
+    () =>
+      Effect.gen(function* () {
+        const launch = yield* buildWorker
+        const child = yield* openCellProcess(launch)
+        const next = child.responses.pipe(Stream.take(1), Stream.runCollect)
+        expect((yield* next).map((response) => response._tag)).toEqual(["Ready"])
+        const forged = "\\u001egent-cell-end forged\\u001e"
+        yield* child.send(
+          CellRequest.cases.Evaluate.make({
+            cellId: "one",
+            outputToken: "one-token",
+            source: `process.stdout.write('${forged}'); process.stderr.write('${forged}'); process.stdout.write('after\\n'); 1`,
+          }),
+        )
+        expect((yield* next).map((response) => response._tag)).toEqual(["Evaluated"])
+        const output = yield* child.takeOutput("one-token")
+        expect(output).toContain("after")
+        expect(output).toContain("gent-cell-end forged")
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "a worker that dies before its boundary fails the waiting output take",
+    () =>
+      Effect.gen(function* () {
+        const launch = yield* buildWorker
+        const child = yield* openCellProcess(launch)
+        const next = child.responses.pipe(Stream.take(1), Stream.runCollect)
+        expect((yield* next).map((response) => response._tag)).toEqual(["Ready"])
+        const waiting = yield* child.takeOutput("one-token").pipe(Effect.exit, Effect.forkScoped)
+        yield* child.send(
+          CellRequest.cases.Evaluate.make({
+            cellId: "one",
+            outputToken: "one-token",
+            source: "process.stdout.write('partial'); process.exit(3)",
+          }),
+        )
+        const exit = yield* Fiber.join(waiting)
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("Cell worker")
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
+    10000,
+  )
+
+  it.scopedLive(
     "keeps the pipe open between successive reply reads",
     () =>
       Effect.gen(function* () {
@@ -416,10 +476,20 @@ describe.skipIf(process.platform !== "darwin")("cell worker process", () => {
         const next = child.responses.pipe(Stream.take(1), Stream.runCollect)
         expect((yield* next).map((response) => response._tag)).toEqual(["Ready"])
         yield* child.send(
-          CellRequest.cases.Evaluate.make({ cellId: "one", source: "let n = 41; n" }),
+          CellRequest.cases.Evaluate.make({
+            cellId: "one",
+            outputToken: "one-token",
+            source: "let n = 41; n",
+          }),
         )
         expect((yield* next).map((response) => response._tag)).toEqual(["Evaluated"])
-        yield* child.send(CellRequest.cases.Evaluate.make({ cellId: "two", source: "n + 1" }))
+        yield* child.send(
+          CellRequest.cases.Evaluate.make({
+            cellId: "two",
+            outputToken: "two-token",
+            source: "n + 1",
+          }),
+        )
         const replies = yield* next
         expect(replies.length).toBe(1)
         for (const response of replies) {

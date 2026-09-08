@@ -16,7 +16,11 @@ import {
 describe("cell process protocol", () => {
   it.live("preserves a Unicode request split across pipe reads", () =>
     Effect.gen(function* () {
-      const request = CellRequest.cases.Evaluate.make({ cellId: "cell-1", source: "'你好'" })
+      const request = CellRequest.cases.Evaluate.make({
+        cellId: "cell-1",
+        outputToken: "cell-1-token",
+        source: "'你好'",
+      })
       const bytes = yield* encodeCellRequest(request)
       const reader = makeCellFrameReader()
       const frames: string[] = []
@@ -79,7 +83,7 @@ describe("cell process protocol", () => {
     "cell output boundaries close the text before them even when a chunk splits the marker",
     () =>
       Effect.sync(() => {
-        const scanner = makeCellOutputScanner()
+        const scanner = makeCellOutputScanner(() => Option.some("cell-1"))
         const marker = cellOutputBoundary("cell-1")
         const first = scanner.push(`before ${marker.slice(0, 5)}`)
         expect(first).toEqual([{ text: "before ", boundary: Option.none() }])
@@ -93,7 +97,7 @@ describe("cell process protocol", () => {
 
   it.live("stray record separators in cell output stay text", () =>
     Effect.sync(() => {
-      const scanner = makeCellOutputScanner()
+      const scanner = makeCellOutputScanner(() => Option.some("x"))
       expect(scanner.push("a\u001eb\u001ec")).toEqual([
         { text: "a\u001eb", boundary: Option.none() },
       ])
@@ -102,6 +106,37 @@ describe("cell process protocol", () => {
       ])
       const long = `\u001e${"z".repeat(400)}`
       expect(scanner.push(long)).toEqual([{ text: long, boundary: Option.none() }])
+    }),
+  )
+
+  it.live("a boundary with another token, an empty token, or an oversized token stays text", () =>
+    Effect.sync(() => {
+      const flush = (candidate: string) => {
+        const scanner = makeCellOutputScanner(() => Option.some("real"))
+        const segments = scanner.push(`${candidate}tail`)
+        return segments.map((segment) => segment.text).join("") + scanner.end()
+      }
+      const forged = cellOutputBoundary("forged")
+      expect(flush(forged)).toBe(`${forged}tail`)
+      const empty = cellOutputBoundary("")
+      expect(flush(empty)).toBe(`${empty}tail`)
+      const oversized = cellOutputBoundary("r".repeat(129))
+      expect(flush(oversized)).toBe(`${oversized}tail`)
+      const scanner = makeCellOutputScanner(() => Option.some("real"))
+      expect(scanner.push(cellOutputBoundary("real"))).toEqual([
+        { text: "", boundary: Option.some("real") },
+      ])
+    }),
+  )
+
+  it.live("closing the stream releases a held partial boundary as text", () =>
+    Effect.sync(() => {
+      const scanner = makeCellOutputScanner(() => Option.some("x"))
+      expect(scanner.push("done\u001egent-cell")).toEqual([
+        { text: "done", boundary: Option.none() },
+      ])
+      expect(scanner.end()).toBe("\u001egent-cell")
+      expect(scanner.end()).toBe("")
     }),
   )
 })

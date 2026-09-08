@@ -49,7 +49,7 @@ describe("turn prompt sections", () => {
         "- The cell is a Bun runtime in the working directory: Bun (Bun.file, Bun.$, Bun.spawn), fetch, process (cwd, env), node builtins through await import('node:fs/promises') or require('node:path'), and packages resolved from the working directory.",
       )
       expect(guidelines?.content).toContain(
-        "- console output, process.stdout and process.stderr writes, and inherited output of processes spawned during the cell return with its result",
+        "- console output, process.stdout and process.stderr writes, and inherited output of spawned processes return with the cell result",
       )
     }),
   )
