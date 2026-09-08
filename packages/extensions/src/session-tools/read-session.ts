@@ -1,11 +1,10 @@
 import { Effect, Option, Schema } from "effect"
 import {
-  AgentName,
   ExtensionContext,
   headTailChars,
   makeRunSpec,
   messagePartsDisplayText,
-  requireAgent,
+  requireCurrentAgent,
   SessionId,
   tool,
   type Branch,
@@ -53,6 +52,8 @@ export const ReadSessionResult = Schema.Struct({
 
 const MAX_TOOL_ARG_CHARS = 500
 const MAX_TREE_CHARS = 120_000
+const EXTRACT_ADDENDUM =
+  "Extract only the information relevant to the stated goal from the given transcript. Cite files and decisions. Do not run tools."
 
 export function truncate(s: string, max: number): string {
   if (s.length > max) return s.slice(0, max) + "…"
@@ -135,12 +136,15 @@ export const ReadSessionTool = tool({
     const goal = Option.fromNullishOr(params.goal)
     if (Option.isSome(goal)) {
       const prompt = `Here is a coding agent session transcript:\n\n${markdown}\n\n---\n\nExtract the information relevant to this goal: ${goal.value}`
-      const agent = ctx.Agent
-      const summarizer = yield* requireAgent(AgentName.make("summarizer"))
-      const result = yield* agent.run({
-        agent: summarizer,
+      const agent = yield* requireCurrentAgent
+      const result = yield* ctx.Agent.run({
+        agent,
         prompt,
-        runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
+        runSpec: makeRunSpec({
+          persistence: "ephemeral",
+          parentToolCallId: ctx.toolCallId,
+          overrides: { systemPromptAddendum: EXTRACT_ADDENDUM, allowedTools: [] },
+        }),
       })
 
       if (result._tag === "error") {

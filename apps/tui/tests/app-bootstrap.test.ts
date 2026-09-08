@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Exit, Option, Schema } from "effect"
-import { AgentName } from "@gent/core-internal/domain/agent"
+import { AgentName, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
 import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
 import { dateFromMillis } from "@gent/core-internal/domain/message"
 import { ProviderId } from "@gent/core-internal/domain/model"
@@ -225,9 +225,9 @@ describe("resolveStartupAuthState", () => {
         client,
         state,
       })
-      expect(auth.initialAgent).toBe(AgentName.make("cowork"))
+      expect(auth.initialAgent).toBe(DEFAULT_AGENT_NAME)
       expect(calls).toEqual([
-        { agentName: AgentName.make("cowork"), sessionId: SessionId.make("session-a") },
+        { agentName: DEFAULT_AGENT_NAME, sessionId: SessionId.make("session-a") },
       ])
     }),
   )

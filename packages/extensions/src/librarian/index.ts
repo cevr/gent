@@ -1,35 +1,11 @@
-import {
-  AgentDefinition,
-  AgentName,
-  defineExtension,
-  defineResource,
-  ModelId,
-} from "@gent/core/extensions/api"
+import { defineExtension, defineResource } from "@gent/core/extensions/api"
 import { GitReader, RepoTool } from "./repo-explorer.js"
 
 export { GitReader, GitReaderError } from "./repo-explorer.js"
 
-const LIBRARIAN_PROMPT = `
-Librarian agent. Answer questions about an external repository by reading its source code.
-You have access to a local clone at the path specified in the prompt.
-Use read, grep, and glob tools to explore the code. Be precise — cite file paths and line numbers.
-- Comparative architecture: compare 2-3 implementations before recommending.
-- Pattern: fetch → explore → cite → compare.
-- Always ground conclusions in specific file paths and line numbers.
-`.trim()
-
-export const librarian = AgentDefinition.make({
-  name: AgentName.make("librarian"),
-  description: "Answers questions about external repos using local cached clones",
-  model: ModelId.make("openai/gpt-5.4-mini"),
-  allowedTools: ["grep", "glob", "read", "repo"],
-  systemPromptAddendum: LIBRARIAN_PROMPT,
-})
-
 export const LibrarianExtension = defineExtension({
   id: "@gent/librarian",
   tools: [RepoTool],
-  agents: [librarian],
   resources: [
     defineResource({
       id: "@gent/librarian/git-reader",

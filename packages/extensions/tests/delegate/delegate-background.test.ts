@@ -1,7 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Struct } from "effect"
 import { DelegateTool } from "../../src/delegate/delegate-tool.js"
-import { AgentName } from "@gent/core-internal/domain/agent"
 import { BranchId, RequestId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { runToolWithCtx, testToolContext } from "@gent/core-internal/test-utils"
 import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
@@ -26,7 +25,7 @@ describe("DelegateTool background mode", () => {
       })
       const result = yield* runToolWithCtx(
         DelegateTool,
-        { agent: AgentName.make("explore"), todo: "analyze the codebase", background: true },
+        { todo: "analyze the codebase", background: true },
         ctx,
       )
       // The handle returns now. The result arrives later as a message on the parent branch.
@@ -50,7 +49,7 @@ describe("DelegateTool background mode", () => {
       )
       const error = yield* runToolWithCtx(
         DelegateTool,
-        { agent: AgentName.make("explore"), todo: "analyze the codebase", background: true },
+        { todo: "analyze the codebase", background: true },
         ctx,
       ).pipe(Effect.flip)
       expect(error).toMatchObject({

@@ -1,4 +1,4 @@
-import { Data, Effect, Option, Predicate, Schema } from "effect"
+import { Effect, Predicate, Schema } from "effect"
 import {
   tool,
   AgentName,
@@ -10,22 +10,13 @@ import {
   getDurableAgentRunSessionId,
   makeRunSpec,
   RequestId,
+  requireCurrentAgent,
+  RunSpecSchema,
   SessionId,
-  type ExtensionContextService,
 } from "@gent/core/extensions/api"
 
-type DelegateAgent = Parameters<ExtensionContextService["Agent"]["run"]>[0]["agent"]
-
-type AgentResolution = Data.TaggedEnum<{
-  Found: { readonly agent: DelegateAgent }
-  Missing: { readonly error: string }
-}>
-
-const AgentResolution = Data.taggedEnum<AgentResolution>()
-
-/** One agent, one self-contained task. Cells compose parallel and chained delegations. */
+/** One self-contained task for a child that inherits this agent. Cells compose parallel and chained delegations. */
 export const DelegateParams = Schema.Struct({
-  agent: AgentName,
   todo: Schema.String,
   description: Schema.optionalKey(Schema.String),
   background: Schema.optionalKey(
@@ -34,6 +25,7 @@ export const DelegateParams = Schema.Struct({
         "Start a durable child and return its handle now. The result arrives later as a message on this branch.",
     }),
   ),
+  overrides: RunSpecSchema.fields.overrides,
 })
 
 export const DelegateResult = Schema.Struct({
@@ -62,31 +54,22 @@ export const DelegateResult = Schema.Struct({
 export const DelegateTool = tool({
   id: "delegate",
   description:
-    "Delegate one self-contained task to a specialized agent. Set background: true to get a handle now and the result as a later message.",
-  promptSnippet: "Delegate work to specialized subagents",
+    "Delegate one self-contained task to a child that inherits this agent and model. Set background: true to get a handle now and the result as a later message.",
+  promptSnippet: "Delegate work to child agents",
   promptGuidelines: [
-    "Use for work that benefits from specialized focus or parallelism",
+    "Use for independent work that benefits from a fresh context or parallelism",
     "Do NOT delegate simple reads, searches, or single-file edits — do those directly",
-    "Each todo prompt must be self-contained — delegated agents have no conversation history",
+    "Each todo prompt must be self-contained — children have no conversation history",
     "Run independent delegations concurrently from one cell with Promise.all; chain dependent ones with sequential awaits and pass earlier output in the next prompt",
     "Background delegations never return output here. Do not poll; a message on this branch reports the result. agent-children lists them.",
-    "For parallel exploration: don't share preliminary findings between agents — let each form independent conclusions",
-    "Prefer focused tools: review (code review), counsel (second opinion), research (repo understanding)",
+    "For parallel exploration: don't share preliminary findings between children — let each form independent conclusions",
+    "Use overrides.modelId for a second opinion from a different model; overrides.systemPromptAddendum focuses a child on one role",
   ],
   params: DelegateParams,
   output: DelegateResult,
   execute: Effect.fn("DelegateTool.execute")(function* (params: typeof DelegateParams.Type) {
     const ctx = yield* ExtensionContext
-
-    const agents = yield* ctx.Agent.listAgents
-    const resolved = Option.match(
-      Option.fromNullishOr(agents.find((candidate) => candidate.name === params.agent)),
-      {
-        onNone: () => AgentResolution.Missing({ error: `Unknown agent: ${params.agent}` }),
-        onSome: (agent) => AgentResolution.Found({ agent }),
-      },
-    )
-    if (resolved._tag === "Missing") return { error: resolved.error }
+    const agent = yield* requireCurrentAgent
 
     const appendSessionRef = (error: string, sessionId?: string) => {
       if (Predicate.isUndefined(sessionId)) return error
@@ -102,19 +85,23 @@ export const DelegateTool = tool({
       }
       const requestId = RequestId.make(ctx.toolCallId)
       const child = yield* ctx.Agent.start({
-        agent: resolved.agent,
+        agent,
         prompt: params.todo,
         requestId,
-        runSpec: makeRunSpec({ persistence: "durable" }),
+        runSpec: makeRunSpec({ persistence: "durable", overrides: params.overrides }),
       })
       return { requestId, ...child, status: "running" } satisfies typeof DelegateResult.Type
     }
 
     // Foreground mode: blocking subagent dispatch
     const result = yield* ctx.Agent.run({
-      agent: resolved.agent,
+      agent,
       prompt: params.todo,
-      runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
+      runSpec: makeRunSpec({
+        persistence: "ephemeral",
+        parentToolCallId: ctx.toolCallId,
+        overrides: params.overrides,
+      }),
     })
 
     if (result._tag === "error") {

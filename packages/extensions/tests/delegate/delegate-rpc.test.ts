@@ -12,7 +12,7 @@ import { Effect, Fiber, Stream } from "effect"
 import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { AgentRunResult, SessionId } from "@gent/core/extensions/api"
+import { AgentRunResult, DEFAULT_AGENT_NAME, SessionId } from "@gent/core/extensions/api"
 import type { AgentName } from "@gent/core/extensions/api"
 import { e2ePreset } from "../helpers/test-preset"
 import { isToolResultFor } from "../helpers/tool-event.js"
@@ -24,7 +24,7 @@ describe("DelegateExtension via model turn", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("delegate", { agent: "explore", todo: "summarise repo layout" }),
+            toolCallStep("delegate", { todo: "summarise repo layout" }),
             textStep("delegated"),
           ])
           const subagentRunner = {
@@ -63,7 +63,9 @@ describe("DelegateExtension via model turn", () => {
           const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
           expect(succeeded).toBeDefined()
           if (succeeded?.event._tag === "ToolCallSucceeded") {
-            expect(succeeded.event.output).toContain("subagent:explore:summarise repo layout")
+            expect(succeeded.event.output).toContain(
+              `subagent:${DEFAULT_AGENT_NAME}:summarise repo layout`,
+            )
           }
         }).pipe(Effect.timeout("8 seconds")),
       ),

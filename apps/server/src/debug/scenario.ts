@@ -67,7 +67,7 @@ const createParentTurnMessages = (
         Prompt.toolCallPart({
           id: delegateToolCallId,
           name: "delegate",
-          params: { todos: [{ agent: "explore", todo: "Inspect the TUI tool chrome" }] },
+          params: { todos: [{ todo: "Inspect the TUI tool chrome" }] },
           providerExecuted: false,
         }),
         Prompt.toolCallPart({
@@ -109,7 +109,7 @@ const createParentTurnMessages = (
             results: [
               {
                 _tag: "success",
-                agentName: "explore",
+                agentName: "main",
                 text: "Live child session completed read + grep before reporting back.",
                 usage: { input: 181, output: 64, cost: 0.01 },
                 toolCalls: [
@@ -236,7 +236,7 @@ const runDelegateScenario = (
       AgentRunSpawned.make({
         parentSessionId: params.sessionId,
         childSessionId: child.sessionId,
-        agentName: AgentName.make("explore"),
+        agentName: AgentName.make("main"),
         prompt: "Inspect the TUI tool chrome",
         toolCallId,
         branchId: params.branchId,
@@ -305,7 +305,7 @@ const runDelegateScenario = (
       AgentRunSucceeded.make({
         parentSessionId: params.sessionId,
         childSessionId: child.sessionId,
-        agentName: AgentName.make("explore"),
+        agentName: AgentName.make("main"),
         toolCallId,
         branchId: params.branchId,
       }),
@@ -355,8 +355,8 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     const reviewToolCallId = asToolCallId(`dbg-live-review-${iteration}`)
     const searchSessionsToolCallId = asToolCallId(`dbg-live-search-sessions-${iteration}`)
     const readSessionToolCallId = asToolCallId(`dbg-live-read-session-${iteration}`)
-    const agent = AgentName.make("cowork")
-    const previousAgent = AgentName.make("cowork")
+    const agent = AgentName.make("main")
+    const previousAgent = AgentName.make("main")
     const startedAt = yield* Clock.currentTimeMillis
 
     yield* eventStore.publish(
@@ -400,7 +400,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
         branchId: params.branchId,
         toolCallId: delegateToolCallId,
         toolName: "delegate",
-        input: { todos: [{ agent: "explore", todo: "Inspect the TUI tool chrome" }] },
+        input: { todos: [{ todo: "Inspect the TUI tool chrome" }] },
       }),
     )
     yield* runDelegateScenario(params, iteration, delegateToolCallId)
@@ -418,7 +418,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
             results: [
               {
                 _tag: "success",
-                agentName: "explore",
+                agentName: "main",
                 text: "Live child session completed read + grep before reporting back.",
                 usage: { input: 181, output: 64, cost: 0.01 },
               },

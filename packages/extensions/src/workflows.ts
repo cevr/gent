@@ -24,9 +24,9 @@ const planRecipe = (input: string) => {
   return [
     `Create an adversarial implementation plan for: ${trimmed(input)}`,
     "Recipe, run from one cell:",
-    "1. Delegate two independent plans with Promise.all: one to `architect`, one to `deepwork`.",
-    "2. Delegate a cross-review of each plan to the other agent, passing the plan text in the prompt.",
-    "3. Delegate a synthesis to `architect` with both plans and both reviews. One cohesive plan, batched by commit.",
+    "1. Delegate two independent plans with Promise.all. Give the second child a different model with overrides.modelId when one is available.",
+    "2. Delegate a cross-review of each plan to a fresh child, passing the plan text in the prompt.",
+    "3. Delegate a synthesis with both plans and both reviews. One cohesive plan, batched by commit.",
     "4. Save it with artifact_save (sourceTool 'plan', label 'Plan: <topic>').",
     "5. Present it with the prompt tool for approval before any code changes.",
   ].join("\n")
@@ -38,8 +38,8 @@ const reviewRecipe = (input: string) => {
   return [
     `Run an adversarial code review of ${scope}.`,
     "Recipe, run from one cell:",
-    "1. Delegate two independent reviews with Promise.all to `reviewer` and `deepwork`. Ask for a JSON array of comments (file, line, severity, type, text, fix).",
-    "2. Delegate a critique of each review to the other agent.",
+    "1. Delegate two independent read-only reviews with Promise.all (overrides.allowedTools: read, grep, glob). Ask for a JSON array of comments (file, line, severity, type, text, fix).",
+    "2. Delegate a critique of each review to a fresh child.",
     "3. Synthesize one comment list and a severity summary (critical, high, medium, low).",
     "4. Save it with artifact_save (sourceTool 'review'). Report the comments; do not apply fixes unless asked.",
   ].join("\n")
@@ -51,9 +51,9 @@ const auditRecipe = (input: string) => {
   return [
     `Audit ${scope}.`,
     "Recipe, run from one cell:",
-    "1. Delegate concern detection to `architect`: up to 5 concern categories for these paths.",
-    "2. For each concern, delegate two audits with Promise.all (`reviewer` and `deepwork`). Every finding must cite file and line.",
-    "3. Delegate a synthesis to `architect`: findings with file, description, severity (critical, warning, suggestion).",
+    "1. Delegate concern detection: up to 5 concern categories for these paths.",
+    "2. For each concern, delegate two independent audits with Promise.all. Every finding must cite file and line.",
+    "3. Delegate a synthesis: findings with file, description, severity (critical, warning, suggestion).",
     "4. Save it with artifact_save (sourceTool 'audit') and present the findings with the prompt tool.",
   ].join("\n")
 }
@@ -61,14 +61,14 @@ const auditRecipe = (input: string) => {
 const counselRecipe = (input: string) => {
   let question = "the current approach"
   if (trimmed(input).length > 0) question = trimmed(input)
-  return `Get a second opinion on ${question}: delegate to \`deepwork\` with a self-contained prompt that states the approach, the alternatives, and the tradeoffs. Report the opinion verbatim, then your response to it.`
+  return `Get a second opinion on ${question}: delegate to a child with overrides.modelId set to a different model when one is available, and a self-contained prompt that states the approach, the alternatives, and the tradeoffs. Report the opinion verbatim, then your response to it.`
 }
 
 const researchRecipe = (input: string) => {
   if (trimmed(input).length === 0) {
-    return "Research an external repository: ask me which repo (owner/repo, owner/repo@tag, or npm:package) and what question to answer, then use the repo tool to fetch it and delegate the reading to `explore`."
+    return "Research an external repository: ask me which repo (owner/repo, owner/repo@tag, or npm:package) and what question to answer, then use the repo tool to fetch it and delegate the reading to a child."
   }
-  return `Research: ${trimmed(input)}. Use the repo tool to fetch each repository, delegate one focused reading per repository to \`explore\` with Promise.all (at most 5), then synthesize a comparative answer with citations to files.`
+  return `Research: ${trimmed(input)}. Use the repo tool to fetch each repository, delegate one focused read-only reading per repository with Promise.all (at most 5), then synthesize a comparative answer with citations to files.`
 }
 
 const command = (params: {

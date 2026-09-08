@@ -1,6 +1,5 @@
 import { Effect, Option, Predicate, Record, Schema } from "effect"
 import {
-  AgentName,
   AgentRunError,
   BranchId,
   ChildAgentRegistryEntry,
@@ -9,7 +8,7 @@ import {
   RunSpecSchema,
   SessionId,
   defineExtension,
-  requireAgent,
+  requireCurrentAgent,
   makeRunSpec,
   tool,
 } from "@gent/core/extensions/api"
@@ -32,7 +31,7 @@ const ChildObservation = Schema.TaggedUnion({
 export const StartChildAgent = tool({
   id: "agent-start",
   description:
-    "Start one durable child and return its handle. The result never returns here: it arrives later as a message on this branch.",
+    "Start one durable child that inherits this agent and model, and return its handle. The result never returns here: it arrives later as a message on this branch.",
   promptGuidelines: [
     "Keep the returned requestId. Use agent-child to inspect or cancel that start, and agent-children to list every start on this branch.",
     "Do not poll for completion. When the child finishes, a message on this branch reports its requestId, session, outcome, and output preview.",
@@ -40,7 +39,6 @@ export const StartChildAgent = tool({
     "For a recovered Unknown agent-start operation, use its toolCallId as the requestId for agent-child inspect or cancel.",
   ],
   params: Schema.Struct({
-    agent: AgentName,
     prompt: Schema.NonEmptyString,
     overrides: RunSpecSchema.fields.overrides,
   }),
@@ -51,7 +49,7 @@ export const StartChildAgent = tool({
       return yield* new AgentRunError({ message: "Child start requires a host-owned tool call" })
     }
     const requestId = RequestId.make(ctx.toolCallId)
-    const agent = yield* requireAgent(params.agent)
+    const agent = yield* requireCurrentAgent
     const child = yield* ctx.Agent.start({
       agent,
       prompt: params.prompt,
