@@ -17,17 +17,14 @@ import {
 } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
-import {
-  assistantMessageIdForTurn,
-  toolResultMessageIdForTurn,
-} from "../../../src/runtime/agent/agent-loop.utils"
+import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
 import { resolveExtensions, ExtensionRegistry } from "../../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import { ModelResolver } from "../../../src/providers/model-resolver"
 import { finishPart, LanguageModelLayers } from "../../../src/test-utils/language-model"
-import { dateFromMillis, Message } from "../../../src/domain/message"
+import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../../src/domain/message"
 import {
   messagePartsText,
   messagePartsToolCallParts,

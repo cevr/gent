@@ -55,7 +55,11 @@ const reparentEphemeralChildEvent = (
 ): AgentEvent => {
   switch (event._tag) {
     case "StreamStarted":
-      return StreamStarted.make({ sessionId: parentSessionId, branchId: parentBranchId })
+      return StreamStarted.make({
+        ...event,
+        sessionId: parentSessionId,
+        branchId: parentBranchId,
+      })
     case "StreamEnded":
       return StreamEnded.make({
         sessionId: parentSessionId,

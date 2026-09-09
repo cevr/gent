@@ -3,7 +3,7 @@ import { Context, Effect, Fiber, Layer, Option, Predicate, Ref, Schema } from "e
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { textStep, toolCallStep } from "../../src/debug/provider"
-import { dateFromMillis, Message } from "../../src/domain/message"
+import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../src/domain/message"
 import {
   DynamicExtensionRegistry,
   type DynamicExtensionRegistryService,
@@ -12,10 +12,7 @@ import { tool } from "@gent/core/extensions/api"
 import { TurnCompleted, type AgentEvent } from "../../src/domain/event"
 import { MessageStorage } from "../../src/storage/message-storage"
 import { BranchId, ExtensionId, MessageId, SessionId } from "../../src/domain/ids"
-import {
-  assistantMessageIdForTurn,
-  toolResultMessageIdForTurn,
-} from "../../src/runtime/agent/agent-loop.utils"
+import { toolResultMessageIdForTurn } from "../../src/runtime/agent/agent-loop.utils"
 import {
   makeAgentLoopService,
   makeLayer,

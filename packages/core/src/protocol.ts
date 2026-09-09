@@ -27,6 +27,7 @@ export {
   ProjectedMessage,
   Session,
   ToolInteraction,
+  assistantMessageIdForTurn,
   dateFromMillis,
   projectMessage,
 } from "./domain/message.js"

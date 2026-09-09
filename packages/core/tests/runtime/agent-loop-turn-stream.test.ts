@@ -4,11 +4,9 @@ import { finishPart, reasoningDeltaPart, textDeltaPart } from "../../src/test-ut
 import type { AgentEvent } from "../../src/domain/event"
 import { AgentName } from "../../src/domain/agent"
 import { BranchId, SessionId } from "../../src/domain/ids"
+import { assistantMessageIdForTurn } from "../../src/domain/message"
 import { MessageStorage } from "../../src/storage/message-storage"
-import {
-  assistantDraftFromMessage,
-  assistantMessageIdForTurn,
-} from "../../src/runtime/agent/agent-loop.utils"
+import { assistantDraftFromMessage } from "../../src/runtime/agent/agent-loop.utils"
 import {
   makeAgentLoopService,
   makeExternalLayerWithEvents,

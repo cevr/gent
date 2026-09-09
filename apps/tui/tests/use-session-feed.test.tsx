@@ -3,6 +3,9 @@ import { createRoot, createSignal } from "solid-js"
 import { Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
+  assistantMessageIdForTurn,
+  projectMessage,
+  ToolInteraction,
   AgentName,
   AgentEvent,
   EventEnvelope,
@@ -590,6 +593,168 @@ describe("useSessionFeed", () => {
       })
     }),
   )
+
+  for (const saved of [false, true]) {
+    it.live(`keeps answers and tools with their owning message (saved: ${saved})`, () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-feed-compaction-live")
+        const branchId = BranchId.make("branch-feed-compaction-live")
+        const inputId = MessageId.make("first-input")
+        const nextInputId = MessageId.make("follow-up-input")
+        const toolCallId = ToolCallId.make("first-stream-tool")
+        const events = [
+          AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 1 }),
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "First " }),
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "answer" }),
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId,
+            toolName: "cell",
+            input: {},
+          }),
+          AgentEvent.cases.StreamEnded.make({ sessionId, branchId }),
+          AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 2 }),
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "Next step" }),
+          AgentEvent.cases.ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId,
+            toolName: "cell",
+            summary: "done",
+            output: "result",
+          }),
+          AgentEvent.cases.TurnCompleted.make({
+            sessionId,
+            branchId,
+            messageId: inputId,
+            durationMs: 0,
+          }),
+          AgentEvent.cases.StreamStarted.make({
+            sessionId,
+            branchId,
+            messageId: nextInputId,
+            step: 1,
+          }),
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "Follow-up " }),
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "answer" }),
+          AgentEvent.cases.TurnCompleted.make({
+            sessionId,
+            branchId,
+            messageId: nextInputId,
+            durationMs: 0,
+          }),
+        ]
+        let snapshot = snapshotFor(sessionId, branchId)
+        if (saved) {
+          const messages = [
+            { id: assistantMessageIdForTurn(inputId, 1), text: "First answer" },
+            { id: assistantMessageIdForTurn(inputId, 2), text: "Next step" },
+            { id: assistantMessageIdForTurn(nextInputId, 1), text: "Follow-up answer" },
+          ].map(({ id, text }, index) => {
+            const calls: ToolInteraction[] = []
+            if (index === 0)
+              calls.push(
+                new ToolInteraction({
+                  id: toolCallId,
+                  toolName: "cell",
+                  status: "completed",
+                  input: {},
+                  summary: "done",
+                  output: "result",
+                }),
+              )
+            return projectMessage(
+              Message.cases.regular.make({
+                id,
+                sessionId,
+                branchId,
+                role: "assistant",
+                parts: [Prompt.textPart({ text })],
+                createdAt: dateFromMillis(index),
+              }),
+              calls,
+            )
+          })
+          snapshot = { ...snapshot, lastEventId: events.length, messages }
+        }
+        let applied = 0
+        let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+        const dispose = createRoot((disposeRoot) => {
+          const [active] = createSignal(makeSession(sessionId, branchId))
+          const client = {
+            session: active,
+            client: createMockClient({
+              session: {
+                getSnapshot: () => Effect.succeed(snapshot),
+                events: () =>
+                  Stream.concat(
+                    Stream.make(...events.map((event, index) => makeEnvelope(index + 1, event))),
+                    Stream.never,
+                  ),
+                watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+              },
+            }),
+            runtime: createMockRuntime(),
+            log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+            setConnectionIssue: () => {},
+            waitForTransportReady: Effect.void,
+            applySessionRuntime: () => {},
+            applySessionSnapshot: () => {},
+            applySessionEvent: () => {
+              applied += 1
+            },
+            applyBufferedSessionEvent: () => {
+              applied += 1
+            },
+          } satisfies FeedClient
+          feed = Option.some(
+            useSessionFeed(
+              () => sessionId,
+              () => branchId,
+              client,
+              client.runtime.cast,
+              {
+                onInteraction: () => {},
+                onInteractionDismissed: () => {},
+                onBranchSwitch: () => {},
+                onQueueSnapshot: () => {},
+              },
+            ),
+          )
+          return disposeRoot
+        })
+
+        yield* waitFor(
+          () =>
+            applied === events.length &&
+            Option.isSome(feed) &&
+            feed.value.messages().some((message) => message.content.includes("Follow-up answer")),
+        ).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              if (Option.isNone(feed)) return
+              const messages = feed.value.messages()
+              expect(messages.map((message) => message.content)).toEqual([
+                "First answer",
+                "Next step",
+                "Follow-up answer",
+              ])
+              expect(messages.map((message) => message.id)).toEqual([
+                assistantMessageIdForTurn(inputId, 1),
+                assistantMessageIdForTurn(inputId, 2),
+                assistantMessageIdForTurn(nextInputId, 1),
+              ])
+              expect(messages[0]?.toolCalls?.[0]?.status).toBe("completed")
+              expect(messages[1]?.toolCalls).toBeUndefined()
+              expect(messages[2]?.toolCalls).toBeUndefined()
+            }),
+          ),
+          Effect.ensuring(Effect.sync(dispose)),
+        )
+      }),
+    )
+  }
 
   it.live("shows a live compaction message as soon as its event arrives", () =>
     Effect.gen(function* () {

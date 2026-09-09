@@ -484,3 +484,49 @@ Evidence:
 - `/tmp/gent-user-border-window-preview.txt`
 - `/tmp/gent-user-border-window-full.txt`
 - `/tmp/gent-core-reduction-current.json`
+
+## Session feed response ownership (2026-09-09)
+
+The live feed appended all response chunks to its last assistant row. A context-window follow-up therefore rendered `WINDOW-CHECK-OKWINDOW-CHECK-OK` as one answer. Each model stream now uses the shared durable answer-ID rule from its input message and step. Historical events without identity receive one local ID per stream. Completion and branch reset clear the active target.
+
+Tool start events use the owning assistant ID or parent call ID. Tool results locate their call across message rows. Ephemeral child stream starts preserve their input-message and step identity. This keeps child activity from redirecting a parent result to the last row.
+
+The answer-ID function moved from loop utilities to the message domain. The supported protocol adds one named export. No new package entry, production file, or service was added. Three function lines moved; they were not deleted. Production line changes for this unit: {"packages/core": 4, "packages/extensions": 0, "packages/sdk": 0, "apps/tui": 35, "apps/server": 0}.
+
+Validation:
+
+- Full `bun run gate` passed after all source and test edits.
+- Focused feed tests plus the real RPC/render integration: 13 passed, 54 assertions.
+- Live Luna through Herdr: `context.status()` and `context.newWindow()` produced the status output and marker. The later automatic response reproduced the two-response case. Both `FEED-WINDOW-OK` answers remained separate, with 8-second and 2-second completion rows. Collapsed, preview, full, and return views retained the output.
+- Live cell delegation read the fixture through a child. The parent cell, nested operation, and child completed. Expanded output contained `CHILD-FEED-OK`; the parent rendered `PARENT-FEED-OK`.
+- Added tests compare the live event path with a completed snapshot plus buffered replay. They assert response identities, separate contents, and late tool ownership. Existing legacy-ID and nested-operation tests pass. These tests do not prove mid-stream reconnect hydration; that path still needs an explicit audit before one-shot completion work.
+
+Evidence:
+
+- `/tmp/gent-feed-identity-gate.log`
+- `/tmp/gent-feed-identity-integration.log`
+- `/tmp/gent-feed-identity-herdr-collapsed.txt`
+- `/tmp/gent-feed-identity-herdr-preview.txt`
+- `/tmp/gent-feed-identity-herdr-full.txt`
+- `/tmp/gent-feed-identity-herdr-return.txt`
+- `/tmp/gent-feed-identity-herdr-followup.txt`
+- `/tmp/gent-feed-identity-herdr-child-preview.txt`
+- `/tmp/gent-feed-identity-herdr-child-full.txt`
+
+Source receipts:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/ARCHITECTURE.md`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/hooks/use-session-feed.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/use-session-feed.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/domain/message.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/protocol.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/agent/agent-loop.turn-execution.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/agent/agent-loop.utils.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/agent/agent-runner.ephemeral.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop-continuation.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop-turn-stream.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop/cell-recovery.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop/external-turn.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop/interactions.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop/streaming.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop/tool-projection-reconciliation.test.ts`

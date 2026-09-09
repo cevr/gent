@@ -18,7 +18,7 @@ import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { TurnError } from "../../domain/driver.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
-import { Message } from "../../domain/message.js"
+import { Message, assistantMessageIdForTurn } from "../../domain/message.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { ConfigService } from "../config-service.js"
 import { GentPlatform } from "../gent-platform.js"
@@ -29,7 +29,6 @@ import { CellExecutionStorage } from "../../storage/cell-execution-storage.js"
 import { recoverCellExecution } from "../code-cell/cell-recovery.js"
 import {
   assistantDraftFromMessage,
-  assistantMessageIdForTurn,
   continuationMessageIdForTurn,
   toolResultMessageIdForTurn,
 } from "./agent-loop.utils.js"

@@ -4,16 +4,13 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { tool } from "@gent/core/extensions/api"
 import { LanguageModelLayers } from "../../../src/test-utils/language-model"
 import { textStep } from "../../../src/debug/provider"
-import { dateFromMillis, Message } from "../../../src/domain/message"
+import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../../src/domain/message"
 import { ToolCallStarted, type AgentEvent } from "../../../src/domain/event"
 import { EventStorage } from "../../../src/storage/event-storage"
 import { MessageStorage } from "../../../src/storage/message-storage"
 import { ensureStorageParents } from "../../../src/test-utils"
 import { BranchId, SessionId, ToolCallId } from "../../../src/domain/ids"
-import {
-  assistantMessageIdForTurn,
-  toolResultMessageIdForTurn,
-} from "../../../src/runtime/agent/agent-loop.utils"
+import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
 import { makeAgentLoopService, makeLayerWithEvents, makeMessage, runAgentLoop } from "./helpers"
 
 describe("tool projection reconciliation", () => {

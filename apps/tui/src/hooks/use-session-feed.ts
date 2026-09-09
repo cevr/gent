@@ -10,6 +10,7 @@ import { batch, createEffect, createMemo, createSignal, on, onCleanup } from "so
 import { createStore, produce, type SetStoreFunction } from "solid-js/store"
 import { Clock, Effect, Equal, Fiber, Option, Predicate, Schedule, Stream } from "effect"
 import {
+  assistantMessageIdForTurn,
   messagePartImage,
   messagePartReasoning,
   messagePartText,
@@ -294,7 +295,7 @@ const ensureAssistantMessage = (
 ) => {
   setStore(
     produce((draft) => {
-      const last = draft.messages[draft.messages.length - 1]
+      const last = draft.messages.find((message) => message.id === id)
       const lastMessage = Option.fromNullishOr(last)
       if (
         Option.isSome(lastMessage) &&
@@ -323,14 +324,15 @@ const ensureAssistantMessage = (
   )
 }
 
-const updateLatestToolCall = (
+const updateToolMessage = (
   setStore: SetStoreFunction<SessionFeedStore>,
   updater: (message: Message) => void,
+  matches: (message: Message) => boolean,
 ) => {
   setStore(
     produce((draft) => {
       const last = Option.fromNullishOr(
-        draft.messages.findLast((message) => !isStandaloneMessage(message)),
+        draft.messages.findLast((message) => !isStandaloneMessage(message) && matches(message)),
       )
       if (Option.isNone(last) || last.value.role !== "assistant") return
       updater(last.value)
@@ -390,25 +392,30 @@ const handleToolCallResult = (
   if (toolEvent._tag === "ToolCallFailed") status = "error"
 
   if (Predicate.isUndefined(toolEvent.parentToolCallId)) setActiveTool(Option.none())
-  updateLatestToolCall(setStore, (message) => {
-    applyToolCallResult(
-      locateToolCall(Option.fromNullishOr(message.toolCalls), toolEvent.toolCallId),
-      status,
-      toolEvent,
-    )
-    // Also update the segment's toolCall
-    const segments = Option.fromNullishOr(message.segments)
-    if (Option.isNone(segments)) return
-    const segmentCalls = segments.value.flatMap((segment) => {
-      if (segment._tag === "tool-call") return [segment.toolCall]
-      return []
-    })
-    applyToolCallResult(
-      locateToolCall(Option.some(segmentCalls), toolEvent.toolCallId),
-      status,
-      toolEvent,
-    )
-  })
+  updateToolMessage(
+    setStore,
+    (message) => {
+      applyToolCallResult(
+        locateToolCall(Option.fromNullishOr(message.toolCalls), toolEvent.toolCallId),
+        status,
+        toolEvent,
+      )
+      // Also update the segment's toolCall
+      const segments = Option.fromNullishOr(message.segments)
+      if (Option.isNone(segments)) return
+      const segmentCalls = segments.value.flatMap((segment) => {
+        if (segment._tag === "tool-call") return [segment.toolCall]
+        return []
+      })
+      applyToolCallResult(
+        locateToolCall(Option.some(segmentCalls), toolEvent.toolCallId),
+        status,
+        toolEvent,
+      )
+    },
+    (message) =>
+      Option.isSome(locateToolCall(Option.fromNullishOr(message.toolCalls), toolEvent.toolCallId)),
+  )
 }
 
 const toActiveInteraction = (event: AgentEvent): Option.Option<ActiveInteraction> => {
@@ -439,6 +446,7 @@ export function useSessionFeed(
   const [turnCount, setTurnCount] = createSignal(0)
   const [activeTool, setActiveTool] = createSignal<Option.Option<string>>(Option.none())
   const [streamReadyKey, setStreamReadyKey] = createSignal<Option.Option<string>>(Option.none())
+  let streamMessageId = Option.none<string>()
   let eventSeq = 0
   const lastSeenEventIdByKey = new Map<string, number>()
   let processedEnvelopeIds = new Set<EventEnvelope["id"]>()
@@ -453,6 +461,7 @@ export function useSessionFeed(
     setTurnCount(0)
     setActiveTool(Option.none())
     setStreamReadyKey(Option.none())
+    streamMessageId = Option.none()
     eventSeq = 0
     processedEnvelopeIds = new Set()
   }
@@ -798,23 +807,36 @@ export function useSessionFeed(
           }
           break
 
-        case "StreamStarted":
+        case "StreamStarted": {
           resolveRetryingEvents(setStore)
           setTurnCount((n) => n + 1)
           setActiveTool(Option.none())
-          ensureAssistantMessage(setStore, "", yield* randomId, yield* Clock.currentTimeMillis)
-          break
-
-        case "StreamChunk":
-          ensureAssistantMessage(
-            setStore,
-            event.chunk,
-            yield* randomId,
-            yield* Clock.currentTimeMillis,
+          const id = yield* Option.fromUndefinedOr(event.messageId).pipe(
+            Option.match({
+              onNone: () => randomId,
+              onSome: (inputId) => Effect.succeed(assistantMessageIdForTurn(inputId, event.step)),
+            }),
           )
+          streamMessageId = Option.some(id)
+          ensureAssistantMessage(setStore, "", id, yield* Clock.currentTimeMillis)
+          break
+        }
+
+        case "StreamChunk": {
+          const id = yield* streamMessageId.pipe(
+            Option.match({ onNone: () => randomId, onSome: Effect.succeed }),
+          )
+          streamMessageId = Option.some(id)
+          ensureAssistantMessage(setStore, event.chunk, id, yield* Clock.currentTimeMillis)
+          break
+        }
+
+        case "StreamEnded":
+          streamMessageId = Option.none()
           break
 
         case "TurnCompleted": {
+          streamMessageId = Option.none()
           resolveRetryingEvents(setStore)
           const durationSeconds = Math.round(event.durationMs / 1000)
           const createdAt = yield* Clock.currentTimeMillis
@@ -843,45 +865,58 @@ export function useSessionFeed(
             output: Option.getOrUndefined(Option.none<string>()),
           } satisfies ToolCall
           const parentToolCallId = Option.fromUndefinedOr(event.parentToolCallId)
-          updateLatestToolCall(setStore, (message) => {
-            if (Option.isSome(parentToolCallId)) {
-              attachOperation(
-                Option.fromNullishOr(message.toolCalls),
-                parentToolCallId.value,
-                toolCall,
-              )
-              const segmentCalls = Option.fromNullishOr(message.segments).pipe(
-                Option.map((segments) =>
-                  segments.flatMap((segment) => {
-                    if (segment._tag === "tool-call") return [segment.toolCall]
-                    return []
-                  }),
-                ),
-              )
-              attachOperation(segmentCalls, parentToolCallId.value, { ...toolCall })
-              return
-            }
-            let toolCalls = Option.fromNullishOr(message.toolCalls)
-            // Cold interaction resume starts the same call again, not a new call.
-            if (
-              Option.isSome(toolCalls) &&
-              toolCalls.value.some((call) => call.id === event.toolCallId)
-            ) {
-              return
-            }
-            if (Option.isNone(toolCalls)) {
-              message.toolCalls = []
-              toolCalls = Option.fromNullishOr(message.toolCalls)
-            }
-            if (Option.isSome(toolCalls)) toolCalls.value.push(toolCall)
-            // Also push to segments for interleaved rendering
-            let segments = Option.fromNullishOr(message.segments)
-            if (Option.isNone(segments)) {
-              message.segments = []
-              segments = Option.fromNullishOr(message.segments)
-            }
-            if (Option.isSome(segments)) segments.value.push({ _tag: "tool-call", toolCall })
-          })
+          updateToolMessage(
+            setStore,
+            (message) => {
+              if (Option.isSome(parentToolCallId)) {
+                attachOperation(
+                  Option.fromNullishOr(message.toolCalls),
+                  parentToolCallId.value,
+                  toolCall,
+                )
+                const segmentCalls = Option.fromNullishOr(message.segments).pipe(
+                  Option.map((segments) =>
+                    segments.flatMap((segment) => {
+                      if (segment._tag === "tool-call") return [segment.toolCall]
+                      return []
+                    }),
+                  ),
+                )
+                attachOperation(segmentCalls, parentToolCallId.value, { ...toolCall })
+                return
+              }
+              let toolCalls = Option.fromNullishOr(message.toolCalls)
+              // Cold interaction resume starts the same call again, not a new call.
+              if (
+                Option.isSome(toolCalls) &&
+                toolCalls.value.some((call) => call.id === event.toolCallId)
+              ) {
+                return
+              }
+              if (Option.isNone(toolCalls)) {
+                message.toolCalls = []
+                toolCalls = Option.fromNullishOr(message.toolCalls)
+              }
+              if (Option.isSome(toolCalls)) toolCalls.value.push(toolCall)
+              // Also push to segments for interleaved rendering
+              let segments = Option.fromNullishOr(message.segments)
+              if (Option.isNone(segments)) {
+                message.segments = []
+                segments = Option.fromNullishOr(message.segments)
+              }
+              if (Option.isSome(segments)) segments.value.push({ _tag: "tool-call", toolCall })
+            },
+            (message) => {
+              if (Option.isSome(parentToolCallId)) {
+                return Option.isSome(
+                  locateToolCall(Option.fromNullishOr(message.toolCalls), parentToolCallId.value),
+                )
+              }
+              if (Predicate.isNotUndefined(event.assistantMessageId))
+                return message.id === event.assistantMessageId
+              return true
+            },
+          )
           break
         }
 

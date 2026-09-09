@@ -120,9 +120,6 @@ export const getSingleText = (message: Message): Option.Option<string> =>
 export const messageText = (message: Message): string =>
   messagePartsTextLines(message.parts).join("\n")
 
-export const assistantMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
-  MessageId.make(`${messageId}:assistant:${step}`)
-
 export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
   MessageId.make(`${messageId}:tool-result:${step}`)
 /** The durable instruction that follows a step whose stream failed after partial output. */

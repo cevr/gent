@@ -208,3 +208,6 @@ export const BranchTreeNode: Schema.Codec<BranchTreeNode, BranchTreeNodeEncoded>
     Schema.suspend((): Schema.Codec<BranchTreeNode, BranchTreeNodeEncoded> => BranchTreeNode),
   ),
 })
+
+export const assistantMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
+  MessageId.make(`${messageId}:assistant:${step}`)

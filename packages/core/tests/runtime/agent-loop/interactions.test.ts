@@ -23,7 +23,7 @@ import {
   toolCallPart,
   type LanguageModelStreamPart,
 } from "../../../src/test-utils/language-model"
-import { dateFromMillis, Message } from "../../../src/domain/message"
+import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../../src/domain/message"
 import { AgentName } from "../../../src/domain/agent"
 import { ExtensionContext, getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { Permission } from "../../../src/domain/permission"
@@ -67,10 +67,7 @@ import { ToolBindingReplayError } from "../../../src/runtime/agent/tool-binding-
 import { runAgentLoopTurnProfileOrLegacy } from "../../../src/runtime/agent/agent-loop.turn-profile"
 import { ExtensionRegistry } from "../../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
-import {
-  assistantMessageIdForTurn,
-  toolResultMessageIdForTurn,
-} from "../../../src/runtime/agent/agent-loop.utils"
+import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
 import { ModelResolver } from "../../../src/providers/model-resolver"
 import { MessageStorage } from "../../../src/storage/message-storage"
 import { EventStorage } from "../../../src/storage/event-storage"

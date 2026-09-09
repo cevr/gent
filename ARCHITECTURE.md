@@ -751,6 +751,8 @@ The old SDK worker supervisor and worker-http transport are deleted. E2E coverag
 
 TUI is a client over the shared contract, not a parallel app.
 
+The session feed uses the durable input-message and step identity for each assistant message. The protocol exports the shared answer-ID rule. Stream chunks update that message only. Tool events locate their owning message by call or assistant ID, including late child results. Historical streams without IDs receive one local ID per stream.
+
 The native transcript sends whole completed items to terminal scrollback when the live view overflows. An item stays entirely in scrollback or entirely in the live view; the TUI does not split it by row. The session feed retains the data for disclosure and resize replay. User messages use an OpenTUI heavy left border, so snapshot layout does not depend on a later height callback. Streaming still stays in the live view until the turn settles. Incremental one-shot output remains separate work.
 
 Production shape:

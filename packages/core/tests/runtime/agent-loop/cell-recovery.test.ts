@@ -31,7 +31,7 @@ import {
   type SessionId,
   type BranchId,
 } from "../../../src/domain/ids"
-import { Message, dateFromMillis } from "../../../src/domain/message"
+import { assistantMessageIdForTurn, Message, dateFromMillis } from "../../../src/domain/message"
 import { CellExecutionStorage } from "../../../src/storage/cell-execution-storage"
 import { MessageStorage } from "../../../src/storage/message-storage"
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
@@ -39,10 +39,7 @@ import { ToolCallBindingStorage } from "../../../src/storage/tool-call-binding-s
 import { SessionProfileCache } from "../../../src/runtime/session-profile"
 import { captureCurrentToolBinding } from "../../../src/runtime/agent/tool-binding-resolution"
 import { CurrentToolCall } from "../../../src/runtime/agent/current-tool-call"
-import {
-  assistantMessageIdForTurn,
-  toolResultMessageIdForTurn,
-} from "../../../src/runtime/agent/agent-loop.utils"
+import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
 import { createE2ELayer } from "../../../src/test-utils/e2e-layer"
 import { LanguageModelLayers } from "../../../src/test-utils/language-model"
 import { textStep } from "../../../src/debug/provider"

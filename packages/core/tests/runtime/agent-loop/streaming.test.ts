@@ -33,7 +33,7 @@ import { MessageStorage } from "../../../src/storage/message-storage"
 import { SequenceRecorder } from "../../../src/test-utils"
 import { emptyQueueSnapshot } from "../../../src/domain/queue"
 import { BranchId, MessageId, RequestId, SessionId } from "../../../src/domain/ids"
-import { assistantMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
+import { assistantMessageIdForTurn } from "../../../src/domain/message"
 import {
   makeAgentLoopService,
   makeExtRegistry,
