@@ -15,23 +15,23 @@ import {
   SubscriptionRef,
 } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
-import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
+import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import { ModelResolver } from "../../src/providers/model-resolver"
+import { textStep, toolCallStep } from "../../src/debug/provider"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-runner"
 import { ChildCompletionDelivery } from "../../src/runtime/agent/child-completion"
 import { makeDurableAgentRunRuntime } from "../../src/runtime/agent/agent-runner.durable"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
-import { messageSingleText } from "@gent/core-internal/domain/message-part-projection"
+import { waitFor } from "../../src/test-utils/fixtures"
+import { messageSingleText } from "../../src/domain/message-part-projection"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { makeEphemeralAgentRootLayerFactory } from "../../src/runtime/agent/ephemeral-root"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { emptyQueueSnapshot } from "@gent/core-internal/domain/queue"
-import { dateFromMillis, Session, Branch, Message } from "@gent/core-internal/domain/message"
+import { emptyQueueSnapshot } from "../../src/domain/queue"
+import { dateFromMillis, Session, Branch, Message } from "../../src/domain/message"
 import {
   AgentRunnerService,
   type AgentRunner,
@@ -41,7 +41,7 @@ import {
   AgentName,
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   makeRunSpec,
-} from "@gent/core-internal/domain/agent"
+} from "../../src/domain/agent"
 import { AllBuiltinAgents, builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import {
   BranchId,
@@ -50,8 +50,8 @@ import {
   RequestId,
   SessionId,
   ToolCallId,
-} from "@gent/core-internal/domain/ids"
-import { ModelId } from "@gent/core-internal/domain/model"
+} from "../../src/domain/ids"
+import { ModelId } from "../../src/domain/model"
 import {
   AgentEvent,
   EventStore,
@@ -60,15 +60,15 @@ import {
   ToolCallStarted,
   ToolCallSucceeded,
   TurnCompleted,
-} from "@gent/core-internal/domain/event"
-import { EventPublisher, EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
-import { makeStorageTransaction, SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage"
-import { SessionOperationStorage } from "@gent/core-internal/storage/session-operation-storage"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { EventStorage } from "@gent/core-internal/storage/event-storage"
-import { RelationshipStorage } from "@gent/core-internal/storage/relationship-storage"
+} from "../../src/domain/event"
+import { EventPublisher, EventPublisherLive } from "../../src/domain/event-publisher"
+import { makeStorageTransaction, SqliteStorage } from "../../src/storage/sqlite-storage"
+import { SessionStorage } from "../../src/storage/session-storage"
+import { SessionOperationStorage } from "../../src/storage/session-operation-storage"
+import { BranchStorage } from "../../src/storage/branch-storage"
+import { MessageStorage } from "../../src/storage/message-storage"
+import { EventStorage } from "../../src/storage/event-storage"
+import { RelationshipStorage } from "../../src/storage/relationship-storage"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { loadAgentRunSuccessData } from "../../src/runtime/agent/agent-runner.metadata"
@@ -80,17 +80,13 @@ import {
   request,
   tool,
 } from "@gent/core/extensions/api"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { CapabilityError } from "@gent/core-internal/domain/capability"
+import { createRpcHarness } from "../../src/test-utils/rpc-harness"
+import { CapabilityError } from "../../src/domain/capability"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
-import {
-  SequenceRecorder,
-  RecordingEventStore,
-  assertSequence,
-} from "@gent/core-internal/test-utils"
+import { SequenceRecorder, RecordingEventStore, assertSequence } from "../../src/test-utils"
 import { SessionCommands } from "../../src/server/session-commands"
 import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
-import { Permission } from "@gent/core-internal/domain/permission"
+import { Permission } from "../../src/domain/permission"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import {
   SessionRuntime,

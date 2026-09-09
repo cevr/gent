@@ -5,21 +5,15 @@ import {
   promptFromResponseParts,
   projectResponsePartsToMessageParts,
   responsePartsFromMessages,
-} from "@gent/core-internal/domain/message-part-projection"
+} from "../../src/domain/message-part-projection"
 import {
   boundToolResultForModel,
   maximumModelToolResultChars,
   toPrompt,
   toPromptMessages,
-} from "@gent/core-internal/providers/ai-transcript"
-import {
-  BranchId,
-  ExtensionId,
-  MessageId,
-  SessionId,
-  ToolCallId,
-} from "@gent/core-internal/domain/ids"
-import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
+} from "../../src/providers/ai-transcript"
+import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
+import { dateFromMillis, Message } from "../../src/domain/message"
 import * as Response from "effect/unstable/ai/Response"
 import { Schema } from "effect"
 

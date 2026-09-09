@@ -949,7 +949,7 @@ Use the smallest honest boundary:
 
 ### Test structure
 
-`packages/core/tests/` mirrors `packages/core/src/`:
+`packages/core/tests/` mirrors `packages/core/src/`. Implementation tests use relative imports into that source tree. They do not depend on the private core-internal package alias:
 
 ```text
 tests/

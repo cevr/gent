@@ -4,11 +4,11 @@ import {
   makeBunCellEvaluator,
   CellHost,
   CellWorkerEnvironment,
-} from "@gent/core-internal/runtime/code-cell/bun-evaluator-boundary"
+} from "../../src/runtime/code-cell/bun-evaluator-boundary"
 import {
   maximumCellDisplayLength,
   maximumCellSourceLength,
-} from "@gent/core-internal/runtime/code-cell/cell-protocol"
+} from "../../src/runtime/code-cell/cell-protocol"
 
 /** Cells share the test process realm, so each test clears its bindings at scope exit. */
 const makeKernel = (host: typeof CellHost.Service) =>

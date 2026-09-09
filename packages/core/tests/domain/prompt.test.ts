@@ -6,9 +6,9 @@ import {
   compileSystemPrompt,
   sectionPatternFor,
   withSectionMarkers,
-} from "@gent/core-internal/domain/prompt"
+} from "../../src/domain/prompt"
 import { buildTurnPrompt } from "../../src/runtime/agent/agent-loop.utils"
-import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
+import { AgentDefinition, AgentName } from "../../src/domain/agent"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 
 describe("system prompt composition", () => {

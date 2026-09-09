@@ -1,19 +1,14 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
-import {
-  AgentEvent,
-  EventId,
-  EventStore,
-  type EventEnvelope,
-} from "@gent/core-internal/domain/event"
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
-import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
-import { SESSION_NOTIFICATION_CAPACITY } from "@gent/core-internal/domain/session-pubsub-registry"
-import { EventStoreLive } from "@gent/core-internal/runtime/event-store-live"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { AgentEvent, EventId, EventStore, type EventEnvelope } from "../../src/domain/event"
+import { BranchId, SessionId } from "../../src/domain/ids"
+import { Branch, dateFromMillis, Session } from "../../src/domain/message"
+import { SESSION_NOTIFICATION_CAPACITY } from "../../src/domain/session-pubsub-registry"
+import { EventStoreLive } from "../../src/runtime/event-store-live"
+import { GentPlatform } from "../../src/runtime/gent-platform"
+import { BranchStorage } from "../../src/storage/branch-storage"
+import { SessionStorage } from "../../src/storage/session-storage"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
 
 const sessionId = SessionId.make("session-delivery")
 const branchId = BranchId.make("branch-delivery")

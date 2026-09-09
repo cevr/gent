@@ -1,5 +1,5 @@
 import { expect, it } from "effect-bun-test"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
+import { waitFor } from "../../../src/test-utils/fixtures"
 import { Effect, Fiber, Layer, Option, Predicate, Ref, Schema, Stream } from "effect"
 import { Gent } from "@gent/sdk"
 import {
@@ -7,22 +7,22 @@ import {
   AgentRunnerService,
   DEFAULT_AGENT_NAME,
   makeRunSpec,
-} from "@gent/core-internal/domain/agent"
+} from "../../../src/domain/agent"
 import { ControlChildAgent } from "../../../../extensions/src/delegate/child-agent-tools.js"
 import { DelegateTool } from "../../../../extensions/src/delegate/delegate-tool.js"
-import { makeDurableAgentRunRuntime } from "@gent/core-internal/runtime/agent/agent-runner.durable"
-import { CellToolOperationStorage } from "@gent/core-internal/storage/cell-tool-operation-storage"
-import { messageSingleText } from "@gent/core-internal/domain/message-part-projection"
+import { makeDurableAgentRunRuntime } from "../../../src/runtime/agent/agent-runner.durable"
+import { CellToolOperationStorage } from "../../../src/storage/cell-tool-operation-storage"
+import { messageSingleText } from "../../../src/domain/message-part-projection"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SqlClient } from "effect/unstable/sql"
-import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc"
+import { CurrentWorkspaceId, WorkspaceId } from "../../../src/server/workspace-rpc"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
-import { makeAmbientExtensionHostContextProvider } from "@gent/core-internal/runtime/make-extension-host-context"
-import { makeCellToolHost } from "@gent/core-internal/runtime/code-cell/cell-tool-host"
-import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger"
-import { CellResponse } from "@gent/core-internal/runtime/code-cell/cell-protocol"
-import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage"
-import { LoadedArtifactIdentity, type LoadedExtension } from "@gent/core-internal/domain/extension"
+import { makeAmbientExtensionHostContextProvider } from "../../../src/runtime/make-extension-host-context"
+import { makeCellToolHost } from "../../../src/runtime/code-cell/cell-tool-host"
+import { ModelContextLedger } from "../../../src/runtime/model-context-ledger"
+import { CellResponse } from "../../../src/runtime/code-cell/cell-protocol"
+import { InteractionStorage } from "../../../src/storage/interaction-storage"
+import { LoadedArtifactIdentity, type LoadedExtension } from "../../../src/domain/extension"
 import {
   ExtensionId,
   MessageId,
@@ -30,22 +30,22 @@ import {
   ToolCallId,
   type SessionId,
   type BranchId,
-} from "@gent/core-internal/domain/ids"
-import { Message, dateFromMillis } from "@gent/core-internal/domain/message"
-import { CellExecutionStorage } from "@gent/core-internal/storage/cell-execution-storage"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { AgentLoopQueueStorage } from "@gent/core-internal/storage/agent-loop-queue-storage"
-import { ToolCallBindingStorage } from "@gent/core-internal/storage/tool-call-binding-storage"
-import { SessionProfileCache } from "@gent/core-internal/runtime/session-profile"
-import { captureCurrentToolBinding } from "@gent/core-internal/runtime/agent/tool-binding-resolution"
-import { CurrentToolCall } from "@gent/core-internal/runtime/agent/current-tool-call"
+} from "../../../src/domain/ids"
+import { Message, dateFromMillis } from "../../../src/domain/message"
+import { CellExecutionStorage } from "../../../src/storage/cell-execution-storage"
+import { MessageStorage } from "../../../src/storage/message-storage"
+import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
+import { ToolCallBindingStorage } from "../../../src/storage/tool-call-binding-storage"
+import { SessionProfileCache } from "../../../src/runtime/session-profile"
+import { captureCurrentToolBinding } from "../../../src/runtime/agent/tool-binding-resolution"
+import { CurrentToolCall } from "../../../src/runtime/agent/current-tool-call"
 import {
   assistantMessageIdForTurn,
   toolResultMessageIdForTurn,
-} from "@gent/core-internal/runtime/agent/agent-loop.utils"
-import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { textStep } from "@gent/core-internal/debug/provider"
+} from "../../../src/runtime/agent/agent-loop.utils"
+import { createE2ELayer } from "../../../src/test-utils/e2e-layer"
+import { LanguageModelLayers } from "../../../src/test-utils/language-model"
+import { textStep } from "../../../src/debug/provider"
 
 const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
   outer: Option.Option<Message["parts"][number]>,

@@ -14,17 +14,17 @@ import * as Response from "effect/unstable/ai/Response"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import { finishPart } from "@gent/core-internal/test-utils/language-model"
+import { finishPart } from "../../src/test-utils/language-model"
 import type {
   ExternalDriverContribution,
   ModelDriverContribution,
   ProviderAuthInfo,
   ProviderResolution,
   TurnExecutor,
-} from "@gent/core-internal/domain/driver"
-import type { ExtensionContributions } from "@gent/core-internal/domain/contribution"
-import { Model, ModelId, ProviderId } from "@gent/core-internal/domain/model"
-import { ExtensionId } from "@gent/core-internal/domain/ids"
+} from "../../src/domain/driver"
+import type { ExtensionContributions } from "../../src/domain/contribution"
+import { Model, ModelId, ProviderId } from "../../src/domain/model"
+import { ExtensionId } from "../../src/domain/ids"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 const noopInvalidate = Effect.void
 const stubResolution = (): Effect.Effect<ProviderResolution> =>

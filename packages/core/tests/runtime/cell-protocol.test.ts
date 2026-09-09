@@ -11,7 +11,7 @@ import {
   maximumCellFrameBytes,
   cellOutputBoundary,
   makeCellOutputScanner,
-} from "@gent/core-internal/runtime/code-cell/cell-protocol"
+} from "../../src/runtime/code-cell/cell-protocol"
 
 describe("cell process protocol", () => {
   it.live("preserves a Unicode request split across pipe reads", () =>

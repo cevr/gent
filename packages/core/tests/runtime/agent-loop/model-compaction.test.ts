@@ -1,15 +1,15 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option, Predicate, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
-import { Message, dateFromMillis } from "@gent/core-internal/domain/message"
+import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
+import { Message, dateFromMillis } from "../../../src/domain/message"
 import {
   LanguageModelLayers,
   finishPart,
   textDeltaPart,
-} from "@gent/core-internal/test-utils/language-model"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { ensureStorageParents } from "@gent/core-internal/test-utils"
+} from "../../../src/test-utils/language-model"
+import { MessageStorage } from "../../../src/storage/message-storage"
+import { ensureStorageParents } from "../../../src/test-utils"
 import { ModelCompactionDetails } from "../../../src/runtime/model-compaction"
 import { makeAgentLoopService, makeLayer, makeMessage, runAgentLoop } from "./helpers"
 

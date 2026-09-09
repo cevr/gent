@@ -12,19 +12,19 @@ import {
   Scope,
   Stream,
 } from "effect"
-import { LoadedArtifactIdentity } from "@gent/core-internal/domain/extension"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
-import { SessionProfileCache } from "@gent/core-internal/runtime/session-profile"
-import { ConfigService } from "@gent/core-internal/runtime/config-service"
-import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
-import { ProcessRunnerLive } from "@gent/core-internal/utils/run-process"
-import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
-import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { LoadedArtifactIdentity } from "../../src/domain/extension"
+import { createRpcHarness } from "../../src/test-utils/rpc-harness"
+import { waitFor } from "../../src/test-utils/fixtures"
+import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import { textStep, toolCallStep } from "../../src/debug/provider"
+import { SessionProfileCache } from "../../src/runtime/session-profile"
+import { ConfigService } from "../../src/runtime/config-service"
+import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
+import { ProcessRunnerLive } from "../../src/utils/run-process"
+import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
+import { GentPlatform } from "../../src/runtime/gent-platform"
+import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import {
   ExtensionContext,
   ExtensionHost,

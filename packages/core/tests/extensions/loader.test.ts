@@ -7,8 +7,8 @@ import { LoadedArtifactIdentity } from "../../src/domain/extension.js"
 import type { GentExtension } from "../../src/domain/extension.js"
 import { ExtensionHost } from "../../src/domain/extension-host.js"
 import { discoverExtensions, setupExtension } from "../../src/runtime/extensions/loader"
-import { ExtensionId } from "@gent/core-internal/domain/ids"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
+import { ExtensionId } from "../../src/domain/ids"
+import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { ProcessRunnerLive } from "../../src/utils/run-process"
 
 const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(

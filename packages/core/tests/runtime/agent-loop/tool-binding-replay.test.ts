@@ -1,8 +1,8 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Context, Effect, Exit, Layer, Option, Predicate, Schema, Scope } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { AgentName } from "@gent/core-internal/domain/agent"
-import { LoadedArtifactIdentity, type LoadedExtension } from "@gent/core-internal/domain/extension"
+import { AgentName } from "../../../src/domain/agent"
+import { LoadedArtifactIdentity, type LoadedExtension } from "../../../src/domain/extension"
 import {
   BranchId,
   ExtensionId,
@@ -10,17 +10,17 @@ import {
   SessionId,
   ToolCallId,
   ToolId,
-} from "@gent/core-internal/domain/ids"
-import { Message, dateFromMillis } from "@gent/core-internal/domain/message"
+} from "../../../src/domain/ids"
+import { Message, dateFromMillis } from "../../../src/domain/message"
 import {
   makeToolBindingIdentity,
   ToolBindingSource,
   ToolSchemaRevision,
   ToolSourceRevision,
-} from "@gent/core-internal/domain/tool-binding"
-import { ResourceId, ResourceRevision } from "@gent/core-internal/domain/resource-graph"
-import { MessageReceived, ToolCallSucceeded } from "@gent/core-internal/domain/event"
-import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
+} from "../../../src/domain/tool-binding"
+import { ResourceId, ResourceRevision } from "../../../src/domain/resource-graph"
+import { MessageReceived, ToolCallSucceeded } from "../../../src/domain/event"
+import { EventPublisher } from "../../../src/domain/event-publisher"
 import {
   ExtensionContext,
   ExtensionHost,
@@ -29,10 +29,10 @@ import {
   tool,
   type ToolCapability,
 } from "@gent/core/extensions/api"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { makeStorageTransaction, SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
-import { ToolCallBindingStorage } from "@gent/core-internal/storage/tool-call-binding-storage"
-import { ensureStorageParents } from "@gent/core-internal/test-utils"
+import { MessageStorage } from "../../../src/storage/message-storage"
+import { makeStorageTransaction, SqliteStorage } from "../../../src/storage/sqlite-storage"
+import { ToolCallBindingStorage } from "../../../src/storage/tool-call-binding-storage"
+import { ensureStorageParents } from "../../../src/test-utils"
 import {
   attachToolBindingIdentity,
   bindingMismatchReason,
@@ -50,8 +50,8 @@ import {
   ProcessLocalToolReplay,
   processLocalReplayBindingKey,
 } from "../../../src/runtime/agent/process-local-tool-replay"
-import { ResourceGenerationId } from "@gent/core-internal/domain/resource-generation"
-import { EventStorage } from "@gent/core-internal/storage/event-storage"
+import { ResourceGenerationId } from "../../../src/domain/resource-generation"
+import { EventStorage } from "../../../src/storage/event-storage"
 import { encodeToolOutput } from "../../../src/domain/tool-output"
 import {
   captureCurrentToolBinding,

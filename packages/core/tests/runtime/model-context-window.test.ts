@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { Option, Result } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
-import { Message, dateFromMillis } from "@gent/core-internal/domain/message"
+import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
+import { Message, dateFromMillis } from "../../src/domain/message"
 import {
   latestUserMessageId,
   messagesInCurrentWindow,

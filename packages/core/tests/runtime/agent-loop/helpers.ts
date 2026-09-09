@@ -16,7 +16,7 @@ import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loo
 import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
-import type { DynamicExtensionRegistry } from "@gent/core-internal/domain/dynamic-extension-registry"
+import type { DynamicExtensionRegistry } from "../../../src/domain/dynamic-extension-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
@@ -27,40 +27,35 @@ import {
   AgentName,
   ExternalDriverRef,
   type RunSpec,
-} from "@gent/core-internal/domain/agent"
+} from "../../../src/domain/agent"
 import {
   finishPart,
   LanguageModelLayers,
   type LanguageModelStreamPart,
-} from "@gent/core-internal/test-utils/language-model"
-import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
-import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
-import { ModelId } from "@gent/core-internal/domain/model"
+} from "../../../src/test-utils/language-model"
+import { ModelResolver } from "../../../src/providers/model-resolver"
+import { dateFromMillis, Message } from "../../../src/domain/message"
+import { ModelId } from "../../../src/domain/model"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents.js"
 import { type AnyResourceContribution, type ToolCapability } from "@gent/core/extensions/api"
-import { Permission } from "@gent/core-internal/domain/permission"
-import {
-  EventEnvelope,
-  EventId,
-  EventStore,
-  type AgentEvent,
-} from "@gent/core-internal/domain/event"
+import { Permission } from "../../../src/domain/permission"
+import { EventEnvelope, EventId, EventStore, type AgentEvent } from "../../../src/domain/event"
 import { ApprovalService } from "../../../src/runtime/approval-service"
-import type { EventPublisher } from "@gent/core-internal/domain/event-publisher"
-import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
-import { SqliteStorage, type StorageError } from "@gent/core-internal/storage/sqlite-storage"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage"
+import type { EventPublisher } from "../../../src/domain/event-publisher"
+import { EventPublisherLive } from "../../../src/domain/event-publisher"
+import { SqliteStorage, type StorageError } from "../../../src/storage/sqlite-storage"
+import { BranchStorage } from "../../../src/storage/branch-storage"
+import { SessionStorage } from "../../../src/storage/session-storage"
 import {
   RecordingEventStore,
   SequenceRecorder,
   ensureStorageParents,
-} from "@gent/core-internal/test-utils"
-import type { QueueSnapshot } from "@gent/core-internal/domain/queue"
-import type { BranchId, InteractionRequestId, SessionId } from "@gent/core-internal/domain/ids"
-import { ActorCommandId, ExtensionId, MessageId } from "@gent/core-internal/domain/ids"
-import type { TurnStreamPart } from "@gent/core-internal/domain/driver"
-import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
+} from "../../../src/test-utils"
+import type { QueueSnapshot } from "../../../src/domain/queue"
+import type { BranchId, InteractionRequestId, SessionId } from "../../../src/domain/ids"
+import { ActorCommandId, ExtensionId, MessageId } from "../../../src/domain/ids"
+import type { TurnStreamPart } from "../../../src/domain/driver"
+import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 // ============================================================================
 // Shared helpers
 // ============================================================================

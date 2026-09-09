@@ -2,22 +2,19 @@ import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, FileSystem, Layer, Path, Predicate, Schema, Stream } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
-import { messageSingleText } from "@gent/core-internal/domain/message-part-projection"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
+import { messageSingleText } from "../../src/domain/message-part-projection"
+import { GentPlatform } from "../../src/runtime/gent-platform"
+import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
+import { createRpcHarness } from "../../src/test-utils/rpc-harness"
 import {
   AgentDefinition,
   AgentName,
   defineExtension,
   ExtensionHost,
 } from "@gent/core/extensions/api"
-import {
-  LanguageModelLayers,
-  type SequenceStep,
-} from "@gent/core-internal/test-utils/language-model"
-import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
+import { LanguageModelLayers, type SequenceStep } from "../../src/test-utils/language-model"
+import { textStep, toolCallStep } from "../../src/debug/provider"
+import { waitFor } from "../../src/test-utils/fixtures"
 import { buildCellExecutable } from "../runtime/cell-worker-fixture.js"
 import { shippedPreset } from "../../../extensions/tests/helpers/test-preset.js"
 

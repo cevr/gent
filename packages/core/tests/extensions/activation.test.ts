@@ -1,4 +1,4 @@
-import { AgentName } from "@gent/core-internal/domain/agent"
+import { AgentName } from "../../src/domain/agent"
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Exit, FileSystem, Layer, Option, Path, Predicate, Schema } from "effect"
@@ -8,13 +8,13 @@ import type {
   GentExtension,
   LoadedExtension,
 } from "../../src/domain/extension.js"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
+import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import {
   setupBuiltinExtensions,
   setupDiscoveredExtensions,
   validateLoadedExtensions,
 } from "../../src/runtime/extensions/activation"
-import type { ExtensionContributions } from "@gent/core-internal/domain/contribution"
+import type { ExtensionContributions } from "../../src/domain/contribution"
 import {
   defineExtension,
   defineResource,
@@ -26,9 +26,9 @@ import { registerContributions } from "../../src/domain/extension-host.js"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
 import { CronRuntime } from "../../src/runtime/extensions/resource-host/schedule-engine"
-import { GentToolMetadataTag, getToolMetadata } from "@gent/core-internal/domain/capability/tool"
-import { ExtensionId } from "@gent/core-internal/domain/ids"
-import type { PromptSection } from "@gent/core-internal/domain/prompt"
+import { GentToolMetadataTag, getToolMetadata } from "../../src/domain/capability/tool"
+import { ExtensionId } from "../../src/domain/ids"
+import type { PromptSection } from "../../src/domain/prompt"
 import { ProcessRunnerLive } from "../../src/utils/run-process"
 
 const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(

@@ -22,34 +22,34 @@ import {
   textDeltaPart,
   toolCallPart,
   type LanguageModelStreamPart,
-} from "@gent/core-internal/test-utils/language-model"
-import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
-import { AgentName } from "@gent/core-internal/domain/agent"
+} from "../../../src/test-utils/language-model"
+import { dateFromMillis, Message } from "../../../src/domain/message"
+import { AgentName } from "../../../src/domain/agent"
 import { ExtensionContext, getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
-import { Permission } from "@gent/core-internal/domain/permission"
+import { Permission } from "../../../src/domain/permission"
 import {
   AgentEvent,
   EventStore,
   MessageReceived,
   ToolCallSucceeded,
-} from "@gent/core-internal/domain/event"
-import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
+} from "../../../src/domain/event"
+import { InteractionPendingError } from "../../../src/domain/interaction-request"
 import { ApprovalService } from "../../../src/runtime/approval-service"
-import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { EventPublisherLive } from "../../../src/domain/event-publisher"
+import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import {
   RecordingEventStore,
   SequenceRecorder,
   ensureStorageParents,
   testExtensionHostContext,
-} from "@gent/core-internal/test-utils"
+} from "../../../src/test-utils"
 import {
   BranchId,
   InteractionRequestId,
   MessageId,
   SessionId,
   ToolCallId,
-} from "@gent/core-internal/domain/ids"
+} from "../../../src/domain/ids"
 import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
@@ -71,10 +71,10 @@ import {
   assistantMessageIdForTurn,
   toolResultMessageIdForTurn,
 } from "../../../src/runtime/agent/agent-loop.utils"
-import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { EventStorage } from "@gent/core-internal/storage/event-storage"
-import { ToolCallBindingStorage } from "@gent/core-internal/storage/tool-call-binding-storage"
+import { ModelResolver } from "../../../src/providers/model-resolver"
+import { MessageStorage } from "../../../src/storage/message-storage"
+import { EventStorage } from "../../../src/storage/event-storage"
+import { ToolCallBindingStorage } from "../../../src/storage/tool-call-binding-storage"
 import { ToolResultReplayError } from "../../../src/runtime/agent/turn-persistence"
 import {
   makeAgentLoopService,

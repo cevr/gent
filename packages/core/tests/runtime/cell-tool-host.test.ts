@@ -15,7 +15,7 @@ import {
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
-import { LoadedArtifactIdentity, type LoadedExtension } from "@gent/core-internal/domain/extension"
+import { LoadedArtifactIdentity, type LoadedExtension } from "../../src/domain/extension"
 import {
   BranchId,
   ExtensionId,
@@ -23,28 +23,28 @@ import {
   MessageId,
   SessionId,
   ToolCallId,
-} from "@gent/core-internal/domain/ids"
-import { Message, dateFromMillis } from "@gent/core-internal/domain/message"
-import { makeAmbientExtensionHostContextProvider } from "@gent/core-internal/runtime/make-extension-host-context"
+} from "../../src/domain/ids"
+import { Message, dateFromMillis } from "../../src/domain/message"
+import { makeAmbientExtensionHostContextProvider } from "../../src/runtime/make-extension-host-context"
 import {
   makeCellToolHost,
   resumeCellToolOperation,
-} from "@gent/core-internal/runtime/code-cell/cell-tool-host"
-import { ApprovalService } from "@gent/core-internal/runtime/approval-service"
-import { recoverCellExecution } from "@gent/core-internal/runtime/code-cell/cell-recovery"
-import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger"
-import { CellResponse } from "@gent/core-internal/runtime/code-cell/cell-protocol"
-import { SessionProfileCache } from "@gent/core-internal/runtime/session-profile"
-import { CellExecutionStorage } from "@gent/core-internal/storage/cell-execution-storage"
-import { CellToolOperationStorage } from "@gent/core-internal/storage/cell-tool-operation-storage"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage"
-import { ensureStorageParents } from "@gent/core-internal/test-utils"
-import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { captureCurrentToolBinding } from "@gent/core-internal/runtime/agent/tool-binding-resolution"
-import { runAgentLoopTurnProfile } from "@gent/core-internal/runtime/agent/agent-loop.turn-profile"
-import type { ResolvedToolCapability } from "@gent/core-internal/runtime/agent/tool-runner"
+} from "../../src/runtime/code-cell/cell-tool-host"
+import { ApprovalService } from "../../src/runtime/approval-service"
+import { recoverCellExecution } from "../../src/runtime/code-cell/cell-recovery"
+import { ModelContextLedger } from "../../src/runtime/model-context-ledger"
+import { CellResponse } from "../../src/runtime/code-cell/cell-protocol"
+import { SessionProfileCache } from "../../src/runtime/session-profile"
+import { CellExecutionStorage } from "../../src/storage/cell-execution-storage"
+import { CellToolOperationStorage } from "../../src/storage/cell-tool-operation-storage"
+import { MessageStorage } from "../../src/storage/message-storage"
+import { InteractionStorage } from "../../src/storage/interaction-storage"
+import { ensureStorageParents } from "../../src/test-utils"
+import { createE2ELayer } from "../../src/test-utils/e2e-layer"
+import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import { captureCurrentToolBinding } from "../../src/runtime/agent/tool-binding-resolution"
+import { runAgentLoopTurnProfile } from "../../src/runtime/agent/agent-loop.turn-profile"
+import type { ResolvedToolCapability } from "../../src/runtime/agent/tool-runner"
 
 const cell = {
   sessionId: SessionId.make("recorded-host-session"),

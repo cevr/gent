@@ -1,7 +1,7 @@
 import { expect } from "effect-bun-test"
 import { Effect, FileSystem, Path } from "effect"
 import { ChildProcess } from "effect/unstable/process"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
+import { GentPlatform } from "../../src/runtime/gent-platform"
 
 export const buildCellWorker = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem

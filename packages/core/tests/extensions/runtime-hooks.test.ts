@@ -7,11 +7,11 @@ import type {
   TurnAfterInput,
 } from "../../src/domain/extension.js"
 import { hook } from "../../src/domain/extension.js"
-import { testExtensionHostContext } from "@gent/core-internal/test-utils"
-import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
+import { testExtensionHostContext } from "../../src/test-utils"
+import { BranchId, ExtensionId, SessionId } from "../../src/domain/ids"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
-import { AgentName } from "@gent/core-internal/domain/agent"
+import { AgentName } from "../../src/domain/agent"
 
 const stubCtx = testExtensionHostContext()
 

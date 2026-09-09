@@ -12,21 +12,21 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Ref, Stream, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { toolCallStep, textStep } from "@gent/core-internal/debug/provider"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
-import { ensureStorageParents } from "@gent/core-internal/test-utils"
+import { toolCallStep, textStep } from "../../src/debug/provider"
+import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import { createE2ELayer } from "../../src/test-utils/e2e-layer"
+import { ensureStorageParents } from "../../src/test-utils"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import {
   EventStore,
   ToolCallFailed,
   ToolCallSucceeded,
   type EventEnvelope,
-} from "@gent/core-internal/domain/event"
-import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
-import { DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
-import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
-import { Permission, PermissionRule } from "@gent/core-internal/domain/permission"
+} from "../../src/domain/event"
+import { dateFromMillis, Message } from "../../src/domain/message"
+import { DEFAULT_AGENT_NAME } from "../../src/domain/agent"
+import { BranchId, ExtensionId, MessageId, SessionId } from "../../src/domain/ids"
+import { Permission, PermissionRule } from "../../src/domain/permission"
 import { tool } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type { LoadedExtension } from "../../src/domain/extension.js"

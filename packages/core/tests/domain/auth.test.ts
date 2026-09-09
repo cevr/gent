@@ -1,4 +1,4 @@
-import { ProviderId } from "@gent/core-internal/domain/model"
+import { ProviderId } from "../../src/domain/model"
 /**
  * Locks the consolidated `domain/auth` module — `Auth` service +
  * `AuthGuard` service + the `Auth.Info` schema.

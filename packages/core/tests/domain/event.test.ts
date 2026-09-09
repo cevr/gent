@@ -12,9 +12,9 @@ import {
   SessionSettingsUpdated,
   StreamChunk,
   TurnCompleted,
-} from "@gent/core-internal/domain/event"
-import { AgentName } from "@gent/core-internal/domain/agent"
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+} from "../../src/domain/event"
+import { AgentName } from "../../src/domain/agent"
+import { BranchId, SessionId } from "../../src/domain/ids"
 
 const session = SessionId.make("session-1")
 const branch = BranchId.make("branch-1")

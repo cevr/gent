@@ -9,9 +9,9 @@
 
 import { describe, test, expect } from "bun:test"
 import { Predicate, Schema } from "effect"
-import { ToolCallId } from "@gent/core-internal/domain/ids"
-import { ModelId } from "@gent/core-internal/domain/model"
-import { RunSpecSchema } from "@gent/core-internal/domain/agent"
+import { ToolCallId } from "../../src/domain/ids"
+import { ModelId } from "../../src/domain/model"
+import { RunSpecSchema } from "../../src/domain/agent"
 
 // ── Tests ──
 

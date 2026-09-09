@@ -24,15 +24,11 @@ import {
   type GentExtension,
   type LoadedExtension,
 } from "../../src/domain/extension.js"
-import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
-import {
-  finishPart,
-  LanguageModelLayers,
-  textDeltaPart,
-} from "@gent/core-internal/test-utils/language-model"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
-import { messageSingleText } from "@gent/core-internal/domain/message-part-projection"
-import type { Message } from "@gent/core-internal/domain/message"
+import { textStep, toolCallStep } from "../../src/debug/provider"
+import { finishPart, LanguageModelLayers, textDeltaPart } from "../../src/test-utils/language-model"
+import { waitFor } from "../../src/test-utils/fixtures"
+import { messageSingleText } from "../../src/domain/message-part-projection"
+import type { Message } from "../../src/domain/message"
 import {
   ExtensionRegistry,
   listSlashCommands,
@@ -40,17 +36,17 @@ import {
 } from "../../src/runtime/extensions/registry"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { ApprovalService } from "../../src/runtime/approval-service"
-import { createToolTestLayer } from "@gent/core-internal/test-utils/extension-harness"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
-import { SlashCommandInfo } from "@gent/core-internal/server/transport-contract"
-import { ToolCallSucceeded } from "@gent/core-internal/domain/event"
+import { createToolTestLayer } from "../../src/test-utils/extension-harness"
+import { createRpcHarness } from "../../src/test-utils/rpc-harness"
+import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
+import { GentPlatform } from "../../src/runtime/gent-platform"
+import { SlashCommandInfo } from "../../src/server/transport-contract"
+import { ToolCallSucceeded } from "../../src/domain/event"
 import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-preset"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
 import { buildExtensionLayers } from "../../src/runtime/profile"
-import { defineResource } from "@gent/core-internal/domain/resource"
+import { defineResource } from "../../src/domain/resource"
 import type { PermissionService } from "../../src/domain/permission"
 import {
   CapabilityError,
@@ -61,8 +57,8 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import * as ExtensionApi from "@gent/core/extensions/api"
-import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
-import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc"
+import { BranchId, ExtensionId, SessionId } from "../../src/domain/ids"
+import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { ConfigService } from "../../src/runtime/config-service"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { ProcessRunnerLive } from "../../src/utils/run-process"

@@ -1,4 +1,4 @@
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { BranchId, SessionId } from "../../src/domain/ids"
 /** Profile behavior through the production live cache and child adapter. */
 import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, FileSystem, Layer, Path, Schema as S } from "effect"
@@ -11,9 +11,9 @@ import {
   defineResource,
   tool,
 } from "@gent/core/extensions/api"
-import { testExtensionHostContext } from "@gent/core-internal/test-utils"
+import { testExtensionHostContext } from "../../src/test-utils"
 import { ConfigService } from "../../src/runtime/config-service"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
+import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import {
   buildExtensionLayers,

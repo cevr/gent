@@ -2,9 +2,9 @@ import { describe, expect, it } from "effect-bun-test"
 import { Cause, Context, Effect, Exit, Layer, Option, Predicate, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { createHash } from "node:crypto"
-import { ExtensionId, RequestId } from "@gent/core-internal/domain/ids"
-import { LoadedArtifactIdentity } from "@gent/core-internal/domain/extension"
-import { ResourceId, ResourceRevision } from "@gent/core-internal/domain/resource-graph"
+import { ExtensionId, RequestId } from "../../src/domain/ids"
+import { LoadedArtifactIdentity } from "../../src/domain/extension"
+import { ResourceId, ResourceRevision } from "../../src/domain/resource-graph"
 import {
   CanonicalCwd,
   ResourceGraphDesiredCommand,
@@ -12,18 +12,18 @@ import {
   ResourceGraphRevision,
   ResourceGraphSnapshot,
   ResourceGraphSource,
-} from "@gent/core-internal/domain/resource-graph-state"
-import { ResourceGraphStorage } from "@gent/core-internal/storage/resource-graph-storage"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
-import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc"
+} from "../../src/domain/resource-graph-state"
+import { ResourceGraphStorage } from "../../src/storage/resource-graph-storage"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
+import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ResourceGraphCommandService } from "../../src/runtime/extensions/resource-host/resource-graph-command"
-import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/fixtures"
-import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
+import { makeTempDirectoryScoped, waitFor } from "../../src/test-utils/fixtures"
+import { createE2ELayer } from "../../src/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import { createRpcHarness } from "../../src/test-utils/rpc-harness"
+import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import {
   defineExtension,

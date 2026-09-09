@@ -1,15 +1,12 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Queue, Stream } from "effect"
-import {
-  CellWorkerTransport,
-  runCellWorker,
-} from "@gent/core-internal/runtime/code-cell/cell-worker"
-import { CellWorkerEnvironment } from "@gent/core-internal/runtime/code-cell/bun-evaluator-boundary"
+import { CellWorkerTransport, runCellWorker } from "../../src/runtime/code-cell/cell-worker"
+import { CellWorkerEnvironment } from "../../src/runtime/code-cell/bun-evaluator-boundary"
 import {
   CellProtocolError,
   CellRequest,
   type CellResponse,
-} from "@gent/core-internal/runtime/code-cell/cell-protocol"
+} from "../../src/runtime/code-cell/cell-protocol"
 
 const makeHarness = Effect.gen(function* () {
   const requests = yield* Queue.make<CellRequest>({ capacity: 64 })

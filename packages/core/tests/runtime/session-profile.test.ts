@@ -13,7 +13,7 @@ import {
   Schema,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
+import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import {
   ExtensionHost,
   defineExtension,

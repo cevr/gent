@@ -3,17 +3,13 @@ import { Cause, Effect, Exit, Layer, Option, Predicate, Schema, Stream } from "e
 import { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { Message, dateFromMillis } from "@gent/core-internal/domain/message"
-import { ModelId } from "@gent/core-internal/domain/model"
-import {
-  finishPart,
-  LanguageModelLayers,
-  textDeltaPart,
-} from "@gent/core-internal/test-utils/language-model"
-import { ensureStorageParents } from "@gent/core-internal/test-utils"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
+import { Message, dateFromMillis } from "../../src/domain/message"
+import { ModelId } from "../../src/domain/model"
+import { finishPart, LanguageModelLayers, textDeltaPart } from "../../src/test-utils/language-model"
+import { ensureStorageParents } from "../../src/test-utils"
+import { MessageStorage } from "../../src/storage/message-storage"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
   compactModelContext,

@@ -2,14 +2,14 @@ import { describe, expect, it } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Cause, Effect, Exit, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { Branch, dateFromMillis, Message, Session } from "@gent/core-internal/domain/message"
+import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
 import {
   ToolBindingSource,
   ToolCallBindingConflictError,
   ToolSchemaRevision,
   ToolSourceRevision,
   makeToolBindingIdentity,
-} from "@gent/core-internal/domain/tool-binding"
+} from "../../src/domain/tool-binding"
 import {
   BranchId,
   ExtensionId,
@@ -17,19 +17,15 @@ import {
   SessionId,
   ToolCallId,
   ToolId,
-} from "@gent/core-internal/domain/ids"
-import { ResourceId, ResourceRevision } from "@gent/core-internal/domain/resource-graph"
-import { StorageError } from "@gent/core-internal/domain/storage-error"
-import {
-  CurrentWorkspaceId,
-  DefaultWorkspaceId,
-  WorkspaceId,
-} from "@gent/core-internal/server/workspace-rpc"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
-import { ToolCallBindingStorage } from "@gent/core-internal/storage/tool-call-binding-storage"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage"
+} from "../../src/domain/ids"
+import { ResourceId, ResourceRevision } from "../../src/domain/resource-graph"
+import { StorageError } from "../../src/domain/storage-error"
+import { CurrentWorkspaceId, DefaultWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
+import { MessageStorage } from "../../src/storage/message-storage"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
+import { ToolCallBindingStorage } from "../../src/storage/tool-call-binding-storage"
+import { BranchStorage } from "../../src/storage/branch-storage"
+import { SessionStorage } from "../../src/storage/session-storage"
 
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 const WORKSPACE_A = WorkspaceId.make("a".repeat(64))

@@ -12,10 +12,10 @@ import { describe, expect, test } from "bun:test"
 import { Context, Effect, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import { defineRequests, getToolId, ref, request, tool } from "@gent/core/extensions/api"
-import { getToolMetadata, isToolCapability } from "@gent/core-internal/domain/capability/tool"
-import type { RpcId, ToolId } from "@gent/core-internal/domain/ids"
-import { ExtensionId } from "@gent/core-internal/domain/ids"
-import { PermissionRule } from "@gent/core-internal/domain/permission"
+import { getToolMetadata, isToolCapability } from "../../src/domain/capability/tool"
+import type { RpcId, ToolId } from "../../src/domain/ids"
+import { ExtensionId } from "../../src/domain/ids"
+import { PermissionRule } from "../../src/domain/permission"
 
 describe("ref(capability)", () => {
   test("factories brand emitted bucket ids while accepting author strings", () => {

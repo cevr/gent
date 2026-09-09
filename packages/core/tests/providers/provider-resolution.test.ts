@@ -2,23 +2,19 @@ import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Layer, Option, Predicate, Schema, Stream } from "effect"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import type { ModelDriverContribution, ProviderResolution } from "@gent/core-internal/domain/driver"
+import type { ModelDriverContribution, ProviderResolution } from "../../src/domain/driver"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import {
   DriverRegistry,
   type DriverRegistryService,
 } from "../../src/runtime/extensions/driver-registry"
-import { Auth, AuthError, type AuthInfo, type AuthService } from "@gent/core-internal/domain/auth"
-import {
-  finishPart,
-  LanguageModelLayers,
-  toolCallPart,
-} from "@gent/core-internal/test-utils/language-model"
-import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
+import { Auth, AuthError, type AuthInfo, type AuthService } from "../../src/domain/auth"
+import { finishPart, LanguageModelLayers, toolCallPart } from "../../src/test-utils/language-model"
+import { ModelResolver } from "../../src/providers/model-resolver"
 import { convertTools } from "../../src/runtime/agent/tool-runner"
-import { ProviderAuthError } from "@gent/core-internal/domain/driver"
-import { toPrompt } from "@gent/core-internal/providers/ai-transcript"
-import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
+import { ProviderAuthError } from "../../src/domain/driver"
+import { toPrompt } from "../../src/providers/ai-transcript"
+import { dateFromMillis, Message } from "../../src/domain/message"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -26,13 +22,7 @@ import * as AiTool from "effect/unstable/ai/Tool"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import type { ToolkitInput } from "effect/unstable/ai/LanguageModel"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import {
-  BranchId,
-  ExtensionId,
-  MessageId,
-  SessionId,
-  ToolCallId,
-} from "@gent/core-internal/domain/ids"
+import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { failingLanguageModel, makeLanguageModel } from "../helpers/failing-language-model"
 // oxlint-disable-next-line effect/noNullish -- AuthService uses undefined to represent missing credentials.
 const missingAuthInfo: AuthInfo | undefined = undefined

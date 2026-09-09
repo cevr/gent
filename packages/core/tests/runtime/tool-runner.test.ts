@@ -1,19 +1,19 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Predicate, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
+import { InteractionPendingError } from "../../src/domain/interaction-request"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { hook, tool, ExtensionContext } from "@gent/core/extensions/api"
 import { ToolRunner, type ResolvedToolCapability } from "../../src/runtime/agent/tool-runner"
 import { executeToolCalls } from "../../src/runtime/agent/turn-tool-execution"
 import { DynamicExtensionRegistry } from "../../src/domain/dynamic-extension-registry"
 import { ApprovalService } from "../../src/runtime/approval-service"
-import { Permission, PermissionRule } from "@gent/core-internal/domain/permission"
+import { Permission, PermissionRule } from "../../src/domain/permission"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import type { AgentEvent, ToolCallStarted } from "../../src/domain/event"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import { EventPublisher } from "../../src/domain/event-publisher"
+import { testToolContext } from "../../src/test-utils/extension-harness"
 import { provideCurrentHostCtx } from "../../src/runtime/agent/current-extension-host-context"
 import { provideCurrentCapabilityContext } from "../../src/runtime/extensions/extension-capability-context"
 import {
@@ -23,8 +23,8 @@ import {
   MessageId,
   SessionId,
   ToolCallId,
-} from "@gent/core-internal/domain/ids"
-import { AgentName } from "@gent/core-internal/domain/agent"
+} from "../../src/domain/ids"
+import { AgentName } from "../../src/domain/agent"
 
 class ToolProfileToken extends Context.Service<
   ToolProfileToken,

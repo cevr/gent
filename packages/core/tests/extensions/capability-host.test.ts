@@ -8,7 +8,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Predicate, Cause, Effect, Exit, type FileSystem, type Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import { CapabilityError, CapabilityNotFoundError } from "@gent/core-internal/domain/capability"
+import { CapabilityError, CapabilityNotFoundError } from "../../src/domain/capability"
 import {
   ExtensionContext,
   request,
@@ -18,8 +18,8 @@ import {
 } from "@gent/core/extensions/api"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { provideCurrentHostCtx } from "../../src/runtime/agent/current-extension-host-context"
-import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
-import { testExtensionHostContext } from "@gent/core-internal/test-utils"
+import { BranchId, ExtensionId, SessionId } from "../../src/domain/ids"
+import { testExtensionHostContext } from "../../src/test-utils"
 
 const extensionId = ExtensionId.make("@test/c")
 const ctx = testExtensionHostContext({

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage"
-import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
+import { BranchStorage } from "../../src/storage/branch-storage"
+import { SessionStorage } from "../../src/storage/session-storage"
+import { Branch, dateFromMillis, Session } from "../../src/domain/message"
+import { BranchId, SessionId } from "../../src/domain/ids"
 import { SqlClient } from "effect/unstable/sql"
 
 const FIXED_NOW_MILLIS = 1_767_225_600_000

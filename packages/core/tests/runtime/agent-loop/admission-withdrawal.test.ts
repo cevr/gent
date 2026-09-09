@@ -2,8 +2,8 @@ import { describe, expect, it } from "effect-bun-test"
 import { DateTime, Effect, Fiber, Option, Ref, Semaphore, TxQueue } from "effect"
 import type { ActiveStreamHandle } from "../../../src/runtime/agent/turn-response"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
-import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
+import { dateFromMillis, Message } from "../../../src/domain/message"
+import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import {
   buildIdleState,
   buildRunningState,

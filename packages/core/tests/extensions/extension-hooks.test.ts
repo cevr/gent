@@ -10,13 +10,13 @@ import type {
   TurnAfterInput,
 } from "../../src/domain/extension.js"
 import { hook } from "../../src/domain/extension.js"
-import type { ExtensionHostContext } from "@gent/core-internal/domain/extension-host-context"
-import { testExtensionHostContext } from "@gent/core-internal/test-utils"
-import { BranchId, ExtensionId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import type { ExtensionHostContext } from "../../src/domain/extension-host-context"
+import { testExtensionHostContext } from "../../src/test-utils"
+import { BranchId, ExtensionId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { provideCurrentCapabilityContext } from "../../src/runtime/extensions/extension-capability-context"
 import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
-import { AgentName } from "@gent/core-internal/domain/agent"
+import { AgentName } from "../../src/domain/agent"
 import { ExtensionContext } from "../../src/domain/extension-services.js"
 
 const stubHostCtx = testExtensionHostContext()

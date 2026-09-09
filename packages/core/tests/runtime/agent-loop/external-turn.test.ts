@@ -25,31 +25,31 @@ import { resolveExtensions, ExtensionRegistry } from "../../../src/runtime/exten
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
-import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
-import { finishPart, LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
+import { ModelResolver } from "../../../src/providers/model-resolver"
+import { finishPart, LanguageModelLayers } from "../../../src/test-utils/language-model"
+import { dateFromMillis, Message } from "../../../src/domain/message"
 import {
   messagePartsText,
   messagePartsToolCallParts,
   messagePartsToolResultParts,
-} from "@gent/core-internal/domain/message-part-projection"
+} from "../../../src/domain/message-part-projection"
 import {
   AgentDefinition,
   AgentName,
   ExternalDriverRef,
   type RunSpec,
-} from "@gent/core-internal/domain/agent"
-import type { TurnExecutor, TurnContext, TurnStreamPart } from "@gent/core-internal/domain/driver"
-import { ExternalToolRunner, TurnError } from "@gent/core-internal/domain/driver"
-import type { AgentEvent } from "@gent/core-internal/domain/event"
-import { EventEnvelope, EventId, EventStore } from "@gent/core-internal/domain/event"
-import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
-import { Permission } from "@gent/core-internal/domain/permission"
-import { SqliteStorage, type StorageError } from "@gent/core-internal/storage/sqlite-storage"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { ToolCallBindingStorage } from "@gent/core-internal/storage/tool-call-binding-storage"
-import type { BranchStorage } from "@gent/core-internal/storage/branch-storage"
-import type { SessionStorage } from "@gent/core-internal/storage/session-storage"
+} from "../../../src/domain/agent"
+import type { TurnExecutor, TurnContext, TurnStreamPart } from "../../../src/domain/driver"
+import { ExternalToolRunner, TurnError } from "../../../src/domain/driver"
+import type { AgentEvent } from "../../../src/domain/event"
+import { EventEnvelope, EventId, EventStore } from "../../../src/domain/event"
+import { EventPublisherLive } from "../../../src/domain/event-publisher"
+import { Permission } from "../../../src/domain/permission"
+import { SqliteStorage, type StorageError } from "../../../src/storage/sqlite-storage"
+import { MessageStorage } from "../../../src/storage/message-storage"
+import { ToolCallBindingStorage } from "../../../src/storage/tool-call-binding-storage"
+import type { BranchStorage } from "../../../src/storage/branch-storage"
+import type { SessionStorage } from "../../../src/storage/session-storage"
 import {
   BranchId,
   ActorCommandId,
@@ -57,16 +57,16 @@ import {
   MessageId,
   SessionId,
   ToolCallId,
-} from "@gent/core-internal/domain/ids"
+} from "../../../src/domain/ids"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents.js"
 import { ApprovalService } from "../../../src/runtime/approval-service"
-import { ensureStorageParents } from "@gent/core-internal/test-utils"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
+import { ensureStorageParents } from "../../../src/test-utils"
+import { waitFor } from "../../../src/test-utils/fixtures"
 import { ExtensionContext, getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
-import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
+import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 // ── Helpers ──
 const sessionId = SessionId.make("test-session")
 const branchId = BranchId.make("test-branch")

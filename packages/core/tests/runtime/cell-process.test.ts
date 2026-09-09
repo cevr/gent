@@ -12,18 +12,15 @@ import {
   Queue,
   Stream,
 } from "effect"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
-import { openCellProcess } from "@gent/core-internal/runtime/code-cell/cell-process"
-import {
-  CellOperationHost,
-  openCellKernel,
-} from "@gent/core-internal/runtime/code-cell/cell-kernel"
+import { GentPlatform } from "../../src/runtime/gent-platform"
+import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
+import { openCellProcess } from "../../src/runtime/code-cell/cell-process"
+import { CellOperationHost, openCellKernel } from "../../src/runtime/code-cell/cell-kernel"
 import {
   CellProtocolError,
   CellRequest,
   type CellResponse,
-} from "@gent/core-internal/runtime/code-cell/cell-protocol"
+} from "../../src/runtime/code-cell/cell-protocol"
 import { buildCellExecutable, buildCellWorker as buildWorker } from "./cell-worker-fixture.js"
 
 const platformLayer = Layer.merge(BunServices.layer, BunGentPlatformLive)

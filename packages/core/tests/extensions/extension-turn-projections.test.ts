@@ -16,11 +16,11 @@ import type {
   ProjectionTurnContext,
 } from "../../src/domain/extension.js"
 import { hook } from "../../src/domain/extension.js"
-import { BranchId, SessionId, ExtensionId } from "@gent/core-internal/domain/ids"
+import { BranchId, SessionId, ExtensionId } from "../../src/domain/ids"
 import { ProjectionError } from "@gent/core/extensions/api"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
-import { testExtensionHostContext } from "@gent/core-internal/test-utils"
+import { testExtensionHostContext } from "../../src/test-utils"
 
 const turnCtx: ExtensionTurnContext = {
   sessionId: SessionId.make("s"),

@@ -1,17 +1,11 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Predicate, Effect, Layer, Option } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
-import { SessionId, ExtensionId } from "@gent/core-internal/domain/ids"
-import {
-  Auth,
-  AuthError,
-  AuthMethod,
-  type AuthInfo,
-  type AuthService,
-} from "@gent/core-internal/domain/auth"
+import { SessionId, ExtensionId } from "../../src/domain/ids"
+import { Auth, AuthError, AuthMethod, type AuthInfo, type AuthService } from "../../src/domain/auth"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import type { ModelDriverContribution } from "@gent/core-internal/domain/driver"
-import { ProviderAuth } from "@gent/core-internal/providers/provider-auth"
+import type { ModelDriverContribution } from "../../src/domain/driver"
+import { ProviderAuth } from "../../src/providers/provider-auth"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"

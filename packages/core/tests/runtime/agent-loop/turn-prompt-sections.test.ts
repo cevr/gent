@@ -1,9 +1,9 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Schema } from "effect"
-import { AgentDefinition, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
-import { tool } from "@gent/core-internal/domain/capability/tool"
-import { buildTurnPromptSections } from "@gent/core-internal/runtime/agent/agent-loop.utils"
-import { CellTool } from "@gent/core-internal/runtime/code-cell/cell-tool"
+import { AgentDefinition, DEFAULT_AGENT_NAME } from "../../../src/domain/agent"
+import { tool } from "../../../src/domain/capability/tool"
+import { buildTurnPromptSections } from "../../../src/runtime/agent/agent-loop.utils"
+import { CellTool } from "../../../src/runtime/code-cell/cell-tool"
 
 const cell = tool({
   id: "cell",

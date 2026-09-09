@@ -17,9 +17,9 @@ import {
   responsePartToAssistantMessagePart,
   responsePartToToolResultPart,
   toolResultPartToResponsePart,
-} from "@gent/core-internal/domain/message-part-projection"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
+} from "../../src/domain/message-part-projection"
+import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
+import { dateFromMillis, Message } from "../../src/domain/message"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 

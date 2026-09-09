@@ -4,10 +4,10 @@ import { BunServices } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { hook } from "../../src/domain/extension.js"
-import { ExtensionId } from "@gent/core-internal/domain/ids"
+import { ExtensionId } from "../../src/domain/ids"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
-import { testExtensionHostContext } from "@gent/core-internal/test-utils"
+import { testExtensionHostContext } from "../../src/test-utils"
 
 const stubHostCtx = testExtensionHostContext()
 

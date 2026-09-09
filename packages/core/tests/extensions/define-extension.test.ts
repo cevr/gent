@@ -23,15 +23,15 @@ import {
 } from "@gent/core/extensions/api"
 import { ExtensionLoadError, type LoadedExtension } from "../../src/domain/extension"
 import { validateExtensionPackage } from "../../src/domain/extension-package-shape"
-import { GentToolMetadataTag, getToolMetadata } from "@gent/core-internal/domain/capability/tool"
+import { GentToolMetadataTag, getToolMetadata } from "../../src/domain/capability/tool"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
-import { PermissionRule } from "@gent/core-internal/domain/permission"
+import { PermissionRule } from "../../src/domain/permission"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
-import { ExtensionId } from "@gent/core-internal/domain/ids"
+import { ExtensionId } from "../../src/domain/ids"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
-import { collectTestContributions, testExtensionHostContext } from "@gent/core-internal/test-utils"
-import { DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
+import { collectTestContributions, testExtensionHostContext } from "../../src/test-utils"
+import { DEFAULT_AGENT_NAME } from "../../src/domain/agent"
 
 const stubHostCtx = testExtensionHostContext()
 

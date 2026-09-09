@@ -1,12 +1,12 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Schema } from "effect"
-import { finishPart, toolCallPart } from "@gent/core-internal/test-utils/language-model"
-import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
-import { DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
+import { finishPart, toolCallPart } from "../../src/test-utils/language-model"
+import { dateFromMillis, Branch, Session } from "../../src/domain/message"
+import { DEFAULT_AGENT_NAME } from "../../src/domain/agent"
 import { tool } from "@gent/core/extensions/api"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { BranchStorage } from "../../src/storage/branch-storage"
+import { SessionStorage } from "../../src/storage/session-storage"
+import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { makeAgentLoopService, makeLiveToolLayer, scriptedProvider } from "./agent-loop/helpers"
 
 describe("concurrency", () => {

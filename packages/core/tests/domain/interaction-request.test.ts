@@ -1,22 +1,22 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Clock, Effect, Layer, Schema } from "effect"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import {
   InteractionStorage,
   type InteractionStorageService,
-} from "@gent/core-internal/storage/interaction-storage"
-import { ensureStorageParents } from "@gent/core-internal/test-utils"
-import { EventStoreError } from "@gent/core-internal/domain/event"
+} from "../../src/storage/interaction-storage"
+import { ensureStorageParents } from "../../src/test-utils"
+import { EventStoreError } from "../../src/domain/event"
 import {
   makeInteractionService,
   InteractionPendingError,
   decodeInteractionParams,
   type InteractionRequestRecord,
   type InteractionStorageConfig,
-} from "@gent/core-internal/domain/interaction-request"
-import { BranchId, InteractionRequestId, SessionId } from "@gent/core-internal/domain/ids"
+} from "../../src/domain/interaction-request"
+import { BranchId, InteractionRequestId, SessionId } from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { CurrentWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
+import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
 
 const persistInteraction = (is: InteractionStorageService, record: InteractionRequestRecord) =>
   is.persist(record).pipe(

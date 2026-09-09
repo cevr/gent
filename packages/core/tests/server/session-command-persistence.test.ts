@@ -1,13 +1,13 @@
 import { describe, expect, it } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Cause, Effect, Logger, Option } from "effect"
-import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
-import { Branch, Message } from "@gent/core-internal/domain/message"
+import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
+import { Branch, Message } from "../../src/domain/message"
 import { SessionRuntimeError } from "../../src/runtime/session-runtime"
 import { SessionCommands } from "../../src/server/session-commands"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage"
+import { BranchStorage } from "../../src/storage/branch-storage"
+import { MessageStorage } from "../../src/storage/message-storage"
+import { SessionStorage } from "../../src/storage/session-storage"
 import { SessionMutations } from "../../src/domain/session-mutations"
 import {
   FIXED_NOW,

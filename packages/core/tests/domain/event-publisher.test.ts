@@ -7,10 +7,10 @@ import {
   EventStore,
   type EventStoreService,
   makeSerializedEventDelivery,
-} from "@gent/core-internal/domain/event"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { dateFromMillis } from "@gent/core-internal/domain/message"
-import { EventPublisher, EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
+} from "../../src/domain/event"
+import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids"
+import { dateFromMillis } from "../../src/domain/message"
+import { EventPublisher, EventPublisherLive } from "../../src/domain/event-publisher"
 
 const FIXED_NOW_MILLIS = dateFromMillis(1_767_225_600_000).getTime()
 

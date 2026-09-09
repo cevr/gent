@@ -13,12 +13,12 @@ import {
   toResponseFinishReason,
   type ActiveStreamHandle,
 } from "../../src/runtime/agent/turn-response"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import type { TurnError } from "@gent/core-internal/domain/driver"
-import { ProviderError } from "@gent/core-internal/domain/provider-error"
-import { finishPart, textDeltaPart } from "@gent/core-internal/test-utils/language-model"
-import type { AgentEvent } from "@gent/core-internal/domain/event"
-import { EventPublisher } from "@gent/core-internal/domain/event-publisher"
+import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
+import type { TurnError } from "../../src/domain/driver"
+import { ProviderError } from "../../src/domain/provider-error"
+import { finishPart, textDeltaPart } from "../../src/test-utils/language-model"
+import type { AgentEvent } from "../../src/domain/event"
+import { EventPublisher } from "../../src/domain/event-publisher"
 
 const sessionId = SessionId.make("collector-session")
 const branchId = BranchId.make("collector-branch")

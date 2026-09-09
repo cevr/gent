@@ -1,9 +1,9 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
+import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { Cause, Context, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect"
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
-import { dateFromMillis, Session } from "@gent/core-internal/domain/message"
+import { BranchId, SessionId } from "../../src/domain/ids"
+import { dateFromMillis, Session } from "../../src/domain/message"
 import { ConfigService } from "../../src/runtime/config-service"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
@@ -21,13 +21,10 @@ import {
   type SessionProfile,
   type SessionProfileCacheService,
 } from "../../src/runtime/session-profile"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
-import { SqliteStorage, StorageError } from "@gent/core-internal/storage/sqlite-storage"
-import {
-  SessionStorage,
-  type SessionStorageService,
-} from "@gent/core-internal/storage/session-storage"
-import type { ExternalDriverContribution } from "@gent/core-internal/domain/driver"
+import { GentPlatform } from "../../src/runtime/gent-platform"
+import { SqliteStorage, StorageError } from "../../src/storage/sqlite-storage"
+import { SessionStorage, type SessionStorageService } from "../../src/storage/session-storage"
+import type { ExternalDriverContribution } from "../../src/domain/driver"
 import { ProcessRunnerLive } from "../../src/utils/run-process"
 import type { PermissionService } from "../../src/domain/permission"
 

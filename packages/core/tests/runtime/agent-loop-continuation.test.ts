@@ -1,17 +1,17 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Fiber, Layer, Option, Predicate, Ref, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
-import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
+import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import { textStep, toolCallStep } from "../../src/debug/provider"
+import { dateFromMillis, Message } from "../../src/domain/message"
 import {
   DynamicExtensionRegistry,
   type DynamicExtensionRegistryService,
-} from "@gent/core-internal/domain/dynamic-extension-registry"
+} from "../../src/domain/dynamic-extension-registry"
 import { tool } from "@gent/core/extensions/api"
-import { TurnCompleted, type AgentEvent } from "@gent/core-internal/domain/event"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { BranchId, ExtensionId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
+import { TurnCompleted, type AgentEvent } from "../../src/domain/event"
+import { MessageStorage } from "../../src/storage/message-storage"
+import { BranchId, ExtensionId, MessageId, SessionId } from "../../src/domain/ids"
 import {
   assistantMessageIdForTurn,
   toolResultMessageIdForTurn,

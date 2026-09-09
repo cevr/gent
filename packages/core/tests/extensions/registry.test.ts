@@ -1,12 +1,12 @@
-import { ModelId } from "@gent/core-internal/domain/model"
+import { ModelId } from "../../src/domain/model"
 import { describe, test, expect, it } from "effect-bun-test"
 import { Predicate, Effect, Layer, Schema } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
-import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
-import type { ExtensionContributions } from "@gent/core-internal/domain/contribution"
+import { AgentDefinition, AgentName } from "../../src/domain/agent"
+import type { ExtensionContributions } from "../../src/domain/contribution"
 import type { LoadedExtension, RunContext } from "../../src/domain/extension.js"
-import type { ModelDriverContribution } from "@gent/core-internal/domain/driver"
-import { BranchId, ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
+import type { ModelDriverContribution } from "../../src/domain/driver"
+import { BranchId, ExtensionId, SessionId } from "../../src/domain/ids"
 import {
   getToolId,
   request,
@@ -14,7 +14,7 @@ import {
   type RequestCapability,
   type ToolCapability,
 } from "@gent/core/extensions/api"
-import { getToolMetadata } from "@gent/core-internal/domain/capability/tool"
+import { getToolMetadata } from "../../src/domain/capability/tool"
 import {
   compileToolPolicy,
   ExtensionRegistry,
@@ -22,7 +22,7 @@ import {
   resolveExtensions,
 } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import type { PromptSection } from "@gent/core-internal/domain/prompt"
+import type { PromptSection } from "../../src/domain/prompt"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 // Test helper: build a no-op model Capability directly. The `tool({...})`
 // factory rejects metadata-free tool records, so fixtures here construct the

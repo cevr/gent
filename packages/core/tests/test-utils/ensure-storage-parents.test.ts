@@ -1,12 +1,9 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Ref } from "effect"
-import { SessionId } from "@gent/core-internal/domain/ids"
-import type { Session } from "@gent/core-internal/domain/message"
-import { ensureStorageParents } from "@gent/core-internal/test-utils"
-import {
-  SessionStorage,
-  type SessionStorageService,
-} from "@gent/core-internal/storage/session-storage"
+import { SessionId } from "../../src/domain/ids"
+import type { Session } from "../../src/domain/message"
+import { ensureStorageParents } from "../../src/test-utils"
+import { SessionStorage, type SessionStorageService } from "../../src/storage/session-storage"
 
 const sessionOnlyLayer = (sessions: Ref.Ref<ReadonlyMap<SessionId, Session>>) =>
   Layer.succeed(SessionStorage, {

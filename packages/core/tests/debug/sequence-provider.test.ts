@@ -5,11 +5,8 @@ import {
   toolCallStep,
   textThenToolCallStep,
   multiToolCallStep,
-} from "@gent/core-internal/debug/provider"
-import {
-  LanguageModelLayers,
-  type SequenceStep,
-} from "@gent/core-internal/test-utils/language-model"
+} from "../../src/debug/provider"
+import { LanguageModelLayers, type SequenceStep } from "../../src/test-utils/language-model"
 import { convertTools } from "../../src/runtime/agent/tool-runner"
 import { LanguageModel } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"

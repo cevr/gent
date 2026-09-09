@@ -1,12 +1,12 @@
 import { expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
-import { ApprovalService } from "@gent/core-internal/runtime/approval-service"
-import { CurrentCellToolOperation } from "@gent/core-internal/runtime/code-cell/current-cell-tool-operation"
-import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
-import { EventStorage } from "@gent/core-internal/storage/event-storage"
+import { GentPlatform } from "../../src/runtime/gent-platform"
+import { ApprovalService } from "../../src/runtime/approval-service"
+import { CurrentCellToolOperation } from "../../src/runtime/code-cell/current-cell-tool-operation"
+import { createE2ELayer } from "../../src/test-utils/e2e-layer"
+import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import { EventStorage } from "../../src/storage/event-storage"
 import { SqlClient } from "effect/unstable/sql"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
@@ -17,27 +17,27 @@ import {
   SessionId,
   ToolCallId,
   ToolId,
-} from "@gent/core-internal/domain/ids"
-import { Message, dateFromMillis } from "@gent/core-internal/domain/message"
-import { StorageError } from "@gent/core-internal/domain/storage-error"
+} from "../../src/domain/ids"
+import { Message, dateFromMillis } from "../../src/domain/message"
+import { StorageError } from "../../src/domain/storage-error"
 import {
   makeToolBindingIdentity,
   ToolBindingSource,
   ToolSchemaRevision,
   ToolSourceRevision,
-} from "@gent/core-internal/domain/tool-binding"
+} from "../../src/domain/tool-binding"
 import {
   encodeInteractionDecision,
   InteractionRequestRecord,
   InteractionPendingError,
-} from "@gent/core-internal/domain/interaction-request"
-import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc"
-import { CellExecutionStorage } from "@gent/core-internal/storage/cell-execution-storage"
-import { CellToolOperationStorage } from "@gent/core-internal/storage/cell-tool-operation-storage"
-import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
-import { ensureStorageParents } from "@gent/core-internal/test-utils"
+} from "../../src/domain/interaction-request"
+import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
+import { CellExecutionStorage } from "../../src/storage/cell-execution-storage"
+import { CellToolOperationStorage } from "../../src/storage/cell-tool-operation-storage"
+import { InteractionStorage } from "../../src/storage/interaction-storage"
+import { MessageStorage } from "../../src/storage/message-storage"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
+import { ensureStorageParents } from "../../src/test-utils"
 
 const cell = {
   sessionId: SessionId.make("cell-operation-session"),

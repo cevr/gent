@@ -1,4 +1,4 @@
-import { AgentName } from "@gent/core-internal/domain/agent"
+import { AgentName } from "../../src/domain/agent"
 /**
  * ResourceHost — service/lifecycle Resource tests.
  *
@@ -14,11 +14,11 @@ import { AgentName } from "@gent/core-internal/domain/agent"
 import { describe, expect, it, test } from "effect-bun-test"
 import { Context, Effect, Layer, Option } from "effect"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
-import type { AnyResourceContribution, ExtensionState } from "@gent/core-internal/domain/resource"
-import { defineResource, defineStateResource } from "@gent/core-internal/domain/contribution"
-import type { ScheduledJobContribution } from "@gent/core-internal/domain/scheduled-job"
+import type { AnyResourceContribution, ExtensionState } from "../../src/domain/resource"
+import { defineResource, defineStateResource } from "../../src/domain/contribution"
+import type { ScheduledJobContribution } from "../../src/domain/scheduled-job"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import { ExtensionId } from "@gent/core-internal/domain/ids"
+import { ExtensionId } from "../../src/domain/ids"
 
 // ── Resource shape + helpers ──
 

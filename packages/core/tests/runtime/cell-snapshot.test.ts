@@ -7,7 +7,7 @@ import {
   maximumSnapshotBindingBytes,
   type SnapshotBinding,
   snapshotReviverSource,
-} from "@gent/core-internal/runtime/code-cell/cell-snapshot"
+} from "../../src/runtime/code-cell/cell-snapshot"
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 type Context = ReturnType<typeof createContext>

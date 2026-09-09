@@ -5,8 +5,8 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Predicate, Deferred, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { PermissionRule } from "@gent/core-internal/domain/permission"
-import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core-internal/domain/agent"
+import { PermissionRule } from "../../src/domain/permission"
+import { AgentName, ExternalDriverRef, ModelDriverRef } from "../../src/domain/agent"
 import { ConfigService, UserConfig } from "../../src/runtime/config-service"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 

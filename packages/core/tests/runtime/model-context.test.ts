@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { Option, Result, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { dateFromMillis, Message, type MessagePart } from "@gent/core-internal/domain/message"
+import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
+import { dateFromMillis, Message, type MessagePart } from "../../src/domain/message"
 import { estimateTokens } from "../../src/runtime/context-estimation"
 import {
   ModelContextBudget,

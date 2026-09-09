@@ -7,8 +7,8 @@ import {
   ResourceGraphError,
   ResourceId,
   ResourceRevision,
-} from "@gent/core-internal/domain/resource-graph"
-import type { ResourcePlan } from "@gent/core-internal/domain/resource-graph"
+} from "../../src/domain/resource-graph"
+import type { ResourcePlan } from "../../src/domain/resource-graph"
 
 const descriptor = (
   id: string,

@@ -1,4 +1,4 @@
-import { AgentName } from "@gent/core-internal/domain/agent"
+import { AgentName } from "../../src/domain/agent"
 /**
  * Extension surface regression locks (compile-time).
  *

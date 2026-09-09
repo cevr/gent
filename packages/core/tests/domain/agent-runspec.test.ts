@@ -4,9 +4,9 @@ import {
   AgentRunResult,
   getDurableAgentRunSessionId,
   makeRunSpec,
-} from "@gent/core-internal/domain/agent"
-import { SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { ModelId } from "@gent/core-internal/domain/model"
+} from "../../src/domain/agent"
+import { SessionId, ToolCallId } from "../../src/domain/ids"
+import { ModelId } from "../../src/domain/model"
 
 describe("run spec construction", () => {
   test("empty input produces empty spec — no spurious keys", () => {

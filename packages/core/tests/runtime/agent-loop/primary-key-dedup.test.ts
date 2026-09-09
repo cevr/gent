@@ -12,8 +12,8 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import { ActorCommandId, BranchId, SessionId } from "@gent/core-internal/domain/ids"
-import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
+import { ActorCommandId, BranchId, SessionId } from "../../../src/domain/ids"
+import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import { AgentLoop } from "../../../src/runtime/agent/agent-loop.actor"
 
 describe("agent-loop op primary keys", () => {

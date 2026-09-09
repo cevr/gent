@@ -5,12 +5,9 @@ import {
   AgentRunResult,
   AgentRunToolCallSchema,
   DEFAULT_AGENT_NAME,
-} from "@gent/core-internal/domain/agent"
-import { SessionId } from "@gent/core-internal/domain/ids"
-import {
-  ApprovalDecisionSchema,
-  ApprovalRequestSchema,
-} from "@gent/core-internal/domain/interaction-request"
+} from "../../src/domain/agent"
+import { SessionId } from "../../src/domain/ids"
+import { ApprovalDecisionSchema, ApprovalRequestSchema } from "../../src/domain/interaction-request"
 
 describe("AgentName brand", () => {
   test("DEFAULT_AGENT_NAME is branded as AgentName", () => {

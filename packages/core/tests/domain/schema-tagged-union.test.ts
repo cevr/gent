@@ -25,8 +25,8 @@
  */
 import { describe, test, expect, it } from "effect-bun-test"
 import { Predicate, Effect, Schema } from "effect"
-import { AgentEvent } from "@gent/core-internal/domain/event"
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { AgentEvent } from "../../src/domain/event"
+import { BranchId, SessionId } from "../../src/domain/ids"
 
 describe("Schema.TaggedUnion — basic shape", () => {
   const Figures = Schema.TaggedUnion({

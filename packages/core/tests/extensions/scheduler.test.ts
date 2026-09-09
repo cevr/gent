@@ -7,9 +7,9 @@ import {
   collectSchedules,
   type CronRuntimeApi,
 } from "../../src/runtime/extensions/resource-host/schedule-engine"
-import type { ScheduledJobContribution } from "@gent/core-internal/domain/scheduled-job"
-import { ExtensionId } from "@gent/core-internal/domain/ids"
-import { AgentName } from "@gent/core-internal/domain/agent"
+import type { ScheduledJobContribution } from "../../src/domain/scheduled-job"
+import { ExtensionId } from "../../src/domain/ids"
+import { AgentName } from "../../src/domain/agent"
 
 const fsLayer = Layer.merge(BunFileSystem.layer, Path.layer)
 

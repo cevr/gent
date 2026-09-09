@@ -1,46 +1,37 @@
-import { ModelId } from "@gent/core-internal/domain/model"
+import { ModelId } from "../../../src/domain/model"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
 import { Cause, Clock, Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
 import { ExtensionContext, tool, type ToolCapability } from "@gent/core/extensions/api"
-import { Permission } from "@gent/core-internal/domain/permission"
-import { ApprovalService } from "@gent/core-internal/runtime/approval-service"
+import { Permission } from "../../../src/domain/permission"
+import { ApprovalService } from "../../../src/runtime/approval-service"
 import {
   processLocalReplayBindingKey,
   ProcessLocalToolReplay,
-} from "@gent/core-internal/runtime/agent/process-local-tool-replay"
+} from "../../../src/runtime/agent/process-local-tool-replay"
 import {
   assistantMessageIdForCommand,
   toolCallIdForCommand,
-} from "@gent/core-internal/runtime/agent/agent-loop.utils"
+} from "../../../src/runtime/agent/agent-loop.utils"
 import { narrowR } from "../../helpers/effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
 import type { PeekResult } from "effect-encore"
-import { AgentDefinition, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
-import { dateFromMillis, Branch, Session } from "@gent/core-internal/domain/message"
-import type { QueueSnapshot } from "@gent/core-internal/domain/queue"
-import {
-  EventEnvelope,
-  EventId,
-  EventStoreError,
-  AgentEvent,
-} from "@gent/core-internal/domain/event"
+import { AgentDefinition, DEFAULT_AGENT_NAME } from "../../../src/domain/agent"
+import { dateFromMillis, Branch, Session } from "../../../src/domain/message"
+import type { QueueSnapshot } from "../../../src/domain/queue"
+import { EventEnvelope, EventId, EventStoreError, AgentEvent } from "../../../src/domain/event"
 import {
   finishPart,
   LanguageModelLayers,
   textDeltaPart,
   type LanguageModelStreamPart,
-} from "@gent/core-internal/test-utils/language-model"
-import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
-import { EventPublisher, EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
-import {
-  RecordingEventStore,
-  SequenceRecorder,
-  type CallRecord,
-} from "@gent/core-internal/test-utils"
+} from "../../../src/test-utils/language-model"
+import { ModelResolver } from "../../../src/providers/model-resolver"
+import { EventPublisher, EventPublisherLive } from "../../../src/domain/event-publisher"
+import { waitFor } from "../../../src/test-utils/fixtures"
+import { RecordingEventStore, SequenceRecorder, type CallRecord } from "../../../src/test-utils"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import {
@@ -51,23 +42,23 @@ import {
   SessionId,
   ToolCallId,
   ToolName,
-} from "@gent/core-internal/domain/ids"
+} from "../../../src/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
-import { EventStorage } from "@gent/core-internal/storage/event-storage"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage"
+import { SqliteStorage } from "../../../src/storage/sqlite-storage"
+import { BranchStorage } from "../../../src/storage/branch-storage"
+import { EventStorage } from "../../../src/storage/event-storage"
+import { MessageStorage } from "../../../src/storage/message-storage"
+import { SessionStorage } from "../../../src/storage/session-storage"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"
 import { AgentLoop as AgentLoopActor } from "../../../src/runtime/agent/agent-loop.actor"
 import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
 import { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
-import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
+import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
 
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {

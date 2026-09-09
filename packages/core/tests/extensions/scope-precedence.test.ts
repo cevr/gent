@@ -14,20 +14,16 @@ import { Effect, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
-import { ExtensionId } from "@gent/core-internal/domain/ids"
+import { ExtensionId } from "../../src/domain/ids"
 
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
-import { PermissionRule } from "@gent/core-internal/domain/permission"
+import { PermissionRule } from "../../src/domain/permission"
 import { hook, tool, type ToolCapability } from "@gent/core/extensions/api"
-import {
-  runToolWithCtx,
-  testExtensionHostContext,
-  testToolContext,
-} from "@gent/core-internal/test-utils"
-import { AgentDefinition } from "@gent/core-internal/domain/agent"
-import { isToolCapability } from "@gent/core-internal/domain/capability/tool"
+import { runToolWithCtx, testExtensionHostContext, testToolContext } from "../../src/test-utils"
+import { AgentDefinition } from "../../src/domain/agent"
+import { isToolCapability } from "../../src/domain/capability/tool"
 
 const stubCtx = testExtensionHostContext()
 

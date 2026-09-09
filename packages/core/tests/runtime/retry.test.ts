@@ -1,5 +1,5 @@
 import { describe, test, expect, it } from "effect-bun-test"
-import { dateFromMillis } from "@gent/core-internal/domain/message"
+import { dateFromMillis } from "../../src/domain/message"
 import { Clock, Effect, Fiber } from "effect"
 import { TestClock } from "effect/testing"
 import {
@@ -10,7 +10,7 @@ import {
   RETRY_JITTER_FRACTION,
   retryProviderCall,
 } from "../../src/runtime/retry"
-import { ProviderError } from "@gent/core-internal/domain/provider-error"
+import { ProviderError } from "../../src/domain/provider-error"
 
 describe("getRetryDelay", () => {
   const config = { initialDelay: 1000, maxDelay: 60_000, backoffFactor: 2, maxAttempts: 3 }

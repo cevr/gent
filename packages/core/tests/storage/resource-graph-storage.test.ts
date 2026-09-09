@@ -2,11 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Exit, Option, Predicate, Schema } from "effect"
 import { canonicalJsonString } from "effect-encore"
 import { SqlClient } from "effect/unstable/sql"
-import {
-  ResourceDescriptor,
-  ResourceId,
-  ResourceRevision,
-} from "@gent/core-internal/domain/resource-graph"
+import { ResourceDescriptor, ResourceId, ResourceRevision } from "../../src/domain/resource-graph"
 import {
   CanonicalCwd,
   ResourceGraphCommandConflictError,
@@ -17,13 +13,13 @@ import {
   ResourceGraphSnapshot,
   ResourceGraphStaleReceiptError,
   type ResourceGraphExtensionSource,
-} from "@gent/core-internal/domain/resource-graph-state"
-import { RequestId, ExtensionId } from "@gent/core-internal/domain/ids"
-import { StorageError } from "@gent/core-internal/domain/storage-error"
-import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc"
-import { ResourceGraphStorage } from "@gent/core-internal/storage/resource-graph-storage"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
-import { toSqlNull } from "@gent/core-internal/storage/sqlite/rows"
+} from "../../src/domain/resource-graph-state"
+import { RequestId, ExtensionId } from "../../src/domain/ids"
+import { StorageError } from "../../src/domain/storage-error"
+import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
+import { ResourceGraphStorage } from "../../src/storage/resource-graph-storage"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
+import { toSqlNull } from "../../src/storage/sqlite/rows"
 
 const WORKSPACE_A = WorkspaceId.make("a".repeat(64))
 const WORKSPACE_B = WorkspaceId.make("b".repeat(64))

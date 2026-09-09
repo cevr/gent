@@ -34,15 +34,15 @@ import {
   finishPart,
   LanguageModelLayers,
   type LanguageModelStreamPart,
-} from "@gent/core-internal/test-utils/language-model"
-import { dateFromMillis, Branch, Message, Session } from "@gent/core-internal/domain/message"
-import { EventStore, MessageReceived } from "@gent/core-internal/domain/event"
-import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage"
-import { EventStorage } from "@gent/core-internal/storage/event-storage"
-import { ActorCommandId, BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
+} from "../../../src/test-utils/language-model"
+import { dateFromMillis, Branch, Message, Session } from "../../../src/domain/message"
+import { EventStore, MessageReceived } from "../../../src/domain/event"
+import { EventPublisherLive } from "../../../src/domain/event-publisher"
+import { SqliteStorage } from "../../../src/storage/sqlite-storage"
+import { BranchStorage } from "../../../src/storage/branch-storage"
+import { SessionStorage } from "../../../src/storage/session-storage"
+import { EventStorage } from "../../../src/storage/event-storage"
+import { ActorCommandId, BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopTestActor,
@@ -55,14 +55,14 @@ import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../../src/runtime/approval-service"
-import { ModelResolver } from "@gent/core-internal/providers/model-resolver"
+import { ModelResolver } from "../../../src/providers/model-resolver"
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
 import {
   LoopQueueState,
   type LoopQueueState as LoopQueueStateType,
 } from "../../../src/runtime/agent/agent-loop.state"
 import { StorageError } from "../../../src/domain/storage-error"
-import { DefaultWorkspaceId } from "@gent/core-internal/server/workspace-rpc"
+import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import { makeExtRegistry } from "../agent-loop/helpers"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>

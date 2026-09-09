@@ -2,7 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Layer, Schema } from "effect"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { ExtensionHost, defineExtension, defineResource, tool } from "@gent/core/extensions/api"
-import { ExtensionId } from "@gent/core-internal/domain/ids"
+import { ExtensionId } from "../../src/domain/ids"
 import { createToolTestLayer } from "../../src/test-utils/extension-harness"
 
 class ResourceInstance extends Context.Service<ResourceInstance, { readonly id: number }>()(

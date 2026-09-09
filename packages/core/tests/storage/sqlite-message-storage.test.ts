@@ -2,19 +2,13 @@ import { describe, expect, it, test } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Predicate, Effect, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
-import { RelationshipStorage } from "@gent/core-internal/storage/relationship-storage"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage"
-import { Branch, dateFromMillis, Message, Session } from "@gent/core-internal/domain/message"
-import {
-  BranchId,
-  ExtensionId,
-  MessageId,
-  SessionId,
-  ToolCallId,
-} from "@gent/core-internal/domain/ids"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
+import { RelationshipStorage } from "../../src/storage/relationship-storage"
+import { MessageStorage } from "../../src/storage/message-storage"
+import { BranchStorage } from "../../src/storage/branch-storage"
+import { SessionStorage } from "../../src/storage/session-storage"
+import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
+import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 
 const FIXED_NOW_MILLIS = 1_767_225_600_000
 const FIXED_NOW = dateFromMillis(FIXED_NOW_MILLIS)

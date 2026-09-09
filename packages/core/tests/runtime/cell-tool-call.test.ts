@@ -2,33 +2,27 @@ import { expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer, Option, Ref, Schema } from "effect"
 import { tool } from "@gent/core/extensions/api"
-import { EventStore } from "@gent/core-internal/domain/event"
-import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher"
+import { EventStore } from "../../src/domain/event"
+import { EventPublisherLive } from "../../src/domain/event-publisher"
 import {
   BranchId,
   ExtensionId,
   InteractionRequestId,
   SessionId,
   ToolCallId,
-} from "@gent/core-internal/domain/ids"
-import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
-import { Permission, PermissionRule } from "@gent/core-internal/domain/permission"
-import { provideCurrentHostCtx } from "@gent/core-internal/runtime/agent/current-extension-host-context"
-import {
-  ToolRunner,
-  type ResolvedToolCapability,
-} from "@gent/core-internal/runtime/agent/tool-runner"
+} from "../../src/domain/ids"
+import { InteractionPendingError } from "../../src/domain/interaction-request"
+import { Permission, PermissionRule } from "../../src/domain/permission"
+import { provideCurrentHostCtx } from "../../src/runtime/agent/current-extension-host-context"
+import { ToolRunner, type ResolvedToolCapability } from "../../src/runtime/agent/tool-runner"
 import {
   executeBoundCellTool,
   cellToolResultValue,
-} from "@gent/core-internal/runtime/code-cell/cell-tool-call"
-import { CellResponse } from "@gent/core-internal/runtime/code-cell/cell-protocol"
+} from "../../src/runtime/code-cell/cell-tool-call"
+import { CellResponse } from "../../src/runtime/code-cell/cell-protocol"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import {
-  ExtensionRegistry,
-  resolveExtensions,
-} from "@gent/core-internal/runtime/extensions/registry"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
+import { testToolContext } from "../../src/test-utils/extension-harness"
 
 const extensionId = ExtensionId.make("cell-test")
 const runCellToolCall = (params: Parameters<typeof executeBoundCellTool>[0]) =>

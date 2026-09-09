@@ -3,22 +3,18 @@ import { Effect, Stream } from "effect"
 import * as AiError from "effect/unstable/ai/AiError"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { narrowR } from "../helpers/effect"
-import { AgentDefinition, AgentName } from "@gent/core-internal/domain/agent"
-import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
-import { Model, ModelId, ProviderId } from "@gent/core-internal/domain/model"
-import { dateFromMillis, Branch, Message, Session } from "@gent/core-internal/domain/message"
-import {
-  finishPart,
-  LanguageModelLayers,
-  textDeltaPart,
-} from "@gent/core-internal/test-utils/language-model"
+import { AgentDefinition, AgentName } from "../../src/domain/agent"
+import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
+import { Model, ModelId, ProviderId } from "../../src/domain/model"
+import { dateFromMillis, Branch, Message, Session } from "../../src/domain/message"
+import { finishPart, LanguageModelLayers, textDeltaPart } from "../../src/test-utils/language-model"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
-import { EventStorage } from "@gent/core-internal/storage/event-storage"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage"
-import { baseLocalLayerWithProvider } from "@gent/core-internal/test-utils/in-process-layer"
+import { EventStorage } from "../../src/storage/event-storage"
+import { BranchStorage } from "../../src/storage/branch-storage"
+import { MessageStorage } from "../../src/storage/message-storage"
+import { SessionStorage } from "../../src/storage/session-storage"
+import { baseLocalLayerWithProvider } from "../../src/test-utils/in-process-layer"
 
 const CONTEXT_LIMIT_TOKENS = 40_000
 const modelId = ModelId.make("test/small-window")

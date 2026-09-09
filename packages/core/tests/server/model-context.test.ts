@@ -1,13 +1,9 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Option, Stream } from "effect"
-import { RequestId } from "@gent/core-internal/domain/ids"
-import {
-  finishPart,
-  LanguageModelLayers,
-  textDeltaPart,
-} from "@gent/core-internal/test-utils/language-model"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
+import { RequestId } from "../../src/domain/ids"
+import { finishPart, LanguageModelLayers, textDeltaPart } from "../../src/test-utils/language-model"
+import { createRpcHarness } from "../../src/test-utils/rpc-harness"
+import { waitFor } from "../../src/test-utils/fixtures"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
 describe("model context RPC boundary", () => {

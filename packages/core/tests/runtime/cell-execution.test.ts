@@ -8,20 +8,17 @@ import {
   SessionId,
   ToolCallId,
   InteractionRequestId,
-} from "@gent/core-internal/domain/ids"
-import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request"
-import { Branch, dateFromMillis, Message, Session } from "@gent/core-internal/domain/message"
-import { CellExecution } from "@gent/core-internal/runtime/code-cell/cell-execution"
-import {
-  CellOperationHost,
-  CellToolCallSuspended,
-} from "@gent/core-internal/runtime/code-cell/cell-kernel"
-import { CellEvaluationError } from "@gent/core-internal/runtime/code-cell/cell-protocol"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+} from "../../src/domain/ids"
+import { InteractionPendingError } from "../../src/domain/interaction-request"
+import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
+import { CellExecution } from "../../src/runtime/code-cell/cell-execution"
+import { CellOperationHost, CellToolCallSuspended } from "../../src/runtime/code-cell/cell-kernel"
+import { CellEvaluationError } from "../../src/runtime/code-cell/cell-protocol"
+import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
+import { BranchStorage } from "../../src/storage/branch-storage"
+import { MessageStorage } from "../../src/storage/message-storage"
+import { SessionStorage } from "../../src/storage/session-storage"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { buildCellWorker } from "./cell-worker-fixture.js"
 
 const platform = Layer.merge(BunServices.layer, BunGentPlatformLive)

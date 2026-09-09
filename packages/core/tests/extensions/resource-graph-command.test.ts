@@ -15,8 +15,8 @@ import { ClientLayer } from "effect-encore"
 import { ShardingConfig } from "effect/unstable/cluster"
 import { PersistenceError } from "effect/unstable/cluster/ClusterError"
 import { SqlClient } from "effect/unstable/sql"
-import { defineResource, type AnyResourceContribution } from "@gent/core-internal/domain/resource"
-import { ResourceId, ResourceRevision } from "@gent/core-internal/domain/resource-graph"
+import { defineResource, type AnyResourceContribution } from "../../src/domain/resource"
+import { ResourceId, ResourceRevision } from "../../src/domain/resource-graph"
 import {
   CanonicalCwd,
   ResourceGraphDesiredCommand,
@@ -24,13 +24,13 @@ import {
   ResourceGraphSnapshot,
   ResourceGraphSource,
   ResourceGraphStatus,
-} from "@gent/core-internal/domain/resource-graph-state"
-import type { ResourceGraphDesiredReceipt } from "@gent/core-internal/domain/resource-graph-state"
-import { ExtensionId, RequestId } from "@gent/core-internal/domain/ids"
-import { ResourceGraphStorage } from "@gent/core-internal/storage/resource-graph-storage"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
-import { StorageError } from "@gent/core-internal/domain/storage-error"
-import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc"
+} from "../../src/domain/resource-graph-state"
+import type { ResourceGraphDesiredReceipt } from "../../src/domain/resource-graph-state"
+import { ExtensionId, RequestId } from "../../src/domain/ids"
+import { ResourceGraphStorage } from "../../src/storage/resource-graph-storage"
+import { SqliteStorage } from "../../src/storage/sqlite-storage"
+import { StorageError } from "../../src/domain/storage-error"
+import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { makeResourceGraphHost } from "../../src/runtime/extensions/resource-host/resource-graph-host"
 import {

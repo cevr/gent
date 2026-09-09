@@ -8,17 +8,17 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Predicate, Effect } from "effect"
-import { textStep } from "@gent/core-internal/debug/provider"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import { textStep } from "../../src/debug/provider"
+import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import {
   AgentName,
   DEFAULT_AGENT_NAME,
   ExternalDriverRef,
   ModelDriverRef,
-} from "@gent/core-internal/domain/agent"
-import { DriverListResult } from "@gent/core-internal/server/transport-contract"
+} from "../../src/domain/agent"
+import { DriverListResult } from "../../src/server/transport-contract"
 import { Gent } from "@gent/sdk"
-import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer"
+import { createE2ELayer } from "../../src/test-utils/e2e-layer"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
 describe("ExtensionRpcs", () => {

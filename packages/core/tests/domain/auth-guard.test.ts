@@ -10,21 +10,21 @@ import {
   AuthGuard,
   type AuthInfo,
   ListAuthProvidersPayload,
-} from "@gent/core-internal/domain/auth"
+} from "../../src/domain/auth"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import type { ModelDriverContribution } from "@gent/core-internal/domain/driver"
+import type { ModelDriverContribution } from "../../src/domain/driver"
 import {
   AgentDefinition,
   AgentName,
   DEFAULT_AGENT_NAME,
   ExternalDriverRef,
-} from "@gent/core-internal/domain/agent"
+} from "../../src/domain/agent"
 import { Effect, Layer, Schema } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
-import { ExtensionId, SessionId } from "@gent/core-internal/domain/ids"
-import { ModelId, ProviderId } from "@gent/core-internal/domain/model"
+import { ExtensionId, SessionId } from "../../src/domain/ids"
+import { ModelId, ProviderId } from "../../src/domain/model"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 
 const stubModel = AiModel.make(
