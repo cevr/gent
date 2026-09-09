@@ -14,7 +14,7 @@
 
 import { createEffect, createRoot, createSignal } from "solid-js"
 import { Context, Effect, Layer, Option, Scope } from "effect"
-import type { AgentName, DriverRef } from "@gent/core/extensions/api"
+import type { AgentName, BranchId, DriverRef, SessionId } from "@gent/core/extensions/api"
 import type { OverlayId, ComposerState } from "./client-facets.js"
 import type { ClientTransportDefinition } from "./client-transport"
 
@@ -42,6 +42,18 @@ export interface ClientShellDefinition {
   readonly openOverlay: (id: OverlayId) => void
   /** Close any open overlay. */
   readonly closeOverlay: () => void
+  /**
+   * Switch the shell to another session branch and navigate to it.
+   *
+   * Takes the branch explicitly rather than resolving one from the session:
+   * a session has many branches, and the caller already knows which loop it
+   * means. Unknown ids are the host's to reject, not the extension's.
+   */
+  readonly switchSession: (input: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly name: string
+  }) => void
   /** Run an extension-owned Effect from a sync UI callback. */
   readonly run: <A, E>(effect: Effect.Effect<A, E, never>) => Promise<A>
   /** Fork an extension-owned Effect from a sync UI callback. */

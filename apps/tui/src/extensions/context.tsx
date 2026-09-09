@@ -45,6 +45,7 @@ import {
   makeClientComposerLayer,
   makeClientLifecycleLayer,
 } from "./client-services"
+import type { BranchId, SessionId } from "@gent/core/extensions/api"
 import { useWorkspace } from "../workspace/context"
 import {
   useClientActions,
@@ -71,6 +72,9 @@ export interface ExtensionUIContextValue {
   readonly loading: Accessor<boolean>
   /** Wire overlay dispatch from the session controller */
   readonly setOverlayDispatch: (open: (id: string) => void, close: () => void) => void
+  readonly setSwitchSessionDispatch: (
+    dispatch: (input: { sessionId: SessionId; branchId: BranchId; name: string }) => void,
+  ) => void
   /** Register dynamic autocomplete contributions (e.g. from session controller) */
   readonly setDynamicAutocomplete: (items: ReadonlyArray<AutocompleteContribution>) => void
   /** Wire composer state reactive getter from the session controller */
@@ -142,6 +146,19 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
     setOverlayDispatchSignal({ open, close })
   }
 
+  // Session switching — wired by the session controller after mount, for the
+  // same reason as the overlay dispatch: navigating needs the router, and
+  // `RouterProvider` is a descendant of this provider, not an ancestor.
+  const [switchSessionDispatch, setSwitchSessionDispatchSignal] = createSignal<
+    (input: { sessionId: SessionId; branchId: BranchId; name: string }) => void
+  >(() => {})
+
+  const setSwitchSessionDispatch = (
+    dispatch: (input: { sessionId: SessionId; branchId: BranchId; name: string }) => void,
+  ) => {
+    setSwitchSessionDispatchSignal(() => dispatch)
+  }
+
   // Composer state provider — wired by session controller
   type ComposerStateSnapshot = {
     draft: string
@@ -198,6 +215,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
         sendMessage: (content) => actions.sendMessage(content),
         openOverlay: (id) => overlayDispatch().open(id),
         closeOverlay: () => overlayDispatch().close(),
+        switchSession: (input) => switchSessionDispatch()(input),
         run: transport.runtime.run,
         cast: transport.runtime.cast,
       }),
@@ -347,6 +365,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
         loading,
         setDynamicAutocomplete,
         setOverlayDispatch,
+        setSwitchSessionDispatch,
         setComposerStateProvider,
         setActivityProvider: (provider) => setActivityProvider(() => provider),
         sessionId: () =>

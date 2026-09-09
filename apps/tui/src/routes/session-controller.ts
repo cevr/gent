@@ -271,6 +271,13 @@ export function createSessionController(props: {
     () => dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({})),
   )
 
+  // Same wiring reason: the extension provider is an ancestor of the router, so
+  // it cannot navigate on its own.
+  ext.setSwitchSessionDispatch((input) => {
+    client.switchSession(input.sessionId, input.branchId, input.name)
+    router.navigateToSession(input.sessionId, input.branchId)
+  })
+
   ext.setActivityProvider(() => {
     const session = Option.fromNullishOr(client.session())
     const sessionId = Option.getOrUndefined(Option.map(session, (value) => value.sessionId))

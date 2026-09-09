@@ -64,6 +64,7 @@ const testRuntime = ManagedRuntime.make(
       sendMessage: () => {},
       openOverlay: () => {},
       closeOverlay: () => {},
+      switchSession: () => {},
       run: runTestShellEffect,
       cast: castTestShellEffect,
     }),

@@ -114,7 +114,12 @@ const emptyLabel = (loading: boolean): string => {
   return "no agents"
 }
 
-export function AgentsPane(props: OverlayProps & { controller: AgentsController }) {
+export function AgentsPane(
+  props: OverlayProps & {
+    controller: AgentsController
+    onSelect: (row: AgentRowEntry) => void
+  },
+) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const [state, setState] = createSignal(FilterListState.initial())
@@ -143,6 +148,13 @@ export function AgentsPane(props: OverlayProps & { controller: AgentsController 
       }
 
       const rows = visible()
+      if (event.name === "return") {
+        const selected = Option.fromNullishOr(rows[state().selectedIndex])
+        if (Option.isNone(selected)) return true
+        props.onSelect(selected.value)
+        return true
+      }
+
       if (event.name === "up" || (event.ctrl === true && event.name === "p")) {
         setState((current) =>
           transitionFilterList(
@@ -243,7 +255,7 @@ export function AgentsPane(props: OverlayProps & { controller: AgentsController 
         </ChromePanel.Body>
 
         <ChromePanel.Error error={Option.getOrUndefined(props.controller.error())} />
-        <ChromePanel.Footer>Type | Up/Down | Esc</ChromePanel.Footer>
+        <ChromePanel.Footer>Type | Up/Down | Enter | Esc</ChromePanel.Footer>
       </ChromePanel.Root>
     </Show>
   )
@@ -277,7 +289,22 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
       }),
       overlayContribution({
         id: AGENTS_VIEW_OVERLAY_ID,
-        component: (props) => <AgentsPane {...props} controller={controller} />,
+        component: (props) => (
+          <AgentsPane
+            {...props}
+            controller={controller}
+            onSelect={(row) => {
+              props.onClose()
+              // Rows are already keyed per branch, so there is no active-branch
+              // lookup to do — the row *is* the loop being switched to.
+              shell.switchSession({
+                sessionId: row.sessionId,
+                branchId: row.branchId,
+                name: Option.fromUndefinedOr(row.name).pipe(Option.getOrElse(() => "Unnamed")),
+              })
+            }}
+          />
+        ),
       }),
     )
   }),

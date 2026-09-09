@@ -199,6 +199,7 @@ const runHeadlessTurn = (
         sendMessage: () => {},
         openOverlay: () => {},
         closeOverlay: () => {},
+        switchSession: () => {},
         run: bundle.runtime.run,
         cast: bundle.runtime.cast,
       }),
