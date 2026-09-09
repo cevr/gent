@@ -13,6 +13,7 @@ import {
 } from "./agent-loop.state.js"
 import { signalActiveStreamInterrupt, type ActiveStreamHandle } from "./turn-response.js"
 import type { TurnOutcome } from "./agent-loop.turn-execution.js"
+import type { TurnInterruption } from "./turn-interruption.js"
 import { turnBoundary, withWideEvent } from "../wide-event-boundary.js"
 
 export type AgentLoopWorkerContext<E = never, R = never> = {
@@ -22,7 +23,7 @@ export type AgentLoopWorkerContext<E = never, R = never> = {
   readonly interruptSemaphore: Semaphore.Semaphore
   readonly turnWorkerQueue: TxQueue.TxQueue<RunningState>
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
-  readonly interruptedRef: Ref.Ref<boolean>
+  readonly turnInterruption: TurnInterruption
   /** Cancel whatever tool work this loop has in flight. Idempotent. */
   readonly interruptToolWork: Effect.Effect<void>
   readonly currentLoopState: Effect.Effect<LoopState>
@@ -102,7 +103,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       }
 
       const nextItem = yield* scope.takeNextQueuedTurn
-      yield* Ref.set(scope.interruptedRef, false)
+      yield* scope.turnInterruption.beginTurn
       if (Option.isSome(nextItem)) {
         const startedAtMs = yield* Clock.currentTimeMillis
         const nextRunning = buildRunningState(
@@ -128,7 +129,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       yield* publishPhaseFailure(cause)
       const nextItem = yield* scope.takeNextQueuedTurn
       const current = yield* scope.currentLoopState
-      yield* Ref.set(scope.interruptedRef, false)
+      yield* scope.turnInterruption.beginTurn
       if (Option.isSome(nextItem)) {
         const startedAtMs = yield* Clock.currentTimeMillis
         const nextRunning = buildRunningState(
@@ -241,7 +242,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       if (snap._tag === "Idle") return false
       if (Predicate.isNotUndefined(messageId) && snap.message.id !== messageId) return false
       if (snap._tag === "WaitingForInteraction") return true
-      yield* Ref.set(scope.interruptedRef, true)
+      yield* scope.turnInterruption.interrupt
       yield* interruptActiveStream(scope.activeStreamRef)
       yield* scope.interruptToolWork
       return false
@@ -251,7 +252,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       const state = yield* scope.currentLoopState
       if (state._tag !== "WaitingForInteraction") return
       if (Predicate.isNotUndefined(messageId) && state.message.id !== messageId) return
-      yield* Ref.set(scope.interruptedRef, true)
+      yield* scope.turnInterruption.interrupt
       const resumed = buildRunningState(
         { currentAgent: state.currentAgent },
         {
@@ -271,7 +272,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     Effect.gen(function* () {
       const state = yield* scope.currentLoopState
       if (state._tag !== "Idle") return
-      yield* Ref.set(scope.interruptedRef, false)
+      yield* scope.turnInterruption.beginTurn
       const startedAtMs = yield* Clock.currentTimeMillis
       const next = buildRunningState(state, item, { startedAtMs })
       yield* scope.saveCheckpoint(next)
@@ -306,7 +307,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
           )
           return
         }
-        yield* Ref.set(scope.interruptedRef, false)
+        yield* scope.turnInterruption.beginTurn
         const resumed = buildRunningState(
           { currentAgent: state.currentAgent },
           {

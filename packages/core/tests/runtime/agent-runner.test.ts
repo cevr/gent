@@ -98,6 +98,7 @@ import {
 } from "../../src/runtime/session-runtime"
 import { BunCrypto, BunFileSystem, BunPath, BunServices } from "@effect/platform-bun"
 import { cellMigrations, cellStorageLayer } from "../../src/runtime/code-cell/cell-storage"
+import { neverInterrupted } from "../../src/runtime/agent/turn-interruption.js"
 const bashStubTool = tool({
   id: "bash",
   description: "Stub bash tool for tests",
@@ -2236,12 +2237,11 @@ describe("ephemeral service propagation", () => {
         // dispatching tool. Build what the factory returns and look for the
         // kernel's own service.
         const branchToolLayer = yield* BranchToolLayer
-        const interruptedRef = yield* Ref.make(false)
         const built = yield* Layer.build(
           branchToolLayer({
             sessionId: SessionId.make("ephemeral-branch-kernel"),
             branchId: BranchId.make("ephemeral-branch-kernel-branch"),
-            interruptedRef,
+            turnInterruption: neverInterrupted,
           }),
         )
         expect(Option.isSome(Context.getOption(built, BranchToolWork))).toBe(true)

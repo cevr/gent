@@ -7,7 +7,6 @@ import {
   Option,
   type Path,
   Predicate,
-  Ref,
   Schema,
   Scope,
   Semaphore,
@@ -33,6 +32,7 @@ import {
 import { GentPlatform } from "../gent-platform.js"
 import { ModelContextLedger } from "../model-context-ledger.js"
 import { BranchToolWork } from "../agent/branch-tool-work.js"
+import { neverInterrupted, type TurnInterruptionStatus } from "../agent/turn-interruption.js"
 
 /** The worker binary this build ships next to the executable. */
 const CELL_WORKER_BINARY = "gent-cell"
@@ -76,7 +76,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
   static Branch = (address: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
-    readonly interruptedRef: Ref.Ref<boolean>
+    readonly turnInterruption: TurnInterruptionStatus
   }) =>
     Layer.unwrap(
       Effect.gen(function* () {
@@ -103,7 +103,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
     input: Parameters<typeof openCellKernel>[0] & {
       readonly sessionId: SessionId
       readonly branchId: BranchId
-      readonly interruptedRef?: Ref.Ref<boolean>
+      readonly turnInterruption?: TurnInterruptionStatus
     },
   ) =>
     Layer.effect(
@@ -223,7 +223,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           const evaluate = Effect.gen(function* () {
             if (
               cancellationEpoch !== runEpoch ||
-              (input.interruptedRef && (yield* Ref.get(input.interruptedRef)))
+              (yield* (input.turnInterruption ?? neverInterrupted).interrupted)
             )
               return yield* new CellEvaluationError({
                 phase: "execute",

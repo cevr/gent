@@ -91,6 +91,7 @@ import {
   provideAgentLoopRuntimeContext,
 } from "./agent-loop.runtime-context.js"
 import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
+import { makeTurnInterruption } from "./turn-interruption.js"
 
 export const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(function* (params: {
   sessionId: SessionId
@@ -318,7 +319,7 @@ export const makeAgentLoopBehavior = (
     )
 
     const loopScope = yield* Effect.scope
-    const interruptedRef = yield* Ref.make(false)
+    const turnInterruption = yield* makeTurnInterruption
     // Branch-owned turn services: the cell kernel, the model context ledger, and
     // every extension Resource declared with `scope: "branch"`. All three share
     // `loopScope`, so they are rebuilt per loop and interrupted when the branch
@@ -330,7 +331,7 @@ export const makeAgentLoopBehavior = (
     )
     const branchToolLayer = yield* BranchToolLayer
     const branchContext = yield* Layer.build(
-      Layer.merge(branchToolLayer({ sessionId, branchId, interruptedRef }), branchResourceLayer),
+      Layer.merge(branchToolLayer({ sessionId, branchId, turnInterruption }), branchResourceLayer),
     ).pipe(Scope.provide(loopScope))
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
@@ -425,7 +426,7 @@ export const makeAgentLoopBehavior = (
       resolveTurnProfile,
       activeStreamRef,
       turnMetricsRef,
-      interruptedRef,
+      turnInterruption,
       clearInFlightTurn,
       takeSteeringForStep,
     })
@@ -437,7 +438,7 @@ export const makeAgentLoopBehavior = (
       interruptSemaphore: yield* Semaphore.make(1),
       turnWorkerQueue,
       activeStreamRef,
-      interruptedRef,
+      turnInterruption,
       interruptToolWork: Option.match(branchWork, {
         onNone: () => Effect.void,
         onSome: (work) => work.cancel,

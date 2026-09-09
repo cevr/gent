@@ -20,6 +20,7 @@ import {
   makeAgentLoopWorker,
 } from "../../../src/runtime/agent/agent-loop.worker"
 import { TurnOutcome } from "../../../src/runtime/agent/agent-loop.turn-execution"
+import { makeTurnInterruption } from "../../../src/runtime/agent/turn-interruption.js"
 
 const sessionId = SessionId.make("withdrawal-session")
 const branchId = BranchId.make("withdrawal-branch")
@@ -55,7 +56,7 @@ const makeHarness = (initial: { state: LoopState; queue: LoopQueueState }) =>
       interruptSemaphore: yield* Semaphore.make(1),
       turnWorkerQueue,
       activeStreamRef: yield* Ref.make(Option.none<ActiveStreamHandle>()),
-      interruptedRef: yield* Ref.make(false),
+      turnInterruption: yield* makeTurnInterruption,
       interruptToolWork: Effect.void,
       currentLoopState: Ref.get(stateRef),
       saveCheckpoint: (next) => Ref.set(stateRef, next),

@@ -74,6 +74,7 @@ import {
   type AgentLoopTurnProfile,
 } from "./agent-loop.turn-profile.js"
 import { resolveReplayToolBinding } from "./tool-binding-resolution.js"
+import type { TurnInterruption } from "./turn-interruption.js"
 
 interface CollectedResult<A> {
   readonly _tag: "collected"
@@ -123,7 +124,7 @@ export type AgentLoopTurnExecutionContext = {
   readonly resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile>
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly turnMetricsRef: Ref.Ref<TurnMetrics>
-  readonly interruptedRef: Ref.Ref<boolean>
+  readonly turnInterruption: TurnInterruption
   readonly clearInFlightTurn: (
     messageId: QueuedTurnItem["message"]["id"],
   ) => Effect.Effect<boolean, AgentLoopError>
@@ -945,7 +946,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           model: resolved.modelId,
         }))
       }
-      if (yield* Ref.get(scope.interruptedRef)) {
+      if (yield* scope.turnInterruption.interrupted) {
         return {
           _tag: "stop",
           currentTurnAgent,
@@ -1064,7 +1065,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               }),
           ),
         )
-      if (cancelled) yield* Ref.set(scope.interruptedRef, true)
+      if (cancelled) yield* scope.turnInterruption.interrupt
 
       const turnProfile = yield* scope.resolveTurnProfile
 
@@ -1078,7 +1079,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       return yield* Effect.gen(function* () {
         yield* persistMessageReceived({ message: state.message })
         yield* scope.clearInFlightTurn(state.message.id)
-        let interrupted = yield* Ref.get(scope.interruptedRef)
+        let interrupted = yield* scope.turnInterruption.interrupted
         let streamFailed = false
         let currentTurnAgent: AgentNameType = Option.getOrElse(
           Option.fromUndefinedOr(state.currentAgent),
@@ -1107,7 +1108,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             break
           }
 
-          if (yield* Ref.get(scope.interruptedRef)) {
+          if (yield* scope.turnInterruption.interrupted) {
             interrupted = true
             break
           }

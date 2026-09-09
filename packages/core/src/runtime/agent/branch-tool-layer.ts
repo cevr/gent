@@ -10,18 +10,19 @@
  * are all stateless.
  */
 
-import { Context, type Ref } from "effect"
+import { Context } from "effect"
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import {
   emptyErasedResourceLayer,
   type ErasedResourceLayer,
 } from "../extensions/extension-effect-membrane.js"
+import type { TurnInterruptionStatus } from "./turn-interruption.js"
 
 export interface BranchToolLayerInput {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  /** Set when the loop is interrupted, so branch work can notice and stop. */
-  readonly interruptedRef: Ref.Ref<boolean>
+  /** Lets branch work notice that the turn was interrupted, and stop. */
+  readonly turnInterruption: TurnInterruptionStatus
 }
 
 /**
