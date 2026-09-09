@@ -136,3 +136,29 @@ Steps 1-2 carry the risk; 3-5 are assembly over surfaces that already exist.
 The reconciliation in step 2 is now the load-bearing piece, not step 1: the
 live enumeration is a few lines, while merging two catalogs into stable row
 identity is where the correctness lives.
+
+## Step 3 outcome (landed `12db9e70`)
+
+Server half shipped: `@gent/agents-view` contributes one `request` capability,
+`list-agents`, returning reconciled rows. Registered in `BuiltinExtensions`.
+
+Two deviations from the shape above, both forced by what the code allows:
+
+- **No `resource` holding the projection.** The capability is a pure read over
+  two catalogs; a resource would add a lifecycle with no state to own. Dropped
+  rather than built empty.
+- **No per-loop state/metrics in the row.** The shape called for joining
+  per-loop state, but enumerating N loops must not fan out into N state reads
+  on every keystroke. Rows carry identity and liveness; step 4's client
+  subscribes per row for detail. `LiveAgentRow` already has the
+  `Option`-shaped fields, so nothing has to change to fill them in later.
+
+The enumeration seam is narrower than expected. `listActiveLoops` cannot be
+supplied from the loop behavior — the behavior is built by the AgentLoop actor,
+so requiring that actor's state client is a cycle — and `effect-encore` does
+not export its `ActorStateRegistry` from the package barrel. It resolves via
+the ambient `Effect.serviceOption` override path instead, which adds no
+requirement. Receipts in the commit message.
+
+Gate green. RPC acceptance test verified by disabling the wiring: all three
+cases fail without it.

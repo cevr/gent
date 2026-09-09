@@ -13,7 +13,7 @@ import { ref } from "@gent/core/extensions/api"
 import { textStep } from "@gent/core-internal/debug/provider"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { AgentsViewExtension, ListAgents } from "../../src/agents-view/index.js"
+import { AgentsViewExtension, AgentsViewRpc } from "../../src/agents-view/index.js"
 import { e2ePreset } from "../helpers/test-preset"
 
 const ReplySchema = Schema.Struct({
@@ -42,8 +42,8 @@ const listAgents = (input: { readonly query?: string }) =>
     const raw = yield* client.extension.request({
       sessionId,
       branchId,
-      extensionId: ref(ListAgents).extensionId,
-      capabilityId: ref(ListAgents).capabilityId,
+      extensionId: ref(AgentsViewRpc.ListAgents).extensionId,
+      capabilityId: ref(AgentsViewRpc.ListAgents).capabilityId,
       input,
     })
     const reply = yield* Schema.decodeUnknownEffect(ReplySchema)(raw)
