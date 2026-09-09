@@ -6,6 +6,7 @@
  */
 
 import { Predicate, Context, Effect } from "effect"
+import { ActorStateRegistry, listStateEntityIds } from "effect-encore"
 import {
   ExtensionHostError,
   ExtensionHostSearchResult,
@@ -345,10 +346,14 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
       searchStorage: Effect.serviceOption(SearchStorage),
       agentRunner: Effect.serviceOption(AgentRunnerService),
       sessionMutations: Effect.serviceOption(SessionMutations),
-      // Optional by construction: the actor's state client exists only where the
-      // AgentLoop actor layer is in scope. Where it is absent the facet keeps
-      // its `unavailable` default rather than failing the whole host context.
-      actorState: Effect.serviceOption(AgentLoopActor.State),
+      // Optional by construction: the registry exists only where an actor layer
+      // is in scope. Where it is absent the facet keeps its `unavailable`
+      // default rather than failing the whole host context.
+      //
+      // The registry rather than the actor's own `State` client: enumerating
+      // entities needs only the registry, and depending on the built actor from
+      // here would invert the layer graph the loop is built from.
+      actorState: Effect.serviceOption(ActorStateRegistry),
     })
 
     const overrides: AmbientHostContextOverrides = {}
@@ -386,12 +391,14 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
       Object.assign(overrides, { sessionMutations: available.sessionMutations.value })
     }
     if (available.actorState._tag === "Some") {
-      const actorState = available.actorState.value
+      const registry = available.actorState.value
       Object.assign(overrides, {
         activeLoops: {
           list: Effect.gen(function* () {
             const workspaceId = yield* CurrentWorkspaceId
-            const entityIds = yield* actorState.listEntityIds
+            const entityIds = yield* listStateEntityIds(AgentLoopActor.name).pipe(
+              Effect.provideService(ActorStateRegistry, registry),
+            )
             return yield* listWorkspaceLoops({
               workspaceId,
               entityIds,
