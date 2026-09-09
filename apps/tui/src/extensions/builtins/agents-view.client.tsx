@@ -179,6 +179,12 @@ export function AgentsPane(props: OverlayProps & { controller: AgentsController 
   )
 
   const panelWidth = () => Math.min(90, dimensions().width - 6)
+  /**
+   * Columns a row may actually use: the panel border takes 2, `ChromePanel.Body`
+   * pads 1 each side, and the row itself pads 1 more on the left. Budgeting less
+   * than that wraps the line and breaks the one-row-per-agent alignment.
+   */
+  const rowWidth = () => Math.max(0, panelWidth() - 5)
   const panelHeight = () => Math.min(20, dimensions().height - 6)
   const left = () => Math.floor((dimensions().width - panelWidth()) / 2)
   const top = () => Math.floor((dimensions().height - panelHeight()) / 2)
@@ -226,7 +232,7 @@ export function AgentsPane(props: OverlayProps & { controller: AgentsController 
                     <text style={{ fg: colorFor(row, selected()) }}>
                       {truncate(
                         `${SECTION_LABEL[row.section].padEnd(9)}${labelFor(row)}`,
-                        panelWidth() - 4,
+                        rowWidth(),
                       )}
                     </text>
                   </box>

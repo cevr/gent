@@ -30,7 +30,7 @@ const live = (overrides: {
   sessionId: sid(overrides.session),
   branchId: bid(overrides.branch),
   agent: overrides.agent ?? "main",
-  status: overrides.status ?? "Running",
+  status: Option.some(overrides.status ?? "Running"),
   model: Option.fromUndefinedOr(overrides.model),
   turns: Option.fromUndefinedOr(overrides.turns),
   costUsd: Option.fromUndefinedOr(overrides.costUsd),
@@ -98,6 +98,13 @@ describe("agents view projection", () => {
 
     test("a durable-only row is inactive", () => {
       expect(sectionOf(Option.none())).toBe("inactive")
+    })
+
+    test("a resident loop with an unread status is idle, not running", () => {
+      // Being materialized is not the same as working. Reporting it as running
+      // would strand every live loop in `running` and make `idle` unreachable.
+      const row = { ...live({ session: "s", branch: "b" }), status: Option.none() }
+      expect(sectionOf(Option.some(row))).toBe("idle")
     })
   })
 

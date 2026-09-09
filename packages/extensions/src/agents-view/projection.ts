@@ -37,8 +37,13 @@ export interface LiveAgentRow {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly agent: string
-  /** Runtime state tag, e.g. `"Idle"` / `"Running"` / `"WaitingForInteraction"`. */
-  readonly status: string
+  /**
+   * Runtime state tag, e.g. `"Idle"` / `"Running"` / `"WaitingForInteraction"`.
+   *
+   * `None` when the loop is known to be materialized but its state has not been
+   * read — enumerating N loops must not fan out into N state reads.
+   */
+  readonly status: Option.Option<string>
   readonly model: Option.Option<string>
   readonly turns: Option.Option<number>
   readonly costUsd: Option.Option<number>
@@ -86,16 +91,24 @@ export const rowKey = (key: AgentRowKey): string =>
   `${key.sessionId.length}:${key.sessionId}:${key.branchId}`
 
 /**
- * Which section a row belongs to. A materialized loop is running or idle by its
- * own status; anything only in durable storage is inactive.
+ * Which section a row belongs to. Anything only in durable storage is inactive.
+ *
+ * A materialized loop whose status was not read counts as **idle**, not
+ * running: being resident is not the same as working, and claiming otherwise
+ * leaves every live loop stuck in `running` forever. Only a status that says
+ * so puts a row in `running`.
  */
 export const sectionOf = (live: Option.Option<LiveAgentRow>): AgentSection =>
   Option.match(live, {
     onNone: () => "inactive",
-    onSome: (row) => {
-      if (row.status === "Idle") return "idle"
-      return "running"
-    },
+    onSome: (row) =>
+      Option.match(row.status, {
+        onNone: () => "idle",
+        onSome: (status) => {
+          if (status === "Idle") return "idle"
+          return "running"
+        },
+      }),
   })
 
 const SECTION_ORDER = { running: 0, idle: 1, inactive: 2 } satisfies Record<AgentSection, number>
@@ -133,7 +146,7 @@ export const reconcileAgentRows = (params: {
       branchId: identity.value.branchId,
       section: sectionOf(live),
       agent: Option.map(live, (row) => row.agent),
-      status: Option.map(live, (row) => row.status),
+      status: Option.flatMap(live, (row) => row.status),
       name: Option.flatMap(durable, (row) => row.name),
       cwd: Option.flatMap(durable, (row) => row.cwd),
       model: Option.flatMap(live, (row) => row.model),

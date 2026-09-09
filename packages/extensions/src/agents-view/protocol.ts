@@ -76,7 +76,9 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (query: string
     sessionId: loop.sessionId,
     branchId: loop.branchId,
     agent: "main",
-    status: "Running",
+    // Not read: see LiveAgentRow.status. A resident loop is reported idle
+    // rather than running, because this capability does not know which it is.
+    status: Option.none(),
     model: Option.none(),
     turns: Option.none(),
     costUsd: Option.none(),
