@@ -56,12 +56,12 @@ describe("Events", () => {
       if (latest && latest._tag === "AgentSwitched") {
         expect(latest.toAgent).toBe(AgentName.make("cowork"))
       }
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
 })
 
 describe("Event decoding", () => {
-  const layer = SqliteStorage.TestWithSql(() => Layer.empty)
+  const layer = SqliteStorage.TestWithSql(() => Layer.empty, {})
   it.live("listEvents fails with a tagged decode error for unknown _tag", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage

@@ -79,7 +79,7 @@ const makeCacheLayer = (params: {
         BunServices.layer,
         processRunnerLive,
         configServiceLive,
-        SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(BunPlatformLive)),
+        SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
       ),
     ),
   )
@@ -115,7 +115,7 @@ describe("session profile resolution", () => {
             BunServices.layer,
             processRunnerLive,
             configServiceLive,
-            SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(BunPlatformLive)),
+            SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
           ),
         ),
       )
@@ -211,7 +211,7 @@ describe("session profile resolution", () => {
             BunServices.layer,
             processRunnerLive,
             configServiceLive,
-            SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(BunPlatformLive)),
+            SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
           ),
         ),
       )

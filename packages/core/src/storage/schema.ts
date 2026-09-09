@@ -456,52 +456,6 @@ const messageInsertionOrderMigration = Effect.gen(function* () {
   )
 })
 
-const cellExecutionsMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql.unsafe(`
-    CREATE TABLE cell_executions (
-      assistant_message_id TEXT NOT NULL,
-      tool_call_id TEXT NOT NULL,
-      started_at INTEGER NOT NULL,
-      result_json TEXT,
-      completed_at INTEGER,
-      PRIMARY KEY (assistant_message_id, tool_call_id),
-      CHECK ((result_json IS NULL) = (completed_at IS NULL)),
-      FOREIGN KEY (assistant_message_id) REFERENCES messages(id) ON DELETE CASCADE
-    )
-  `)
-})
-
-const cellNamespacesMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql.unsafe(`
-    CREATE TABLE cell_namespaces (
-      session_id TEXT NOT NULL,
-      branch_id TEXT NOT NULL,
-      snapshot_json TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (session_id, branch_id),
-      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
-    )
-  `)
-})
-
-const cellToolOperationsMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql.unsafe(`
-    CREATE TABLE cell_tool_operations (
-      assistant_message_id TEXT NOT NULL,
-      cell_tool_call_id TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      record_json TEXT NOT NULL,
-      request_id TEXT UNIQUE,
-      PRIMARY KEY (assistant_message_id, cell_tool_call_id, operation_id),
-      FOREIGN KEY (assistant_message_id, cell_tool_call_id)
-        REFERENCES cell_executions(assistant_message_id, tool_call_id) ON DELETE CASCADE
-    )
-  `)
-})
-
 // oxlint-disable-next-line effect/noUnknownParameters -- SQLite migrations expose unknown failure causes.
 const wrapMigrationError = (error: unknown): StorageError =>
   new StorageError({ message: "Storage migration failed", cause: error })
@@ -525,7 +479,18 @@ const StorageCompatibilityLive: Layer.Layer<never, StorageError, SqlClient.SqlCl
     ),
   )
 
-const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
+/**
+ * Migrations a feature contributes for the tables it owns.
+ *
+ * Keys are `<id>_<name>`; ids order the whole chain, core's and the
+ * features' alike, so a feature picks ids above core's last one. Core never
+ * names a feature's tables -- it only leaves room in the sequence for them.
+ */
+export type FeatureMigrations = Record<string, Effect.Effect<void, unknown, SqlClient.SqlClient>>
+
+const makeStorageMigratorLive = (
+  featureMigrations: FeatureMigrations,
+): Layer.Layer<never, StorageError, SqlClient.SqlClient> =>
   SqliteMigrator.layer({
     loader: Migrator.fromRecord({
       "001_init": initialMigration,
@@ -539,9 +504,7 @@ const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient>
       "009_tool_call_bindings": toolCallBindingsMigration,
       "010_resource_graph_state": resourceGraphStateMigration,
       "011_message_insertion_order": messageInsertionOrderMigration,
-      "012_cell_executions": cellExecutionsMigration,
-      "013_cell_tool_operations": cellToolOperationsMigration,
-      "014_cell_namespaces": cellNamespacesMigration,
+      ...featureMigrations,
     }),
     table: "gent_storage_migrations",
   }).pipe(
@@ -562,5 +525,7 @@ const StorageIntegrityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient
     ),
   )
 
-export const StorageInitLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
-  StorageIntegrityLive.pipe(Layer.provideMerge(StorageMigratorLive))
+export const makeStorageInitLive = (
+  featureMigrations: FeatureMigrations,
+): Layer.Layer<never, StorageError, SqlClient.SqlClient> =>
+  StorageIntegrityLive.pipe(Layer.provideMerge(makeStorageMigratorLive(featureMigrations)))

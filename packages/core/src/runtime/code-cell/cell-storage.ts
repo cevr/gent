@@ -8,7 +8,7 @@
  */
 
 import { Effect, Layer, Option } from "effect"
-import type { SqlClient } from "effect/unstable/sql"
+import { SqlClient } from "effect/unstable/sql"
 import type { InteractionStorage } from "../../storage/interaction-storage.js"
 import { CellExecution } from "./cell-execution.js"
 import type { BranchToolLayerFactory } from "../agent/branch-tool-layer.js"
@@ -17,11 +17,66 @@ import { CellExecutionStorage } from "./cell-execution-storage.js"
 import { CellNamespaceStorage } from "./cell-namespace-storage.js"
 import { CellToolOperationStorage } from "./cell-tool-operation-storage.js"
 import type { GentPlatform } from "../gent-platform.js"
+import type { FeatureMigrations } from "../../storage/schema.js"
 import type { DispatchingToolStorage } from "./dispatching-tool-storage.js"
 import { InnerOperationReceipts } from "../../domain/inner-operation-receipts.js"
 import { RetainedBindings } from "../../domain/retained-bindings.js"
 import type { ToolCallRecoveryService } from "../../domain/tool-call-recovery.js"
 import { cellToolCallRecovery } from "./cell-tool-call-recovery.js"
+
+/**
+ * The tables the cell owns.
+ *
+ * Ids continue core's chain rather than starting a new one: one migration
+ * sequence runs against one database, so a feature picks the next free ids
+ * and keeps them for the life of the schema. These three shipped as 012-014
+ * and must keep those ids or an existing database re-runs them.
+ */
+export const cellMigrations: FeatureMigrations = {
+  "012_cell_executions": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql.unsafe(`
+    CREATE TABLE cell_executions (
+      assistant_message_id TEXT NOT NULL,
+      tool_call_id TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      result_json TEXT,
+      completed_at INTEGER,
+      PRIMARY KEY (assistant_message_id, tool_call_id),
+      CHECK ((result_json IS NULL) = (completed_at IS NULL)),
+      FOREIGN KEY (assistant_message_id) REFERENCES messages(id) ON DELETE CASCADE
+    )
+  `)
+  }),
+  "013_cell_tool_operations": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql.unsafe(`
+    CREATE TABLE cell_tool_operations (
+      assistant_message_id TEXT NOT NULL,
+      cell_tool_call_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      record_json TEXT NOT NULL,
+      request_id TEXT UNIQUE,
+      PRIMARY KEY (assistant_message_id, cell_tool_call_id, operation_id),
+      FOREIGN KEY (assistant_message_id, cell_tool_call_id)
+        REFERENCES cell_executions(assistant_message_id, tool_call_id) ON DELETE CASCADE
+    )
+  `)
+  }),
+  "014_cell_namespaces": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql.unsafe(`
+    CREATE TABLE cell_namespaces (
+      session_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, branch_id),
+      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
+    )
+  `)
+  }),
+}
 
 /**
  * Build the cell's repositories over an existing SQL client.

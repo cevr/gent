@@ -551,7 +551,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty),
+          SqliteStorage.TestWithSql(() => Layer.empty, {}),
           EventPublisher.Test(),
         ),
       ),
@@ -624,7 +624,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty),
+          SqliteStorage.TestWithSql(() => Layer.empty, {}),
           EventPublisher.Test(),
         ),
       ),
@@ -665,7 +665,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty),
+          SqliteStorage.TestWithSql(() => Layer.empty, {}),
           EventPublisher.Test(),
         ),
       ),
@@ -738,7 +738,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty),
+          SqliteStorage.TestWithSql(() => Layer.empty, {}),
           EventPublisher.Test(),
         ),
       ),
@@ -802,7 +802,7 @@ describe("tool binding replay", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          SqliteStorage.TestWithSql(() => Layer.empty),
+          SqliteStorage.TestWithSql(() => Layer.empty, {}),
           EventPublisher.Test(),
         ),
       ),

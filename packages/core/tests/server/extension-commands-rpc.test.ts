@@ -752,7 +752,7 @@ describe("extension command RPCs", () => {
                   Layer.mergeAll(
                     BunPlatformLive,
                     ConfigService.Test(),
-                    SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(
+                    SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
                       Layer.provide(BunPlatformLive),
                     ),
                   ),
@@ -861,7 +861,9 @@ describe("extension command RPCs", () => {
                 BunServices.layer,
                 processRunnerLive,
                 configServiceLive,
-                SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(BunPlatformLive)),
+                SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
+                  Layer.provide(BunPlatformLive),
+                ),
               ),
             ),
             Layer.orDie,
@@ -1007,7 +1009,9 @@ describe("extension command RPCs", () => {
                 BunServices.layer,
                 processRunnerLive,
                 configServiceLive,
-                SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(BunPlatformLive)),
+                SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
+                  Layer.provide(BunPlatformLive),
+                ),
               ),
             ),
             Layer.orDie,
@@ -1183,7 +1187,9 @@ describe("extension command RPCs", () => {
                 BunServices.layer,
                 processRunnerLive,
                 configServiceLive,
-                SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(BunPlatformLive)),
+                SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
+                  Layer.provide(BunPlatformLive),
+                ),
               ),
             ),
             Layer.orDie,

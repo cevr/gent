@@ -82,7 +82,7 @@ import {
   steerAgentLoop,
   waitForPhase,
 } from "./helpers"
-import { cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
+import { cellMigrations, cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
 
 describe("interaction", () => {
   const intSessionId = SessionId.make("s-interaction")
@@ -157,7 +157,7 @@ describe("interaction", () => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const baseDeps = Layer.mergeAll(
-      SqliteStorage.TestWithSql(cellStorageLayer),
+      SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
       resolvedProviderLayer,
       ModelResolver.fromLanguageModel(resolvedProviderLayer),
       makeExtRegistry(tools),
@@ -304,7 +304,7 @@ describe("interaction", () => {
         ),
       )
       const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(cellStorageLayer),
+        SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         makeExtRegistry(),

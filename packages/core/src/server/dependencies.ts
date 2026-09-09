@@ -33,7 +33,11 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
-import { cellBranchLayer, cellStorageLayer } from "../runtime/code-cell/cell-storage.js"
+import {
+  cellBranchLayer,
+  cellMigrations,
+  cellStorageLayer,
+} from "../runtime/code-cell/cell-storage.js"
 import { BranchToolLayer } from "../runtime/agent/branch-tool-layer.js"
 import { CurrentInteractionOwner } from "../domain/interaction-owner.js"
 import { ResourceGraphStorage } from "../storage/resource-graph-storage.js"
@@ -165,9 +169,10 @@ const platformServicesLive = Layer.provideMerge(
 )
 
 const makeStorageLayer = (config: DependenciesConfig, persistenceMode: "disk" | "memory") => {
-  if (persistenceMode === "memory") return SqliteStorage.MemoryWithSql(cellStorageLayer)
+  if (persistenceMode === "memory")
+    return SqliteStorage.MemoryWithSql(cellStorageLayer, cellMigrations)
   const dbPath = Option.getOrElse(Option.fromUndefinedOr(config.dbPath), () => ".gent/data.db")
-  return SqliteStorage.LiveWithSql(dbPath, cellStorageLayer)
+  return SqliteStorage.LiveWithSql(dbPath, cellStorageLayer, cellMigrations)
 }
 
 const makeClusterRunnerLayer = (persistenceMode: "disk" | "memory") => {

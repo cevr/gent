@@ -64,7 +64,7 @@ import { ensureStorageParents } from "../../../src/test-utils"
 import { waitFor } from "../../../src/test-utils/fixtures"
 import { ExtensionContext, getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
-import { cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
+import { cellMigrations, cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
 // ── Helpers ──
 const sessionId = SessionId.make("test-session")
 const branchId = BranchId.make("test-branch")
@@ -305,7 +305,7 @@ const makeLayerWithEvents = (
   let toolRunnerLayer = ToolRunner.Test()
   if (options?.liveToolRunner === true) toolRunnerLayer = ToolRunner.Live
   const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(cellStorageLayer),
+    SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(executor, options?.tools),
@@ -746,7 +746,7 @@ describe("external turn execution", () => {
         },
       ])
       const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(cellStorageLayer),
+        SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(agentsResolved),
@@ -914,7 +914,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(cellStorageLayer),
+        SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
@@ -999,7 +999,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(cellStorageLayer),
+        SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
@@ -1098,7 +1098,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(cellStorageLayer),
+        SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
@@ -1196,7 +1196,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       )
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(cellStorageLayer),
+        SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),

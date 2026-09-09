@@ -75,7 +75,7 @@ describe("Concurrent writes", () => {
       expect(yield* Ref.get(peak)).toBeGreaterThan(1)
     }).pipe(
       Effect.timeout("5 seconds"),
-      Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty)),
+      Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {})),
     ),
   )
   it.live("appendEvent with N concurrent fibers produces N envelopes with unique ids", () =>
@@ -110,7 +110,7 @@ describe("Concurrent writes", () => {
       expect(yield* Ref.get(peak)).toBeGreaterThan(1)
     }).pipe(
       Effect.timeout("5 seconds"),
-      Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty)),
+      Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {})),
     ),
   )
   it.live("createMessage with N concurrent fibers produces N rows with no lost writes", () =>
@@ -156,7 +156,7 @@ describe("Concurrent writes", () => {
       expect(yield* Ref.get(peak)).toBeGreaterThan(1)
     }).pipe(
       Effect.timeout("5 seconds"),
-      Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty)),
+      Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {})),
     ),
   )
 })

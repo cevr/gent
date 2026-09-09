@@ -48,7 +48,7 @@ import {
   scriptedProvider,
   steerAgentLoop,
 } from "./helpers"
-import { cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
+import { cellMigrations, cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
 
 describe("run completion", () => {
   it.live("run returns after a fast turn completes before the caller awaits idle", () =>
@@ -219,7 +219,7 @@ describe("streaming", () => {
           })
         }),
       )
-      const baseStorageLayer = SqliteStorage.TestWithSql(cellStorageLayer)
+      const baseStorageLayer = SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations)
       const slowStorage = Layer.provideMerge(delayedEventStorage, baseStorageLayer)
       const deps = Layer.mergeAll(
         slowStorage,

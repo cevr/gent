@@ -55,4 +55,36 @@ describe("core feature independence guard", () => {
     )
     expect(findings).toEqual([])
   })
+  test("flags core naming a table the cell owns", () => {
+    const findings = findCoreFeatureIndependenceFindings(
+      "packages/core/src/storage/schema.ts",
+      "    CREATE TABLE cell_executions (",
+    )
+    expect(findings).toHaveLength(1)
+    expect(findings[0]!.message).toContain("feature-migrations seam")
+  })
+
+  test("lets the cell name its own tables", () => {
+    const findings = findCoreFeatureIndependenceFindings(
+      "packages/core/src/runtime/code-cell/cell-storage.ts",
+      "    CREATE TABLE cell_executions (",
+    )
+    expect(findings).toEqual([])
+  })
+
+  test("lets a cell file import a sibling through the feature directory name", () => {
+    const findings = findCoreFeatureIndependenceFindings(
+      "packages/core/src/runtime/code-cell/cell-storage.ts",
+      'import { CellExecution } from "../code-cell/cell-execution.js"',
+    )
+    expect(findings).toEqual([])
+  })
+
+  test("ignores a kernel table whose name is not a feature's", () => {
+    const findings = findCoreFeatureIndependenceFindings(
+      "packages/core/src/storage/schema.ts",
+      "    CREATE TABLE sessions (",
+    )
+    expect(findings).toEqual([])
+  })
 })

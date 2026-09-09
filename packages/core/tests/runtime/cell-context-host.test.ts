@@ -9,7 +9,7 @@ import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { handleContextCall, pageText } from "../../src/runtime/code-cell/cell-context-host"
 import { ModelContextLedger } from "../../src/runtime/model-context-ledger"
-import { cellStorageLayer } from "../../src/runtime/code-cell/cell-storage"
+import { cellMigrations, cellStorageLayer } from "../../src/runtime/code-cell/cell-storage"
 
 const sessionId = SessionId.make("context-host-session")
 const branchId = BranchId.make("context-host-branch")
@@ -28,7 +28,7 @@ const decodeReply = Schema.decodeUnknownSync(
 )
 
 const layer = Layer.mergeAll(
-  SqliteStorage.TestWithSql(cellStorageLayer),
+  SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
   GentPlatform.Test(),
   ModelContextLedger.Branch,
 )

@@ -94,7 +94,7 @@ const keyFor = (workspaceId = WORKSPACE_A, cwd = CWD_A) => ({ workspaceId, cwd }
 
 const withStorage = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
-    Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty)),
+    Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {})),
     Effect.provideService(CurrentWorkspaceId, WORKSPACE_A),
   )
 

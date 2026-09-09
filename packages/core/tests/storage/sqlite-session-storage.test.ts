@@ -35,7 +35,7 @@ describe("Sessions", () => {
       expect(retrieved).toBeDefined()
       expect(retrieved?.id).toBe(SessionId.make("test-session"))
       expect(retrieved?.name).toBe("Test Session")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("lists sessions", () =>
     Effect.gen(function* () {
@@ -58,7 +58,7 @@ describe("Sessions", () => {
       )
       const sessionsResult = yield* sessions.listSessions
       expect(sessionsResult.length).toBe(2)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("lists first branch per session", () =>
     Effect.gen(function* () {
@@ -83,7 +83,7 @@ describe("Sessions", () => {
         SessionId.make("s2"),
         SessionId.make("s1"),
       ])
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("updates a session", () =>
     Effect.gen(function* () {
@@ -98,7 +98,7 @@ describe("Sessions", () => {
       yield* sessions.updateSession(new Session({ ...session, name: "Updated" }))
       const retrieved = yield* sessions.getSession(SessionId.make("update-test"))
       expect(retrieved?.name).toBe("Updated")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("decodes invalid stored reasoning levels as absent", () =>
     Effect.gen(function* () {
@@ -107,7 +107,7 @@ describe("Sessions", () => {
       yield* sql`INSERT INTO sessions (id, reasoning_level, created_at, updated_at) VALUES (${"invalid-reasoning"}, ${"too-spicy"}, ${FIXED_NOW_MILLIS}, ${FIXED_NOW_MILLIS})`
       const retrieved = yield* sessions.getSession(SessionId.make("invalid-reasoning"))
       expect(retrieved?.reasoningLevel).toBeUndefined()
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("fails through StorageError for invalid durable session row shape", () =>
     Effect.gen(function* () {
@@ -116,7 +116,7 @@ describe("Sessions", () => {
       yield* sql`INSERT INTO sessions (id, created_at, updated_at) VALUES (${"invalid-session-row"}, ${"not-a-number"}, ${FIXED_NOW_MILLIS})`
       const exit = yield* Effect.exit(sessions.getSession(SessionId.make("invalid-session-row")))
       expect(exit._tag).toBe("Failure")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("deletes a session", () =>
     Effect.gen(function* () {
@@ -131,7 +131,7 @@ describe("Sessions", () => {
       yield* sessions.deleteSession(SessionId.make("delete-test"))
       const retrieved = yield* sessions.getSession(SessionId.make("delete-test"))
       expect(retrieved).toBeUndefined()
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("enables sqlite foreign key enforcement", () =>
     Effect.gen(function* () {
@@ -140,14 +140,18 @@ describe("Sessions", () => {
         foreign_keys: number
       }>`PRAGMA foreign_keys`
       expect(rows[0]?.foreign_keys).toBe(1)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.scoped("configures file-backed sqlite durability pragmas", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const dir = yield* fs.makeTempDirectoryScoped()
-      const layer = SqliteStorage.LiveWithSql(path.join(dir, "gent.db"), () => Layer.empty).pipe(
+      const layer = SqliteStorage.LiveWithSql(
+        path.join(dir, "gent.db"),
+        () => Layer.empty,
+        {},
+      ).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
         Layer.provide(GentPlatform.Test()),
@@ -184,7 +188,7 @@ describe("Sessions", () => {
       const path = yield* Path.Path
       const dir = yield* fs.makeTempDirectoryScoped()
       const dbPath = path.join(dir, "gent.db")
-      const layer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty).pipe(
+      const layer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
         Layer.provide(GentPlatform.Test()),
@@ -212,9 +216,6 @@ describe("Sessions", () => {
           "tool_call_bindings",
           "resource_graph_state",
           "message_insertion_order",
-          "cell_executions",
-          "cell_tool_operations",
-          "cell_namespaces",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -240,9 +241,6 @@ describe("Sessions", () => {
           "tool_call_bindings",
           "resource_graph_state",
           "message_insertion_order",
-          "cell_executions",
-          "cell_tool_operations",
-          "cell_namespaces",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -253,7 +251,11 @@ describe("Sessions", () => {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const dir = yield* fs.makeTempDirectoryScoped()
-      const layer = SqliteStorage.LiveWithSql(path.join(dir, "gent.db"), () => Layer.empty).pipe(
+      const layer = SqliteStorage.LiveWithSql(
+        path.join(dir, "gent.db"),
+        () => Layer.empty,
+        {},
+      ).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
         Layer.provide(GentPlatform.Test()),
@@ -282,9 +284,6 @@ describe("Sessions", () => {
         }
         // Restore the version-10 schema in this temporary test database.
         const sql = yield* SqlClient.SqlClient
-        yield* sql.unsafe("DROP TABLE cell_namespaces")
-        yield* sql.unsafe("DROP TABLE cell_tool_operations")
-        yield* sql.unsafe("DROP TABLE cell_executions")
         yield* sql.unsafe("DROP TRIGGER messages_assign_insertion_order")
         yield* sql.unsafe("DROP INDEX idx_messages_branch_created")
         yield* sql.unsafe("DROP INDEX idx_messages_insertion_order")
@@ -344,7 +343,7 @@ describe("Sessions", () => {
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(BunSqliteClient.layer({ filename: dbPath })))
 
-      const layer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty).pipe(
+      const layer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
         Layer.provide(GentPlatform.Test()),
@@ -392,7 +391,7 @@ describe("Sessions", () => {
         sql`INSERT INTO durable_operations (workspace_id, operation, request_id, result_json, subject_session_id, subject_branch_id, created_at) VALUES (${"default"}, ${"session.create"}, ${"orphan-durable"}, ${"{}"}, ${"fk-session"}, ${"missing-branch"}, ${now})`,
       )
       expect(durableExit._tag).toBe("Failure")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("cascades queue and durable operation projections when deleting a session", () =>
     Effect.gen(function* () {
@@ -437,7 +436,7 @@ describe("Sessions", () => {
       `
       expect(queueRows[0]?.count).toBe(0)
       expect(operationRows[0]?.count).toBe(0)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("rejects invalid session parent and active branch relationships", () =>
     Effect.gen(function* () {
@@ -485,7 +484,7 @@ describe("Sessions", () => {
         sql`INSERT INTO sessions (id, active_branch_id, created_at, updated_at) VALUES (${"wrong-active"}, ${"parent-b-branch"}, ${now.getTime()}, ${now.getTime()})`,
       )
       expect(wrongActiveBranchExit._tag).toBe("Failure")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("rejects parent branch without parent session through storage service", () =>
     Effect.gen(function* () {
@@ -505,7 +504,7 @@ describe("Sessions", () => {
       expect(
         yield* sessions.getSession(SessionId.make("storage-dangling-parent-branch")),
       ).toBeUndefined()
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("rejects branch creation with a parent branch outside the same session", () =>
     Effect.gen(function* () {
@@ -542,7 +541,7 @@ describe("Sessions", () => {
         sql`INSERT INTO branches (id, session_id, parent_branch_id, created_at) VALUES (${"branch-parent-b-direct-child"}, ${"branch-parent-b"}, ${"branch-parent-a-root"}, ${now.getTime()})`,
       )
       expect(directInsertExit._tag).toBe("Failure")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("rejects deleting branches that own child branches or child sessions", () =>
     Effect.gen(function* () {
@@ -610,7 +609,7 @@ describe("Sessions", () => {
       expect(directChildSessionExit._tag).toBe("Failure")
       expect(yield* branches.getBranch(BranchId.make("delete-parent-child"))).toBeDefined()
       expect(yield* sessions.getSession(SessionId.make("delete-child-session"))).toBeDefined()
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("deletes session children and storage projections", () =>
     Effect.gen(function* () {
@@ -712,14 +711,14 @@ describe("Sessions", () => {
       expect(chunks[0]?.count).toBe(0)
       expect(fts[0]?.count).toBe(0)
       expect([...cascadedIds].sort()).toEqual([sessionId, childSessionId].sort())
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("returns the cascade set for a no-op delete of an already-removed session", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const cascadedIds = yield* sessions.deleteSession(SessionId.make("never-existed"))
       expect(cascadedIds).toEqual([])
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   // Observable post-state contract (sqlite-storage.ts:1204-1209):
   // when `deleteSession(parent)` races with concurrent
@@ -849,7 +848,7 @@ describe("Sessions", () => {
       }
     }).pipe(
       Effect.timeout("5 seconds"),
-      Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty)),
+      Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {})),
     ),
   )
 })

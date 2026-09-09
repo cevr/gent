@@ -35,11 +35,11 @@ import {
   ModelCompactionFailure,
 } from "../../src/runtime/model-compaction"
 import { ModelContextBudget, ModelContextProjectionError } from "../../src/runtime/model-context"
-import { cellStorageLayer } from "../../src/runtime/code-cell/cell-storage"
+import { cellMigrations, cellStorageLayer } from "../../src/runtime/code-cell/cell-storage"
 
 // The cell's storage carries the projections core reads from it, so this is
 // the same wiring production uses.
-const storageWithReceipts = SqliteStorage.TestWithSql(cellStorageLayer)
+const storageWithReceipts = SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations)
 
 const sessionId = SessionId.make("compaction-session")
 const branchId = BranchId.make("compaction-branch")

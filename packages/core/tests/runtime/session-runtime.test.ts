@@ -63,7 +63,7 @@ import { MessageStorage } from "../../src/storage/message-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
-import { cellStorageLayer } from "../../src/runtime/code-cell/cell-storage.js"
+import { cellMigrations, cellStorageLayer } from "../../src/runtime/code-cell/cell-storage.js"
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   const mainAgent = AgentDefinition.make({
     name: DEFAULT_AGENT_NAME,
@@ -103,7 +103,7 @@ const makeRuntimeLayer = (
   const resolvedExtensions = makeTestExtensions(tools)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = SqliteStorage.TestWithSql(cellStorageLayer)
+  const storageLayer = SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations)
   const baseDepsWithoutProfile = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
@@ -147,7 +147,7 @@ const makeLiveToolRuntimeLayer = (
   const resolvedExtensions = makeTestExtensions(tools)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = SqliteStorage.TestWithSql(cellStorageLayer)
+  const storageLayer = SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations)
   const baseDeps = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),

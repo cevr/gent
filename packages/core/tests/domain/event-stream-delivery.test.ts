@@ -24,7 +24,7 @@ const range = (from: number, to: number) =>
 
 const durableLayer = EventStoreLive.pipe(
   Layer.provideMerge(
-    SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(GentPlatform.Test())),
+    SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(GentPlatform.Test())),
   ),
 )
 

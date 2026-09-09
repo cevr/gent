@@ -38,7 +38,7 @@ const fsLayer = Layer.provideMerge(
 const sharedLayer = Layer.mergeAll(
   fsLayer,
   ConfigService.Test(),
-  SqliteStorage.TestWithSql(() => Layer.empty),
+  SqliteStorage.TestWithSql(() => Layer.empty, {}),
 )
 
 // Build a fresh production cache in the test's owning scope.

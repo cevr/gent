@@ -13,7 +13,7 @@ import { CellExecutionStorage } from "../../src/runtime/code-cell/cell-execution
 import { MessageStorage } from "../../src/storage/message-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
-import { cellStorageLayer } from "../../src/runtime/code-cell/cell-storage"
+import { cellMigrations, cellStorageLayer } from "../../src/runtime/code-cell/cell-storage"
 
 const now = dateFromMillis(1_767_225_600_000)
 const code = "await tools.write({ path: 'result.txt', content: 'once' })"
@@ -81,7 +81,7 @@ it.live("admits a cell once under concurrent claims and retains its first result
       .pipe(Effect.flip)
     expect(conflict.message).toBe("Cell result is immutable")
     expect(yield* storage.claim(address)).toEqual({ _tag: "Completed", result })
-  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer))),
+  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations))),
 )
 
 it.live("denies cross-workspace and cross-branch claims and completions", () =>
@@ -126,7 +126,7 @@ it.live("denies cross-workspace and cross-branch claims and completions", () =>
       ).toBe(true)
     }
     expect((yield* storage.claim(address))._tag).toBe("Incomplete")
-  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer))),
+  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations))),
 )
 
 it.live("rejects unclaimed and mismatched results and removes receipts with the message", () =>
@@ -161,7 +161,7 @@ it.live("rejects unclaimed and mismatched results and removes receipts with the 
       readonly count: number
     }>`SELECT COUNT(*) AS count FROM cell_executions`
     expect(rows[0]?.count).toBe(0)
-  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer))),
+  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations))),
 )
 
 it.live("rejects admission inside a caller transaction before granting execution", () =>
@@ -172,7 +172,7 @@ it.live("rejects admission inside a caller transaction before granting execution
     const rejected = yield* storage.claim(address).pipe(sql.withTransaction, Effect.flip)
     expect(Schema.is(StorageError)(rejected)).toBe(true)
     expect(yield* storage.claim(address)).toEqual({ _tag: "Claimed", code })
-  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer))),
+  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations))),
 )
 
 it.scopedLive(
@@ -185,6 +185,7 @@ it.scopedLive(
       const storageLayer = SqliteStorage.LiveWithSql(
         path.join(dir, "gent.db"),
         cellStorageLayer,
+        cellMigrations,
       ).pipe(Layer.provide(GentPlatform.Test()))
       const first = yield* Effect.scoped(
         Effect.gen(function* () {

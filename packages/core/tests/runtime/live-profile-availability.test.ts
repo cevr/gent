@@ -163,7 +163,9 @@ describe("live profile resource availability", () => {
                 BunServices.layer,
                 ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
                 configServiceLive,
-                SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(BunPlatformLive)),
+                SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
+                  Layer.provide(BunPlatformLive),
+                ),
                 Layer.succeed(
                   CronRuntime,
                   CronRuntime.of({

@@ -20,7 +20,7 @@ import { StorageError } from "../domain/storage-error.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 export { StorageError }
 
-import { StorageInitLive } from "./schema.js"
+import { makeStorageInitLive, type FeatureMigrations } from "./schema.js"
 
 export type StorageTransaction = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -113,19 +113,21 @@ const ensureDbDirectory = (dbPath: string) =>
 
 const makeLiveSqliteLayer = (
   dbPath: string,
+  featureMigrations: FeatureMigrations,
 ): Layer.Layer<
   SqlClient.SqlClient,
   StorageError | PlatformError.PlatformError,
   FileSystem.FileSystem | Path.Path
 > =>
-  StorageInitLive.pipe(
+  makeStorageInitLive(featureMigrations).pipe(
     Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: dbPath }))),
     Layer.provideMerge(ensureDbDirectory(dbPath)),
   )
 
-const makeMemorySqliteLayer: Layer.Layer<SqlClient.SqlClient, StorageError> = StorageInitLive.pipe(
-  Layer.provideMerge(memorySqliteClientLayer),
-)
+const makeMemorySqliteLayer = (
+  featureMigrations: FeatureMigrations,
+): Layer.Layer<SqlClient.SqlClient, StorageError> =>
+  makeStorageInitLive(featureMigrations).pipe(Layer.provideMerge(memorySqliteClientLayer))
 
 export const SqliteStorage = {
   // Load-bearing: `deleteSession`'s atomic SELECT+DELETE relies on @effect/sql-sqlite-bun's
@@ -140,16 +142,18 @@ export const SqliteStorage = {
       StorageError | PlatformError.PlatformError,
       FileSystem.FileSystem | Path.Path
     >,
+    featureMigrations: FeatureMigrations,
   ): Layer.Layer<
     FocusedStorage | A,
     StorageError | PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path | GentPlatform
-  > => provideFocusedRepositories(makeLiveSqliteLayer(dbPath), extra),
+  > => provideFocusedRepositories(makeLiveSqliteLayer(dbPath, featureMigrations), extra),
 
   MemoryWithSql: <A>(
     extra: ExtraRepositories<A, StorageError, never>,
+    featureMigrations: FeatureMigrations,
   ): Layer.Layer<FocusedStorage | A, StorageError, GentPlatform> =>
-    provideFocusedRepositories(makeMemorySqliteLayer, extra),
+    provideFocusedRepositories(makeMemorySqliteLayer(featureMigrations), extra),
 
   // `TestWithSql` is the closed-context variant: it self-provides
   // `GentPlatform.Test()` so storage tests can yield it without wiring a
@@ -157,6 +161,10 @@ export const SqliteStorage = {
   // `MemoryWithSql` and supply the live `GentPlatform`.
   TestWithSql: <A>(
     extra: ExtraRepositories<A, StorageError, never>,
+    featureMigrations: FeatureMigrations,
   ): Layer.Layer<FocusedStorage | A, StorageError> =>
-    Layer.provide(provideFocusedRepositories(makeMemorySqliteLayer, extra), GentPlatform.Test()),
+    Layer.provide(
+      provideFocusedRepositories(makeMemorySqliteLayer(featureMigrations), extra),
+      GentPlatform.Test(),
+    ),
 }

@@ -12,7 +12,7 @@ import { dateFromMillis, Session, Branch, Message } from "../../src/domain/messa
 import { SessionId, BranchId, MessageId } from "../../src/domain/ids"
 import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
 
-const test = it.live.layer(SqliteStorage.TestWithSql(() => Layer.empty))
+const test = it.live.layer(SqliteStorage.TestWithSql(() => Layer.empty, {}))
 
 const FIXED_NOW_MILLIS = 1_767_225_600_000
 const FIXED_NOW = dateFromMillis(FIXED_NOW_MILLIS)
