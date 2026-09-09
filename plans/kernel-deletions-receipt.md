@@ -266,4 +266,6 @@ The final end-to-end run after the approval fix passed both tasks: 26 TUI tests 
 
 The host retains operation receipts, approval decisions, actor ownership, child/process lifetimes, file locks, and edit checks. The existing focused host tests passed (eight tests, 154 assertions). Saved files carry final workflow output. Kernel values carry working data. No replacement artifact catalog, RPC, or actor was added.
 
-Next: integrate and push the verified commits, restore the warm-source binary, and remove the Rift. Then research a smaller fully extensible core. Examine removal of core-internal, fewer files and concepts, and extensions over the actor-owned core loop. This next study does not authorize an unreviewed core rewrite.
+Delivery: commits through `bfc03d7577f8941b69d4c59f749f0a4e8069938b` are on `origin/main`. The direct warm-source build passed. The installed command points to `/Users/cvr/Developer/personal/gent/apps/tui/bin/gent`. Live Herdr ran that build and received DELIVERY-GREEN at idle. Evidence: `/tmp/gent-deletions-warm-build.log` and `/tmp/gent-deletions-delivered-herdr.txt`.
+
+The next research is in `plans/core-extension-reduction-2026-09-08.md`. It does not implement a core rewrite.
