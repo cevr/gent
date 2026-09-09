@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show, type Accessor } from "solid-js"
+import { createMemo, For, Show, type Accessor } from "solid-js"
 import { Match, Option, Predicate, Schema } from "effect"
 import type { SyntaxStyle } from "@opentui/core"
 import { useTerminalDimensions } from "../terminal-dimensions"
@@ -208,50 +208,44 @@ function UserMessage(props: {
     return theme.primary
   }
   const hasContent = () => props.content.length > 0 || props.images.length > 0
-  const [contentHeight, setContentHeight] = createSignal(1)
 
   return (
     <Show when={hasContent()}>
       <Show
         when={Option.getOrUndefined(collapsedLabel())}
         fallback={
-          <box marginTop={1} flexDirection="row" alignItems="flex-start">
-            <text width={1} flexShrink={0} style={{ fg: railColor() }}>
-              {Array.from({ length: contentHeight() }, () => "┃").join("\n")}
-            </text>
-            <box
-              flexGrow={1}
-              paddingLeft={1}
-              paddingRight={1}
-              flexDirection="column"
-              onSizeChange={function () {
-                setContentHeight(this.height)
-              }}
-            >
-              <Show when={props.images.length > 0}>
-                <For each={props.images}>
-                  {(img) => (
-                    <text style={{ fg: theme.info }}>
-                      [Image: {img.mediaType.replace("image/", "")}]
+          <box
+            marginTop={1}
+            paddingLeft={1}
+            paddingRight={1}
+            flexDirection="column"
+            border={["left"]}
+            borderStyle="heavy"
+            borderColor={railColor()}
+          >
+            <Show when={props.images.length > 0}>
+              <For each={props.images}>
+                {(img) => (
+                  <text style={{ fg: theme.info }}>
+                    [Image: {img.mediaType.replace("image/", "")}]
+                  </text>
+                )}
+              </For>
+            </Show>
+            <Show when={props.content.length > 0}>
+              <box flexDirection="column">
+                <Show when={label()}>
+                  {(value) => (
+                    <text>
+                      <span style={{ fg: labelColor(), bold: true }}>[{value()}]</span>
                     </text>
                   )}
-                </For>
-              </Show>
-              <Show when={props.content.length > 0}>
-                <box flexDirection="column">
-                  <Show when={label()}>
-                    {(value) => (
-                      <text>
-                        <span style={{ fg: labelColor(), bold: true }}>[{value()}]</span>
-                      </text>
-                    )}
-                  </Show>
-                  <text style={{ fg: textColor() }}>
-                    <span style={{ bold: true }}>{props.content}</span>
-                  </text>
-                </box>
-              </Show>
-            </box>
+                </Show>
+                <text style={{ fg: textColor() }}>
+                  <span style={{ bold: true }}>{props.content}</span>
+                </text>
+              </box>
+            </Show>
           </box>
         }
       >

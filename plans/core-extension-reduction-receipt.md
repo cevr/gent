@@ -432,3 +432,55 @@ Evidence:
 - `/tmp/gent-native-border-audit.md`
 
 Final collapse observation: `/tmp/gent-tui-protocol-herdr-collapsed.txt` and `/tmp/gent-tui-protocol-herdr-after-collapse.txt` show `TUI-PROTOCOL-OKTUI-PROTOCOL-OK` on one line and two worked-time rows. The cause is not yet proved. It can involve repeated display or two turns joined without separation. Keep this as an open native transcript check beside the wrapped border defect. The live run proves the context calls and marker appeared; it does not prove correct final scrollback layout.
+
+## Whole-message scrollback and user borders — 2026-09-09
+
+User messages now use the native OpenTUI heavy left border. Removed the repeated border text, measured-height signal, and size callback. A fresh scrollback snapshot no longer depends on a later reactive height update to draw the border.
+
+The long live prompt then exposed missing lines where the old renderer split one item between saved rows and the live view. NativeTranscript now sends whole items to scrollback after streaming settles and the view overflows. Removed partial-row counts, partial fingerprints, row-slice snapshot options, and the clipped duplicate live subtree. The session feed still owns all transcript data. Disclosure and resize can rebuild the display. Streaming remains in the live view until settlement; incremental one-shot streaming and preservation of unrelated terminal history across replay remain separate work.
+
+The new native-buffer test failed with the old user border at widths 32 and 65. It passes with the fix. The final focused suite passed 19 tests with 415 assertions. It checks every nonblank snapshot row's first native cell, all 24 numbered prompt lines and the answer exactly once, all disclosure levels, and resize in both directions. Images, queued labels, hard/soft wrapping, and Unicode are included. The test reads native cells because OpenTUI's test recorder slices UTF-16 text by terminal-column width. The full gate passed. A test-only ternary violated the repository style rule on an earlier gate attempt and was removed before the final pass.
+
+Herdr used live Luna in pane `wZ:pH` with a 24-line Unicode prompt and a cell read. Before whole-item commits, the collapsed capture stopped at ROW-17 and preview stopped during ROW-19. The same live check after the change retains ROW-01 through ROW-24 and every continuation border. Collapsed, preview, full, and return-to-collapsed captures all pass the saved row/border audit. The final answer is BORDER-OK.
+
+The separate context-window check still shows two answers joined after a later stream. Source inspection found that `ensureAssistantMessage` appends new streams to the previous assistant without using `StreamStarted.messageId`. This is a session-feed identity defect, not yet fixed. The status result and durable new-window marker still appear. Continue with a separate feed change and real stream/replay tests. Do not report all transcript defects resolved.
+
+This unit removes 49 production source lines: 6 from message-list and 43 from native-transcript. It adds no production files, packages, or exports. No implementation moved. Across the goal, production file count equals baseline and physical source lines are 27 below baseline.
+
+Changed files:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/components/message-list.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/components/native-transcript.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/message-list-render.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/ARCHITECTURE.md`
+
+Other source receipts:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/render-harness-boundary.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/native-transcript-mouse.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/hooks/use-session-feed.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/domain/event.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/node_modules/@opentui/core/lib/border.d.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/node_modules/@opentui/core/renderables/Box.d.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/node_modules/@opentui/core/buffer.d.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/node_modules/@opentui/core/testing.js`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/node_modules/@opentui/solid/index.js`
+
+Evidence:
+
+- `/tmp/gent-user-border-before.log`
+- `/tmp/gent-user-border-after.log`
+- `/tmp/gent-user-border-gate.log`
+- `/tmp/gent-user-border-prompt.txt`
+- `/tmp/gent-user-border-process.json`
+- `/tmp/gent-user-border-herdr-collapsed.txt`
+- `/tmp/gent-user-border-herdr-preview.txt`
+- `/tmp/gent-user-border-herdr-complete-collapsed.txt`
+- `/tmp/gent-user-border-herdr-complete-preview.txt`
+- `/tmp/gent-user-border-herdr-complete-full.txt`
+- `/tmp/gent-user-border-herdr-complete-return.txt`
+- `/tmp/gent-user-border-herdr-audit.json`
+- `/tmp/gent-user-border-window-collapsed.txt`
+- `/tmp/gent-user-border-window-preview.txt`
+- `/tmp/gent-user-border-window-full.txt`
+- `/tmp/gent-core-reduction-current.json`

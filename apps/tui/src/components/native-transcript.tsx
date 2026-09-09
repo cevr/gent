@@ -43,12 +43,10 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const [ready, setReady] = createSignal(false)
   const [nativeOutputReady, setNativeOutputReady] = createSignal(false)
   const [committedCount, setCommittedCount] = createSignal(0)
-  const [committedRows, setCommittedRows] = createSignal(0)
   const [liveHeight, setLiveHeight] = createSignal(0)
   const [measurementVersion, setMeasurementVersion] = createSignal(0)
   const itemHeights = new Map<SessionItem, number>()
   let committed: string[] = []
-  let partialFingerprint = Option.none<string>()
   let displayRevision = 0
   const [displayBoundary, setDisplayBoundary] = createSignal(captureTranscriptDisplay([]))
   const displayedItems = createMemo(() => projectTranscriptDisplay(props.items, displayBoundary()))
@@ -73,9 +71,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       setNativeOutputReady(false)
       setReplayPending(true)
       committed = []
-      partialFingerprint = Option.none()
       setCommittedCount(0)
-      setCommittedRows(0)
     })
   }
 
@@ -95,8 +91,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     { when: () => props.expanded && !props.overlayOpen },
   )
 
-  const write = (items: SessionItem[], rows?: { start: number; count: number }) => {
-    // Native history replaces transcript rows. Reserve only the composer while committing it.
+  const write = (items: SessionItem[]) => {
+    // Native history takes complete transcript items. Reserve only the composer while committing it.
     const previousFooterHeight = renderer.footerHeight
     Effect.runSync(
       Effect.sync(() => {
@@ -110,16 +106,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
               disposeSnapshot = dispose
               return (
                 <RendererContext.Provider value={snapshotRenderer}>
-                  {Option.match(Option.fromNullishOr(rows), {
-                    onNone: () => props.renderItems(items, false),
-                    onSome: (slice) => (
-                      <box height={slice.count} overflow="hidden" flexShrink={0}>
-                        <box position="absolute" top={-slice.start} width="100%" flexShrink={0}>
-                          {props.renderItems(items, false)}
-                        </box>
-                      </box>
-                    ),
-                  })}
+                  {props.renderItems(items, false)}
                 </RendererContext.Provider>
               )
             }),
@@ -190,7 +177,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     if ((returning || replayPending()) && !settlingNative) {
       settlingNative = true
       renderer.once("frame", finishNativeReturn)
-      // Layout and content changes invalidate saved rows and partial-item offsets.
+      // Layout and content changes invalidate saved snapshots.
       // Clear before the layout frame; replay only after its measurements arrive.
       renderer.resetSplitFooterForReplay({ clearSavedLines: replayPending() })
       renderer.requestRender()
@@ -207,9 +194,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       displayRevision = nextDisplayRevision
       setDisplayBoundary(captureTranscriptDisplay(props.items))
       committed = []
-      partialFingerprint = Option.none()
       setCommittedCount(0)
-      setCommittedRows(0)
     })
   })
 
@@ -220,12 +205,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     measurementVersion()
     const available = Math.max(0, dimensions().height - props.footerHeight)
     untrack(() => {
-      const prefixMatches =
-        committed.every((value, index) => next[index] === value) &&
-        Option.match(partialFingerprint, {
-          onNone: () => true,
-          onSome: (value) => next[committed.length] === value,
-        })
+      const prefixMatches = committed.every((value, index) => next[index] === value)
       if (!prefixMatches) {
         requestReplay()
         return
@@ -235,27 +215,18 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         remainingHeight += itemHeights.get(item) ?? 0
       }
       let nextCount = committed.length
-      let rowOffset = committedRows()
-      remainingHeight -= rowOffset
       while (nextCount < items.length && remainingHeight > available) {
         const item = items[nextCount]
         if (!item) break
         const height = Option.fromNullishOr(itemHeights.get(item))
-        if (Option.isNone(height) || remainingHeight <= available) break
-        const rows = Math.min(height.value - rowOffset, remainingHeight - available)
-        if (rows <= 0) break
-        write([item], { start: rowOffset, count: rows })
-        remainingHeight -= rows
-        rowOffset += rows
-        if (rowOffset < height.value) break
-        rowOffset = 0
+        if (Option.isNone(height)) break
+        // A completed item has one owner: native history or the live view.
+        write([item])
+        remainingHeight -= height.value
         nextCount++
       }
       committed = next.slice(0, nextCount)
-      partialFingerprint = Option.none()
-      if (rowOffset > 0) partialFingerprint = Option.fromNullishOr(next[nextCount])
       setCommittedCount(nextCount)
-      setCommittedRows(rowOffset)
       const currentItems = new Set(items)
       for (const item of itemHeights.keys()) {
         if (!currentItems.has(item)) itemHeights.delete(item)
@@ -300,33 +271,19 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         }}
       >
         <For each={liveItems()}>
-          {(item, index) => {
-            const offset = () => {
-              if (props.expanded || index() > 0) return 0
-              return committedRows()
-            }
-            const height = () => {
-              measurementVersion()
-              if (offset() === 0) return "auto"
-              return Math.max(0, (itemHeights.get(item) ?? 0) - offset())
-            }
-            return (
-              <box flexDirection="column" flexShrink={0} height={height()} overflow="hidden">
-                <box
-                  flexDirection="column"
-                  flexShrink={0}
-                  top={-offset()}
-                  onSizeChange={function () {
-                    if (itemHeights.get(item) === this.height) return
-                    itemHeights.set(item, this.height)
-                    setMeasurementVersion((version) => version + 1)
-                  }}
-                >
-                  {props.renderItems([item], props.streaming && index() === liveItems().length - 1)}
-                </box>
-              </box>
-            )
-          }}
+          {(item, index) => (
+            <box
+              flexDirection="column"
+              flexShrink={0}
+              onSizeChange={function () {
+                if (itemHeights.get(item) === this.height) return
+                itemHeights.set(item, this.height)
+                setMeasurementVersion((version) => version + 1)
+              }}
+            >
+              {props.renderItems([item], props.streaming && index() === liveItems().length - 1)}
+            </box>
+          )}
         </For>
         {props.children}
       </box>

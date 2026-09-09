@@ -1,8 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option, Schema } from "effect"
-import { Show, createSignal } from "solid-js"
+import { Show, createSignal, onCleanup } from "solid-js"
+import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/routes/session-ui-state"
+import { NativeTranscript } from "../src/components/native-transcript"
 import { MessageList, type Message, type SessionItem } from "../src/components/message-list"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/components/tool-frame"
 import { ReadToolRenderer } from "../src/components/tool-renderers/read"
@@ -10,7 +12,7 @@ import { EditToolRenderer } from "../src/components/tool-renderers/edit"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/context"
-import { SyntaxStyle } from "@opentui/core"
+import { SyntaxStyle, type CliRendererExternalOutputEvent } from "@opentui/core"
 
 const absent = Option.getOrUndefined(Option.none())
 const syntaxStyle = () => SyntaxStyle.create()
@@ -235,6 +237,97 @@ describe("FX transcript treatment", () => {
       expect(frame).toContain("switch now")
     }),
   )
+
+  for (const width of [32, 65]) {
+    it.live(`keeps the user border on every scrollback row at width ${width}`, () =>
+      Effect.gen(function* () {
+        const [disclosure, setDisclosure] = createSignal<DisclosureLevel>("collapsed")
+        const leadingCells: number[] = []
+        const savedText: string[] = []
+        const items = [
+          userMessage(
+            "regular-message",
+            "long-user",
+            Array.from(
+              { length: 24 },
+              (_, index) => `line ${index + 1}: wrapped user text with unicode café 日本語`,
+            ).join("\n"),
+            "queued",
+            [{ mediaType: "image/png" }],
+          ),
+          { ...unknownFailureMessage("last-answer"), content: "ANSWER-END", toolCalls: absent },
+        ]
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => {
+              const renderer = useRenderer()
+              // Check native cells: string offsets do not match terminal columns for wide glyphs.
+              const capture = (event: CliRendererExternalOutputEvent) => {
+                const { snapshot } = event
+                savedText.push(new TextDecoder().decode(snapshot.getRealCharBytes(false)))
+                for (let row = 0; row < snapshot.height; row++) {
+                  const cells = snapshot.buffers.char.subarray(
+                    row * snapshot.width,
+                    (row + 1) * snapshot.width,
+                  )
+                  const first = Option.fromUndefinedOr(
+                    cells.find((cell) => cell !== 0 && cell !== 32),
+                  )
+                  if (Option.isSome(first)) leadingCells.push(first.value)
+                }
+              }
+              renderer.on("external_output", capture)
+              onCleanup(() => renderer.off("external_output", capture))
+              return (
+                <NativeTranscript
+                  items={items}
+                  streaming={false}
+                  footerHeight={3}
+                  expanded={false}
+                  disclosure={disclosure()}
+                  displayRevision={0}
+                  overlayOpen={false}
+                  renderItems={(visible) => (
+                    <MessageList
+                      items={visible}
+                      disclosure={disclosure()}
+                      syntaxStyle={syntaxStyle}
+                      streaming={false}
+                    />
+                  )}
+                >
+                  <box />
+                </NativeTranscript>
+              )
+            },
+            { width, height: 14 },
+          ),
+        )
+        let otherWidth = 32
+        if (width === 32) otherWidth = 65
+        const views: ReadonlyArray<{ width: number; disclosure: DisclosureLevel }> = [
+          { width, disclosure: "collapsed" },
+          { width, disclosure: "preview" },
+          { width, disclosure: "full" },
+          { width, disclosure: "collapsed" },
+          { width: otherWidth, disclosure: "collapsed" },
+          { width, disclosure: "collapsed" },
+        ]
+        for (const view of views) {
+          setDisclosure(view.disclosure)
+          if (setup.renderer.terminalWidth !== view.width) setup.resize(view.width, 14)
+          yield* Effect.promise(() => setup.flush())
+          const cells = leadingCells.splice(0)
+          expect(cells.length).toBeGreaterThan(10)
+          expect(cells.filter((cell) => cell !== 0x2503)).toEqual([])
+          const transcript = savedText.splice(0).join("") + renderFrame(setup)
+          for (let line = 1; line <= 24; line++)
+            expect(transcript.split(`line ${line}:`)).toHaveLength(2)
+          expect(transcript.split("ANSWER-END")).toHaveLength(2)
+        }
+      }),
+    )
+  }
 
   it.live("goal continuations collapse to one line until full detail is on", () =>
     Effect.gen(function* () {

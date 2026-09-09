@@ -751,6 +751,8 @@ The old SDK worker supervisor and worker-http transport are deleted. E2E coverag
 
 TUI is a client over the shared contract, not a parallel app.
 
+The native transcript sends whole completed items to terminal scrollback when the live view overflows. An item stays entirely in scrollback or entirely in the live view; the TUI does not split it by row. The session feed retains the data for disclosure and resize replay. User messages use an OpenTUI heavy left border, so snapshot layout does not depend on a later height callback. Streaming still stays in the live view until the turn settles. Incremental one-shot output remains separate work.
+
 Production shape:
 
 - local mode: one process owns renderer, runtime, storage, and reconnect UX under one root scope
