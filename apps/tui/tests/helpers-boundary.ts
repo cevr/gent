@@ -29,15 +29,18 @@ export const waitForRenderedFrame = (
   const loop = (startedAt: number): Effect.Effect<string, RenderFrameTimeoutError> =>
     Effect.gen(function* () {
       yield* Effect.promise(() => setup.renderOnce())
+      // Test the frame we just rendered before consulting the clock. Checking
+      // the deadline first throws away an unexamined frame, so a condition that
+      // becomes true on the final render is reported as a timeout.
+      const frame = renderFrame(setup)
+      lastFrame = frame
+      if (predicate(frame)) return frame
       const now = yield* Clock.currentTimeMillis
       if (now - startedAt >= timeoutMs) {
         return yield* new RenderFrameTimeoutError({
           message: `timed out waiting for rendered frame: ${label}\n${lastFrame}`,
         })
       }
-      const frame = renderFrame(setup)
-      lastFrame = frame
-      if (predicate(frame)) return frame
       // gent/no-sleep: allow render-poll primitive — TUI frame must be re-rendered between observations
       yield* Effect.sleep("10 millis")
       return yield* loop(startedAt)
