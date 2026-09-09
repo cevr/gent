@@ -33,14 +33,13 @@ import {
   clientCommandContribution,
   clientContributions,
   defineClientExtension,
-  overlayContribution,
+  widgetContribution,
   type OverlayProps,
 } from "../client-facets"
 import { ClientShell } from "../client-services"
-import { ClientTransport } from "../client-transport"
+import { ClientTransport, type ExtensionAgentDetail } from "../client-transport"
 
 export const AGENTS_VIEW_EXTENSION_ID = "@gent/agents-view"
-export const AGENTS_VIEW_OVERLAY_ID = "agents"
 
 /**
  * Rows plus the load state, held in the setup closure.
@@ -55,12 +54,30 @@ interface AgentsController {
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
   readonly refresh: (query: string) => void
+  /**
+   * Detail for the row the reader is on, or `None` while it loads. Listings
+   * stay cheap by carrying identity and liveness only; this is the second
+   * read, made for one row at a time.
+   */
+  readonly detail: () => Option.Option<ExtensionAgentDetail>
+  /** Tell the controller which row is selected, so it can fetch that detail. */
+  readonly select: (row: Option.Option<AgentRowEntry>) => void
+  /**
+   * Whether the pane is showing. A docked widget is always mounted, unlike the
+   * overlay this replaced, so visibility is controller state rather than
+   * something the overlay registry decides.
+   */
+  readonly open: () => boolean
+  readonly setOpen: (open: boolean) => void
 }
 
-const makeAgentsController = (
+export const makeAgentsController = (
   fetchRows: (
     query: string,
   ) => Effect.Effect<ReadonlyArray<AgentRowEntry>, { readonly message: string }>,
+  fetchDetail: (
+    key: Pick<AgentRowEntry, "sessionId" | "branchId">,
+  ) => Effect.Effect<ExtensionAgentDetail, { readonly message: string }>,
   cast: (effect: Effect.Effect<void>) => void,
   current: () => Option.Option<{ sessionId: string; branchId: string }>,
 ): AgentsController => {
@@ -87,8 +104,62 @@ const makeAgentsController = (
     )
   }
 
-  return { rows, current, error, loading, refresh }
+  const [detail, setDetail] = createSignal<Option.Option<ExtensionAgentDetail>>(Option.none())
+  // Arrow keys move faster than a round trip, so replies can land out of order.
+  // Only the reply for the row still selected is allowed to win; anything else
+  // would show one row's cost next to another row's name.
+  const [pending, setPending] = createSignal(Option.none<string>())
+
+  const select = (row: Option.Option<AgentRowEntry>) => {
+    if (Option.isNone(row)) {
+      setPending(Option.none())
+      setDetail(Option.none())
+      return
+    }
+    const key = { sessionId: row.value.sessionId, branchId: row.value.branchId }
+    const token = `${key.sessionId.length}:${key.sessionId}:${key.branchId}`
+    if (Option.contains(pending(), token)) return
+    setPending(Option.some(token))
+    setDetail(Option.none())
+    cast(
+      fetchDetail(key).pipe(
+        Effect.match({
+          // A detail read that fails leaves the line blank rather than
+          // replacing the list with an error: the rows are still correct.
+          onFailure: () => {},
+          onSuccess: (next) => {
+            if (!Option.contains(pending(), token)) return
+            setDetail(Option.some(next))
+          },
+        }),
+      ),
+    )
+  }
+
+  const [open, setOpen] = createSignal(false)
+
+  return { rows, current, error, loading, refresh, detail, select, open, setOpen }
 }
+
+/**
+ * The section label for a row, corrected by live state where we have it.
+ *
+ * The listing reports every resident loop as `idle`, because enumerating N
+ * loops must not fan out into N state reads. The detail read for the selected
+ * row does know, so that one row shows what it is actually doing rather than
+ * the conservative guess the listing had to make.
+ */
+const sectionLabelFor = (
+  row: AgentRowEntry,
+  detail: Option.Option<ExtensionAgentDetail>,
+): string =>
+  Option.match(Option.flatMap(detail, (value) => value.status), {
+    onNone: () => SECTION_LABEL[row.section],
+    onSome: (status) => {
+      if (status === "Idle") return SECTION_LABEL.idle
+      return SECTION_LABEL.running
+    },
+  })
 
 /** Section headers, rendered inline so the list stays one flat navigable array. */
 const SECTION_LABEL = {
@@ -117,6 +188,61 @@ const currentMarker = (current: boolean): string => {
   if (current) return "• "
   return "  "
 }
+
+/** Whole seconds under a minute, then `m:ss` — a detail line has no room for more. */
+const formatDuration = (ms: number): string => {
+  const totalSeconds = Math.floor(ms / 1000)
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const minutes = Math.floor(totalSeconds / 60)
+  return `${minutes}m${String(totalSeconds % 60).padStart(2, "0")}s`
+}
+
+/** Sub-cent costs still deserve a number, so keep three decimals throughout. */
+const formatCost = (usd: number): string => `$${usd.toFixed(3)}`
+
+/**
+ * Drop the provider prefix from a model id: `anthropic/claude-sonnet-5` becomes
+ * `claude-sonnet-5`. The detail line is the widest content in the panel, and
+ * the prefix is the least informative part of it — every row in a given install
+ * usually shares one.
+ */
+const shortModel = (model: string): string => {
+  const slash = model.lastIndexOf("/")
+  if (slash < 0) return model
+  return model.slice(slash + 1)
+}
+
+/** "1 turn", not "1 turns". */
+const formatTurns = (turns: number): string => {
+  if (turns === 1) return "1 turn"
+  return `${turns} turns`
+}
+
+/**
+ * The detail line for the selected row. Absent fields are dropped rather than
+ * shown as placeholders — a session that never streamed has no model, and a
+ * row of dashes reads as broken rather than as empty.
+ *
+ * Status is deliberately absent: every row already carries it in the section
+ * column, and this line is the widest content in the panel — repeating it here
+ * costs the columns that cost and duration need.
+ */
+const detailLabel = (detail: Option.Option<ExtensionAgentDetail>): string =>
+  Option.match(detail, {
+    onNone: () => "",
+    onSome: (value) => {
+      const parts = [
+        ...Option.match(value.model, {
+          onNone: () => [],
+          onSome: (model) => [shortModel(model)],
+        }),
+        formatTurns(value.turns),
+        formatCost(value.costUsd),
+        formatDuration(value.durationMs),
+      ]
+      return parts.join("  ·  ")
+    },
+  })
 
 /** An empty list means one of two different things; say which. */
 const emptyLabel = (loading: boolean): string => {
@@ -154,6 +280,18 @@ export function AgentsPane(
   // Filtering is the server's job — it owns the same search the projection
   // tests cover — so typing refetches rather than filtering a local copy.
   const visible = () => props.controller.rows()
+
+  // One detail read per selection, not per keystroke batch: the controller
+  // ignores a repeat of the row it is already fetching.
+  createEffect(
+    on([() => props.open, visible, () => state().selectedIndex], ([open, rows, index]) => {
+      if (!open) {
+        props.controller.select(Option.none())
+        return
+      }
+      props.controller.select(Option.fromNullishOr(rows[index]))
+    }),
+  )
 
   useScrollSync(() => `agents-row-${state().selectedIndex}`, {
     getRef: () => Option.getOrUndefined(scrollRef),
@@ -216,16 +354,41 @@ export function AgentsPane(
     { when: () => props.open },
   )
 
-  const panelWidth = () => Math.min(90, dimensions().width - 6)
+  // Docked under the composer rather than floating. The pane fills the width of
+  // the container it is docked in, so it never sets one; the truncation budget
+  // still needs a number, and the terminal width minus the surrounding margin
+  // is what that container actually gets.
+  const panelWidth = () => Math.max(0, dimensions().width - 2)
   /**
-   * Columns a row may actually use: the panel border takes 2, `ChromePanel.Body`
+   * Columns a row may actually use: the pane border takes 2, `ChromePanel.Body`
    * pads 1 each side, and the row itself pads 1 more on the left. Budgeting less
    * than that wraps the line and breaks the one-row-per-agent alignment.
    */
   const rowWidth = () => Math.max(0, panelWidth() - 5)
-  const panelHeight = () => Math.min(20, dimensions().height - 6)
-  const left = () => Math.floor((dimensions().width - panelWidth()) / 2)
-  const top = () => Math.floor((dimensions().height - panelHeight()) / 2)
+  /**
+   * A `ChromePanel.Section` pads 1 each side inside the 2 border columns, and
+   * unlike a row it carries no extra left pad — so it gets one more column
+   * than {@link rowWidth}. Reusing the row budget here truncates a column early.
+   */
+  const sectionWidth = () => Math.max(0, panelWidth() - 4)
+  /**
+   * Rows of list body, on top of the pane's own chrome (border, query, detail,
+   * footer). Fixed rather than a fraction of the terminal: the pane shares the
+   * screen with the transcript, and a fraction of a short terminal collapses
+   * the list to a line or two. The body scrolls within this, which is what
+   * gives the pane its own scroll buffer.
+   */
+  const BODY_ROWS = 10
+  const CHROME_ROWS = 6
+  const paneHeight = () =>
+    Math.max(6, Math.min(BODY_ROWS + CHROME_ROWS, dimensions().height - 4))
+
+  // Detail is fetched for the selected row only, so only that row can be
+  // corrected; the rest keep the label the listing gave them.
+  const sectionFor = (row: AgentRowEntry, selected: boolean): string => {
+    if (!selected) return SECTION_LABEL[row.section]
+    return sectionLabelFor(row, props.controller.detail())
+  }
 
   const colorFor = (row: AgentRowEntry, selected: boolean) => {
     if (selected) return theme.selectedListItemText
@@ -236,12 +399,20 @@ export function AgentsPane(
 
   return (
     <Show when={props.open}>
-      <ChromePanel.Root
+      <box
+        height={paneHeight()}
+        // Stretch to the docked container's width instead of shrinking to the
+        // longest row: this is a pane, and a pane that hugs its content reads
+        // as a floating box again.
+        alignSelf="stretch"
+        marginLeft={1}
+        marginRight={1}
+        backgroundColor={theme.backgroundMenu}
+        border
+        borderStyle="rounded"
+        borderColor={theme.borderSubtle}
+        flexDirection="column"
         title="Agents"
-        width={panelWidth()}
-        height={panelHeight()}
-        left={left()}
-        top={top()}
       >
         <ChromePanel.Section>
           <text style={{ fg: theme.text }}>
@@ -269,7 +440,7 @@ export function AgentsPane(
                   <box id={`agents-row-${index()}`} backgroundColor={background()} paddingLeft={1}>
                     <text style={{ fg: colorFor(row, selected()) }}>
                       {truncate(
-                        `${currentMarker(isCurrent(row))}${SECTION_LABEL[row.section].padEnd(9)}${labelFor(row)}`,
+                        `${currentMarker(isCurrent(row))}${sectionFor(row, selected()).padEnd(9)}${labelFor(row)}`,
                         rowWidth(),
                       )}
                     </text>
@@ -280,9 +451,17 @@ export function AgentsPane(
           </Show>
         </ChromePanel.Body>
 
+        <Show when={visible().length > 0}>
+          <ChromePanel.Section>
+            <text style={{ fg: theme.textMuted }}>
+              {truncate(detailLabel(props.controller.detail()), sectionWidth())}
+            </text>
+          </ChromePanel.Section>
+        </Show>
+
         <ChromePanel.Error error={Option.getOrUndefined(props.controller.error())} />
         <ChromePanel.Footer>Type | Up/Down | Enter | Esc</ChromePanel.Footer>
-      </ChromePanel.Root>
+      </box>
     </Show>
   )
 }
@@ -298,6 +477,10 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
           Effect.map((reply) => reply.rows),
           Effect.mapError((error) => ({ message: String(error) })),
         ),
+      (key) =>
+        transport
+          .agentDetail(key)
+          .pipe(Effect.mapError((error) => ({ message: String(error) }))),
       shell.cast,
       () =>
         Option.map(Option.fromNullishOr(transport.currentSession()), (active) => ({
@@ -318,18 +501,22 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         // and is keyed per branch. Kept as an alias so the habit still works.
         aliases: ["tree"],
         onSelect: () => {
-          shell.openOverlay(AGENTS_VIEW_OVERLAY_ID)
+          controller.setOpen(true)
           controller.refresh("")
         },
       }),
-      overlayContribution({
-        id: AGENTS_VIEW_OVERLAY_ID,
-        component: (props) => (
+      widgetContribution({
+        id: "agents.pane",
+        // Docked under the composer rather than covering the transcript: the
+        // agent list is something you read *while* working, not instead of it.
+        slot: "below-input",
+        component: () => (
           <AgentsPane
-            {...props}
+            open={controller.open()}
             controller={controller}
+            onClose={() => controller.setOpen(false)}
             onSelect={(row) => {
-              props.onClose()
+              controller.setOpen(false)
               // Rows are already keyed per branch, so there is no active-branch
               // lookup to do — the row *is* the loop being switched to.
               shell.switchSession({
