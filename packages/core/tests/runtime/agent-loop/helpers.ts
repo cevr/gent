@@ -1,6 +1,6 @@
 import type { LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
-import { Predicate, Clock, Duration, Effect, Layer, Option, Ref, Stream } from "effect"
+import { Predicate, Clock, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
 import {
@@ -531,20 +531,43 @@ export const makeExternalLayerWithEvents = (
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
-/** Poll `check` until it yields a value, with a short sleep between attempts. */
+/** A `waitFor` deadline expiring. Typed so a timeout fails its own test. */
+export class AgentLoopTestTimeout extends Schema.TaggedError<AgentLoopTestTimeout>()(
+  "@gent/core/tests/runtime/agent-loop/AgentLoopTestTimeout",
+  { description: Schema.String, timeoutMs: Schema.Finite },
+) {}
+
+/**
+ * Poll `check` until it yields a value, or the deadline passes.
+ *
+ * Bounded by wall clock rather than a fixed number of attempts: an attempt
+ * budget is not a timeout. Under load each iteration takes far longer than the
+ * sleep between them, so a 50-attempt budget expires in milliseconds on an idle
+ * machine and in seconds on a busy one — which made this helper give up early
+ * whenever the suite ran alongside a build.
+ *
+ * Fails rather than dies, so a timeout surfaces as the failing test's own error
+ * instead of escaping as an unhandled defect if the fiber outlives the test.
+ */
 export const waitFor = <A, E, R>(
   check: () => Effect.Effect<Option.Option<A>, E, R>,
   description: string,
-  attempts = 50,
+  timeout: Duration.Input = "5 seconds",
 ) =>
   Effect.gen(function* () {
-    for (let i = 0; i < attempts; i++) {
+    const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(timeout)
+    for (;;) {
       const result = yield* check()
       if (Option.isSome(result)) return result.value
+      if ((yield* Clock.currentTimeMillis) >= deadline) {
+        return yield* new AgentLoopTestTimeout({
+          description,
+          timeoutMs: Duration.toMillis(timeout),
+        })
+      }
       // gent/no-sleep: allow polling primitive — this IS the waitFor helper other tests use instead of sleep
       yield* Effect.sleep("1 millis")
     }
-    return yield* Effect.die(new Error(`Timed out waiting for ${description}`))
   })
 
 export const waitForPhase = (
@@ -554,7 +577,7 @@ export const waitForPhase = (
     branchId: BranchId
   },
   runtimeTag: string,
-  attempts = 50,
+  timeout: Duration.Input = "5 seconds",
 ) =>
   waitFor(
     () =>
@@ -566,6 +589,6 @@ export const waitForPhase = (
         return Option.none()
       }),
     `runtime state "${runtimeTag}"`,
-    attempts,
+    timeout,
   )
 // ============================================================================
