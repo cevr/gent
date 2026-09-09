@@ -452,6 +452,7 @@ export const resolveExtensions = (
 
 export interface CompiledToolPolicy {
   readonly tools: ReadonlyArray<ToolCapability>
+  readonly modelTools: ReadonlyArray<ToolCapability>
   readonly promptSections: ReadonlyArray<PromptSection>
 }
 
@@ -536,7 +537,24 @@ export const compileToolPolicy = (
     tools = tools.filter((t) => getToolMetadata(t).interactive !== true)
   }
 
-  return { tools, promptSections: collectProjectionPromptSections(extensionProjections) }
+  let modelSet = Option.none<ReadonlyArray<string>>()
+  for (const projection of extensionProjections) {
+    if (Predicate.isNotUndefined(projection.toolPolicy?.modelSet)) {
+      modelSet = Option.some(projection.toolPolicy.modelSet)
+    }
+  }
+  const modelTools = Option.match(modelSet, {
+    onNone: () => tools,
+    onSome: (names) => {
+      const selected = new Set(names)
+      return tools.filter((tool) => selected.has(String(getToolId(tool))))
+    },
+  })
+  return {
+    tools,
+    modelTools,
+    promptSections: collectProjectionPromptSections(extensionProjections),
+  }
 }
 
 // Extension Registry Service
@@ -577,13 +595,8 @@ const filterToolsForAgent = (
   let tools: ToolCapability[]
 
   if (!Predicate.isUndefined(agent.allowedTools)) {
-    // `cell` is the model surface, not a host tool: an allow list scopes the host
-    // tools reachable inside the cell and never swaps the model back to raw tools.
     const names = new Set(agent.allowedTools)
-    tools = allTools.filter((t) => {
-      const id = String(getToolId(t))
-      return id === "cell" || names.has(id)
-    })
+    tools = allTools.filter((t) => names.has(String(getToolId(t))))
   } else {
     tools = [...allTools]
   }

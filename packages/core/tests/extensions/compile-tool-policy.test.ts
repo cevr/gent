@@ -1,9 +1,24 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Schema } from "effect"
-import { getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
+import { it } from "effect-bun-test"
+import { BunServices } from "@effect/platform-bun"
+import { Effect, Layer, Schema } from "effect"
+import {
+  AgentDefinition,
+  AgentName,
+  defineExtension,
+  ExtensionHost,
+  getToolId,
+  tool,
+  type ToolCapability,
+} from "@gent/core/extensions/api"
 import { compileToolPolicy } from "../../src/runtime/extensions/registry"
-import { AgentDefinition, AgentName } from "../../src/domain/agent"
 import { BranchId, SessionId } from "../../src/domain/ids"
+import { createRpcHarness } from "../../src/test-utils/rpc-harness"
+import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import { textStep, toolCallStep } from "../../src/debug/provider"
+import { waitFor } from "../../src/test-utils/fixtures"
+import { messageSingleText } from "../../src/domain/message-part-projection"
+import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 
 describe("compileToolPolicy", () => {
   const makeTool = (name: string): ToolCapability =>
@@ -45,6 +60,50 @@ describe("compileToolPolicy", () => {
 
   const names = (tools: ReadonlyArray<ToolCapability>) =>
     tools.map((t) => String(getToolId(t))).sort()
+
+  test("model selection leaves admitted host tools available", () => {
+    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
+    const result = compileToolPolicy(allTools, agent, emptyCtx, [
+      { toolPolicy: { modelSet: ["read"] } },
+    ])
+    expect(names(result.tools)).toEqual(names(allTools))
+    expect(names(result.modelTools)).toEqual(["read"])
+    expect(result.modelTools[0]).toBe(allTools[0])
+  })
+
+  test("model selection cannot restore unknown, denied, or non-interactive tools", () => {
+    const agent = AgentDefinition.make({ name: AgentName.make("cowork"), deniedTools: ["bash"] })
+    const result = compileToolPolicy(
+      [...allTools, makeInteractiveTool("question")],
+      agent,
+      { ...emptyCtx, interactive: false },
+      [{ toolPolicy: { modelSet: ["read", "read", "bash", "question", "missing"] } }],
+    )
+    expect(names(result.modelTools)).toEqual(["read"])
+  })
+
+  test("the last explicit model selection wins and an empty set advertises no tools", () => {
+    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
+    const result = compileToolPolicy(allTools, agent, emptyCtx, [
+      { toolPolicy: { modelSet: ["read"] } },
+      { toolPolicy: { modelSet: [] } },
+      { toolPolicy: { include: ["bash"] } },
+    ])
+    expect(result.modelTools).toEqual([])
+    expect(names(result.tools)).toEqual(names(allTools))
+  })
+
+  test("a cell name has no special allowance without an extension policy", () => {
+    const agent = AgentDefinition.make({ name: AgentName.make("cowork"), allowedTools: ["read"] })
+    const tools = [makeTool("cell"), ...allTools]
+    const direct = compileToolPolicy(tools, agent, emptyCtx, [])
+    expect(names(direct.modelTools)).toEqual(["read"])
+    const selected = compileToolPolicy(tools, agent, emptyCtx, [
+      { toolPolicy: { include: ["cell"], modelSet: ["cell"] } },
+    ])
+    expect(names(selected.modelTools)).toEqual(["cell"])
+    expect(names(selected.tools)).toEqual(["cell", "read"])
+  })
 
   test("no allow-list → all tools", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
@@ -130,4 +189,91 @@ describe("compileToolPolicy", () => {
     const { tools } = compileToolPolicy([interactiveTool], agent, emptyCtx, [])
     expect(names(tools)).toContain("ask_user")
   })
+})
+
+describe("extension model surface over RPC", () => {
+  for (const selected of [false, true]) {
+    let name = "advertises direct tools without a special case for the cell name"
+    if (selected) name = "runs an extension-selected tool with exact admitted bindings"
+    it.scopedLive(name, () =>
+      Effect.gen(function* () {
+        let observedHostTools: ReadonlyArray<string> = []
+        const extension = defineExtension({
+          id: "test/model-surface",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "agent",
+              AgentDefinition.make({ name: AgentName.make("main"), deniedTools: ["blocked"] }),
+            )
+            for (const name of ["bridge", "cell", "blocked"]) {
+              yield* host.register(
+                "tool",
+                tool({
+                  id: name,
+                  description: `Run ${name}`,
+                  params: Schema.Struct({ value: Schema.String }),
+                  output: Schema.String,
+                  execute: ({ value }) => Effect.succeed(`${name}:${value}`),
+                }),
+              )
+            }
+            if (selected) {
+              yield* host.on("turnProjection", () =>
+                Effect.succeed({
+                  toolPolicy: { modelSet: ["bridge", "blocked", "missing"] },
+                }),
+              )
+            }
+            yield* host.on("systemPrompt", (input) =>
+              Effect.sync(() => {
+                observedHostTools = input.hostTools?.map(getToolId).sort() ?? []
+                return input.basePrompt
+              }),
+            )
+          }),
+        })
+        const call = toolCallStep("bridge", { value: "kept" })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          {
+            ...call,
+            assertOptions: (options) => {
+              let expected = ["bridge", "cell"]
+              if (selected) expected = ["bridge"]
+              expect(
+                options.tools.map((tool) => tool.name).sort((a, b) => a.localeCompare(b)),
+              ).toEqual(expected)
+            },
+          },
+          textStep("finished"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: [],
+          extensionInputs: [extension],
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "Use the bridge." })
+        const messages = yield* waitFor(
+          client.message.list({ branchId }),
+          (messages) =>
+            messages.some(
+              (message) =>
+                message.role === "assistant" && messageSingleText(message.parts) === "finished",
+            ),
+          3000,
+          "bridge reply",
+        )
+        expect(
+          messages
+            .flatMap((message) => message.parts)
+            .filter((part) => part.type === "tool-result"),
+        ).toMatchObject([{ name: "bridge", isFailure: false, result: "bridge:kept" }])
+        expect(observedHostTools).toEqual(["bridge", "cell"])
+        yield* controls.assertDone
+      }).pipe(
+        Effect.timeout("4 seconds"),
+        Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+      ),
+    )
+  }
 })

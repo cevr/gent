@@ -200,3 +200,50 @@ Evidence:
 - `/tmp/gent-anthropic-context-herdr-preview.txt`
 - `/tmp/gent-anthropic-context-herdr-full.txt`
 - `/tmp/gent-core-reduction-current.json`
+
+Commit: `ffba72e7`. Commit checks passed. Log: `/tmp/gent-anthropic-context-commit.log`.
+
+Pending visual defect: after the disclosure replay, the first prompt's second wrapped line lost its left border. The initial live view had a border on both lines. The full-view receipt above records the missing border. Reproduce this during the native-transcript unit. Check replay and committed scrollback rows, not only the live message component. Functional cell checks passed; this visual issue remains open.
+
+## Let extensions select the model tool surface
+
+The existing `turnProjection` hook now supports `ToolPolicyFragment.modelSet`. The last explicit set selects a subset of the final admitted host tools. An empty set selects none. Missing, denied, and filtered interactive tools stay unavailable. Selection retains the admitted capability and binding identities. No new hook kind or registry was added.
+
+The cell extension uses that policy to include and select `cell`. It skips selection for external drivers and an explicit agent denial. It renders the host catalog through the existing `systemPrompt` hook. The hook receives admitted `hostTools`. The new public `getToolPrompt` accessor returns prompt text without execution metadata. The raw metadata accessor remains private. Projection hooks now see the resolved driver, including config overrides.
+
+The turn resolver, policy compiler, and general prompt builder have no remaining `cell` name rule. Registering a tool with that name alone does not select it or bypass an allow list. The cell catalog is appended by its owning hook; earlier prompt rewrites remain intact. Kernel branch ownership and the worker build still belong to core and remain pending work.
+
+Pure policy tests cover selection, empty selection, precedence, unknown names, duplicate names, denials, interactive filtering, and the removed name exception. RPC tests register an ordinary extension and run its `bridge` tool. One test uses direct tools. The other selects only the bridge. Both confirm the admitted host set and persisted tool result. Shipped-cell tests check the real catalog, host read calls, concurrency, allow lists, and external-driver dispatch. A lifetime fixture now loads the real cell extension instead of relying on the old name rule. Its child, reset, and branch checks pass. The full gate passed.
+
+Live Herdr used Luna to read a fixture through `tools.call` inside the cell. A second turn reused the retained text and returned true. Preview and full views showed the nested read and retained binding. A separate directory disabled `@gent/cell`; Luna then called `read` directly and completed. The wrapped-prompt border defect reproduced during replay and remains open.
+
+This unit adds no source files or packages. It adds one public function export and 31 net core source lines. The 12-line input-key formatter moved unchanged. The former 22-line catalog block moved into the cell hook with changes; its functionality was not deleted. Core now has 200 files / 45,368 lines. Other source counts stay at the preceding values. Across the work so far, production source is one file and 48 physical lines below the baseline. Dependency patches remain outside those source counts.
+
+Source files:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/ARCHITECTURE.md`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/domain/capability/tool.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/domain/extension.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/extensions/api.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/agent/agent-loop.utils.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/agent/turn-resolve.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/code-cell/cell-extension.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/extensions/registry.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/extensions/cell-default-surface.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/extensions/compile-tool-policy.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop/cell-lifetime.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop/turn-prompt-sections.test.ts`
+
+Evidence:
+
+- `/tmp/gent-model-surface-gate.log`
+- `/tmp/gent-model-surface-tests.log`
+- `/tmp/gent-model-surface-rpc-tests.log`
+- `/tmp/gent-model-surface-lifetime-tests.log`
+- `/tmp/gent-model-surface-herdr-preview.txt`
+- `/tmp/gent-model-surface-herdr-full.txt`
+- `/tmp/gent-model-surface-direct-herdr-preview.txt`
+- `/tmp/gent-model-surface-direct-herdr-full.txt`
+- `/tmp/gent-model-surface-direct/.gent/config.json`
+- `/tmp/gent-model-surface-check/note.txt`
+- `/tmp/gent-core-reduction-current.json`

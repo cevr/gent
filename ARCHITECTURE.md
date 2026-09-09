@@ -465,9 +465,19 @@ Files: `interaction-request.ts` (InteractionPendingError, makeInteractionService
 Core runtime should not reach for ambient process state unless the app shell is the real owner.
 
 The Bun cell implementation in `runtime/code-cell/` is the shipped model
-execution surface. `cell-extension.ts` declares the `@gent/cell` builtin with the
-`cell` tool; core owns it because the turn resolver owns the `cell` surface rule. The server root composes it ahead of the extension package
-builtins. Test presets that exercise host tools directly omit it. `cell-kernel.ts` owns serialized evaluate/reset operations,
+execution surface. `cell-extension.ts` registers the `@gent/cell` tool and selects it
+through the ordinary `turnProjection` hook. `ToolPolicyFragment.modelSet` narrows
+the final admitted host tools for model calls. The last explicit set wins; an
+empty set advertises no tools. It cannot restore unknown, denied, or filtered
+interactive tools. Without a set, the model receives the admitted tools directly.
+The cell extension also renders its catalog through `systemPrompt`, whose
+`hostTools` input contains the admitted host bindings' capabilities. `getToolPrompt`
+exposes catalog text without the private execution metadata. Projection hooks see
+the resolved driver, including config overrides. The loop has no `cell` name rule
+for selection or allow lists. The server root still composes the extension before
+the extension package builtins; its branch lifetime and worker build still belong
+to core. Test presets that exercise host tools directly omit it.
+`cell-kernel.ts` owns serialized evaluate/reset operations,
 evaluation deadlines, host-call dispatch, and worker disposal. Each evaluation
 receives its host service from the caller's Effect context. Worker faults lose
 working state; ordinary cell errors preserve it. No cell is automatically replayed.

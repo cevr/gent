@@ -30,6 +30,14 @@ const cellOnly = (step: SequenceStep): SequenceStep => ({
   ...step,
   assertOptions: (options) => {
     expect(options.tools.map((tool) => tool.name)).toEqual(["cell"])
+    const system = options.prompt.content
+      .filter((message) => message.role === "system")
+      .map((message) => message.content)
+      .join("\n")
+    expect(system).toContain("## Host Tools")
+    expect(system).toContain("- **read**(path")
+    expect(system).toContain("await tools.call(name, input)")
+    expect(system).not.toContain("- **cell**(")
   },
 })
 

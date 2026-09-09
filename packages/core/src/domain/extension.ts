@@ -129,6 +129,8 @@ export interface SystemPromptInput {
    * the codemode `gent.<tool>(...)` shape into the rewritten prompt.
    */
   readonly tools?: ReadonlyArray<ToolCapability>
+  /** Admitted host tools, including tools hidden from the model by modelSet. */
+  readonly hostTools?: ReadonlyArray<ToolCapability>
   /**
    * Tool surface declared by the resolved driver (`"native"` or
    * `"codemode"`). Set by the agent loop from
@@ -266,6 +268,12 @@ export interface ToolPolicyFragment {
   readonly exclude?: ReadonlyArray<string>
   /** If set, replaces the full tool list (before agent deny reapplication) */
   readonly overrideSet?: ReadonlyArray<string>
+  /**
+   * Model-facing subset of the final admitted host tools. The last supplied set
+   * wins. Missing, denied, and filtered interactive tools cannot be restored here.
+   * An empty set advertises no tools. Omission preserves the previous selection.
+   */
+  readonly modelSet?: ReadonlyArray<string>
 }
 
 /** Turn-time projection — needs agent/tool context, used during prompt assembly */

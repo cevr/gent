@@ -18,35 +18,16 @@ const isReasoningEffort = Schema.is(ReasoningEffort)
 
 /**
  * Build the per-turn prompt sections (base + agent addendum + tool list +
- * tool guidelines + cell catalog + extension extras). Returns the
+ * tool guidelines + extension extras). Returns the
  * unsorted section list so prompt slots can rewrite specific sections
  * (e.g. codemode replacing `tool-list` / `tool-guidelines`) before final
  * compilation.
  */
-/**
- * Input keys of a host tool as `(todo, description?, background?)`. The model
- * reads only the catalog line before its first call, so the keys travel with
- * it; `tools.describe(name)` still owns the full schema.
- */
-const describeInputKeys = (tool: ToolCapability): string => {
-  const ast = tool.parametersSchema.ast
-  if (ast._tag !== "Objects") return ""
-  const keys = ast.propertySignatures.map((signature) => {
-    const optional = Option.fromUndefinedOr(signature.type.context).pipe(
-      Option.exists((context) => context.isOptional),
-    )
-    if (optional) return `${String(signature.name)}?`
-    return String(signature.name)
-  })
-  return `(${keys.join(", ")})`
-}
-
 export const buildTurnPromptSections = (
   baseSections: ReadonlyArray<PromptSection>,
   agent: AgentDefinition,
   tools: ReadonlyArray<ToolCapability>,
   extraSections?: ReadonlyArray<PromptSection>,
-  cellHostTools: ReadonlyArray<ToolCapability> = [],
 ): ReadonlyArray<PromptSection> => {
   const sections: PromptSection[] = [...baseSections]
 
@@ -77,28 +58,6 @@ export const buildTurnPromptSections = (
       id: "tool-list",
       content: withSectionMarkers("tool-list", `## Available Tools\n\n${snippets.join("\n")}`),
       priority: 42,
-    })
-  }
-
-  // Cell catalog — host tools callable only inside the cell. The system prompt is the
-  // instruction delivery: it is rebuilt each turn, so live composition changes reach the
-  // model without a catalog tool. Full schemas stay in the kernel behind tools.describe.
-  const hostEntries = cellHostTools
-    .map((tool) => ({ id: getToolId(tool), metadata: getToolMetadata(tool), tool }))
-    .filter((entry) => entry.id !== "cell")
-    .sort((left, right) => left.id.localeCompare(right.id))
-    .map(
-      (entry) =>
-        `- **${entry.id}**${describeInputKeys(entry.tool)}: ${entry.metadata.promptSnippet ?? entry.tool.description}`,
-    )
-  if (hostEntries.length > 0) {
-    sections.push({
-      id: "cell-catalog",
-      content: withSectionMarkers(
-        "cell-catalog",
-        `## Host Tools\n\nCallable inside \`cell\` with \`await tools.call(name, input)\`. \`tools.describe(name)\` returns the input schema.\n\n${hostEntries.join("\n")}`,
-      ),
-      priority: 43,
     })
   }
 

@@ -12,6 +12,7 @@ import { SteerCommand } from "../../../src/domain/steer"
 import { messageSingleText } from "../../../src/domain/message-part-projection"
 import { dispatchCell } from "../../../src/runtime/code-cell/cell-dispatch"
 import { CellTool } from "../../../src/runtime/code-cell/cell-tool"
+import { CellExtension } from "../../../src/runtime/code-cell/cell-extension"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { BunGentPlatformLive } from "../../../src/runtime/gent-platform-bun"
 import { createRpcHarness } from "../../../src/test-utils/rpc-harness"
@@ -118,7 +119,6 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
             )
             yield* host.register(
               "tool",
-              CellTool,
               ReadSessionTool,
               tool({
                 id: "model-started",
@@ -144,6 +144,7 @@ describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
           providerLayer,
           agents: [],
           extensionInputs: [
+            { ...CellExtension, artifactIdentity: LoadedArtifactIdentity.make("cell-source") },
             {
               ...fixture,
               artifactIdentity: LoadedArtifactIdentity.make("cell-child-fixture-source"),

@@ -1,6 +1,14 @@
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { ExtensionId } from "../../domain/ids.js"
-import { defineExtension, ExtensionHost } from "../../extensions/api.js"
+import {
+  defineExtension,
+  ExtensionHost,
+  ExtensionContext,
+  getToolId,
+  getToolPrompt,
+  withSectionMarkers,
+  type ToolCapability,
+} from "../../extensions/api.js"
 import { CellTool } from "./cell-tool.js"
 
 export const CELL_EXTENSION_ID = ExtensionId.make("@gent/cell")
@@ -10,12 +18,61 @@ export const CELL_EXTENSION_ID = ExtensionId.make("@gent/cell")
  * model turn advertises only `cell`; host tools stay callable inside the cell
  * through the turn's bound identities, and the kernel's local `tools.search` and
  * `tools.describe` read the catalog the host ships with each changed turn.
- * Core owns this registration because the turn resolver owns the `cell` surface rule.
+ * The extension owns the model selection and catalog through ordinary hooks.
  */
 export const CellExtension = defineExtension({
   id: CELL_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("tool", CellTool)
+    yield* host.on("turnProjection", () =>
+      Effect.gen(function* () {
+        const ctx = yield* ExtensionContext
+        if (
+          ctx.turn?.agent.driver?._tag === "external" ||
+          ctx.turn?.agent.deniedTools?.includes("cell")
+        ) {
+          return {}
+        }
+        return { toolPolicy: { include: ["cell"], modelSet: ["cell"] } }
+      }),
+    )
+    yield* host.on("systemPrompt", (input) =>
+      Effect.sync(() => {
+        if (
+          input.agent.driver?._tag === "external" ||
+          input.tools?.length !== 1 ||
+          !input.tools.some((tool) => getToolId(tool) === "cell")
+        ) {
+          return input.basePrompt
+        }
+        const entries = (input.hostTools ?? [])
+          .filter((tool) => getToolId(tool) !== "cell")
+          .toSorted((left, right) => getToolId(left).localeCompare(getToolId(right)))
+          .map(
+            (tool) =>
+              `- **${getToolId(tool)}**${describeInputKeys(tool)}: ${getToolPrompt(tool).promptSnippet ?? tool.description}`,
+          )
+        if (entries.length === 0) return input.basePrompt
+        const catalog = withSectionMarkers(
+          "cell-catalog",
+          `## Host Tools\n\nCallable inside \`cell\` with \`await tools.call(name, input)\`. \`tools.describe(name)\` returns the input schema.\n\n${entries.join("\n")}`,
+        )
+        return `${input.basePrompt}\n\n${catalog}`
+      }),
+    )
   }),
 })
+
+const describeInputKeys = (tool: ToolCapability): string => {
+  const ast = tool.parametersSchema.ast
+  if (ast._tag !== "Objects") return ""
+  const keys = ast.propertySignatures.map((signature) => {
+    const optional = Option.fromUndefinedOr(signature.type.context).pipe(
+      Option.exists((context) => context.isOptional),
+    )
+    if (optional) return `${String(signature.name)}?`
+    return String(signature.name)
+  })
+  return `(${keys.join(", ")})`
+}

@@ -122,6 +122,14 @@ export const getToolMetadata = <Input, Output, Error>(
 
 export const getToolId = (tool: ToolCapability): ToolId => getToolMetadata(tool).id
 
+/** Prompt text for extension-owned tool catalogs, without execution metadata. */
+export const getToolPrompt = (
+  tool: ToolCapability,
+): Pick<GentToolMetadata, "promptSnippet" | "promptGuidelines"> => {
+  const { promptSnippet, promptGuidelines } = getToolMetadata(tool)
+  return { promptSnippet, promptGuidelines }
+}
+
 export const getToolEffect = <Input, Output, Error>(
   tool: ToolCapability<Input, Output, Error>,
 ): GentToolMetadata<Input, Output, Error>["effect"] => getToolMetadata(tool).effect

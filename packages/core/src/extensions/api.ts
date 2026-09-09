@@ -153,6 +153,7 @@ export {
 // See `domain/capability/{tool,request}.ts` for the typed shapes.
 export {
   getToolId,
+  getToolPrompt,
   tool,
   type GentToolMetadata,
   type ToolInput,
