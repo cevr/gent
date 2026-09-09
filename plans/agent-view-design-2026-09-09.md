@@ -80,10 +80,29 @@ capability kept working.
    rows means N subscriptions, or one new stream.
 3. **No server-side elapsed per loop.** Only client-side
    (`session-controller-state.ts:17`).
-4. **Unverified:** whether `listEntityIds` reports idle-but-evicted entities.
-   `2479d42f fix(runtime): retain active turns across entity idle expiry`
-   suggests eviction is real. **Must be checked before relying on it as the
-   sole source** — if it under-reports, durable storage has to backfill.
+4. **Resolved: `listEntityIds` is live-only, and under-reports by design.**
+   Traced through `effect-encore`: `listEntityIds` -> `listStateEntityIds`
+   (`dist/actor.js:263`) -> `ActorStateRegistry.list` (`dist/actor-state.js:61`).
+   That registry is an in-memory `Ref<Map>` (`dist/actor-state.js:14`), and
+   `registerState` installs `Effect.addFinalizer(() => registry.deregister(...))`
+   (`dist/actor-state.js:53`). An entity deregisters when its scope closes.
+
+   So the enumeration returns **only currently-materialized actors**. An idle,
+   evicted, or never-started branch is absent — and it is empty after a restart.
+   It answers "which loops are running now", never "which agents exist".
+
+   **Consequence for the design.** Rows cannot come from the actor registry
+   alone. Like Prime, gent needs two catalogs merged:
+   - **live** — `listEntityIds`, giving Running/Idle and live metrics;
+   - **durable** — `SessionStorage.listSessions` plus
+     `SessionOperationStorage.listAgentStarts` (`session-operation-storage.ts:332-368`,
+     workspace-wide with `Option.none()`), giving Inactive rows and surviving
+     restarts.
+
+   A live row and a durable row for the same `(sessionId, branchId)` are the
+   same agent and must reconcile to one row, with live data winning. This is
+   exactly Prime's `reconcileUnifiedSessions` shape
+   (`agents-view-state.ts:180-229`) and the reason that function exists.
 
 ## Shape
 
@@ -105,11 +124,15 @@ testable without a terminal. That is the part of Prime worth copying exactly.
 
 ## Order
 
-1. Open the enumeration seam: `listActiveLoops` on `SessionRuntimeService`.
-   **First verify the eviction question in gap 4.**
+1. Open the enumeration seam: `listActiveLoops` on `SessionRuntimeService`,
+   named for what it returns — _active_ loops, not all agents.
 2. Pure projection module + tests (no TUI).
 3. Extension server half: the row capability.
 4. Extension client half: overlay, command, keybinding.
 5. Subagent nesting + disclosure, reusing the live `delegate` parent links.
 
 Steps 1-2 carry the risk; 3-5 are assembly over surfaces that already exist.
+
+The reconciliation in step 2 is now the load-bearing piece, not step 1: the
+live enumeration is a few lines, while merging two catalogs into stable row
+identity is where the correctness lives.
