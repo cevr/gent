@@ -88,10 +88,12 @@ Sources:
 1. **Move kernel evaluation, snapshot policy, and declarations into the
    extension.** Keep generic admission and durable effect receipts in the host.
    Prove reset, interrupt, crash, restart, and branch isolation.
-2. **Remove `@gent/core-internal`.** 41 files still import it. The TUI source and
-   tests are the bulk. `apps/tui/package.json` and `apps/server/package.json`
-   still declare the dependency. Delete the symlink package, path aliases, and
-   the obsolete guard rules last.
+2. **Remove `@gent/core-internal`.** 109 files still reference it: 41 in
+   `packages/extensions`, 35 in `apps/tui`, 8 in `packages/e2e`, 7 each in
+   `packages/tooling`, `packages/sdk`, and `packages/core`, 3 in `apps/server`,
+   plus the package itself. `apps/tui/package.json` and
+   `apps/server/package.json` still declare the dependency. Delete the symlink
+   package, path aliases, and the obsolete guard rules last.
 3. **Durable context admission.** Plan:
    [durable-context-admission-2026-09-08.md](durable-context-admission-2026-09-08.md).
    One host-owned module over `MessageStorage` at
@@ -110,6 +112,33 @@ Sources:
 6. **Reduce internal files and paths.** Collapse single-owner forwarding modules.
    Audit the legacy turn profile path. Do not merge unrelated code to meet a
    file quota.
+
+## Findings from the 2026-09-09 survey
+
+Recorded before starting the branch-resource unit.
+
+- Only three shipped extensions declare a Resource, all `scope: "process"`:
+  `packages/extensions/src/btw/index.ts:95`,
+  `packages/extensions/src/exec-tools/index.ts:34`, and
+  `packages/extensions/src/skills/index.ts:25`. The test layer adds a fourth at
+  `packages/core/src/test-utils/e2e-layer.ts:104`. A new scope literal therefore
+  touches few real declaration sites.
+- `resource-layer.ts:54` and `:97` default a `ResourceScope` parameter to
+  `"process"`. Those defaults keep existing callers compiling when the union widens.
+- `defineStateResource` pins `scope: "process"` as a literal
+  (`domain/resource.ts:182`), not as `ResourceScope`. That is deliberate — state
+  resources are process-only — and is not a blocker.
+- `schedule-engine.ts:12` states that only process Resources contribute
+  schedules. A branch scope must not silently start feeding that reconciler.
+- `CellExecution.Branch` already documents "one branch scope owns admission"
+  (`runtime/code-cell/cell-execution.ts:66`). The branch concept exists; it is
+  simply not expressed through the Resource API yet.
+- Two `@gent/core-internal/...` strings are Schema error-tag identifiers, not
+  imports: `test-utils/fixtures.ts:51` and `schedule-engine.ts:39`. They carry
+  wire identity, so renaming them during the `core-internal` removal is a
+  deliberate decision, not a mechanical find-and-replace.
+- The artifacts extension is already deleted (`27171e89`, on `main`). The user's
+  "artifacts in the kernel" question is closed; do not re-plan it.
 
 ## Known open defect
 
