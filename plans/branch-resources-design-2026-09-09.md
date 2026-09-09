@@ -34,28 +34,43 @@ with `Scope.fork(actorScope)`, closes it if construction or handle publication
 fails, and transfers ownership on success. That is the branch lifetime. It
 landed in `77505180` as the prerequisite for this unit.
 
-### 3. The declaration path already filters by scope
+### 3. The declaration path is parameterised, but every caller pins "process"
 
 `collectResourceEntries(extensions, scope)` filters on `resource.scope === scope`
 (`resource-layer.ts:32-40`). `buildResourceLayer` and
-`buildResourceServiceLayer` take a `ResourceScope` parameter that merely
-defaults to `"process"` (`:54`, `:97`). Both call sites pass `"process"`
-explicitly (`profile.ts:293`, `:295`).
+`buildResourceServiceLayer` take a `ResourceScope` parameter defaulting to
+`"process"` (`:54`, `:97`).
 
-Widening `ResourceScope` therefore does not require new plumbing here.
+Do not read this as "already generic". Every caller pins the literal:
+`profile.ts:293`, `profile.ts:295`, `live-profile.ts:550`,
+`e2e-layer.ts:90`, `e2e-layer.ts:107`. The availability reporter also pins it
+(`live-profile.ts:385`).
+
+**This is the trap in this unit.** Widening `ResourceScope` is a _widening_, so
+almost nothing fails to compile. A `scope: "branch"` resource would type-check,
+then be silently dropped by `live-profile.ts:550` before it ever reached a host,
+and never be reported unavailable by `live-profile.ts:385`. The type system
+gives no signal. A branch feed must land in the same change as the literal.
 
 ## What must actually change
 
 1. `domain/resource.ts:38` — `ResourceScope` becomes `"process" | "branch"`, and
-   `ScopeOf` gains a `BranchScope` brand alongside `ServerScope`. The module doc
-   (`:9-17`) requires the host lifecycle to land in the same change; that rule is
-   satisfied by item 2.
+   `ScopeOf` (`:44`) gains a `BranchScope` arm alongside `ServerScope`. Without
+   the `ScopeOf` arm, `ScopeOf<"branch">` is `never` and the brand gate silently
+   disappears — the widening would remove type safety rather than add a lifetime.
 2. `agent-loop.behavior.ts:322-331` — replace the direct
    `Layer.build(CellExecution.Branch ⊕ ModelContextLedger.Branch)` with a branch
    resource host constructed over `loopScope`. Both `Scope.Scope` (`:218`) and
    `GentPlatform` (`:241`) are already in the behavior's R channel, so no new
    requirement enters the signature.
 3. A branch `baseContext` built from stable host services only. See the hazard.
+4. A branch-scoped feed replacing the pinned `"process"` at `live-profile.ts:550`,
+   and the availability filter at `live-profile.ts:385`. Without this the
+   feature is inert — see the trap above.
+
+`AnyResourceContribution` (`domain/resource.ts:102`) widens automatically, so
+every host that iterates it starts receiving branch resources with no type-level
+signal. Audit those iterations as part of the change.
 
 `defineStateResource` stays process-only — it pins the literal `scope: "process"`
 (`domain/resource.ts:182`) on purpose. `schedule-engine.ts:12` states only
@@ -85,12 +100,81 @@ least the branch's own — storage, platform, config. Never a value read out of
 ## Teardown semantics, confirmed
 
 - `shutdown` is `Effect.uninterruptible` and holds the reconciliation semaphore
-  (`:1023-1029`, `:1022`).
+  (`:1024-1030`, `:1022`).
+- It is idempotent on two guards: `shutdownComplete` (`:978`, set `:1016`) and
+  the shared semaphore, which also serialises it against `apply` (`:969`).
 - In-flight staging races `shutdownRequested` and is interrupted (`:419`,
   `:618`, `:818`).
-- `shutdownComplete` guards repeat runs (`:1016`).
 
 A branch scope closing mid-stage is therefore defined behavior, not a race.
+
+### Branch close interrupts in-flight work — it does not drain it
+
+This is the one place the host may need a real change, and it is easy to miss.
+
+`shutdown` closes the live generation with the literal retire mode `"cancel"`
+(`:981`). `closeGeneration` branches on that: `"cancel"` runs
+`leases.cancel` immediately (`:484-486`); only the `else` branch drains
+(`:487-493`). The `awaitDrained` effect passed as the drain argument is never
+evaluated on the shutdown path.
+
+`leases.cancel` fires the `cancelled` deferred, and `run` races admitted work
+against it, so the work is **interrupted**. Every production retire path uses
+`"drain"` (`live-profile.ts:763`), but shutdown never does, and shutdown is what
+a scope close triggers.
+
+Consequence: closing a branch mid-turn interrupts any work admitted through that
+branch host's publication. If branch teardown must let in-flight turn work
+finish, either quiesce the branch before closing its scope, or add a graceful
+mode to `shutdown`. The latter is the only change `makeResourceGraphHost` itself
+would need.
+
+Decide this before implementing. The cell kernel already treats cancellation as
+a first-class outcome — `cell-execution.ts` returns "Cell cancelled. Its effects
+may have occurred; its source was not replayed." — so interrupt-on-close may be
+acceptable. Do not assume it silently.
+
+## A prior multi-scope design left tombstones — read them before designing
+
+An earlier design had three runtime brand _constructors_: `brandServerScope`,
+`brandCwdScope`, `brandEphemeralScope`, in a module
+`packages/core/src/runtime/scope-brands.ts`. That module no longer exists, and
+the constructors have zero uses in any `src/` tree.
+
+Three fences still guard that vanished design:
+
+- `lint/no-direct-env.ts:840` — oxlint rule `gent/brand-constructor-callers`,
+  pinning each constructor to one composition root.
+- `lint/no-direct-env.ts:869` — sibling rule `gent/no-scope-brand-cast`, fencing
+  `as ServerProfile | CwdProfile | EphemeralProfile`.
+- `packages/tooling/src/platform-duplication-guards.ts:73-76` — a tombstone
+  pattern: "Legacy runtime composer scope brands are deleted; compose layers at
+  the owner."
+
+Both lint rules are enabled in `.oxlintrc.json:27,29` and exercised by
+`packages/tooling/tests/fixtures.test.ts:121-130` against fixtures in
+`packages/tooling/fixtures/`. They pass, but they guard symbols that no longer
+exist. The tombstone covers the three _types_; it does not cover the three
+_constructors_, so the lint rules are not redundant with it.
+
+The rules are implemented and live — they are oxlint JS-plugin rules in
+`lint/no-direct-env.ts`, not TypeScript modules under `packages/tooling/src`.
+Searching only `packages/tooling/src` makes them look unimplemented; they are
+not. The fixture at `packages/tooling/fixtures/brand-constructor-callers.invalid.ts`
+imports the vanished `scope-brands.js`, but it is `@ts-nocheck`'d and exists to
+be linted, not compiled, so it is doing its job.
+
+Two consequences for this unit:
+
+1. Today's brands are `declare const` phantom types with no runtime payload
+   (`domain/resource.ts:33-35`). A new `BranchScope` must follow that shape.
+   Do not resurrect runtime brand constructors — they were deliberately removed.
+2. Do not name a new scope `cwd` or `ephemeral`. Those names carry tombstones
+   and would trip the guards.
+
+Leave these fences alone in this unit. Deciding whether a fence around a
+non-existent symbol still earns its keep is a separate cleanup with its own
+gate.
 
 ## Acceptance for this unit
 
