@@ -3,7 +3,14 @@
 Date: 2026-09-09. Author: Claude, from source read at `4c123fa3`.
 
 This note records what the source actually supports before any code changes.
-Every claim below has a file and line receipt. Nothing here is implemented yet.
+Every claim below has a file and line receipt.
+
+**Status: implemented.** Verified 2026-09-09. `buildResourceLayer(..., "branch")`
+runs in `agent-loop.behavior.ts:339` against the branch scope, and
+`@gent/skills` declares `scope: "branch"` (`packages/extensions/src/skills/index.ts:28`)
+with its service read by the turn projection. The trap this note warned about —
+widening `ResourceScope` while every caller still pins `"process"` — did not
+happen: there is a real branch-scoped consumer. No open work remains here.
 
 ## The finding that shrinks this unit
 
