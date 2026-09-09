@@ -90,6 +90,29 @@ mechanism.
    service method — worth doing for the surface it removes, not for line
    count.
 
+   **Attempted and reverted.** Removing them typechecked everywhere except
+   `tests/server/resource-graph-rpc.test.ts`, which confirmed there is no
+   production caller. But reading that test before deleting it changed the
+   conclusion: `resourceGraph.submit` is the **only entry point that repairs a
+   failed resource graph**. The test "repairs a failed owner and reacquires its
+   resource after restart" (`:262`) submits a new desired revision against a
+   graph in state `failed` and waits for `applied`.
+
+   There is no other trigger. `applyDesired` has callers at
+   `session-profile.ts:441` and `dependencies.ts:317`, but both are owner
+   adapters invoked _by_ the resource graph entity (`resource-graph-entity.ts:325`)
+   during an apply that something else initiated. Startup recovery
+   (`recoverAllAndAwaitReport`) re-drives interrupted applications; it does not
+   re-submit a graph that failed validation or apply.
+
+   So "no production caller" was true and misleading. The RPC is the operator
+   escape hatch for a wedged resource graph, reachable over the transport. An
+   uncalled _recovery_ surface is not the same as a dead one — the absence of
+   calls is the success case.
+
+   **Revised.** This step is withdrawn. Revisit only if step 3 removes the
+   failure state that makes repair necessary.
+
 3. **Then** measure what remains: with one process resource left
    (`background-bash`) plus `btw/runs`, ask whether generations, leases, and
    retire modes are still earning their place, or whether a plain
