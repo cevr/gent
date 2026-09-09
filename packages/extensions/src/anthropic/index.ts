@@ -53,7 +53,15 @@ const readOptionalEnv = (name: string): Effect.Effect<Option.Option<string>> =>
 // that hosts `AnthropicClient`; the keychain transform middleware reads
 // from it per-request via `mapRequestEffect`.
 
-// Maps gent reasoning level to Anthropic effort (Anthropic caps at "high")
+// Maps gent reasoning level to Anthropic effort.
+//
+// The Anthropic API accepts `max` (and Sonnet 5 also accepts `xhigh`), but the
+// installed `@effect/ai-anthropic` config type is narrower than the wire
+// schema: `AnthropicLanguageModel.layer`'s `output_config.effort` is
+// `"low" | "medium" | "high"`, while `Generated.ts` `EffortLevel` is
+// `"low" | "medium" | "high" | "max"`. Passing `max` here fails typecheck
+// (TS2322). So `xhigh` and `max` clamp to `high` until that config type widens.
+// Verified against @effect/ai-anthropic@4.0.0-rc.112 on 2026-09-09.
 const ANTHROPIC_EFFORT = new Map<string, "low" | "medium" | "high">([
   ["minimal", "low"],
   ["low", "low"],

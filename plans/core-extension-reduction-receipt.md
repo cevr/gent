@@ -630,3 +630,40 @@ Source receipts:
 - `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/server/auth-rpc.test.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/test-utils/e2e-layer.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/extensions/src/anthropic/index.ts`
+
+## Reasoning effort cap: investigated, not a gent defect (2026-09-09)
+
+The prior entry recorded `ANTHROPIC_EFFORT` clamping `xhigh` and `max` to
+`"high"` as a stale cap worth raising. That conclusion was wrong. The clamp is
+an upstream SDK limit.
+
+`@effect/ai-anthropic@4.0.0-rc.112` carries two different effort types. The wire
+schema in `Generated.d.ts` is `EffortLevel = "low" | "medium" | "high" | "max"`.
+The config type gent passes through `AnthropicLanguageModel.layer` is narrower:
+`output_config.effort?: "low" | "medium" | "high" | null`.
+
+Proved by probe, not by reading. Widening the map to emit `"max"` fails
+typecheck:
+
+```
+src/anthropic/index.ts(78,73): error TS2322:
+  Type '"max"' is not assignable to type '"high" | "low" | "medium" | null | undefined'.
+```
+
+The probe was reverted with `git checkout`. Only the comment changed: it now
+names the two types, the version checked, and the condition that would lift the
+clamp. `main` continues to request `high` while running `reasoningEffort: "max"`.
+
+Raising this needs an upstream change to the `AnthropicLanguageModel` config
+type, or a local patch. Neither is worth carrying for one effort level; revisit
+when the package updates.
+
+Validation: full `bun run gate` passed. `/tmp/gent-effort-gate.log`.
+
+Size: comment only. 0 behavior change, 0 files added or deleted.
+
+Source receipts:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/extensions/src/anthropic/index.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.112+11eac7cfbf53fc55/node_modules/@effect/ai-anthropic/dist/AnthropicLanguageModel.d.ts:148`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.112+11eac7cfbf53fc55/node_modules/@effect/ai-anthropic/dist/Generated.d.ts:1236`
