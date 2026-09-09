@@ -19,16 +19,24 @@ describe("system prompt composition", () => {
     date: "2026-01-01",
   }
 
-  test("includes identity as a general purpose agent that uses code", () => {
+  test("includes identity as a general purpose agent", () => {
     const result = buildSystemPrompt(base)
-    expect(result).toContain("You are Gent, a general purpose agent that uses code to solve tasks.")
+    expect(result).toContain("You are Gent, a general purpose agent.")
   })
 
-  test("includes work section with cell and delegation guidance", () => {
+  test("includes work section with delegation guidance", () => {
     const result = buildSystemPrompt(base)
     expect(result).toContain("# Work")
-    expect(result).toContain("The cell is your persistent control environment.")
     expect(result).toContain("A child inherits your agent and model")
+  })
+
+  test("names no specific tool, so a deployment without one reads correctly", () => {
+    // The base prompt is the loop's, not a feature's. A tool that needs the
+    // model to know how to use it says so in its own prompt section.
+    const result = buildSystemPrompt(base)
+    for (const name of ["cell", "bash", "grep"]) {
+      expect(result.toLowerCase()).not.toContain(name)
+    }
   })
 
   test("includes environment section", () => {
@@ -227,30 +235,24 @@ describe("turn prompt composition", () => {
     expect(result).not.toContain("## Tool Guidelines")
   })
 
-  test("prefer-dedicated-tools guideline names only active tools", () => {
+  test("a tool steering the model toward another one says so itself", () => {
+    // The loop reads guidelines off the tools present; it does not know that
+    // "bash" exists or that "grep" is preferable to it.
     const tools = [
-      makeTool("bash", { description: "Run" }),
+      makeTool("bash", {
+        description: "Run",
+        promptGuidelines: ["Prefer grep over bash for file searching"],
+      }),
       makeTool("grep", { description: "Search" }),
     ]
     const result = buildTurnPrompt(baseSections, agent, tools)
-    expect(result).toContain("Prefer grep over bash")
-    expect(result).not.toContain("glob")
+    expect(result).toContain("Prefer grep over bash for file searching")
   })
 
-  test("names all active dedicated tools in the guideline", () => {
-    const tools = [
-      makeTool("bash", { description: "Run" }),
-      makeTool("grep", { description: "Search" }),
-      makeTool("read", { description: "Read" }),
-    ]
+  test("a guideline only reaches the prompt while its tool is active", () => {
+    const tools = [makeTool("grep", { description: "Search" })]
     const result = buildTurnPrompt(baseSections, agent, tools)
-    expect(result).toContain("Prefer grep/read over bash")
-  })
-
-  test("omits prefer-dedicated-tools guideline when only bash active", () => {
-    const tools = [makeTool("bash", { description: "Run" })]
-    const result = buildTurnPrompt(baseSections, agent, tools)
-    expect(result).not.toContain("Prefer")
+    expect(result).not.toContain("Prefer grep over bash")
   })
 
   test("never renders a delegation roster: children inherit the current agent", () => {

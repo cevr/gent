@@ -53,16 +53,28 @@ export const CellExtension = defineExtension({
             (tool) =>
               `- **${getToolId(tool)}**${describeInputKeys(tool)}: ${getToolPrompt(tool).promptSnippet ?? tool.description}`,
           )
-        if (entries.length === 0) return input.basePrompt
+        if (entries.length === 0) return `${input.basePrompt}\n\n${CELL_WORK}`
         const catalog = withSectionMarkers(
           "cell-catalog",
           `## Host Tools\n\nCallable inside \`cell\` with \`await tools.call(name, input)\`. \`tools.describe(name)\` returns the input schema.\n\n${entries.join("\n")}`,
         )
-        return `${input.basePrompt}\n\n${catalog}`
+        return `${input.basePrompt}\n\n${CELL_WORK}\n\n${catalog}`
       }),
     )
   }),
 })
+
+/**
+ * How to work when the cell is the execution surface.
+ *
+ * Core's base prompt says a turn ends when the model stops calling tools; it
+ * does not say the work happens in a cell, because a deployment without this
+ * extension has no cell. The sentences that assume one live here.
+ */
+const CELL_WORK = `# Working in the cell
+
+- The cell is your persistent control environment. Keep intermediate values in named variables, inspect and transform outputs, and write small helpers. Use it for loops, parsing, and state; call host tools for effects.
+- You solve tasks by writing and running TypeScript in the cell, observing results, and iterating one step at a time.`
 
 const describeInputKeys = (tool: ToolCapability): string => {
   const ast = tool.parametersSchema.ast

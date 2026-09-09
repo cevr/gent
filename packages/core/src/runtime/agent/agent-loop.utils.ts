@@ -62,14 +62,10 @@ export const buildTurnPromptSections = (
   }
 
   // Tool guidelines — collected from active tools + conditional rules
+  // Every guideline comes from the tool that owns it. The loop does not know
+  // tool names -- a tool that wants to steer the model toward another one says
+  // so in its own `promptGuidelines`.
   const guidelines = toolsWithMetadata.flatMap((tool) => tool.metadata.promptGuidelines ?? [])
-  const hasBash = toolsWithMetadata.some((tool) => tool.id === "bash")
-  const dedicatedNames = ["grep", "read"].filter((name) =>
-    toolsWithMetadata.some((tool) => tool.id === name),
-  )
-  if (hasBash && dedicatedNames.length > 0) {
-    guidelines.push(`Prefer ${dedicatedNames.join("/")} over bash for file searching and reading`)
-  }
   if (guidelines.length > 0) {
     const deduped = [...new Set(guidelines)]
     sections.push({
