@@ -517,8 +517,11 @@ This is a packaged worker, not a daemon or a new session owner.
 host uses its sibling `gent-cell`. Source runs use core's `dist/gent-cell`, resolved
 from the platform module, not cwd or the Bun executable. Source runs need the core
 build first. The TUI build sets the compiled-host marker explicitly.
-`agent-loop.behavior.ts` builds `CellExecution.Branch` in the existing loop scope
-and supplies it to turn execution. Each branch owns a separate service and lazy
+`agent-loop.handlers.ts` allocates a child of the actor scope for each loop rebuild.
+It publishes the loop handle before it transfers scope ownership. Failure or
+interruption during construction closes that child immediately.
+`agent-loop.behavior.ts` uses this supplied scope to build `CellExecution.Branch`
+and supplies the service to turn execution. Each branch owns a separate service and lazy
 worker. Closing the loop scope closes that worker. Source runs have no
 build artifact, so builtin tools carry no durable identity there; cells record a
 `ProcessLocal` binding that names the live resource generation instead. Such an

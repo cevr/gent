@@ -47,6 +47,7 @@ import {
   Predicate,
   Ref,
   Schema,
+  Scope,
   Stream,
   Semaphore,
 } from "effect"
@@ -505,27 +506,39 @@ export const buildAgentLoopActorHandlers = (config: {
           }),
         )
       }
-      const handle = yield* makeAgentLoopBehavior(
-        sessionId,
-        branchId,
-        sideMutationSemaphore,
-        config.baseSections,
-        initialQueue,
-        Option.getOrUndefined(sessionProfileCacheOption),
-      ).pipe(
-        Effect.provideService(AgentLoopFollowUp, {
-          enqueue: (input) => reentrantHandle.pipe(Effect.flatMap((h) => admitFollowUp(h, input))),
-          dequeue: (input) =>
-            reentrantHandle.pipe(
-              Effect.flatMap((h) =>
-                h.removeFollowUp(
-                  followUpMessageIdForSource({ workspaceId: brandedWorkspaceId, ...input }),
+      // Each rebuild owns a child of the actor scope, never the request scope.
+      // Transfer it only after construction and handle publication both succeed.
+      const handle = yield* Effect.acquireUseRelease(
+        Scope.fork(actorScope),
+        (loopScope) =>
+          makeAgentLoopBehavior(
+            sessionId,
+            branchId,
+            sideMutationSemaphore,
+            config.baseSections,
+            initialQueue,
+            Option.getOrUndefined(sessionProfileCacheOption),
+          ).pipe(
+            Effect.provideService(AgentLoopFollowUp, {
+              enqueue: (input) =>
+                reentrantHandle.pipe(Effect.flatMap((h) => admitFollowUp(h, input))),
+              dequeue: (input) =>
+                reentrantHandle.pipe(
+                  Effect.flatMap((h) =>
+                    h.removeFollowUp(
+                      followUpMessageIdForSource({ workspaceId: brandedWorkspaceId, ...input }),
+                    ),
+                  ),
                 ),
-              ),
-            ),
-        }),
+            }),
+            Scope.provide(loopScope),
+            Effect.tap((handle) => Ref.set(handleRef, Option.some(handle))),
+          ),
+        (loopScope, exit) => {
+          if (Exit.isFailure(exit)) return Scope.close(loopScope, exit)
+          return Effect.void
+        },
       )
-      yield* Ref.set(handleRef, Option.some(handle))
       if (Option.isSome(initialQueueFailure)) {
         yield* Ref.set(startupExitRef, Option.some(Exit.fail(initialQueueFailure.value)))
         yield* Ref.set(closed, false)

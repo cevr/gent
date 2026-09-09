@@ -215,6 +215,7 @@ export const makeAgentLoopBehavior = (
 ): Effect.Effect<
   AgentLoopBehavior,
   never,
+  | Scope.Scope
   | Entity.CurrentAddress
   | SessionStorage
   | MessageStorage
@@ -318,7 +319,7 @@ export const makeAgentLoopBehavior = (
       }),
     )
 
-    const loopScope = yield* Scope.make()
+    const loopScope = yield* Effect.scope
     const interruptedRef = yield* Ref.make(false)
     // Branch-owned turn services: the cell kernel and the model context ledger.
     const cellContext = yield* Layer.build(

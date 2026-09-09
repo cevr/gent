@@ -530,3 +530,48 @@ Source receipts:
 - `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop/interactions.test.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop/streaming.test.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop/tool-projection-reconciliation.test.ts`
+
+## Actor-owned loop scope (2026-09-09)
+
+The behavior factory previously allocated an unattached scope. The actor now allocates one child scope per rebuild and provides it to the behavior. `Effect.acquireUseRelease` closes the child if construction or handle publication fails or is interrupted. Successful construction transfers ownership after `handleRef` is set. The existing loop close path still closes that scope. The actor scope also owns the child, so actor shutdown provides a second lifetime boundary.
+
+This is a prerequisite for branch resources. It does not advertise a new resource scope. Cell and model-context services still have explicit construction in the behavior. No kernel implementation moved in this unit.
+
+Validation:
+
+- Full `bun run gate` passed.
+- Focused cell-lifetime and recovery-race tests: 5 passed, 46 assertions. These cover cell persistence across RPC requests, branch isolation, worker closure, and serialized rebuild behavior. No new failure-injection test was added for this scope transfer.
+- Live Herdr Luna session retained `actorScopeProbe = 41` across requests. The next cell printed `42` without redefining it. Collapsed, preview, and full cards retained both values.
+- During a 60-second cell wait, Ctrl+C produced the cancelled-cell card and interruption row. A later cell ran and the assistant returned `SCOPE-RECOVERED` in the same session.
+
+Size: +14 production lines, 0 files added or deleted, 0 moved implementation lines, 0 package or export changes. Core source now has 201 files and 45,457 physical lines.
+
+Evidence:
+
+- `/tmp/gent-actor-scope-gate.log`
+- `/tmp/gent-actor-scope-tests.log`
+- `/tmp/gent-actor-scope-herdr-retained.txt`
+- `/tmp/gent-actor-scope-herdr-preview.txt`
+- `/tmp/gent-actor-scope-herdr-full.txt`
+- `/tmp/gent-actor-scope-herdr-running.txt`
+- `/tmp/gent-actor-scope-herdr-cancelled.txt`
+- `/tmp/gent-actor-scope-herdr-recovered.txt`
+
+Source receipts:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/agent/agent-loop.handlers.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/agent/agent-loop.behavior.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop/cell-lifetime.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop/recovery-race.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/node_modules/effect/src/Scope.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/ARCHITECTURE.md`
+
+The next branch-resource change must reuse graph admission and generation leases. The current graph host captures `baseContext` once. A branch resource must not retain a process-publication service after that publication retires. Keep construction dependencies on stable host services and branch resources; provide generation-bound tool authority per call. Verify this boundary before wiring resources into turn profiles. This is a design constraint from the source audit, not an implemented feature.
+
+Audit sources:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/extensions/resource-host/resource-graph-host.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/live-profile.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/agent/agent-loop.turn-profile.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/domain/resource.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/code-cell/cell-execution.ts`
