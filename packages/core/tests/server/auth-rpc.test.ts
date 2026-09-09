@@ -16,7 +16,7 @@ import { BunServices } from "@effect/platform-bun"
 import { textStep } from "../../src/debug/provider"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { Auth, AuthError, AuthMethod } from "../../src/domain/auth"
-import { DEFAULT_AGENT_NAME, ExternalDriverRef } from "../../src/domain/agent"
+import { DEFAULT_AGENT_NAME, DEFAULT_MODEL_ID, ExternalDriverRef } from "../../src/domain/agent"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
 import { ConfigService } from "../../src/runtime/config-service.js"
@@ -146,22 +146,25 @@ describe("auth.listProviders", () => {
               configServiceLayer: configServiceLive,
             }),
           )
-          // Launch cwd has no override -> main (openai-modeled)
-          // requires openai. Proves the override is NOT in user config.
+          // The provider required by `main` follows DEFAULT_MODEL_ID, so this
+          // test states the override invariant rather than a shipped model.
+          const defaultProvider = DEFAULT_MODEL_ID.slice(0, DEFAULT_MODEL_ID.indexOf("/"))
+          // Launch cwd has no override -> main requires its model's
+          // provider. Proves the override is NOT in user config.
           const launchSession = yield* client.session.create({ cwd: launch })
           const launchList = yield* client.auth.listProviders({
             agentName: DEFAULT_AGENT_NAME,
             sessionId: launchSession.sessionId,
           })
-          expect(launchList.find((p) => p.provider === "openai")?.required).toBe(true)
-          // Session cwd has the project override -> openai is NOT
+          expect(launchList.find((p) => p.provider === defaultProvider)?.required).toBe(true)
+          // Session cwd has the project override -> that provider is NOT
           // required because the agent is externally routed.
           const overriddenSession = yield* client.session.create({ cwd: sessionCwd })
           const overriddenList = yield* client.auth.listProviders({
             agentName: DEFAULT_AGENT_NAME,
             sessionId: overriddenSession.sessionId,
           })
-          expect(overriddenList.find((p) => p.provider === "openai")?.required).toBe(false)
+          expect(overriddenList.find((p) => p.provider === defaultProvider)?.required).toBe(false)
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
       ),
   )

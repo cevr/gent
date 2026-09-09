@@ -45,6 +45,7 @@ export interface ModelContextWindows {
 
 export const MODEL_CONTEXT_WINDOWS: ModelContextWindows = {
   "anthropic/claude-opus-4-6": 1_000_000,
+  "anthropic/claude-sonnet-5": 1_000_000,
   "openai/gpt-5.4": 1_000_000,
   "openai/gpt-5.4-mini": 1_000_000,
   "openai/gpt-5.5": 1_050_000,

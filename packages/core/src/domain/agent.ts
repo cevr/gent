@@ -81,7 +81,7 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
 // Children spawned from a cell inherit the caller's agent and model.
 
 // Default model — used when an agent has no model set
-export const DEFAULT_MODEL_ID = ModelId.make("openai/gpt-5.6-luna")
+export const DEFAULT_MODEL_ID = ModelId.make("anthropic/claude-sonnet-5")
 
 /** Resolve model for an agent definition */
 export const resolveAgentModel = (agent: AgentDefinition): ModelId =>

@@ -575,3 +575,58 @@ Audit sources:
 - `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/agent/agent-loop.turn-profile.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/domain/resource.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/code-cell/cell-execution.ts`
+
+## Default model switched to Sonnet 5 (2026-09-09)
+
+The user asked for Sonnet 5. `DEFAULT_MODEL_ID` is now
+`anthropic/claude-sonnet-5`, replacing `openai/gpt-5.6-luna`. The Anthropic
+driver takes any model name, so the switch needed no driver change. Claude Code
+OAuth credentials are present in the keychain.
+
+`MODEL_CONTEXT_WINDOWS` gained a `anthropic/claude-sonnet-5` entry at 1,000,000
+tokens. This entry is load-bearing, not cosmetic: `e2e-layer.ts` indexes that
+table by `DEFAULT_MODEL_ID` to shrink the window for compaction tests.
+
+One test changed. `auth-rpc.test.ts` asserted that provider `openai` was
+required for `main`. Its subject is driver-override resolution by session cwd,
+not the shipped model, so it now derives the provider from `DEFAULT_MODEL_ID`.
+The assertion states the real invariant and no longer breaks on a model change.
+
+Validation:
+
+- Full `bun run gate` passed. `/tmp/gent-sonnet5-gate.log`.
+- The changed test was proved to still catch its regression. Replacing
+  `configService.get(Option.getOrUndefined(cwd))` with `configService.get(undefined)`
+  in `rpc-handlers.ts:574` made it fail; the source was restored with
+  `git checkout` and re-verified.
+- Live Herdr: a cell printed 42 and the model replied `SONNET5-OK`. The status
+  line read `Claude Sonnet 5`. Tool call ids carry the Anthropic `toolu_` prefix,
+  which confirms the Anthropic driver ran.
+- Collapsed, preview, and full disclosure all rendered, and returned to collapsed.
+- A cell binding survived across turns: `sonnetProbe = 41` in one turn, then
+  `sonnetProbe + 1` returned 42 in the next without redefinition.
+
+Known limit, not fixed here: `ANTHROPIC_EFFORT` in
+`packages/extensions/src/anthropic/index.ts` maps `xhigh` and `max` down to
+`"high"`. Its comment says Anthropic caps at `high`. That is now stale — Sonnet 5
+accepts `xhigh` and `max`. `main` runs `reasoningEffort: "max"`, so it currently
+requests `high`. Raising this cap is a separate change with its own gate.
+
+Size: 2 production lines changed, 1 test file updated, 0 files added or deleted.
+
+Evidence:
+
+- `/tmp/gent-sonnet5-gate.log`
+- `/tmp/gent-sonnet5-build.log`
+- `/tmp/gent-sonnet5-herdr-collapsed.txt`
+- `/tmp/gent-sonnet5-herdr-preview.txt`
+- `/tmp/gent-sonnet5-herdr-full.txt`
+- `/tmp/gent-sonnet5-herdr-reuse.txt`
+
+Source receipts:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/domain/agent.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/context-estimation.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/server/auth-rpc.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/test-utils/e2e-layer.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/extensions/src/anthropic/index.ts`
