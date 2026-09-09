@@ -11,7 +11,6 @@ import {
   MessageId,
   SessionId,
 } from "../../domain/ids.js"
-import type { ToolCallId, ToolName } from "../../domain/ids.js"
 import { SteerCommand } from "../../domain/steer.js"
 import { WorkspaceId } from "../../server/workspace-rpc.js"
 import { entityIdOf } from "./agent-loop.entity-id.js"
@@ -186,24 +185,6 @@ export type GetMetricsInput = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
-}
-export type RecordToolResultInput = {
-  readonly workspaceId: WorkspaceId
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly commandId?: ActorCommandId
-  readonly toolCallId: ToolCallId
-  readonly toolName: ToolName
-  readonly output: unknown
-  readonly isError?: boolean
-}
-export type InvokeToolInput = {
-  readonly workspaceId: WorkspaceId
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly commandId: ActorCommandId
-  readonly toolName: ToolName
-  readonly input: unknown
 }
 export type RequestExtensionInput = {
   readonly workspaceId: WorkspaceId

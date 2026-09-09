@@ -119,7 +119,6 @@ export type AgentLoopBehavior = {
   stateChanges: Stream.Stream<AgentLoopState>
   runtimeState: Effect.Effect<SessionRuntimeState>
   queueSnapshot: Effect.Effect<QueueSnapshot>
-  setStartingState: (state: RunningState) => Effect.Effect<void>
   reserveStartOrQueueFollowUp: (
     item: QueuedTurnItem,
     options: { readonly queueOnly: boolean },
@@ -132,7 +131,6 @@ export type AgentLoopBehavior = {
     AgentLoopError
   >
   takeNextQueuedTurnIfIdle: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
-  takeNextQueuedTurn: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   appendSteering: (item: QueuedTurnItem) => Effect.Effect<LoopState, AgentLoopError>
   drainQueue: Effect.Effect<QueueSnapshot, AgentLoopError>
   removeFollowUp: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
@@ -144,12 +142,10 @@ export type AgentLoopBehavior = {
    * context, or a branch Resource resolves as "Service not found".
    */
   branchContext: Context.Context<never>
-  persistState: (state: LoopState) => Effect.Effect<void, AgentLoopError>
   refreshRuntimeState: Effect.Effect<void, AgentLoopError>
   /** Read the current FSM state. Replaces effect-machine `actor.snapshot`. */
   snapshot: Effect.Effect<LoopState>
   startTurn: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
-  interruptActiveStream: Effect.Effect<void>
   interrupt: (messageId?: MessageId) => Effect.Effect<void, AgentLoopError>
   switchAgent: (agent: AgentNameType) => Effect.Effect<void, AgentLoopError>
   respondInteraction: (requestId: InteractionRequestId) => Effect.Effect<void, AgentLoopError>
@@ -390,9 +386,7 @@ export const makeAgentLoopBehavior = (
       runtimeState,
       queueSnapshot,
       currentLoopState,
-      persistRuntimeState,
       refreshRuntimeState,
-      setStartingState,
       reserveStartOrQueueFollowUp,
       reserveRunStartOrQueueFollowUp,
       takeNextQueuedTurnIfIdle,
@@ -500,11 +494,9 @@ export const makeAgentLoopBehavior = (
       stateChanges,
       runtimeState,
       queueSnapshot,
-      setStartingState,
       reserveStartOrQueueFollowUp,
       reserveRunStartOrQueueFollowUp,
       takeNextQueuedTurnIfIdle,
-      takeNextQueuedTurn: takeNextQueuedTurnCommitted,
       appendSteering,
       drainQueue,
       removeFollowUp: (messageId) =>
@@ -516,11 +508,9 @@ export const makeAgentLoopBehavior = (
         ),
       resolveTurnProfile,
       branchContext,
-      persistState: persistRuntimeState,
       refreshRuntimeState,
       snapshot: currentLoopState,
       startTurn: worker.startTurn,
-      interruptActiveStream: worker.interruptActiveStream,
       interrupt: worker.interrupt,
       switchAgent: worker.switchAgent,
       respondInteraction: worker.respondInteraction,

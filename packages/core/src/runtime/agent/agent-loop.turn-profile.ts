@@ -60,10 +60,6 @@ export const provideAgentLoopTurnProfile =
  * Its `LiveSessionProfile` result always enters the live branch. Direct actor
  * tests and the legacy runtime use the explicit legacy branch.
  */
-export const provideLegacyAgentLoopTurnProfile =
-  (profile: LegacyAgentLoopTurnProfile) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    provideAgentLoopTurnProfile(profile)(effect)
 
 const isLiveAgentLoopTurnProfile = (
   profile: AgentLoopTurnProfile,
@@ -111,7 +107,7 @@ export const runAgentLoopTurnProfileOrLegacy =
   (profile: AgentLoopTurnProfile) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) => {
     if (!isLiveAgentLoopTurnProfile(profile)) {
-      return provideLegacyAgentLoopTurnProfile(profile)(effect)
+      return provideAgentLoopTurnProfile(profile)(effect)
     }
     return runAgentLoopTurnProfile(profile)(effect)
   }

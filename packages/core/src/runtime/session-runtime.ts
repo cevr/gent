@@ -635,13 +635,8 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
             const commandId = ActorCommandId.make(input.requestId)
             const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
             const workspaceId = yield* CurrentWorkspaceId
-            yield* ref.execute(
-              AgentLoopActor.GetQueue.make({
-                ...input,
-                workspaceId,
-                commandId: ActorCommandId.make(yield* platform.randomId),
-              }),
-            )
+            // DrainQueue opens the loop itself (`ensureStarted` in its handler),
+            // so no priming read is needed first.
             return yield* ref.execute(
               AgentLoopActor.DrainQueue.make({
                 ...input,

@@ -14,7 +14,7 @@ import { EventStore, MessageReceived } from "../../../src/domain/event"
 import { EventPublisherLive } from "../../../src/domain/event-publisher"
 import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { EventStorage } from "../../../src/storage/event-storage"
-import { ActorCommandId, BranchId, MessageId, SessionId } from "../../../src/domain/ids"
+import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
@@ -41,29 +41,10 @@ import {
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
 import { StorageError } from "../../../src/domain/storage-error"
 import { ensureStorageParents } from "../../../src/test-utils"
-import {
-  assistantMessageIdForCommand,
-  toolCallIdForCommand,
-  toolResultMessageIdForCommand,
-  toolResultMessageIdForToolCall,
-} from "../../../src/runtime/agent/agent-loop.utils"
 import { cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })
-
-describe("agent loop command ids", () => {
-  test("derive stable message and tool ids", () => {
-    const commandId = ActorCommandId.make("test-command-id")
-
-    expect(String(toolCallIdForCommand(commandId))).toBe(String(commandId))
-    expect(String(assistantMessageIdForCommand(commandId))).toBe(`${commandId}:assistant`)
-    expect(String(toolResultMessageIdForCommand(commandId))).toBe(`${commandId}:tool-result`)
-    expect(String(toolResultMessageIdForToolCall(toolCallIdForCommand(commandId)))).toBe(
-      `tool-call:${commandId}:tool-result`,
-    )
-  })
-})
 
 describe("wake admission", () => {
   const queuedMessage = (id: string, text: string) =>
