@@ -31,6 +31,7 @@ import {
   type CellRestoreReport,
 } from "./cell-protocol.js"
 import { GentPlatform } from "../gent-platform.js"
+import { BranchToolWork } from "../agent/branch-tool-work.js"
 
 /** The worker binary this build ships next to the executable. */
 const CELL_WORKER_BINARY = "gent-cell"
@@ -80,7 +81,16 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
       Effect.gen(function* () {
         const platform = yield* GentPlatform
         const binaryPath = yield* platform.siblingBinaryPath(CELL_WORKER_BINARY)
-        return CellExecution.Live({ ...address, binaryPath, workerPath: binaryPath })
+        const live = CellExecution.Live({ ...address, binaryPath, workerPath: binaryPath })
+        // The loop cancels branch work through `BranchToolWork`; the cell's
+        // own cancel is what that means here.
+        return Layer.provideMerge(
+          Layer.effect(
+            BranchToolWork,
+            Effect.map(CellExecution, (cells) => BranchToolWork.of({ cancel: cells.cancel })),
+          ),
+          live,
+        )
       }),
     )
 

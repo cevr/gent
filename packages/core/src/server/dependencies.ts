@@ -33,7 +33,8 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
-import { cellStorageLayer } from "../runtime/code-cell/cell-storage.js"
+import { cellBranchLayer, cellStorageLayer } from "../runtime/code-cell/cell-storage.js"
+import { BranchToolLayer } from "../runtime/agent/branch-tool-layer.js"
 import { CurrentInteractionOwner } from "../domain/interaction-owner.js"
 import { ResourceGraphStorage } from "../storage/resource-graph-storage.js"
 import {
@@ -544,6 +545,9 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const baseServicesLive = Layer.provideMerge(
     Layer.mergeAll(
+      // The app names the branch-scoped tool layer it ships. The loop builds
+      // it without knowing what it is.
+      Layer.succeed(BranchToolLayer, cellBranchLayer),
       platformServicesLive,
       runtimeEnvironmentLive,
       clusterRunnerLive,

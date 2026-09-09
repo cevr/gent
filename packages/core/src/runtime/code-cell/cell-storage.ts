@@ -10,6 +10,9 @@
 import { Effect, Layer, Option } from "effect"
 import type { SqlClient } from "effect/unstable/sql"
 import type { InteractionStorage } from "../../storage/interaction-storage.js"
+import { CellExecution } from "./cell-execution.js"
+import type { BranchToolLayerFactory } from "../agent/branch-tool-layer.js"
+import { eraseResourceLayer } from "../extensions/extension-effect-membrane.js"
 import { CellExecutionStorage } from "./cell-execution-storage.js"
 import { CellNamespaceStorage } from "./cell-namespace-storage.js"
 import { CellToolOperationStorage } from "./cell-tool-operation-storage.js"
@@ -89,3 +92,12 @@ export const cellRetainedBindings = Layer.effect(
     })
   }),
 )
+
+/**
+ * The cell's branch-scoped layer, as the loop's `BranchToolLayer` factory.
+ *
+ * The cell kernel lives for the life of a branch: one worker process holding a
+ * namespace across turns. It is built with the loop and torn down with it.
+ */
+export const cellBranchLayer: BranchToolLayerFactory = (input) =>
+  eraseResourceLayer(CellExecution.Branch(input))

@@ -14,7 +14,7 @@ import type { MessageStorage } from "../../storage/message-storage.js"
 import type { RelationshipStorage } from "../../storage/relationship-storage.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
 import { SqliteStorage } from "../../storage/sqlite-storage.js"
-import { cellStorageLayer } from "../code-cell/cell-storage.js"
+import { cellBranchLayer, cellStorageLayer } from "../code-cell/cell-storage.js"
 import { ApprovalService } from "../approval-service.js"
 import { type ExtensionRegistryService } from "../extensions/registry.js"
 import { EventStoreLive } from "../event-store-live.js"
@@ -27,6 +27,7 @@ import { PromptPresenterLive } from "../prompt-presenter-live.js"
 import { RuntimeEnvironment } from "../runtime-environment.js"
 import { SessionRuntime } from "../session-runtime.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
+import { BranchToolLayer } from "./branch-tool-layer.js"
 import { ToolRunner } from "./tool-runner.js"
 
 export interface EphemeralAgentRootConfig {
@@ -194,6 +195,9 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
     const storageLayer = SqliteStorage.MemoryWithSql(cellStorageLayer).pipe(
       Layer.provide(parentGentPlatformLayer),
     )
+    // The cell's storage and its per-branch kernel must arrive together: storage
+    // alone gives a child agent the tables with nothing to run against them.
+    const branchToolLayer = Layer.succeed(BranchToolLayer, cellBranchLayer)
     const clusterRunnerLayer = Layer.provide(
       SingleRunner.layer({ runnerStorage: "memory" }),
       Layer.merge(storageLayer, parentCryptoLayer),
@@ -253,6 +257,7 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
             parentModelRegistryLayer,
             sessionGovernanceLayer,
             parentGentPlatformLayer,
+            branchToolLayer,
           ),
           storageLayer,
         ),

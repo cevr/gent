@@ -29,7 +29,8 @@ import {
   type Path,
 } from "effect"
 import { Entity, Sharding } from "effect/unstable/cluster"
-import { CellExecution } from "../code-cell/cell-execution.js"
+import { BranchToolLayer } from "./branch-tool-layer.js"
+import { BranchToolWork } from "./branch-tool-work.js"
 import { ModelContextLedger } from "../model-context-ledger.js"
 import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -334,10 +335,11 @@ export const makeAgentLoopBehavior = (
       extensionRegistry.getResolved().extensions,
       "branch",
     )
+    const branchToolLayer = yield* BranchToolLayer
     const branchContext = yield* Layer.build(
       Layer.merge(
         Layer.merge(
-          CellExecution.Branch({ sessionId, branchId, interruptedRef }),
+          branchToolLayer({ sessionId, branchId, interruptedRef }),
           ModelContextLedger.Branch,
         ),
         branchResourceLayer,
@@ -346,7 +348,9 @@ export const makeAgentLoopBehavior = (
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
     const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
-    const cells = Context.get(branchContext, CellExecution)
+    // A tool holding branch-scoped work exposes how to cancel it. A branch
+    // whose tools are all stateless has nothing to cancel.
+    const branchWork = Context.getOption(branchContext, BranchToolWork)
     const currentAgent = yield* resolveStoredAgent({
       sessionId,
       branchId,
@@ -449,7 +453,10 @@ export const makeAgentLoopBehavior = (
       turnWorkerQueue,
       activeStreamRef,
       interruptedRef,
-      interruptToolWork: cells.cancel,
+      interruptToolWork: Option.match(branchWork, {
+        onNone: () => Effect.void,
+        onSome: (work) => work.cancel,
+      }),
       currentLoopState,
       saveCheckpoint,
       takeNextQueuedTurn: takeNextQueuedTurnCommitted,

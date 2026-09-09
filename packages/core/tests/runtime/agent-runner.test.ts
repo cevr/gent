@@ -27,6 +27,8 @@ import { waitFor } from "../../src/test-utils/fixtures"
 import { messageSingleText } from "../../src/domain/message-part-projection"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { makeEphemeralAgentRootLayerFactory } from "../../src/runtime/agent/ephemeral-root"
+import { BranchToolLayer } from "../../src/runtime/agent/branch-tool-layer"
+import { BranchToolWork } from "../../src/runtime/agent/branch-tool-work"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
@@ -2202,6 +2204,47 @@ describe("ephemeral service propagation", () => {
         yield* publisher.deliver(envelope)
         const deliveredAgain = yield* Fiber.join(duplicate).pipe(Effect.timeoutOption("25 millis"))
         expect(deliveredAgain._tag).toBe("None")
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.scoped, Effect.provide(layer))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+  it.live("an ephemeral child agent gets the branch tool kernel, not just its storage", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("unused")])
+      const parentDeps = Layer.mergeAll(
+        providerLayer,
+        ModelResolver.fromLanguageModel(providerLayer),
+        testRegistryLayer,
+        ephemeralParentDeps,
+        BunFileSystem.layer,
+        BunPath.layer,
+      )
+      const layer = Layer.unwrap(
+        Effect.gen(function* () {
+          const extensionRegistry = yield* ExtensionRegistry
+          const makeEphemeralAgentRootLayer = yield* makeEphemeralAgentRootLayerFactory
+          return makeEphemeralAgentRootLayer({
+            config: { baseSections: [] },
+            extensionRegistry,
+          })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(parentDeps)),
+      )
+      yield* Effect.gen(function* () {
+        // The reference has a do-nothing default, so an unwired child would still
+        // build and still run turns -- it would just silently lose every
+        // dispatching tool. Build what the factory returns and look for the
+        // kernel's own service.
+        const branchToolLayer = yield* BranchToolLayer
+        const interruptedRef = yield* Ref.make(false)
+        const built = yield* Layer.build(
+          branchToolLayer({
+            sessionId: SessionId.make("ephemeral-branch-kernel"),
+            branchId: BranchId.make("ephemeral-branch-kernel-branch"),
+            interruptedRef,
+          }),
+        )
+        expect(Option.isSome(Context.getOption(built, BranchToolWork))).toBe(true)
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.scoped, Effect.provide(layer))
     }).pipe(Effect.timeout("4 seconds")),
