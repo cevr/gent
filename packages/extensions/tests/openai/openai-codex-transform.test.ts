@@ -554,6 +554,75 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
       expect(parsed["input"]).toEqual([{ role: "user", content: "hi" }])
     }),
   )
+  it.live("later context updates preserve the instruction prefix and tool history", () =>
+    Effect.gen(function* () {
+      const state = okResponse()
+      const wrapped = yield* Effect.promise(() => buildWrapped(state))
+      const history = [
+        { role: "user", content: "Read the file." },
+        { type: "function_call", call_id: "stable-call", name: "cell", arguments: "{}" },
+        { type: "function_call_output", call_id: "stable-call", output: "saved result" },
+      ]
+      const update = { role: "system", content: "Today's date is now: 2026-09-09" }
+      for (const tail of [history, [...history, update]]) {
+        yield* wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({
+            model: "gpt-5.6-luna",
+            instructions: "Fixed provider instructions.",
+            input: [{ role: "system", content: "Fixed session instructions." }, ...tail],
+          }),
+        })
+      }
+      const bodies = yield* Effect.forEach(state.captured, (request) =>
+        decodeJsonRecord(Option.getOrThrow(Option.fromUndefinedOr(request.body))),
+      )
+      const first = Option.getOrThrow(Option.fromUndefinedOr(bodies[0]))
+      const second = Option.getOrThrow(Option.fromUndefinedOr(bodies[1]))
+      expect(first["instructions"]).toBe(
+        "Fixed provider instructions.\n\nFixed session instructions.",
+      )
+      expect(second["instructions"]).toBe(first["instructions"])
+      expect(first["input"]).toEqual(history)
+      expect(second["input"]).toEqual([...history, { ...update, role: "developer" }])
+    }),
+  )
+  it.live("chat context updates stay after earlier user and assistant messages", () =>
+    Effect.gen(function* () {
+      const state = okResponse()
+      const wrapped = yield* Effect.promise(() => buildWrapped(state))
+      yield* wrapped.post("https://api.openai.com/v1/chat/completions", {
+        body: jsonBody({
+          model: "gpt-5.6-luna",
+          messages: [
+            { role: "system", content: "Fixed instructions." },
+            { role: "user", content: "First turn." },
+            { role: "assistant", content: "Done." },
+            { role: "system", content: "Today's date is now: 2026-09-09" },
+            { role: "user", content: "Next turn." },
+          ],
+        }),
+      })
+      const request = Option.getOrThrow(Option.fromUndefinedOr(state.captured[0]))
+      const parsed = yield* decodeJsonRecord(
+        Option.getOrThrow(Option.fromUndefinedOr(request.body)),
+      )
+      expect(parsed["instructions"]).toBe("Fixed instructions.")
+      expect(parsed["input"]).toEqual([
+        { role: "user", content: [{ type: "input_text", text: "First turn." }] },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Done.", annotations: [] }],
+          status: "completed",
+        },
+        {
+          role: "developer",
+          content: [{ type: "input_text", text: "Today's date is now: 2026-09-09" }],
+        },
+        { role: "user", content: [{ type: "input_text", text: "Next turn." }] },
+      ])
+    }),
+  )
   it.live("drops sampling limits the Codex backend rejects", () =>
     Effect.gen(function* () {
       const state = okResponse()

@@ -8,6 +8,10 @@ The shipped preset should expose one model tool, `cell`. File reads, edits, and 
 
 Inspect the official OpenCode v2 branch for prompt-cache behavior before changing Gent's prompt construction. Verify stable tool definitions and order, stable historical calls, date-change messages, and provider cache controls against pinned source. Keep stable instructions at the front. Deliver changing context without rewriting earlier history where the provider supports it. Preserve live extension changes and permission checks. Record provider cache counters so live runs can show cache use. Unknown cache usage must not be reported as zero. Each logical code change still requires the full gate and live Herdr checks.
 
+The [OpenCode v2 source review](opencode-cache-priors-2026-09-08.md) pins commit `08e28fb915d7a4d64add09150fc4ee7d63a796ef`. Use one durable context admission path for dates, catalogs, and other extension content. Save baseline bytes and chronological updates. Provider adapters must preserve update order before this path is enabled. Do not copy provider capability guesses from the prior project. Integrate this work with the context-policy unit below. Keep admission, replay, and branch ownership in the host; keep content and provider cache controls in extensions.
+
+After the cache work, make `gent -p` an inline one-shot TUI. Use OpenTUI's normal terminal buffer if its renderer supports the required behavior. Stream the same answer and tool cards, retain approvals and cancellation, then exit when the run is complete. Leave the output in native terminal scrollback. Research the exact renderer and shutdown behavior before implementation. Test through Herdr, including output that exceeds the terminal height. Keep this as a separate logical unit with the full gate.
+
 ## Decision
 
 Make product behavior an extension over one actor-owned execution loop. Keep execution ownership in the host. Remove `@gent/core-internal`. Replace its wildcard imports with a few explicit package entry points. Reduce files by combining code that changes for the same reason. Measure deleted code separately from moved code.

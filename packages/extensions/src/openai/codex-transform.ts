@@ -98,8 +98,8 @@ const ensureBetaToken = (existing: Option.Option<string>, requiredToken: string)
 
 /**
  * Codex backend expects a responses-API payload shape:
- *   - `system`/`developer` items lifted out of `input` into a top-level
- *     `instructions` string (joined by `\n\n`)
+ *   - Leading `system`/`developer` items move into top-level `instructions`.
+ *     Later updates stay in chronological order as developer messages.
  *   - `store: false` to prevent server-side conversation persistence
  *
  * The OAuth path uses the Responses SDK, but the transformer also normalizes
@@ -140,14 +140,18 @@ const splitInstructions = (
   const instructions: string[] = []
   const filteredInput: unknown[] = []
   for (const item of input) {
-    if (isInstructionItem(item)) {
+    if (filteredInput.length === 0 && isInstructionItem(item)) {
       const text = textFromContent(item.content)
       if (Option.isSome(text)) {
         instructions.push(text.value)
         continue
       }
     }
-    filteredInput.push(item)
+    if (isInstructionItem(item)) {
+      filteredInput.push({ ...item, role: "developer" })
+    } else {
+      filteredInput.push(item)
+    }
   }
   return Option.some({ instructions, input: filteredInput })
 }
@@ -175,15 +179,13 @@ const chatMessagesToResponsesInput = (
   messages: unknown,
 ): Option.Option<{ instructions: string[]; input: unknown[] }> => {
   if (!Array.isArray(messages)) return Option.none()
-  const instructions: string[] = []
   const input: unknown[] = []
 
   for (const message of messages) {
     if (!isRecord(message)) continue
     const role = message["role"]
     if (role === "system" || role === "developer") {
-      const text = textFromContent(message["content"])
-      if (Option.isSome(text)) instructions.push(text.value)
+      input.push({ role, content: convertChatContent(message["content"]) })
       continue
     }
     if (role === "user") {
@@ -205,7 +207,7 @@ const chatMessagesToResponsesInput = (
     input.push(message)
   }
 
-  return Option.some({ instructions, input })
+  return splitInstructions(input)
 }
 
 /**
@@ -240,6 +242,10 @@ const rewriteCodexBody = (
   // max_output_tokens"); reasoning models there also take no temperature.
   delete next["max_output_tokens"]
   delete next["temperature"]
+  const existingInstructions = parsed.value["instructions"]
+  if (Predicate.isString(existingInstructions) && existingInstructions.length > 0) {
+    instructions.unshift(existingInstructions)
+  }
   next["instructions"] = CODEX_DEFAULT_INSTRUCTIONS
   if (instructions.length > 0) next["instructions"] = instructions.join("\n\n")
   next["input"] = input
