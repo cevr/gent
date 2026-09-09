@@ -33,6 +33,23 @@ import type { BranchId, EventEnvelope, SessionId } from "@gent/core/protocol"
 
 type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
 
+/**
+ * Per-loop detail, for one loop at a time.
+ *
+ * Enumerating every loop must not fan out into N snapshot reads, so listings
+ * carry identity and liveness only and a client asks for this separately —
+ * for the row a reader is actually looking at. Every field is optional
+ * because a session that has never streamed has no model and no cost yet.
+ */
+export interface ExtensionAgentDetail {
+  /** Runtime state tag, e.g. `"Idle"` / `"Running"`. */
+  readonly status: Option.Option<string>
+  readonly model: Option.Option<string>
+  readonly turns: number
+  readonly costUsd: number
+  readonly durationMs: number
+}
+
 export interface ClientTransportDefinition {
   /** Active (sessionId, branchId) — absent before a session is mounted. */
   // eslint-disable-next-line effect/noNullish -- extension transport preserves an absent active session.
@@ -54,6 +71,14 @@ export interface ClientTransportDefinition {
   ) => () => void
   /** Subscribe to every event for the active session/branch. */
   readonly onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
+  /**
+   * Read live detail for one loop, by explicit key rather than the active
+   * session: the caller is asking about a row, which is usually not the
+   * session the shell is on.
+   */
+  readonly agentDetail: (
+    key: ActiveExtensionSession,
+  ) => Effect.Effect<ExtensionAgentDetail, ClientTransportRequestError>
 }
 
 export interface ClientShellTransportDefinition {
@@ -93,6 +118,7 @@ export const makeClientTransportLayer = (
     ) => requestExtensionAt(payload, ref, input, activeSession),
     onExtensionStateChanged: payload.onExtensionStateChanged,
     onSessionEvent: payload.onSessionEvent,
+    agentDetail: (key) => agentDetailAt(payload, key),
   }
   return Layer.succeed(ClientTransport, transport)
 }
@@ -178,6 +204,41 @@ const requestExtensionAt = <Input, Output>(
       ),
     )
   })
+
+/**
+ * Narrow the session snapshot down to the fields a per-loop detail line shows.
+ *
+ * The snapshot also carries the full projected message list; a detail line has
+ * no use for it, so the extension surface never sees it.
+ */
+const agentDetailAt = (
+  transport: ClientShellTransportDefinition,
+  key: ActiveExtensionSession,
+): Effect.Effect<ExtensionAgentDetail, ClientTransportRequestError> =>
+  Effect.tryPromise({
+    try: () =>
+      transport.runtime.run(
+        transport.client.session.getSnapshot({
+          sessionId: key.sessionId,
+          branchId: key.branchId,
+        }),
+      ),
+    catch: (cause) =>
+      new ClientTransportRequestError({
+        extensionId: "@gent/tui/client-transport",
+        tag: "session.getSnapshot",
+        message: `agent detail failed: ${String(cause)}`,
+        cause,
+      }),
+  }).pipe(
+    Effect.map((snapshot) => ({
+      status: Option.some(snapshot.runtime._tag),
+      model: Option.fromUndefinedOr(snapshot.metrics.lastModelId),
+      turns: snapshot.metrics.turns,
+      costUsd: snapshot.metrics.costUsd,
+      durationMs: snapshot.metrics.durationMs,
+    })),
+  )
 
 export function requestExtension<Input, Output>(
   ref: CapabilityRef<Input, Output>,
