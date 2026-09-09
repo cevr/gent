@@ -290,3 +290,45 @@ Evidence:
 - `/tmp/gent-model-surface-direct/.gent/config.json`
 - `/tmp/gent-model-surface-check/note.txt`
 - `/tmp/gent-core-reduction-current.json`
+
+## Client protocol and SDK imports — 2026-09-09
+
+Added `@gent/core/protocol` as an explicit entry point in the existing core package. It exposes 72 named client schemas, projections, and RPC declarations. It does not export storage tags, `EventStore`, `SessionRuntime`, or `RpcHandlersLive`. Core implementation files retain relative imports. The entry point has two package keys for extensionless and `.js` consumers. It has no wildcard export.
+
+The SDK now imports shared client data through that entry point. Its 55 public value/type export declarations and aliases are unchanged. Host construction still uses the private package. TUI imports will move in the next sub-commit. Runtime/test contracts and private package removal remain incomplete.
+
+The import guard accepts explicit protocol paths and rejects unknown core paths and protocol wildcards. Eight guard tests passed. Core and SDK type checking passed. The full gate passed. Loading the protocol module from Bun succeeded; the checked host tags were absent. Existing SDK/RPC tests passed through the changed imports.
+
+Herdr ran the compiled TUI with live Luna in pane `wZ:pH`. It streamed `Checking protocol.`, called `read` from a cell, and returned `PROTOCOL-OK — surface verified`. The preview showed the file result. The full level showed cell source and nested tool output. The third toggle returned to collapsed output. The check did not prove a cache improvement or fix the known long-transcript border defect.
+
+This sub-commit adds one production file and 57 net physical source lines: 71 core lines added and 14 SDK lines removed. These removed lines are import consolidation, not removed behavior. No implementation moved. Across the goal, production file count now equals the baseline and physical source lines are 25 above it. Package count is unchanged. This is a contract step toward private package removal, not a source reduction claim.
+
+Changed code and contract files:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/protocol.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/package.json`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/sdk/src/client.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/sdk/src/index.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/sdk/src/namespaced-client.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/sdk/src/runtime-boundary.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/sdk/src/server.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/tooling/src/core-public-exports.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/tooling/tests/core-public-exports.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/tsconfig.json`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/ARCHITECTURE.md`
+
+The protocol file names each owning source module. The full caller inventory is saved in `/tmp/gent-core-consumer-current.json`. The bounded mechanical SDK migration used a Luna agent; root review checked the final imports and public names.
+
+Evidence:
+
+- `/tmp/gent-protocol-export-map.json`
+- `/tmp/gent-protocol-core-typecheck.log`
+- `/tmp/gent-sdk-protocol-typecheck.log`
+- `/tmp/gent-protocol-guards-tests.log`
+- `/tmp/gent-protocol-sdk-surface.json`
+- `/tmp/gent-protocol-load.log`
+- `/tmp/gent-protocol-sdk-gate.log`
+- `/tmp/gent-protocol-sdk-herdr-live.txt`
+- `/tmp/gent-protocol-sdk-herdr-preview.txt`
+- `/tmp/gent-protocol-sdk-herdr-full.txt`
+- `/tmp/gent-core-reduction-current.json`

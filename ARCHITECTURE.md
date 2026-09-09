@@ -37,8 +37,8 @@ apps/
 └── server/    # HTTP + RPC adapter over the same app services
 
 packages/
-├── core/          # public extension authoring API only
-├── core-internal/ # monorepo-internal domain/runtime/server/test surface
+├── core/          # explicit extension authoring and client protocol entry points
+├── core-internal/ # temporary private alias for remaining host/test consumers
 │   ├── domain/    # Schemas, ids, events, service tags, pure domain helpers
 │   ├── storage/   # Storage tags, schema ownership, SQLite assembler, focused repositories
 │   ├── providers/ # Effect AI provider stack: model resolution, auth, debug/sequence drivers
@@ -49,6 +49,8 @@ packages/
 ├── extensions/    # shipped extension set
 └── sdk/           # direct + RPC transports over one client contract
 ```
+
+`@gent/core/protocol` contains shared client schemas, message projections, and the RPC contract. The SDK uses this entry point for client data. It does not expose server storage or runtime service tags. Core implementation files keep relative imports; they do not import through the public protocol entry point. The private alias remains while host and test consumers move to supported contracts.
 
 ## System Shape
 

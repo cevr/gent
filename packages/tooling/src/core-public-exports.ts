@@ -26,20 +26,15 @@ export interface SdkPublicSurfaceFinding {
   readonly message: string
 }
 
-const publicCoreExports = new Set(["./extensions/api", "./extensions/api.js"])
-const forbiddenCorePathPrefixes = [
-  "@gent/core/debug",
-  "@gent/core/domain",
-  "@gent/core/providers",
-  "@gent/core/runtime",
-  "@gent/core/server",
-  "@gent/core/storage",
-  "@gent/core/test-utils",
-  "@gent/core/utils",
-]
+const publicCoreExports = new Set([
+  "./extensions/api",
+  "./extensions/api.js",
+  "./protocol",
+  "./protocol.js",
+])
 
-const isForbiddenCorePath = (key: string): boolean =>
-  forbiddenCorePathPrefixes.some((prefix) => key === prefix || key.startsWith(`${prefix}/`))
+const isPublicCorePath = (key: string): boolean =>
+  key.startsWith("@gent/core/") && publicCoreExports.has(`./${key.slice("@gent/core/".length)}`)
 
 export const findCorePublicExportFindings = (
   packageJson: PackageJson,
@@ -52,8 +47,7 @@ export const findCorePublicExportFindings = (
     if (publicCoreExports.has(key)) continue
     findings.push({
       path: `packages/core/package.json exports["${key}"]`,
-      message:
-        "Only @gent/core/extensions/api is public; workspace internals must use @gent/core-internal/*",
+      message: "Core exports must name a supported extension or protocol entry point",
     })
   }
 
@@ -64,9 +58,9 @@ export const findCorePublicExportFindings = (
     () => ({}),
   )
   for (const key of Object.keys(paths)) {
-    if (key === "@gent/core/extensions/api" || key === "@gent/core/extensions/api.js") continue
+    if (isPublicCorePath(key)) continue
     if (key.startsWith("@gent/core-internal/")) continue
-    if (!isForbiddenCorePath(key)) continue
+    if (!key.startsWith("@gent/core/")) continue
     findings.push({
       path: `tsconfig.json compilerOptions.paths["${key}"]`,
       message: "Do not give TypeScript a public-looking @gent/core/* path for internal modules",

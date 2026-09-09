@@ -3,44 +3,39 @@ import type { Scope } from "effect"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
 import { Socket } from "effect/unstable/socket"
 import {
-  GentRpcs,
-  type GentRpcClient,
-  type GentClientRpcError,
-} from "@gent/core-internal/server/rpcs.js"
-import { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
-import {
   ConnectionState,
   GentConnectionError,
-  type GentLifecycle,
-  type SteerCommand,
-  type Session,
-  type Branch,
-  type BranchTreeNode,
-  type SessionSnapshot,
-  type SessionTreeNode,
-  type ExtensionHealth,
-  type ExtensionHealthIssue,
-  type ExtensionHealthSnapshot,
-} from "@gent/core-internal/server/transport-contract.js"
-import type {
-  AuthProviderInfo,
-  AuthAuthorization,
-  AuthMethod,
-} from "@gent/core-internal/domain/auth.js"
-import type { PermissionRule } from "@gent/core-internal/domain/permission.js"
-import type { SessionId, BranchId, MessageId } from "@gent/core-internal/domain/ids.js"
-import type {
-  Message,
-  MessagePart,
-  ProjectedMessage,
-  ToolInteraction,
-} from "@gent/core-internal/domain/message.js"
-import {
+  GentRpcs,
   messagePartsImages,
   messagePartsReasoning,
   messagePartsText,
-} from "@gent/core-internal/domain/message-part-projection.js"
-import type { QueueEntryInfo, QueueSnapshot } from "@gent/core-internal/domain/queue.js"
+  type AuthAuthorization,
+  type AuthMethod,
+  type AuthProviderInfo,
+  type Branch,
+  type BranchId,
+  type BranchTreeNode,
+  type ExtensionHealth,
+  type ExtensionHealthIssue,
+  type ExtensionHealthSnapshot,
+  type GentClientRpcError,
+  type GentLifecycle,
+  type GentRpcClient,
+  type Message,
+  type MessageId,
+  type MessagePart,
+  type PermissionRule,
+  type ProjectedMessage,
+  type QueueEntryInfo,
+  type QueueSnapshot,
+  type Session,
+  type SessionId,
+  type SessionSnapshot,
+  type SessionTreeNode,
+  type SteerCommand,
+  type ToolInteraction,
+} from "@gent/core/protocol"
+import { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
 import {
   makeNamespacedClient,
   type GentNamespacedClient,

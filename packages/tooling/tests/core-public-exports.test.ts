@@ -7,13 +7,15 @@ import {
 } from "../src/core-public-exports"
 
 describe("core public export guard", () => {
-  test("allows only extension api exports", () => {
+  test("allows explicit extension and protocol exports", () => {
     expect(
       findCorePublicExportFindings(
         {
           exports: {
             "./extensions/api": "./src/extensions/api.ts",
             "./extensions/api.js": "./src/extensions/api.ts",
+            "./protocol": "./src/protocol.ts",
+            "./protocol.js": "./src/protocol.ts",
           },
         },
         {
@@ -21,6 +23,8 @@ describe("core public export guard", () => {
             paths: {
               "@gent/core/extensions/api": ["./packages/core/src/extensions/api.ts"],
               "@gent/core/extensions/api.js": ["./packages/core/src/extensions/api.ts"],
+              "@gent/core/protocol": ["./packages/core/src/protocol.ts"],
+              "@gent/core/protocol.js": ["./packages/core/src/protocol.ts"],
               "@gent/core-internal/*.js": ["./packages/core/src/*.ts"],
               "@gent/core-internal/*": ["./packages/core/src/*"],
             },
@@ -58,13 +62,32 @@ describe("core public export guard", () => {
     ).toEqual([
       {
         path: 'packages/core/package.json exports["./domain/ids"]',
-        message:
-          "Only @gent/core/extensions/api is public; workspace internals must use @gent/core-internal/*",
+        message: "Core exports must name a supported extension or protocol entry point",
       },
       {
         path: 'tsconfig.json compilerOptions.paths["@gent/core/domain/ids"]',
         message: "Do not give TypeScript a public-looking @gent/core/* path for internal modules",
       },
+    ])
+  })
+
+  test("rejects protocol wildcards and unknown core paths", () => {
+    const findings = findCorePublicExportFindings(
+      { exports: { "./protocol/*": "./src/*.ts" } },
+      {
+        compilerOptions: {
+          paths: {
+            "@gent/core/protocol/*": ["./packages/core/src/*"],
+            "@gent/core/unknown": ["./packages/core/src/domain/ids.ts"],
+          },
+        },
+      },
+      Option.none(),
+    )
+    expect(findings.map((finding) => finding.path)).toEqual([
+      'packages/core/package.json exports["./protocol/*"]',
+      'tsconfig.json compilerOptions.paths["@gent/core/protocol/*"]',
+      'tsconfig.json compilerOptions.paths["@gent/core/unknown"]',
     ])
   })
 

@@ -135,7 +135,9 @@
       "@gent/core/extensions/api.js": ["./packages/core/src/extensions/api.ts"],
       "@gent/extensions/index.js": ["./packages/extensions/src/index.ts"],
       "@gent/extensions/client": ["./packages/extensions/src/client.ts"],
-      "@gent/extensions/client.js": ["./packages/extensions/src/client.ts"]
+      "@gent/extensions/client.js": ["./packages/extensions/src/client.ts"],
+      "@gent/core/protocol": ["./packages/core/src/protocol.ts"],
+      "@gent/core/protocol.js": ["./packages/core/src/protocol.ts"]
     }
   },
   "include": [],

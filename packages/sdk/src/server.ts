@@ -21,7 +21,7 @@ import { provideWorkspaceIdHeader } from "@gent/core-internal/server/workspace-r
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import type { LanguageModel } from "effect/unstable/ai"
 import { BuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
-import { GentConnectionError } from "@gent/core-internal/server/transport-contract.js"
+import { GentConnectionError } from "@gent/core/protocol"
 import {
   workspaceHeadersForCwd,
   workspaceIdForCwd,

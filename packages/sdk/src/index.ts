@@ -1,20 +1,26 @@
 // Shared transport contract
 export {
-  QueueEntryInfo,
-  QueueSnapshot,
-  emptyQueueSnapshot,
-} from "@gent/core-internal/domain/queue.js"
-
-export {
-  Session,
   Branch,
-  SessionSnapshot,
-  SlashCommandInfo,
+  CanonicalCwd,
+  ConnectionState,
   DriverInfo,
   DriverListResult,
-  ConnectionState,
   GentConnectionError,
-} from "@gent/core-internal/server/transport-contract.js"
+  QueueEntryInfo,
+  QueueSnapshot,
+  RequestId,
+  ResourceDescriptor,
+  ResourceGraphExtensionSource,
+  ResourceGraphRevision,
+  ResourceGraphSnapshot,
+  ResourceGraphSource,
+  ResourceId,
+  ResourceRevision,
+  Session,
+  SessionSnapshot,
+  SlashCommandInfo,
+  emptyQueueSnapshot,
+} from "@gent/core/protocol"
 export type {
   GentLifecycle,
   BranchTreeNode,
@@ -23,28 +29,16 @@ export type {
   ExtensionHealthSnapshot,
   SteerCommand,
   SessionTreeNode,
-} from "@gent/core-internal/server/transport-contract.js"
+} from "@gent/core/protocol"
 
 // Durable resource-graph repair values. These schemas let a control client
 // validate a snapshot previewed from the target declarations before submit.
-export {
-  CanonicalCwd,
-  ResourceGraphExtensionSource,
-  ResourceGraphRevision,
-  ResourceGraphSnapshot,
-  ResourceGraphSource,
-} from "@gent/core-internal/domain/resource-graph-state.js"
 export type {
   ResourceGraphExtensionSource as ResourceGraphExtensionSourceType,
   ResourceGraphSnapshot as ResourceGraphSnapshotType,
   ResourceGraphSource as ResourceGraphSourceType,
-} from "@gent/core-internal/domain/resource-graph-state.js"
-export {
-  ResourceDescriptor,
-  ResourceId,
-  ResourceRevision,
-} from "@gent/core-internal/domain/resource-graph.js"
-export type { ResourceDescriptor as ResourceDescriptorType } from "@gent/core-internal/domain/resource-graph.js"
+  ResourceDescriptor as ResourceDescriptorType,
+} from "@gent/core/protocol"
 
 // Client constructors
 export {
@@ -54,8 +48,6 @@ export {
   type GentClientRpcError,
   type GentClientBundle,
 } from "./client.js"
-
-export { RequestId } from "@gent/core-internal/domain/ids.js"
 
 // Namespaced client + runtime types
 export type { GentNamespacedClient, GentRuntime } from "./namespaced-client.js"
