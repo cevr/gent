@@ -92,6 +92,7 @@ export const sessionRuntimeLayer = (
           queue: emptyQueueSnapshot(),
         }),
       watchState: () => Effect.succeed(Stream.empty),
+      listActiveLoops: Effect.succeed([]),
       terminateSession: () => Effect.void,
       ...overrides,
     }),
