@@ -149,7 +149,7 @@ const runReplayScenario = (scenario: ReplayScenario) =>
               BunServices.layer,
               processRunnerLive,
               configServiceLive,
-              SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
+              SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(BunPlatformLive)),
             ),
           ),
           Layer.orDie,

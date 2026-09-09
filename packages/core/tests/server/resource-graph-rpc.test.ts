@@ -152,7 +152,7 @@ describe("resource graph RPC boundary", () => {
       const dbPath = `${tempDir}/gent.db`
       const cwd = CanonicalCwd.make("/tmp")
       const workspaceId = WorkspaceId.make(createHash("sha256").update(cwd).digest("hex"))
-      const seedLayer = SqliteStorage.LiveWithSql(dbPath).pipe(
+      const seedLayer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
         Layer.provide(BunGentPlatformLive),
@@ -212,7 +212,7 @@ describe("resource graph RPC boundary", () => {
       const dbPath = `${tempDir}/gent.db`
       const cwd = CanonicalCwd.make("/tmp/unrelated")
       const workspaceId = WorkspaceId.make(createHash("sha256").update(cwd).digest("hex"))
-      const seedLayer = SqliteStorage.LiveWithSql(dbPath).pipe(
+      const seedLayer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
         Layer.provide(BunGentPlatformLive),
@@ -285,7 +285,7 @@ describe("resource graph RPC boundary", () => {
         }),
       )
 
-      const seedLayer = SqliteStorage.LiveWithSql(dbPath).pipe(
+      const seedLayer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
         Layer.provide(BunGentPlatformLive),
@@ -388,7 +388,7 @@ describe("resource graph RPC boundary", () => {
       const workspaceId = WorkspaceId.make(createHash("sha256").update(cwd).digest("hex"))
       const events: Array<string> = []
       const extension = makeColdResourceExtension(events)
-      const seedLayer = SqliteStorage.LiveWithSql(dbPath).pipe(
+      const seedLayer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
         Layer.provide(BunGentPlatformLive),

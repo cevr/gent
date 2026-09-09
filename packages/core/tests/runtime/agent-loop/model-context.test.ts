@@ -30,6 +30,7 @@ import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents"
 import { MODEL_OUTPUT_RESERVE_TOKENS } from "../../../src/runtime/model-context"
 import { makeMessage, makeAgentLoopService, makeLayer, runAgentLoop } from "./helpers"
+import { cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
 
 const promptText = (prompt: Prompt.Prompt): string =>
   prompt.content
@@ -176,7 +177,7 @@ describe("native model context projection", () => {
       Layer.provide(Layer.mergeAll(Auth.Test(), driverRegistry)),
     )
     const deps = Layer.mergeAll(
-      SqliteStorage.TestWithSql(),
+      SqliteStorage.TestWithSql(cellStorageLayer),
       extensionRegistry,
       driverRegistry,
       RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),

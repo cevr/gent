@@ -185,7 +185,9 @@ describe("interaction.respondInteraction", () => {
       Effect.gen(function* () {
         const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
         const dbPath = `${tempDir}/gent-decision.db`
-        const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(Layer.provide(BunPlatformLive))
+        const storageLayer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty).pipe(
+          Layer.provide(BunPlatformLive),
+        )
         const finalReply = "approval resumed from stored decision"
         const firstProvider = yield* LanguageModelLayers.sequence([
           toolCallStep("approval_probe", { text: "approve deploy?" }),

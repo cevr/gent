@@ -78,13 +78,13 @@ describe("resolveSessionEnvironment", () => {
               BunServices.layer,
               processRunnerLive,
               configServiceLive,
-              SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
+              SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(BunPlatformLive)),
             ),
           ),
         )
         const testLayer = Layer.mergeAll(
           BunServices.layer,
-          SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)),
+          SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(BunPlatformLive)),
           emptyRegistryLayer,
           emptyDriverRegistryLayer,
           runtimeEnvironmentLive,
@@ -150,7 +150,7 @@ describe("resolveSessionEnvironment", () => {
         baseSections: [{ id: "default", content: "Default", priority: 1 }],
       }
       const testLayer = Layer.mergeAll(
-        SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test())),
+        SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(GentPlatform.Test())),
         emptyRegistryLayer,
         runtimeEnvironmentLayer,
       )
@@ -187,7 +187,7 @@ describe("resolveSessionEnvironment", () => {
         platform: "test",
       })
       const testLayer = Layer.mergeAll(
-        SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test())),
+        SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(GentPlatform.Test())),
         emptyRegistryLayer,
         emptyDriverRegistryLayer,
         runtimeEnvironmentLayer,
@@ -280,7 +280,7 @@ describe("resolveSessionEnvironment", () => {
         platform: "test",
       })
       const testLayer = Layer.mergeAll(
-        SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test())),
+        SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(GentPlatform.Test())),
         emptyRegistryLayer,
         defaultDriverRegistryLayer,
         runtimeEnvironmentLayer,

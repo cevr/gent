@@ -71,7 +71,9 @@ const makeProcessLayerWithFailingMarkFailed = <A, E>(storageLayer: Layer.Layer<A
 }
 
 const makePlatformLayer = () =>
-  makeProcessLayer(SqliteStorage.MemoryWithSql().pipe(Layer.provide(BunPlatformLive)))
+  makeProcessLayer(
+    SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(BunPlatformLive)),
+  )
 const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) => Effect.provide(e, makePlatformLayer())
 
 const processTestTimeout = 5_000
@@ -375,6 +377,7 @@ describe("BashTool execution", () => {
         const millis = yield* Clock.currentTimeMillis
         const storageLayer = SqliteStorage.LiveWithSql(
           `/tmp/gent-background-bash-terminal-${millis}.db`,
+          () => Layer.empty,
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
 
         yield* Effect.gen(function* () {
@@ -452,6 +455,7 @@ describe("BashTool execution", () => {
         const millis = yield* Clock.currentTimeMillis
         const storageLayer = SqliteStorage.LiveWithSql(
           `/tmp/gent-background-bash-failure-${millis}.db`,
+          () => Layer.empty,
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
 
         const result = yield* runToolWithCtx(
@@ -505,6 +509,7 @@ describe("BashTool execution", () => {
         const millis = yield* Clock.currentTimeMillis
         const storageLayer = SqliteStorage.LiveWithSql(
           `/tmp/gent-background-bash-${millis}.db`,
+          () => Layer.empty,
         ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
         const processLayer = makeProcessLayer(storageLayer)
         const firstContext = yield* Layer.buildWithScope(processLayer, scope)

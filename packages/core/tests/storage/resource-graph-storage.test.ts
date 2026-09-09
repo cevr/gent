@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, Exit, Option, Predicate, Schema } from "effect"
+import { Cause, Effect, Exit, Layer, Option, Predicate, Schema } from "effect"
 import { canonicalJsonString } from "effect-encore"
 import { SqlClient } from "effect/unstable/sql"
 import { ResourceDescriptor, ResourceId, ResourceRevision } from "../../src/domain/resource-graph"
@@ -94,7 +94,7 @@ const keyFor = (workspaceId = WORKSPACE_A, cwd = CWD_A) => ({ workspaceId, cwd }
 
 const withStorage = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
-    Effect.provide(SqliteStorage.TestWithSql()),
+    Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty)),
     Effect.provideService(CurrentWorkspaceId, WORKSPACE_A),
   )
 

@@ -35,6 +35,11 @@ import {
   ModelCompactionFailure,
 } from "../../src/runtime/model-compaction"
 import { ModelContextBudget, ModelContextProjectionError } from "../../src/runtime/model-context"
+import { cellStorageLayer } from "../../src/runtime/code-cell/cell-storage"
+
+// The cell's storage carries the projections core reads from it, so this is
+// the same wiring production uses.
+const storageWithReceipts = SqliteStorage.TestWithSql(cellStorageLayer)
 
 const sessionId = SessionId.make("compaction-session")
 const branchId = BranchId.make("compaction-branch")
@@ -154,9 +159,7 @@ describe("model context compaction", () => {
         expect(summaryCalls).toBe(1)
       }),
     ).pipe(
-      Effect.provide(
-        Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
-      ),
+      Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
       Effect.timeout("10 seconds"),
     )
   })
@@ -206,9 +209,7 @@ describe("model context compaction", () => {
         ]).toEqual([...messages])
       }),
     ).pipe(
-      Effect.provide(
-        Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
-      ),
+      Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
       Effect.timeout("10 seconds"),
     )
   })
@@ -269,9 +270,7 @@ describe("model context compaction", () => {
         ).toBe(true)
       }),
     ).pipe(
-      Effect.provide(
-        Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
-      ),
+      Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
       Effect.timeout("10 seconds"),
     )
   })
@@ -331,9 +330,7 @@ describe("model context compaction", () => {
         expect(summaryCalls).toBe(1)
       }),
     ).pipe(
-      Effect.provide(
-        Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
-      ),
+      Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
       Effect.timeout("10 seconds"),
     )
   })
@@ -370,9 +367,7 @@ describe("model context compaction", () => {
         expect(yield* storage.listMessages(branchId)).toEqual(messages)
       }),
     ).pipe(
-      Effect.provide(
-        Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
-      ),
+      Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
       Effect.timeout("10 seconds"),
     )
   })
@@ -420,9 +415,7 @@ describe("model context compaction", () => {
         ).toBe(false)
       }),
     ).pipe(
-      Effect.provide(
-        Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
-      ),
+      Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
       Effect.timeout("10 seconds"),
     )
   })
@@ -487,9 +480,7 @@ describe("model context compaction", () => {
         expect(yield* storage.listMessages(branchId)).toEqual(messages)
       }),
     ).pipe(
-      Effect.provide(
-        Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
-      ),
+      Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
       Effect.timeout("10 seconds"),
     )
   })
@@ -541,9 +532,7 @@ describe("model context compaction", () => {
         expect(summaryCalls).toBe(0)
       }),
     ).pipe(
-      Effect.provide(
-        Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
-      ),
+      Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
       Effect.timeout("10 seconds"),
     )
   })
@@ -585,9 +574,7 @@ describe("model context compaction", () => {
         expect(yield* storage.listMessages(branchId)).toEqual(messages)
       }),
     ).pipe(
-      Effect.provide(
-        Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
-      ),
+      Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
       Effect.timeout("10 seconds"),
     )
   })
@@ -648,7 +635,7 @@ describe("model context compaction", () => {
           messages,
           budget: budget(scenario.limit),
           force: { instructions: scenario.instructions },
-          cellBindings: scenario.bindings,
+          retainedBindings: scenario.bindings,
           summaryModel: Effect.succeed(model),
         })
         expect(result.compacted).toBe(scenario.compacted)
@@ -668,9 +655,7 @@ describe("model context compaction", () => {
         if (scenario.instructions.length > 0) expect(text).toContain(scenario.instructions)
         for (const binding of scenario.bindings) expect(text).toContain(binding)
       }).pipe(
-        Effect.provide(
-          Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
-        ),
+        Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
         Effect.timeout("10 seconds"),
       )
     })
@@ -726,9 +711,7 @@ describe("model context compaction", () => {
         }
       }),
     ).pipe(
-      Effect.provide(
-        Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
-      ),
+      Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
       Effect.timeout("10 seconds"),
     )
   })
@@ -809,12 +792,12 @@ describe("model context compaction", () => {
             messages: firstRound,
             budget: budget(),
             force: {},
-            cellBindings: ["files", "plan"],
+            retainedBindings: ["files", "plan"],
             summaryModel: Effect.succeed(model),
           })
           expect(first.compacted).toBe(true)
           const prompt = Option.map(capturedPrompt, promptText).pipe(Option.getOrElse(() => ""))
-          expect(prompt).toContain("Cell namespace bindings retained on this branch: files, plan")
+          expect(prompt).toContain("Names retained on this branch: files, plan")
           const firstDetails = Option.getOrThrow(detailsOf(first))
           expect(firstDetails.paths).toEqual({ read: ["/repo/a.ts"], modified: ["/repo/b.ts"] })
           const summaryText = first.projection.messages
@@ -848,9 +831,7 @@ describe("model context compaction", () => {
           expect(secondDetails.paths?.modified).toEqual(["/repo/b.ts", "/repo/c.ts"])
         }),
       ).pipe(
-        Effect.provide(
-          Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
-        ),
+        Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
         Effect.timeout("10 seconds"),
       )
     },
@@ -956,9 +937,7 @@ describe("model context compaction", () => {
         })
       }),
     ).pipe(
-      Effect.provide(
-        Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
-      ),
+      Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
       Effect.timeout("10 seconds"),
     )
   })
@@ -1051,9 +1030,7 @@ describe("model context compaction", () => {
         }
       }),
     ).pipe(
-      Effect.provide(
-        Layer.mergeAll(SqliteStorage.TestWithSql(), GentPlatform.Test(), providerLayer),
-      ),
+      Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
       Effect.timeout("10 seconds"),
     )
   })

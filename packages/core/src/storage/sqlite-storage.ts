@@ -15,9 +15,6 @@ import { EventStorage } from "./event-storage.js"
 import { RelationshipStorage } from "./relationship-storage.js"
 import { SessionOperationStorage } from "./session-operation-storage.js"
 import { ToolCallBindingStorage } from "./tool-call-binding-storage.js"
-import { CellExecutionStorage } from "../runtime/code-cell/cell-execution-storage.js"
-import { CellNamespaceStorage } from "../runtime/code-cell/cell-namespace-storage.js"
-import { CellToolOperationStorage } from "../runtime/code-cell/cell-tool-operation-storage.js"
 import { ResourceGraphStorage } from "./resource-graph-storage.js"
 import { StorageError } from "../domain/storage-error.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
@@ -66,17 +63,28 @@ type FocusedStorage =
   | RelationshipStorage
   | SessionOperationStorage
   | ToolCallBindingStorage
-  | CellExecutionStorage
-  | CellNamespaceStorage
-  | CellToolOperationStorage
   | ResourceGraphStorage
   | ClusterMessageStorage.MessageStorage
 
-const provideFocusedRepositories = <E, R>(
+/**
+ * Repositories an extension adds to the same database.
+ *
+ * Core assembles the kernel's tables. A feature that owns tables of its own
+ * supplies them here, built over the same SQL client and the same interaction
+ * storage, so core never has to name them.
+ */
+export type ExtraRepositories<A, E, R> = (
   base: Layer.Layer<SqlClient.SqlClient, E, R>,
-): Layer.Layer<FocusedStorage, E, R | GentPlatform> => {
+  interactionStorage: Layer.Layer<InteractionStorage, E, R>,
+) => Layer.Layer<A, E, R | GentPlatform>
+
+const provideFocusedRepositories = <A, E, R>(
+  base: Layer.Layer<SqlClient.SqlClient, E, R>,
+  extra: ExtraRepositories<A, E, R>,
+): Layer.Layer<FocusedStorage | A, E, R | GentPlatform> => {
   const interactionStorage = Layer.provide(InteractionStorage.Live, base)
   return Layer.mergeAll(
+    extra(base, interactionStorage),
     base,
     Layer.provide(SessionStorage.Live, base),
     Layer.provide(BranchStorage.Live, base),
@@ -86,9 +94,6 @@ const provideFocusedRepositories = <E, R>(
     Layer.provide(RelationshipStorage.Live, base),
     Layer.provide(SessionOperationStorage.Live, base),
     Layer.provide(ToolCallBindingStorage.Live, base),
-    Layer.provide(CellExecutionStorage.Live, base),
-    Layer.provide(CellNamespaceStorage.Live, base),
-    Layer.provide(CellToolOperationStorage.Live, Layer.merge(base, interactionStorage)),
     Layer.provide(ResourceGraphStorage.Live, base),
     Layer.provide(encoreSqlMessageStorage(), Layer.merge(base, BunCrypto.layer)),
     interactionStorage,
@@ -128,21 +133,30 @@ export const SqliteStorage = {
   // pooled/multi-connection driver, the cascade tx must switch to BEGIN IMMEDIATE (or an
   // equivalent write-lock) to preserve the invariant that no child row is committed between
   // the recursive SELECT and the DELETE.
-  LiveWithSql: (
+  LiveWithSql: <A>(
     dbPath: string,
+    extra: ExtraRepositories<
+      A,
+      StorageError | PlatformError.PlatformError,
+      FileSystem.FileSystem | Path.Path
+    >,
   ): Layer.Layer<
-    FocusedStorage,
+    FocusedStorage | A,
     StorageError | PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path | GentPlatform
-  > => provideFocusedRepositories(makeLiveSqliteLayer(dbPath)),
+  > => provideFocusedRepositories(makeLiveSqliteLayer(dbPath), extra),
 
-  MemoryWithSql: (): Layer.Layer<FocusedStorage, StorageError, GentPlatform> =>
-    provideFocusedRepositories(makeMemorySqliteLayer),
+  MemoryWithSql: <A>(
+    extra: ExtraRepositories<A, StorageError, never>,
+  ): Layer.Layer<FocusedStorage | A, StorageError, GentPlatform> =>
+    provideFocusedRepositories(makeMemorySqliteLayer, extra),
 
   // `TestWithSql` is the closed-context variant: it self-provides
   // `GentPlatform.Test()` so storage tests can yield it without wiring a
   // platform layer themselves. Production callers use `LiveWithSql` /
   // `MemoryWithSql` and supply the live `GentPlatform`.
-  TestWithSql: (): Layer.Layer<FocusedStorage, StorageError> =>
-    Layer.provide(provideFocusedRepositories(makeMemorySqliteLayer), GentPlatform.Test()),
+  TestWithSql: <A>(
+    extra: ExtraRepositories<A, StorageError, never>,
+  ): Layer.Layer<FocusedStorage | A, StorageError> =>
+    Layer.provide(provideFocusedRepositories(makeMemorySqliteLayer, extra), GentPlatform.Test()),
 }

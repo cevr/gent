@@ -14,6 +14,9 @@ import {
 import { CellOperationHost } from "./cell-kernel.js"
 import { type CellCatalog, CellEvaluationError } from "./cell-protocol.js"
 import { CurrentCellToolOperation } from "./current-cell-tool-operation.js"
+import { CurrentInteractionOwner } from "../../domain/interaction-owner.js"
+import { cellInteractionOwner } from "./cell-interaction-owner.js"
+import { CurrentDispatchingCall } from "../agent/current-dispatching-call.js"
 import { handleContextCall, isContextCall } from "./cell-context-host.js"
 import { ModelContextLedger } from "../model-context-ledger.js"
 import { executeBoundCellTool, cellToolResultValue } from "./cell-tool-call.js"
@@ -71,7 +74,14 @@ export const resumeCellToolOperation = Effect.fn("CellToolHost.resume")(
           },
           toolCallId: admitted.toolCallId,
           binding: Option.some(binding),
-        }).pipe(Effect.provideService(CurrentCellToolOperation, key))
+        }).pipe(
+          Effect.provideService(CurrentCellToolOperation, key),
+          Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
+          Effect.provideService(CurrentDispatchingCall, {
+            assistantMessageId: key.cell.assistantMessageId,
+            toolCallId: key.cell.toolCallId,
+          }),
+        )
         yield* storage.complete(key, result)
         return result
       }),
@@ -139,7 +149,14 @@ export const makeCellToolHost = (
             request,
             toolCallId: admission.operation.toolCallId,
             binding: captured,
-          }).pipe(Effect.provideService(CurrentCellToolOperation, key))
+          }).pipe(
+            Effect.provideService(CurrentCellToolOperation, key),
+            Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
+            Effect.provideService(CurrentDispatchingCall, {
+              assistantMessageId: key.cell.assistantMessageId,
+              toolCallId: key.cell.toolCallId,
+            }),
+          )
           yield* storage.complete(key, result)
           return yield* cellToolResultValue(result)
         }),

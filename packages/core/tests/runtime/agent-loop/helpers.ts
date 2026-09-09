@@ -56,6 +56,7 @@ import type { BranchId, InteractionRequestId, SessionId } from "../../../src/dom
 import { ActorCommandId, ExtensionId, MessageId } from "../../../src/domain/ids"
 import type { TurnStreamPart } from "../../../src/domain/driver"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
+import { cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
 // ============================================================================
 // Shared helpers
 // ============================================================================
@@ -302,7 +303,7 @@ export const makeLayer = (
   resources: AnyResourceContribution[] = [],
 ) => {
   const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(),
+    SqliteStorage.TestWithSql(cellStorageLayer),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(tools, resources),
@@ -324,7 +325,7 @@ export const makeRecordingLayer = (providerLayer: Layer.Layer<LanguageModel.Lang
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
   const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(),
+    SqliteStorage.TestWithSql(cellStorageLayer),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(),
@@ -370,7 +371,7 @@ export const makeLiveToolLayer = (
 ) => {
   const extRegistry = makeExtRegistry(tools, resources)
   const baseDeps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(),
+    SqliteStorage.TestWithSql(cellStorageLayer),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     extRegistry,
@@ -424,7 +425,7 @@ export const makeLayerWithEvents = (
   tools: ReadonlyArray<ToolCapability> = [],
 ) => {
   const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(),
+    SqliteStorage.TestWithSql(cellStorageLayer),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(tools),
@@ -447,7 +448,7 @@ export const makeLayerWithEventPublisher = (
   eventPublisherLayer: Layer.Layer<EventPublisher>,
 ) => {
   const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(),
+    SqliteStorage.TestWithSql(cellStorageLayer),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(),
@@ -513,7 +514,7 @@ export const makeExternalLayerWithEvents = (
     Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
   )
   const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(),
+    SqliteStorage.TestWithSql(cellStorageLayer),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     registryLayer,

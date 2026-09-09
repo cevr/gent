@@ -23,7 +23,9 @@ const range = (from: number, to: number) =>
   Array.from({ length: to - from + 1 }, (_, index) => from + index)
 
 const durableLayer = EventStoreLive.pipe(
-  Layer.provideMerge(SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))),
+  Layer.provideMerge(
+    SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(GentPlatform.Test())),
+  ),
 )
 
 /** The durable store validates the session and branch rows before it appends. */

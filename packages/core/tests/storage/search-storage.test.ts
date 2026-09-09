@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { test as bunTest } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { RelationshipStorage } from "../../src/storage/relationship-storage"
 import { MessageStorage } from "../../src/storage/message-storage"
@@ -12,7 +12,7 @@ import { dateFromMillis, Session, Branch, Message } from "../../src/domain/messa
 import { SessionId, BranchId, MessageId } from "../../src/domain/ids"
 import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
 
-const test = it.live.layer(SqliteStorage.TestWithSql())
+const test = it.live.layer(SqliteStorage.TestWithSql(() => Layer.empty))
 
 const FIXED_NOW_MILLIS = 1_767_225_600_000
 const FIXED_NOW = dateFromMillis(FIXED_NOW_MILLIS)

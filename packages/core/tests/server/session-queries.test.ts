@@ -43,7 +43,7 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
 
 const sessionQueriesActorFailureLayer = (() => {
   const base = Layer.mergeAll(
-    SqliteStorage.TestWithSql(),
+    SqliteStorage.TestWithSql(() => Layer.empty),
     GentPlatform.Test(),
     sessionRuntimeLayer({
       getState: () =>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { EventDecodeError, EventStorage } from "../../src/storage/event-storage"
@@ -56,12 +56,12 @@ describe("Events", () => {
       if (latest && latest._tag === "AgentSwitched") {
         expect(latest.toAgent).toBe(AgentName.make("cowork"))
       }
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
 })
 
 describe("Event decoding", () => {
-  const layer = SqliteStorage.TestWithSql()
+  const layer = SqliteStorage.TestWithSql(() => Layer.empty)
   it.live("listEvents fails with a tagged decode error for unknown _tag", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage

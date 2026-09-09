@@ -47,6 +47,7 @@ import {
   toolResultMessageIdForCommand,
   toolResultMessageIdForToolCall,
 } from "../../../src/runtime/agent/agent-loop.utils"
+import { cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })
@@ -125,7 +126,7 @@ describe("queue drain regression", () => {
           }),
         )
         const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(),
+          SqliteStorage.TestWithSql(cellStorageLayer),
           gatedProvider,
           ModelResolver.fromLanguageModel(gatedProvider),
           makeExtRegistry(),
@@ -261,7 +262,7 @@ describe("queue drain regression", () => {
         )
         const makeLayer = () => {
           const deps = Layer.mergeAll(
-            SqliteStorage.TestWithSql(),
+            SqliteStorage.TestWithSql(cellStorageLayer),
             queueStorageLayer,
             queuedProvider,
             ModelResolver.fromLanguageModel(queuedProvider),
@@ -349,7 +350,7 @@ describe("queue drain regression", () => {
           }),
         )
         const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(),
+          SqliteStorage.TestWithSql(cellStorageLayer),
           providerLayer,
           ModelResolver.fromLanguageModel(providerLayer),
           makeExtRegistry(),
@@ -430,7 +431,7 @@ describe("queue drain regression", () => {
           }),
         )
         const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(),
+          SqliteStorage.TestWithSql(cellStorageLayer),
           queueStorageLayer,
           heldProvider,
           ModelResolver.fromLanguageModel(heldProvider),

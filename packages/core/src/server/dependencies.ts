@@ -33,8 +33,8 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
-import { CellToolOperationStorage } from "../runtime/code-cell/cell-tool-operation-storage.js"
-import { CurrentCellToolOperation } from "../runtime/code-cell/current-cell-tool-operation.js"
+import { cellStorageLayer } from "../runtime/code-cell/cell-storage.js"
+import { CurrentInteractionOwner } from "../domain/interaction-owner.js"
 import { ResourceGraphStorage } from "../storage/resource-graph-storage.js"
 import {
   decodeInteractionDecision,
@@ -164,9 +164,9 @@ const platformServicesLive = Layer.provideMerge(
 )
 
 const makeStorageLayer = (config: DependenciesConfig, persistenceMode: "disk" | "memory") => {
-  if (persistenceMode === "memory") return SqliteStorage.MemoryWithSql()
+  if (persistenceMode === "memory") return SqliteStorage.MemoryWithSql(cellStorageLayer)
   const dbPath = Option.getOrElse(Option.fromUndefinedOr(config.dbPath), () => ".gent/data.db")
-  return SqliteStorage.LiveWithSql(dbPath)
+  return SqliteStorage.LiveWithSql(dbPath, cellStorageLayer)
 }
 
 const makeClusterRunnerLayer = (persistenceMode: "disk" | "memory") => {
@@ -250,13 +250,15 @@ const makeApprovalServiceLayer = <A, E, R>(
     Layer.unwrap(
       Effect.gen(function* () {
         const store = yield* InteractionStorage
-        const operations = yield* CellToolOperationStorage
         return ApprovalService.LiveWithStorage({
           persist: (record) =>
             Effect.gen(function* () {
-              const operation = yield* Effect.serviceOption(CurrentCellToolOperation)
-              if (Option.isSome(operation)) {
-                yield* operations.suspend(operation.value, record)
+              // A dispatching tool owns the interactions its inner calls
+              // raise, so they are written to its receipt. Core does not know
+              // which tools those are; an absent owner is a direct call.
+              const owner = yield* Effect.serviceOption(CurrentInteractionOwner)
+              if (Option.isSome(owner)) {
+                yield* owner.value.persist(record)
               } else {
                 yield* store.persist(record)
               }

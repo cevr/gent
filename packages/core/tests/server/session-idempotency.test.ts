@@ -32,7 +32,7 @@ import { waitFor } from "../../src/test-utils/fixtures"
 
 describe("requestId idempotency", () => {
   const makePersistentSessionCommandsLayer = (dbPath: string) => {
-    const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(
+    const storageLayer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty).pipe(
       Layer.provide(BunServices.layer),
       Layer.provide(GentPlatform.Test()),
     )
@@ -118,7 +118,9 @@ describe("requestId idempotency", () => {
             dispatchCount++
           }),
       })
-      const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
+      const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(
+        Layer.provide(GentPlatform.Test()),
+      )
       const deps = Layer.mergeAll(
         storageLayer,
         countingRuntime,
@@ -171,7 +173,9 @@ describe("requestId idempotency", () => {
             dispatchCount++
           }),
       })
-      const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
+      const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(
+        Layer.provide(GentPlatform.Test()),
+      )
       const deps = Layer.mergeAll(
         storageLayer,
         countingRuntime,
@@ -568,7 +572,9 @@ describe("requestId idempotency", () => {
           }),
       }),
     )
-    const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
+    const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(
+      Layer.provide(GentPlatform.Test()),
+    )
     const deps = Layer.mergeAll(
       storageLayer,
       sessionRuntimeLayer(),
@@ -703,7 +709,7 @@ describe("requestId idempotency", () => {
       const deliveredPromptRequestIds = new Set<string>()
 
       const makeLayer = (failPrompt: boolean) => {
-        const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(
+        const storageLayer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty).pipe(
           Layer.provide(BunServices.layer),
           Layer.provide(GentPlatform.Test()),
         )

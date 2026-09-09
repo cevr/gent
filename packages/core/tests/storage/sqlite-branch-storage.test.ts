@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
@@ -31,7 +31,7 @@ describe("Branches", () => {
       const retrieved = yield* branches.getBranch(BranchId.make("test-branch"))
       expect(retrieved).toBeDefined()
       expect(retrieved?.sessionId).toBe(SessionId.make("branch-session"))
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("lists branches for a session", () =>
     Effect.gen(function* () {
@@ -61,7 +61,7 @@ describe("Branches", () => {
       )
       const branchesResult = yield* branches.listBranches(SessionId.make("multi-branch"))
       expect(branchesResult.length).toBe(2)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("fails through StorageError for invalid durable branch row shape", () =>
     Effect.gen(function* () {
@@ -78,7 +78,7 @@ describe("Branches", () => {
       yield* sql`INSERT INTO branches (id, session_id, created_at) VALUES (${"invalid-branch-row"}, ${"invalid-branch-session"}, ${"not-a-number"})`
       const exit = yield* Effect.exit(branches.getBranch(BranchId.make("invalid-branch-row")))
       expect(exit._tag).toBe("Failure")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("updates branch summary", () =>
     Effect.gen(function* () {
@@ -101,6 +101,6 @@ describe("Branches", () => {
       yield* branches.updateBranchSummary(BranchId.make("summary-branch"), "Short summary")
       const retrieved = yield* branches.getBranch(BranchId.make("summary-branch"))
       expect(retrieved?.summary).toBe("Short summary")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
 })

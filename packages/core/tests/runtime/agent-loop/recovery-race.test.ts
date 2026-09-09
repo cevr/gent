@@ -64,6 +64,7 @@ import {
 import { StorageError } from "../../../src/domain/storage-error"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import { makeExtRegistry } from "../agent-loop/helpers"
+import { cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })
@@ -135,7 +136,7 @@ describe("agent-loop recovery race", () => {
         )
 
         const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(),
+          SqliteStorage.TestWithSql(cellStorageLayer),
           queueStorageLayer,
           providerLayer,
           ModelResolver.fromLanguageModel(providerLayer),
@@ -233,7 +234,7 @@ describe("agent-loop recovery race", () => {
           ),
         )
 
-        const baseStorage = SqliteStorage.TestWithSql()
+        const baseStorage = SqliteStorage.TestWithSql(cellStorageLayer)
         const wrappedQueueStorage = gatedQueueStorageLayer(
           reopenGate,
           reopenEntered,

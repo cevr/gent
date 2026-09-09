@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Effect, Ref } from "effect"
+import { Effect, Layer, Ref } from "effect"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { EventStorage } from "../../src/storage/event-storage"
 import { MessageStorage } from "../../src/storage/message-storage"
@@ -73,7 +73,10 @@ describe("Concurrent writes", () => {
       }
       // Negative control: real interleaving, not accidental serialization.
       expect(yield* Ref.get(peak)).toBeGreaterThan(1)
-    }).pipe(Effect.timeout("5 seconds"), Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(
+      Effect.timeout("5 seconds"),
+      Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty)),
+    ),
   )
   it.live("appendEvent with N concurrent fibers produces N envelopes with unique ids", () =>
     Effect.gen(function* () {
@@ -105,7 +108,10 @@ describe("Concurrent writes", () => {
       const persisted = yield* events.listEvents({ sessionId, branchId })
       expect(persisted.length).toBe(N)
       expect(yield* Ref.get(peak)).toBeGreaterThan(1)
-    }).pipe(Effect.timeout("5 seconds"), Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(
+      Effect.timeout("5 seconds"),
+      Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty)),
+    ),
   )
   it.live("createMessage with N concurrent fibers produces N rows with no lost writes", () =>
     Effect.gen(function* () {
@@ -148,6 +154,9 @@ describe("Concurrent writes", () => {
         expect(seen.has(id)).toBe(true)
       }
       expect(yield* Ref.get(peak)).toBeGreaterThan(1)
-    }).pipe(Effect.timeout("5 seconds"), Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(
+      Effect.timeout("5 seconds"),
+      Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty)),
+    ),
   )
 })

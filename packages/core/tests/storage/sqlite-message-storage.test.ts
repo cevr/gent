@@ -1,6 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Predicate, Effect, Schema } from "effect"
+import { Predicate, Effect, Layer, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { RelationshipStorage } from "../../src/storage/relationship-storage"
@@ -47,7 +47,7 @@ describe("Messages", () => {
       expect(retrieved).toBeDefined()
       expect(retrieved?.role).toBe("user")
       expect(retrieved?.parts[0]?.type).toBe("text")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("round-trips all persisted transcript part types", () =>
     Effect.gen(function* () {
@@ -132,7 +132,7 @@ describe("Messages", () => {
           result: { ok: true },
         }),
       )
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("stores message parts in shared content chunks", () =>
     Effect.gen(function* () {
@@ -185,7 +185,7 @@ describe("Messages", () => {
       expect(chunkRows[0]?.count).toBe(1)
       expect(refRows[0]?.count).toBe(2)
       expect(messagesResult.map((message) => message.parts)).toEqual([[sharedPart], [sharedPart]])
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("counts messages in a branch", () =>
     Effect.gen(function* () {
@@ -228,7 +228,7 @@ describe("Messages", () => {
       )
       const count = yield* branches.countMessages(BranchId.make("count-branch"))
       expect(count).toBe(2)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("lists messages for a branch", () =>
     Effect.gen(function* () {
@@ -273,7 +273,7 @@ describe("Messages", () => {
       expect(messagesResult.length).toBe(2)
       expect(messagesResult[0]?.role).toBe("user")
       expect(messagesResult[1]?.role).toBe("assistant")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("deletes message chunk refs and search projection rows", () =>
     Effect.gen(function* () {
@@ -332,7 +332,7 @@ describe("Messages", () => {
       expect(refs[0]?.count).toBe(0)
       expect(chunks[0]?.count).toBe(0)
       expect(fts[0]?.count).toBe(0)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("updates session updatedAt when creating message", () =>
     Effect.gen(function* () {
@@ -367,7 +367,7 @@ describe("Messages", () => {
       )
       const session = yield* sessions.getSession(SessionId.make("session-updated-at"))
       expect(session?.updatedAt.getTime()).toBe(messageTime.getTime())
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("rolls back message insert when session timestamp update fails", () =>
     Effect.gen(function* () {
@@ -415,7 +415,7 @@ describe("Messages", () => {
       expect(yield* messages.getMessage(MessageId.make("tx-message"))).toBeUndefined()
       const session = yield* sessions.getSession(SessionId.make("tx-message-session"))
       expect(session?.updatedAt.getTime()).toBe(start.getTime())
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("createMessageIfAbsent leaves session timestamp unchanged when insert is ignored", () =>
     Effect.gen(function* () {
@@ -463,7 +463,7 @@ describe("Messages", () => {
       expect(session?.updatedAt.getTime()).toBe(firstTime.getTime())
       const message = yield* messages.getMessage(MessageId.make("if-absent-message"))
       expect(message?.parts).toEqual([Prompt.textPart({ text: "first" })])
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("preserves insertion order for equal timestamps in history and deletion", () =>
     Effect.gen(function* () {
@@ -525,7 +525,7 @@ describe("Messages", () => {
       expect(
         (yield* messages.listMessages(BranchId.make("order-branch"))).map((message) => message.id),
       ).toEqual([MessageId.make("b")])
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
 })
 describe("Message Metadata", () => {
@@ -574,7 +574,7 @@ describe("Message Metadata", () => {
       expect(Schema.is(MessageDetails)(details)).toBe(true)
       if (!Schema.is(MessageDetails)(details)) return
       expect(details.iteration).toBe(3)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("createMessageIfAbsent preserves metadata", () =>
     Effect.gen(function* () {
@@ -610,7 +610,7 @@ describe("Message Metadata", () => {
       expect(messagesResult[0]!.metadata).toBeDefined()
       expect(messagesResult[0]!.metadata!.hidden).toBe(true)
       expect(messagesResult[0]!.metadata!.extensionId).toBe("review-loop")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("messages without metadata have undefined metadata", () =>
     Effect.gen(function* () {
@@ -643,7 +643,7 @@ describe("Message Metadata", () => {
       )
       const messagesResult = yield* messages.listMessages(BranchId.make("no-meta-b"))
       expect(messagesResult[0]!.metadata).toBeUndefined()
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   it.live("invalid stored metadata fails across read surfaces", () =>
     Effect.gen(function* () {
@@ -676,7 +676,7 @@ describe("Message Metadata", () => {
         relationships.getSessionDetail(SessionId.make("bad-meta-s")),
       )
       expect(detailExit._tag).toBe("Failure")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   test("domain message preserves metadata for transport", () => {
     const message = Message.cases.regular.make({
@@ -726,7 +726,7 @@ describe("Message Metadata", () => {
         return yield* Effect.die(new Error("expected interjection message"))
       expect(stored._tag).toBe("interjection")
       expect(stored.role).toBe("user")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
   test("domain message omits metadata when absent", () => {
     const message = Message.cases.regular.make({

@@ -3,7 +3,8 @@ import { Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { ApprovalService } from "../../src/runtime/approval-service"
-import { CurrentCellToolOperation } from "../../src/runtime/code-cell/current-cell-tool-operation"
+import { CurrentInteractionOwner } from "../../src/domain/interaction-owner"
+import { cellInteractionOwner } from "../../src/runtime/code-cell/cell-interaction-owner"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { EventStorage } from "../../src/storage/event-storage"
@@ -38,6 +39,7 @@ import { InteractionStorage } from "../../src/storage/interaction-storage"
 import { MessageStorage } from "../../src/storage/message-storage"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { ensureStorageParents } from "../../src/test-utils"
+import { cellStorageLayer } from "../../src/runtime/code-cell/cell-storage"
 
 const cell = {
   sessionId: SessionId.make("cell-operation-session"),
@@ -150,7 +152,7 @@ it.live("admits an operation once and preserves its original input, binding, and
           .pipe(Effect.flip),
       ),
     ).toBe(true)
-  }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer))),
 )
 
 it.scopedLive(
@@ -169,12 +171,18 @@ it.scopedLive(
       yield* sql`CREATE TEMP TRIGGER require_cell_approval_owner BEFORE INSERT ON events WHEN NEW.event_tag = 'InteractionPresented' BEGIN SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM cell_tool_operations o JOIN interaction_requests r ON r.request_id = o.request_id WHERE r.request_id = json_extract(NEW.event_json, '$.requestId')) THEN RAISE(ABORT, 'approval has no operation owner') END; END`
       const first = yield* approval
         .present({ text: "First?" }, cell)
-        .pipe(Effect.provideService(CurrentCellToolOperation, key), Effect.flip)
+        .pipe(
+          Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
+          Effect.flip,
+        )
       if (!Schema.is(InteractionPendingError)(first)) return yield* Effect.die(first)
       yield* approval.storeResolution(first.requestId, { approved: false, notes: "First denied" })
       const blocked = yield* approval
         .present({ text: "Second?" }, cell)
-        .pipe(Effect.provideService(CurrentCellToolOperation, peer), Effect.flip)
+        .pipe(
+          Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(peer, storage)),
+          Effect.flip,
+        )
       expect(blocked._tag).toBe("EventStoreError")
       expect((yield* storage.get(peer)).state._tag).toBe("Started")
       expect(
@@ -186,11 +194,14 @@ it.scopedLive(
       expect(
         yield* approval
           .present({ text: "First?" }, cell)
-          .pipe(Effect.provideService(CurrentCellToolOperation, key)),
+          .pipe(Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage))),
       ).toEqual({ approved: false, notes: "First denied" })
       const second = yield* approval
         .present({ text: "Second?" }, cell)
-        .pipe(Effect.provideService(CurrentCellToolOperation, peer), Effect.flip)
+        .pipe(
+          Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(peer, storage)),
+          Effect.flip,
+        )
       if (!Schema.is(InteractionPendingError)(second)) return yield* Effect.die(second)
       expect(second.requestId).not.toBe(first.requestId)
       yield* approval.storeResolution(second.requestId, { approved: true })
@@ -198,12 +209,17 @@ it.scopedLive(
       expect(
         yield* approval
           .present({ text: "Second?" }, cell)
-          .pipe(Effect.provideService(CurrentCellToolOperation, peer)),
+          .pipe(
+            Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(peer, storage)),
+          ),
       ).toEqual({ approved: true })
       expect(
         (yield* approval
           .present({ text: "Again?" }, cell)
-          .pipe(Effect.provideService(CurrentCellToolOperation, key), Effect.flip))._tag,
+          .pipe(
+            Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
+            Effect.flip,
+          ))._tag,
       ).toBe("EventStoreError")
     }).pipe(
       Effect.provide(
@@ -241,7 +257,7 @@ it.live("never leaves an approval behind when its operation link fails", () =>
     yield* storage.suspend(key, request)
     expect(yield* interactions.listPending(cell)).toEqual([request])
     expect((yield* storage.get(key)).state).toEqual({ _tag: "Waiting", requestId })
-  }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer))),
 )
 
 it.live(
@@ -297,7 +313,7 @@ it.live(
         "Started",
       ])
       expect((yield* storage.admit(params)).admitted).toBe(false)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer))),
 )
 
 it.live("binds a decision to one waiting operation and grants one resume attempt", () =>
@@ -335,7 +351,7 @@ it.live("binds a decision to one waiting operation and grants one resume attempt
     )
     expect((yield* storage.admit(params)).admitted).toBe(false)
     expect((yield* storage.get(key)).state._tag).toBe("Resuming")
-  }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer))),
 )
 
 it.live(
@@ -364,7 +380,7 @@ it.live(
         readonly count: number
       }>`SELECT COUNT(*) AS count FROM cell_tool_operations`
       expect(rows[0]?.count).toBe(0)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer))),
 )
 
 it.live("does not admit external work inside a caller transaction or after cell completion", () =>
@@ -405,7 +421,7 @@ it.live("does not admit external work inside a caller transaction or after cell 
         yield* storage.admit({ ...params, operationId: "2" }).pipe(Effect.flip),
       ),
     ).toBe(true)
-  }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer))),
 )
 
 it.scopedLive("retains approval ownership and prevents a second resume after database reopen", () =>
@@ -413,7 +429,7 @@ it.scopedLive("retains approval ownership and prevents a second resume after dat
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const directory = yield* fs.makeTempDirectoryScoped()
-    const layer = SqliteStorage.LiveWithSql(path.join(directory, "gent.db")).pipe(
+    const layer = SqliteStorage.LiveWithSql(path.join(directory, "gent.db"), cellStorageLayer).pipe(
       Layer.provide(GentPlatform.Test()),
     )
     yield* Effect.scoped(

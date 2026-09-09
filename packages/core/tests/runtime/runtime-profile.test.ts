@@ -35,7 +35,11 @@ const fsLayer = Layer.provideMerge(
   childProcessSpawnerLive,
 )
 
-const sharedLayer = Layer.mergeAll(fsLayer, ConfigService.Test(), SqliteStorage.TestWithSql())
+const sharedLayer = Layer.mergeAll(
+  fsLayer,
+  ConfigService.Test(),
+  SqliteStorage.TestWithSql(() => Layer.empty),
+)
 
 // Build a fresh production cache in the test's owning scope.
 const openProfile = Effect.fn("RuntimeProfileTest.openProfile")(function* (

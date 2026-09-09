@@ -194,7 +194,7 @@ const makeActorLayer = (
   failPrepareRevision?: string,
 ) => {
   const dependencies = Layer.mergeAll(
-    SqliteStorage.TestWithSql(),
+    SqliteStorage.TestWithSql(() => Layer.empty),
     Layer.provide(
       makeHostApplierLayer(events, control, failApply, postAdmissionControl, failPrepareRevision),
       GentPlatform.Test("graph-host"),
@@ -231,7 +231,7 @@ const makeDispatchLayer = (
   } satisfies ResourceGraphDispatchService)
 
 const makeCommandServiceLayer = (dispatch: Layer.Layer<ResourceGraphDispatch>) => {
-  const storage = SqliteStorage.TestWithSql()
+  const storage = SqliteStorage.TestWithSql(() => Layer.empty)
   const client = Layer.provide(
     ClientLayer.fromConfig,
     Layer.merge(storage, ShardingConfig.layerDefaults),
@@ -270,7 +270,7 @@ describe("resource graph command owner", () => {
 
   it.live("persists the Encore dispatch in the same SQLite message store", () =>
     Effect.gen(function* () {
-      const storage = SqliteStorage.TestWithSql()
+      const storage = SqliteStorage.TestWithSql(() => Layer.empty)
       const client = Layer.provide(
         ClientLayer.fromConfig,
         Layer.merge(storage, ShardingConfig.layerDefaults),
@@ -475,7 +475,7 @@ describe("resource graph command owner", () => {
         listAll: () => Effect.succeed([key]),
         listWorkspaces: Effect.succeed([WORKSPACE_A]),
       })
-      const backing = SqliteStorage.TestWithSql()
+      const backing = SqliteStorage.TestWithSql(() => Layer.empty)
       const client = Layer.provide(
         ClientLayer.fromConfig,
         Layer.merge(backing, ShardingConfig.layerDefaults),

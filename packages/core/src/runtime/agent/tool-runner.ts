@@ -34,7 +34,7 @@ import { ToolCallId, type ExtensionId, type SessionId } from "../../domain/ids.j
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
-import { CurrentCellToolOperation } from "../code-cell/current-cell-tool-operation.js"
+import { CurrentDispatchingCall } from "./current-dispatching-call.js"
 import { CurrentToolCall } from "./current-tool-call.js"
 import {
   CurrentExtensionHostContext,
@@ -108,17 +108,17 @@ const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, mes
     result: { error: message },
   })
 
-/** The admitting cell, when this call runs inside one. */
-const parentToolCallId = Effect.map(Effect.serviceOption(CurrentCellToolOperation), (operation) =>
-  Option.getOrUndefined(Option.map(operation, (key) => key.cell.toolCallId)),
+/** The dispatching call, when this call runs inside one. */
+const parentToolCallId = Effect.map(Effect.serviceOption(CurrentDispatchingCall), (call) =>
+  Option.getOrUndefined(Option.map(call, (parent) => parent.toolCallId)),
 )
 
-/** The assistant message that holds the tool-call part: the direct call, else the admitting cell. */
+/** The assistant message holding the tool-call part: this call's, else the dispatcher's. */
 const assistantMessageId = Effect.gen(function* () {
   const current = yield* Effect.serviceOption(CurrentToolCall)
   if (Option.isSome(current)) return current.value.assistantMessageId
-  const operation = yield* Effect.serviceOption(CurrentCellToolOperation)
-  return Option.getOrUndefined(Option.map(operation, (key) => key.cell.assistantMessageId))
+  const parent = yield* Effect.serviceOption(CurrentDispatchingCall)
+  return Option.getOrUndefined(Option.map(parent, (call) => call.assistantMessageId))
 })
 
 const publishStarted = (params: { ctx: ToolCapabilityContext; toolCall: ToolCall }) =>

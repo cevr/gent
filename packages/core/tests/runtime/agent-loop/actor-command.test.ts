@@ -37,6 +37,7 @@ import { AgentLoop as AgentLoopActor } from "../../../src/runtime/agent/agent-lo
 import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
+import { cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage.js"
 
 const makeTestExtensions = (
   tools: ReadonlyArray<ToolCapability> = [],
@@ -60,7 +61,7 @@ const makeTestExtensions = (
   ])
 }
 
-const makeClusterRunnerLayer = (storageLayer: ReturnType<typeof SqliteStorage.TestWithSql>) =>
+const makeClusterRunnerLayer = <A>(storageLayer: ReturnType<typeof SqliteStorage.TestWithSql<A>>) =>
   Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     Layer.merge(storageLayer, BunCrypto.layer),
@@ -74,7 +75,7 @@ const makeRuntimeLayer = (
   const resolvedExtensions = makeTestExtensions(tools, requests)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = SqliteStorage.TestWithSql()
+  const storageLayer = SqliteStorage.TestWithSql(cellStorageLayer)
   let toolRunnerLayer = ToolRunner.Test()
   if (tools.length > 0) toolRunnerLayer = ToolRunner.Live
   const baseDeps = Layer.mergeAll(

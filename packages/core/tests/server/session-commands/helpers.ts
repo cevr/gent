@@ -99,7 +99,9 @@ export const sessionRuntimeLayer = (
   )
 
 const buildFailingSessionCommandsLayer = () => {
-  const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
+  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(
+    Layer.provide(GentPlatform.Test()),
+  )
   const deps = Layer.mergeAll(
     storageLayer,
     sessionRuntimeLayer(),
@@ -144,7 +146,9 @@ export const createActiveSessionFixture = Effect.fn("createActiveSessionFixture"
 )
 
 const buildSendFailingSessionCommandsLayer = () => {
-  const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
+  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(
+    Layer.provide(GentPlatform.Test()),
+  )
   const failingRuntimeLayer = sessionRuntimeLayer({
     sendUserMessage: () => Effect.fail(new SessionRuntimeError({ message: "runtime failed" })),
   })
@@ -169,7 +173,9 @@ export const sendFailingSessionCommandsLayer = Layer.fresh(
 )
 
 const buildSessionCommandsLayer = () => {
-  const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
+  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(
+    Layer.provide(GentPlatform.Test()),
+  )
   const deps = Layer.mergeAll(
     storageLayer,
     sessionRuntimeLayer(),
@@ -215,7 +221,9 @@ export const sessionCommandsLayerWithMachineProbe = (
   runtimeTerminated?: Array<SessionId>,
   runtimeRestored?: Array<SessionId>,
 ) => {
-  const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
+  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(
+    Layer.provide(GentPlatform.Test()),
+  )
   let runtimeLayer = sessionRuntimeLayer()
   if (!Predicate.isUndefined(runtimeTerminated)) {
     runtimeLayer = sessionRuntimeProbeLayer(runtimeTerminated)
@@ -237,7 +245,9 @@ export const sessionCommandsLayerWithMachineProbe = (
 }
 
 export const sessionMutationsLayerWithMachineProbe = (runtimeTerminated: Array<SessionId>) => {
-  const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
+  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(
+    Layer.provide(GentPlatform.Test()),
+  )
   const runtimeLayer = sessionRuntimeProbeLayer(runtimeTerminated)
   const deps = Layer.mergeAll(
     storageLayer,
@@ -256,7 +266,9 @@ export const failingDeleteSessionCommandsLayerWithMachineProbe = (
   runtimeTerminated: Array<SessionId>,
   runtimeRestored: Array<SessionId>,
 ) => {
-  const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
+  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(
+    Layer.provide(GentPlatform.Test()),
+  )
   const failingSessionStorageLayer = Layer.effect(
     SessionStorage,
     Effect.gen(function* () {
@@ -295,7 +307,9 @@ export const racySessionCommandsLayer = (params: {
   readonly runtimeTerminated: Array<SessionId>
   readonly lateChild: { sessionId: SessionId; branchId: BranchId }
 }) => {
-  const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test()))
+  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(
+    Layer.provide(GentPlatform.Test()),
+  )
   const racingSessionStorageLayer = Layer.effect(
     SessionStorage,
     Effect.gen(function* () {

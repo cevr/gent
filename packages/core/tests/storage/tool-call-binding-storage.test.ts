@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Cause, Effect, Exit, Schema } from "effect"
+import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
 import {
@@ -138,7 +138,7 @@ describe("ToolCallBindingStorage", () => {
         "@test/a-resource",
         "@test/z-resource",
       ])
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
 
   it.live("accepts an equal duplicate without changing the immutable row", () =>
@@ -153,7 +153,7 @@ describe("ToolCallBindingStorage", () => {
 
       expect(duplicate).toEqual(first)
       expect(yield* storage.get(getParams(fixture))).toEqual(first)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
 
   it.live("rejects a conflicting duplicate without overwriting the row", () =>
@@ -171,7 +171,7 @@ describe("ToolCallBindingStorage", () => {
         expect(Schema.is(ToolCallBindingConflictError)(Cause.squash(conflict.cause))).toBe(true)
       }
       expect(yield* storage.get(getParams(fixture))).toEqual(first)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
 
   it.live("requires the assistant message to contain the bound tool call", () =>
@@ -207,7 +207,7 @@ describe("ToolCallBindingStorage", () => {
       if (Exit.isFailure(mismatchedName)) {
         expect(Schema.is(StorageError)(Cause.squash(mismatchedName.cause))).toBe(true)
       }
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
 
   it.live("rejects a non-canonical resource vector at the persistence boundary", () =>
@@ -224,7 +224,7 @@ describe("ToolCallBindingStorage", () => {
       if (Exit.isFailure(result)) {
         expect(Schema.is(StorageError)(Cause.squash(result.cause))).toBe(true)
       }
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
 
   it.live("rejects reads and writes outside the message workspace and branch", () =>
@@ -280,7 +280,7 @@ describe("ToolCallBindingStorage", () => {
         .get(getParams(fixture))
         .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_A))
       expect(stillStored).toEqual(makeBinding())
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
 
   it.live("rolls back a message and its binding in one outer transaction", () =>
@@ -337,7 +337,7 @@ describe("ToolCallBindingStorage", () => {
           branchId,
         }),
       ).toBeUndefined()
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
 
   it.live("deletes bindings with their assistant message", () =>
@@ -354,7 +354,7 @@ describe("ToolCallBindingStorage", () => {
         WHERE assistant_message_id = ${fixture.messageId}
       `
       expect(rows[0]?.count).toBe(0)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
 
   it.live("rejects malformed binding JSON at the read boundary", () =>
@@ -381,7 +381,7 @@ describe("ToolCallBindingStorage", () => {
       if (Exit.isFailure(malformed)) {
         expect(Schema.is(StorageError)(Cause.squash(malformed.cause))).toBe(true)
       }
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
 
   it.live("round-trips a visible non-replayable dynamic source", () =>
@@ -398,6 +398,6 @@ describe("ToolCallBindingStorage", () => {
       yield* storage.save(saveParams(fixture, dynamic))
       const loaded = yield* storage.get(getParams(fixture))
       expect(loaded?.source._tag).toBe("DynamicNonReplayable")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql())),
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty))),
   )
 })

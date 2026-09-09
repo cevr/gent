@@ -14,6 +14,7 @@ import type { MessageStorage } from "../../storage/message-storage.js"
 import type { RelationshipStorage } from "../../storage/relationship-storage.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
 import { SqliteStorage } from "../../storage/sqlite-storage.js"
+import { cellStorageLayer } from "../code-cell/cell-storage.js"
 import { ApprovalService } from "../approval-service.js"
 import { type ExtensionRegistryService } from "../extensions/registry.js"
 import { EventStoreLive } from "../event-store-live.js"
@@ -190,7 +191,9 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
   }) => {
     const resolved = params.extensionRegistry.getResolved()
     const extensionLayers = buildExtensionLayers(resolved, { lifecycle: "skip" })
-    const storageLayer = SqliteStorage.MemoryWithSql().pipe(Layer.provide(parentGentPlatformLayer))
+    const storageLayer = SqliteStorage.MemoryWithSql(cellStorageLayer).pipe(
+      Layer.provide(parentGentPlatformLayer),
+    )
     const clusterRunnerLayer = Layer.provide(
       SingleRunner.layer({ runnerStorage: "memory" }),
       Layer.merge(storageLayer, parentCryptoLayer),

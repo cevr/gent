@@ -8,7 +8,7 @@
  * @module
  */
 
-import type { DispatchingToolStorage } from "../code-cell/cell-services.js"
+import type { DispatchingToolStorage } from "../code-cell/dispatching-tool-storage.js"
 import {
   Cause,
   Context,
@@ -334,7 +334,7 @@ export const makeAgentLoopBehavior = (
       extensionRegistry.getResolved().extensions,
       "branch",
     )
-    const cellContext = yield* Layer.build(
+    const branchContext = yield* Layer.build(
       Layer.merge(
         Layer.merge(
           CellExecution.Branch({ sessionId, branchId, interruptedRef }),
@@ -346,7 +346,7 @@ export const makeAgentLoopBehavior = (
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
     const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
-    const cells = Context.get(cellContext, CellExecution)
+    const cells = Context.get(branchContext, CellExecution)
     const currentAgent = yield* resolveStoredAgent({
       sessionId,
       branchId,
@@ -460,7 +460,7 @@ export const makeAgentLoopBehavior = (
       runTurn: (state) =>
         Effect.acquireUseRelease(
           keepAlive(true),
-          () => runTurn(state).pipe(Effect.provideContext(cellContext)),
+          () => runTurn(state).pipe(Effect.provideContext(branchContext)),
           () => keepAlive(false),
         ),
       switchAgentOnState,
@@ -510,7 +510,7 @@ export const makeAgentLoopBehavior = (
           }),
         ),
       resolveTurnProfile,
-      branchContext: cellContext,
+      branchContext,
       persistState: persistRuntimeState,
       refreshRuntimeState,
       snapshot: currentLoopState,

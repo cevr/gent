@@ -1,4 +1,4 @@
-import type { DispatchingToolStorage } from "./code-cell/cell-services.js"
+import type { DispatchingToolStorage } from "./code-cell/dispatching-tool-storage.js"
 import {
   Predicate,
   Cause,

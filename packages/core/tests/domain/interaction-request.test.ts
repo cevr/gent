@@ -48,7 +48,7 @@ const decideInteraction = (
 // ============================================================================
 describe("Interaction Request", () => {
   const storageLive = Layer.mergeAll(
-    SqliteStorage.MemoryWithSql().pipe(Layer.provide(GentPlatform.Test())),
+    SqliteStorage.MemoryWithSql(() => Layer.empty).pipe(Layer.provide(GentPlatform.Test())),
     GentPlatform.Test(),
   )
   const workspaceA = "a".repeat(64)

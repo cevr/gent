@@ -548,7 +548,14 @@ describe("tool binding replay", () => {
           toolCallId,
         }),
       ).toBeUndefined()
-    }).pipe(Effect.provide(Layer.mergeAll(SqliteStorage.TestWithSql(), EventPublisher.Test()))),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          SqliteStorage.TestWithSql(() => Layer.empty),
+          EventPublisher.Test(),
+        ),
+      ),
+    ),
   )
   it.live("replays the structured terminal result for the current assistant only", () =>
     Effect.gen(function* () {
@@ -614,7 +621,14 @@ describe("tool binding replay", () => {
         toolCalls: [toolCall],
       })
       expect(results.get(toolCallId)?.result).toEqual({ value: "current" })
-    }).pipe(Effect.provide(Layer.mergeAll(SqliteStorage.TestWithSql(), EventPublisher.Test()))),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          SqliteStorage.TestWithSql(() => Layer.empty),
+          EventPublisher.Test(),
+        ),
+      ),
+    ),
   )
   it.live("does not replay a terminal result without its assistant anchor", () =>
     Effect.gen(function* () {
@@ -648,7 +662,14 @@ describe("tool binding replay", () => {
         ],
       })
       expect(results.size).toBe(0)
-    }).pipe(Effect.provide(Layer.mergeAll(SqliteStorage.TestWithSql(), EventPublisher.Test()))),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          SqliteStorage.TestWithSql(() => Layer.empty),
+          EventPublisher.Test(),
+        ),
+      ),
+    ),
   )
   it.live("stops result replay at the next assistant message", () =>
     Effect.gen(function* () {
@@ -714,7 +735,14 @@ describe("tool binding replay", () => {
         ],
       })
       expect(results.get(toolCallId)?.result).toEqual({ value: "current" })
-    }).pipe(Effect.provide(Layer.mergeAll(SqliteStorage.TestWithSql(), EventPublisher.Test()))),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          SqliteStorage.TestWithSql(() => Layer.empty),
+          EventPublisher.Test(),
+        ),
+      ),
+    ),
   )
   it.live("rejects a corrupt structured terminal result", () =>
     Effect.gen(function* () {
@@ -771,7 +799,14 @@ describe("tool binding replay", () => {
         const error = Cause.findErrorOption(exit.cause)
         expect(Option.isSome(error) && Schema.is(ToolResultReplayError)(error.value)).toBe(true)
       }
-    }).pipe(Effect.provide(Layer.mergeAll(SqliteStorage.TestWithSql(), EventPublisher.Test()))),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          SqliteStorage.TestWithSql(() => Layer.empty),
+          EventPublisher.Test(),
+        ),
+      ),
+    ),
   )
   it.live("isolates process-local replay state between server scopes", () =>
     Effect.scoped(

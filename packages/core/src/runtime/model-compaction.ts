@@ -14,7 +14,7 @@ import type { ProviderError } from "../domain/provider-error.js"
 import type { StorageError } from "../domain/storage-error.js"
 import { toPrompt } from "../providers/ai-transcript.js"
 import { MessageStorage, type MessageStorageService } from "../storage/message-storage.js"
-import { CellToolOperationStorage } from "./code-cell/cell-tool-operation-storage.js"
+import { InnerOperationReceipts, type InnerOperation } from "../domain/inner-operation-receipts.js"
 import {
   ModelContextBudget,
   type ModelContextError,
@@ -270,13 +270,14 @@ const estimateTextTokens = (text: string): number => Math.ceil(text.length / 4)
 
 const summaryPromptText = (
   messages: ReadonlyArray<Message>,
-  cellBindings: ReadonlyArray<string>,
-): string => `${SUMMARY_USER_PREFIX}${formatConversation(messages)}${bindingsNote(cellBindings)}`
+  retainedBindings: ReadonlyArray<string>,
+): string =>
+  `${SUMMARY_USER_PREFIX}${formatConversation(messages)}${bindingsNote(retainedBindings)}`
 
-/** The cell keeps its namespace across turns; the summary must say what those names hold. */
+/** A stateful tool keeps names across turns; the summary must say what they hold. */
 const bindingsNote = (bindings: ReadonlyArray<string>): string => {
   if (bindings.length === 0) return ""
-  return `\n\nCell namespace bindings retained on this branch: ${bindings.join(", ")}. Record what each holds when the history shows it, so later cells can reuse them instead of recomputing.`
+  return `\n\nNames retained on this branch: ${bindings.join(", ")}. Record what each holds when the history shows it, so later calls can reuse them instead of recomputing.`
 }
 
 const emptyPaths: CompactionPaths = { read: [], modified: [] }
@@ -310,11 +311,14 @@ const mergePaths = (...sources: ReadonlyArray<CompactionPaths>): CompactionPaths
   }
 }
 
-/** Paths from direct tool calls and from the inner operations of each cell in the range. */
+/** Paths from direct tool calls, and from the inner calls each dispatch recorded. */
 const collectSourcePaths = Effect.fn("ModelCompaction.collectSourcePaths")(function* (
   sourceMessages: ReadonlyArray<Message>,
 ) {
-  const operations = yield* CellToolOperationStorage
+  // No dispatching tool on this branch means nothing recorded receipts, and
+  // every tool call reports its own params. Compaction must not depend on a
+  // feature the deployment may not have.
+  const operations = yield* Effect.serviceOption(InnerOperationReceipts)
   const read: string[] = []
   const modified: string[] = []
   const record = (entry: Option.Option<[keyof CompactionPaths, string]>) => {
@@ -330,22 +334,26 @@ const collectSourcePaths = Effect.fn("ModelCompaction.collectSourcePaths")(funct
       // that is not core's business — the receipts say so. A tool that
       // recorded none (the common case, and a dispatcher that failed before
       // running) falls back to its own params.
-      const inner = yield* operations
-        .listForToolCall({
-          sessionId: message.sessionId,
-          branchId: message.branchId,
-          assistantMessageId: message.id,
-          toolCallId: ToolCallId.make(part.id),
-        })
-        .pipe(
-          Effect.catchTag("StorageError", (error) =>
-            Effect.logDebug("Compaction skipped a tool call without receipts")
-              .pipe(Effect.annotateLogs({ error: String(error) }))
-              .pipe(Effect.as([])),
-          ),
-        )
+      const inner: ReadonlyArray<InnerOperation> = yield* Option.match(operations, {
+        onNone: () => Effect.succeed<ReadonlyArray<InnerOperation>>([]),
+        onSome: (service) =>
+          service
+            .listForToolCall({
+              sessionId: message.sessionId,
+              branchId: message.branchId,
+              assistantMessageId: message.id,
+              toolCallId: ToolCallId.make(part.id),
+            })
+            .pipe(
+              Effect.catchTag("StorageError", (error) =>
+                Effect.logDebug("Compaction skipped a tool call without receipts")
+                  .pipe(Effect.annotateLogs({ error: String(error) }))
+                  .pipe(Effect.as<ReadonlyArray<InnerOperation>>([])),
+              ),
+            ),
+      })
       if (inner.length > 0) {
-        for (const { operation } of inner) {
+        for (const operation of inner) {
           record(
             Option.flatMap(decodePathParams(operation.input), (params) =>
               pathFor(operation.binding.toolId, params),
@@ -436,7 +444,7 @@ const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
   readonly model: LanguageModel.Service
   readonly sourceMessages: ReadonlyArray<Message>
   readonly instructions: Option.Option<string>
-  readonly cellBindings: ReadonlyArray<string>
+  readonly retainedBindings: ReadonlyArray<string>
 }) {
   const input = Message.cases.regular.make({
     id: MessageId.make("model-compaction-input"),
@@ -445,7 +453,7 @@ const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
     role: "user",
     parts: [
       Prompt.textPart({
-        text: summaryPromptText(params.sourceMessages, params.cellBindings),
+        text: summaryPromptText(params.sourceMessages, params.retainedBindings),
       }),
     ],
     createdAt: yield* DateTime.nowAsDate,
@@ -541,7 +549,7 @@ const selectSummarySource = (
   omitted: ReadonlySet<MessageId>,
   budget: ModelContextBudget,
   instructions: Option.Option<string>,
-  cellBindings: ReadonlyArray<string>,
+  retainedBindings: ReadonlyArray<string>,
 ): Option.Option<ReadonlyArray<Message>> => {
   const omittedIndexes = normalized.messages.flatMap((message, index) => {
     if (omitted.has(message.id) && !isSummaryMessage(message)) return [index]
@@ -570,7 +578,7 @@ const selectSummarySource = (
     const projected = projectModelContext(candidate, boundedBudget)
     if (Result.isFailure(projected) || projected.success.messages.length === 0) continue
     const promptTokens = estimateTextTokens(
-      summaryPromptText(projected.success.messages, cellBindings),
+      summaryPromptText(projected.success.messages, retainedBindings),
     )
     if (promptTokens > projected.success.availableInputTokens) continue
     return Option.some(projected.success.messages)
@@ -784,10 +792,10 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
     readonly budget: ModelContextBudget
     readonly hash?: RevisionHash
     readonly persistSummary?: SummaryPersister
-    /** Summarize even when the projection fits; the model asked for it from a cell. */
+    /** Summarize even when the projection fits; the model asked for it. */
     readonly force?: { readonly instructions?: string }
-    /** Names the cell namespace currently retains; the summary records what they hold. */
-    readonly cellBindings?: ReadonlyArray<string>
+    /** Names a stateful tool retains across turns; the summary records what they hold. */
+    readonly retainedBindings?: ReadonlyArray<string>
     readonly summaryModel: Effect.Effect<
       LanguageModel.Service,
       ProviderError | ProviderAuthError,
@@ -815,13 +823,13 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
     const instructions = Option.flatMap(forced, (value) =>
       Option.fromUndefinedOr(value.instructions),
     )
-    const cellBindings = params.cellBindings ?? []
+    const retainedBindings = params.retainedBindings ?? []
     const sourceOption = selectSummarySource(
       normalized,
       omitted,
       params.budget,
       instructions,
-      cellBindings,
+      retainedBindings,
     )
     if (Option.isNone(sourceOption)) {
       return ModelCompactionResult.make({
@@ -846,7 +854,7 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
           model,
           sourceMessages,
           instructions,
-          cellBindings,
+          retainedBindings,
         }).pipe(Effect.mapError((failure) => compactionFailure(params.modelId, failure))),
       ),
     )

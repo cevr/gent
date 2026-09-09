@@ -12,8 +12,7 @@ import { Context, Effect, Layer, Option } from "effect"
 import { isRecord } from "../domain/guards.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { EventStoreError, InteractionPresented } from "../domain/event.js"
-import { CellToolOperationStorage } from "./code-cell/cell-tool-operation-storage.js"
-import { CurrentCellToolOperation } from "./code-cell/current-cell-tool-operation.js"
+import { CurrentInteractionOwner } from "../domain/interaction-owner.js"
 import type { InteractionRequestId } from "../domain/ids.js"
 import {
   makeInteractionService,
@@ -103,36 +102,22 @@ function makeApprovalInteractionService(
     return {
       ...service,
       present: Effect.fn("ApprovalService.present")(function* (params, ctx) {
-        const current = yield* Effect.serviceOption(CurrentCellToolOperation)
-        if (Option.isNone(current)) return yield* service.present(params, ctx)
+        // An interaction raised inside a dispatching tool belongs to that
+        // tool's receipt, not to the branch's native replay. Absent owner is
+        // the common case: a direct tool call takes the native path.
+        const owner = yield* Effect.serviceOption(CurrentInteractionOwner)
+        if (Option.isNone(owner)) return yield* service.present(params, ctx)
         if (Option.isNone(Option.fromUndefinedOr(storage)))
           return yield* new EventStoreError({
-            message: "Cell approval requires durable interaction storage",
+            message: "An owned interaction requires durable interaction storage",
           })
-        const key = current.value
-        if (key.cell.sessionId !== ctx.sessionId || key.cell.branchId !== ctx.branchId)
-          return yield* new EventStoreError({ message: "Cell approval belongs to another branch" })
-        const operations = yield* Effect.serviceOption(CellToolOperationStorage)
-        if (Option.isNone(operations))
+        if (owner.value.sessionId !== ctx.sessionId || owner.value.branchId !== ctx.branchId)
           return yield* new EventStoreError({
-            message: "Cell approval requires durable operation storage",
+            message: "The owning call belongs to another branch",
           })
-        const operation = yield* operations.value
-          .get(key)
-          .pipe(
-            Effect.mapError(
-              (cause) => new EventStoreError({ message: "Cannot read cell approval owner", cause }),
-            ),
-          )
-        if (operation.state._tag === "Started")
-          return yield* service.present(params, { ...ctx, resumeRequestId: Option.none() })
-        if (operation.state._tag === "Resuming")
-          return yield* service.present(params, {
-            ...ctx,
-            resumeRequestId: Option.some(operation.state.requestId),
-          })
-        return yield* new EventStoreError({
-          message: "Cell operation is not admitted for approval",
+        return yield* service.present(params, {
+          ...ctx,
+          resumeRequestId: yield* owner.value.resumeRequestId,
         })
       }),
     }

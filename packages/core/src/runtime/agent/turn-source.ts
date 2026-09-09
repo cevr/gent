@@ -43,7 +43,7 @@ import {
   type ModelCompactionError,
   ModelCompactionResult,
 } from "../model-compaction.js"
-import { CellNamespaceStorage } from "../code-cell/cell-namespace-storage.js"
+import { RetainedBindings } from "../../domain/retained-bindings.js"
 import { type ContextDirective, ModelContextLedger } from "../model-context-ledger.js"
 import {
   latestUserMessageId,
@@ -372,9 +372,9 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       if (Option.isSome(persisted.envelope)) yield* eventPublisher.deliver(persisted.envelope.value)
       return persisted.message
     })
-  // The model can ask, from a cell, for a fresh window or a focused summary.
+  // The model can ask, from inside a tool, for a fresh window or a focused summary.
   const ledger = yield* ModelContextLedger
-  // A directive belongs to the turn whose cell scheduled it: the first
+  // A directive belongs to the turn whose tool call scheduled it: the first
   // projection of a new turn drops whatever an earlier turn left behind.
   if (params.step <= 1) yield* ledger.discardDirective
   const directive = yield* ledger.pendingDirective
@@ -386,12 +386,13 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     persist: persistDurableMessage,
   })
   const windowed = messagesInCurrentWindow(durableMessages)
-  // The summary names the cell bindings that survive compaction.
-  const namespaces = yield* CellNamespaceStorage
-  const cellBindings = Option.match(
-    yield* namespaces.get({ sessionId: params.sessionId, branchId: params.branchId }),
-    { onNone: () => [], onSome: (snapshot) => snapshot.bindings.map((binding) => binding.name) },
-  )
+  // The summary names the bindings that survive compaction. A branch with no
+  // stateful tool retains nothing.
+  const retained = yield* Effect.serviceOption(RetainedBindings)
+  const retainedBindings = yield* Option.match(retained, {
+    onNone: () => Effect.succeed<ReadonlyArray<string>>([]),
+    onSome: (service) => service.list({ sessionId: params.sessionId, branchId: params.branchId }),
+  })
   const compact = (forced: Option.Option<CompactionRequest>) =>
     compactModelContext({
       modelId: contextModelId,
@@ -401,7 +402,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       budget,
       hash: params.hash,
       persistSummary: persistDurableMessage,
-      cellBindings,
+      retainedBindings,
       force: Option.getOrUndefined(forced),
       summaryModel: resolveAdmittedModel({
         ...modelRequest,
