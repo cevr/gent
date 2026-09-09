@@ -1,6 +1,12 @@
 # Smaller core through extensions
 
-Status: research proposal. No core rewrite is implemented by this document.
+Status: implementation in progress. See core-extension-reduction-receipt.md for completed changes and checks.
+
+## Added user requirements
+
+The shipped preset should expose one model tool, `cell`. File reads, edits, and other operations can run inside the kernel. Keep host operations where they own approvals, durable receipts, and child lifetimes. The generic core must still support extensions that choose a different tool surface. Compare total task tokens before claiming that direct kernel code saves tokens.
+
+Inspect the official OpenCode v2 branch for prompt-cache behavior before changing Gent's prompt construction. Verify stable tool definitions and order, stable historical calls, date-change messages, and provider cache controls against pinned source. Keep stable instructions at the front. Deliver changing context without rewriting earlier history where the provider supports it. Preserve live extension changes and permission checks. Record provider cache counters so live runs can show cache use. Unknown cache usage must not be reported as zero. Each logical code change still requires the full gate and live Herdr checks.
 
 ## Decision
 

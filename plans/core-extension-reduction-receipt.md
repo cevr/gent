@@ -69,3 +69,27 @@ Evidence:
 - `/tmp/gent-excerpt-direct-preview.txt`
 - `/tmp/gent-excerpt-direct-full.txt`
 - `/tmp/gent-core-renderer-check/sample.txt`
+
+## Preserve cache usage
+
+The user added prompt-cache work based on OpenCode v2. Before changing prompt policy, preserve the Effect provider's optional cache-read and cache-write counts in Gent's durable usage schema. Keep total input tokens unchanged. Invalid or absent normalized counts stay absent. Old events still decode. This adds no files, services, or exports.
+
+The full gate passed. Live Herdr connected the TUI to a dedicated server with a temporary SQLite database. Luna ran a cell that retained 42, then used the value in a second turn to produce 43. Both turns reached idle. Ctrl+O showed preview, full, and collapsed levels. Four StreamEnded records contained the new fields. All four reported zero cache reads and writes. This proves counter delivery, not a cache improvement. The installed OpenAI adapter defaults an absent wire cache-read detail to zero; these are normalized provider counts, not raw HTTP evidence.
+
+Source files:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/domain/event.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/domain/response-to-prompt.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-turn-response.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/extensions/node_modules/@effect/ai-openai/src/OpenAiLanguageModel.ts` (normalization boundary)
+
+Evidence:
+
+- `/tmp/gent-cache-usage-gate.log`
+- `/tmp/gent-cache-usage-herdr-preview.txt`
+- `/tmp/gent-cache-usage-herdr-second-turn.txt`
+- `/tmp/gent-cache-usage-herdr-full.txt`
+- `/tmp/gent-cache-usage-live-counts.json`
+- `/tmp/gent-cache-usage-check/state/data.db`
+
+Session: `01a08419-8626-741f-bc8d-1e2f354d6658`. Total input counts: 7,297; 7,356; 7,390; 7,441. Total output counts: 442; 9; 25; 9.

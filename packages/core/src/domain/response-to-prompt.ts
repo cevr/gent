@@ -17,7 +17,18 @@ export const responseUsage = (usage: Response.FinishPart["usage"]): Option.Optio
     outputTokens < 0
   )
     return Option.none()
-  return Option.some({ inputTokens, outputTokens })
+  const cacheReadTokens = Option.fromUndefinedOr(usage.inputTokens.cacheRead).pipe(
+    Option.filter((count) => Number.isSafeInteger(count) && count >= 0),
+  )
+  const cacheWriteTokens = Option.fromUndefinedOr(usage.inputTokens.cacheWrite).pipe(
+    Option.filter((count) => Number.isSafeInteger(count) && count >= 0),
+  )
+  return Option.some({
+    inputTokens,
+    outputTokens,
+    cacheReadTokens: Option.getOrUndefined(cacheReadTokens),
+    cacheWriteTokens: Option.getOrUndefined(cacheWriteTokens),
+  })
 }
 
 export interface MessagePartProjection {

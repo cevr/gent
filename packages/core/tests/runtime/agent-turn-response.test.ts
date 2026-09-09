@@ -17,7 +17,7 @@ import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids
 import type { TurnError } from "../../src/domain/driver"
 import { ProviderError } from "../../src/domain/provider-error"
 import { finishPart, textDeltaPart } from "../../src/test-utils/language-model"
-import type { AgentEvent } from "../../src/domain/event"
+import { UsageSchema, type AgentEvent } from "../../src/domain/event"
 import { EventPublisher } from "../../src/domain/event-publisher"
 
 const sessionId = SessionId.make("collector-session")
@@ -80,6 +80,54 @@ describe("agent turn response collectors", () => {
 
     expect(collected.messageProjection.assistant.map((part) => part.type)).toEqual(["text"])
     expect(collected.messageProjection.usage).toEqual({ inputTokens: 3, outputTokens: 5 })
+  })
+
+  test("cache counts survive response projection and durable usage encoding", () => {
+    const finish = Schema.decodeUnknownSync(Response.FinishPart)(
+      finishPart({ finishReason: "stop", usage: { inputTokens: 100, outputTokens: 5 } }),
+    )
+    const collected = collectNormalizedResponse({
+      responseParts: [
+        Response.makePart("finish", {
+          ...finish,
+          usage: new Response.Usage({
+            ...finish.usage,
+            inputTokens: { ...finish.usage.inputTokens, cacheRead: 80, cacheWrite: 0 },
+          }),
+        }),
+      ],
+      streamFailed: false,
+      interrupted: false,
+      driverKind: "model",
+    })
+    const codec = Schema.fromJsonString(UsageSchema)
+    const encoded = Schema.encodeSync(codec)(
+      Option.getOrThrow(Option.fromUndefinedOr(collected.messageProjection.usage)),
+    )
+    expect(Schema.decodeSync(codec)(encoded)).toEqual({
+      inputTokens: 100,
+      outputTokens: 5,
+      cacheReadTokens: 80,
+      cacheWriteTokens: 0,
+    })
+  })
+
+  test("invalid cache counts stay unknown without discarding valid token totals", () => {
+    const usage = Schema.decodeUnknownSync(Response.FinishPart)(
+      finishPart({ finishReason: "stop", usage: { inputTokens: 100, outputTokens: 5 } }),
+    ).usage
+    for (const count of [Option.getOrUndefined(Option.none<number>()), -1, 1.5, Number.NaN]) {
+      expect(
+        responseUsage({
+          ...usage,
+          inputTokens: { ...usage.inputTokens, cacheRead: count, cacheWrite: count },
+        }),
+      ).toEqual(Option.some({ inputTokens: 100, outputTokens: 5 }))
+    }
+    expect(Schema.decodeSync(UsageSchema)({ inputTokens: 100, outputTokens: 5 })).toEqual({
+      inputTokens: 100,
+      outputTokens: 5,
+    })
   })
 
   test("stream error formatting accepts errors message objects and primitives", () => {

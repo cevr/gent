@@ -34,6 +34,8 @@ import { makeCursorReplayStream, makeSessionPubSubRegistry } from "./session-pub
 export const UsageSchema = Schema.Struct({
   inputTokens: Schema.Finite,
   outputTokens: Schema.Finite,
+  cacheReadTokens: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  cacheWriteTokens: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 })
 export type Usage = typeof UsageSchema.Type
 
