@@ -232,10 +232,38 @@ Source files:
 - `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/approval-service.ts`
 - `/Users/cvr/Developer/personal/gent/packages/core/src/domain/interaction-request.ts`
 
+## Saved-plan reset, restart, and fork acceptance
+
+Live Herdr wrote a 900,000-byte plan through the atomic write tool. A later cell used reset and observed `typeof scratchResetProbe` as undefined. The saved namespace was empty, while the file still contained all 45,000 marker lines. After process exit and session reopen, empty `/plan` read the same file and showed a bounded preview with a truncation notice.
+
+The test then forked from the earlier final answer, before the plan write. Empty `/plan` on the new branch reported its own file missing. It did not adopt the parent plan. The parent file remained byte-for-byte unchanged. Source inspection confirms that `forkSessionBranch` copies messages and creates a new branch id; it does not copy namespace rows or result files.
+
+The initial 2 MB host-call probe exceeded the existing 1 MiB transport frame limit. The corrected 900,000-byte probe fits that frame and exceeds both snapshot limits (256 KiB per binding and 768 KiB total). The transport limit was retained. This test does not claim unbounded host-call payloads.
+
+Evidence:
+
+- `/tmp/gent-saved-plan-reset.txt`
+- `/tmp/gent-saved-plan-reset-transcript.txt`
+- `/tmp/gent-saved-plan-reset-files.txt`
+- `/tmp/gent-saved-plan-cold-read.txt`
+- `/tmp/gent-saved-plan-fork.txt`
+- `/tmp/gent-saved-plan-fork-files.txt`
+
+Source files:
+
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/code-cell/cell-protocol.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/code-cell/cell-snapshot.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/code-cell/cell-execution.ts`
+- `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-mutations-live.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/workflows.ts`
+- `/Users/cvr/Developer/personal/gent/packages/extensions/src/fs-tools/write.ts`
+
 ## Remaining work
 
-1. Verify saved-file recovery and branch isolation in the final acceptance run.
-2. Complete the source review and requirement audit.
-3. After this goal, research a smaller fully extensible core. Examine removal of core-internal, fewer files and concepts, and extensions over the actor-owned core loop.
+The source review and requirement audit found no further change needed for these five removals. The review covered the implementation, removed registrations and consumers, storage recovery scope, tests, and documentation. The two defects found by live checks are fixed: session activity after handoff and pending approvals after restart. Their receipts appear above.
 
-Run the full gate and live Herdr checks for each logical commit. Complete review and the final goal audit before integration.
+The final end-to-end run after the approval fix passed both tasks: 26 TUI tests and 36 runtime/transport tests. Evidence: `/tmp/gent-deletions-final-e2e.log`. The full gate passed for each logical code commit. The final audit also checked `git diff --check` and searched active app/package source for removed artifact tools, repository/principles registrations, skill wrappers, and es-git. No references remained.
+
+The host retains operation receipts, approval decisions, actor ownership, child/process lifetimes, file locks, and edit checks. The existing focused host tests passed (eight tests, 154 assertions). Saved files carry final workflow output. Kernel values carry working data. No replacement artifact catalog, RPC, or actor was added.
+
+Next: integrate and push the verified commits, restore the warm-source binary, and remove the Rift. Then research a smaller fully extensible core. Examine removal of core-internal, fewer files and concepts, and extensions over the actor-owned core loop. This next study does not authorize an unreviewed core rewrite.
