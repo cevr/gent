@@ -106,9 +106,8 @@ Ranked by lines removed per unit of risk:
    (2,864) + profile compilation (1,371) is ~4,200 lines serving a small
    number of genuinely long-lived resources. Anything rebuildable per turn
    should be, following exo.
-2. **Collapse the duplicated provider credential machinery** (~2,900 lines
-   across anthropic + openai, structurally parallel) into one generic
-   service. Pure duplication, low risk.
+2. ~~Collapse the duplicated provider credential machinery.~~ **Withdrawn
+   after reading both.** See "Provider credentials are not duplication" below.
 3. **Trim host tools that a Bun cell does better.** `glob` is done. Each
    removal takes a tool file, a TUI renderer, a test, and a catalog line.
 4. **Consolidate `runtime/agent`'s 34 files** — but as _modules_, never
@@ -156,3 +155,37 @@ semantics. They need a process-lifetime scope and a start hook.
 change; the resource graph is also what the `resource-graph-rpc` surface and
 its storage (`resource-graph-storage.ts`, 679 lines) report on. The next step
 is to establish what observable behavior would be lost, not to start cutting.
+
+## Provider credentials are not duplication — withdrawing that candidate
+
+The reduction survey flagged anthropic + openai credential code (~2,900
+lines) as parallel duplication, on the evidence that both expose
+`CredentialCacheCell`, `CredentialServiceApi`, `CredentialIO`, and
+`CredentialService`. Reading the bodies, that was wrong.
+
+The **API shapes** rhyme. The **implementations solve different problems**:
+
+- **Anthropic** reads credentials Claude Code already owns: it spawns
+  `security` against the macOS keychain (`anthropic/oauth/keychain.ts:19`,
+  `:61`), with a credentials-file fallback (`credentials-file.ts`) and a CLI
+  fallback (`keychain.ts:95`). There is no authorization flow — gent is a
+  reader of someone else's credentials.
+- **OpenAI** runs a full OAuth flow it owns: authorization and device
+  variants, a local callback, token exchange and refresh
+  (`openai/oauth.ts:472`, `:543`, `:713`, `:742`, `:765`).
+
+The cache state machines differ too. Anthropic's is
+cache-hit / read / refresh / persist. OpenAI's adds `durableCell` vs
+`pendingPersistCell`, an `invalidated` flag, and retry of a pending persist
+(`openai/credential-service.ts:71`, `:82`, `:255`, `:320`, `:351`) — a
+**superset**, because its write-back can fail independently of its refresh.
+
+Extracting a shared service would force Anthropic's simpler path through
+OpenAI's larger state machine, adding a coupling that must then be understood
+by anyone touching either. That trades ~200 lines of similar-looking
+scaffolding for a worse abstraction. The remaining bulk — keychain spawning,
+OAuth flows, request transforms — is irreducibly provider-specific.
+
+**Correction recorded rather than quietly dropped**: the earlier claim came
+from comparing exported symbol names, not implementations. Symbol-shape
+similarity is not duplication.
