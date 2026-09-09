@@ -27,6 +27,11 @@
  *   architectural allow comment. Compiled-binary safety.
  * - no-make-unsafe: bans `.makeUnsafe(...)` constructors; model validation
  *   and allocation through Effectful/Option-returning APIs instead.
+ * - no-die-in-test-helpers: bans `Effect.die`/`dieMessage` in test code when the
+ *   message describes a *timeout*. A timeout is an expected outcome, so dying
+ *   on it escapes as "Unhandled error between tests" attributed to no test.
+ *   Dying on a genuine impossible state (missing fixture, out-of-range index)
+ *   stays allowed — that really is a defect.
  * - no-hand-rolled-tagged-union: bans inline `{ _tag: "X"; ... } | { _tag: "Y"; ... }`
  *   type literals; require `Schema.TaggedUnion` / `Schema.TaggedStruct` /
  *   `Schema.TaggedErrorClass` instead.
@@ -1418,6 +1423,92 @@ const plugin: Plugin = {
      * inside `tests/`, `helpers-boundary.ts`). The rule does NOT apply to
      * product code — production retries/timeouts/debounces are unaffected.
      */
+    "no-die-in-test-helpers": {
+      create(context) {
+        // Match on the message text the call carries. A structural test is not
+        // available here — whether a die is a timeout is a statement about
+        // intent, and the message is where that intent is written down.
+        const TIMEOUT_TEXT = /tim(?:ed|e)\s*out|timeout|waiting for|gave up/i
+        const mentionsTimeout = (node: AstNode): boolean => {
+          let found = false
+          walkAst(node, (inner) => {
+            if (found) return
+            if (inner.type === "Literal") {
+              const raw = getStringField(inner, "raw")
+              if (raw !== undefined && TIMEOUT_TEXT.test(raw)) found = true
+              return
+            }
+            if (inner.type === "TemplateElement") {
+              // The text sits under `value: { cooked, raw }` — a bare record
+              // with no `type`, so it is not reachable via `getNodeField`.
+              const value = inner["value"]
+              if (!isRecord(value)) return
+              const cooked = value["cooked"]
+              const raw = value["raw"]
+              const text = typeof cooked === "string" ? cooked : raw
+              if (typeof text === "string" && TIMEOUT_TEXT.test(text)) found = true
+            }
+          })
+          return found
+        }
+
+        const filename = context.filename
+        if (!isTestFilename(filename) && !isTestBoundaryFilename(filename)) {
+          const inTestsTree = /\/tests\//.test(filename)
+          const inIntegrationTree = /\/integration\//.test(filename)
+          const inTestUtils = /\/test-utils\//.test(filename)
+          if (!inTestsTree && !inIntegrationTree && !inTestUtils) return {}
+        }
+
+        const getComments = (): ReadonlyArray<AstNode> => {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- oxlint plugin context exposes sourceCode outside public types
+          const ctx = context as unknown as {
+            sourceCode?: { getAllComments?: () => ReadonlyArray<unknown> }
+          }
+          const getAll = ctx.sourceCode?.getAllComments
+          if (typeof getAll !== "function") return []
+          return getAll.call(ctx.sourceCode).filter(isAstNode)
+        }
+
+        const hasAllowComment = (node: AstNode): boolean => {
+          const startLine = getLocLine(node, "start")
+          if (startLine === undefined) return false
+          return getComments().some((comment) => {
+            const endLine = getLocLine(comment, "end")
+            if (endLine === undefined) return false
+            if (endLine !== startLine - 1 && endLine !== startLine) return false
+            const value = getStringField(comment, "value")
+            return value !== undefined && /\bgent\/no-die-in-test-helpers:\s*allow\s+\S/.test(value)
+          })
+        }
+
+        return {
+          CallExpression(node) {
+            if (!isAstNode(node)) return
+            const callee = getNodeField(node, "callee")
+            if (callee?.type !== "MemberExpression") return
+            const prop = getNodeField(callee, "property")
+            if (prop?.type !== "Identifier") return
+            const method = getStringField(prop, "name")
+            if (method !== "die" && method !== "dieMessage") return
+            const obj = getNodeField(callee, "object")
+            if (obj?.type !== "Identifier") return
+            if (getStringField(obj, "name") !== "Effect") return
+            // Only *timeouts* are the bug. `Effect.die` for an impossible state
+            // — a lookup that must succeed, an out-of-range index — is correct:
+            // that really is a defect, and dying names it as one. A timeout is
+            // an expected outcome, so dying on it drops the diagnostic and
+            // detaches the failure from the test that caused it.
+            if (!mentionsTimeout(node)) return
+            if (hasAllowComment(node)) return
+            context.report({
+              message: `\`Effect.${method}(...)\` in test code — a defect escapes the failing assertion and surfaces as "Unhandled error between tests", attributed to no test in particular. Fail with a typed error instead (\`Schema.TaggedError\`, then \`yield* new MyError({...})\`) so the timeout or precondition failure lands on the test that caused it. If this site genuinely models an unrecoverable defect, add \`// gent/no-die-in-test-helpers: allow <reason>\` on the line directly above the call.`,
+              node,
+            })
+          },
+        }
+      },
+    },
     "no-sleep": {
       create(context) {
         const filename = context.filename

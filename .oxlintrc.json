@@ -37,6 +37,9 @@
     "gent/no-hand-rolled-tagged-union": "error",
     // Custom — .sleep(...) banned in tests; carve out with `// gent/no-sleep: allow <reason>`
     "gent/no-sleep": "error",
+    // Custom — Effect.die in test code escapes as an unattributed defect;
+    // carve out with `// gent/no-die-in-test-helpers: allow <reason>`
+    "gent/no-die-in-test-helpers": "error",
     // Custom — no `withX(innerCall(...))`; pipe the inner call through the adapter
     "gent/no-with-wrapper-call": "error",
 

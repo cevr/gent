@@ -183,6 +183,13 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 5,
   },
   {
+    rule: "gent/no-die-in-test-helpers",
+    invalid: "no-die-in-test-helpers.invalid.test.ts",
+    valid: "no-die-in-test-helpers.valid.test.ts",
+    // 3 unguarded Effect.die/dieMessage + 1 malformed-carveout die
+    expectedCount: 4,
+  },
+  {
     rule: "gent/no-with-wrapper-call",
     invalid: "no-with-wrapper-call.invalid.ts",
     valid: "no-with-wrapper-call.valid.ts",

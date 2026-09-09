@@ -21,6 +21,7 @@
     "gent/no-bun-outside-adapter": "error",
     "gent/no-hand-rolled-tagged-union": "error",
     "gent/no-sleep": "error",
+    "gent/no-die-in-test-helpers": "error",
     "gent/no-with-wrapper-call": "error"
   }
 }
