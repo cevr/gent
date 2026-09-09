@@ -1,4 +1,3 @@
-import type { DispatchingToolStorage } from "../code-cell/dispatching-tool-storage.js"
 import type { Context } from "effect"
 import { Effect } from "effect"
 import type { SqlClient } from "effect/unstable/sql"
@@ -22,7 +21,6 @@ export type AgentLoopRuntimeServices =
   | ModelRegistry
   | ToolRunner
   | EventPublisher
-  | DispatchingToolStorage
   | InteractionStorage
 
 export type AgentLoopRuntimeContext = Context.Context<AgentLoopRuntimeServices>

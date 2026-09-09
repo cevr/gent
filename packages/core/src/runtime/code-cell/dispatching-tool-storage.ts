@@ -1,10 +1,10 @@
 /**
- * The storage tags a dispatching tool needs carried through the loop context.
+ * The storage tags the cell needs, as one name.
  *
- * A dispatching tool runs other tools inside itself, so its storage has to
- * travel with the turn. Core's requirement unions name this alias rather than
- * the tags behind it, so adding, splitting, or removing one of them never
- * edits core.
+ * The cell runs other tools inside itself, so all three tables travel with the
+ * turn together. Core does not name them: it carries whatever the branch tool
+ * layer builds, so adding, splitting, or removing one of these never edits
+ * core.
  */
 
 import type { CellExecutionStorage } from "./cell-execution-storage.js"

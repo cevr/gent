@@ -6,6 +6,7 @@ import {
   findExtensionsPublicExportFindings,
   findSdkPublicExportFindings,
 } from "./core-public-exports"
+import { findCoreFeatureIndependenceFindings } from "./core-feature-independence"
 import { findPlatformDuplicationViolations } from "./platform-duplication-guards"
 import { findSuppressionInventoryFindings } from "./suppression-inventory"
 
@@ -57,6 +58,10 @@ const program = Effect.gen(function* () {
 
     if (/\.[cm]?[jt]sx?$/.test(file)) {
       for (const finding of findPlatformDuplicationViolations(file, text)) {
+        pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
+      }
+
+      for (const finding of findCoreFeatureIndependenceFindings(file, text)) {
         pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
       }
     }

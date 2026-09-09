@@ -8,7 +8,6 @@
  * @module
  */
 
-import type { DispatchingToolStorage } from "../code-cell/dispatching-tool-storage.js"
 import {
   Cause,
   Context,
@@ -230,7 +229,6 @@ export const makeAgentLoopBehavior = (
   | EventStorage
   | SessionOperationStorage
   | ToolCallBindingStorage
-  | DispatchingToolStorage
   | InteractionStorage
   | SqlClient.SqlClient
   | ModelResolver
