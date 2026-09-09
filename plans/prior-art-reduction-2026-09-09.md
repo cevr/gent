@@ -189,3 +189,38 @@ OAuth flows, request transforms — is irreducibly provider-specific.
 **Correction recorded rather than quietly dropped**: the earlier claim came
 from comparing exported symbol names, not implementations. Symbol-shape
 similarity is not duplication.
+
+## Candidates tested and rejected
+
+Three apparent collapses were checked against the code. Two did not survive;
+recording them so they are not re-proposed.
+
+**`Submit` / `SubmitDurable` — rejected.** The two actor handlers have
+byte-identical bodies (`agent-loop.handlers.ts:836-846`, both
+`submitTurn(operation).pipe(provideActorWorkspace)`), which looks like pure
+duplication. It is not: the protocol entry for `SubmitDurable` carries
+`persisted: true` (`agent-loop.protocol.ts:285`), so the actor framework
+writes the operation to durable storage for restart recovery. The handler is
+the same because the _behavior_ is the same; the delivery guarantee differs.
+`session-runtime.ts:502-506` picks between them on `completion === "admission"`.
+The duplication is in the declaration, and that is where it belongs.
+
+**Ephemeral vs durable agent runners — rejected.** `agent-runner.durable.ts`
+(492) and `agent-runner.ephemeral.ts` (397) look like two implementations of
+one thing. Both are live: `agent-runner.ts:201` branches on
+`persistence === "ephemeral"`, and two shipped extensions request it —
+`btw/index.ts:161` and `session-tools/read-session.ts:144` — to run a child
+without creating durable session rows. Removing either removes a capability.
+
+**Provider credentials — rejected**, see the section above.
+
+**What survived: the resource host.** Of the four large candidates, only the
+resource-host audit held up, and it held up strongly: 2,864 + ~1,371 lines
+serving two genuinely long-lived resources.
+
+### Method note
+
+Two of three rejections came from comparing _names and shapes_ rather than
+reading implementations. Symbol-level similarity is a hypothesis, not
+evidence. For the remaining candidates, read the bodies and find a live call
+site before proposing removal.
