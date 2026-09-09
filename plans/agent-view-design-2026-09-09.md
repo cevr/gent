@@ -183,3 +183,29 @@ writes — comes back at depth 1 under its parent at depth 0.
 
 Verified live in a real TUI: palette entry, three real sessions with sections
 and agent names, filter to empty, backspace to restore, escape to close.
+
+## Step 5 outcome (landed `4cf131e2`) — the plan is complete
+
+Subagent nesting needed **no new code**. `agent-runner.durable.ts:238` already
+writes `parentSessionId`/`parentBranchId` for every delegated child, which is
+exactly what the projection reads. Verified with a real delegate run: the child
+renders indented under its parent with `└─`, carrying its prompt-derived name.
+
+The live run also found two defects the gate had passed:
+
+1. **Every resident loop reported `running`.** The capability hardcoded
+   `status: "Running"`, so a finished subagent stayed running forever and the
+   `idle` section was unreachable. Fixed by making status `Option` and treating
+   an unread status as idle — being resident is not being busy. Reading real
+   per-loop state remains off the table; it is the fan-out this capability
+   exists to avoid.
+2. **Rows wrapped.** The truncation budget missed 1 column: chrome costs 5
+   (2 border, 2 body padding, 1 row padding), not 4.
+
+Both were invisible to typecheck, lint, and 33 passing tests. The lesson is the
+standing one — run the thing.
+
+## Status: closed
+
+All five steps landed. Server half, client half, nesting, and the pure
+projection with 33 tests. The row unit is `(sessionId, branchId)` as designed.
