@@ -137,7 +137,7 @@ describe("compileToolPolicy", () => {
   test("extension projection include adds tools when they are allowed", () => {
     const agent = AgentDefinition.make({
       name: AgentName.make("cowork"),
-      allowedTools: ["read", "grep", "glob", "lookup"],
+      allowedTools: ["read", "grep", "lookup"],
     })
     const projections = [{ toolPolicy: { include: ["bash"] } }]
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, projections)

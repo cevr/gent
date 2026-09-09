@@ -22,7 +22,6 @@ import { BtwExtension } from "./btw/index.js"
 import { ReadTool } from "./fs-tools/read.js"
 import { WriteTool } from "./fs-tools/write.js"
 import { EditTool } from "./fs-tools/edit.js"
-import { GlobTool } from "./fs-tools/glob.js"
 import { GrepTool } from "./fs-tools/grep.js"
 import { WebFetchTool } from "./network-tools/webfetch.js"
 import { WebSearchTool } from "./network-tools/websearch.js"
@@ -64,7 +63,7 @@ export const FsToolsExtension = defineExtension({
   id: "@gent/fs-tools",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("tool", ReadTool, WriteTool, EditTool, GlobTool, GrepTool)
+    yield* host.register("tool", ReadTool, WriteTool, EditTool, GrepTool)
   }),
 })
 

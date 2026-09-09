@@ -23,7 +23,7 @@ describe("run spec CLI serialization", () => {
       persistence: "ephemeral",
       overrides: {
         modelId: ModelId.make("anthropic/claude-sonnet-4-6"),
-        allowedTools: ["grep", "glob", "read"],
+        allowedTools: ["grep", "read"],
         deniedTools: ["bash"],
         reasoningEffort: "high",
         systemPromptAddendum: "Be concise.",

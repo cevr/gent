@@ -64,7 +64,7 @@ export const buildTurnPromptSections = (
   // Tool guidelines — collected from active tools + conditional rules
   const guidelines = toolsWithMetadata.flatMap((tool) => tool.metadata.promptGuidelines ?? [])
   const hasBash = toolsWithMetadata.some((tool) => tool.id === "bash")
-  const dedicatedNames = ["grep", "glob", "read"].filter((name) =>
+  const dedicatedNames = ["grep", "read"].filter((name) =>
     toolsWithMetadata.some((tool) => tool.id === name),
   )
   if (hasBash && dedicatedNames.length > 0) {

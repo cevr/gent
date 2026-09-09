@@ -5,7 +5,6 @@ export { BashToolRenderer } from "./bash"
 export { CellToolRenderer } from "./cell"
 export { WriteToolRenderer } from "./write"
 export { GrepToolRenderer } from "./grep"
-export { GlobToolRenderer } from "./glob"
 export { WebfetchToolRenderer } from "./webfetch"
 export { SubagentToolRenderer } from "./subagent"
 export { SearchSessionsToolRenderer } from "./search-sessions"
@@ -28,7 +27,6 @@ import { BashToolRenderer } from "./bash"
 import { CellToolRenderer } from "./cell"
 import { WriteToolRenderer } from "./write"
 import { GrepToolRenderer } from "./grep"
-import { GlobToolRenderer } from "./glob"
 import { WebfetchToolRenderer } from "./webfetch"
 import { SubagentToolRenderer } from "./subagent"
 import { SearchSessionsToolRenderer } from "./search-sessions"
@@ -42,7 +40,6 @@ export const BUILTIN_TOOL_RENDERERS: ReadonlyArray<BuiltinToolRendererEntry> = [
   { toolNames: ["cell"], component: CellToolRenderer, headless: CellHeadlessToolRenderer },
   { toolNames: ["write"], component: WriteToolRenderer },
   { toolNames: ["grep"], component: GrepToolRenderer },
-  { toolNames: ["glob"], component: GlobToolRenderer },
   { toolNames: ["webfetch"], component: WebfetchToolRenderer },
   { toolNames: ["delegate"], component: SubagentToolRenderer },
   {

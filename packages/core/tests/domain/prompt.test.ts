@@ -241,11 +241,10 @@ describe("turn prompt composition", () => {
     const tools = [
       makeTool("bash", { description: "Run" }),
       makeTool("grep", { description: "Search" }),
-      makeTool("glob", { description: "Find" }),
       makeTool("read", { description: "Read" }),
     ]
     const result = buildTurnPrompt(baseSections, agent, tools)
-    expect(result).toContain("Prefer grep/glob/read over bash")
+    expect(result).toContain("Prefer grep/read over bash")
   })
 
   test("omits prefer-dedicated-tools guideline when only bash active", () => {
