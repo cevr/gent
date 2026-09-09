@@ -108,6 +108,7 @@ const baseDeps = (overrides: {
     queueFollowUp: die("queueFollowUp"),
     dequeueFollowUp: die("dequeueFollowUp"),
   },
+  activeLoops: { list: die("listActiveLoops")() },
 })
 
 describe("host facet survivors after C9.5 prune", () => {

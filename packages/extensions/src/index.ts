@@ -11,6 +11,7 @@ import { BuiltinArtifactIdentity } from "./artifact-identity.js"
 import { ExecToolsExtension } from "./exec-tools/index.js"
 import { DelegateExtension } from "./delegate/delegate-tool.js"
 import { AgentsExtension } from "./agents.js"
+import { AgentsViewExtension } from "./agents-view/index.js"
 import { AnthropicExtension } from "./anthropic/index.js"
 import { OpenAIExtension } from "./openai/index.js"
 import { GoogleExtension, MistralExtension } from "./openai-compatible-driver.js"
@@ -108,6 +109,7 @@ export {
   HandoffExtension,
   GoalExtension,
   BtwExtension,
+  AgentsViewExtension,
 }
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
@@ -121,6 +123,7 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   InteractionToolsExtension,
   SessionToolsExtension,
   AgentsExtension,
+  AgentsViewExtension,
   WorkflowsExtension,
   SkillsExtension,
   AnthropicExtension,

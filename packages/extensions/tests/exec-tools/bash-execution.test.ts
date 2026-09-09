@@ -161,6 +161,8 @@ const stubCtx = testToolContext({
     listBranches: Effect.die("listBranches not wired in test"),
     queueFollowUp: dieStub("queueFollowUp"),
     dequeueFollowUp: dieStub("dequeueFollowUp"),
+    listSessions: Effect.die("listSessions not wired in test"),
+    listActiveLoops: Effect.die("listActiveLoops not wired in test"),
   },
   Interaction: {
     approve: () => Effect.succeed({ approved: true }),

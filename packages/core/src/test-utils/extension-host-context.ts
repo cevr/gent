@@ -33,6 +33,8 @@ const defaultSession = (): ExtensionHostContext.SessionFacet => ({
   queueFollowUp: () => die("session.queueFollowUp"),
   dequeueFollowUp: () => die("session.dequeueFollowUp"),
   listBranches: () => die("session.listBranches"),
+  listSessions: () => die("session.listSessions"),
+  listActiveLoops: () => die("session.listActiveLoops"),
 })
 
 const defaultInteraction = (): ExtensionHostContext.Interaction => ({

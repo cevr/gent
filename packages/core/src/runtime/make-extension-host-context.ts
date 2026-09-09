@@ -29,6 +29,9 @@ import { SessionStorage, type SessionStorageService } from "../storage/session-s
 import type { MessageMetadata } from "../domain/message.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import { hasMessage } from "../domain/guards.js"
+import { AgentLoop as AgentLoopActor } from "./agent/agent-loop.protocol.js"
+import { listWorkspaceLoops } from "./agent/agent-loop.entity-id.js"
+import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 export interface ExtensionSessionControlService {
   readonly queueFollowUp: (input: {
@@ -46,6 +49,21 @@ export interface ExtensionSessionControlService {
   }) => Effect.Effect<boolean, Error>
 }
 
+/**
+ * Live loop enumeration for the host context. Separate from `sessionControl`
+ * because the agent-loop behavior provides that one and cannot see
+ * `SessionRuntime` without a cycle; this is supplied at server wiring instead.
+ */
+/** Decoding entity ids is cheap; bound it so a large registry does not stall a host-context build. */
+const ACTIVE_LOOP_DECODE_CONCURRENCY = 8
+
+export interface ExtensionActiveLoopsService {
+  readonly list: Effect.Effect<
+    ReadonlyArray<{ readonly sessionId: SessionId; readonly branchId: BranchId }>,
+    Error
+  >
+}
+
 export interface MakeExtensionHostContextDeps {
   readonly platform: RuntimeEnvironmentApi
   readonly host: ExtensionHostPlatform
@@ -61,6 +79,7 @@ export interface MakeExtensionHostContextDeps {
   readonly agentRunner: AgentRunner
   readonly sessionMutations: SessionMutationsService
   readonly sessionControl: ExtensionSessionControlService
+  readonly activeLoops: ExtensionActiveLoopsService
 }
 
 export interface MakeExtensionHostContextRunInfo {
@@ -104,6 +123,7 @@ type AmbientHostContextDefaults = Pick<
   | "agentRunner"
   | "sessionMutations"
   | "sessionControl"
+  | "activeLoops"
 >
 
 const unavailable = (service: string) => () => Effect.die(`${service} not available`)
@@ -270,6 +290,13 @@ export const HostSessionControlRef = Context.Reference<ExtensionSessionControlSe
   },
 )
 
+export const HostActiveLoopsRef = Context.Reference<ExtensionActiveLoopsService>(
+  "@gent/core/src/runtime/make-extension-host-context/HostActiveLoopsRef",
+  {
+    defaultValue: () => ({ list: unavailable("ActiveLoops")() }),
+  },
+)
+
 export const HostSessionMutationsRef = Context.Reference<SessionMutationsService>(
   "@gent/core/src/runtime/make-extension-host-context/HostSessionMutationsRef",
   {
@@ -300,6 +327,7 @@ const loadAmbientHostContextDefaults: Effect.Effect<AmbientHostContextDefaults> 
   agentRunner: Effect.service(HostAgentRunnerRef),
   sessionMutations: Effect.service(HostSessionMutationsRef),
   sessionControl: Effect.service(HostSessionControlRef),
+  activeLoops: Effect.service(HostActiveLoopsRef),
 })
 type AmbientHostContextOverrides = Partial<AmbientHostContextDefaults>
 
@@ -317,6 +345,10 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
       searchStorage: Effect.serviceOption(SearchStorage),
       agentRunner: Effect.serviceOption(AgentRunnerService),
       sessionMutations: Effect.serviceOption(SessionMutations),
+      // Optional by construction: the actor's state client exists only where the
+      // AgentLoop actor layer is in scope. Where it is absent the facet keeps
+      // its `unavailable` default rather than failing the whole host context.
+      actorState: Effect.serviceOption(AgentLoopActor.State),
     })
 
     const overrides: AmbientHostContextOverrides = {}
@@ -352,6 +384,22 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
     }
     if (available.sessionMutations._tag === "Some") {
       Object.assign(overrides, { sessionMutations: available.sessionMutations.value })
+    }
+    if (available.actorState._tag === "Some") {
+      const actorState = available.actorState.value
+      Object.assign(overrides, {
+        activeLoops: {
+          list: Effect.gen(function* () {
+            const workspaceId = yield* CurrentWorkspaceId
+            const entityIds = yield* actorState.listEntityIds
+            return yield* listWorkspaceLoops({
+              workspaceId,
+              entityIds,
+              concurrency: ACTIVE_LOOP_DECODE_CONCURRENCY,
+            })
+          }),
+        } satisfies ExtensionActiveLoopsService,
+      })
     }
     return overrides
   },
@@ -399,6 +447,9 @@ const provideAmbientHostContextOverrides =
     if (!Predicate.isUndefined(overrides.sessionControl)) {
       next = next.pipe(Effect.provideService(HostSessionControlRef, overrides.sessionControl))
     }
+    if (!Predicate.isUndefined(overrides.activeLoops)) {
+      next = next.pipe(Effect.provideService(HostActiveLoopsRef, overrides.activeLoops))
+    }
     return next
   }
 
@@ -433,6 +484,7 @@ const makeAmbientExtensionHostContextDeps = (
       agentRunner: defaults.agentRunner,
       sessionMutations: defaults.sessionMutations,
       sessionControl: defaults.sessionControl,
+      activeLoops: defaults.activeLoops,
     }
   })
 
@@ -566,6 +618,12 @@ const makeExtensionHostContext = (
         deps.branchStorage
           .listBranches(runInfo.sessionId)
           .pipe(Effect.mapError(toHostError("session.listBranches"))),
+
+      listSessions: () =>
+        deps.sessionStorage.listSessions.pipe(Effect.mapError(toHostError("session.listSessions"))),
+
+      listActiveLoops: () =>
+        deps.activeLoops.list.pipe(Effect.mapError(toHostError("session.listActiveLoops"))),
     },
 
     interaction: {

@@ -113,6 +113,21 @@ export interface ExtensionSessionService {
     readonly branchId?: BranchId
   }) => Effect.Effect<boolean, ExtensionServiceError>
   readonly listBranches: Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
+  /**
+   * Every session in the workspace. The durable half of an agent catalog:
+   * survives restarts, but says nothing about what is running now.
+   */
+  readonly listSessions: Effect.Effect<ReadonlyArray<Session>, ExtensionServiceError>
+  /**
+   * Loops materialized right now. The live half of an agent catalog: carries
+   * status, but is empty after a restart and omits idle or evicted branches.
+   * Merge against `listSessions` to see every agent rather than only the
+   * running ones.
+   */
+  readonly listActiveLoops: Effect.Effect<
+    ReadonlyArray<{ readonly sessionId: SessionId; readonly branchId: BranchId }>,
+    ExtensionServiceError
+  >
 }
 
 export interface ExtensionAgentService extends Pick<
@@ -304,6 +319,8 @@ export const extensionServicesFromHostContext = (
       dequeueFollowUp: (params) =>
         sessionEffect("dequeueFollowUp", ctx.session.dequeueFollowUp(params)),
       listBranches: sessionEffect("listBranches", ctx.session.listBranches()),
+      listSessions: sessionEffect("listSessions", ctx.session.listSessions()),
+      listActiveLoops: sessionEffect("listActiveLoops", ctx.session.listActiveLoops()),
     }
     const Agent: ExtensionAgentService = {
       listAgents: mapError("ExtensionAgent", "listAgents", ctx.agent.listAgents()),

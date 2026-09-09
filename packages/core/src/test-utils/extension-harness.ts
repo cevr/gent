@@ -134,6 +134,8 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     queueFollowUp: dieStub("session.queueFollowUp"),
     dequeueFollowUp: dieStub("session.dequeueFollowUp"),
     listBranches: dieStub("session.listBranches"),
+    listSessions: dieStub("session.listSessions"),
+    listActiveLoops: dieStub("session.listActiveLoops"),
   }
   const Agent: ExtensionContextService["Agent"] = {
     listAgents: dieEffect("agent.listAgents"),
@@ -152,6 +154,8 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     queueFollowUp: dieStub("session.queueFollowUp"),
     dequeueFollowUp: dieStub("session.dequeueFollowUp"),
     listBranches: dieEffect("session.listBranches"),
+    listSessions: dieEffect("session.listSessions"),
+    listActiveLoops: dieEffect("session.listActiveLoops"),
   }
   const interaction = {
     approve: dieStub("interaction.approve"),

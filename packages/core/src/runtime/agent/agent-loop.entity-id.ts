@@ -117,3 +117,31 @@ const decodeBranchId = (raw: string, entityId: string): Effect.Effect<BranchId, 
         }),
     ),
   )
+
+/**
+ * Enumerate the materialized loops belonging to one workspace.
+ *
+ * The actor registry is keyed by opaque entity id across every workspace, so
+ * reading it means decoding each id and dropping the ones that belong
+ * elsewhere. An id that fails to decode is skipped rather than failing the
+ * enumeration: one malformed key must not make the whole catalog unreadable.
+ *
+ * Lives here rather than in `SessionRuntime` because the agent loop needs the
+ * same enumeration and cannot import `SessionRuntime` — that module builds the
+ * loops, so the dependency would be a cycle.
+ */
+export const listWorkspaceLoops = (input: {
+  readonly workspaceId: WorkspaceId
+  readonly entityIds: ReadonlyArray<string>
+  readonly concurrency: number
+}): Effect.Effect<ReadonlyArray<{ readonly sessionId: SessionId; readonly branchId: BranchId }>> =>
+  Effect.forEach(input.entityIds, (entityId) => parseEntityId(entityId).pipe(Effect.option), {
+    concurrency: input.concurrency,
+  }).pipe(
+    Effect.map((targets) =>
+      targets.flatMap((target) => {
+        if (Option.isNone(target) || target.value.workspaceId !== input.workspaceId) return []
+        return [{ sessionId: target.value.sessionId, branchId: target.value.branchId }]
+      }),
+    ),
+  )

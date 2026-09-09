@@ -39,7 +39,7 @@ import type { MessageStorage } from "../storage/message-storage.js"
 import type { SessionStorage } from "../storage/session-storage.js"
 import type { SessionOperationStorage } from "../storage/session-operation-storage.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
-import { entityIdOf, parseEntityId } from "./agent/agent-loop.entity-id.js"
+import { entityIdOf, listWorkspaceLoops, parseEntityId } from "./agent/agent-loop.entity-id.js"
 import { followUpMessageIdForSource } from "./agent/agent-loop.protocol.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
 import type { ExtensionRegistry } from "./extensions/registry.js"
@@ -723,14 +723,10 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     listActiveLoops: Effect.gen(function* () {
       const workspaceId = yield* CurrentWorkspaceId
       const entityIds = yield* actorState.listEntityIds
-      const targets = yield* Effect.forEach(
+      return yield* listWorkspaceLoops({
+        workspaceId,
         entityIds,
-        (entityId) => parseEntityId(entityId).pipe(Effect.option),
-        { concurrency: SESSION_TERMINATION_CONCURRENCY },
-      )
-      return targets.flatMap((target) => {
-        if (Option.isNone(target) || target.value.workspaceId !== workspaceId) return []
-        return [{ sessionId: target.value.sessionId, branchId: target.value.branchId }]
+        concurrency: SESSION_TERMINATION_CONCURRENCY,
       })
     }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("listActiveLoops failed", cause)))),
 

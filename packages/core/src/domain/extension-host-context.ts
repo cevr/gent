@@ -139,6 +139,13 @@ export declare namespace ExtensionHostContext {
     }) => Effect.Effect<boolean, ExtensionHostError>
 
     readonly listBranches: () => Effect.Effect<ReadonlyArray<Branch>, ExtensionHostError>
+    /** Every session in the workspace — the durable half of an agent catalog. */
+    readonly listSessions: () => Effect.Effect<ReadonlyArray<Session>, ExtensionHostError>
+    /** Loops materialized right now — the live half. Empty after a restart. */
+    readonly listActiveLoops: () => Effect.Effect<
+      ReadonlyArray<{ readonly sessionId: SessionId; readonly branchId: BranchId }>,
+      ExtensionHostError
+    >
   }
 
   interface Interaction {
