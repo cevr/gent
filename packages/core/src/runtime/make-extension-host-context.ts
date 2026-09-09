@@ -5,7 +5,7 @@
  * Single wiring point: ToolRunner and agent-loop both call this.
  */
 
-import { Predicate, Context, Effect } from "effect"
+import { Predicate, Context, Effect, Option } from "effect"
 import { ActorStateRegistry, listStateEntityIds } from "effect-encore"
 import {
   ExtensionHostError,
@@ -144,321 +144,174 @@ const toHostError =
       cause: error,
     })
 
-export const HostPlatformRef = Context.Reference<RuntimeEnvironmentApi>(
-  "@gent/core/src/runtime/make-extension-host-context/HostPlatformRef",
-  {
-    defaultValue: () => ({ cwd: "", home: "", platform: "unknown" }),
-  },
-)
+const unavailablePlatform: RuntimeEnvironmentApi = { cwd: "", home: "", platform: "unknown" }
 
+const unavailableExtensionPlatform: ExtensionHostPlatform = {
+  osInfo: {
+    platform: "unknown",
+    arch: "unknown",
+    release: "unknown",
+    hostname: "unknown",
+    type: "unknown",
+  },
+  execPath: "",
+  homeDirectory: "",
+  parentEnv: {},
+  randomId: Effect.succeed("00000000-0000-4000-8000-000000000000"),
+  pathListSeparator: ":",
+  commandCandidates: (command) => [command],
+  isPortFree: () => Effect.succeed(false),
+  isPidAlive: () => Effect.succeed(false),
+  signalPid: () => Effect.void,
+  runProcess: (command) =>
+    Effect.fail(
+      new ExtensionHostProcessError({
+        command,
+        message: "host.runProcess unavailable",
+      }),
+    ),
+}
+
+/**
+ * The one host facet that is injected rather than yielded.
+ *
+ * `makeExtensionHostPlatform` is an Effect over `GentPlatform`, not a service
+ * Tag, so a caller that has already built one hands it in here. Every other
+ * facet resolves from its own Tag.
+ */
 export const HostExtensionPlatformRef = Context.Reference<ExtensionHostPlatform>(
   "@gent/core/src/runtime/make-extension-host-context/HostExtensionPlatformRef",
-  {
-    defaultValue: () => ({
-      osInfo: {
-        platform: "unknown",
-        arch: "unknown",
-        release: "unknown",
-        hostname: "unknown",
-        type: "unknown",
-      },
-      execPath: "",
-      homeDirectory: "",
-      parentEnv: {},
-      randomId: Effect.succeed("00000000-0000-4000-8000-000000000000"),
-      pathListSeparator: ":",
-      commandCandidates: (command) => [command],
-      isPortFree: () => Effect.succeed(false),
-      isPidAlive: () => Effect.succeed(false),
-      signalPid: () => Effect.void,
-      runProcess: (command) =>
-        Effect.fail(
-          new ExtensionHostProcessError({
-            command,
-            message: "host.runProcess unavailable",
-          }),
-        ),
-    }),
-  },
+  { defaultValue: () => unavailableExtensionPlatform },
 )
 
-export const HostApprovalServiceRef = Context.Reference<ApprovalServiceApi>(
-  "@gent/core/src/runtime/make-extension-host-context/HostApprovalServiceRef",
-  {
-    defaultValue: () => ({
-      present: unavailable("ApprovalService"),
-      pendingRequestId: unavailable("ApprovalService"),
-      storeResolution: unavailable("ApprovalService"),
-      respond: unavailable("ApprovalService"),
-      rehydrate: unavailable("ApprovalService"),
+const unavailableApprovalService: ApprovalServiceApi = {
+  present: unavailable("ApprovalService"),
+  pendingRequestId: unavailable("ApprovalService"),
+  storeResolution: unavailable("ApprovalService"),
+  respond: unavailable("ApprovalService"),
+  rehydrate: unavailable("ApprovalService"),
+}
+
+const unavailablePromptPresenter: PromptPresenterService = {
+  present: unavailable("PromptPresenter"),
+  confirm: unavailable("PromptPresenter"),
+  review: unavailable("PromptPresenter"),
+}
+
+const unavailableSearchStorage: SearchStorageService = {
+  searchMessages: () => Effect.succeed([]),
+}
+
+const unavailableSessionStorage: SessionStorageService = {
+  createSession: unavailable("SessionStorage"),
+  getSession: unavailable("SessionStorage"),
+  getLastSessionByCwd: unavailable("SessionStorage"),
+  listSessions: unavailable("SessionStorage")(),
+  updateSession: unavailable("SessionStorage"),
+  deleteSession: unavailable("SessionStorage"),
+}
+
+const unavailableBranchStorage: BranchStorageService = {
+  createBranch: unavailable("BranchStorage"),
+  getBranch: unavailable("BranchStorage"),
+  listBranches: unavailable("BranchStorage"),
+  deleteBranch: unavailable("BranchStorage"),
+  updateBranchSummary: unavailable("BranchStorage"),
+  countMessages: unavailable("BranchStorage"),
+  countMessagesByBranches: unavailable("BranchStorage"),
+}
+
+const unavailableMessageStorage: MessageStorageService = {
+  createMessage: unavailable("MessageStorage"),
+  createMessageIfAbsent: unavailable("MessageStorage"),
+  getMessage: unavailable("MessageStorage"),
+  listMessages: unavailable("MessageStorage"),
+  deleteMessages: unavailable("MessageStorage"),
+  updateMessageTurnDuration: unavailable("MessageStorage"),
+}
+
+const unavailableRelationshipStorage: RelationshipStorageService = {
+  getChildSessions: unavailable("RelationshipStorage"),
+  getSessionAncestors: unavailable("RelationshipStorage"),
+  getSessionDetail: unavailable("RelationshipStorage"),
+}
+
+const unavailableAgentRunner: AgentRunner = {
+  start: unavailable("AgentRunnerService"),
+  inspect: unavailable("AgentRunnerService"),
+  list: unavailable("AgentRunnerService"),
+  cancel: unavailable("AgentRunnerService"),
+  run: unavailable("AgentRunnerService"),
+}
+const unavailableSessionControl: ExtensionSessionControlService = {
+  queueFollowUp: unavailable("SessionControl"),
+  dequeueFollowUp: unavailable("SessionControl"),
+}
+
+const unavailableActiveLoops: ExtensionActiveLoopsService = { list: unavailable("ActiveLoops")() }
+
+const unavailableSessionMutations: SessionMutationsService = {
+  renameSession: unavailable("SessionMutations"),
+  createSessionBranch: unavailable("SessionMutations"),
+  forkSessionBranch: unavailable("SessionMutations"),
+  switchActiveBranch: unavailable("SessionMutations"),
+  createChildSession: unavailable("SessionMutations"),
+  deleteSession: unavailable("SessionMutations"),
+  deleteBranch: unavailable("SessionMutations"),
+  deleteMessages: unavailable("SessionMutations"),
+  updateReasoningLevel: unavailable("SessionMutations"),
+}
+
+/** The real service if the ambient context carries one, else the `unavailable` stub. */
+const facet = <I, S>(tag: Context.Key<I, S>, absent: S): Effect.Effect<S> =>
+  Effect.serviceOption(tag).pipe(Effect.map(Option.getOrElse(() => absent)))
+
+/**
+ * Enumerating a workspace's loops needs only the actor state registry, and the
+ * registry exists only where an actor layer is in scope. Where it is absent the
+ * facet stays `unavailable` rather than failing the whole host context.
+ *
+ * The registry rather than the actor's own `State` client: depending on the
+ * built actor from here would invert the layer graph the loop is built from.
+ */
+const activeLoopsFacet: Effect.Effect<ExtensionActiveLoopsService> = Effect.serviceOption(
+  ActorStateRegistry,
+).pipe(
+  Effect.map(
+    Option.match({
+      onNone: () => unavailableActiveLoops,
+      onSome: (registry) => ({
+        list: Effect.gen(function* () {
+          const workspaceId = yield* CurrentWorkspaceId
+          const entityIds = yield* listStateEntityIds(AgentLoopActor.name).pipe(
+            Effect.provideService(ActorStateRegistry, registry),
+          )
+          return yield* listWorkspaceLoops({
+            workspaceId,
+            entityIds,
+            concurrency: ACTIVE_LOOP_DECODE_CONCURRENCY,
+          })
+        }),
+      }),
     }),
-  },
+  ),
 )
 
-export const HostPromptPresenterRef = Context.Reference<PromptPresenterService>(
-  "@gent/core/src/runtime/make-extension-host-context/HostPromptPresenterRef",
-  {
-    defaultValue: () => ({
-      present: unavailable("PromptPresenter"),
-      confirm: unavailable("PromptPresenter"),
-      review: unavailable("PromptPresenter"),
-    }),
-  },
-)
-
-export const HostSearchStorageRef = Context.Reference<SearchStorageService>(
-  "@gent/core/src/runtime/make-extension-host-context/HostSearchStorageRef",
-  {
-    defaultValue: () => ({
-      searchMessages: () => Effect.succeed([]),
-    }),
-  },
-)
-
-export const HostSessionStorageRef = Context.Reference<SessionStorageService>(
-  "@gent/core/src/runtime/make-extension-host-context/HostSessionStorageRef",
-  {
-    defaultValue: () => ({
-      createSession: unavailable("SessionStorage"),
-      getSession: unavailable("SessionStorage"),
-      getLastSessionByCwd: unavailable("SessionStorage"),
-      listSessions: unavailable("SessionStorage")(),
-      updateSession: unavailable("SessionStorage"),
-      deleteSession: unavailable("SessionStorage"),
-    }),
-  },
-)
-
-export const HostBranchStorageRef = Context.Reference<BranchStorageService>(
-  "@gent/core/src/runtime/make-extension-host-context/HostBranchStorageRef",
-  {
-    defaultValue: () => ({
-      createBranch: unavailable("BranchStorage"),
-      getBranch: unavailable("BranchStorage"),
-      listBranches: unavailable("BranchStorage"),
-      deleteBranch: unavailable("BranchStorage"),
-      updateBranchSummary: unavailable("BranchStorage"),
-      countMessages: unavailable("BranchStorage"),
-      countMessagesByBranches: unavailable("BranchStorage"),
-    }),
-  },
-)
-
-export const HostMessageStorageRef = Context.Reference<MessageStorageService>(
-  "@gent/core/src/runtime/make-extension-host-context/HostMessageStorageRef",
-  {
-    defaultValue: () => ({
-      createMessage: unavailable("MessageStorage"),
-      createMessageIfAbsent: unavailable("MessageStorage"),
-      getMessage: unavailable("MessageStorage"),
-      listMessages: unavailable("MessageStorage"),
-      deleteMessages: unavailable("MessageStorage"),
-      updateMessageTurnDuration: unavailable("MessageStorage"),
-    }),
-  },
-)
-
-export const HostRelationshipStorageRef = Context.Reference<RelationshipStorageService>(
-  "@gent/core/src/runtime/make-extension-host-context/HostRelationshipStorageRef",
-  {
-    defaultValue: () => ({
-      getChildSessions: unavailable("RelationshipStorage"),
-      getSessionAncestors: unavailable("RelationshipStorage"),
-      getSessionDetail: unavailable("RelationshipStorage"),
-    }),
-  },
-)
-
-export const HostAgentRunnerRef = Context.Reference<AgentRunner>(
-  "@gent/core/src/runtime/make-extension-host-context/HostAgentRunnerRef",
-  {
-    defaultValue: () => ({
-      start: unavailable("AgentRunnerService"),
-      inspect: unavailable("AgentRunnerService"),
-      list: unavailable("AgentRunnerService"),
-      cancel: unavailable("AgentRunnerService"),
-      run: unavailable("AgentRunnerService"),
-    }),
-  },
-)
-export const HostSessionControlRef = Context.Reference<ExtensionSessionControlService>(
-  "@gent/core/src/runtime/make-extension-host-context/HostSessionControlRef",
-  {
-    defaultValue: () => ({
-      queueFollowUp: unavailable("SessionControl"),
-      dequeueFollowUp: unavailable("SessionControl"),
-    }),
-  },
-)
-
-export const HostActiveLoopsRef = Context.Reference<ExtensionActiveLoopsService>(
-  "@gent/core/src/runtime/make-extension-host-context/HostActiveLoopsRef",
-  {
-    defaultValue: () => ({ list: unavailable("ActiveLoops")() }),
-  },
-)
-
-export const HostSessionMutationsRef = Context.Reference<SessionMutationsService>(
-  "@gent/core/src/runtime/make-extension-host-context/HostSessionMutationsRef",
-  {
-    defaultValue: () => ({
-      renameSession: unavailable("SessionMutations"),
-      createSessionBranch: unavailable("SessionMutations"),
-      forkSessionBranch: unavailable("SessionMutations"),
-      switchActiveBranch: unavailable("SessionMutations"),
-      createChildSession: unavailable("SessionMutations"),
-      deleteSession: unavailable("SessionMutations"),
-      deleteBranch: unavailable("SessionMutations"),
-      deleteMessages: unavailable("SessionMutations"),
-      updateReasoningLevel: unavailable("SessionMutations"),
-    }),
-  },
-)
-
-const loadAmbientHostContextDefaults: Effect.Effect<AmbientHostContextDefaults> = Effect.all({
-  platform: Effect.service(HostPlatformRef),
+const resolveAmbientHostContextDefaults: Effect.Effect<AmbientHostContextDefaults> = Effect.all({
+  platform: facet(RuntimeEnvironment, unavailablePlatform),
   host: Effect.service(HostExtensionPlatformRef),
-  approvalService: Effect.service(HostApprovalServiceRef),
-  promptPresenter: Effect.service(HostPromptPresenterRef),
-  sessionStorage: Effect.service(HostSessionStorageRef),
-  branchStorage: Effect.service(HostBranchStorageRef),
-  messageStorage: Effect.service(HostMessageStorageRef),
-  relationshipStorage: Effect.service(HostRelationshipStorageRef),
-  searchStorage: Effect.service(HostSearchStorageRef),
-  agentRunner: Effect.service(HostAgentRunnerRef),
-  sessionMutations: Effect.service(HostSessionMutationsRef),
-  sessionControl: Effect.service(HostSessionControlRef),
-  activeLoops: Effect.service(HostActiveLoopsRef),
+  approvalService: facet(ApprovalService, unavailableApprovalService),
+  promptPresenter: facet(PromptPresenter, unavailablePromptPresenter),
+  sessionStorage: facet(SessionStorage, unavailableSessionStorage),
+  branchStorage: facet(BranchStorage, unavailableBranchStorage),
+  messageStorage: facet(MessageStorage, unavailableMessageStorage),
+  relationshipStorage: facet(RelationshipStorage, unavailableRelationshipStorage),
+  searchStorage: facet(SearchStorage, unavailableSearchStorage),
+  agentRunner: facet(AgentRunnerService, unavailableAgentRunner),
+  sessionMutations: facet(SessionMutations, unavailableSessionMutations),
+  sessionControl: Effect.succeed(unavailableSessionControl),
+  activeLoops: activeLoopsFacet,
 })
-type AmbientHostContextOverrides = Partial<AmbientHostContextDefaults>
-
-const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOverrides> = Effect.gen(
-  function* () {
-    const available = yield* Effect.all({
-      platform: Effect.serviceOption(RuntimeEnvironment),
-      host: Effect.serviceOption(HostExtensionPlatformRef),
-      approvalService: Effect.serviceOption(ApprovalService),
-      promptPresenter: Effect.serviceOption(PromptPresenter),
-      sessionStorage: Effect.serviceOption(SessionStorage),
-      branchStorage: Effect.serviceOption(BranchStorage),
-      messageStorage: Effect.serviceOption(MessageStorage),
-      relationshipStorage: Effect.serviceOption(RelationshipStorage),
-      searchStorage: Effect.serviceOption(SearchStorage),
-      agentRunner: Effect.serviceOption(AgentRunnerService),
-      sessionMutations: Effect.serviceOption(SessionMutations),
-      // Optional by construction: the registry exists only where an actor layer
-      // is in scope. Where it is absent the facet keeps its `unavailable`
-      // default rather than failing the whole host context.
-      //
-      // The registry rather than the actor's own `State` client: enumerating
-      // entities needs only the registry, and depending on the built actor from
-      // here would invert the layer graph the loop is built from.
-      actorState: Effect.serviceOption(ActorStateRegistry),
-    })
-
-    const overrides: AmbientHostContextOverrides = {}
-    if (available.platform._tag === "Some") {
-      Object.assign(overrides, { platform: available.platform.value })
-    }
-    if (available.host._tag === "Some") {
-      Object.assign(overrides, { host: available.host.value })
-    }
-    if (available.approvalService._tag === "Some") {
-      Object.assign(overrides, { approvalService: available.approvalService.value })
-    }
-    if (available.promptPresenter._tag === "Some") {
-      Object.assign(overrides, { promptPresenter: available.promptPresenter.value })
-    }
-    if (available.sessionStorage._tag === "Some") {
-      Object.assign(overrides, { sessionStorage: available.sessionStorage.value })
-    }
-    if (available.branchStorage._tag === "Some") {
-      Object.assign(overrides, { branchStorage: available.branchStorage.value })
-    }
-    if (available.messageStorage._tag === "Some") {
-      Object.assign(overrides, { messageStorage: available.messageStorage.value })
-    }
-    if (available.relationshipStorage._tag === "Some") {
-      Object.assign(overrides, { relationshipStorage: available.relationshipStorage.value })
-    }
-    if (available.searchStorage._tag === "Some") {
-      Object.assign(overrides, { searchStorage: available.searchStorage.value })
-    }
-    if (available.agentRunner._tag === "Some") {
-      Object.assign(overrides, { agentRunner: available.agentRunner.value })
-    }
-    if (available.sessionMutations._tag === "Some") {
-      Object.assign(overrides, { sessionMutations: available.sessionMutations.value })
-    }
-    if (available.actorState._tag === "Some") {
-      const registry = available.actorState.value
-      Object.assign(overrides, {
-        activeLoops: {
-          list: Effect.gen(function* () {
-            const workspaceId = yield* CurrentWorkspaceId
-            const entityIds = yield* listStateEntityIds(AgentLoopActor.name).pipe(
-              Effect.provideService(ActorStateRegistry, registry),
-            )
-            return yield* listWorkspaceLoops({
-              workspaceId,
-              entityIds,
-              concurrency: ACTIVE_LOOP_DECODE_CONCURRENCY,
-            })
-          }),
-        } satisfies ExtensionActiveLoopsService,
-      })
-    }
-    return overrides
-  },
-)
-
-const provideAmbientHostContextOverrides =
-  (overrides: AmbientHostContextOverrides) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> => {
-    let next = effect
-    if (!Predicate.isUndefined(overrides.platform)) {
-      next = next.pipe(Effect.provideService(HostPlatformRef, overrides.platform))
-    }
-    if (!Predicate.isUndefined(overrides.host)) {
-      next = next.pipe(Effect.provideService(HostExtensionPlatformRef, overrides.host))
-    }
-    if (!Predicate.isUndefined(overrides.approvalService)) {
-      next = next.pipe(Effect.provideService(HostApprovalServiceRef, overrides.approvalService))
-    }
-    if (!Predicate.isUndefined(overrides.promptPresenter)) {
-      next = next.pipe(Effect.provideService(HostPromptPresenterRef, overrides.promptPresenter))
-    }
-    if (!Predicate.isUndefined(overrides.sessionStorage)) {
-      next = next.pipe(Effect.provideService(HostSessionStorageRef, overrides.sessionStorage))
-    }
-    if (!Predicate.isUndefined(overrides.branchStorage)) {
-      next = next.pipe(Effect.provideService(HostBranchStorageRef, overrides.branchStorage))
-    }
-    if (!Predicate.isUndefined(overrides.messageStorage)) {
-      next = next.pipe(Effect.provideService(HostMessageStorageRef, overrides.messageStorage))
-    }
-    if (!Predicate.isUndefined(overrides.relationshipStorage)) {
-      next = next.pipe(
-        Effect.provideService(HostRelationshipStorageRef, overrides.relationshipStorage),
-      )
-    }
-    if (!Predicate.isUndefined(overrides.searchStorage)) {
-      next = next.pipe(Effect.provideService(HostSearchStorageRef, overrides.searchStorage))
-    }
-    if (!Predicate.isUndefined(overrides.agentRunner)) {
-      next = next.pipe(Effect.provideService(HostAgentRunnerRef, overrides.agentRunner))
-    }
-    if (!Predicate.isUndefined(overrides.sessionMutations)) {
-      next = next.pipe(Effect.provideService(HostSessionMutationsRef, overrides.sessionMutations))
-    }
-    if (!Predicate.isUndefined(overrides.sessionControl)) {
-      next = next.pipe(Effect.provideService(HostSessionControlRef, overrides.sessionControl))
-    }
-    if (!Predicate.isUndefined(overrides.activeLoops)) {
-      next = next.pipe(Effect.provideService(HostActiveLoopsRef, overrides.activeLoops))
-    }
-    return next
-  }
 
 export interface MakeAmbientExtensionHostContextDepsInput {
   readonly extensionRegistry: ExtensionRegistryService
@@ -470,12 +323,11 @@ const makeAmbientExtensionHostContextDeps = (
   input: MakeAmbientExtensionHostContextDepsInput,
 ): Effect.Effect<MakeExtensionHostContextDeps> =>
   Effect.gen(function* () {
-    const defaults = yield* loadAmbientHostContextDefaults.pipe(
-      provideAmbientHostContextOverrides({
-        ...(yield* availableAmbientHostContextOverrides),
-        ...input.overrides,
-      }),
-    )
+    const resolved = yield* resolveAmbientHostContextDefaults
+    // A caller that already holds a facet wins over what the ambient context
+    // resolves: this is how a test substitutes one storage without building a
+    // whole layer graph around it.
+    const defaults: AmbientHostContextDefaults = { ...resolved, ...input.overrides }
     return {
       platform: defaults.platform,
       host: defaults.host,
