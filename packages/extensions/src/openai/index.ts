@@ -183,9 +183,10 @@ export const buildOpenAIModelDriver = (
       }
 
       if (Option.isSome(apiKey)) {
+        const config = buildOpenAiCompatConfig(Option.fromNullishOr(hints), true)
         return makeApiKeyOpenAIResolution(
           modelName,
-          buildOpenAiCompatConfig(Option.fromNullishOr(hints), true),
+          { ...config, prompt_cache_key: hints?.cacheKey },
           apiKey.value,
         )
       }

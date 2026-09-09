@@ -142,3 +142,29 @@ Evidence:
 - `/tmp/gent-cache-routing-check/state/data.db`
 
 Session: `01a0842f-6110-741d-891f-f6bcbf7f8d4d`.
+
+Commit: `72c9c61a`. Commit checks passed. Log: `/tmp/gent-cache-routing-commit.log`.
+
+## Preserve API-key cache routing on the wire
+
+The OpenAI API-key driver now supplies the same session key. A pinned Bun patch copies that field through the compatibility adapter's Chat Completions serializer. The patch changes source and exported JavaScript. It preserves absence when no key is supplied. No package versions changed. Current upstream and the newest published RC still have the defect; see the linked adapter research note.
+
+HTTP tests cover generation and streaming, repeated keys, distinct keys, omitted keys, endpoint, and authorization. Existing OAuth and Google/Mistral checks also pass. The full gate passed after test style and typing fixes.
+
+Live Herdr ran two Luna cell turns, retained 42, returned 43, and showed preview/full/collapsed levels. This live run uses OAuth. The HTTP tests prove the API-key repair. No live API-key request or cache gain is claimed.
+
+Source files:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/package.json`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/bun.lock`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/patches/@effect%2Fai-openai-compat@4.0.0-rc.112.patch`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/extensions/src/openai/index.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/extensions/tests/openai/openai-extension-driver.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/plans/openai-compat-cache-key-priors-2026-09-08.md`
+
+Evidence:
+
+- `/tmp/gent-cache-compat-patch.log`
+- `/tmp/gent-cache-compat-gate.log`
+- `/tmp/gent-cache-compat-herdr-preview.txt`
+- `/tmp/gent-cache-compat-herdr-full.txt`

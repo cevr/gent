@@ -10,7 +10,9 @@ Inspect the official OpenCode v2 branch for prompt-cache behavior before changin
 
 The [OpenCode v2 source review](opencode-cache-priors-2026-09-08.md) pins commit `08e28fb915d7a4d64add09150fc4ee7d63a796ef`. Use one durable context admission path for dates, catalogs, and other extension content. Save baseline bytes and chronological updates. Provider adapters must preserve update order before this path is enabled. Do not copy provider capability guesses from the prior project. Integrate this work with the context-policy unit below. Keep admission, replay, and branch ownership in the host; keep content and provider cache controls in extensions.
 
-After the cache work, make `gent -p` an inline one-shot TUI. Use OpenTUI's normal terminal buffer if its renderer supports the required behavior. Stream the same answer and tool cards, retain approvals and cancellation, then exit when the run is complete. Leave the output in native terminal scrollback. Research the exact renderer and shutdown behavior before implementation. Test through Herdr, including output that exceeds the terminal height. Keep this as a separate logical unit with the full gate.
+After the cache work, make `gent -p` an inline one-shot TUI. Use OpenTUI's normal terminal buffer if its renderer supports the required behavior. Stream the same answer and tool cards, retain approvals and cancellation, then exit when the run is complete. Leave the output in native terminal scrollback. Research the exact renderer and shutdown behavior before implementation. Test through Herdr, including output that exceeds the terminal height. Keep this as a separate logical unit with the full gate. The user confirmed that this path must retain all normal tool calls. See [the inline renderer research](inline-prompt-priors-2026-09-08.md) for completion, child-run, and scrollback requirements.
+
+Detailed cache follow-ups: [durable context admission](durable-context-admission-2026-09-08.md) and [the API-key adapter repair](openai-compat-cache-key-priors-2026-09-08.md).
 
 ## Decision
 

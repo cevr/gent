@@ -16,7 +16,8 @@
  * credential cache cell.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Option, Schema, SynchronizedRef } from "effect"
+import { Effect, Layer, Option, Schema, Stream, SynchronizedRef } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
 import { encodeExternalJson } from "../helpers/external-wire.js"
 import { buildOpenAIModelDriver } from "../../src/openai/index.js"
 import {
@@ -27,6 +28,7 @@ import {
 import type { ProviderAuthInfo } from "@gent/core/extensions/api"
 import {
   makeFakeFetchState,
+  fakeFetchLayer,
   oneGenerate,
   type CapturedRequest,
   type FakeFetchState,
@@ -98,7 +100,70 @@ const responseForRequest = (request: CapturedRequest) => {
 const runOne = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState) =>
   oneGenerate(layer, state, responseForRequest).pipe(Effect.orDie)
 
+const runStream = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState) =>
+  LanguageModel.streamText({ prompt: "hi" }).pipe(
+    Stream.runDrain,
+    Effect.provide(
+      Layer.provideMerge(
+        layer,
+        fakeFetchLayer(state, () => ({
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+          body: `data: ${encodeExternalJson({
+            id: "chatcmpl-cache",
+            object: "chat.completion.chunk",
+            created: 1700000000,
+            model: "gpt-5.4",
+            choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }],
+          })}\n\ndata: [DONE]\n\n`,
+        })),
+      ),
+    ),
+    Effect.scoped,
+  )
+
 describe("OpenAI cache routing", () => {
+  it.live("API-key requests preserve cache routing for generation and streaming", () =>
+    Effect.gen(function* () {
+      const credentialCellRef = yield* SynchronizedRef.make(EMPTY_CREDENTIAL_CELL)
+      const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
+      const codec = Schema.fromJsonString(
+        Schema.Struct({ prompt_cache_key: Schema.optional(Schema.String) }),
+      )
+      const cacheKeys = [
+        Option.some("same-session"),
+        Option.some("same-session"),
+        Option.some("other-session"),
+        Option.none<string>(),
+      ]
+      for (const streaming of [false, true]) {
+        const fetchState = makeFakeFetchState()
+        for (const cacheKey of cacheKeys) {
+          const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("cache-test-key"), {
+            cacheKey: Option.getOrUndefined(cacheKey),
+          })
+          if (streaming) {
+            yield* runStream(model, fetchState)
+          } else {
+            yield* runOne(model, fetchState)
+          }
+        }
+        const keys = yield* Effect.forEach(fetchState.captured, (request) =>
+          Effect.gen(function* () {
+            expect(request.url).toBe("https://api.openai.com/v1/chat/completions")
+            expect(request.headers["authorization"]).toBe("Bearer cache-test-key")
+            const body = Option.getOrThrow(Option.fromUndefinedOr(request.body))
+            expect(body).not.toContain("previous_response_id")
+            return Option.fromUndefinedOr(
+              (yield* Schema.decodeEffect(codec)(body)).prompt_cache_key,
+            )
+          }),
+        )
+        expect(keys).toEqual(cacheKeys)
+      }
+    }),
+  )
+
   it.live("OAuth requests retain the supplied cache key across calls", () =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell>(

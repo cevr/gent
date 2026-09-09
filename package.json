@@ -71,6 +71,7 @@
     "@ff-labs/fff-bun": "0.10.6"
   },
   "patchedDependencies": {
-    "@opentui/core@0.5.11": "patches/@opentui%2Fcore@0.5.11.patch"
+    "@opentui/core@0.5.11": "patches/@opentui%2Fcore@0.5.11.patch",
+    "@effect/ai-openai-compat@4.0.0-rc.112": "patches/@effect%2Fai-openai-compat@4.0.0-rc.112.patch"
   }
 }
