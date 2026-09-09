@@ -63,6 +63,8 @@ const OpenAiReasoningEffort = Schema.Literals([
 const buildOpenAiResponsesConfig = (hints: Option.Option<ProviderHints>): OpenAiResponsesConfig => {
   let config: OpenAiResponsesConfig = { store: false }
   if (Option.isSome(hints)) {
+    const cacheKey = Option.fromUndefinedOr(hints.value.cacheKey)
+    if (Option.isSome(cacheKey)) config = { ...config, prompt_cache_key: cacheKey.value }
     const maxTokens = Option.fromNullishOr(hints.value.maxTokens)
     if (Option.isSome(maxTokens)) config = { ...config, max_output_tokens: maxTokens.value }
     const temperature = Option.fromNullishOr(hints.value.temperature)

@@ -16,7 +16,7 @@
  * credential cache cell.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Option, SynchronizedRef } from "effect"
+import { Effect, Option, Schema, SynchronizedRef } from "effect"
 import { encodeExternalJson } from "../helpers/external-wire.js"
 import { buildOpenAIModelDriver } from "../../src/openai/index.js"
 import {
@@ -97,6 +97,35 @@ const responseForRequest = (request: CapturedRequest) => {
 }
 const runOne = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState) =>
   oneGenerate(layer, state, responseForRequest).pipe(Effect.orDie)
+
+describe("OpenAI cache routing", () => {
+  it.live("OAuth requests retain the supplied cache key across calls", () =>
+    Effect.gen(function* () {
+      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell>(
+        makeDurableCell({
+          access: "cache-test-token",
+          refresh: "r",
+          expires: FAR_FUTURE_MS,
+          accountId: Option.none(),
+        }),
+      )
+      const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
+      const codec = Schema.fromJsonString(Schema.Struct({ prompt_cache_key: Schema.String }))
+      const fetchState = makeFakeFetchState()
+      for (const cacheKey of ["same-session", "same-session", "other-session"]) {
+        const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo(), { cacheKey })
+        yield* runOne(model, fetchState)
+      }
+      const keys = yield* Effect.forEach(fetchState.captured, (request) =>
+        Schema.decodeEffect(codec)(Option.getOrThrow(Option.fromUndefinedOr(request.body))).pipe(
+          Effect.map((body) => body.prompt_cache_key),
+        ),
+      )
+      expect(keys).toEqual(["same-session", "same-session", "other-session"])
+    }),
+  )
+})
+
 describe("buildOpenAIModelDriver — OAuth callback state", () => {
   it.live("stale callback state fails instead of reporting success", () =>
     Effect.gen(function* () {

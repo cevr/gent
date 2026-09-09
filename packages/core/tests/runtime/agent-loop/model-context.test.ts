@@ -139,9 +139,10 @@ describe("native model context projection", () => {
     }).pipe(Effect.timeout("5 seconds"))
   })
 
-  it.live("passes the output reserve to the resolved provider driver", () => {
+  it.live("passes the output reserve and stable session cache key to the provider", () => {
     const modelId = ModelId.make("context-driver/model")
     let observedMaxTokens = Option.none<number>()
+    const observedCacheKeys: Array<Option.Option<string>> = []
     const providerLayer = LanguageModelLayers.testStream(() =>
       Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
     )
@@ -154,6 +155,7 @@ describe("native model context projection", () => {
             Option.flatMap((value) => Option.fromUndefinedOr(value.maxTokens)),
           )
           if (Option.isSome(maxTokens)) observedMaxTokens = maxTokens
+          observedCacheKeys.push(Option.fromUndefinedOr(hints?.cacheKey))
           return AiModel.make("context-driver", "model", providerLayer)
         }),
     }
@@ -214,6 +216,19 @@ describe("native model context projection", () => {
           { runSpec: { overrides: { modelId } } },
         )
         expect(observedMaxTokens).toEqual(Option.some(MODEL_OUTPUT_RESERVE_TOKENS))
+        yield* runAgentLoop(
+          agentLoop,
+          makeMessage(
+            SessionId.make("model-context-driver-session"),
+            BranchId.make("model-context-driver-branch"),
+            "continue with the same cache key",
+          ),
+          { runSpec: { overrides: { modelId } } },
+        )
+        expect(observedCacheKeys).toEqual([
+          Option.some("model-context-driver-session"),
+          Option.some("model-context-driver-session"),
+        ])
       }),
     ).pipe(Effect.provide(layer), Effect.timeout("5 seconds"))
   })

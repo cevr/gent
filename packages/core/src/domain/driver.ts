@@ -100,6 +100,8 @@ export interface ProviderHints {
   readonly reasoning?: string
   readonly maxTokens?: number
   readonly temperature?: number
+  /** Stable conversation identity for providers that support cache routing. */
+  readonly cacheKey?: string
 }
 
 /** Auth info passed to `resolveModel` — mirrors `AuthStore` entries. */

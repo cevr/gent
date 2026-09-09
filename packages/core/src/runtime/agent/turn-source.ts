@@ -290,6 +290,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     hints: {
       temperature: resolved.temperature,
       reasoning: resolved.reasoning,
+      cacheKey: params.sessionId,
     },
     driverRegistry,
   }

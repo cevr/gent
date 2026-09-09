@@ -114,3 +114,31 @@ Evidence:
 - `/tmp/gent-cache-prefix-gate.log`
 - `/tmp/gent-cache-prefix-herdr-preview.txt`
 - `/tmp/gent-cache-prefix-herdr-full.txt`
+
+## Route Codex cache requests by session
+
+Provider hints now carry the durable session ID as an optional cache key. The OpenAI OAuth Responses driver sends it as `prompt_cache_key`. Two runtime turns retain the same ID. HTTP tests verify repeated and distinct keys. Google and Mistral requests omit this OpenAI field.
+
+The full gate passed. Live Herdr ran two Luna cell turns in one kernel, returned 42 then 43, and showed all three disclosure levels. The TUI returned to the shell. Four saved usage records reported zero cache reads and writes. No cache gain is claimed.
+
+The API-key compatibility adapter drops this field during serialization. This unit does not enable cache routing on that path. The remaining provider work must fix and test that boundary.
+
+Source files:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/domain/driver.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/runtime/agent/turn-source.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/tests/runtime/agent-loop/model-context.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/extensions/src/openai/index.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/extensions/tests/openai/openai-extension-driver.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/extensions/tests/openai-compatible-providers.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/extensions/node_modules/@effect/ai-openai-compat/src/OpenAiLanguageModel.ts`
+
+Evidence:
+
+- `/tmp/gent-cache-routing-gate.log`
+- `/tmp/gent-cache-routing-herdr-preview.txt`
+- `/tmp/gent-cache-routing-herdr-full.txt`
+- `/tmp/gent-cache-routing-live-counts.json`
+- `/tmp/gent-cache-routing-check/state/data.db`
+
+Session: `01a0842f-6110-741d-891f-f6bcbf7f8d4d`.

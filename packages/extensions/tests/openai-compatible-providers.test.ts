@@ -46,7 +46,9 @@ describe("OpenAI-compatible provider drivers", () => {
     Effect.gen(function* () {
       const contributions = yield* collectTestContributions(GoogleExtension.setup)
       const driver = onlyDriver(contributions.modelDrivers ?? [])
-      const model = yield* driver.resolveModel("gemini-2.5-pro", makeApiAuthInfo("google-key"))
+      const model = yield* driver.resolveModel("gemini-2.5-pro", makeApiAuthInfo("google-key"), {
+        cacheKey: "session-cache-key",
+      })
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       const request = fetchState.captured.at(-1)!
@@ -54,6 +56,7 @@ describe("OpenAI-compatible provider drivers", () => {
         "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
       )
       expect(request.headers["authorization"]).toBe("Bearer google-key")
+      expect(request.body).not.toContain("prompt_cache_key")
     }),
   )
 
@@ -64,12 +67,14 @@ describe("OpenAI-compatible provider drivers", () => {
       const model = yield* driver.resolveModel(
         "mistral-large-latest",
         makeApiAuthInfo("mistral-key"),
+        { cacheKey: "session-cache-key" },
       )
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       const request = fetchState.captured.at(-1)!
       expect(request.url).toBe("https://api.mistral.ai/v1/chat/completions")
       expect(request.headers["authorization"]).toBe("Bearer mistral-key")
+      expect(request.body).not.toContain("prompt_cache_key")
     }),
   )
 })
