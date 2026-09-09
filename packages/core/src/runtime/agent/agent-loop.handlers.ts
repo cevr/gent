@@ -55,8 +55,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { Actor } from "effect-encore"
 import { type AgentName, type RunSpec } from "../../domain/agent.js"
 import type { ModelId } from "../../domain/model.js"
-import { EventStore, InteractionResolved } from "../../domain/event.js"
-import { EventPublisher } from "../../domain/event-publisher.js"
+import { EventStore } from "../../domain/event.js"
 import { Message, type MessageMetadata } from "../../domain/message.js"
 
 const isActiveLoopState = Predicate.or(
@@ -75,13 +74,7 @@ import { GentPlatform } from "../gent-platform.js"
 import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { SessionProfileCache } from "../session-profile.js"
-import {
-  assistantMessageIdForCommand,
-  interjectionMessageIdForCommand,
-  toolCallIdForCommand,
-  toolResultMessageIdForCommand,
-  toolResultMessageIdForToolCall,
-} from "./agent-loop.utils.js"
+import { interjectionMessageIdForCommand } from "./agent-loop.utils.js"
 import {
   AgentLoopError,
   emptyLoopQueueState,
@@ -105,13 +98,6 @@ import type { CapabilityError, CapabilityNotFoundError } from "../../domain/capa
 import { provideExtensionLeaf } from "../extensions/extension-effect-membrane.js"
 import { parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
-import { recordToolResult } from "./turn-persistence.js"
-import { invokeTool, ToolInvocationInteractionError } from "./turn-tool-execution.js"
-import { ApprovalService } from "../approval-service.js"
-import {
-  ProcessLocalToolReplay,
-  processLocalReplayBindingKey,
-} from "./process-local-tool-replay.js"
 import {
   runAgentLoopTurnProfileOrLegacy,
   type AgentLoopTurnProfile,
@@ -132,9 +118,7 @@ import {
   type GetStateInput,
   type HandlerRequest,
   type InterruptInput,
-  type InvokeToolInput,
   type MessageType,
-  type RecordToolResultInput,
   type RemoveFollowUpInput,
   type RequestExtensionInput,
   followUpMessageIdForSource,
@@ -1015,110 +999,6 @@ export const buildAgentLoopActorHandlers = (config: {
             if (Option.isSome(context)) Object.assign(metrics, { context: context.value })
             return metrics
           }).pipe(provideActorWorkspace),
-      ),
-      RecordToolResult: Effect.fn("AgentLoop.RecordToolResult")(
-        ({ operation }: HandlerRequest<RecordToolResultInput>) =>
-          Effect.gen(function* () {
-            yield* ensureTarget(operation)
-            yield* markWrite
-            const handle = yield* ensureStarted
-            const toolResultMessageId = Option.match(Option.fromUndefinedOr(operation.commandId), {
-              onNone: () => toolResultMessageIdForToolCall(operation.toolCallId),
-              onSome: (commandId) => toolResultMessageIdForCommand(commandId),
-            })
-            yield* recordToolResult({
-              toolResultMessageId,
-              assistantMessageId: Option.getOrUndefined(
-                Option.map(
-                  Option.fromUndefinedOr(operation.commandId),
-                  assistantMessageIdForCommand,
-                ),
-              ),
-              sessionId: operation.sessionId,
-              branchId: operation.branchId,
-              toolCallId: operation.toolCallId,
-              toolName: operation.toolName,
-              output: operation.output,
-              isError: operation.isError,
-            }).pipe(handle.withSideMutation, Effect.ensuring(drainWake(handle)))
-          }).pipe(
-            Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
-            provideActorWorkspace,
-          ),
-      ),
-      InvokeTool: Effect.fn("AgentLoop.InvokeTool")(
-        ({ operation }: HandlerRequest<InvokeToolInput>) =>
-          Effect.gen(function* () {
-            yield* ensureTarget(operation)
-            yield* markWrite
-            const handle = yield* ensureStarted
-            yield* Effect.gen(function* () {
-              const currentTurnAgent = (yield* currentRuntimeState(handle)).agent
-              const environment = yield* handle.resolveTurnProfile
-              yield* invokeTool({
-                assistantMessageId: assistantMessageIdForCommand(operation.commandId),
-                toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
-                toolCallId: toolCallIdForCommand(operation.commandId),
-                toolName: operation.toolName,
-                input: operation.input,
-                sessionId: operation.sessionId,
-                branchId: operation.branchId,
-                currentTurnAgent,
-                turnProfile: environment,
-              }).pipe(
-                Effect.catchTag("ToolInteractionPending", (pending) =>
-                  Effect.gen(function* () {
-                    const error = new ToolInvocationInteractionError({
-                      message:
-                        "InvokeTool cannot wait for approval. Use a session turn for interactive tools.",
-                      toolCallId: pending.toolCallId,
-                    })
-                    const approval = yield* ApprovalService
-                    yield* approval.respond(pending.pending.requestId)
-                    yield* recordToolResult({
-                      sessionId: operation.sessionId,
-                      branchId: operation.branchId,
-                      toolResultMessageId: toolResultMessageIdForCommand(operation.commandId),
-                      assistantMessageId: assistantMessageIdForCommand(operation.commandId),
-                      toolCallId: pending.toolCallId,
-                      toolName: operation.toolName,
-                      output: { error: error.message, reason: error._tag },
-                      isError: true,
-                    })
-                    const publisher = yield* EventPublisher
-                    yield* publisher.publish(
-                      InteractionResolved.make({
-                        sessionId: operation.sessionId,
-                        branchId: operation.branchId,
-                        requestId: pending.pending.requestId,
-                        approved: false,
-                        notes: error.message,
-                      }),
-                    )
-                    return yield* new AgentLoopError({ message: error.message, cause: error })
-                  }).pipe(
-                    Effect.ensuring(
-                      Effect.gen(function* () {
-                        const replay = yield* ProcessLocalToolReplay
-                        yield* replay.removeBinding(
-                          processLocalReplayBindingKey({
-                            sessionId: operation.sessionId,
-                            branchId: operation.branchId,
-                            assistantMessageId: assistantMessageIdForCommand(operation.commandId),
-                            toolCallId: pending.toolCallId,
-                          }),
-                        )
-                      }),
-                    ),
-                  ),
-                ),
-                runAgentLoopTurnProfileOrLegacy(environment),
-              )
-            }).pipe(handle.withSideMutation, Effect.ensuring(drainWake(handle)))
-          }).pipe(
-            Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
-            provideActorWorkspace,
-          ),
       ),
       RequestExtension: Effect.fn("AgentLoop.RequestExtension")(
         ({ operation }: HandlerRequest<RequestExtensionInput>) =>

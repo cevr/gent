@@ -10,9 +10,8 @@ import {
   InteractionRequestId,
   MessageId,
   SessionId,
-  ToolCallId,
-  ToolName,
 } from "../../domain/ids.js"
+import type { ToolCallId, ToolName } from "../../domain/ids.js"
 import { SteerCommand } from "../../domain/steer.js"
 import { WorkspaceId } from "../../server/workspace-rpc.js"
 import { entityIdOf } from "./agent-loop.entity-id.js"
@@ -106,26 +105,6 @@ const GetMetricsFields = {
   sessionId: SessionId,
   branchId: BranchId,
   commandId: ActorCommandId,
-}
-
-const RecordToolResultFields = {
-  ...WorkspaceFields,
-  sessionId: SessionId,
-  branchId: BranchId,
-  commandId: Schema.optional(ActorCommandId),
-  toolCallId: ToolCallId,
-  toolName: ToolName,
-  output: Schema.Unknown,
-  isError: Schema.optional(Schema.Boolean),
-}
-
-const InvokeToolFields = {
-  ...WorkspaceFields,
-  sessionId: SessionId,
-  branchId: BranchId,
-  commandId: ActorCommandId,
-  toolName: ToolName,
-  input: Schema.Unknown,
 }
 
 const ExtensionRequestInputEnvelope = Schema.TaggedUnion({
@@ -383,31 +362,6 @@ export const AgentLoop = Actor.fromEntity(
       success: SessionRuntimeMetrics,
       error: AgentLoopError,
       id: (p: GetMetricsInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
-        primaryKey: p.commandId,
-      }),
-    },
-    // Mid-turn tool result. Dedup by toolCallId — replays of the same tool
-    // call must collapse to one effect.
-    RecordToolResult: {
-      payload: RecordToolResultFields,
-      success: Schema.Void,
-      error: AgentLoopError,
-      id: (p: RecordToolResultInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
-        primaryKey: p.toolCallId,
-      }),
-    },
-    // Programmatic tool invocation (server-driven). commandId is required
-    // here (vs optional in the legacy command schema) because the actor
-    // execution id needs a deterministic primary key — callers that previously
-    // elided commandId now generate one before sending.
-    InvokeTool: {
-      payload: InvokeToolFields,
-      success: Schema.Void,
-      error: AgentLoopError,
-      persisted: true,
-      id: (p: InvokeToolInput) => ({
         entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
         primaryKey: p.commandId,
       }),

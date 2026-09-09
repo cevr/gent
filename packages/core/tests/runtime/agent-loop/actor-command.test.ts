@@ -2,26 +2,16 @@ import { ModelId } from "../../../src/domain/model"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
-import { Cause, Clock, Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
-import { ExtensionContext, tool, type ToolCapability } from "@gent/core/extensions/api"
+import { Cause, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { request, type RequestCapability, type ToolCapability } from "@gent/core/extensions/api"
 import { Permission } from "../../../src/domain/permission"
 import { ApprovalService } from "../../../src/runtime/approval-service"
-import {
-  processLocalReplayBindingKey,
-  ProcessLocalToolReplay,
-} from "../../../src/runtime/agent/process-local-tool-replay"
-import {
-  assistantMessageIdForCommand,
-  toolCallIdForCommand,
-} from "../../../src/runtime/agent/agent-loop.utils"
+import { ProcessLocalToolReplay } from "../../../src/runtime/agent/process-local-tool-replay"
 import { narrowR } from "../../helpers/effect"
-import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
 import type { PeekResult } from "effect-encore"
 import { AgentDefinition, DEFAULT_AGENT_NAME } from "../../../src/domain/agent"
 import { dateFromMillis, Branch, Session } from "../../../src/domain/message"
-import type { QueueSnapshot } from "../../../src/domain/queue"
-import { EventEnvelope, EventId, EventStoreError, AgentEvent } from "../../../src/domain/event"
 import {
   finishPart,
   LanguageModelLayers,
@@ -29,20 +19,11 @@ import {
   type LanguageModelStreamPart,
 } from "../../../src/test-utils/language-model"
 import { ModelResolver } from "../../../src/providers/model-resolver"
-import { EventPublisher, EventPublisherLive } from "../../../src/domain/event-publisher"
-import { waitFor } from "../../../src/test-utils/fixtures"
-import { RecordingEventStore, SequenceRecorder, type CallRecord } from "../../../src/test-utils"
+import { EventPublisherLive } from "../../../src/domain/event-publisher"
+import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
-import {
-  ActorCommandId,
-  BranchId,
-  ExtensionId,
-  MessageId,
-  SessionId,
-  ToolCallId,
-  ToolName,
-} from "../../../src/domain/ids"
+import { ActorCommandId, BranchId, ExtensionId, SessionId } from "../../../src/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
@@ -51,8 +32,6 @@ import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { BranchStorage } from "../../../src/storage/branch-storage"
-import { EventStorage } from "../../../src/storage/event-storage"
-import { MessageStorage } from "../../../src/storage/message-storage"
 import { SessionStorage } from "../../../src/storage/session-storage"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"
 import { AgentLoop as AgentLoopActor } from "../../../src/runtime/agent/agent-loop.actor"
@@ -61,7 +40,10 @@ import { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
 
-const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
+const makeTestExtensions = (
+  tools: ReadonlyArray<ToolCapability> = [],
+  requests: ReadonlyArray<RequestCapability> = [],
+) => {
   const mainAgent = AgentDefinition.make({
     name: DEFAULT_AGENT_NAME,
     model: ModelId.make("test/default"),
@@ -74,6 +56,7 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
       contributions: {
         agents: [mainAgent],
         tools,
+        requests,
       } satisfies ExtensionContributions,
     },
   ])
@@ -88,8 +71,9 @@ const makeClusterRunnerLayer = (storageLayer: ReturnType<typeof SqliteStorage.Te
 const makeRuntimeLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   tools: ReadonlyArray<ToolCapability> = [],
+  requests: ReadonlyArray<RequestCapability> = [],
 ) => {
-  const resolvedExtensions = makeTestExtensions(tools)
+  const resolvedExtensions = makeTestExtensions(tools, requests)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
   const storageLayer = SqliteStorage.TestWithSql()
@@ -123,42 +107,6 @@ const makeRuntimeLayer = (
   return Layer.provideMerge(
     SessionRuntime.Live({ baseSections: [] }),
     Layer.mergeAll(baseDeps, eventPublisherLayer, approvalLayer, ProcessLocalToolReplay.Live),
-  )
-}
-
-const makeRuntimeLayerWithEventPublisher = (
-  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
-  eventPublisherLayer: Layer.Layer<EventPublisher, never, EventStorage>,
-) => {
-  const resolvedExtensions = makeTestExtensions()
-  const recorderLayer = SequenceRecorder.Live
-  const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = SqliteStorage.TestWithSql()
-  const baseDeps = Layer.mergeAll(
-    storageLayer,
-    makeClusterRunnerLayer(storageLayer),
-    providerLayer,
-    ModelResolver.fromLanguageModel(providerLayer),
-    ExtensionRegistry.fromResolved(resolvedExtensions),
-    DriverRegistry.fromResolved({
-      modelDrivers: resolvedExtensions.modelDrivers,
-      externalDrivers: resolvedExtensions.externalDrivers,
-    }),
-    eventStoreLayer,
-    recorderLayer,
-    ToolRunner.Test(),
-    ApprovalService.Test(),
-    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-    ConfigService.Test(),
-    BunServices.layer,
-    ModelRegistry.Test(),
-    GentPlatform.Test(),
-    AgentLoopSessionGovernance.Live,
-  )
-  const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, baseDeps)
-  return Layer.provideMerge(
-    SessionRuntime.Live({ baseSections: [] }),
-    Layer.merge(baseDeps, providedEventPublisherLayer),
   )
 }
 
@@ -219,38 +167,38 @@ const getActorState = (input: { sessionId: SessionId; branchId: BranchId }) =>
     )
   })
 
-const recordToolResultViaActor = (input: {
+/**
+ * `RequestExtension` is the live side-mutation operation: its handler takes the
+ * same per-session permit and the same `drainWake` as every other mutation. The
+ * concurrency tests below drive the actor through it, so they assert the
+ * permit's behavior against a path production actually uses.
+ */
+const TEST_REQUEST_EXTENSION_ID = ExtensionId.make("agents")
+
+const requestExtensionViaActor = (input: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly commandId: ActorCommandId
-  readonly toolCallId: ToolCallId
-  readonly toolName: ToolName
-  readonly output: unknown
-  readonly isError?: boolean
+  readonly capabilityId: string
+  readonly input: unknown
 }) =>
   Effect.gen(function* () {
     const actorClientFactory = yield* AgentLoopActor.Context
     const ref = yield* actorClientFactory(
       entityIdOf(DefaultWorkspaceId, input.sessionId, input.branchId),
     )
-    yield* ref.execute(
-      AgentLoopActor.RecordToolResult.make({
+    return yield* ref.execute(
+      AgentLoopActor.RequestExtension.make({
         workspaceId: DefaultWorkspaceId,
         sessionId: input.sessionId,
         branchId: input.branchId,
         commandId: input.commandId,
-        toolCallId: input.toolCallId,
-        toolName: input.toolName,
-        output: input.output,
-        isError: input.isError,
+        extensionId: TEST_REQUEST_EXTENSION_ID,
+        capabilityId: input.capabilityId,
+        input: { _tag: "Present", value: input.input },
       }),
     )
   })
-
-const eventTags = (calls: ReadonlyArray<CallRecord>) =>
-  calls
-    .filter((call) => call.service === "EventStore" && call.method === "append")
-    .map((call) => Schema.decodeUnknownSync(AgentEvent)(call.args)._tag)
 
 const materializeActorCommand = <A, E>(result: PeekResult<A, E>): Effect.Effect<A, E> => {
   switch (result._tag) {
@@ -269,162 +217,6 @@ const materializeActorCommand = <A, E>(result: PeekResult<A, E>): Effect.Effect<
 }
 
 describe("agent-loop actor commands", () => {
-  it.live("InvokeTool rejects approval with a paired result and durable command failure", () =>
-    Effect.gen(function* () {
-      const executions = yield* Ref.make(0)
-      const approvalTool = tool({
-        id: "direct-approval",
-        description: "Needs human approval",
-        params: Schema.Struct({}),
-        output: Schema.Boolean,
-        execute: () =>
-          Effect.gen(function* () {
-            yield* Ref.update(executions, (count) => count + 1)
-            const ctx = yield* ExtensionContext
-            return (yield* ctx.Interaction.approve({ text: "approve direct invocation" })).approved
-          }),
-      })
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-      const layer = makeRuntimeLayer(providerLayer, [approvalTool])
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { sessionId, branchId } = yield* createSessionBranch
-          const factory = yield* AgentLoopActor.Context
-          const control = yield* AgentLoopActor.Control
-          const entityId = entityIdOf(DefaultWorkspaceId, sessionId, branchId)
-          const ref = yield* factory(entityId)
-          const commandId = ActorCommandId.make("direct-approval-command")
-          const payload = AgentLoopActor.InvokeTool.make({
-            workspaceId: DefaultWorkspaceId,
-            sessionId,
-            branchId,
-            commandId,
-            toolName: ToolName.make("direct-approval"),
-            input: {},
-          })
-          yield* ref.send(payload)
-          const first = yield* AgentLoopActor.InvokeTool.waitFor(payload)
-          expect(first._tag).toBe("Failure")
-          if (first._tag !== "Failure") return
-          expect(first.error.cause).toMatchObject({
-            message:
-              "InvokeTool cannot wait for approval. Use a session turn for interactive tools.",
-          })
-          expect(first.error.message).toContain("InvokeTool cannot wait for approval")
-          const storage = yield* MessageStorage
-          const history = yield* storage.listMessages(branchId)
-          expect(history.map((message) => message.role)).toEqual(["assistant", "tool"])
-          expect(history[1]?.parts[0]).toEqual(
-            Prompt.toolResultPart({
-              id: toolCallIdForCommand(commandId),
-              name: "direct-approval",
-              isFailure: true,
-              providerExecuted: false,
-              result: {
-                error:
-                  "InvokeTool cannot wait for approval. Use a session turn for interactive tools.",
-                reason: "ToolInvocationInteractionError",
-              },
-            }),
-          )
-          const approval = yield* ApprovalService
-          expect(yield* approval.pendingRequestId({ sessionId, branchId })).toBeUndefined()
-          const replay = yield* ProcessLocalToolReplay
-          expect(
-            Option.isNone(
-              yield* replay.getBinding(
-                processLocalReplayBindingKey({
-                  sessionId,
-                  branchId,
-                  assistantMessageId: assistantMessageIdForCommand(commandId),
-                  toolCallId: toolCallIdForCommand(commandId),
-                }),
-              ),
-            ),
-          ).toBe(true)
-          yield* ref.send(payload)
-          yield* control.redeliver(entityId)
-          const repeated = yield* AgentLoopActor.InvokeTool.waitFor(payload)
-          expect(repeated).toEqual(first)
-          expect(yield* Ref.get(executions)).toBe(1)
-          const recorder = yield* SequenceRecorder
-          expect(eventTags(yield* recorder.getCalls)).toContain("InteractionResolved")
-          const state = yield* ref.execute(
-            AgentLoopActor.GetState.make({
-              workspaceId: DefaultWorkspaceId,
-              sessionId,
-              branchId,
-              commandId: ActorCommandId.make("direct-approval-state"),
-            }),
-          )
-          expect(state._tag).toBe("Idle")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for the actor operation.
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer), narrowR),
-      )
-    }),
-  )
-  it.live("InvokeTool actor command dedupes by commandId", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-      const layer = makeRuntimeLayer(providerLayer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const messageStorage = yield* MessageStorage
-          const recorder = yield* SequenceRecorder
-          const { sessionId, branchId } = yield* createSessionBranch
-          const actorClientFactory = yield* AgentLoopActor.Context
-          const actorControl = yield* AgentLoopActor.Control
-          const entityId = entityIdOf(DefaultWorkspaceId, sessionId, branchId)
-          const ref = yield* actorClientFactory(entityId)
-          yield* ref.execute(
-            AgentLoopActor.GetState.make({
-              workspaceId: DefaultWorkspaceId,
-              sessionId,
-              branchId,
-              commandId: ActorCommandId.make("invoke-tool-warm-state"),
-            }),
-          )
-          const invokePayload = AgentLoopActor.InvokeTool.make({
-            workspaceId: DefaultWorkspaceId,
-            sessionId,
-            branchId,
-            commandId: ActorCommandId.make("invoke-tool-idempotent"),
-            toolName: ToolName.make("read"),
-            input: {},
-          })
-          yield* ref.send(invokePayload)
-          yield* actorControl.redeliver(entityId)
-          yield* AgentLoopActor.InvokeTool.waitFor(invokePayload).pipe(
-            Effect.flatMap(materializeActorCommand),
-          )
-          yield* ref.send(invokePayload)
-          yield* actorControl.redeliver(entityId)
-          yield* AgentLoopActor.InvokeTool.waitFor(invokePayload).pipe(
-            Effect.flatMap(materializeActorCommand),
-          )
-          const messages = yield* waitFor(
-            messageStorage.listMessages(branchId),
-            (current) => current.length === 2,
-            5000,
-            "invokeTool messages",
-          )
-          const queue = yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })
-          const calls = yield* recorder.getCalls
-          expect(messages.map((message) => message.role)).toEqual(["assistant", "tool"])
-          expect(messages[0]?.parts[0]?.type).toBe("tool-call")
-          expect(messages[1]?.parts[0]?.type).toBe("tool-result")
-          expect(queue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
-          expect(eventTags(calls)).toContain("ToolCallStarted")
-          expect(eventTags(calls)).toContain("ToolCallSucceeded")
-          expect(eventTags(calls).filter((tag) => tag === "ToolCallStarted")).toHaveLength(1)
-          expect(eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(1)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
-    }),
-  )
-
   it.live("Interrupt reports invalid derived cancel commands through the error channel", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
@@ -479,180 +271,63 @@ describe("agent-loop actor commands", () => {
     }),
   )
 
-  it.live("recordToolResult dedupes by commandId", () =>
+  it.live("side-mutation commands are serialized per session", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-      const layer = makeRuntimeLayer(providerLayer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const messageStorage = yield* MessageStorage
-          const recorder = yield* SequenceRecorder
-          const target = yield* createSessionBranchWithIds({
-            sessionId: SessionId.make("record-tool-idempotent-session"),
-            branchId: BranchId.make("record-tool-idempotent-branch"),
-          })
-          const command = {
-            commandId: ActorCommandId.make("record-tool-idempotent"),
-            ...target,
-            toolCallId: ToolCallId.make("tool-call-idempotent"),
-            toolName: ToolName.make("read"),
-            output: { ok: true },
-          }
-          yield* recordToolResultViaActor(command)
-          yield* recordToolResultViaActor(command)
-          const messages = yield* messageStorage.listMessages(target.branchId)
-          const calls = yield* recorder.getCalls
-          const toolMessages = messages.filter((message) => message.role === "tool")
-          const state = yield* getActorState(target)
-          expect(toolMessages).toHaveLength(1)
-          expect(toolMessages[0]?.id).toBe(MessageId.make("record-tool-idempotent:tool-result"))
-          expect(toolMessages[0]?.parts).toEqual([
-            Prompt.toolResultPart({
-              id: ToolCallId.make("tool-call-idempotent"),
-              name: "read",
-              isFailure: false,
-              providerExecuted: false,
-              result: { ok: true },
-            }),
-          ])
-          expect(state).toEqual({
-            _tag: "Idle",
-            agent: DEFAULT_AGENT_NAME,
-            queue: { followUp: [], steering: [] },
-          })
-          expect(eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(1)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
-    }),
-  )
-
-  it.live("recordToolResult rolls back the tool message when durable event append fails", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-      const failingPublisherLayer = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
-          append: (event: AgentEvent) => {
-            if (event._tag === "ToolCallSucceeded") {
-              return Effect.fail(new EventStoreError({ message: "append failed" }))
+      const firstEntered = yield* Deferred.make<void>()
+      const releaseFirst = yield* Deferred.make<void>()
+      let entered = 0
+      let completed = 0
+      const blockingRequest = request({
+        id: "serialize-probe",
+        input: Schema.String,
+        output: Schema.String,
+        execute: (value: string) =>
+          Effect.gen(function* () {
+            entered++
+            if (entered === 1) {
+              // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+              yield* Deferred.succeed(firstEntered, undefined)
+              yield* Deferred.await(releaseFirst)
             }
-            return Effect.gen(function* () {
-              return EventEnvelope.make({
-                id: EventId.make(0),
-                event,
-                createdAt: yield* Clock.currentTimeMillis,
-              })
-            })
-          },
-          deliver: () => Effect.void,
-          publish: () => Effect.void,
-        }),
-      )
-      const layer = makeRuntimeLayerWithEventPublisher(providerLayer, failingPublisherLayer)
+            completed++
+            return value
+          }),
+      })
+      const layer = makeRuntimeLayer(providerLayer, [], [blockingRequest])
       yield* narrowR(
         Effect.gen(function* () {
-          const messageStorage = yield* MessageStorage
           const { sessionId, branchId } = yield* createSessionBranch
-          const commandId = ActorCommandId.make("record-tool-atomicity")
-          const exit = yield* Effect.exit(
-            recordToolResultViaActor({
-              commandId,
+          const call = (commandId: string, value: string) =>
+            requestExtensionViaActor({
               sessionId,
               branchId,
-              toolCallId: ToolCallId.make("tool-call-atomicity"),
-              toolName: ToolName.make("read"),
-              output: { ok: true },
-            }),
-          )
-          const message = yield* messageStorage.getMessage(
-            MessageId.make(`${commandId}:tool-result`),
-          )
-          expect(exit._tag).toBe("Failure")
-          expect(message).toBeUndefined()
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
-    }),
-  )
-
-  it.live("recordToolResult commands are serialized per session", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-      const firstDeliveryStarted = yield* Deferred.make<void>()
-      const releaseDelivery = yield* Deferred.make<void>()
-      let deliveredToolResults = 0
-      const eventPublisherLayer = Layer.effect(
-        EventPublisher,
-        Effect.gen(function* () {
-          const eventStorage = yield* EventStorage
-          const append = (event: AgentEvent) =>
-            eventStorage
-              .appendEvent(event)
-              .pipe(
-                Effect.mapError(
-                  (error) => new EventStoreError({ message: error.message, cause: error }),
-                ),
-              )
-          const deliver = (envelope: EventEnvelope) =>
-            Effect.gen(function* () {
-              if (envelope.event._tag !== "ToolCallSucceeded") return
-              deliveredToolResults++
-              if (deliveredToolResults === 1) {
-                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-                yield* Deferred.succeed(firstDeliveryStarted, undefined)
-                yield* Deferred.await(releaseDelivery)
-              }
+              commandId: ActorCommandId.make(commandId),
+              capabilityId: "serialize-probe",
+              input: value,
             })
-          return EventPublisher.of({
-            append,
-            deliver,
-            publish: (event) =>
-              Effect.gen(function* () {
-                const envelope = yield* append(event)
-                yield* deliver(envelope)
-              }),
-          })
-        }),
-      )
-      const layer = makeRuntimeLayerWithEventPublisher(providerLayer, eventPublisherLayer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const { sessionId, branchId } = yield* createSessionBranch
-          const first = {
-            commandId: ActorCommandId.make("record-tool-serialize-a"),
-            sessionId,
-            branchId,
-            toolCallId: ToolCallId.make("tool-call-serialize-a"),
-            toolName: ToolName.make("read"),
-            output: { value: "a" },
-          }
-          const second = {
-            commandId: ActorCommandId.make("record-tool-serialize-b"),
-            sessionId,
-            branchId,
-            toolCallId: ToolCallId.make("tool-call-serialize-b"),
-            toolName: ToolName.make("read"),
-            output: { value: "b" },
-          }
-          const firstFiber = yield* Effect.forkChild(recordToolResultViaActor(first))
-          yield* Deferred.await(firstDeliveryStarted).pipe(Effect.timeout("5 seconds"))
-          const secondFiber = yield* Effect.forkChild(recordToolResultViaActor(second))
+          const firstFiber = yield* Effect.forkChild(call("serialize-a", "a"))
+          yield* Deferred.await(firstEntered).pipe(Effect.timeout("5 seconds"))
+          const secondFiber = yield* Effect.forkChild(call("serialize-b", "b"))
+          // The permit is held by the first command, so the second cannot even
+          // enter the capability body until the first releases it.
           const earlySecond = yield* Fiber.join(secondFiber).pipe(Effect.timeoutOption("1 millis"))
           expect(earlySecond._tag).toBe("None")
-          expect(deliveredToolResults).toBe(1)
+          expect(entered).toBe(1)
+          expect(completed).toBe(0)
           // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-          yield* Deferred.succeed(releaseDelivery, undefined)
+          yield* Deferred.succeed(releaseFirst, undefined)
           yield* Fiber.join(firstFiber)
           yield* Fiber.join(secondFiber)
-          expect(deliveredToolResults).toBe(2)
+          expect(entered).toBe(2)
+          expect(completed).toBe(2)
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
       )
     }),
   )
 
-  it.live("recordToolResult waits for the active turn mutation owner", () =>
+  it.live("a side mutation waits for the active turn mutation owner", () =>
     Effect.gen(function* () {
       const streamStarted = yield* Deferred.make<void>()
       const streamReleased = yield* Deferred.make<void>()
@@ -667,11 +342,21 @@ describe("agent-loop actor commands", () => {
           ] satisfies LanguageModelStreamPart[])
         }),
       )
-      const layer = makeRuntimeLayer(providerLayer)
+      let executed = false
+      const probeRequest = request({
+        id: "owner-probe",
+        input: Schema.String,
+        output: Schema.String,
+        execute: (value: string) =>
+          Effect.sync(() => {
+            executed = true
+            return value
+          }),
+      })
+      const layer = makeRuntimeLayer(providerLayer, [], [probeRequest])
       yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
-          const messageStorage = yield* MessageStorage
           const { sessionId, branchId } = yield* createSessionBranch
           const submitFiber = yield* Effect.forkChild(
             sessionRuntime.sendUserMessage({
@@ -681,42 +366,35 @@ describe("agent-loop actor commands", () => {
             }),
           )
           yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
-          const recordFiber = yield* Effect.forkChild(
-            recordToolResultViaActor({
-              commandId: ActorCommandId.make("record-tool-active-owner"),
+          const requestFiber = yield* Effect.forkChild(
+            requestExtensionViaActor({
               sessionId,
               branchId,
-              toolCallId: ToolCallId.make("tool-call-active-owner"),
-              toolName: ToolName.make("read"),
-              output: { value: "blocked until turn completes" },
+              commandId: ActorCommandId.make("request-active-owner"),
+              capabilityId: "owner-probe",
+              input: "blocked until turn completes",
             }),
           )
-          const earlyRecord = yield* Fiber.join(recordFiber).pipe(Effect.timeoutOption("1 millis"))
-          const messagesBeforeRelease = yield* messageStorage.listMessages(branchId)
-          expect(earlyRecord._tag).toBe("None")
-          expect(messagesBeforeRelease.some((message) => message.role === "tool")).toBe(false)
+          // The running turn owns the mutation permit, so the side mutation
+          // cannot start until the turn releases it.
+          const earlyRequest = yield* Fiber.join(requestFiber).pipe(
+            Effect.timeoutOption("1 millis"),
+          )
+          expect(earlyRequest._tag).toBe("None")
+          expect(executed).toBe(false)
           // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(streamReleased, undefined)
           yield* Fiber.join(submitFiber)
-          yield* Fiber.join(recordFiber)
-          const messagesAfterRelease = yield* waitFor(
-            messageStorage.listMessages(branchId),
-            (messages) => messages.some((message) => message.role === "tool"),
-            5000,
-            "tool result after active turn releases ownership",
-          )
-          expect(messagesAfterRelease.map((message) => message.role)).toEqual([
-            "user",
-            "assistant",
-            "tool",
-          ])
+          const result = yield* Fiber.join(requestFiber)
+          expect(executed).toBe(true)
+          expect(result).toEqual("blocked until turn completes")
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
       )
     }),
   )
 
-  it.live("TerminateBranch interrupts an active turn while tool result delivery is waiting", () =>
+  it.live("TerminateBranch interrupts an active turn while a side mutation is waiting", () =>
     Effect.gen(function* () {
       const streamStarted = yield* Deferred.make<void>()
       const streamReleased = yield* Deferred.make<void>()
@@ -731,7 +409,13 @@ describe("agent-loop actor commands", () => {
           ] satisfies LanguageModelStreamPart[])
         }),
       )
-      const layer = makeRuntimeLayer(providerLayer)
+      const terminateProbe = request({
+        id: "terminate-probe",
+        input: Schema.String,
+        output: Schema.String,
+        execute: (value: string) => Effect.succeed(value),
+      })
+      const layer = makeRuntimeLayer(providerLayer, [], [terminateProbe])
       yield* narrowR(
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
@@ -745,13 +429,12 @@ describe("agent-loop actor commands", () => {
           )
           yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
           const recordFiber = yield* Effect.forkChild(
-            recordToolResultViaActor({
-              commandId: ActorCommandId.make("record-tool-terminate-owner"),
+            requestExtensionViaActor({
               sessionId,
               branchId,
-              toolCallId: ToolCallId.make("tool-call-terminate-owner"),
-              toolName: ToolName.make("read"),
-              output: { value: "blocked until turn completes" },
+              commandId: ActorCommandId.make("request-terminate-owner"),
+              capabilityId: "terminate-probe",
+              input: "blocked until turn completes",
             }),
           )
           const earlyRecord = yield* Fiber.join(recordFiber).pipe(Effect.timeoutOption("1 millis"))
