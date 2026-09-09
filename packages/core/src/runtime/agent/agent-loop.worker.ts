@@ -23,7 +23,8 @@ export type AgentLoopWorkerContext<E = never, R = never> = {
   readonly turnWorkerQueue: TxQueue.TxQueue<RunningState>
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly interruptedRef: Ref.Ref<boolean>
-  readonly interruptCell: Effect.Effect<void>
+  /** Cancel whatever tool work this loop has in flight. Idempotent. */
+  readonly interruptToolWork: Effect.Effect<void>
   readonly currentLoopState: Effect.Effect<LoopState>
   readonly saveCheckpoint: (next: LoopState) => Effect.Effect<void, AgentLoopError>
   readonly takeNextQueuedTurn: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
@@ -242,7 +243,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       if (snap._tag === "WaitingForInteraction") return true
       yield* Ref.set(scope.interruptedRef, true)
       yield* interruptActiveStream(scope.activeStreamRef)
-      yield* scope.interruptCell
+      yield* scope.interruptToolWork
       return false
     }).pipe(scope.interruptSemaphore.withPermits(1))
     if (!waiting) return

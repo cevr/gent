@@ -32,6 +32,9 @@ import {
 } from "./cell-protocol.js"
 import { GentPlatform } from "../gent-platform.js"
 
+/** The worker binary this build ships next to the executable. */
+const CELL_WORKER_BINARY = "gent-cell"
+
 export class CellExecutionIncomplete extends Schema.TaggedError<CellExecutionIncomplete>()(
   "CellExecutionIncomplete",
   {
@@ -67,7 +70,7 @@ export interface CellExecutionService {
 export class CellExecution extends Context.Service<CellExecution, CellExecutionService>()(
   "@gent/core/src/runtime/code-cell/cell-execution/CellExecution",
 ) {
-  /** The platform selects the installed worker. Acquisition stays lazy. */
+  /** The cell names its own worker; the platform resolves where it lives. */
   static Branch = (address: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
@@ -76,7 +79,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
     Layer.unwrap(
       Effect.gen(function* () {
         const platform = yield* GentPlatform
-        const binaryPath = yield* platform.cellWorkerPath
+        const binaryPath = yield* platform.siblingBinaryPath(CELL_WORKER_BINARY)
         return CellExecution.Live({ ...address, binaryPath, workerPath: binaryPath })
       }),
     )

@@ -453,7 +453,7 @@ export const makeAgentLoopBehavior = (
       turnWorkerQueue,
       activeStreamRef,
       interruptedRef,
-      interruptCell: cells.cancel,
+      interruptToolWork: cells.cancel,
       currentLoopState,
       saveCheckpoint,
       takeNextQueuedTurn: takeNextQueuedTurnCommitted,

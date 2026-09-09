@@ -59,11 +59,12 @@ const publicationResources = (publication: RuntimeProfilePublication) =>
   bindingResourcesFromPlan(publication.plan.descriptors, publication.plan.startOrder)
 
 /**
- * The identity a cell records for one inner host operation. A build-owned
- * binding is durable. A source run has none, so the operation names the live
- * process generation instead; resume is then valid only inside that generation.
+ * The identity a dispatching tool records for one inner host operation. A
+ * build-owned binding is durable. A source run has none, so the operation names
+ * the live process generation instead; resume is then valid only inside that
+ * generation.
  */
-export const cellOperationBindingIdentity = Effect.fn("ToolBinding.cellOperationIdentity")(
+export const innerOperationBindingIdentity = Effect.fn("ToolBinding.innerOperationIdentity")(
   function* (entry: ResolvedToolCapability, publication: RuntimeProfilePublication) {
     if (Predicate.isNotUndefined(entry.binding)) return Option.some(entry.binding)
     const platform = yield* GentPlatform

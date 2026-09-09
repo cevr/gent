@@ -56,7 +56,7 @@ const makeHarness = (initial: { state: LoopState; queue: LoopQueueState }) =>
       turnWorkerQueue,
       activeStreamRef: yield* Ref.make(Option.none<ActiveStreamHandle>()),
       interruptedRef: yield* Ref.make(false),
-      interruptCell: Effect.void,
+      interruptToolWork: Effect.void,
       currentLoopState: Ref.get(stateRef),
       saveCheckpoint: (next) => Ref.set(stateRef, next),
       takeNextQueuedTurn: Effect.gen(function* () {

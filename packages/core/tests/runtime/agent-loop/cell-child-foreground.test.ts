@@ -61,7 +61,7 @@ describe.skipIf(process.platform !== "darwin")("foreground child cell", () => {
               GentPlatform,
               GentPlatform.of({
                 ...platform,
-                cellWorkerPath: Effect.succeed(artifact.binaryPath),
+                siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
               }),
             ),
           ],

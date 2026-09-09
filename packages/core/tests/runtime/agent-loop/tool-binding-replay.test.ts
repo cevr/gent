@@ -55,7 +55,7 @@ import { EventStorage } from "../../../src/storage/event-storage"
 import { encodeToolOutput } from "../../../src/domain/tool-output"
 import {
   captureCurrentToolBinding,
-  cellOperationBindingIdentity,
+  innerOperationBindingIdentity,
   resolveReplayToolBinding,
   resolveStoredToolBinding,
 } from "../../../src/runtime/agent/tool-binding-resolution"
@@ -426,7 +426,7 @@ describe("tool binding replay", () => {
         if (Option.isNone(current)) return yield* Effect.die("Expected captured capability")
         // A source-loaded extension has no build artifact, so no durable identity.
         expect(current.value.binding).toBeUndefined()
-        const identity = yield* cellOperationBindingIdentity(current.value, publication)
+        const identity = yield* innerOperationBindingIdentity(current.value, publication)
         if (Option.isNone(identity)) return yield* Effect.die("Expected process-local identity")
         expect(identity.value.source).toEqual({
           _tag: "ProcessLocal",

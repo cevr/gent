@@ -65,7 +65,7 @@ describe.skipIf(process.platform !== "darwin")("model context directives from a 
               GentPlatform,
               GentPlatform.of({
                 ...platform,
-                cellWorkerPath: Effect.succeed(artifact.binaryPath),
+                siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
               }),
             ),
           ],
@@ -185,7 +185,7 @@ describe.skipIf(process.platform !== "darwin")("model context directives from a 
                 GentPlatform,
                 GentPlatform.of({
                   ...platform,
-                  cellWorkerPath: Effect.succeed(artifact.binaryPath),
+                  siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
                 }),
               ),
             ],

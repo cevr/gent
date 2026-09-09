@@ -66,7 +66,10 @@ describe.skipIf(process.platform !== "darwin")("shipped model surface", () => {
           extraLayers: [
             Layer.succeed(
               GentPlatform,
-              GentPlatform.of({ ...platform, cellWorkerPath: Effect.succeed(artifact.binaryPath) }),
+              GentPlatform.of({
+                ...platform,
+                siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
+              }),
             ),
           ],
         })
@@ -166,7 +169,10 @@ describe.skipIf(process.platform !== "darwin")("shipped model surface", () => {
           extraLayers: [
             Layer.succeed(
               GentPlatform,
-              GentPlatform.of({ ...platform, cellWorkerPath: Effect.succeed(artifact.binaryPath) }),
+              GentPlatform.of({
+                ...platform,
+                siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
+              }),
             ),
           ],
         })
@@ -243,7 +249,10 @@ describe.skipIf(process.platform !== "darwin")("shipped model surface", () => {
           extraLayers: [
             Layer.succeed(
               GentPlatform,
-              GentPlatform.of({ ...platform, cellWorkerPath: Effect.succeed(artifact.binaryPath) }),
+              GentPlatform.of({
+                ...platform,
+                siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
+              }),
             ),
           ],
         })

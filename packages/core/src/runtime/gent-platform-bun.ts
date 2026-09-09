@@ -101,13 +101,14 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
 
     execPath: Effect.sync(() => process.execPath),
 
-    cellWorkerPath: Effect.sync(() => {
-      // oxlint-disable-next-line effect/noRuntimeTypeof -- This build symbol is absent in source runs; it is not external input.
-      if (typeof __GENT_COMPILED__ !== "undefined" && __GENT_COMPILED__) {
-        return nodeFileURLToPath(new URL("gent-cell", pathToFileURL(process.execPath)))
-      }
-      return nodeFileURLToPath(new URL("../../dist/gent-cell", import.meta.url))
-    }),
+    siblingBinaryPath: (name: string) =>
+      Effect.sync(() => {
+        // oxlint-disable-next-line effect/noRuntimeTypeof -- This build symbol is absent in source runs; it is not external input.
+        if (typeof __GENT_COMPILED__ !== "undefined" && __GENT_COMPILED__) {
+          return nodeFileURLToPath(new URL(name, pathToFileURL(process.execPath)))
+        }
+        return nodeFileURLToPath(new URL(`../../dist/${name}`, import.meta.url))
+      }),
 
     homeDirectory: Effect.sync(() => os.homedir()),
 

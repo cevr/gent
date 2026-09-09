@@ -3,7 +3,7 @@ import type { InteractionRequestId } from "../../domain/ids.js"
 import { CellToolOperationStorage } from "../../storage/cell-tool-operation-storage.js"
 import type { OwnedToolCallAddress } from "../../storage/sqlite/owned-tool-call.js"
 import {
-  cellOperationBindingIdentity,
+  innerOperationBindingIdentity,
   resolveStoredToolBinding,
 } from "../agent/tool-binding-resolution.js"
 import type { ResolvedToolCapability } from "../agent/tool-runner.js"
@@ -109,7 +109,7 @@ export const makeCellToolHost = (
               message: `Tool ${request.name} is not selected for this turn`,
               output: "",
             })
-          const identity = yield* cellOperationBindingIdentity(
+          const identity = yield* innerOperationBindingIdentity(
             captured.value,
             params.profile.turnPublication,
           )
