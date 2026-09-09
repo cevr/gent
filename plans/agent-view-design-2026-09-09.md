@@ -162,3 +162,24 @@ requirement. Receipts in the commit message.
 
 Gate green. RPC acceptance test verified by disabling the wiring: all three
 cases fail without it.
+
+## Step 4 outcome (landed `087f6725`)
+
+Client half shipped: `/agents` opens a centered overlay listing every loop,
+grouped by section and indented by depth.
+
+One deviation from the shape: **search is served, not local.** The overlay
+sends the query to the server on each keystroke rather than filtering a cached
+array. The projection already owns `filterRows` and its tests; a second
+client-side filter would be a competing implementation free to drift.
+
+`session-tree-state.ts` turned out to be fully generic — a query plus a wrapped
+selection index, nothing session-shaped. Renamed `filter-list-state.ts` and
+shared, rather than copied. That is one reducer for two overlays.
+
+Step 5 is now client-only. The nesting seam is proven at the RPC layer: a child
+session created with `parentSessionId`/`parentBranchId` — the link `delegate`
+writes — comes back at depth 1 under its parent at depth 0.
+
+Verified live in a real TUI: palette entry, three real sessions with sections
+and agent names, filter to empty, backspace to restore, escape to close.
