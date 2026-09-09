@@ -7,7 +7,7 @@
 
 import { Match, Option, Schema } from "effect"
 import { Show, For, createMemo } from "solid-js"
-import { windowItems, headTailExcerpts } from "@gent/core-internal/domain/windowing.js"
+import { headTail } from "@gent/core-internal/domain/output-buffer.js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { GutterText } from "../gutter-text"
@@ -97,12 +97,9 @@ export function ReadToolRenderer(props: ToolRendererProps) {
       text,
       lineNum: start + i,
     }))
-    if (lines.length <= 6) return indexed
-    const { items } = windowItems<WindowedLine>(indexed, headTailExcerpts(3, 3), (count) => ({
-      _tag: "elision",
-      count,
-    }))
-    return items
+    const { head, tail, truncatedCount } = headTail(indexed, 6)
+    if (truncatedCount === 0) return head
+    return [...head, { _tag: "elision", count: truncatedCount }, ...tail]
   })
 
   return (

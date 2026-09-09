@@ -5,6 +5,8 @@ import { Show, createSignal } from "solid-js"
 import type { DisclosureLevel } from "../src/routes/session-ui-state"
 import { MessageList, type Message, type SessionItem } from "../src/components/message-list"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/components/tool-frame"
+import { ReadToolRenderer } from "../src/components/tool-renderers/read"
+import { EditToolRenderer } from "../src/components/tool-renderers/edit"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/context"
@@ -634,6 +636,68 @@ describe("FX transcript treatment", () => {
       const frame = renderFrame(setup)
       expect(frame.match(/⇣ Compacted 3 messages into ~14 tokens/g)?.length).toBe(2)
       expect(frame.match(/renamed the loader/g)?.length).toBe(1)
+    }),
+  )
+})
+
+describe("compact file tool bodies", () => {
+  it.live("keeps the first and last read lines with the omitted count", () =>
+    Effect.gen(function* () {
+      const lines = Array.from({ length: 10 }, (_, i) => `read-line-${i + 1}`)
+      const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+        content: lines.join("\n"),
+        lineCount: 10,
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <ReadToolRenderer
+            expanded={false}
+            toolCall={{
+              id: "read-excerpt",
+              toolName: "read",
+              status: "completed",
+              input: { path: "/tmp/excerpt.txt" },
+              summary: absent,
+              output,
+            }}
+          />
+        )),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("read-line-1")
+      expect(frame).toContain("read-line-3")
+      expect(frame).toContain("read-line-8")
+      expect(frame).toContain("read-line-10")
+      expect(frame).toContain("4 more lines")
+      expect(frame).not.toContain("read-line-4")
+      expect(frame).not.toContain("read-line-7")
+    }),
+  )
+
+  it.live("keeps the end of a long edit with an omitted-lines marker", () =>
+    Effect.gen(function* () {
+      const oldString = Array.from({ length: 10 }, (_, i) => `old-line-${i + 1}`).join("\n")
+      const newString = Array.from({ length: 10 }, (_, i) => `new-line-${i + 1}`).join("\n")
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <EditToolRenderer
+            expanded={false}
+            toolCall={{
+              id: "edit-excerpt",
+              toolName: "edit",
+              status: "completed",
+              input: { path: "/tmp/excerpt.txt", oldString, newString },
+              summary: absent,
+              output: absent,
+            }}
+          />
+        )),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("new-line-10")
+      expect(frame).toContain("more lines")
+      expect(frame).not.toContain("old-line-5")
+      expect(frame).not.toContain("new-line-5")
     }),
   )
 })

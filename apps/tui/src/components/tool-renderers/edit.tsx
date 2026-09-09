@@ -8,7 +8,7 @@
 import { Show, For, createMemo } from "solid-js"
 import type { JSX } from "solid-js"
 import { Option } from "effect"
-import { windowItems, headTailExcerpts } from "@gent/core-internal/domain/windowing.js"
+import { headTail } from "@gent/core-internal/domain/output-buffer.js"
 import { buildSyntaxStyle, useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
@@ -79,12 +79,9 @@ export function EditToolRenderer(props: ToolRendererProps) {
     const lines: DiffLine[] = data.diff
       .split("\n")
       .map((text) => ({ _tag: "line", text, kind: diffLineKind(text) }))
-    if (lines.length <= 6) return lines
-    const { items } = windowItems<DiffLine>(lines, headTailExcerpts(3, 3), (count) => ({
-      _tag: "elision",
-      count,
-    }))
-    return items
+    const { head, tail, truncatedCount } = headTail(lines, 6)
+    if (truncatedCount === 0) return head
+    return [...head, { _tag: "elision", count: truncatedCount }, ...tail]
   })
 
   return (

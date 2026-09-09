@@ -24,7 +24,7 @@ The core package has two export keys for one authoring surface: `./extensions/ap
 ## Commit sequence
 
 1. Remove core-internal imports from core's own implementation tests.
-2. Move TUI-only helpers out of core. Define and adopt client schemas and the small host/testing contracts. Delete the private package after the last consumer moves.
+2. Remove unnecessary TUI helper APIs from core. Define and adopt client schemas and the small host/testing contracts. Delete the private package after the last consumer moves.
 3. Replace the fixed cell selection with a typed extension tool-surface seam.
 4. Add branch resources under the existing actor scope. Make the kernel use ordinary extension declarations and lifetime rules.
 5. Move product defaults and context policy. Audit and remove redundant internal paths and files.
@@ -43,3 +43,29 @@ Evidence:
 - `/tmp/gent-core-test-imports-gate.log`
 - `/tmp/gent-core-reduction-build.log`
 - `/tmp/gent-core-test-imports-herdr.txt`
+
+## Remove the unused multi-range excerpt API
+
+Read and edit had used windowItems only for a fixed first-three/last-three preview. Both now use the existing headTail helper. Removed windowing.ts and its tests, including the extra TUI test of the same pure function. Existing output-buffer tests cover head/tail boundaries. Two renderer tests now check the actual compact read/edit bodies and their omitted-lines markers.
+
+The full gate passed. Live Herdr checked cell read/edit and a direct-tool profile with @gent/cell disabled. Ctrl+O cycled collapsed, preview, full, and collapsed. Full read showed line numbers. Full edit showed the actual replacement. The ten-line file changed from line-NN to row-NN and retained its final newline. FX preview uses its own bounded output view; the renderer tests exercise the compact component bodies.
+
+This unit deletes three files. Production source drops by one file and 104 physical lines. It moves no production code and adds no exports.
+
+Source files:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/components/tool-renderers/read.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/components/tool-renderers/edit.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/domain/output-buffer.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/message-list-render.test.tsx`
+
+Evidence:
+
+- `/tmp/gent-excerpt-reduction-gate.log`
+- `/tmp/gent-excerpt-render-tests.log` (16 tests, 88 assertions)
+- `/tmp/gent-excerpt-reduction-preview.txt`
+- `/tmp/gent-excerpt-reduction-full.txt`
+- `/tmp/gent-excerpt-direct-collapsed.txt`
+- `/tmp/gent-excerpt-direct-preview.txt`
+- `/tmp/gent-excerpt-direct-full.txt`
+- `/tmp/gent-core-renderer-check/sample.txt`
