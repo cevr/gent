@@ -1,8 +1,8 @@
 /**
- * Thin Solid wrapper over ChildSessionTracker from @gent/runtime.
+ * Thin Solid wrapper over the TUI child session tracker.
  *
  * Creates a tracker, subscribes to changes, writes to Solid store.
- * All event projection logic lives in the runtime service.
+ * All event projection logic lives in the tracker.
  */
 import { createStore } from "solid-js/store"
 import { createEffect, on, onCleanup } from "solid-js"
@@ -23,7 +23,7 @@ export interface UseChildSessionsReturn {
 }
 
 type ChildSessionClient = Pick<ClientSessionValue, "session"> &
-  Pick<ClientTransportValue, "runtime">
+  Pick<ClientTransportValue, "runtime" | "client">
 
 export function useChildSessions(client: ChildSessionClient): UseChildSessionsReturn {
   const [store, setStore] = createStore<{ entries: Record<string, ChildSessionEntry> }>({
@@ -49,7 +49,7 @@ export function useChildSessions(client: ChildSessionClient): UseChildSessionsRe
       client.runtime.fork(
         Effect.scoped(
           Effect.gen(function* () {
-            const tracker = yield* makeChildSessionTracker
+            const tracker = yield* makeChildSessionTracker(client.client.session.events)
 
             // Fork: pump tracker snapshots → Solid store
             yield* Effect.forkScoped(

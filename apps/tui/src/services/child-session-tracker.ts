@@ -8,14 +8,10 @@
  */
 import { Effect, Fiber, FiberSet, Option, Ref, Stream, SubscriptionRef } from "effect"
 import type { Scope } from "effect"
-import {
-  EventStore,
-  type AgentEvent,
-  type EventEnvelope,
-} from "@gent/core-internal/domain/event.js"
+import type { AgentEvent, EventEnvelope } from "@gent/core-internal/domain/event.js"
+import type { GentNamespacedClient } from "@gent/sdk"
 import type { AgentName } from "@gent/core-internal/domain/agent.js"
-import { SessionId } from "@gent/core-internal/domain/ids.js"
-import type { BranchId, ToolCallId } from "@gent/core-internal/domain/ids.js"
+import { SessionId, BranchId, type ToolCallId } from "@gent/core-internal/domain/ids.js"
 
 // =============================================================================
 // Constants
@@ -66,10 +62,10 @@ export interface ChildSessionTrackerService {
   readonly changes: Stream.Stream<ReadonlyMap<string, ChildSessionEntry>>
 }
 
-export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore | Scope.Scope> =
+export const make = (
+  events: GentNamespacedClient["session"]["events"],
+): Effect.Effect<ChildSessionTrackerService, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const eventStore = yield* EventStore
-
     const entries = yield* SubscriptionRef.make(new Map<string, ChildSessionEntry>())
     const childFibers = yield* Ref.make(new Map<string, Fiber.Fiber<void>>())
     const fiberSet = yield* FiberSet.make<void>()
@@ -90,75 +86,62 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
         },
       )
 
-    const handleChildEvent = (childSessionId: string, event: AgentEvent) =>
-      Effect.gen(function* () {
-        switch (event._tag) {
-          case "ToolCallStarted": {
-            const updated = yield* updateEntry(childSessionId, (entry) => ({
-              ...entry,
-              toolCalls: [
-                ...entry.toolCalls,
-                {
-                  toolCallId: event.toolCallId,
-                  toolName: event.toolName,
-                  status: "running",
-                  input: event.input,
-                },
-              ],
-            }))
-            if (Option.isNone(updated)) return
-            break
-          }
-
-          case "ToolCallSucceeded": {
-            const updated = yield* updateEntry(childSessionId, (entry) => ({
-              ...entry,
-              toolCalls: entry.toolCalls.map((tc): ChildToolCall => {
-                if (tc.toolCallId === event.toolCallId) return { ...tc, status: "completed" }
-                return tc
-              }),
-            }))
-            if (Option.isNone(updated)) return
-            break
-          }
-
-          case "ToolCallFailed": {
-            const updated = yield* updateEntry(childSessionId, (entry) => ({
-              ...entry,
-              toolCalls: entry.toolCalls.map((tc): ChildToolCall => {
-                if (tc.toolCallId === event.toolCallId) return { ...tc, status: "error" }
-                return tc
-              }),
-            }))
-            if (Option.isNone(updated)) return
-            break
-          }
-
-          case "StreamChunk": {
-            const updated = yield* updateEntry(childSessionId, (entry) => {
-              const combined = entry.streamText + event.chunk
-              return {
-                ...entry,
-                streamText: (() => {
-                  if (combined.length > STREAM_TEXT_MAX_LENGTH) {
-                    return combined.slice(combined.length - STREAM_TEXT_MAX_LENGTH)
-                  }
-                  return combined
-                })(),
-              }
-            })
-            if (Option.isNone(updated)) return
-            break
+    const projectChildEvent = (entry: ChildSessionEntry, event: AgentEvent): ChildSessionEntry => {
+      switch (event._tag) {
+        case "ToolCallStarted": {
+          return {
+            ...entry,
+            toolCalls: [
+              ...entry.toolCalls,
+              {
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                status: "running",
+                input: event.input,
+              },
+            ],
           }
         }
-      })
 
-    const subscribeChild = (childSessionId: string) =>
+        case "ToolCallSucceeded": {
+          return {
+            ...entry,
+            toolCalls: entry.toolCalls.map((tc): ChildToolCall => {
+              if (tc.toolCallId === event.toolCallId) return { ...tc, status: "completed" }
+              return tc
+            }),
+          }
+        }
+
+        case "ToolCallFailed": {
+          return {
+            ...entry,
+            toolCalls: entry.toolCalls.map((tc): ChildToolCall => {
+              if (tc.toolCallId === event.toolCallId) return { ...tc, status: "error" }
+              return tc
+            }),
+          }
+        }
+
+        case "StreamChunk": {
+          const combined = entry.streamText + event.chunk
+          return {
+            ...entry,
+            streamText: combined.slice(-STREAM_TEXT_MAX_LENGTH),
+          }
+        }
+        default:
+          return entry
+      }
+    }
+
+    const subscribeChild = (childSessionId: string, branchId?: BranchId) =>
       Effect.gen(function* () {
         const fiber = yield* FiberSet.run(fiberSet)(
           Stream.runForEach(
-            eventStore.subscribe({ sessionId: SessionId.make(childSessionId) }),
-            (envelope: EventEnvelope) => handleChildEvent(childSessionId, envelope.event),
+            events({ sessionId: SessionId.make(childSessionId), branchId, after: 0 }),
+            (envelope: EventEnvelope) =>
+              updateEntry(childSessionId, (entry) => projectChildEvent(entry, envelope.event)),
           ).pipe(Effect.catchEager(() => Effect.void)),
         )
         yield* Ref.update(childFibers, (m) => new Map(m).set(childSessionId, fiber))
@@ -207,14 +190,14 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
             )
             if (!added) return
             // Subscribe to child events for tool call hydration.
-            // On replay, the subscription replays child history then gets interrupted
-            // when AgentRunSucceeded/Failed fires interruptChild.
-            yield* subscribeChild(childId)
+            // Completion drains saved child history before it closes the subscription.
+            yield* subscribeChild(childId, event.childBranchId)
             break
           }
 
           case "AgentRunSucceeded": {
             const childId = event.childSessionId
+            yield* finishChild(childId)
             const updated = yield* updateEntry(childId, (entry): ChildSessionEntry => ({
               ...entry,
               status: "completed",
@@ -223,18 +206,17 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
               savedPath: event.savedPath,
             }))
             if (Option.isNone(updated)) return
-            yield* interruptChild(childId)
             break
           }
 
           case "AgentRunFailed": {
             const childId = event.childSessionId
+            yield* finishChild(childId)
             const updated = yield* updateEntry(childId, (entry): ChildSessionEntry => ({
               ...entry,
               status: "error",
             }))
             if (Option.isNone(updated)) return
-            yield* interruptChild(childId)
             break
           }
 
@@ -243,13 +225,46 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
         }
       })
 
+    const finishChild = Effect.fn("ChildSessionTracker.finishChild")(function* (
+      childSessionId: string,
+    ) {
+      yield* interruptChild(childSessionId)
+      const current = Option.fromUndefinedOr(
+        (yield* SubscriptionRef.get(entries)).get(childSessionId),
+      )
+      if (Option.isNone(current)) return
+      const entry = current.value
+      // A parent completion can arrive before the child's RPC replay finishes.
+      // Fold the final durable history privately, then publish one complete snapshot.
+      yield* events({
+        sessionId: SessionId.make(childSessionId),
+        branchId: Option.getOrUndefined(
+          Option.fromUndefinedOr(entry.childBranchId).pipe(Option.map((id) => BranchId.make(id))),
+        ),
+        after: 0,
+      }).pipe(
+        Stream.takeUntil((envelope) => envelope.event._tag === "StreamSynchronized"),
+        Stream.runFold(
+          (): ChildSessionEntry => ({ ...entry, toolCalls: [], streamText: "" }),
+          (state, envelope) => projectChildEvent(state, envelope.event),
+        ),
+        Effect.flatMap((snapshot) => updateEntry(childSessionId, () => snapshot)),
+        Effect.catchEager((error) =>
+          Effect.logWarning("Child event replay failed").pipe(
+            Effect.annotateLogs({ childSessionId, error: String(error) }),
+          ),
+        ),
+      )
+    })
+
     const service: ChildSessionTrackerService = {
       track: ({ sessionId, branchId }) =>
         FiberSet.run(fiberSet)(
           Stream.runForEach(
-            eventStore.subscribe({
+            events({
               sessionId,
               branchId,
+              after: 0,
             }),
             (envelope: EventEnvelope) => handleParentEvent(envelope.event),
           ).pipe(Effect.catchEager(() => Effect.void)),
@@ -257,6 +272,7 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
 
       stop: Effect.gen(function* () {
         yield* FiberSet.clear(fiberSet)
+        yield* Ref.set(childFibers, new Map())
         yield* SubscriptionRef.set(entries, new Map())
       }),
 

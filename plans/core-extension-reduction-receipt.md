@@ -247,3 +247,46 @@ Evidence:
 - `/tmp/gent-model-surface-direct/.gent/config.json`
 - `/tmp/gent-model-surface-check/note.txt`
 - `/tmp/gent-core-reduction-current.json`
+
+## Child tracking through RPC — 2026-09-09
+
+The TUI child tracker now uses the client's `session.events` stream. It no longer requires the server-only `EventStore` service in the client runtime. Child subscriptions use the child branch ID when available.
+
+A saved parent completion can arrive before child history has finished loading. Completion now stops the live child subscription and folds saved child events through `StreamSynchronized`. It publishes the final snapshot before the terminal child state. This keeps child tools and text on replay. Stop clears entries and fiber references.
+
+Three real RPC tests passed with 16 assertions. They verify live tool/text updates, completed history, failed history, branch filtering, and cleanup. Each test also confirms that the client runtime has no `EventStore`. The full gate passed. The initial test fixture lacked the RPC workspace identity and used an outdated `Stream.filterMap` result type. Both fixture errors were corrected before the gate passed.
+
+Herdr ran two live Luna checks in pane `wZ:pH`. One called delegate from a cell. One used a direct delegate with the cell extension disabled. Both children read the fixture and returned the expected marker and first line. The collapsed, preview, and full levels remained usable. These UI checks show tool completion and output; the RPC tests prove the tracker snapshots. The known wrapped prompt border defect still appears after disclosure replay. It remains open for the native transcript work.
+
+This unit adds 16 production lines and no production files or public core exports. Current production totals remain one file and 32 physical lines below the baseline. No code was moved in this unit. The private package still exists. The one-shot `-p` work remains queued after the cache work, with all normal tools, approvals, and child work retained.
+
+Changed files:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/hooks/use-child-sessions.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/services/child-session-tracker.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/child-session-tracker.test.ts`
+
+Other source receipts:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/sdk/src/client.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/sdk/src/transport-headers.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/server/rpc-handlers.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/server/workspace-rpc.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/domain/event.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/core/src/storage/event-storage.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/plans/inline-prompt-priors-2026-09-08.md`
+
+Evidence:
+
+- `/tmp/gent-child-tracker-tests.log`
+- `/tmp/gent-child-tracker-gate.log`
+- `/tmp/gent-child-tracker-herdr-live.txt`
+- `/tmp/gent-child-tracker-herdr-preview.txt`
+- `/tmp/gent-child-tracker-herdr-full.txt`
+- `/tmp/gent-child-tracker-herdr-collapsed.txt`
+- `/tmp/gent-child-tracker-direct-herdr-live.txt`
+- `/tmp/gent-child-tracker-direct-herdr-preview.txt`
+- `/tmp/gent-child-tracker-direct-herdr-full.txt`
+- `/tmp/gent-model-surface-direct/.gent/config.json`
+- `/tmp/gent-model-surface-check/note.txt`
+- `/tmp/gent-core-reduction-current.json`
