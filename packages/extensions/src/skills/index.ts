@@ -2,8 +2,11 @@
  * @gent/skills extension — exposes user/project skills (`.md` files
  * under `~/.claude/skills/` and `<cwd>/.claude/skills/`) to agents.
  *
- * The Skills service is process-scoped. Request RPCs and the
- * turn projection read it directly; no actor mirror is needed.
+ * The Skills service is branch-scoped. Skills are read from disk once per
+ * branch and never reload (`skills.ts`), so branch lifetime is the honest
+ * lifetime: a new branch picks up skills added since, and nothing outlives
+ * the loop that read them. Request RPCs and the turn projection read it
+ * directly; no actor mirror is needed.
  */
 
 import { Effect } from "effect"
@@ -22,7 +25,7 @@ export const SkillsExtension = defineExtension({
       defineResource({
         id: "@gent/skills/service",
         tag: Skills,
-        scope: "process",
+        scope: "branch",
         layer: Skills.Live({ cwd: host.cwd, home: host.home }),
       }),
     )
