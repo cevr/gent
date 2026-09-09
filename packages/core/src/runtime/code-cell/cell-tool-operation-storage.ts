@@ -8,16 +8,19 @@ import {
   MessageId,
   SessionId,
   ToolCallId,
-} from "../domain/ids.js"
+} from "../../domain/ids.js"
 import {
   ApprovalDecisionSchema,
   type InteractionRequestRecord,
-} from "../domain/interaction-request.js"
-import { StorageError } from "../domain/storage-error.js"
-import { ToolBindingIdentity, canonicalizeToolBindingIdentity } from "../domain/tool-binding.js"
-import { GentPlatform } from "../runtime/gent-platform.js"
-import { makeOwnedToolCallReader, type OwnedToolCallAddress } from "./sqlite/owned-tool-call.js"
-import { InteractionStorage } from "./interaction-storage.js"
+} from "../../domain/interaction-request.js"
+import { StorageError } from "../../domain/storage-error.js"
+import { ToolBindingIdentity, canonicalizeToolBindingIdentity } from "../../domain/tool-binding.js"
+import { GentPlatform } from "../gent-platform.js"
+import {
+  makeOwnedToolCallReader,
+  type OwnedToolCallAddress,
+} from "../../storage/sqlite/owned-tool-call.js"
+import { InteractionStorage } from "../../storage/interaction-storage.js"
 
 export const CellToolOperationId = Schema.NonEmptyString.check(Schema.isMaxLength(128))
 const OperationAddressRow = Schema.Struct({
@@ -101,7 +104,7 @@ const failure = (cause: unknown) => {
 export class CellToolOperationStorage extends Context.Service<
   CellToolOperationStorage,
   CellToolOperationStorageService
->()("@gent/core/src/storage/cell-tool-operation-storage/CellToolOperationStorage") {
+>()("@gent/core/src/runtime/code-cell/cell-tool-operation-storage/CellToolOperationStorage") {
   static Live = Layer.effect(
     CellToolOperationStorage,
     Effect.gen(function* () {

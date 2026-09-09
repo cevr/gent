@@ -2,10 +2,7 @@ import { Effect, Option, Schema } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import { ToolCallId } from "../../domain/ids.js"
 import { summarizeToolOutput } from "../../domain/tool-output.js"
-import {
-  CellToolOperationStorage,
-  type CellToolOperation,
-} from "../../storage/cell-tool-operation-storage.js"
+import { CellToolOperationStorage, type CellToolOperation } from "./cell-tool-operation-storage.js"
 import type { OwnedToolCallAddress } from "../../storage/sqlite/owned-tool-call.js"
 
 /** Compact record of one admitted inner call. It stays in the saved cell result. */

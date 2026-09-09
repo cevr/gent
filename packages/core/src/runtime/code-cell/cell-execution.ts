@@ -16,8 +16,8 @@ import type { ChildProcessSpawner } from "effect/unstable/process"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../domain/ids.js"
 import { StorageError } from "../../domain/storage-error.js"
-import { CellExecutionStorage } from "../../storage/cell-execution-storage.js"
-import { CellNamespaceStorage } from "../../storage/cell-namespace-storage.js"
+import { CellExecutionStorage } from "./cell-execution-storage.js"
+import { CellNamespaceStorage } from "./cell-namespace-storage.js"
 import {
   CellKernelError,
   type CellOperationHost,

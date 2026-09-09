@@ -1,3 +1,4 @@
+import type { DispatchingToolStorage } from "../code-cell/cell-services.js"
 import type { Context } from "effect"
 import { Effect } from "effect"
 import type { SqlClient } from "effect/unstable/sql"
@@ -9,9 +10,6 @@ import type { EventStorage } from "../../storage/event-storage.js"
 import type { ModelResolver } from "../../providers/model-resolver.js"
 import type { ModelRegistry } from "../model-registry.js"
 import type { ToolRunner } from "./tool-runner.js"
-import type { CellExecutionStorage } from "../../storage/cell-execution-storage.js"
-import type { CellNamespaceStorage } from "../../storage/cell-namespace-storage.js"
-import type { CellToolOperationStorage } from "../../storage/cell-tool-operation-storage.js"
 import type { InteractionStorage } from "../../storage/interaction-storage.js"
 
 export type AgentLoopRuntimeServices =
@@ -24,9 +22,7 @@ export type AgentLoopRuntimeServices =
   | ModelRegistry
   | ToolRunner
   | EventPublisher
-  | CellExecutionStorage
-  | CellNamespaceStorage
-  | CellToolOperationStorage
+  | DispatchingToolStorage
   | InteractionStorage
 
 export type AgentLoopRuntimeContext = Context.Context<AgentLoopRuntimeServices>

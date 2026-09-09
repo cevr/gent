@@ -1,6 +1,6 @@
 import { Effect, Option } from "effect"
 import type { InteractionRequestId } from "../../domain/ids.js"
-import { CellToolOperationStorage } from "../../storage/cell-tool-operation-storage.js"
+import { CellToolOperationStorage } from "./cell-tool-operation-storage.js"
 import type { OwnedToolCallAddress } from "../../storage/sqlite/owned-tool-call.js"
 import {
   innerOperationBindingIdentity,

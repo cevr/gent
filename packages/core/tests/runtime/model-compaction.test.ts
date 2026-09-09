@@ -21,8 +21,8 @@ import {
   ToolSchemaRevision,
   ToolSourceRevision,
 } from "../../src/domain/tool-binding"
-import { CellExecutionStorage } from "../../src/storage/cell-execution-storage"
-import { CellToolOperationStorage } from "../../src/storage/cell-tool-operation-storage"
+import { CellExecutionStorage } from "../../src/runtime/code-cell/cell-execution-storage"
+import { CellToolOperationStorage } from "../../src/runtime/code-cell/cell-tool-operation-storage"
 import { MessageStorage } from "../../src/storage/message-storage"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"

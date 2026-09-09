@@ -14,7 +14,7 @@ import type { ProviderError } from "../domain/provider-error.js"
 import type { StorageError } from "../domain/storage-error.js"
 import { toPrompt } from "../providers/ai-transcript.js"
 import { MessageStorage, type MessageStorageService } from "../storage/message-storage.js"
-import { CellToolOperationStorage } from "../storage/cell-tool-operation-storage.js"
+import { CellToolOperationStorage } from "./code-cell/cell-tool-operation-storage.js"
 import {
   ModelContextBudget,
   type ModelContextError,

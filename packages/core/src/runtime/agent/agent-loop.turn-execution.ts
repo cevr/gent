@@ -25,7 +25,7 @@ import { GentPlatform } from "../gent-platform.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { WideEvent } from "../wide-event-boundary.js"
 import { AgentLoopError, type QueuedTurnItem, type RunningState } from "./agent-loop.state.js"
-import { CellExecutionStorage } from "../../storage/cell-execution-storage.js"
+import { CellExecutionStorage } from "../code-cell/cell-execution-storage.js"
 import { recoverCellExecution } from "../code-cell/cell-recovery.js"
 import {
   assistantDraftFromMessage,

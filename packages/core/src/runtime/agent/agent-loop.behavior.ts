@@ -8,6 +8,7 @@
  * @module
  */
 
+import type { DispatchingToolStorage } from "../code-cell/cell-services.js"
 import {
   Cause,
   Context,
@@ -51,9 +52,6 @@ import type { MessageStorage } from "../../storage/message-storage.js"
 import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
-import type { CellExecutionStorage } from "../../storage/cell-execution-storage.js"
-import type { CellNamespaceStorage } from "../../storage/cell-namespace-storage.js"
-import type { CellToolOperationStorage } from "../../storage/cell-tool-operation-storage.js"
 import type { InteractionStorage } from "../../storage/interaction-storage.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import type { SessionProfileCacheService } from "../session-profile.js"
@@ -231,9 +229,7 @@ export const makeAgentLoopBehavior = (
   | EventStorage
   | SessionOperationStorage
   | ToolCallBindingStorage
-  | CellExecutionStorage
-  | CellNamespaceStorage
-  | CellToolOperationStorage
+  | DispatchingToolStorage
   | InteractionStorage
   | SqlClient.SqlClient
   | ModelResolver

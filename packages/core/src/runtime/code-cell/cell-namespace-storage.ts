@@ -1,8 +1,8 @@
 import { Context, DateTime, Effect, Layer, Option, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import type { BranchId, SessionId } from "../domain/ids.js"
-import { StorageError } from "../domain/storage-error.js"
-import { CellSnapshot } from "../runtime/code-cell/cell-snapshot.js"
+import type { BranchId, SessionId } from "../../domain/ids.js"
+import { StorageError } from "../../domain/storage-error.js"
+import { CellSnapshot } from "./cell-snapshot.js"
 
 const SnapshotJson = Schema.fromJsonString(CellSnapshot)
 const NamespaceRow = Schema.Struct({ snapshot_json: Schema.String })
@@ -32,7 +32,7 @@ const storageFailure = (cause: unknown) => {
 export class CellNamespaceStorage extends Context.Service<
   CellNamespaceStorage,
   CellNamespaceStorageService
->()("@gent/core/src/storage/cell-namespace-storage/CellNamespaceStorage") {
+>()("@gent/core/src/runtime/code-cell/cell-namespace-storage/CellNamespaceStorage") {
   static Live = Layer.effect(
     CellNamespaceStorage,
     Effect.gen(function* () {

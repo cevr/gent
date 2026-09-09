@@ -43,7 +43,7 @@ import {
   type ModelCompactionError,
   ModelCompactionResult,
 } from "../model-compaction.js"
-import { CellNamespaceStorage } from "../../storage/cell-namespace-storage.js"
+import { CellNamespaceStorage } from "../code-cell/cell-namespace-storage.js"
 import { type ContextDirective, ModelContextLedger } from "../model-context-ledger.js"
 import {
   latestUserMessageId,

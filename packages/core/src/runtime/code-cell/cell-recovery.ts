@@ -2,11 +2,8 @@ import { Effect, Option, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { StorageError } from "../../domain/storage-error.js"
-import { CellExecutionStorage } from "../../storage/cell-execution-storage.js"
-import {
-  CellToolOperationStorage,
-  CellToolOperationId,
-} from "../../storage/cell-tool-operation-storage.js"
+import { CellExecutionStorage } from "./cell-execution-storage.js"
+import { CellToolOperationStorage, CellToolOperationId } from "./cell-tool-operation-storage.js"
 import { InteractionStorage } from "../../storage/interaction-storage.js"
 import { ToolCallId, ToolId } from "../../domain/ids.js"
 import { CellToolCallSuspended } from "./cell-kernel.js"

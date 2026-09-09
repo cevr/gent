@@ -1,9 +1,12 @@
 import { Context, DateTime, Effect, Layer, Option, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { StorageError } from "../domain/storage-error.js"
-import { CellInput } from "../domain/cell-input.js"
-import { makeOwnedToolCallReader, type OwnedToolCallAddress } from "./sqlite/owned-tool-call.js"
+import { StorageError } from "../../domain/storage-error.js"
+import { CellInput } from "./cell-input.js"
+import {
+  makeOwnedToolCallReader,
+  type OwnedToolCallAddress,
+} from "../../storage/sqlite/owned-tool-call.js"
 
 const ResultJson = Schema.fromJsonString(Prompt.ToolResultPart)
 const ExecutionRow = Schema.Struct({ result_json: Schema.NullOr(Schema.String) })
@@ -40,7 +43,7 @@ const storageFailure = (cause: unknown) => {
 export class CellExecutionStorage extends Context.Service<
   CellExecutionStorage,
   CellExecutionStorageService
->()("@gent/core/src/storage/cell-execution-storage/CellExecutionStorage") {
+>()("@gent/core/src/runtime/code-cell/cell-execution-storage/CellExecutionStorage") {
   static Live = Layer.effect(
     CellExecutionStorage,
     Effect.gen(function* () {

@@ -32,8 +32,8 @@ import {
   InteractionPendingError,
 } from "../../src/domain/interaction-request"
 import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
-import { CellExecutionStorage } from "../../src/storage/cell-execution-storage"
-import { CellToolOperationStorage } from "../../src/storage/cell-tool-operation-storage"
+import { CellExecutionStorage } from "../../src/runtime/code-cell/cell-execution-storage"
+import { CellToolOperationStorage } from "../../src/runtime/code-cell/cell-tool-operation-storage"
 import { InteractionStorage } from "../../src/storage/interaction-storage"
 import { MessageStorage } from "../../src/storage/message-storage"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"

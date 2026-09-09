@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { tool } from "../../domain/capability/tool.js"
-import { CellInput } from "../../domain/cell-input.js"
+import { CellInput } from "./cell-input.js"
 import { ToolResultFailure } from "../../domain/tool-output.js"
 import { dispatchCell } from "./cell-dispatch.js"
 

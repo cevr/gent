@@ -1,3 +1,4 @@
+import type { DispatchingToolStorage } from "./code-cell/cell-services.js"
 import {
   Predicate,
   Cause,
@@ -50,9 +51,6 @@ import type { ApprovalService } from "./approval-service.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { ToolRunner } from "./agent/tool-runner.js"
 import type { ToolCallBindingStorage } from "../storage/tool-call-binding-storage.js"
-import type { CellExecutionStorage } from "../storage/cell-execution-storage.js"
-import type { CellNamespaceStorage } from "../storage/cell-namespace-storage.js"
-import type { CellToolOperationStorage } from "../storage/cell-tool-operation-storage.js"
 import type { InteractionStorage } from "../storage/interaction-storage.js"
 import type { ConfigService } from "./config-service.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
@@ -207,9 +205,7 @@ type SessionRuntimeLayerRequirements =
   | ModelResolver
   | ToolRunner
   | ToolCallBindingStorage
-  | CellExecutionStorage
-  | CellNamespaceStorage
-  | CellToolOperationStorage
+  | DispatchingToolStorage
   | InteractionStorage
   | ConfigService
   | AgentLoopSessionGovernance

@@ -12,7 +12,7 @@ import { Context, Effect, Layer, Option } from "effect"
 import { isRecord } from "../domain/guards.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { EventStoreError, InteractionPresented } from "../domain/event.js"
-import { CellToolOperationStorage } from "../storage/cell-tool-operation-storage.js"
+import { CellToolOperationStorage } from "./code-cell/cell-tool-operation-storage.js"
 import { CurrentCellToolOperation } from "./code-cell/current-cell-tool-operation.js"
 import type { InteractionRequestId } from "../domain/ids.js"
 import {

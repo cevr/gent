@@ -11,7 +11,7 @@ import {
 import { ControlChildAgent } from "../../../../extensions/src/delegate/child-agent-tools.js"
 import { DelegateTool } from "../../../../extensions/src/delegate/delegate-tool.js"
 import { makeDurableAgentRunRuntime } from "../../../src/runtime/agent/agent-runner.durable"
-import { CellToolOperationStorage } from "../../../src/storage/cell-tool-operation-storage"
+import { CellToolOperationStorage } from "../../../src/runtime/code-cell/cell-tool-operation-storage"
 import { messageSingleText } from "../../../src/domain/message-part-projection"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SqlClient } from "effect/unstable/sql"
@@ -32,7 +32,7 @@ import {
   type BranchId,
 } from "../../../src/domain/ids"
 import { assistantMessageIdForTurn, Message, dateFromMillis } from "../../../src/domain/message"
-import { CellExecutionStorage } from "../../../src/storage/cell-execution-storage"
+import { CellExecutionStorage } from "../../../src/runtime/code-cell/cell-execution-storage"
 import { MessageStorage } from "../../../src/storage/message-storage"
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
 import { ToolCallBindingStorage } from "../../../src/storage/tool-call-binding-storage"

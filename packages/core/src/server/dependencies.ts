@@ -33,7 +33,7 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
-import { CellToolOperationStorage } from "../storage/cell-tool-operation-storage.js"
+import { CellToolOperationStorage } from "../runtime/code-cell/cell-tool-operation-storage.js"
 import { CurrentCellToolOperation } from "../runtime/code-cell/current-cell-tool-operation.js"
 import { ResourceGraphStorage } from "../storage/resource-graph-storage.js"
 import {
