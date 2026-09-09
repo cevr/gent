@@ -254,6 +254,8 @@ export function AgentsPane(
   props: OverlayProps & {
     controller: AgentsController
     onSelect: (row: AgentRowEntry) => void
+    /** Show the pane if hidden, hide it if shown. Bound to Ctrl+T. */
+    onToggle: () => void
   },
 ) {
   const { theme } = useTheme()
@@ -295,6 +297,15 @@ export function AgentsPane(
 
   useScrollSync(() => `agents-row-${state().selectedIndex}`, {
     getRef: () => Option.getOrUndefined(scrollRef),
+  })
+
+  // The toggle binds whether or not the pane is showing, so it can open as well
+  // as close. Registered separately from the pane's own keys, which are gated on
+  // `open` and would otherwise swallow every keystroke while docked.
+  useScopedKeyboard((event) => {
+    if (event.ctrl !== true || event.name !== "t") return false
+    props.onToggle()
+    return true
   })
 
   useScopedKeyboard(
@@ -460,7 +471,7 @@ export function AgentsPane(
         </Show>
 
         <ChromePanel.Error error={Option.getOrUndefined(props.controller.error())} />
-        <ChromePanel.Footer>Type | Up/Down | Enter | Esc</ChromePanel.Footer>
+        <ChromePanel.Footer>Type | Up/Down | Enter | Esc | Ctrl+T</ChromePanel.Footer>
       </box>
     </Show>
   )
@@ -515,6 +526,11 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
             open={controller.open()}
             controller={controller}
             onClose={() => controller.setOpen(false)}
+            onToggle={() => {
+              const next = !controller.open()
+              controller.setOpen(next)
+              if (next) controller.refresh("")
+            }}
             onSelect={(row) => {
               controller.setOpen(false)
               // Rows are already keyed per branch, so there is no active-branch

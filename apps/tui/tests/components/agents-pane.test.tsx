@@ -51,6 +51,7 @@ describe("Agents pane navigation", () => {
             onSelect={(value) => {
               selected = Option.some(value)
             }}
+            onToggle={() => {}}
             onClose={() => setOpen(false)}
           />
         )),
@@ -107,6 +108,7 @@ describe("Agents pane navigation", () => {
               setOpen: () => {},
             }}
             onSelect={() => {}}
+            onToggle={() => {}}
             onClose={() => {}}
           />
         )),
@@ -157,12 +159,59 @@ describe("Agents pane navigation", () => {
               setOpen: () => {},
             }}
             onSelect={() => {}}
+            onToggle={() => {}}
             onClose={() => {}}
           />
         )),
       )
 
       expect(renderFrame(setup)).toContain("running")
+    }),
+  )
+
+  it.live("toggles with Ctrl+T while the pane is hidden", () =>
+    Effect.gen(function* () {
+      // The pane's other keys are gated on `open`, so the toggle has to be
+      // registered separately or it can close the pane but never reopen it.
+      const [open, setOpen] = createSignal(false)
+      let toggles = 0
+
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <AgentsPane
+            open={open()}
+            controller={{
+              rows: () => [row("toggle", "Alpha", 0)],
+              current: () => Option.none(),
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              open,
+              setOpen,
+            }}
+            onSelect={() => {}}
+            onToggle={() => {
+              toggles++
+              setOpen((current) => !current)
+            }}
+            onClose={() => setOpen(false)}
+          />
+        )),
+      )
+
+      expect(renderFrame(setup)).not.toContain("Agents")
+
+      setup.mockInput.pressKey("t", { ctrl: true })
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(toggles).toBe(1)
+      expect(open()).toBe(true)
+      expect(renderFrame(setup)).toContain("Agents")
+
+      setup.mockInput.pressKey("t", { ctrl: true })
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(open()).toBe(false)
     }),
   )
 })
