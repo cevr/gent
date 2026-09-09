@@ -30,24 +30,28 @@ const ReplySchema = Schema.Struct({
   ),
 })
 
+const openHarness = Effect.gen(function* () {
+  const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+  return yield* createRpcHarness({
+    ...e2ePreset,
+    providerLayer,
+    extensionInputs: [AgentsViewExtension],
+    cwd: "/tmp/agents-view-rpc",
+  })
+})
+
 const listAgents = (input: { readonly query?: string }) =>
   Effect.gen(function* () {
-    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-    const { client, sessionId, branchId } = yield* createRpcHarness({
-      ...e2ePreset,
-      providerLayer,
-      extensionInputs: [AgentsViewExtension],
-      cwd: "/tmp/agents-view-rpc",
-    })
-    const raw = yield* client.extension.request({
-      sessionId,
-      branchId,
+    const harness = yield* openHarness
+    const raw = yield* harness.client.extension.request({
+      sessionId: harness.sessionId,
+      branchId: harness.branchId,
       extensionId: ref(AgentsViewRpc.ListAgents).extensionId,
       capabilityId: ref(AgentsViewRpc.ListAgents).capabilityId,
       input,
     })
     const reply = yield* Schema.decodeUnknownEffect(ReplySchema)(raw)
-    return { reply, sessionId, branchId }
+    return { reply, harness, sessionId: harness.sessionId, branchId: harness.branchId }
   })
 
 describe("AgentsViewExtension via RPC", () => {
@@ -76,6 +80,40 @@ describe("AgentsViewExtension via RPC", () => {
         Effect.gen(function* () {
           const { reply } = yield* listAgents({ query: "no-such-agent-anywhere" })
           expect(reply.rows).toHaveLength(0)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "a child session nests under its parent",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* openHarness
+
+          // `session.create` stores parentSessionId/parentBranchId, which is the
+          // same link `delegate` writes for a subagent. Step 5's disclosure tree
+          // reads nothing else, so proving depth here proves the nesting seam.
+          const child = yield* harness.client.session.create({
+            cwd: "/tmp/agents-view-rpc-child",
+            parentSessionId: harness.sessionId,
+            parentBranchId: harness.branchId,
+          })
+
+          const raw = yield* harness.client.extension.request({
+            sessionId: harness.sessionId,
+            branchId: harness.branchId,
+            extensionId: ref(AgentsViewRpc.ListAgents).extensionId,
+            capabilityId: ref(AgentsViewRpc.ListAgents).capabilityId,
+            input: {},
+          })
+          const reply = yield* Schema.decodeUnknownEffect(ReplySchema)(raw)
+
+          const parentRow = reply.rows.find((row) => row.sessionId === harness.sessionId)
+          const childRow = reply.rows.find((row) => row.sessionId === child.sessionId)
+          expect(parentRow?.depth).toBe(0)
+          expect(childRow?.depth).toBe(1)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

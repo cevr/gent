@@ -3,6 +3,7 @@ import type { AnyExtensionClientModule } from "../client-facets.js"
 import { Effect } from "effect"
 import { ref } from "@gent/core/extensions/api"
 import { SkillsRpc } from "@gent/extensions/client.js"
+import builtinAgentsView from "./agents-view.client"
 import builtinBtw from "./btw.client"
 import builtinDriver from "./driver.client"
 import builtinFiles from "./files.client"
@@ -67,6 +68,7 @@ const builtinSkills = defineClientExtension("@gent/skills-ui", {
 // Builtins keep their precise `R` locally; the load membrane erases them in
 // one place when `loader-boundary.ts` runs `runtime.runPromise(...)`.
 export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
+  builtinAgentsView,
   builtinBtw,
   builtinConnection,
   builtinDriver,

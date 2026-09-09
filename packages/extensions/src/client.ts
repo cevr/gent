@@ -24,3 +24,4 @@ export {
   type SideTurn as SideTurnType,
 } from "./btw/btw-protocol.js"
 export { BtwRpc } from "./btw/index.js"
+export { AgentsViewRpc, type AgentRowEntry } from "./agents-view/protocol.js"

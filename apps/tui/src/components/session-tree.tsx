@@ -9,7 +9,7 @@ import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { truncate } from "../utils/format-tool"
 import { useScopedKeyboard } from "../keyboard/context"
-import { SessionTreeEvent, SessionTreeState, transitionSessionTree } from "./session-tree-state"
+import { FilterListEvent, FilterListState, transitionFilterList } from "./filter-list-state"
 import { Option } from "effect"
 
 interface FlatNode {
@@ -95,7 +95,7 @@ export interface SessionTreeProps {
 export function SessionTree(props: SessionTreeProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
-  const [state, setState] = createSignal(SessionTreeState.initial())
+  const [state, setState] = createSignal(FilterListState.initial())
   let scrollRef = Option.none<ScrollBoxRenderable>()
 
   const items = createMemo<FlatNode[]>(() => {
@@ -114,7 +114,7 @@ export function SessionTree(props: SessionTreeProps) {
       // eslint-disable-next-line effect/noNullish -- the tree is absent while its query loads.
       if (!open || tree === null) return
       const currentIndex = buildTreeLines(tree, id, "").findIndex((item) => item.isCurrent)
-      setState(SessionTreeState.initial(Math.max(0, currentIndex)))
+      setState(FilterListState.initial(Math.max(0, currentIndex)))
     }),
   )
 
@@ -127,7 +127,7 @@ export function SessionTree(props: SessionTreeProps) {
 
       if (e.name === "backspace") {
         setState((current) =>
-          transitionSessionTree(current, SessionTreeEvent.cases.Backspace.make({})),
+          transitionFilterList(current, FilterListEvent.cases.Backspace.make({})),
         )
         return true
       }
@@ -143,9 +143,9 @@ export function SessionTree(props: SessionTreeProps) {
 
       if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
         setState((current) =>
-          transitionSessionTree(
+          transitionFilterList(
             current,
-            SessionTreeEvent.cases.MoveUp.make({ itemCount: visible.length }),
+            FilterListEvent.cases.MoveUp.make({ itemCount: visible.length }),
           ),
         )
         return true
@@ -153,9 +153,9 @@ export function SessionTree(props: SessionTreeProps) {
 
       if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
         setState((current) =>
-          transitionSessionTree(
+          transitionFilterList(
             current,
-            SessionTreeEvent.cases.MoveDown.make({ itemCount: visible.length }),
+            FilterListEvent.cases.MoveDown.make({ itemCount: visible.length }),
           ),
         )
         return true
@@ -166,7 +166,7 @@ export function SessionTree(props: SessionTreeProps) {
         const char = sequence.value
         if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
           setState((current) =>
-            transitionSessionTree(current, SessionTreeEvent.cases.TypeChar.make({ char })),
+            transitionFilterList(current, FilterListEvent.cases.TypeChar.make({ char })),
           )
           return true
         }

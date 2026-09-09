@@ -1,25 +1,35 @@
+/**
+ * Reducer for a filtered, keyboard-navigated list.
+ *
+ * Nothing here knows what the list holds: it is a search query plus a wrapped
+ * selection index. Shared by the session tree and the agents view so the two
+ * overlays cannot drift on wrap-around or reset-on-type behavior.
+ *
+ * @module
+ */
+
 import { Match, Schema } from "effect"
 
-export interface SessionTreeState {
+export interface FilterListState {
   readonly query: string
   readonly selectedIndex: number
 }
 
-export const SessionTreeState = {
-  initial: (selectedIndex = 0): SessionTreeState => ({
+export const FilterListState = {
+  initial: (selectedIndex = 0): FilterListState => ({
     query: "",
     selectedIndex,
   }),
 }
 
-export const SessionTreeEvent = Schema.TaggedUnion({
+export const FilterListEvent = Schema.TaggedUnion({
   Open: { selectedIndex: Schema.Finite },
   Backspace: {},
   MoveUp: { itemCount: Schema.Finite },
   MoveDown: { itemCount: Schema.Finite },
   TypeChar: { char: Schema.String },
 })
-export type SessionTreeEvent = Schema.Schema.Type<typeof SessionTreeEvent>
+export type FilterListEvent = Schema.Schema.Type<typeof FilterListEvent>
 
 const wrapIndex = (selectedIndex: number, itemCount: number, direction: -1 | 1): number => {
   if (itemCount <= 0) return 0
@@ -31,14 +41,14 @@ const wrapIndex = (selectedIndex: number, itemCount: number, direction: -1 | 1):
   return 0
 }
 
-export function transitionSessionTree(
-  state: SessionTreeState,
-  event: SessionTreeEvent,
-): SessionTreeState {
-  const transitionEvent: (event: SessionTreeEvent) => SessionTreeState =
-    Match.type<SessionTreeEvent>().pipe(
+export function transitionFilterList(
+  state: FilterListState,
+  event: FilterListEvent,
+): FilterListState {
+  const transitionEvent: (event: FilterListEvent) => FilterListState =
+    Match.type<FilterListEvent>().pipe(
       Match.tagsExhaustive({
-        Open: (event) => SessionTreeState.initial(event.selectedIndex),
+        Open: (event) => FilterListState.initial(event.selectedIndex),
         Backspace: () => ({
           query: state.query.slice(0, -1),
           selectedIndex: 0,
