@@ -124,3 +124,35 @@ Ranked by lines removed per unit of risk:
 - opencode's codemode is built but **unwired** — it is not evidence that
   codemode is production-proven there.
 - exo's 15,661 includes a Rust host; the reusable TS harness is **8,420**.
+
+## Audit: which resources actually need to outlive a turn?
+
+Finding 2 said the question is not "can we rebuild per round" but "what
+genuinely needs to persist". Answered by inventory.
+
+**Every non-test `scope: "process"` resource in the repo — there are three:**
+
+| Resource                           | Site                                    | Holds                                                                                                                                  | Outlives a turn?                              |
+| ---------------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `@gent/skills/service`             | `extensions/src/skills/index.ts:22`     | Skills read from disk at layer setup; `list` is `Effect.succeed(skills)` (`skills.ts:181`) with **no reload path** (`skills.ts:22-23`) | **No.** Immutable cache of a disk read.       |
+| `@gent/exec-tools/background-bash` | `extensions/src/exec-tools/index.ts:32` | Background process handles; `start` runs `storage.reconcileInterrupted`                                                                | **Yes.** Owns live OS processes across turns. |
+| `@gent/btw/runs`                   | `extensions/src/btw/index.ts:93`        | In-flight side-question runs, forked with `Effect.forkIn(effect, scope)` (`:88`)                                                       | **Yes.** Owns running fibers.                 |
+
+Everything else matching `scope: "process"` is a test fixture
+(`test/e2e-layer/process-override`) or a doc sample (`my-ext/service` in
+`extensions/api.ts:21`). **Zero schedules are registered anywhere.**
+
+So the resource host — 2,864 lines of generations, leases, publications,
+retire modes, and plan reconciliation — plus ~1,371 lines of profile
+compilation, exists to keep **two** things alive: background bash processes
+and btw run fibers. Skills is a cache that could be rebuilt per turn without
+anyone noticing.
+
+That is the reduction target, and it is much better-shaped than expected: two
+genuinely long-lived resources do not need a generational graph with drain
+semantics. They need a process-lifetime scope and a start hook.
+
+**Not yet a proposal.** Deleting the host is a large, high-blast-radius
+change; the resource graph is also what the `resource-graph-rpc` surface and
+its storage (`resource-graph-storage.ts`, 679 lines) report on. The next step
+is to establish what observable behavior would be lost, not to start cutting.
