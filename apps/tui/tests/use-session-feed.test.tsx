@@ -1,23 +1,21 @@
 import { describe, it, expect } from "effect-bun-test"
 import { createRoot, createSignal } from "solid-js"
 import { Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
-import { AgentName } from "@gent/core-internal/domain/agent"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
+  AgentName,
   AgentEvent,
   EventEnvelope,
-  EventId,
   type ActiveInteraction,
-} from "@gent/core-internal/domain/event"
-import {
   BranchId,
-  ExtensionId,
-  InteractionRequestId,
   MessageId,
   SessionId,
   ToolCallId,
-} from "@gent/core-internal/domain/ids"
-import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
+  dateFromMillis,
+  Message,
+} from "@gent/core/protocol"
+import { EventId } from "@gent/core-internal/domain/event"
+import { ExtensionId, InteractionRequestId } from "@gent/core-internal/domain/ids"
 import type { SessionRuntimeState } from "@gent/core-internal/server/transport-contract"
 import { emptyQueueSnapshot, type SessionSnapshot } from "@gent/sdk"
 import { useSessionFeed } from "../src/hooks/use-session-feed"

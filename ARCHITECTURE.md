@@ -809,6 +809,8 @@ extensions, and the same rule defines the contract for user/project
 extensions. "Builtin" means "included in the default distribution", not
 privileged.
 
+TUI client extensions may also import shared client data from `@gent/core/protocol`. This exception does not apply to server extension implementations or to nested protocol paths.
+
 ### Extension API Inventory
 
 `@gent/core/extensions/api` is the extension API. Anything an extension needs

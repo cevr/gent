@@ -9,19 +9,18 @@
 import { batch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { createStore, produce, type SetStoreFunction } from "solid-js/store"
 import { Clock, Effect, Equal, Fiber, Option, Predicate, Schedule, Stream } from "effect"
-import type {
-  ActiveInteraction,
-  AgentEvent,
-  EventEnvelope,
-} from "@gent/core-internal/domain/event.js"
-import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
-import { projectMessage } from "@gent/core-internal/domain/message.js"
 import {
   messagePartImage,
   messagePartReasoning,
   messagePartText,
   messagePartToolCall,
-} from "@gent/core-internal/domain/message-part-projection.js"
+  projectMessage,
+  type ActiveInteraction,
+  type AgentEvent,
+  type BranchId,
+  type EventEnvelope,
+  type SessionId,
+} from "@gent/core/protocol"
 import {
   extractText,
   extractReasoning,

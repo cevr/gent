@@ -1,9 +1,5 @@
 import { Match, Schema } from "effect"
-import { Message } from "@gent/core-internal/domain/message"
-import {
-  Session as SessionSchema,
-  SessionTreeNode,
-} from "@gent/core-internal/server/transport-contract"
+import { Message, Session as SessionSchema, SessionTreeNode } from "@gent/core/protocol"
 import type { DomainSession, SessionTreeNode as DomainSessionTreeNode } from "../client/index"
 import type { PromptSearchState } from "../components/prompt-search-state"
 import {

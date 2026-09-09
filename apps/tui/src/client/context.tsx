@@ -11,25 +11,27 @@ import {
 import { createStore } from "solid-js/store"
 import type { Context } from "effect"
 import { Effect, Option, Predicate, Schema } from "effect"
-import type { ModelContextMetrics } from "@gent/core-internal/runtime/agent/agent-loop.state"
 import {
   AgentName as AgentNameSchema,
   type AgentDefinition,
+  BranchId,
   DEFAULT_AGENT_NAME,
-  DEFAULT_MODEL_ID,
-  resolveAgentModel,
+  SessionId,
+  type AgentEvent,
   type AgentName,
+  type CreateSessionInput,
+  type EventEnvelope,
+  type MessageId,
+  type Model,
+  type ModelContextMetrics,
+  type ModelId,
   type ReasoningEffort,
-} from "@gent/core-internal/domain/agent.js"
-import { type Model, type ModelId } from "@gent/core-internal/domain/model.js"
-import type { AgentEvent, EventEnvelope } from "@gent/core-internal/domain/event.js"
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
-import type { MessageId } from "@gent/core-internal/domain/ids.js"
+} from "@gent/core/protocol"
+import { DEFAULT_MODEL_ID, resolveAgentModel } from "@gent/core-internal/domain/agent.js"
 import type { ClientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { useRequiredContext } from "../utils/solid-context"
 import { randomId } from "../utils/random-id"
-import type { CreateSessionInput } from "@gent/core-internal/server/transport-contract"
 import { useWorkspace } from "../workspace/context"
 import { AgentStatus, type AgentState } from "./agent-state"
 import { createClientEventHub } from "./event-hub"

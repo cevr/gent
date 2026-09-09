@@ -25,13 +25,13 @@ import { makeClientTraceLogger } from "./utils/client-trace-logger"
 import { RegistryProvider } from "./atom-solid/solid"
 import { LinkOpener } from "./services/link-opener"
 import { OsService } from "./services/os-service"
-import type { ProviderId } from "@gent/core-internal/domain/model.js"
 import {
   RunSpecSchema,
   AgentName as AgentNameSchema,
-  type RunSpec,
   type AgentName,
-} from "@gent/core-internal/domain/agent.js"
+  type ProviderId,
+  type RunSpec,
+} from "@gent/core/protocol"
 
 import { render } from "@opentui/solid"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Option } from "effect"
-import { AgentEvent } from "@gent/core-internal/domain/event"
-import { BranchId, InteractionRequestId, SessionId } from "@gent/core-internal/domain/ids"
+import { AgentEvent, BranchId, SessionId } from "@gent/core/protocol"
+import { InteractionRequestId } from "@gent/core-internal/domain/ids"
 import {
   autocompleteContribution,
   borderLabelContribution,

@@ -1,5 +1,4 @@
-import type { EventEnvelope } from "@gent/core-internal/domain/event.js"
-import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
+import type { BranchId, EventEnvelope, SessionId } from "@gent/core/protocol"
 import type { ClientLog } from "../utils/client-logger"
 
 export type ExtensionStatePulse = {

@@ -1,10 +1,9 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Deferred, Effect, Fiber, Layer, Option, Result, Stream } from "effect"
 import { Gent } from "@gent/sdk"
-import { AgentName } from "@gent/core-internal/domain/agent"
-import { AgentEvent, EventStore, type EventStoreService } from "@gent/core-internal/domain/event"
+import { AgentName, AgentEvent, ToolCallId } from "@gent/core/protocol"
+import { EventStore, type EventStoreService } from "@gent/core-internal/domain/event"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc"
-import { ToolCallId } from "@gent/core-internal/domain/ids"
 import { baseLocalLayer } from "@gent/core-internal/test-utils/in-process-layer"
 import {
   make as makeChildSessionTracker,

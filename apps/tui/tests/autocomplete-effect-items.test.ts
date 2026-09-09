@@ -21,7 +21,7 @@ import {
   requestExtension,
 } from "../src/extensions/client-transport"
 import { runAutocompleteItems } from "../src/components/autocomplete-popup-boundary"
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { BranchId, SessionId } from "@gent/core/protocol"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,

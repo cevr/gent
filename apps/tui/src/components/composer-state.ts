@@ -10,7 +10,7 @@ import {
   InteractionPresented,
   type ActiveInteraction,
   type ApprovalResult,
-} from "@gent/core-internal/domain/event.js"
+} from "@gent/core/protocol"
 
 const ApprovalResultSchema = Schema.Struct({
   approved: Schema.Boolean,

@@ -2,8 +2,15 @@ import { describe, test, expect } from "bun:test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Option } from "effect"
 import { extractText, extractImages, type Message as DomainMessage } from "@gent/sdk"
-import { dateFromMillis, Message, type MessagePart } from "@gent/core-internal/domain/message"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import {
+  BranchId,
+  Message,
+  MessageId,
+  SessionId,
+  ToolCallId,
+  dateFromMillis,
+  type MessagePart,
+} from "@gent/core/protocol"
 import { projectMessagesWithToolInteractions } from "@gent/core-internal/domain/message-part-projection"
 
 const absent = Option.getOrUndefined(Option.none())

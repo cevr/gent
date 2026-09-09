@@ -2,8 +2,13 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem, Option } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { BranchId, InteractionRequestId, SessionId } from "@gent/core-internal/domain/ids"
-import type { ActiveInteraction, ApprovalResult } from "@gent/core-internal/domain/event"
+import {
+  BranchId,
+  SessionId,
+  type ActiveInteraction,
+  type ApprovalResult,
+} from "@gent/core/protocol"
+import { InteractionRequestId } from "@gent/core-internal/domain/ids"
 import { PromptRenderer } from "../../../src/components/interaction-renderers/prompt"
 import { destroyRenderSetup, renderWithProviders } from "../../render-harness-boundary"
 import { waitForRenderedFrame } from "../../helpers-boundary"

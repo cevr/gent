@@ -1,6 +1,5 @@
 import type { GentClientRpcError } from "@gent/sdk"
-import { GentRpcError } from "@gent/core-internal/server/errors"
-import { GentConnectionError } from "@gent/core-internal/server/transport-contract"
+import { GentConnectionError, GentRpcError } from "@gent/core/protocol"
 import { Predicate, Schema } from "effect"
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 

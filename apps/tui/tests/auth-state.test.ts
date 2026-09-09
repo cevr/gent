@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { Option } from "effect"
-import type {
-  AuthAuthorization,
-  AuthMethod,
-  AuthProviderInfo,
-} from "@gent/core-internal/domain/auth"
-import { ProviderId } from "@gent/core-internal/domain/model"
+import {
+  ProviderId,
+  type AuthAuthorization,
+  type AuthMethod,
+  type AuthProviderInfo,
+} from "@gent/core/protocol"
 import { AuthState, transitionAuth } from "../src/routes/auth-state"
 
 const absent = Option.getOrUndefined(Option.none())

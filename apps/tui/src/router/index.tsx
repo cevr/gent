@@ -1,4 +1,4 @@
-import type { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
+import type { BranchId, SessionId } from "@gent/core/protocol"
 import { createContext, createSignal, onCleanup, type ParentProps } from "solid-js"
 import { Option } from "effect"
 import { useRequiredContext } from "../utils/solid-context"

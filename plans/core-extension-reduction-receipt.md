@@ -332,3 +332,103 @@ Evidence:
 - `/tmp/gent-protocol-sdk-herdr-preview.txt`
 - `/tmp/gent-protocol-sdk-herdr-full.txt`
 - `/tmp/gent-core-reduction-current.json`
+
+## TUI protocol imports — 2026-09-09
+
+Migrated 56 TUI source, test, and integration files to the supported protocol entry point. The mechanical check found zero mismatches in imported/re-exported names, aliases, type-only status, or code outside declarations. No mapped symbols remain on their old private modules. Model defaults, host services, and test construction still have private imports; those contracts remain incomplete.
+
+The first gate found that the extension import rule treated the new protocol path as private in TUI client extensions. The rule now permits only the exact extensionless and `.js` protocol entry points in client extension files. Server extension implementations remain on the authoring API. Added fixtures reject server imports of protocol and reject nested protocol/internal paths in client extensions. The fixture suite passed: 36 tests and 79 assertions.
+
+TUI type checking and the full gate passed. The changed session-feed integration and excluded headless-runner tests also passed: 10 tests and 26 assertions. Herdr ran live Luna in the compiled TUI. One cell called `context.status()` and `context.newWindow()`. The status result, scheduled window result, durable new-window marker, and `TUI-PROTOCOL-OK` appeared. Preview and full levels exposed the cell output/source. The third toggle returned to collapsed output. This does not prove cache savings or resolve the recorded native transcript border defect.
+
+This unit removes three production source lines through import consolidation. It adds no production files, packages, or protocol exports. The new guard fixtures are test files. No implementation moved. Current production totals have the same file count as baseline and 22 more physical source lines. The private package still exists. Host/kernel lifecycle work remains before removal can finish.
+
+The bounded mechanical TUI migration used a Luna agent. Root reviewed representative client, driver, and child-tracker diffs and checked every changed file with the declaration/body audit. The first run produced no source changes; root stopped that run and resumed the same task with a direct execution step.
+
+Changed TUI source/test files:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/integration/session-feed-boundary.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/app-bootstrap.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/client/agent-state.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/client/context.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/client/event-hub.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/client/session-state.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/components/composer-drafts.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/components/composer-state.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/components/composer.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/components/interaction-renderers/ask-user.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/components/interaction-renderers/option-list.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/components/message-picker.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/components/session-tree.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/components/tool-renderers/agent-tree.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/components/use-composer-controller.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/extensions/builtins/driver.client.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/extensions/client-facets.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/extensions/client-transport.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/headless-runner.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/hooks/use-child-sessions.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/hooks/use-session-feed.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/main.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/router/index.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/routes/auth-state.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/routes/auth.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/routes/branch-picker.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/routes/session-controller.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/routes/session-ui-state.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/routes/session.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/services/child-session-tracker.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/utils/format-error.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/src/utils/session-labels.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/agent-lifecycle.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/app-auth.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/app-bootstrap.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/auth-route.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/auth-state.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/autocomplete-effect-items.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/child-session-tracker.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/client-session-state.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/components/command-palette.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/components/interaction-renderers/ask-user.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/components/interaction-renderers/handoff.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/components/interaction-renderers/prompt.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/components/session-tree.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/extension-integration.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/extension-test-harness-boundary.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/extensions-resolve.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/headless-runner.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/local-health.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/render-harness-boundary.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/router.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/sdk-utilities.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/session-controller-state.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/use-session-feed.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/tests/widgets-render.test.tsx`
+
+Other changed files:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/AGENTS.md`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/apps/tui/AGENTS.md`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/ARCHITECTURE.md`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/lint/no-direct-env.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/tooling/tests/fixtures.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/tooling/fixtures/packages/extensions/src/no-extension-internal-imports.invalid.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/tooling/fixtures/apps/tui/src/extensions/protocol-imports.valid.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/tooling/fixtures/apps/tui/src/extensions/protocol-imports.invalid.ts`
+
+Evidence:
+
+- `/tmp/gent-tui-protocol-audit.json`
+- `/tmp/gent-tui-protocol-files.txt`
+- `/tmp/gent-tui-protocol-typecheck.log`
+- `/tmp/gent-tui-protocol-guards-tests.log`
+- `/tmp/gent-tui-protocol-integration.log`
+- `/tmp/gent-tui-protocol-gate.log`
+- `/tmp/gent-tui-protocol-herdr-live.txt`
+- `/tmp/gent-tui-protocol-herdr-preview.txt`
+- `/tmp/gent-tui-protocol-herdr-full.txt`
+- `/tmp/gent-tui-protocol-herdr-collapsed.txt`
+- `/tmp/gent-core-reduction-current.json`
+- `/tmp/gent-core-host-contract-audit.md`
+- `/tmp/gent-native-border-audit.md`
+
+Final collapse observation: `/tmp/gent-tui-protocol-herdr-collapsed.txt` and `/tmp/gent-tui-protocol-herdr-after-collapse.txt` show `TUI-PROTOCOL-OKTUI-PROTOCOL-OK` on one line and two worked-time rows. The cause is not yet proved. It can involve repeated display or two turns joined without separation. Keep this as an open native transcript check beside the wrapped border defect. The live run proves the context calls and marker appeared; it does not prove correct final scrollback layout.

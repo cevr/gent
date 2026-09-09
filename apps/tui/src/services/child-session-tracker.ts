@@ -8,10 +8,15 @@
  */
 import { Effect, Fiber, FiberSet, Option, Ref, Stream, SubscriptionRef } from "effect"
 import type { Scope } from "effect"
-import type { AgentEvent, EventEnvelope } from "@gent/core-internal/domain/event.js"
 import type { GentNamespacedClient } from "@gent/sdk"
-import type { AgentName } from "@gent/core-internal/domain/agent.js"
-import { SessionId, BranchId, type ToolCallId } from "@gent/core-internal/domain/ids.js"
+import {
+  BranchId,
+  SessionId,
+  type AgentEvent,
+  type AgentName,
+  type EventEnvelope,
+  type ToolCallId,
+} from "@gent/core/protocol"
 
 // =============================================================================
 // Constants

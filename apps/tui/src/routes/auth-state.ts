@@ -3,7 +3,7 @@ import {
   AuthAuthorization,
   AuthMethod,
   AuthProviderInfo as AuthProviderInfoSchema,
-} from "@gent/core-internal/domain/auth"
+} from "@gent/core/protocol"
 
 type AuthProviderInfo = AuthProviderInfoSchema
 

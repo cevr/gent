@@ -8,11 +8,16 @@ import {
   StreamStarted,
   TurnCompleted,
 } from "@gent/core-internal/domain/event"
-import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import { reduceAgentLifecycle } from "../src/client/context"
 import { AgentStatus } from "../src/client/agent-state"
-import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
-import { AgentName } from "@gent/core-internal/domain/agent"
+import {
+  AgentName,
+  BranchId,
+  Message,
+  MessageId,
+  SessionId,
+  dateFromMillis,
+} from "@gent/core/protocol"
 
 const makeMessage = (role: "user" | "assistant") =>
   Message.cases.regular.make({

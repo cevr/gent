@@ -1,7 +1,6 @@
 import { Schema } from "effect"
 import type * as Option from "effect/Option"
-import type { AgentName } from "@gent/core-internal/domain/agent.js"
-import type { ModelId } from "@gent/core-internal/domain/model.js"
+import type { AgentName, ModelId } from "@gent/core/protocol"
 
 export const AgentStatus = Schema.Union([
   Schema.TaggedStruct("idle", {}),

@@ -4,7 +4,7 @@
 
 import { createContext, createSignal, Show, type Accessor, type JSX } from "solid-js"
 import { Option, Schema } from "effect"
-import type { ActiveInteraction, ApprovalResult } from "@gent/core-internal/domain/event.js"
+import type { ActiveInteraction, ApprovalResult } from "@gent/core/protocol"
 import { useTheme } from "../theme/index"
 import { AutocompletePopup, type AutocompleteState } from "./autocomplete-popup"
 import { useComposerController } from "./use-composer-controller"

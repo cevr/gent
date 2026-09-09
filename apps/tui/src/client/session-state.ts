@@ -1,6 +1,5 @@
 import { Schema } from "effect"
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids.js"
-import { ReasoningEffort } from "@gent/core-internal/domain/agent.js"
+import { BranchId, ReasoningEffort, SessionId } from "@gent/core/protocol"
 
 export interface Session {
   readonly sessionId: SessionId

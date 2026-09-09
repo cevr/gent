@@ -8,7 +8,7 @@
 import { createSignal, createUniqueId, Show, For, type JSX } from "solid-js"
 import { SyntaxStyle, type ScrollBoxRenderable } from "@opentui/core"
 import { Option } from "effect"
-import type { QuestionOption } from "@gent/core-internal/domain/event.js"
+import type { QuestionOption } from "@gent/core/protocol"
 import { useTheme } from "../../theme/index"
 import { useScopedKeyboard } from "../../keyboard/context"
 import { useTerminalDimensions } from "../../terminal-dimensions"

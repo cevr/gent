@@ -1,6 +1,6 @@
 import { createContext, type ParentProps } from "solid-js"
 import { Option } from "effect"
-import type { BranchId } from "@gent/core-internal/domain/ids.js"
+import type { BranchId } from "@gent/core/protocol"
 import type { ComposerInteractionState } from "./composer-interaction-state"
 import { useRequiredContext } from "../utils/solid-context"
 

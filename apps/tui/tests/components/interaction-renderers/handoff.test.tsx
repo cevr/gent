@@ -1,9 +1,14 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Option } from "effect"
-import { BranchId, InteractionRequestId, SessionId } from "@gent/core-internal/domain/ids"
-import type { ActiveInteraction, ApprovalResult } from "@gent/core-internal/domain/event"
-import type { CreateSessionInput } from "@gent/core-internal/server/transport-contract"
+import {
+  BranchId,
+  SessionId,
+  type ActiveInteraction,
+  type ApprovalResult,
+  type CreateSessionInput,
+} from "@gent/core/protocol"
+import { InteractionRequestId } from "@gent/core-internal/domain/ids"
 import { HandoffRenderer } from "../../../src/components/interaction-renderers/handoff"
 import {
   createMockClient,

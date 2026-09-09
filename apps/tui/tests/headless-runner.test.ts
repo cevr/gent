@@ -1,13 +1,12 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Option, Schema, Sink, Stdio, Stream } from "effect"
 import {
-  EventEnvelope,
   EventId,
   ToolCallStarted,
   ToolCallSucceeded,
   TurnCompleted,
 } from "@gent/core-internal/domain/event"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { BranchId, EventEnvelope, SessionId, ToolCallId } from "@gent/core/protocol"
 import { GentConnectionError } from "@gent/sdk"
 import { runHeadless } from "../src/headless-runner"
 import { renderHeadlessToolCall } from "../src/headless-tool-renderers"

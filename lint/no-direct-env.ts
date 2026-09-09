@@ -477,6 +477,7 @@ const plugin: Plugin = {
 
         // Allowed @gent/core subpaths (everything else is forbidden).
         const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/api(?:\.js)?$/
+        const ALLOWED_CLIENT_PROTOCOL = /^@gent\/core\/protocol(?:\.js)?$/
         const ALLOWED_BUILTIN_INTERNAL_PACKAGE =
           /^@gent\/core-internal\/runtime\/gent-platform(?:-bun)?(?:\.js)?$/
 
@@ -501,7 +502,11 @@ const plugin: Plugin = {
             return
           }
 
-          if (source.startsWith("@gent/core/") && !ALLOWED_PACKAGE.test(source)) {
+          if (
+            source.startsWith("@gent/core/") &&
+            !ALLOWED_PACKAGE.test(source) &&
+            !(inTuiExtensions && ALLOWED_CLIENT_PROTOCOL.test(source))
+          ) {
             context.report({
               message: `Extensions must import from "@gent/core/extensions/api", not internal paths. Forbidden: "${source}"`,
               node,

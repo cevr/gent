@@ -8,3 +8,5 @@ export * from "@gent/core-internal/runtime/profile"
 export const loadRuntime = () => import("@gent/core/runtime/session-runtime")
 
 export const values = [SessionId, AgentName, SessionRuntime, EventStore]
+
+export { Session } from "@gent/core/protocol"

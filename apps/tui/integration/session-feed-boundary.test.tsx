@@ -12,7 +12,7 @@ import {
 import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core-internal/test-utils/in-process-layer.js"
 import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
+import { BranchId, SessionId } from "@gent/core/protocol"
 import { Gent } from "@gent/sdk"
 import { waitForFrame, makeSessionState, repoRoot } from "./helpers"
 const absentReasoningLevel = Option.getOrUndefined(Option.none())

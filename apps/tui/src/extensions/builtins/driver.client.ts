@@ -17,7 +17,7 @@
 
 import { Effect, Option } from "effect"
 import { defineClientExtension, clientCommandContribution } from "../client-facets.js"
-import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core-internal/domain/agent.js"
+import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/protocol"
 import { ClientDriver, ClientShell } from "../client-services"
 
 const USAGE = "Usage: /driver <agent> <driver-id|default>"

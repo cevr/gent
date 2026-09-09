@@ -1,9 +1,13 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Exit, Option, Schema } from "effect"
-import { AgentName, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent"
-import { BranchId, SessionId } from "@gent/core-internal/domain/ids"
-import { dateFromMillis } from "@gent/core-internal/domain/message"
-import { ProviderId } from "@gent/core-internal/domain/model"
+import {
+  AgentName,
+  BranchId,
+  DEFAULT_AGENT_NAME,
+  ProviderId,
+  SessionId,
+  dateFromMillis,
+} from "@gent/core/protocol"
 import { emptyQueueSnapshot, type GentClientRpcError } from "@gent/sdk"
 import {
   AppBootstrapError,

@@ -10,8 +10,7 @@ import { QueueWidget } from "../src/components/queue-widget"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { runEffectBoundary } from "./run-effect-boundary"
 import { useClient, type GentRuntime } from "../src/client"
-import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids"
-import { dateFromMillis } from "@gent/core-internal/domain/message"
+import { BranchId, MessageId, SessionId, dateFromMillis } from "@gent/core/protocol"
 
 const absent = Option.getOrUndefined(Option.none())
 const nullValue = Option.getOrNull(Option.none())

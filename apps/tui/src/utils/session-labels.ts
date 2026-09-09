@@ -2,7 +2,7 @@ import { Option } from "effect"
 import type { RGBA } from "@opentui/core"
 import type { BorderLabelItem } from "./border-segments"
 import { formatTokens } from "./format-tool"
-import type { ModelContextMetrics } from "@gent/core-internal/runtime/agent/agent-loop.state"
+import type { ModelContextMetrics } from "@gent/core/protocol"
 
 interface ThemeColors {
   textMuted: RGBA

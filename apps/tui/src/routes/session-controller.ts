@@ -4,9 +4,13 @@ import { DateTime, Effect, Fiber, Option, Random, Schedule } from "effect"
 import { useEnv } from "../env/context"
 import { shutdownLog } from "../utils/client-logger"
 import { useRequiredContext } from "../utils/solid-context"
-import type { Message as DurableMessage } from "@gent/core-internal/domain/message"
-import type { ActiveInteraction } from "@gent/core-internal/domain/event.js"
-import type { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids.js"
+import type {
+  ActiveInteraction,
+  BranchId,
+  MessageId,
+  Message as DurableMessage,
+  SessionId,
+} from "@gent/core/protocol"
 import type { Message, SessionItem } from "../components/message-list"
 import {
   ComposerInteractionEvent,

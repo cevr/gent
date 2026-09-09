@@ -2,7 +2,7 @@
 
 import { createSignal, Show } from "solid-js"
 import type { InteractionRendererProps } from "../../extensions/client-facets.js"
-import { QuestionSchema } from "@gent/core-internal/domain/event.js"
+import { QuestionSchema } from "@gent/core/protocol"
 import { OptionList } from "./option-list"
 import { Option, Schema } from "effect"
 
