@@ -58,6 +58,7 @@ import type { InteractionStorage } from "../../storage/interaction-storage.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import type { SessionProfileCacheService } from "../session-profile.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
+import { buildResourceLayer } from "../extensions/resource-host/index.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import { makeExtensionHostPlatform } from "../extensions/host-platform.js"
 import { ToolRunner } from "./tool-runner.js"
@@ -138,6 +139,13 @@ export type AgentLoopBehavior = {
   drainQueue: Effect.Effect<QueueSnapshot, AgentLoopError>
   removeFollowUp: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
   resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile>
+  /**
+   * Branch-lifetime services: the cell kernel, the model context ledger, and
+   * every extension Resource declared with `scope: "branch"`. Extension leaves
+   * invoked outside a turn (an `extension.request` RPC, say) must be given this
+   * context, or a branch Resource resolves as "Service not found".
+   */
+  branchContext: Context.Context<never>
   persistState: (state: LoopState) => Effect.Effect<void, AgentLoopError>
   refreshRuntimeState: Effect.Effect<void, AgentLoopError>
   /** Read the current FSM state. Replaces effect-machine `actor.snapshot`. */
@@ -321,11 +329,22 @@ export const makeAgentLoopBehavior = (
 
     const loopScope = yield* Effect.scope
     const interruptedRef = yield* Ref.make(false)
-    // Branch-owned turn services: the cell kernel and the model context ledger.
+    // Branch-owned turn services: the cell kernel, the model context ledger, and
+    // every extension Resource declared with `scope: "branch"`. All three share
+    // `loopScope`, so they are rebuilt per loop and interrupted when the branch
+    // closes. Process-scope Resources are not collected here — they belong to
+    // the process graph host and outlive this scope.
+    const branchResourceLayer = buildResourceLayer(
+      extensionRegistry.getResolved().extensions,
+      "branch",
+    )
     const cellContext = yield* Layer.build(
       Layer.merge(
-        CellExecution.Branch({ sessionId, branchId, interruptedRef }),
-        ModelContextLedger.Branch,
+        Layer.merge(
+          CellExecution.Branch({ sessionId, branchId, interruptedRef }),
+          ModelContextLedger.Branch,
+        ),
+        branchResourceLayer,
       ),
     ).pipe(Scope.provide(loopScope))
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
@@ -495,6 +514,7 @@ export const makeAgentLoopBehavior = (
           }),
         ),
       resolveTurnProfile,
+      branchContext: cellContext,
       persistState: persistRuntimeState,
       refreshRuntimeState,
       snapshot: currentLoopState,

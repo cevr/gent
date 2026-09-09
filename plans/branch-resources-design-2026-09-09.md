@@ -176,6 +176,38 @@ Leave these fences alone in this unit. Deciding whether a fence around a
 non-existent symbol still earns its keep is a separate cleanup with its own
 gate.
 
+## Correction: the `live-profile.ts:550` literal is a filter, not a bug
+
+Earlier notes framed `collectResourceEntries(..., "process")` at
+`live-profile.ts:550` as a hardcoded value to replace with a widened list. That
+is wrong, and widening it in place would be a real defect.
+
+Receipts. The list flows `loadDesired` -> `desired.resources` ->
+`host.apply({ resources })` at `live-profile.ts:611` and `:764`. The host turns
+that argument into its lease graph: `resourceMap(input.resources)` at
+`resource-graph-host.ts:665`, `nextDeclarationOrder` at `:681`,
+`resourcesInDeclarationOrder` at `:683`, and `planResourceGraph(input.resources)`
+at `:863`. Everything in the list is started under the **process** scope.
+
+So a `scope: "branch"` entry added to that list would not merely be carried
+along — it would be **started at process lifetime**, which is exactly the
+lifetime `"branch"` exists to deny. The `"process"` argument is the correct
+filter for that call site and stays.
+
+What is actually needed is a **second** collection at branch lifetime, feeding a
+**second** host instance whose parent scope is the loop's `loopScope`. The
+assembly layer already supports this without modification:
+`collectResourceEntries`, `buildResourceLayer`, and `buildResourceServiceLayer`
+all take `scope` as a parameter (`resource-layer.ts:32`, `:53`, `:95`), each
+defaulting to `"process"` only for back-compat.
+
+The `:385` availability filter (`resource.scope === "process"`) is likewise
+correct as written: it suspends an extension whose _process_ resource is
+inactive. A branch resource has no bearing on process-level staging.
+
+**Revised unit of work.** Add a branch collection + branch host over
+`loopScope`; do not touch `:550` or `:385`.
+
 ## Decision: interrupt on branch close, matching Prime
 
 Checked against the pinned Prime Agent checkout at `a3b3e75` (2026-08-11),

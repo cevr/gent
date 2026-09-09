@@ -6,13 +6,14 @@
  * carries the unifying concept: "this extension owns a long-lived service
  * with optional startup/shutdown."
  *
- * The `scope` discriminator is intentionally narrow. Today the host owns
- * exactly one long-lived resource lifetime:
+ * The `scope` discriminator is intentionally narrow. The host owns two
+ * long-lived resource lifetimes:
  *
  *   - `"process"` — survives for the server's lifetime; requires `ServerScope`
+ *   - `"branch"`  — survives for one agent-loop branch; requires `BranchScope`
  *
  * Add more scope literals only with their host lifecycle implementation in the
- * same wave. Advertising `session`/`branch`/`cwd` without a runtime owner makes
+ * same wave. Advertising `session`/`cwd` without a runtime owner makes
  * impossible lifetimes look supported.
  *
  * @module
@@ -26,22 +27,33 @@ import { ResourceDescriptor, ResourceId, ResourceRevision } from "./resource-gra
 
 /**
  * Pure type-level scope brand used by Resource declarations. Encodes the
- * lifetime of a `Scope.Scope` at the type level. Today Resource hosting
- * supports only process-scoped services: `ServerScope` survives for the
+ * lifetime of a `Scope.Scope` at the type level. `ServerScope` survives for the
  * server's lifetime. Add new brands only when their resource host lifecycle
  * exists. These types carry no runtime payload; they are purely structural.
  */
 declare const ServerBrand: unique symbol
 export type ServerScope = { readonly [ServerBrand]: true }
 
+/**
+ * One agent-loop branch's lifetime. The actor forks a child of its own scope
+ * per loop rebuild and transfers it to the published loop handle, so a branch
+ * resource is released when that branch closes.
+ */
+declare const BranchBrand: unique symbol
+export type BranchScope = { readonly [BranchBrand]: true }
+
 /** Runtime literal-string union for Resource lifetimes. */
-export type ResourceScope = "process"
+export type ResourceScope = "process" | "branch"
 
 /**
  * Type-level mapping from the `scope` literal to the corresponding nominal
  * scope brand. The brand flows into the `R` channel of the Resource's `layer`.
  */
-export type ScopeOf<S extends ResourceScope> = S extends "process" ? ServerScope : never
+export type ScopeOf<S extends ResourceScope> = S extends "process"
+  ? ServerScope
+  : S extends "branch"
+    ? BranchScope
+    : never
 
 // ── The Resource contribution ──
 
@@ -194,13 +206,15 @@ export const defineStateResource = <A, Value, R = never, E = never>(
   spec: StateResourceSpec<A, Value, R, E>,
 ): ResourceContribution<A, "process", R, E> => {
   const { id, revision, requires, required } = spec
-  return defineResource({
+  return defineResource<A, "process", R, E>({
     id,
     revision,
     requires,
     required,
     tag: spec.tag,
-    scope: spec.scope,
+    // State resources are deliberately process-only. The explicit generic above
+    // pins the literal now that `ResourceScope` also admits `"branch"`.
+    scope: "process",
     layer: Layer.effect(
       spec.tag,
       Effect.gen(function* () {

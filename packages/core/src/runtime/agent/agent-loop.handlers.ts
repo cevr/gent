@@ -1155,7 +1155,12 @@ export const buildAgentLoopActorHandlers = (config: {
                   ).pipe(provideExtensionLeaf({ extensionId: dynamic.value.extensionId }))
                 })
               }
-              return yield* runExtensionRequest(environment, dynamicRequest)
+              return yield* runExtensionRequest(environment, dynamicRequest).pipe(
+                // Branch Resources live on the loop scope, not on the turn
+                // profile. Without this an extension leaf reached over RPC
+                // cannot see a `scope: "branch"` service.
+                Effect.provideContext(handle.branchContext),
+              )
             }).pipe(handle.withSideMutation, Effect.ensuring(drainWake(handle)))
           }).pipe(
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
