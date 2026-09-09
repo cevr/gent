@@ -2,14 +2,13 @@ import { ModelId } from "../../../src/domain/model"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
-import { Cause, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { request, type RequestCapability, type ToolCapability } from "@gent/core/extensions/api"
 import { Permission } from "../../../src/domain/permission"
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import { ProcessLocalToolReplay } from "../../../src/runtime/agent/process-local-tool-replay"
 import { narrowR } from "../../helpers/effect"
 import { SingleRunner } from "effect/unstable/cluster"
-import type { PeekResult } from "effect-encore"
 import { AgentDefinition, DEFAULT_AGENT_NAME } from "../../../src/domain/agent"
 import { dateFromMillis, Branch, Session } from "../../../src/domain/message"
 import {
@@ -36,7 +35,6 @@ import { SessionStorage } from "../../../src/storage/session-storage"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"
 import { AgentLoop as AgentLoopActor } from "../../../src/runtime/agent/agent-loop.actor"
 import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
-import { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
 
@@ -128,28 +126,6 @@ const createSessionBranch = Effect.gen(function* () {
   return { sessionId, branchId }
 })
 
-const createSessionBranchWithIds = (input: {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-}) =>
-  Effect.gen(function* () {
-    const sessionStorage = yield* SessionStorage
-    const branchStorage = yield* BranchStorage
-    const now = dateFromMillis(1_767_225_600_000)
-    yield* sessionStorage.createSession(
-      new Session({
-        id: input.sessionId,
-        name: `Runtime Test ${input.sessionId}`,
-        createdAt: now,
-        updatedAt: now,
-      }),
-    )
-    yield* branchStorage.createBranch(
-      new Branch({ id: input.branchId, sessionId: input.sessionId, createdAt: now }),
-    )
-    return input
-  })
-
 let getActorStateCounter = 0
 const getActorState = (input: { sessionId: SessionId; branchId: BranchId }) =>
   Effect.gen(function* () {
@@ -200,77 +176,7 @@ const requestExtensionViaActor = (input: {
     )
   })
 
-const materializeActorCommand = <A, E>(result: PeekResult<A, E>): Effect.Effect<A, E> => {
-  switch (result._tag) {
-    case "Success":
-      return Effect.succeed(result.value)
-    case "Failure":
-      return Effect.fail(result.error)
-    case "Interrupted":
-      return Effect.interrupt
-    case "Defect":
-      return Effect.die(result.cause)
-    case "Pending":
-    case "Suspended":
-      return Effect.die(new Error(`Actor command did not reach a terminal state: ${result._tag}`))
-  }
-}
-
 describe("agent-loop actor commands", () => {
-  it.live("Interrupt reports invalid derived cancel commands through the error channel", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-      const layer = makeRuntimeLayer(providerLayer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const { sessionId, branchId } = yield* createSessionBranchWithIds({
-            sessionId: SessionId.make("interrupt-invalid-command-session"),
-            branchId: BranchId.make("interrupt-invalid-command-branch"),
-          })
-          const actorClientFactory = yield* AgentLoopActor.Context
-          const actorControl = yield* AgentLoopActor.Control
-          const entityId = entityIdOf(DefaultWorkspaceId, sessionId, branchId)
-          const ref = yield* actorClientFactory(entityId)
-          yield* ref.execute(
-            AgentLoopActor.GetState.make({
-              workspaceId: DefaultWorkspaceId,
-              sessionId,
-              branchId,
-              commandId: ActorCommandId.make("interrupt-warm-state"),
-            }),
-          )
-          const interruptPayload = AgentLoopActor.Interrupt.make({
-            workspaceId: DefaultWorkspaceId,
-            sessionId,
-            branchId,
-            commandId: ActorCommandId.make("x".repeat(129)),
-          })
-          const exit = yield* Effect.gen(function* () {
-            yield* ref.send(interruptPayload)
-            yield* actorControl.redeliver(entityId)
-            const result = yield* AgentLoopActor.Interrupt.waitFor(interruptPayload)
-            return yield* materializeActorCommand(result)
-          }).pipe(Effect.exit)
-
-          expect(exit._tag).toBe("Failure")
-          if (exit._tag !== "Failure") return
-          const errorOption = Cause.findErrorOption(exit.cause)
-          if (errorOption._tag !== "Some") {
-            return yield* Effect.die(
-              new Error(`Expected interrupt failure error, got cause: ${Cause.pretty(exit.cause)}`),
-            )
-          }
-          const error = errorOption.value
-          if (!Schema.is(AgentLoopError)(error)) {
-            return yield* Effect.die(new Error(`Expected AgentLoopError, got: ${String(error)}`))
-          }
-          expect(error.message).toBe("Invalid interrupt command")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
-    }),
-  )
-
   it.live("side-mutation commands are serialized per session", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])

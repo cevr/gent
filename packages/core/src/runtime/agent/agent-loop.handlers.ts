@@ -69,7 +69,6 @@ import {
   type BranchId,
   type SessionId,
 } from "../../domain/ids.js"
-import { SteerCommand } from "../../domain/steer.js"
 import { GentPlatform } from "../gent-platform.js"
 import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
 import type { PromptSection } from "../../domain/prompt.js"
@@ -117,7 +116,6 @@ import {
   type GetQueueInput,
   type GetStateInput,
   type HandlerRequest,
-  type InterruptInput,
   type MessageType,
   type RemoveFollowUpInput,
   type RequestExtensionInput,
@@ -844,21 +842,6 @@ export const buildAgentLoopActorHandlers = (config: {
       Steer: Effect.fn("AgentLoop.Steer")(({ operation }: HandlerRequest<SteerInput>) =>
         applySteer(operation.commandId, operation.command).pipe(provideActorWorkspace),
       ),
-      Interrupt: Effect.fn("AgentLoop.Interrupt")(function* ({
-        operation,
-      }: HandlerRequest<InterruptInput>) {
-        const command = yield* Schema.decodeEffect(SteerCommand)({
-          _tag: "Cancel",
-          sessionId: operation.sessionId,
-          branchId: operation.branchId,
-          requestId: operation.commandId,
-        }).pipe(
-          Effect.mapError(
-            (cause) => new AgentLoopError({ message: "Invalid interrupt command", cause }),
-          ),
-        )
-        yield* applySteer(operation.commandId, command).pipe(provideActorWorkspace)
-      }),
       RespondInteraction: Effect.fn("AgentLoop.RespondInteraction")(
         ({ operation }: HandlerRequest<RespondInteractionInput>) =>
           Effect.gen(function* () {

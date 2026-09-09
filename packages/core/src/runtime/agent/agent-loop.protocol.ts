@@ -57,13 +57,6 @@ const SteerFields = {
   command: SteerCommand,
 }
 
-const InterruptFields = {
-  ...WorkspaceFields,
-  sessionId: SessionId,
-  branchId: BranchId,
-  commandId: ActorCommandId,
-}
-
 const RespondInteractionFields = {
   ...WorkspaceFields,
   sessionId: SessionId,
@@ -156,12 +149,6 @@ export type QueueFollowUpInput = WorkspaceInput & {
 export type SteerInput = WorkspaceInput & {
   readonly commandId: ActorCommandId
   readonly command: SteerCommandType
-}
-export type InterruptInput = {
-  readonly workspaceId: WorkspaceId
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly commandId: ActorCommandId
 }
 export type RespondInteractionInput = {
   readonly workspaceId: WorkspaceId
@@ -293,16 +280,6 @@ export const AgentLoop = Actor.fromEntity(
       persisted: true,
       id: (p: SteerInput) => ({
         entityId: entityIdOf(p.workspaceId, p.command.sessionId, p.command.branchId),
-        primaryKey: p.commandId,
-      }),
-    },
-    Interrupt: {
-      payload: InterruptFields,
-      success: Schema.Void,
-      error: AgentLoopError,
-      persisted: true,
-      id: (p: InterruptInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
         primaryKey: p.commandId,
       }),
     },
