@@ -168,3 +168,35 @@ Evidence:
 - `/tmp/gent-cache-compat-gate.log`
 - `/tmp/gent-cache-compat-herdr-preview.txt`
 - `/tmp/gent-cache-compat-herdr-full.txt`
+
+Commit: `0b44e887`. Commit checks passed. Log: `/tmp/gent-cache-compat-commit.log`.
+
+## Preserve Anthropic context order
+
+A pinned patch repairs the Anthropic serializer. It retains the initial system group. It lowers later system groups to escaped user text at their original position. It also handles history that has no initial system message. It copies the existing cache control to the resulting text block. The patch changes both source and exported JavaScript. No package version or Gent runtime export changed.
+
+The repair serves text generation, structured output, and streaming. HTTP tests exercise all three through the real API-key and OAuth extension layers. They compare initial instructions and the old message prefix, including a completed cell call/result. They check escaped update text, its cache marker, and absent initial system text. The full gate passed after test fixture, typing, and style fixes.
+
+The fallback has user authority. It cannot override initial system constraints. It can change thinking-cache behavior on older models. The host must append updates after all client tool results and must respect unresolved server-tool rules. The serializer does not repair invalid tool history. Native model-aware system-role support remains separate work. See the provider research note for primary evidence.
+
+Live Herdr ran two Luna cell turns, retained 42, returned 43, and showed preview/full/collapsed levels. This checks the normal TUI path. The HTTP tests check Anthropic conversion. No live Anthropic acceptance or cache gain is claimed.
+
+Source counts remain 200 core files / 45,337 lines; 56 extension files / 9,411 lines; 7 SDK files / 1,050 lines; 143 TUI files / 22,833 lines; and 2 server files / 794 lines. Relative to the initial inventory, this is one production source file and 79 physical lines removed. No production source moved. These counts exclude dependency patches. This unit adds one patch file with 22 added source/distribution lines. It adds no Gent production source file, export, or package.
+
+Source files:
+
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/package.json`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/bun.lock`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/patches/@effect%2Fai-anthropic@4.0.0-rc.112.patch`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/extensions/tests/anthropic/anthropic-extension-driver.test.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/plans/anthropic-context-priors-2026-09-08.md`
+- `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/plans/durable-context-admission-2026-09-08.md`
+
+Evidence:
+
+- `/tmp/gent-anthropic-context-patch.log`
+- `/tmp/gent-anthropic-context-tests.log`
+- `/tmp/gent-anthropic-context-gate.log`
+- `/tmp/gent-anthropic-context-herdr-preview.txt`
+- `/tmp/gent-anthropic-context-herdr-full.txt`
+- `/tmp/gent-core-reduction-current.json`

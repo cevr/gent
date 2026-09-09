@@ -1,0 +1,44 @@
+diff --git a/dist/AnthropicLanguageModel.js b/dist/AnthropicLanguageModel.js
+index 7d9005ad1281d467f1664783e070be16aa986d83..b470a2377f609a40d7d0540accd484ecb060c1fc 100644
+--- a/dist/AnthropicLanguageModel.js
++++ b/dist/AnthropicLanguageModel.js
+@@ -274,6 +274,17 @@ const prepareMessages = /*#__PURE__*/Effect.fnUntraced(function* ({
+     switch (group.type) {
+       case "system":
+         {
++          if (i > 0) {
++            messages.push({
++              role: "user",
++              content: group.messages.map(message => ({
++                type: "text",
++                text: `<host-context-update>\n${message.content.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}\n</host-context-update>`,
++                cache_control: getCacheControl(message)
++              }))
++            });
++            break;
++          }
+           system = group.messages.map(message => ({
+             type: "text",
+             text: message.content,
+diff --git a/src/AnthropicLanguageModel.ts b/src/AnthropicLanguageModel.ts
+index 4452bcd192c9c39a2ab68d1284aea05a01afb0a8..b40de54a37b1858feea4540458b0aadb4bf42c18 100644
+--- a/src/AnthropicLanguageModel.ts
++++ b/src/AnthropicLanguageModel.ts
+@@ -927,6 +927,17 @@ const prepareMessages = Effect.fnUntraced(
+ 
+       switch (group.type) {
+         case "system": {
++          if (i > 0) {
++            messages.push({
++              role: "user",
++              content: group.messages.map((message) => ({
++                type: "text",
++                text: `<host-context-update>\n${message.content.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}\n</host-context-update>`,
++                cache_control: getCacheControl(message)
++              }))
++            })
++            break
++          }
+           system = group.messages.map((message) => ({
+             type: "text",
+             text: message.content,

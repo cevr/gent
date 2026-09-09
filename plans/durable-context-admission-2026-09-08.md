@@ -106,11 +106,11 @@ Sources:
 
 ## Provider preparation
 
-Wrap the `LanguageModel.Service` returned by the Anthropic extension. Transform prompt input before calling the installed adapter. Apply the transform to streaming, text generation, and object generation. Preserve leading system content. Convert later system messages to escaped user context at the same position.
+Repair the Anthropic adapter's prompt conversion before it loses earlier system content. A pinned package patch keeps leading system content and converts later system groups to escaped user context at the same position. This shared conversion serves streaming, text generation, and object generation. Gent's final HTTP tests cover API-key and OAuth routes. Keep this provider behavior outside the core loop.
 
 The fallback has lower authority. It preserves text and order. It does not provide native system-message authority. Do not infer native support from a model-name regex. Keep tool output as tool output.
 
-The installed Anthropic converter overwrites its top-level system value for each system group. An HTTP transform runs too late to restore lost text. The returned provider layer is the required preparation boundary. It does not need ambient `ExtensionContext` or a new provider registry.
+The unpatched Anthropic converter overwrites its top-level system value for each system group. An HTTP transform runs too late to restore lost text. The serializer repair needs no ambient `ExtensionContext`, model-service wrapper, or new provider registry. Updates must follow completed client tool results. Do not insert them between a call and its result. See [the provider research](anthropic-context-priors-2026-09-08.md) for server-tool and thinking-cache limits.
 
 Check final OAuth wire bodies. The OAuth transform moves baseline content into the first user message. It adds billing and identity blocks. Cache placement must account for those transforms. The installed adapter discards assistant cache hints, so an assistant annotation alone proves no wire behavior.
 
