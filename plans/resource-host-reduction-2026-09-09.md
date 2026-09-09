@@ -72,9 +72,24 @@ mechanism.
    for it. Removes one process resource, exercises the new branch path, and
    is reversible. _Low risk._
 2. **Retire the `resourceGraph.*` RPC surface** — three RPCs, three handlers,
-   and their input/output schemas, with no production caller. Keep the
+   and `ResourceGraphCommandServiceApi.submit`, its only caller. Keep the
    `resource_graph_state` table, since `local-health` reads it. _Low risk,
    removes a public surface that exists only for its own tests._
+
+   **Scoped precisely after tracing.** The command service itself is **not**
+   removable: `dependencies.ts:437` calls
+   `commandService.recoverAllAndAwaitReport` at startup to recover resource
+   graph applications interrupted by a previous process. `recover`,
+   `recoverAll`, `recoverAllAndAwait`, and `recoverAllAndAwaitReport` are all
+   live. Only `submit` (`resource-graph-command.ts:115`) is unreachable
+   outside tests — its sole caller is `rpc-handlers.ts:441`, itself uncalled.
+   `resource-graph-entity.ts` stays too: `live-profile.ts:67` and
+   `session-profile.ts:53` both import it.
+
+   So this step is three RPCs, three handlers, four schema types, and one
+   service method — worth doing for the surface it removes, not for line
+   count.
+
 3. **Then** measure what remains: with one process resource left
    (`background-bash`) plus `btw/runs`, ask whether generations, leases, and
    retire modes are still earning their place, or whether a plain
