@@ -18,7 +18,6 @@ interface SessionCommandRegistryProps {
   }
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
   readonly navigateToCreatedSession: Parameters<ClientContextValue["createSession"]>[0]
-  readonly openSessionTree: () => void
   readonly openForkPicker: () => void
   readonly openPermissions: () => void
   readonly openAuth: () => void
@@ -109,14 +108,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
         ),
       )
     },
-  },
-  {
-    id: "session.tree",
-    title: "Browse Session Tree",
-    category: "Session",
-    slash: "tree",
-    slashPriority: 0,
-    onSelect: props.openSessionTree,
   },
   {
     id: "session.fork",

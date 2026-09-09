@@ -15,7 +15,6 @@ import { pickerText } from "../components/picker-text"
 import { CommandPalette } from "../components/command-palette"
 import { useCommand } from "../command/context"
 import { useTheme, buildSyntaxStyle } from "../theme/index"
-import { SessionTree } from "../components/session-tree"
 import { MessagePicker } from "../components/message-picker"
 import { collectDiagrams, MermaidViewer } from "../components/mermaid-viewer"
 import { QueueWidget } from "../components/queue-widget"
@@ -250,14 +249,6 @@ export function Session(props: SessionProps) {
           </ComposerFrame>
           <ExtensionWidgets slot="below-input" />
         </box>
-
-        <SessionTree
-          open={controller.uiState().overlay._tag === "tree"}
-          tree={controller.treeOverlay()}
-          currentSessionId={props.sessionId}
-          onSelect={controller.onSessionTreeSelect}
-          onClose={controller.closeOverlay}
-        />
 
         <MessagePicker
           open={controller.uiState().overlay._tag === "fork"}

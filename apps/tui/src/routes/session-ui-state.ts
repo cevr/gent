@@ -1,6 +1,5 @@
 import { Match, Schema } from "effect"
-import { Message, Session as SessionSchema, SessionTreeNode } from "@gent/core/protocol"
-import type { DomainSession, SessionTreeNode as DomainSessionTreeNode } from "../client/index"
+import { Message } from "@gent/core/protocol"
 import type { PromptSearchState } from "../components/prompt-search-state"
 import {
   PromptSearchEvent as PromptSearchEventSchema,
@@ -18,11 +17,6 @@ interface PromptSearchOverlayState {
 
 export type SessionOverlayState =
   | { readonly _tag: "none" }
-  | {
-      readonly _tag: "tree"
-      readonly tree: DomainSessionTreeNode
-      readonly sessions: readonly DomainSession[]
-    }
   | { readonly _tag: "fork"; readonly messages: readonly Message[] }
   | { readonly _tag: "mermaid" }
   | { readonly _tag: "auth"; readonly enforceAuth: boolean }
@@ -59,10 +53,6 @@ export const SessionUiEvent = Schema.TaggedUnion({
   CollapseDisclosure: {},
   ToggleTranscript: {},
   ClearDisplay: {},
-  OpenTree: {
-    tree: SessionTreeNode,
-    sessions: Schema.Array(SessionSchema),
-  },
   OpenFork: { messages: Schema.Array(Message) },
   OpenMermaid: {},
   OpenAuth: { enforceAuth: Schema.Boolean },
@@ -119,17 +109,6 @@ export function transitionSessionUi(
       }),
       CollapseDisclosure: (): SessionUiTransitionResult => ({
         state: { ...state, disclosure: "collapsed" },
-        effects: [],
-      }),
-      OpenTree: (event): SessionUiTransitionResult => ({
-        state: {
-          ...state,
-          overlay: {
-            _tag: "tree",
-            tree: event.tree,
-            sessions: event.sessions,
-          },
-        },
         effects: [],
       }),
       OpenFork: (event): SessionUiTransitionResult => ({

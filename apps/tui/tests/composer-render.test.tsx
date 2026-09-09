@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
 import { createSignal, type JSX } from "solid-js"
-import { Effect, Option } from "effect"
+import { Effect } from "effect"
 import { Composer } from "../src/components/composer"
 import {
   ComposerInteractionState,
@@ -34,7 +34,6 @@ function TestComposer(props: {
     promptSearchState: PromptSearchState.closed,
     promptSearchOpen: () => props.suspended ?? false,
     disclosure: () => "collapsed",
-    treeOverlay: () => Option.getOrNull(Option.none()),
     activity: () => ({ phase: "idle", turn: 0 }),
     phaseLabel: () => "idle",
     elapsed: () => 0,
@@ -48,7 +47,6 @@ function TestComposer(props: {
     dispatchComposer: () => {},
     resolveAuthGate: () => {},
     closeOverlay: () => {},
-    onSessionTreeSelect: () => {},
     onForkSelect: () => {},
     onPromptSearchEvent: () => {},
   } satisfies SessionController

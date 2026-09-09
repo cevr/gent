@@ -6,14 +6,15 @@
  * loop, live or stored, grouped by section and nested under its parent. The
  * server owns the projection, so this file only renders and navigates.
  *
- * Structure follows `session-tree.tsx`, which is the repo's template for a
- * centered filter-list overlay, and shares its reducer via `filter-list-state`.
+ * Replaces the former `session-tree.tsx` overlay: this shows every loop rather
+ * than one session's descendants, adds liveness, and is keyed per branch. The
+ * shared reducer lives in `filter-list-state`.
  *
  * @module
  */
 
 import { Effect, Option } from "effect"
-import { createSignal, For, Show } from "solid-js"
+import { createEffect, createSignal, For, on, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { AgentsViewRpc, type AgentRowEntry } from "@gent/extensions/client"
 import { ref } from "@gent/core/extensions/api"
@@ -49,6 +50,8 @@ export const AGENTS_VIEW_OVERLAY_ID = "agents"
  */
 interface AgentsController {
   readonly rows: () => ReadonlyArray<AgentRowEntry>
+  /** The loop the shell is currently on, so the pane can mark and preselect it. */
+  readonly current: () => Option.Option<{ sessionId: string; branchId: string }>
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
   readonly refresh: (query: string) => void
@@ -59,6 +62,7 @@ const makeAgentsController = (
     query: string,
   ) => Effect.Effect<ReadonlyArray<AgentRowEntry>, { readonly message: string }>,
   cast: (effect: Effect.Effect<void>) => void,
+  current: () => Option.Option<{ sessionId: string; branchId: string }>,
 ): AgentsController => {
   const [rows, setRows] = createSignal<ReadonlyArray<AgentRowEntry>>([])
   const [error, setError] = createSignal<Option.Option<string>>(Option.none())
@@ -83,7 +87,7 @@ const makeAgentsController = (
     )
   }
 
-  return { rows, error, loading, refresh }
+  return { rows, current, error, loading, refresh }
 }
 
 /** Section headers, rendered inline so the list stays one flat navigable array. */
@@ -108,6 +112,12 @@ const labelFor = (row: AgentRowEntry): string => {
   return `${indentFor(row.depth)}${name}  ·  ${agent}`
 }
 
+/** Marks the loop the shell is on, so a reader can find themselves in the list. */
+const currentMarker = (current: boolean): string => {
+  if (current) return "• "
+  return "  "
+}
+
 /** An empty list means one of two different things; say which. */
 const emptyLabel = (loading: boolean): string => {
   if (loading) return "loading…"
@@ -124,6 +134,22 @@ export function AgentsPane(
   const dimensions = useTerminalDimensions()
   const [state, setState] = createSignal(FilterListState.initial())
   let scrollRef: Option.Option<ScrollBoxRenderable> = Option.none()
+
+  const isCurrent = (row: AgentRowEntry): boolean =>
+    Option.match(props.controller.current(), {
+      onNone: () => false,
+      onSome: (active) => active.sessionId === row.sessionId && active.branchId === row.branchId,
+    })
+
+  // Open on the loop the shell is already on, the way the session tree did.
+  // Re-runs when rows arrive, since the fetch resolves after the pane mounts.
+  createEffect(
+    on([() => props.open, () => props.controller.rows()], ([open, rows]) => {
+      if (!open) return
+      const index = rows.findIndex(isCurrent)
+      setState(FilterListState.initial(Math.max(0, index)))
+    }),
+  )
 
   // Filtering is the server's job — it owns the same search the projection
   // tests cover — so typing refetches rather than filtering a local copy.
@@ -243,7 +269,7 @@ export function AgentsPane(
                   <box id={`agents-row-${index()}`} backgroundColor={background()} paddingLeft={1}>
                     <text style={{ fg: colorFor(row, selected()) }}>
                       {truncate(
-                        `${SECTION_LABEL[row.section].padEnd(9)}${labelFor(row)}`,
+                        `${currentMarker(isCurrent(row))}${SECTION_LABEL[row.section].padEnd(9)}${labelFor(row)}`,
                         rowWidth(),
                       )}
                     </text>
@@ -273,6 +299,11 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
           Effect.mapError((error) => ({ message: String(error) })),
         ),
       shell.cast,
+      () =>
+        Option.map(Option.fromNullishOr(transport.currentSession()), (active) => ({
+          sessionId: active.sessionId,
+          branchId: active.branchId,
+        })),
     )
 
     return clientContributions(
@@ -282,6 +313,10 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         description: "Show every agent loop, live and stored",
         category: "Session",
         slash: "agents",
+        // `/tree` was the session-tree overlay, which this view replaces: it
+        // shows every loop rather than one session's descendants, adds liveness,
+        // and is keyed per branch. Kept as an alias so the habit still works.
+        aliases: ["tree"],
         onSelect: () => {
           shell.openOverlay(AGENTS_VIEW_OVERLAY_ID)
           controller.refresh("")

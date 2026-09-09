@@ -82,7 +82,6 @@ export interface SessionController {
   promptSearchState: () => ReturnType<typeof getPromptSearchState>
   promptSearchOpen: () => boolean
   disclosure: () => DisclosureLevel
-  treeOverlay: () => ReturnType<typeof getTreeOverlay>
   activity: () =>
     | { phase: "idle"; turn: number }
     | { phase: "thinking"; turn: number }
@@ -98,15 +97,8 @@ export interface SessionController {
   dispatchComposer: (event: ComposerEvent) => void
   resolveAuthGate: () => void
   closeOverlay: () => void
-  onSessionTreeSelect: (sessionId: SessionId) => void
   onForkSelect: (messageId: MessageId) => void
   onPromptSearchEvent: (event: Extract<SessionUiEvent, { _tag: "PromptSearch" }>["event"]) => void
-}
-
-const getTreeOverlay = (state: ReturnType<typeof SessionUiState.initial>["overlay"]) => {
-  if (state._tag === "tree") return state.tree
-  // eslint-disable-next-line effect/noNullish -- SessionTree uses null to represent a closed overlay.
-  return null
 }
 
 export function createSessionController(props: {
@@ -452,36 +444,6 @@ export function createSessionController(props: {
     }
   })
 
-  const openSessionTree = () => {
-    cast(
-      Effect.gen(function* () {
-        const sessions = yield* client.listSessions
-        const byId = new Map(sessions.map((session) => [session.id, session]))
-        let rootId = props.sessionId
-        let current = Option.fromNullishOr(byId.get(props.sessionId))
-        while (Option.isSome(current)) {
-          const parentId = Option.fromNullishOr(current.value.parentSessionId)
-          if (Option.isNone(parentId)) break
-          const parent = Option.fromNullishOr(byId.get(parentId.value))
-          if (Option.isNone(parent)) break
-          rootId = parent.value.id
-          current = parent
-        }
-
-        const tree = yield* client.getSessionTree(rootId)
-        yield* Effect.sync(() => {
-          dispatchSessionUi(SessionUiEvent.cases.OpenTree.make({ tree, sessions }))
-        })
-      }).pipe(
-        Effect.catchEager((error) =>
-          Effect.sync(() => {
-            client.setError(formatError(error))
-          }),
-        ),
-      ),
-    )
-  }
-
   const openForkPicker = () => {
     const sessionId = props.sessionId
     const branchId = props.branchId
@@ -510,7 +472,6 @@ export function createSessionController(props: {
     navigateToCreatedSession: (sessionId, branchId) => {
       router.navigateToSession(sessionId, branchId)
     },
-    openSessionTree,
     openForkPicker,
     openPermissions: () => dispatchSessionUi(SessionUiEvent.cases.OpenPermissions.make({})),
     openAuth: () => dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: false })),
@@ -559,32 +520,6 @@ export function createSessionController(props: {
       ),
       Effect.asVoid,
     )
-
-  const onSessionTreeSelect = (sessionId: SessionId) => {
-    const currentOverlay = uiState().overlay
-    dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({}))
-    if (currentOverlay._tag !== "tree") return
-
-    const nextSession = Option.fromNullishOr(
-      currentOverlay.sessions.find((session) => session.id === sessionId),
-    )
-    if (Option.isNone(nextSession)) {
-      client.setError("Session tree entry missing active branch")
-      return
-    }
-    const activeBranchId = Option.fromNullishOr(nextSession.value.activeBranchId)
-    if (Option.isNone(activeBranchId)) {
-      client.setError("Session tree entry missing active branch")
-      return
-    }
-
-    client.switchSession(
-      nextSession.value.id,
-      activeBranchId.value,
-      nextSession.value.name ?? "Unnamed",
-    )
-    router.navigateToSession(nextSession.value.id, activeBranchId.value)
-  }
 
   const onForkSelect = (messageId: MessageId) => {
     dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({}))
@@ -745,7 +680,6 @@ export function createSessionController(props: {
     promptSearchState: () => getPromptSearchState(uiState()),
     promptSearchOpen: promptSearch.isOpen,
     disclosure: () => uiState().disclosure,
-    treeOverlay: () => getTreeOverlay(uiState().overlay),
     activity,
     phaseLabel,
     elapsed,
@@ -758,7 +692,6 @@ export function createSessionController(props: {
     dispatchComposer,
     resolveAuthGate,
     closeOverlay,
-    onSessionTreeSelect,
     onForkSelect,
     onPromptSearchEvent: (event) => promptSearch.onEvent(event),
   }
