@@ -41,25 +41,51 @@ export type ErasedCapabilityEffect<E = any> = (
 ) => Effect.Effect<any, E, any>
 
 /**
+ * What a tool may declare about itself beyond its schemas and body.
+ *
+ * Every one is optional, and each travels the same route: the author's input,
+ * the metadata annotation, the capability. Declaring them once here means a
+ * new one is added in a single place rather than three, where forgetting a
+ * site drops the declaration silently instead of failing to compile.
+ */
+export interface ToolDeclarations {
+  /** One-liner for the system prompt tool list (distinct from `description`,
+   *  which is sent to the LLM as part of the tool schema). */
+  readonly promptSnippet?: string
+  /** Behavioral guidelines injected into the system prompt when this tool is active. */
+  readonly promptGuidelines?: ReadonlyArray<string>
+  /** If true, requires an interactive session — filtered out in headless
+   *  mode and subagent contexts. */
+  readonly interactive?: boolean
+  /**
+   * If true, this tool runs other tools inside itself.
+   *
+   * The loop restores host tool bindings for a dispatching tool on crash
+   * recovery, because its inner calls need them; a plain tool needs only its
+   * own binding. Declaring it keeps the loop from having to know tool names.
+   */
+  readonly dispatches?: boolean
+  /** Permission allow/deny rules gating execution. */
+  readonly permissionRules?: ReadonlyArray<PermissionRule>
+  /** Static system-prompt section bundled with this tool. For dynamic
+   *  prompt fragments resolved per-turn from services, use a turn projection hook. */
+  readonly prompt?: PromptSection
+}
+
+/**
  * Erased runtime shape of a `tool({...})` Capability. The author-facing branded
  * type lives in `domain/capability/tool.ts`; runtime code reads Gent-only fields
  * from the `GentToolMetadata` annotation, not this shape.
  */
-export interface ToolCapability {
+export interface ToolCapability extends ToolDeclarations {
   readonly _tag: "tool"
   readonly id: ToolId
   readonly readonly: boolean
-  readonly promptSnippet?: string
-  readonly prompt?: PromptSection
-  readonly permissionRules?: ReadonlyArray<PermissionRule>
   readonly input: unknown
   readonly output: unknown
   readonly native: unknown
   readonly effect: unknown
   readonly description: string
-  readonly promptGuidelines?: ReadonlyArray<string>
-  readonly interactive?: boolean
-  readonly dispatches?: boolean
   readonly metadata: unknown
 }
 

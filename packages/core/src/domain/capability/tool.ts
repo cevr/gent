@@ -17,25 +17,41 @@
 
 import { Context, Predicate, type Effect, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
-import { type ToolCapability as ToolCapabilityApi } from "../capability.js"
+import { type ToolCapability as ToolCapabilityApi, type ToolDeclarations } from "../capability.js"
 import { ToolId } from "../ids.js"
-import type { PermissionRule } from "../permission.js"
-import type { PromptSection } from "../prompt.js"
 
 const ToolCapabilityBrand: unique symbol = Symbol("@gent/core/ToolCapability")
 declare const ToolCapabilityType: unique symbol
 
-export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unknown> {
+/**
+ * The declarations `source` actually carries, with absent ones left out.
+ *
+ * Omission matters: these are exact optional properties, so a key present and
+ * set to `undefined` is not the same as a key that is missing. A conditional
+ * spread drops the key entirely, and each field keeps its own type.
+ */
+const declarationsOf = (source: ToolDeclarations): ToolDeclarations => ({
+  ...(Predicate.isNotUndefined(source.promptSnippet) && { promptSnippet: source.promptSnippet }),
+  ...(Predicate.isNotUndefined(source.promptGuidelines) && {
+    promptGuidelines: source.promptGuidelines,
+  }),
+  ...(Predicate.isNotUndefined(source.interactive) && { interactive: source.interactive }),
+  ...(Predicate.isNotUndefined(source.dispatches) && { dispatches: source.dispatches }),
+  ...(Predicate.isNotUndefined(source.permissionRules) && {
+    permissionRules: source.permissionRules,
+  }),
+  ...(Predicate.isNotUndefined(source.prompt) && { prompt: source.prompt }),
+})
+
+export interface GentToolMetadata<
+  Input = unknown,
+  Output = unknown,
+  Error = unknown,
+> extends ToolDeclarations {
   readonly id: ToolId
   readonly readonly: boolean
   readonly input: Schema.Decoder<Input, never>
   readonly output: Schema.Encoder<unknown, never>
-  readonly promptSnippet?: string
-  readonly promptGuidelines?: ReadonlyArray<string>
-  readonly interactive?: boolean
-  readonly dispatches?: boolean
-  readonly permissionRules?: ReadonlyArray<PermissionRule>
-  readonly prompt?: PromptSection
   // oxlint-disable-next-line effect/noUnknownParameters -- The toolkit decodes wire inputs; the factory validates the decoded value.
   readonly effect: (input: unknown) => Effect.Effect<Output, Error, never>
 }
@@ -148,7 +164,7 @@ export interface ToolInput<
   Output extends Schema.Encoder<any, never> = Schema.Encoder<any, never>,
   Error = never,
   Deps = never,
-> {
+> extends ToolDeclarations {
   /** Stable id (extension-local). Used by the LLM as the tool name. */
   readonly id: string
   /** Sent to the LLM as part of the tool schema — describes what the tool does. */
@@ -169,27 +185,6 @@ export interface ToolInput<
    *  through this schema, and Gent stores the same schema in metadata for
    *  lifecycle hooks and direct tool-runner invocation. */
   readonly output: Output
-  /** One-liner for the system prompt tool list (distinct from `description`,
-   *  which is sent to the LLM as part of the tool schema). */
-  readonly promptSnippet?: string
-  /** Behavioral guidelines injected into the system prompt when this tool is active. */
-  readonly promptGuidelines?: ReadonlyArray<string>
-  /** If true, requires an interactive session — filtered out in headless
-   *  mode and subagent contexts. */
-  readonly interactive?: boolean
-  /**
-   * If true, this tool runs other tools inside itself.
-   *
-   * The loop restores host tool bindings for a dispatching tool on crash
-   * recovery, because its inner calls need them; a plain tool needs only its
-   * own binding. Declaring it keeps the loop from having to know tool names.
-   */
-  readonly dispatches?: boolean
-  /** Permission allow/deny rules gating execution. */
-  readonly permissionRules?: ReadonlyArray<PermissionRule>
-  /** Static system-prompt section bundled with this tool. For dynamic
-   *  prompt fragments resolved per-turn from services, use a turn projection hook. */
-  readonly prompt?: PromptSection
   /** The tool body. Receives decoded `params`; host capabilities are imported
    *  as constrained Effect services such as `ExtensionContext`. */
   readonly execute: (
@@ -213,11 +208,6 @@ export const tool = <
 ): ToolCapability<Schema.Schema.Type<Params>, Schema.Schema.Type<Output>, Error> => {
   const params = input.params
   const id = ToolId.make(input.id)
-  type MutableMetadata = {
-    -readonly [
-      K in keyof GentToolMetadata<Schema.Schema.Type<Params>, Schema.Schema.Type<Output>, Error>
-    ]?: GentToolMetadata<Schema.Schema.Type<Params>, Schema.Schema.Type<Output>, Error>[K]
-  }
   const metadata: GentToolMetadata<
     Schema.Schema.Type<Params>,
     Schema.Schema.Type<Output>,
@@ -233,18 +223,7 @@ export const tool = <
       return input.execute(decoded) as Effect.Effect<Schema.Schema.Type<Output>, Error, never>
     },
   }
-  const mutableMetadata: MutableMetadata = metadata
-  if (Predicate.isNotUndefined(input.promptSnippet))
-    mutableMetadata.promptSnippet = input.promptSnippet
-  if (Predicate.isNotUndefined(input.promptGuidelines)) {
-    mutableMetadata.promptGuidelines = input.promptGuidelines
-  }
-  if (Predicate.isNotUndefined(input.interactive)) mutableMetadata.interactive = input.interactive
-  if (Predicate.isNotUndefined(input.dispatches)) mutableMetadata.dispatches = input.dispatches
-  if (Predicate.isNotUndefined(input.permissionRules)) {
-    mutableMetadata.permissionRules = input.permissionRules
-  }
-  if (Predicate.isNotUndefined(input.prompt)) mutableMetadata.prompt = input.prompt
+  Object.assign(metadata, declarationsOf(input))
 
   const native = AiTool.dynamic(input.id, {
     description: input.description,
@@ -266,18 +245,7 @@ export const tool = <
     description: input.description,
     metadata,
   }
-  if (Predicate.isNotUndefined(metadata.promptSnippet)) {
-    capability.promptSnippet = metadata.promptSnippet
-  }
-  if (Predicate.isNotUndefined(metadata.promptGuidelines)) {
-    capability.promptGuidelines = metadata.promptGuidelines
-  }
-  if (Predicate.isNotUndefined(metadata.interactive)) capability.interactive = metadata.interactive
-  if (Predicate.isNotUndefined(metadata.dispatches)) capability.dispatches = metadata.dispatches
-  if (Predicate.isNotUndefined(metadata.permissionRules)) {
-    capability.permissionRules = metadata.permissionRules
-  }
-  if (Predicate.isNotUndefined(metadata.prompt)) capability.prompt = metadata.prompt
+  Object.assign(capability, declarationsOf(metadata))
   const brand: ToolCapability<
     Schema.Schema.Type<Params>,
     Schema.Schema.Type<Output>,
