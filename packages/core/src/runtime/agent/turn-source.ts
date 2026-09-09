@@ -372,8 +372,13 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       if (Option.isSome(persisted.envelope)) yield* eventPublisher.deliver(persisted.envelope.value)
       return persisted.message
     })
-  // The model can ask, from inside a tool, for a fresh window or a focused summary.
-  const ledger = yield* ModelContextLedger
+  // The model can ask, from inside a dispatching tool, for a fresh window or a
+  // focused summary. A branch with no such tool has no ledger and no
+  // directives, so the read falls back to an inert one.
+  const ledger = Option.getOrElse(
+    yield* Effect.serviceOption(ModelContextLedger),
+    () => ModelContextLedger.inert,
+  )
   // A directive belongs to the turn whose tool call scheduled it: the first
   // projection of a new turn drops whatever an earlier turn left behind.
   if (params.step <= 1) yield* ledger.discardDirective

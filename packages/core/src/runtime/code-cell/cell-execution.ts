@@ -31,6 +31,7 @@ import {
   type CellRestoreReport,
 } from "./cell-protocol.js"
 import { GentPlatform } from "../gent-platform.js"
+import { ModelContextLedger } from "../model-context-ledger.js"
 import { BranchToolWork } from "../agent/branch-tool-work.js"
 
 /** The worker binary this build ships next to the executable. */
@@ -83,11 +84,15 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
         const binaryPath = yield* platform.siblingBinaryPath(CELL_WORKER_BINARY)
         const live = CellExecution.Live({ ...address, binaryPath, workerPath: binaryPath })
         // The loop cancels branch work through `BranchToolWork`; the cell's
-        // own cancel is what that means here.
+        // own cancel is what that means here. The context ledger ships with the
+        // cell too: the cell is what schedules directives into it.
         return Layer.provideMerge(
-          Layer.effect(
-            BranchToolWork,
-            Effect.map(CellExecution, (cells) => BranchToolWork.of({ cancel: cells.cancel })),
+          Layer.merge(
+            Layer.effect(
+              BranchToolWork,
+              Effect.map(CellExecution, (cells) => BranchToolWork.of({ cancel: cells.cancel })),
+            ),
+            ModelContextLedger.Branch,
           ),
           live,
         )

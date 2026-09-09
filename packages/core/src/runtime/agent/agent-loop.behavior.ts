@@ -30,7 +30,6 @@ import {
 import { Entity, Sharding } from "effect/unstable/cluster"
 import { BranchToolLayer } from "./branch-tool-layer.js"
 import { BranchToolWork } from "./branch-tool-work.js"
-import { ModelContextLedger } from "../model-context-ledger.js"
 import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
@@ -331,13 +330,7 @@ export const makeAgentLoopBehavior = (
     )
     const branchToolLayer = yield* BranchToolLayer
     const branchContext = yield* Layer.build(
-      Layer.merge(
-        Layer.merge(
-          branchToolLayer({ sessionId, branchId, interruptedRef }),
-          ModelContextLedger.Branch,
-        ),
-        branchResourceLayer,
-      ),
+      Layer.merge(branchToolLayer({ sessionId, branchId, interruptedRef }), branchResourceLayer),
     ).pipe(Scope.provide(loopScope))
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())

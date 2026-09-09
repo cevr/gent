@@ -53,4 +53,22 @@ export class ModelContextLedger extends Context.Service<
   })
 
   static Branch = Layer.effect(ModelContextLedger, ModelContextLedger.make)
+
+  /**
+   * The ledger a branch gets when nothing schedules directives.
+   *
+   * Only a dispatching tool writes this ledger -- the model asks for a fresh
+   * window or a focused summary from inside one. A branch without such a tool
+   * still projects its context every turn, so the read side must resolve to
+   * something rather than fail. Absence means "no directive, and nowhere to
+   * record", not an error.
+   */
+  static readonly inert: ModelContextLedgerService = {
+    status: Effect.succeedNone,
+    recordProjection: () => Effect.void,
+    schedule: () => Effect.void,
+    pendingDirective: Effect.succeedNone,
+    acknowledgeDirective: () => Effect.void,
+    discardDirective: Effect.void,
+  }
 }
