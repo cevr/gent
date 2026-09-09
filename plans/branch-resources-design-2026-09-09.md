@@ -176,6 +176,46 @@ Leave these fences alone in this unit. Deciding whether a fence around a
 non-existent symbol still earns its keep is a separate cleanup with its own
 gate.
 
+## Decision: interrupt on branch close, matching Prime
+
+Checked against the pinned Prime Agent checkout at `a3b3e75` (2026-08-11),
+`~/.cache/repo/primeintellect-ai/prime-agent/packages/coding-agent`.
+
+Prime's `KernelManager.dispose()` (`src/core/kernel/index.ts:1500-1516`) runs
+in this order:
+
+1. `flushSnapshotForDispose()` — persist kernel state, capped at 5s
+   (`:1485-1489`, `SNAPSHOT_DISPOSE_TIMEOUT_MS` at `:39-40`).
+2. Wait up to 5s for in-flight **host requests** to settle
+   (`HOST_REQUEST_DISPOSE_TIMEOUT_MS` at `:32`).
+3. `cleanupResources()` in a `finally` — `rejectActiveExecution(new
+Error("Kernel has been shut down"))` at `:1295`, then SIGTERM.
+
+So Prime drains host callbacks but **interrupts the running cell
+unconditionally**. Its own code marks the gap at `:1507`:
+
+> `// TODO: plumb AbortSignal through AgentSession.prompt so disposal can`
+> `// cancel long-running child loops.`
+
+Its cancellation UX is interrupt-first as well: Ctrl+C interrupts, waits 1s
+(`KERNEL_ABORT_GRACE_MS`, `:41`), then force-settles the tool call and moves on,
+leaving the cell possibly still running. The hard kill is offered to the user
+rather than applied automatically (`src/core/tools/ipython.ts:566-608`).
+
+**Decision.** Take interrupt-on-close. It matches Prime, matches gent's existing
+`shutdown` (`resource-graph-host.ts:981`), and matches what the cell already
+tells the user: "Cell cancelled. Its effects may have occurred; its source was
+not replayed." No change to `makeResourceGraphHost`.
+
+Gent is arguably ahead here: Prime orphans an in-flight child's provider request
+silently, while gent's cancellation is explicit in the transcript.
+
+**The one behavior to verify, not assume.** Prime flushes its snapshot before
+teardown. Gent snapshots on successful cell completion instead, so a branch
+closing mid-cell should still retain _previously_ snapshotted bindings via the
+recovery path. That is a claim about existing behavior under a new teardown
+owner — test it, do not trust it.
+
 ## Acceptance for this unit
 
 From the parent plan, restated concretely:
