@@ -123,6 +123,9 @@ it.scopedLive(
                 tool({
                   id: "cell",
                   description: "Must not replay",
+                  // Stands in for the real cell, so it must declare the same
+                  // property the loop keys recovery off.
+                  dispatches: true,
                   params: Schema.Struct({ code: Schema.String }),
                   output: Schema.Finite,
                   execute: () =>

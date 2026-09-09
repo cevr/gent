@@ -33,6 +33,7 @@ export interface GentToolMetadata<Input = unknown, Output = unknown, Error = unk
   readonly promptSnippet?: string
   readonly promptGuidelines?: ReadonlyArray<string>
   readonly interactive?: boolean
+  readonly dispatches?: boolean
   readonly permissionRules?: ReadonlyArray<PermissionRule>
   readonly prompt?: PromptSection
   // oxlint-disable-next-line effect/noUnknownParameters -- The toolkit decodes wire inputs; the factory validates the decoded value.
@@ -176,6 +177,14 @@ export interface ToolInput<
   /** If true, requires an interactive session — filtered out in headless
    *  mode and subagent contexts. */
   readonly interactive?: boolean
+  /**
+   * If true, this tool runs other tools inside itself.
+   *
+   * The loop restores host tool bindings for a dispatching tool on crash
+   * recovery, because its inner calls need them; a plain tool needs only its
+   * own binding. Declaring it keeps the loop from having to know tool names.
+   */
+  readonly dispatches?: boolean
   /** Permission allow/deny rules gating execution. */
   readonly permissionRules?: ReadonlyArray<PermissionRule>
   /** Static system-prompt section bundled with this tool. For dynamic
@@ -231,6 +240,7 @@ export const tool = <
     mutableMetadata.promptGuidelines = input.promptGuidelines
   }
   if (Predicate.isNotUndefined(input.interactive)) mutableMetadata.interactive = input.interactive
+  if (Predicate.isNotUndefined(input.dispatches)) mutableMetadata.dispatches = input.dispatches
   if (Predicate.isNotUndefined(input.permissionRules)) {
     mutableMetadata.permissionRules = input.permissionRules
   }
@@ -263,6 +273,7 @@ export const tool = <
     capability.promptGuidelines = metadata.promptGuidelines
   }
   if (Predicate.isNotUndefined(metadata.interactive)) capability.interactive = metadata.interactive
+  if (Predicate.isNotUndefined(metadata.dispatches)) capability.dispatches = metadata.dispatches
   if (Predicate.isNotUndefined(metadata.permissionRules)) {
     capability.permissionRules = metadata.permissionRules
   }

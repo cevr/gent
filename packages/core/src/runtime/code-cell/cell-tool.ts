@@ -5,9 +5,15 @@ import { ToolResultFailure } from "../../domain/tool-output.js"
 import { dispatchCell } from "./cell-dispatch.js"
 
 /** Declaration only. The turn dispatcher still owns identity, permissions, and execution scope. */
+/** The model-facing name of the cell tool. */
+export const CELL_TOOL_ID = "cell"
+
 export const CellTool = tool({
-  id: "cell",
+  id: CELL_TOOL_ID,
   description: "Run TypeScript in the current branch's persistent Bun cell.",
+  // The cell calls host tools from inside itself, so recovery must restore
+  // host bindings for it, not just its own.
+  dispatches: true,
   params: CellInput,
   output: Schema.Json,
   promptGuidelines: [

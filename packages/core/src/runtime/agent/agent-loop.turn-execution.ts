@@ -8,12 +8,7 @@ import {
 } from "../../domain/agent.js"
 import { StreamEnded, StreamStarted, TurnCompleted } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
-import {
-  InteractionRequestId,
-  ToolCallId,
-  type BranchId,
-  type SessionId,
-} from "../../domain/ids.js"
+import { type BranchId, InteractionRequestId, type SessionId } from "../../domain/ids.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { TurnError } from "../../domain/driver.js"
 import { MessageStorage } from "../../storage/message-storage.js"
@@ -25,8 +20,10 @@ import { GentPlatform } from "../gent-platform.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { WideEvent } from "../wide-event-boundary.js"
 import { AgentLoopError, type QueuedTurnItem, type RunningState } from "./agent-loop.state.js"
-import { CellExecutionStorage } from "../code-cell/cell-execution-storage.js"
-import { recoverCellExecution } from "../code-cell/cell-recovery.js"
+import {
+  ToolCallRecoveryOutcome,
+  ToolCallRecoveryService,
+} from "../../domain/tool-call-recovery.js"
 import {
   assistantDraftFromMessage,
   continuationMessageIdForTurn,
@@ -72,6 +69,7 @@ import {
   ProcessLocalToolReplay,
 } from "./process-local-tool-replay.js"
 import {
+  provideAgentLoopTurnProfile,
   runAgentLoopTurnProfileOrLegacy,
   type AgentLoopTurnProfile,
 } from "./agent-loop.turn-profile.js"
@@ -680,7 +678,16 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         readonly nativeToolCalls: ReadonlyArray<Prompt.ToolCallPart>
         readonly toolBindings: Map<string, ResolvedToolCapability>
       }) {
-        if (!params.nativeToolCalls.some((call) => call.name === "cell")) return params.toolBindings
+        // A dispatching tool's inner calls need the turn's host bindings, so
+        // recovery must rebuild them. A plain tool needs only its own. Which
+        // tools dispatch is declared on the capability, not known by name.
+        const dispatching = params.nativeToolCalls.filter((call) =>
+          Option.match(Option.fromUndefinedOr(params.toolBindings.get(call.name)), {
+            onNone: () => false,
+            onSome: (entry) => entry.capability.dispatches === true,
+          }),
+        )
+        if (dispatching.length === 0) return params.toolBindings
         const resolved = yield* resolveTurnContext({
           agentOverride: params.state.agentOverride,
           runSpec: params.state.runSpec,
@@ -693,10 +700,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           hash: (input) => platform.hash("sha256", input),
         })
         if (Predicate.isUndefined(resolved)) {
-          return yield* new AgentLoopError({ message: "Cell recovery requires a selected agent" })
+          return yield* new AgentLoopError({ message: "Recovery requires a selected agent" })
         }
-        // A stored binding cannot restore authority removed by the current agent policy.
-        if (!resolved.toolBindings.has("cell")) params.toolBindings.delete("cell")
+        // A stored binding cannot restore authority the current agent policy
+        // removed: a tool the agent no longer grants must not come back.
+        for (const call of dispatching) {
+          if (!resolved.toolBindings.has(call.name)) params.toolBindings.delete(call.name)
+        }
         return resolved.hostToolBindings
       },
     )
@@ -744,52 +754,51 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       yield* Effect.logInfo("turn.resume-tools")
       const recoveredResults: Array<Prompt.ToolResultPart> = []
       const nativeToolCalls: Array<Prompt.ToolCallPart> = []
+      // A tool that keeps durable receipts can settle a call the crash left in
+      // flight; anything else is re-issued to the model. Which tools those are
+      // is not the loop's business — no recovery service means re-issue all.
+      const recovery = yield* Effect.serviceOption(ToolCallRecoveryService)
       for (const toolCall of pendingToolCalls) {
-        if (toolCall.name !== "cell") {
-          nativeToolCalls.push(toolCall)
-          continue
-        }
-        const cell = {
-          sessionId: scope.sessionId,
-          branchId: scope.branchId,
-          assistantMessageId: pendingAssistant.value.id,
-          toolCallId: ToolCallId.make(toolCall.id),
-        }
-        const cells = yield* CellExecutionStorage
-        const saved = yield* cells.get(cell)
-        if (Option.isNone(saved)) {
-          nativeToolCalls.push(toolCall)
-          continue
-        }
-        const turnPublication = params.turnProfile.turnPublication
-        if (Predicate.isUndefined(turnPublication)) {
-          return yield* new AgentLoopError({
-            message: "Cell recovery requires a live turn publication",
-          })
-        }
-        const recovered = yield* recoverCellExecution({
-          cell,
-          profile: { ...params.turnProfile, turnPublication },
-        }).pipe(
-          Effect.asSome,
-          Effect.catchTag("CellToolCallSuspended", (suspended) => Effect.succeed(suspended)),
-          Effect.mapError(
-            (cause) => new AgentLoopError({ message: "Cell recovery failed", cause }),
-          ),
-        )
-        if (recovered._tag === "CellToolCallSuspended") {
+        const outcome: ToolCallRecoveryOutcome = yield* Option.match(recovery, {
+          onNone: () =>
+            Effect.succeed<ToolCallRecoveryOutcome>(
+              ToolCallRecoveryOutcome.cases.NotRecovered.make({}),
+            ),
+          onSome: (service) =>
+            service
+              .recover({
+                sessionId: scope.sessionId,
+                branchId: scope.branchId,
+                assistantMessageId: pendingAssistant.value.id,
+                toolCall,
+              })
+              .pipe(
+                provideAgentLoopTurnProfile(params.turnProfile),
+                Effect.mapError(
+                  (cause) => new AgentLoopError({ message: "Tool call recovery failed", cause }),
+                ),
+              ),
+        })
+        if (outcome._tag === "Suspended") {
           return {
             step: pendingStep,
             interaction: Option.some(
               TurnOutcome.cases.InteractionRequested.make({
-                pendingRequestId: recovered.pending.requestId,
+                pendingRequestId: outcome.requestId,
                 pendingToolCallId: toolCall.id,
                 currentTurnAgent: params.currentTurnAgent,
               }),
             ),
           }
         }
-        if (Option.isSome(recovered)) recoveredResults.push(recovered.value)
+        if (outcome._tag === "Settled") {
+          recoveredResults.push(outcome.result)
+          continue
+        }
+        // `Incomplete` recorded effects but no result: it must not run again,
+        // and it contributes no result part.
+        if (outcome._tag === "Incomplete") continue
+        nativeToolCalls.push(toolCall)
       }
       const toolBindings = yield* captureReplayToolBindings({
         assistantMessageId: pendingAssistant.value.id,

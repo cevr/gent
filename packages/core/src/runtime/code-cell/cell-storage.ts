@@ -17,6 +17,8 @@ import type { GentPlatform } from "../gent-platform.js"
 import type { DispatchingToolStorage } from "./dispatching-tool-storage.js"
 import { InnerOperationReceipts } from "../../domain/inner-operation-receipts.js"
 import { RetainedBindings } from "../../domain/retained-bindings.js"
+import type { ToolCallRecoveryService } from "../../domain/tool-call-recovery.js"
+import { cellToolCallRecovery } from "./cell-tool-call-recovery.js"
 
 /**
  * Build the cell's repositories over an existing SQL client.
@@ -29,7 +31,7 @@ export const cellStorageLayer = <E, R>(
   base: Layer.Layer<SqlClient.SqlClient, E, R>,
   interactionStorage: Layer.Layer<InteractionStorage, E, R>,
 ): Layer.Layer<
-  DispatchingToolStorage | InnerOperationReceipts | RetainedBindings,
+  DispatchingToolStorage | InnerOperationReceipts | RetainedBindings | ToolCallRecoveryService,
   E,
   R | GentPlatform
 > => {
@@ -41,7 +43,10 @@ export const cellStorageLayer = <E, R>(
   // The projections ship with the tables. Installing the cell's storage
   // without the answers core reads from it would leave compaction silently
   // reporting no receipts and no retained names.
-  return Layer.provideMerge(Layer.merge(cellInnerOperationReceipts, cellRetainedBindings), tables)
+  return Layer.provideMerge(
+    Layer.mergeAll(cellInnerOperationReceipts, cellRetainedBindings, cellToolCallRecovery),
+    Layer.merge(tables, interactionStorage),
+  )
 }
 
 /**

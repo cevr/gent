@@ -59,6 +59,7 @@ export interface ToolCapability {
   readonly description: string
   readonly promptGuidelines?: ReadonlyArray<string>
   readonly interactive?: boolean
+  readonly dispatches?: boolean
   readonly metadata: unknown
 }
 
