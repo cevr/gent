@@ -381,7 +381,7 @@ it.scopedLive(
             expect(recovered.result).toMatchObject({ stateLost: true })
             expect(yield* Ref.get(calls)).toBe(4)
             expect(
-              (yield* (yield* CellToolOperationStorage).listForCell(cell)).map(
+              (yield* (yield* CellToolOperationStorage).listForToolCall(cell)).map(
                 ({ operation }) => operation.state._tag,
               ),
             ).toEqual(["Completed", "Completed"])

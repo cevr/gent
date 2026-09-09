@@ -72,7 +72,7 @@ export interface CellToolOperationStorageService {
     readonly toolCallId: ToolCallId
   }) => Effect.Effect<Option.Option<CellToolOperation>, StorageError>
   /** Recover all inner outcomes without relying on a live worker or phase. */
-  readonly listForCell: (
+  readonly listForToolCall: (
     cell: OwnedToolCallAddress,
   ) => Effect.Effect<
     ReadonlyArray<{ readonly key: CellToolOperationKey; readonly operation: CellToolOperation }>,
@@ -239,7 +239,7 @@ export class CellToolOperationStorage extends Context.Service<
           }).pipe(sql.withTransaction, Effect.mapError(failure))
         },
       )
-      const listForCell = Effect.fn("CellToolOperationStorage.listForCell")(function* (
+      const listForToolCall = Effect.fn("CellToolOperationStorage.listForToolCall")(function* (
         cell: OwnedToolCallAddress,
       ) {
         return yield* Effect.gen(function* () {
@@ -368,7 +368,7 @@ export class CellToolOperationStorage extends Context.Service<
         admit,
         get,
         findByToolCallId,
-        listForCell,
+        listForToolCall,
         suspend,
         resume,
         complete,

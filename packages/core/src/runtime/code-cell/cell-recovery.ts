@@ -33,7 +33,7 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
       ),
     )
   if (outer._tag === "Completed") return outer.result
-  const records = yield* operations.listForCell(params.cell)
+  const records = yield* operations.listForToolCall(params.cell)
   const pending = yield* interactions.listPending(params.cell)
   for (const { key, operation } of records) {
     if (operation.state._tag !== "Waiting") continue
@@ -55,7 +55,7 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
       })
     yield* resumeCellToolOperation({ ...params, operationId: key.operationId, requestId })
   }
-  const latest = yield* operations.listForCell(params.cell)
+  const latest = yield* operations.listForToolCall(params.cell)
   const outcomes = latest.map(({ key, operation }) => {
     if (operation.state._tag === "Completed")
       return RecoveredOperation.cases.Completed.make({

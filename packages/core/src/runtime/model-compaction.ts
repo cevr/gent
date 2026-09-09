@@ -325,22 +325,26 @@ const collectSourcePaths = Effect.fn("ModelCompaction.collectSourcePaths")(funct
   for (const message of sourceMessages) {
     for (const part of message.parts) {
       if (part.type !== "tool-call") continue
-      if (part.name === "cell") {
-        // A cell that failed before it ran has no receipt; it touched nothing.
-        const inner = yield* operations
-          .listForCell({
-            sessionId: message.sessionId,
-            branchId: message.branchId,
-            assistantMessageId: message.id,
-            toolCallId: ToolCallId.make(part.id),
-          })
-          .pipe(
-            Effect.catchTag("StorageError", (error) =>
-              Effect.logDebug("Compaction skipped a cell without receipts")
-                .pipe(Effect.annotateLogs({ error: String(error) }))
-                .pipe(Effect.as([])),
-            ),
-          )
+      // A tool that dispatched inner calls reports the paths *those* touched;
+      // its own params describe the dispatch, not the files. Which tools do
+      // that is not core's business — the receipts say so. A tool that
+      // recorded none (the common case, and a dispatcher that failed before
+      // running) falls back to its own params.
+      const inner = yield* operations
+        .listForToolCall({
+          sessionId: message.sessionId,
+          branchId: message.branchId,
+          assistantMessageId: message.id,
+          toolCallId: ToolCallId.make(part.id),
+        })
+        .pipe(
+          Effect.catchTag("StorageError", (error) =>
+            Effect.logDebug("Compaction skipped a tool call without receipts")
+              .pipe(Effect.annotateLogs({ error: String(error) }))
+              .pipe(Effect.as([])),
+          ),
+        )
+      if (inner.length > 0) {
         for (const { operation } of inner) {
           record(
             Option.flatMap(decodePathParams(operation.input), (params) =>

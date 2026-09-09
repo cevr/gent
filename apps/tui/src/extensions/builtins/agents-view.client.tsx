@@ -149,17 +149,17 @@ export const makeAgentsController = (
  * row does know, so that one row shows what it is actually doing rather than
  * the conservative guess the listing had to make.
  */
-const sectionLabelFor = (
-  row: AgentRowEntry,
-  detail: Option.Option<ExtensionAgentDetail>,
-): string =>
-  Option.match(Option.flatMap(detail, (value) => value.status), {
-    onNone: () => SECTION_LABEL[row.section],
-    onSome: (status) => {
-      if (status === "Idle") return SECTION_LABEL.idle
-      return SECTION_LABEL.running
+const sectionLabelFor = (row: AgentRowEntry, detail: Option.Option<ExtensionAgentDetail>): string =>
+  Option.match(
+    Option.flatMap(detail, (value) => value.status),
+    {
+      onNone: () => SECTION_LABEL[row.section],
+      onSome: (status) => {
+        if (status === "Idle") return SECTION_LABEL.idle
+        return SECTION_LABEL.running
+      },
     },
-  })
+  )
 
 /** Section headers, rendered inline so the list stays one flat navigable array. */
 const SECTION_LABEL = {
@@ -391,8 +391,7 @@ export function AgentsPane(
    */
   const BODY_ROWS = 10
   const CHROME_ROWS = 6
-  const paneHeight = () =>
-    Math.max(6, Math.min(BODY_ROWS + CHROME_ROWS, dimensions().height - 4))
+  const paneHeight = () => Math.max(6, Math.min(BODY_ROWS + CHROME_ROWS, dimensions().height - 4))
 
   // Detail is fetched for the selected row only, so only that row can be
   // corrected; the rest keep the label the listing gave them.
@@ -489,9 +488,7 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
           Effect.mapError((error) => ({ message: String(error) })),
         ),
       (key) =>
-        transport
-          .agentDetail(key)
-          .pipe(Effect.mapError((error) => ({ message: String(error) }))),
+        transport.agentDetail(key).pipe(Effect.mapError((error) => ({ message: String(error) }))),
       shell.cast,
       () =>
         Option.map(Option.fromNullishOr(transport.currentSession()), (active) => ({

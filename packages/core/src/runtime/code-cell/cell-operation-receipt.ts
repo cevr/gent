@@ -50,7 +50,7 @@ export const withCellOperationReceipts = Effect.fn("CellOperationReceipt.attach"
   result: Prompt.ToolResultPart,
 ) {
   const storage = yield* CellToolOperationStorage
-  const operations = yield* storage.listForCell(cell)
+  const operations = yield* storage.listForToolCall(cell)
   if (operations.length === 0) return result
   const value = decodeJsonObject(result.result)
   if (Option.isNone(value)) return result

@@ -251,24 +251,24 @@ it.live(
       yield* fixture
       yield* (yield* CellExecutionStorage).claim(cell)
       const storage = yield* CellToolOperationStorage
-      expect(yield* storage.listForCell(cell)).toEqual([])
+      expect(yield* storage.listForToolCall(cell)).toEqual([])
       yield* storage.admit(params)
       yield* storage.suspend(key, request)
-      const found = yield* storage.listForCell(cell)
+      const found = yield* storage.listForToolCall(cell)
       expect(found).toHaveLength(1)
       expect(found[0]?.key).toEqual(key)
       expect(found[0]?.operation.state).toEqual({ _tag: "Waiting", requestId })
       expect(
         Schema.is(StorageError)(
           yield* storage
-            .listForCell({ ...cell, branchId: BranchId.make("other") })
+            .listForToolCall({ ...cell, branchId: BranchId.make("other") })
             .pipe(Effect.flip),
         ),
       ).toBe(true)
       expect(
         Schema.is(StorageError)(
           yield* storage
-            .listForCell(cell)
+            .listForToolCall(cell)
             .pipe(
               Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("b".repeat(64))),
               Effect.flip,
@@ -291,7 +291,7 @@ it.live(
         }),
       )
       yield* storage.admit({ ...params, operationId: "2" })
-      const completed = yield* storage.listForCell(cell)
+      const completed = yield* storage.listForToolCall(cell)
       expect(completed.map(({ operation }) => operation.state._tag)).toEqual([
         "Completed",
         "Started",
@@ -439,7 +439,7 @@ it.scopedLive("retains approval ownership and prevents a second resume after dat
           const storage = yield* CellToolOperationStorage
           expect((yield* storage.get(key)).state).toEqual({ _tag: "Waiting", requestId })
           expect(
-            (yield* storage.listForCell(cell)).map(({ operation }) => operation.state),
+            (yield* storage.listForToolCall(cell)).map(({ operation }) => operation.state),
           ).toEqual([{ _tag: "Waiting", requestId }])
           const resumed = yield* storage.resume(key, requestId)
           expect(resumed.state).toEqual({
@@ -461,7 +461,7 @@ it.scopedLive("retains approval ownership and prevents a second resume after dat
           expect(existing.operation.toolCallId).toBe(resumedId)
           expect(existing.operation.state._tag).toBe("Resuming")
           expect(
-            (yield* storage.listForCell(cell)).map(({ operation }) => operation.state._tag),
+            (yield* storage.listForToolCall(cell)).map(({ operation }) => operation.state._tag),
           ).toEqual(["Resuming"])
           expect(
             Schema.is(StorageError)(yield* storage.resume(key, requestId).pipe(Effect.flip)),
