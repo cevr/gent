@@ -77,7 +77,7 @@ const ErrorCause = Schema.Struct({ cause: Schema.optional(Schema.Unknown) })
 const HeadersCause = Schema.Struct({ headers: Schema.instanceOf(Headers) })
 
 // oxlint-disable-next-line effect/noUnknownParameters -- Provider failures arrive as unknown values at this retry boundary.
-const getRetryAfterOption = (error: unknown, nowMs: number): Option.Option<number> => {
+export const getRetryAfterOption = (error: unknown, nowMs: number): Option.Option<number> => {
   const decodedError = Schema.decodeUnknownOption(ErrorCause)(error)
   if (Option.isNone(decodedError)) return Option.none()
 
@@ -106,9 +106,6 @@ const getRetryAfterOption = (error: unknown, nowMs: number): Option.Option<numbe
 }
 
 // oxlint-disable-next-line effect/noNullish, effect/noUnknownParameters -- This public helper preserves the established absent retry-after API and accepts provider failures at the retry boundary.
-export const getRetryAfter = (error: unknown, nowMs = 0): number | undefined =>
-  Option.getOrUndefined(getRetryAfterOption(error, nowMs))
-
 // Calculate delay for attempt — private. `retryProviderCall` is the only consumer;
 // unit coverage flows through `retryProviderCall({ onRetry })` reporting the
 // computed delay (see retry-progress test).

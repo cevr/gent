@@ -1,10 +1,10 @@
 import { describe, test, expect, it } from "effect-bun-test"
 import { dateFromMillis } from "../../src/domain/message"
-import { Clock, Effect, Fiber } from "effect"
+import { Clock, Effect, Fiber, Option } from "effect"
 import { TestClock } from "effect/testing"
 import {
   isRetryable,
-  getRetryAfter,
+  getRetryAfterOption,
   getRetryDelay,
   DEFAULT_RETRY_CONFIG,
   RETRY_JITTER_FRACTION,
@@ -25,11 +25,11 @@ describe("getRetryDelay", () => {
   })
 })
 
-describe("getRetryAfter", () => {
+describe("getRetryAfterOption", () => {
   test("parses retry-after seconds from Headers", () => {
     const headers = new Headers({ "retry-after": "5" })
     const error = { cause: { headers } }
-    expect(getRetryAfter(error)).toBe(5000)
+    expect(getRetryAfterOption(error, 0)).toEqual(Option.some(5000))
   })
   it.live("parses retry-after date from Headers", () =>
     Effect.gen(function* () {
@@ -37,16 +37,16 @@ describe("getRetryAfter", () => {
       const future = dateFromMillis(now + 10_000)
       const headers = new Headers({ "retry-after": future.toUTCString() })
       const error = { cause: { headers } }
-      const result = getRetryAfter(error, now)
-      expect(result).toBeDefined()
+      const result = getRetryAfterOption(error, now)
+      expect(Option.isSome(result)).toBe(true)
       // Should be roughly 10 seconds from now (within tolerance)
-      expect(Math.abs(result! - 10000)).toBeLessThan(2000)
+      if (Option.isSome(result)) expect(Math.abs(result.value - 10000)).toBeLessThan(2000)
     }),
   )
   test("returns undefined for empty retry-after header", () => {
     const headers = new Headers()
     const error = { cause: { headers } }
-    expect(getRetryAfter(error)).toBeUndefined()
+    expect(getRetryAfterOption(error, 0)).toEqual(Option.none())
   })
 })
 describe("Retry Logic", () => {
