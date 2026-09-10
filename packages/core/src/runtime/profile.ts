@@ -19,7 +19,10 @@ import {
   type ResolvedExtensions,
 } from "./extensions/registry.js"
 import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-registry.js"
-import { buildResourceLayer, buildResourceServiceLayer } from "./extensions/resource-host/index.js"
+import {
+  buildResourceLayer,
+  buildResourceServiceLayer,
+} from "./extensions/resource-host/resource-layer.js"
 import {
   setupBuiltinExtensions,
   setupDiscoveredExtensions,

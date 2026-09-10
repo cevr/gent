@@ -10,7 +10,7 @@ import { ExtensionId } from "../../src/domain/ids"
 import { getToolMetadata } from "../../src/domain/capability/tool"
 import type { LoadedExtension } from "../../src/domain/extension"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
-import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
+import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"
 import { collectTestContributions } from "../../src/test-utils"
 
 const sessionNotesSourceUrl = new URL(

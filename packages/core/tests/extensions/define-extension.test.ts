@@ -24,7 +24,7 @@ import {
 import { ExtensionLoadError, type LoadedExtension } from "../../src/domain/extension"
 import { validateExtensionPackage } from "../../src/domain/extension-package-shape"
 import { GentToolMetadataTag, getToolMetadata } from "../../src/domain/capability/tool"
-import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
+import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"
 import { PermissionRule } from "../../src/domain/permission"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { ExtensionId } from "../../src/domain/ids"

@@ -19,7 +19,7 @@ import {
   type ErasedResourceLayer,
 } from "../extension-effect-membrane.js"
 
-export interface ResourceEntry {
+interface ResourceEntry {
   readonly extensionId: ExtensionId
   readonly resource: AnyResourceContribution
 }
@@ -39,9 +39,7 @@ export const collectResourceEntries = (
       .map((resource) => ({ extensionId: ext.manifest.id, resource })),
   )
 
-export const mergeResourceServiceLayers = (
-  entries: ReadonlyArray<ResourceEntry>,
-): ErasedResourceLayer =>
+const mergeResourceServiceLayers = (entries: ReadonlyArray<ResourceEntry>): ErasedResourceLayer =>
   entries.reduce<ErasedResourceLayer>(
     (acc, { resource }) =>
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.

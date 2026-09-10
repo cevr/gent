@@ -39,17 +39,16 @@ import type { ModelResolver } from "../../providers/model-resolver.js"
 import type { RuntimeEnvironment } from "../runtime-environment.js"
 import type { ConfigService } from "../config-service.js"
 import type { ModelRegistry } from "../model-registry.js"
-import type { AgentRunnerConfig } from "./agent-runner.config.js"
 import { makeDurableAgentRunRuntime } from "./agent-runner.durable.js"
 import { ChildCompletionDelivery } from "./child-completion.js"
-import { runEphemeralAgent } from "./agent-runner.ephemeral.js"
+import { runEphemeralAgent, type AgentRunnerConfig } from "./agent-runner.ephemeral.js"
 import {
   EphemeralAgentRootLayerFactoryService,
   makeEphemeralAgentRootLayerFactory,
 } from "./ephemeral-root.js"
 import { makeAgentRunMetadataRuntime } from "./agent-runner.metadata.js"
 import { normalizeRunSpec, handleAgentRunFailure } from "./agent-runner.run-spec.js"
-export type { AgentRunnerConfig } from "./agent-runner.config.js"
+export type { AgentRunnerConfig } from "./agent-runner.ephemeral.js"
 export { getSessionDepth } from "./agent-runner.durable.js"
 
 export const InProcessRunner = (

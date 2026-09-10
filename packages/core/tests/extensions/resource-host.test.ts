@@ -13,7 +13,7 @@ import { AgentName } from "../../src/domain/agent"
 
 import { describe, expect, it, test } from "effect-bun-test"
 import { Context, Effect, Layer, Option } from "effect"
-import { buildResourceLayer } from "../../src/runtime/extensions/resource-host"
+import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"
 import type { AnyResourceContribution, ExtensionState } from "../../src/domain/resource"
 import { defineResource, defineStateResource } from "../../src/domain/contribution"
 import type { ScheduledJobContribution } from "../../src/domain/scheduled-job"

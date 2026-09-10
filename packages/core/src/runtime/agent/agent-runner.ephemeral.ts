@@ -40,13 +40,19 @@ import { EventStorage } from "../../storage/event-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"
 import type { ExtensionRegistryService } from "../extensions/registry.js"
+import type { PromptSection } from "../../domain/prompt.js"
 import { SessionRuntime } from "../session-runtime.js"
 import { agentRunBoundary, WideEvent, withWideEvent } from "../wide-event-boundary"
-import type { AgentRunnerConfig } from "./agent-runner.config.js"
 import { type DurableAgentRunRuntime } from "./agent-runner.durable.js"
 import { loadAgentRunSuccessData, type AgentRunMetadataRuntime } from "./agent-runner.metadata.js"
 import { handleAgentRunFailure } from "./agent-runner.run-spec.js"
 import { EphemeralAgentRootLayerFactoryService } from "./ephemeral-root.js"
+
+/** Per-run knobs an agent run accepts: a wall-clock cap and extra prompt sections. */
+export interface AgentRunnerConfig {
+  readonly timeoutMs?: number
+  readonly baseSections?: ReadonlyArray<PromptSection>
+}
 
 const reparentEphemeralChildEvent = (
   event: AgentEvent,
