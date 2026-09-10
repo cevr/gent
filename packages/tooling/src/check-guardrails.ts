@@ -12,6 +12,7 @@ import { findAliasTestLayers } from "./core-alias-test-layers"
 import { declaredCoreExports, findCoreDeadExports, identifiersIn } from "./core-dead-exports"
 import { findPlatformDuplicationViolations } from "./platform-duplication-guards"
 import { findSuppressionInventoryFindings } from "./suppression-inventory"
+import { adaptedSeamsIn, findUnadaptedSeams } from "./core-unadapted-seams"
 
 const trackedFileNames = Effect.promise(() =>
   Bun.$`git ls-files --cached --others --exclude-standard`.text(),
@@ -46,6 +47,24 @@ const program = Effect.gen(function* () {
   // then count which names any other file mentions.
   const coreDeclarations: Array<{ file: string; name: string; line: number }> = []
   const identifiersByFile = new Map<string, ReadonlySet<string>>()
+  // Seam scan needs the whole tree too: the declarations live in core, the
+  // adapters that fill them live in the shipped extensions and the apps.
+  const sourceTexts = new Map<string, string>()
+  const adaptedSeams = new Set<string>()
+
+  /**
+   * Facts the cross-file scans need, gathered in the single pass over the
+   * tree. Each of these is answerable only once every file has been read:
+   * whether an export is dead, and whether a seam has an adapter.
+   */
+  const collectWholeTreeFacts = (file: string, text: string): void => {
+    for (const declaration of declaredCoreExports(file, text)) {
+      coreDeclarations.push({ file, ...declaration })
+    }
+    identifiersByFile.set(file, identifiersIn(text))
+    sourceTexts.set(file, text)
+    for (const seam of adaptedSeamsIn(file, text)) adaptedSeams.add(seam)
+  }
 
   for (const maybeEntry of textFiles) {
     if (Option.isNone(maybeEntry)) continue
@@ -74,14 +93,15 @@ const program = Effect.gen(function* () {
         pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
       }
 
-      for (const declaration of declaredCoreExports(file, text)) {
-        coreDeclarations.push({ file, ...declaration })
-      }
-      identifiersByFile.set(file, identifiersIn(text))
+      collectWholeTreeFacts(file, text)
     }
   }
 
   for (const finding of findCoreDeadExports(coreDeclarations, identifiersByFile)) {
+    pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
+  }
+
+  for (const finding of findUnadaptedSeams(sourceTexts, adaptedSeams)) {
     pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
   }
 

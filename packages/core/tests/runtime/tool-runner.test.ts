@@ -3,7 +3,7 @@ import { Predicate, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { InteractionPendingError } from "../../src/domain/interaction-request"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
-import { hook, tool, ExtensionContext } from "@gent/core/extensions/api"
+import { tool, ExtensionContext } from "@gent/core/extensions/api"
 import { ToolRunner, type ResolvedToolCapability } from "../../src/runtime/agent/tool-runner"
 import { executeToolCalls } from "../../src/runtime/agent/turn-tool-execution"
 import { DynamicExtensionRegistry } from "../../src/domain/dynamic-extension-registry"
@@ -108,7 +108,7 @@ describe("tool execution", () => {
       expect(result.result).toEqual({ echoed: "hello" })
     }))
 
-  test("runs session dynamic tools and honors tool-call preflight hooks", () =>
+  test("runs a tool registered dynamically for the session", () =>
     Effect.gen(function* () {
       const DynamicTool = tool({
         id: "dynamic_echo",
@@ -118,30 +118,7 @@ describe("tool execution", () => {
         execute: ({ message }) => Effect.succeed({ echoed: message }),
       })
       const deps = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(
-          resolveExtensions([
-            {
-              manifest: { id: ExtensionId.make("policy") },
-              scope: "builtin",
-              sourcePath: "policy",
-              contributions: {
-                hooks: [
-                  hook("toolCall", (input) => {
-                    if (
-                      input.toolName === "dynamic_echo" &&
-                      Predicate.isObjectOrArray(input.input) &&
-                      "message" in input.input &&
-                      input.input["message"] === "blocked"
-                    ) {
-                      return Effect.succeed({ _tag: "deny", message: "blocked" })
-                    }
-                    return Effect.undefined
-                  }),
-                ],
-              },
-            },
-          ]),
-        ),
+        ExtensionRegistry.fromResolved(resolveExtensions([])),
         DynamicExtensionRegistry.Live,
         Permission.Test(),
         EventPublisher.Test(),
@@ -150,7 +127,7 @@ describe("tool execution", () => {
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
-      const { allowed, denied } = yield* Effect.gen(function* () {
+      const { allowed } = yield* Effect.gen(function* () {
         const dynamic = yield* DynamicExtensionRegistry
         const unregister = yield* dynamic.registerTool({
           extensionId: ExtensionId.make("dynamic"),
@@ -176,29 +153,11 @@ describe("tool execution", () => {
               }),
             ),
           )
-        const denied = yield* runner
-          .run({
-            toolCallId: ToolCallId.make("tc-dynamic-denied"),
-            toolName: "dynamic_echo",
-            input: { message: "blocked" },
-          })
-          .pipe(
-            provideCurrentHostCtx(
-              testToolContext({
-                sessionId: SessionId.make("s"),
-                branchId: BranchId.make("b"),
-                toolCallId: ToolCallId.make("tc-dynamic-denied"),
-                agentName: AgentName.make("cowork"),
-              }),
-            ),
-          )
-        return { allowed, denied }
+        return { allowed }
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(allowed.isFailure).toBe(false)
       expect(allowed.result).toEqual({ echoed: "hello" })
-      expect(denied.isFailure).toBe(true)
-      expect(denied.result).toEqual({ error: "blocked" })
     }))
 
   test("executes the captured dynamic implementation after replacement", () =>
@@ -466,61 +425,6 @@ describe("tool execution", () => {
       const error = errorFromResult(result)
       expect(error).toContain("Tool 'strict' input failed:")
       expect(error).toContain("path")
-    }))
-  test("returns structured error when a transformed result violates the output schema", () =>
-    Effect.gen(function* () {
-      const StrictOutputTool = tool({
-        id: "strict_output",
-        description: "Requires structured output",
-        params: Schema.Struct({}),
-        output: Schema.Struct({ ok: Schema.Boolean }),
-        execute: () => Effect.succeed({ ok: true }),
-      })
-      const deps = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(
-          resolveExtensions([
-            {
-              manifest: { id: ExtensionId.make("tool-owner") },
-              scope: "builtin",
-              sourcePath: "test",
-              contributions: { tools: [StrictOutputTool] },
-            },
-            {
-              manifest: { id: ExtensionId.make("result-transformer") },
-              scope: "builtin",
-              sourcePath: "test",
-              contributions: {
-                hooks: [hook("toolResult", () => Effect.succeed({ ok: "bad" }))],
-              },
-            },
-          ]),
-        ),
-        Permission.Test(),
-        EventPublisher.Test(),
-        ApprovalService.Test(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      )
-      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const result = yield* Effect.gen(function* () {
-        const runner = yield* ToolRunner
-        const toolCallId = ToolCallId.make("tc-output")
-        return yield* runner.run({ toolCallId, toolName: "strict_output", input: {} }).pipe(
-          provideCurrentHostCtx(
-            testToolContext({
-              sessionId: SessionId.make("s"),
-              branchId: BranchId.make("b"),
-              toolCallId,
-              agentName: AgentName.make("cowork"),
-            }),
-          ),
-        )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-      expect(result.isFailure).toBe(true)
-      const error = errorFromResult(result)
-      expect(error).toContain("Tool 'strict_output' failed:")
-      expect(error).toContain("ok")
     }))
   test("returns 'Permission denied' error when tool is denied by permission rules", () =>
     Effect.gen(function* () {

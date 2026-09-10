@@ -155,35 +155,10 @@ export interface TurnAfterInput {
   readonly usage: { readonly inputTokens: number; readonly outputTokens: number }
 }
 
-export interface ToolResultInput {
-  readonly toolCallId: ToolCallId
-  readonly toolName: string
-  readonly input: unknown
-  readonly result: unknown
-  readonly agentName?: AgentName
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-}
-
-export interface ToolCallInput {
-  readonly toolCallId: ToolCallId
-  readonly toolName: string
-  readonly input: unknown
-  readonly agentName?: AgentName
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-}
-
-export type ToolCallPreflightResult = void | {
-  readonly _tag: "deny"
-  readonly message: string
-  readonly result?: unknown
-}
-
 // ── Lifecycle hooks ──
 //
-// Per-extension, per-session handlers run by the runtime at prompt, turn,
-// tool-call, and tool-result seams. Authored on `defineExtension({ hooks })`.
+// Per-extension, per-session handlers run by the runtime at the prompt and
+// turn seams. Authored on `defineExtension({ hooks })`.
 // Failures are always isolated: the runtime logs a warning and lets later hooks
 // still fire.
 
@@ -196,8 +171,6 @@ interface ExtensionHookSignatures {
   readonly systemPrompt: { readonly input: SystemPromptInput; readonly output: string }
   readonly turnProjection: { readonly input: void; readonly output: TurnProjection }
   readonly turnAfter: { readonly input: TurnAfterInput; readonly output: void }
-  readonly toolCall: { readonly input: ToolCallInput; readonly output: ToolCallPreflightResult }
-  readonly toolResult: { readonly input: ToolResultInput; readonly output: unknown }
 }
 
 export type ExtensionHookKind = keyof ExtensionHookSignatures

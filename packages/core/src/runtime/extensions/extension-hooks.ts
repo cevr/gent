@@ -1,14 +1,11 @@
-import { Cause, Effect, Option, Predicate, Schema } from "effect"
+import { Cause, Effect, Option, Predicate } from "effect"
 import {
   SCOPE_PRECEDENCE,
   type AnyExtensionHook,
   type ExtensionHook,
   type LoadedExtension,
   type SystemPromptInput,
-  type ToolCallInput,
-  type ToolCallPreflightResult,
   type ToolPolicyFragment,
-  type ToolResultInput,
   type TurnAfterInput,
   type ProjectionTurnContext,
 } from "../../domain/extension.js"
@@ -28,12 +25,6 @@ export interface CompiledExtensionHooks {
   readonly resolveTurnProjection: (
     projection: ProjectionTurnContext,
   ) => Effect.Effect<ExtensionTurnProjection, never, CurrentExtensionHostContext>
-  readonly transformToolResult: (
-    input: ToolResultInput,
-  ) => Effect.Effect<unknown, never, CurrentExtensionHostContext>
-  readonly preflightToolCall: (
-    input: ToolCallInput,
-  ) => Effect.Effect<ToolCallPreflightResult, never, CurrentExtensionHostContext>
   readonly emitTurnAfter: (
     input: TurnAfterInput,
   ) => Effect.Effect<void, never, CurrentExtensionHostContext>
@@ -42,20 +33,6 @@ export interface CompiledExtensionHooks {
 interface ExtensionTurnProjection {
   readonly promptSections: ReadonlyArray<PromptSection>
   readonly policyFragments: ReadonlyArray<ToolPolicyFragment>
-}
-
-const ToolCallDenialSchema = Schema.TaggedStruct("deny", {
-  message: Schema.String,
-  result: Schema.optional(Schema.Unknown),
-})
-type ToolCallDenial = typeof ToolCallDenialSchema.Type
-
-const isToolCallDenial = (result: ToolCallPreflightResult): result is ToolCallDenial =>
-  Schema.is(ToolCallDenialSchema)(result)
-
-const toToolCallDenial = (result: ToolCallPreflightResult): Option.Option<ToolCallDenial> => {
-  if (isToolCallDenial(result)) return Option.some(result)
-  return Option.none()
 }
 
 interface RegisteredSystemPromptRewrite {
@@ -78,18 +55,6 @@ interface HookTurnProjectionSlot {
 interface RegisteredHook<Input> {
   readonly extensionId: ExtensionId
   readonly handler: (input: Input) => Effect.Effect<void, unknown, unknown>
-}
-
-interface RegisteredToolResultTransform {
-  readonly extensionId: ExtensionId
-  readonly handler: (input: ToolResultInput) => Effect.Effect<unknown, unknown, unknown>
-}
-
-interface RegisteredToolCallPreflight {
-  readonly extensionId: ExtensionId
-  readonly handler: (
-    input: ToolCallInput,
-  ) => Effect.Effect<ToolCallPreflightResult, unknown, unknown>
 }
 
 const sortExtensions = (extensions: ReadonlyArray<LoadedExtension>) =>
@@ -175,8 +140,6 @@ const collectHookSlot = (
     systemPrompt: RegisteredSystemPromptRewrite[]
     turnProjection: HookTurnProjectionSlot[]
     turnAfter: RegisteredHook<TurnAfterInput>[]
-    toolCall: RegisteredToolCallPreflight[]
-    toolResult: RegisteredToolResultTransform[]
   },
 ) => {
   switch (slot.kind) {
@@ -195,12 +158,6 @@ const collectHookSlot = (
         handler: slot.hook.handler,
       })
       return
-    case "toolCall":
-      slots.toolCall.push({ extensionId: ext.manifest.id, handler: slot.hook.handler })
-      return
-    case "toolResult":
-      slots.toolResult.push({ extensionId: ext.manifest.id, handler: slot.hook.handler })
-      return
   }
 }
 
@@ -211,14 +168,10 @@ export const compileExtensionHooks = (
   const systemPromptSlots: RegisteredSystemPromptRewrite[] = []
   const turnProjectionSlots: HookTurnProjectionSlot[] = []
   const turnAfterSlots: RegisteredHook<TurnAfterInput>[] = []
-  const toolResultSlots: RegisteredToolResultTransform[] = []
-  const toolCallSlots: RegisteredToolCallPreflight[] = []
   const hookSlots = {
     systemPrompt: systemPromptSlots,
     turnProjection: turnProjectionSlots,
     turnAfter: turnAfterSlots,
-    toolCall: toolCallSlots,
-    toolResult: toolResultSlots,
   }
 
   for (const ext of sorted) {
@@ -275,72 +228,6 @@ export const compileExtensionHooks = (
         }
 
         return { promptSections: [...sectionsById.values()], policyFragments }
-      }),
-
-    transformToolResult: (input) =>
-      Effect.gen(function* () {
-        let current: unknown = input.result
-        for (const slot of toolResultSlots) {
-          const next = yield* sealErasedEffect(
-            () =>
-              // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous tool-result slot
-              slot
-                .handler({ ...input, result: current })
-                .pipe(provideExtensionLeaf({ extensionId: slot.extensionId })),
-            {
-              onFailure: (error) =>
-                Effect.logWarning("extension.hook.tool-result.failed").pipe(
-                  Effect.annotateLogs({
-                    extensionId: slot.extensionId,
-                    error: String(error),
-                  }),
-                  Effect.as(current),
-                ),
-              onDefect: (defect) =>
-                Effect.logWarning("extension.hook.tool-result.defect").pipe(
-                  Effect.annotateLogs({
-                    extensionId: slot.extensionId,
-                    defect: String(defect),
-                  }),
-                  Effect.as(current),
-                ),
-            },
-          )
-          current = next
-        }
-        return current
-      }),
-
-    preflightToolCall: (input) =>
-      Effect.gen(function* () {
-        for (const slot of toolCallSlots) {
-          const decision = yield* sealErasedEffect<Option.Option<ToolCallDenial>, never>(
-            () =>
-              // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-              eraseHookEffect(slot.handler(input))
-                .pipe(Effect.map(toToolCallDenial))
-                .pipe(provideExtensionLeaf({ extensionId: slot.extensionId })),
-            {
-              onFailure: (error) =>
-                Effect.logWarning("extension.hook.tool-call.failed").pipe(
-                  Effect.annotateLogs({
-                    extensionId: slot.extensionId,
-                    error: String(error),
-                  }),
-                  Effect.as(Option.none()),
-                ),
-              onDefect: (defect) =>
-                Effect.logWarning("extension.hook.tool-call.defect").pipe(
-                  Effect.annotateLogs({
-                    extensionId: slot.extensionId,
-                    defect: String(defect),
-                  }),
-                  Effect.as(Option.none()),
-                ),
-            },
-          )
-          if (Option.isSome(decision)) return decision.value
-        }
       }),
 
     emitTurnAfter: (input) =>

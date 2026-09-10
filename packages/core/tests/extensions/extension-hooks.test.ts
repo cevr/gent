@@ -6,13 +6,12 @@ import type {
   ExtensionContributions,
   LoadedExtension,
   SystemPromptInput,
-  ToolCallInput,
   TurnAfterInput,
 } from "../../src/domain/extension.js"
 import { hook } from "../../src/domain/extension.js"
 import type { ExtensionHostContext } from "../../src/domain/extension-host-context"
 import { testExtensionHostContext } from "../../src/test-utils"
-import { BranchId, ExtensionId, SessionId, ToolCallId } from "../../src/domain/ids"
+import { BranchId, ExtensionId, SessionId } from "../../src/domain/ids"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { provideCurrentCapabilityContext } from "../../src/runtime/extensions/extension-capability-context"
 import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
@@ -124,83 +123,6 @@ describe("runtime slots", () => {
       expect(result).toBe("readonly")
       expect(yield* Ref.get(sawProcessAuthority)).toBe(true)
     }))
-
-  test("toolResult applies explicit resource enrichments in scope order", () => {
-    const extensions = [
-      makeExt("builtin", "builtin", {
-        hooks: [hook("toolResult", (input) => Effect.succeed(`${String(input.result)}-builtin`))],
-      }),
-      makeExt("explicit", "project", {
-        hooks: [hook("toolResult", (input) => Effect.succeed(`${String(input.result)}-explicit`))],
-      }),
-    ]
-
-    const slots = compileExtensionHooks(extensions)
-
-    return slots
-      .transformToolResult({
-        toolCallId: ToolCallId.make("tc-1"),
-        toolName: "echo",
-        input: { text: "hello" },
-        result: "base",
-        sessionId: SessionId.make("test-session"),
-        branchId: BranchId.make("test-branch"),
-        agentName: AgentName.make("cowork"),
-      })
-      .pipe(
-        Effect.provideService(CurrentExtensionHostContext, stubHostCtx),
-        Effect.tap((result) => Effect.sync(() => expect(result).toBe("base-builtin-explicit"))),
-      )
-  })
-
-  test("toolCall hook returns first deny decision in scope order", () => {
-    const slots = compileExtensionHooks([
-      makeExt("builtin", "builtin", {
-        hooks: [
-          hook("toolCall", () => Effect.undefined),
-          hook("toolCall", () =>
-            Effect.succeed({
-              _tag: "deny",
-              message: "blocked by hook",
-              result: { error: "blocked" },
-            }),
-          ),
-        ],
-      }),
-      makeExt("project", "project", {
-        hooks: [
-          hook("toolCall", () =>
-            Effect.succeed({
-              _tag: "deny",
-              message: "project should not run",
-            }),
-          ),
-        ],
-      }),
-    ])
-
-    return slots
-      .preflightToolCall({
-        toolCallId: ToolCallId.make("tc-1"),
-        toolName: "echo",
-        input: {},
-        sessionId: SessionId.make("test-session"),
-        branchId: BranchId.make("test-branch"),
-        agentName: AgentName.make("cowork"),
-      } satisfies ToolCallInput)
-      .pipe(
-        Effect.provideService(CurrentExtensionHostContext, stubHostCtx),
-        Effect.tap((result) =>
-          Effect.sync(() =>
-            expect(result).toEqual({
-              _tag: "deny",
-              message: "blocked by hook",
-              result: { error: "blocked" },
-            }),
-          ),
-        ),
-      )
-  })
 
   test("turnAfter isolates failing hooks; all handlers still run", () => {
     const calls: string[] = []

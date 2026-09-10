@@ -195,14 +195,16 @@ describe("defineExtension", () => {
         setup: Effect.gen(function* () {
           const host = yield* ExtensionHost
           yield* host.on("turnAfter", () => Effect.void)
-          yield* host.on("toolCall", () => Effect.void)
+          yield* host.on("turnProjection", () =>
+            Effect.succeed({ promptSections: [], policyFragments: [] }),
+          )
           yield* host.on("systemPrompt", (input) => Effect.succeed(input.basePrompt))
         }),
       })
       const contributions = yield* setupOf(ext)
       expect(contributions.hooks?.map((slot) => slot.kind)).toEqual([
         "turnAfter",
-        "toolCall",
+        "turnProjection",
         "systemPrompt",
       ])
     }))

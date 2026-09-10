@@ -167,49 +167,24 @@ const makeExecutionToolkit = (params: {
   ctx: ToolCapabilityContext
   fileSystem: FileSystem.FileSystem
   path: Path.Path
-}): Effect.Effect<ToolRunnerToolkit, never, ExtensionRegistry> =>
+}): Effect.Effect<ToolRunnerToolkit> =>
   Effect.gen(function* () {
-    const registry = yield* ExtensionRegistry
     const metadata = getToolMetadata(params.tool)
     const toolkit = convertTools([params.tool])
     const toolName = String(getToolId(params.tool))
 
     const handlerMap: AiToolkit.HandlersFrom<ToolCapabilityMap> = {
       [toolName]: (decodedInput) =>
-        Effect.gen(function* () {
-          const executeResult = yield* (
-            // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-            metadata
-              .effect(decodedInput)
-              .pipe(Effect.mapError(normalizeToolExecutionError))
-              .pipe(provideExtensionLeaf({}))
-              .pipe(
-                provideCurrentHostCtx(params.ctx),
-                Effect.provideService(FileSystem.FileSystem, params.fileSystem),
-                Effect.provideService(Path.Path, params.path),
-              )
-          )
-
-          return yield* registry.extensionHooks
-            .transformToolResult({
-              toolCallId: params.toolCall.toolCallId,
-              toolName: params.toolCall.toolName,
-              input: decodedInput,
-              result: executeResult,
-              agentName: params.ctx.agentName,
-              sessionId: params.ctx.sessionId,
-              branchId: params.ctx.branchId,
-            })
-            .pipe(
-              provideCurrentHostCtx(params.ctx),
-              Effect.catchEager((e) =>
-                Effect.logWarning("extension.hook.tool-result.failed").pipe(
-                  Effect.annotateLogs({ error: String(e) }),
-                  Effect.as(executeResult),
-                ),
-              ),
-            )
-        }),
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+        metadata
+          .effect(decodedInput)
+          .pipe(Effect.mapError(normalizeToolExecutionError))
+          .pipe(provideExtensionLeaf({}))
+          .pipe(
+            provideCurrentHostCtx(params.ctx),
+            Effect.provideService(FileSystem.FileSystem, params.fileSystem),
+            Effect.provideService(Path.Path, params.path),
+          ),
     }
 
     const handlers = yield* toolkit.toHandlers(handlerMap)
@@ -339,7 +314,6 @@ const runTool = Effect.fn("ToolRunner.execute")(function* (
 ) {
   const hostCtx = yield* CurrentExtensionHostContext
   const ctx: ToolCapabilityContext = { ...hostCtx, toolCallId: toolCall.toolCallId }
-  const activeRegistry = yield* ExtensionRegistry
   const basePermissionOpt = yield* Effect.serviceOption(Permission)
   const activePermission: PermissionService = Option.getOrElse(
     basePermissionOpt,
@@ -387,25 +361,6 @@ const runTool = Effect.fn("ToolRunner.execute")(function* (
       return yield* finish(errorResult(toolCall, "Tool execution services unavailable"))
     }
     const executeKnownTool = Effect.gen(function* () {
-      const preflight = yield* activeRegistry.extensionHooks.preflightToolCall({
-        toolCallId: toolCall.toolCallId,
-        toolName: toolCall.toolName,
-        input: toolCall.input,
-        agentName: ctx.agentName,
-        sessionId: ctx.sessionId,
-        branchId: ctx.branchId,
-      })
-      if (preflight?._tag === "deny") {
-        yield* WideEvent.failDomain("preflight_denied", { message: preflight.message })
-        return Prompt.toolResultPart({
-          id: toolCall.toolCallId,
-          name: toolCall.toolName,
-          isFailure: true,
-          providerExecuted: false,
-          result: preflight.result ?? { error: preflight.message },
-        })
-      }
-
       const permCheckResult = yield* activePermission.check(toolCall.toolName, toolCall.input).pipe(
         Effect.catchEager((e) =>
           WideEvent.failDomain("permission_check_failed", {

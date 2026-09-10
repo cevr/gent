@@ -73,7 +73,6 @@ export {
   type GentExtension,
   LoadedArtifactIdentity,
   type SystemPromptInput,
-  type ToolCallInput,
   type TurnAfterInput,
   hook,
   type AnyExtensionHook,
