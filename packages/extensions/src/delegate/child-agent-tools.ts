@@ -20,6 +20,8 @@ const ChildObservation = Schema.TaggedUnion({
     ...ChildAgentHandle.fields,
     interrupted: Schema.optionalKey(Schema.Boolean),
     streamFailed: Schema.optionalKey(Schema.Boolean),
+    /** The child spent its continuations and never answered. */
+    unanswered: Schema.optionalKey(Schema.Boolean),
   },
 })
 
@@ -53,6 +55,7 @@ export const ControlChildAgent = tool({
         {
           interrupted: observation.completion.value.interrupted,
           streamFailed: observation.completion.value.streamFailed,
+          unanswered: observation.completion.value.unanswered,
         },
         Predicate.isNotUndefined,
       ),

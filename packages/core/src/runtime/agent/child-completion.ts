@@ -24,6 +24,43 @@ const childCompletionSourceId = (requestId: RequestId) => `child:${requestId}:co
 /** Bounded preview inside the parent message; the full output lives in a file. */
 const maximumPreviewChars = 4_000
 
+/**
+ * The message a parent reads when a child finishes.
+ *
+ * A turn receipt is not task success, and the ways a turn can end badly are
+ * not visible in the child's text: an interrupted turn, a failed model
+ * stream, and a turn that spent its continuations without answering all
+ * produce output a parent would otherwise read as a completed result. Each
+ * flag the receipt carries is named here so the parent model sees it.
+ *
+ * Pure, and exported, so those outcomes are testable without standing up
+ * the delivery layer.
+ */
+export const describeChildCompletion = (params: {
+  readonly requestId: RequestId
+  readonly agentName: AgentName
+  readonly child: StoredAgentStartResult
+  readonly completion: TurnCompleted
+  readonly text: string
+  readonly savedPath: Option.Option<string>
+}): string => {
+  const outcome: Array<string> = []
+  if (params.completion.interrupted === true) outcome.push("interrupted")
+  if (params.completion.streamFailed === true) outcome.push("model stream failed")
+  if (params.completion.unanswered === true) outcome.push("no answer produced")
+  let status = "completed"
+  if (outcome.length > 0) status = `ended (${outcome.join(", ")})`
+  const preview = headTailChars(params.text, maximumPreviewChars)
+  const lines = [
+    `Child agent "${params.agentName}" ${status}. requestId ${params.requestId}; session ${params.child.sessionId}; branch ${params.child.branchId}.`,
+    "Completion is a turn receipt, not task success. Read the output before relying on it.",
+    "",
+    preview.text,
+  ]
+  if (Option.isSome(params.savedPath)) lines.push("", `Full output: ${params.savedPath.value}`)
+  return lines.join("\n")
+}
+
 interface ChildCompletionDeliveryService {
   /** Deliver one completed child to its parent branch. Repeats are no-ops. */
   readonly deliver: (requestId: RequestId) => Effect.Effect<void>
@@ -72,31 +109,6 @@ export class ChildCompletionDelivery extends Context.Service<
           Stream.runHead,
         )
 
-      const describe = (params: {
-        readonly requestId: RequestId
-        readonly agentName: AgentName
-        readonly child: StoredAgentStartResult
-        readonly completion: TurnCompleted
-        readonly text: string
-        readonly savedPath: Option.Option<string>
-      }) => {
-        const outcome: Array<string> = []
-        if (params.completion.interrupted === true) outcome.push("interrupted")
-        if (params.completion.streamFailed === true) outcome.push("model stream failed")
-        let status = "completed"
-        if (outcome.length > 0) status = `ended (${outcome.join(", ")})`
-        const preview = headTailChars(params.text, maximumPreviewChars)
-        const lines = [
-          `Child agent "${params.agentName}" ${status}. requestId ${params.requestId}; session ${params.child.sessionId}; branch ${params.child.branchId}.`,
-          "Completion is a turn receipt, not task success. Read the output before relying on it.",
-          "",
-          preview.text,
-        ]
-        if (Option.isSome(params.savedPath))
-          lines.push("", `Full output: ${params.savedPath.value}`)
-        return lines.join("\n")
-      }
-
       const deliverCompletion = Effect.fn("ChildCompletionDelivery.deliverCompletion")(function* (
         requestId: RequestId,
         child: StoredAgentStartResult,
@@ -128,7 +140,7 @@ export class ChildCompletionDelivery extends Context.Service<
           ...parent,
           // A parent with no prior turn still gets to read the completion.
           wake: true,
-          content: describe({
+          content: describeChildCompletion({
             requestId,
             agentName: child.input.agentName,
             child,
