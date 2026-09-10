@@ -14,7 +14,6 @@ import { BunServices } from "@effect/platform-bun"
 import {
   AgentRunnerService,
   AgentRunResult,
-  DEFAULT_MODEL_ID,
   type AgentDefinition,
   type AgentRunner,
   DEFAULT_AGENT_NAME,
@@ -26,7 +25,6 @@ import type { EventPublisher } from "../domain/event-publisher.js"
 import { SessionId, type ExtensionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
-import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
@@ -232,39 +230,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
 }
 
 // ── Test helpers ──
-
-/**
- * Temporarily shrink the context window for the default model so that
- * even small messages exceed the handoff threshold (85%).
- *
- * With 5000-token window and 4000-token system overhead, any message
- * content pushes context past 85%. Restores the original value via
- * Effect.ensuring, safe against test failures.
- *
- * Usage:
- * ```ts
- * yield* Effect.gen(function* () { ... }).pipe(provideTinyContextWindow)
- * ```
- */
-export const provideTinyContextWindow = <A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> => {
-  const originalWindow = MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID]
-  return Effect.suspend(() => {
-    MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID] = 5_000
-    return effect
-  }).pipe(
-    Effect.ensuring(
-      Effect.sync(() => {
-        if (!Predicate.isUndefined(originalWindow)) {
-          MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID] = originalWindow
-        } else {
-          delete MODEL_CONTEXT_WINDOWS[DEFAULT_MODEL_ID]
-        }
-      }),
-    ),
-  )
-}
 
 /**
  * ApprovalService that tracks whether present() was called.

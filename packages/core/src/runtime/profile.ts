@@ -116,7 +116,7 @@ export interface RuntimeProfileDeclarations {
 
 const permissionRulesFromConfig = (config: UserConfig) => config.permissions ?? []
 
-export const makeProfilePermissionService = (params: {
+const makeProfilePermissionService = (params: {
   readonly cwd: string
   readonly configService: ConfigServiceService
   readonly extensionRules: ReadonlyArray<PermissionRule>

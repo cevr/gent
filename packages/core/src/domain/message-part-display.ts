@@ -23,7 +23,7 @@ export interface ToolCallPartProjection {
   readonly input: unknown
 }
 
-export interface ToolResultPartProjection {
+interface ToolResultPartProjection {
   readonly id: string
   readonly toolName: string
   readonly value: unknown
@@ -107,7 +107,7 @@ export const messagePartToolCall = (part: MessagePart): ToolCallPartProjection |
 }
 
 // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
-export const messagePartToolResult = (part: MessagePart): ToolResultPartProjection | undefined => {
+const messagePartToolResult = (part: MessagePart): ToolResultPartProjection | undefined => {
   // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
   if (part.type !== "tool-result") return undefined
   let outputType: "error-json" | "json" = "json"

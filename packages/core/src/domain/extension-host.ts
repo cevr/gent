@@ -98,7 +98,7 @@ type MutableContributions = {
  * A host whose registrations accumulate into one contributions record.
  * `seal` returns the record with empty buckets dropped.
  */
-export interface CollectingExtensionHost {
+interface CollectingExtensionHost {
   readonly service: ExtensionHostService
   readonly seal: Effect.Effect<ExtensionContributions>
 }

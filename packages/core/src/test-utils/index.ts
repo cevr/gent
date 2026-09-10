@@ -315,12 +315,7 @@ export function ensureStorageParents(input: {
 }
 
 // E2E test layer
-export {
-  createE2ELayer,
-  type E2ELayerConfig,
-  provideTinyContextWindow,
-  trackingApprovalService,
-} from "./e2e-layer.js"
+export { createE2ELayer, type E2ELayerConfig, trackingApprovalService } from "./e2e-layer.js"
 
 // Extension tool test helpers
 export {

@@ -104,30 +104,30 @@ export const SendUserMessagePayload = Schema.Struct({
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
 
-export const CancelInterruptPayload = Schema.TaggedStruct("Cancel", {
+const CancelInterruptPayload = Schema.TaggedStruct("Cancel", {
   commandId: Schema.optional(ActorCommandId),
   sessionId: SessionId,
   branchId: BranchId,
   requestId: RequestId,
 })
-export type CancelInterruptPayload = typeof CancelInterruptPayload.Type
+type CancelInterruptPayload = typeof CancelInterruptPayload.Type
 
-export const InterruptTurnPayload = Schema.TaggedStruct("Interrupt", {
+const InterruptTurnPayload = Schema.TaggedStruct("Interrupt", {
   commandId: Schema.optional(ActorCommandId),
   sessionId: SessionId,
   branchId: BranchId,
   requestId: RequestId,
 })
-export type InterruptTurnPayload = typeof InterruptTurnPayload.Type
+type InterruptTurnPayload = typeof InterruptTurnPayload.Type
 
-export const InterjectPayload = Schema.TaggedStruct("Interject", {
+const InterjectPayload = Schema.TaggedStruct("Interject", {
   commandId: Schema.optional(ActorCommandId),
   sessionId: SessionId,
   branchId: BranchId,
   requestId: RequestId,
   message: Schema.String,
 })
-export type InterjectPayload = typeof InterjectPayload.Type
+type InterjectPayload = typeof InterjectPayload.Type
 
 export const InterruptPayload = Schema.Union([
   CancelInterruptPayload,
