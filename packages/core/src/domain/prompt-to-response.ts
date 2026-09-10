@@ -24,43 +24,6 @@ export const messagePartToPromptPart = (
   }
 }
 
-export const userMessagePartToPromptPart = (
-  part: Prompt.TextPart | Prompt.FilePart,
-): Prompt.UserMessagePart => {
-  switch (part.type) {
-    case "text":
-      return part
-    case "file":
-      return part
-  }
-}
-
-export const assistantMessagePartToPromptPart = (
-  part:
-    | Prompt.TextPart
-    | Prompt.ReasoningPart
-    | Prompt.FilePart
-    | Prompt.ToolCallPart
-    | Prompt.ToolApprovalRequestPart,
-): Prompt.AssistantMessagePart => {
-  switch (part.type) {
-    case "text":
-      return part
-    case "reasoning":
-      return part
-    case "file":
-      return part
-    case "tool-call":
-      return part
-    case "tool-approval-request":
-      return part
-  }
-}
-
-export const toolMessagePartToPromptPart = (
-  part: Prompt.ToolResultPart | Prompt.ToolApprovalResponsePart,
-): Prompt.ToolMessagePart => part
-
 export const assistantMessagePartToResponsePart = (
   part:
     | Prompt.TextPart

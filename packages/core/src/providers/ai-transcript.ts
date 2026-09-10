@@ -3,13 +3,10 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import type { Message } from "../domain/message.js"
 import { headTailChars } from "../domain/output-buffer.js"
 import {
-  assistantMessagePartToPromptPart,
   normalizeResponseParts,
   projectResponsePartsToMessageParts,
   promptFromResponseParts,
   responsePartsFromMessages,
-  toolMessagePartToPromptPart,
-  userMessagePartToPromptPart,
 } from "../domain/message-part-projection.js"
 
 export {
@@ -43,7 +40,7 @@ const toUserMessage = (message: Message): Option.Option<Prompt.UserMessage> => {
     switch (part.type) {
       case "text":
       case "file":
-        content.push(userMessagePartToPromptPart(part))
+        content.push(part)
         break
       default:
         break
@@ -64,7 +61,7 @@ const toAssistantMessage = (message: Message): Option.Option<Prompt.AssistantMes
       case "file":
       case "tool-call":
       case "tool-approval-request":
-        content.push(assistantMessagePartToPromptPart(part))
+        content.push(part)
         break
       default:
         break
@@ -109,7 +106,7 @@ const toToolMessage = (message: Message): Option.Option<Prompt.ToolMessage> => {
   const content = message.parts.flatMap((part): ReadonlyArray<Prompt.ToolMessagePart> => {
     if (part.type === "tool-result") return [boundToolResultForModel(part)]
     if (part.type !== "tool-approval-response") return []
-    return [toolMessagePartToPromptPart(part)]
+    return [part]
   })
 
   if (content.length === 0) return Option.none()
